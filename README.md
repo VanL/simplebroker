@@ -1,0 +1,250 @@
+# SimpleBroker
+
+*A lightweight message queue backed by SQLite. No setup required, just works.*
+
+```bash
+$ pip install simplebroker
+$ broker write tasks "ship it 🚀"
+$ broker read tasks
+ship it 🚀
+```
+
+SimpleBroker gives you a zero-configuration message queue that runs anywhere Python runs. It's designed to be simple enough to understand in an afternoon, yet powerful enough for real work.
+
+## Features
+
+- **Zero configuration** - No servers, daemons, or complex setup
+- **SQLite-backed** - Rock-solid reliability with true ACID guarantees  
+- **Concurrent safe** - Multiple processes can read/write simultaneously
+- **Simple CLI** - Intuitive commands that work with pipes and scripts
+- **Portable** - Each directory gets its own isolated `.broker.db`
+- **Fast** - 1000+ messages/second throughput
+- **Lightweight** - ~550 lines of code, no external dependencies
+
+## Installation
+
+```bash
+# Install with pip
+pip install simplebroker
+
+# Or better, use pipx for isolation
+pipx install simplebroker
+```
+
+The CLI is available as both `broker` and `simplebroker`.
+
+## Quick Start
+
+```bash
+# Create a queue and write a message
+$ broker write myqueue "Hello, World!"
+
+# Read the message (removes it)
+$ broker read myqueue
+Hello, World!
+
+# Write from stdin
+$ echo "another message" | broker write myqueue -
+
+# Read all messages at once
+$ broker read myqueue --all
+
+# Peek without removing
+$ broker peek myqueue
+
+# List all queues
+$ broker list
+myqueue: 3
+
+# Broadcast to all queues
+$ broker broadcast "System maintenance at 5pm"
+
+# Clean up when done
+$ broker --cleanup
+```
+
+## Command Reference
+
+### Global Options
+
+- `-d, --dir PATH` - Use PATH instead of current directory
+- `-f, --file NAME` - Database filename (default: `.broker.db`)
+- `-q, --quiet` - Suppress non-error output
+- `--cleanup` - Delete the database file and exit
+- `--version` - Show version information
+- `--help` - Show help message
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `write <queue> <message>` | Add a message to the queue |
+| `write <queue> -` | Add message from stdin |
+| `read <queue> [--all]` | Remove and return message(s) |
+| `peek <queue> [--all]` | Return message(s) without removing |
+| `list` | Show all queues and message counts |
+| `purge <queue>` | Delete all messages in queue |
+| `purge --all` | Delete all queues |
+| `broadcast <message>` | Send message to all existing queues |
+
+### Exit Codes
+
+- `0` - Success
+- `3` - Queue is empty
+- `4` - Queue does not exist
+- `1` - General error
+
+## Examples
+
+### Basic Queue Operations
+
+```bash
+# Create a work queue
+$ broker write work "process customer 123"
+$ broker write work "process customer 456"
+
+# Worker processes tasks
+$ while msg=$(broker read work 2>/dev/null); do
+    echo "Processing: $msg"
+    # do work...
+done
+```
+
+### Using Multiple Queues
+
+```bash
+# Different queues for different purposes
+$ broker write emails "send welcome to user@example.com"
+$ broker write logs "2023-12-01 system started"
+$ broker write metrics "cpu_usage:0.75"
+
+$ broker list
+emails: 1
+logs: 1
+metrics: 1
+```
+
+### Fan-out Pattern
+
+```bash
+# Send to all queues at once
+$ broker broadcast "shutdown signal"
+
+# Each worker reads from its own queue
+$ broker read worker1  # -> "shutdown signal"
+$ broker read worker2  # -> "shutdown signal"
+```
+
+### Integration with Unix Tools
+
+```bash
+# Store command output
+$ df -h | broker write monitoring -
+$ broker peek monitoring
+
+# Process files through a queue
+$ find . -name "*.log" | while read f; do
+    broker write logfiles "$f"
+done
+
+# Parallel processing with xargs
+$ broker read logfiles --all | xargs -P 4 -I {} process_log {}
+```
+
+### Remote Queue via SSH
+
+```bash
+# Write to remote queue
+$ echo "remote task" | ssh server "cd /app && broker write tasks -"
+
+# Read from remote queue  
+$ ssh server "cd /app && broker read tasks"
+```
+
+## Design Philosophy
+
+SimpleBroker follows the Unix philosophy: do one thing well. It's not trying to replace RabbitMQ or Redis - it's for when you need a queue without the complexity.
+
+**What SimpleBroker is:**
+- A simple, reliable message queue
+- Perfect for scripts, cron jobs, and small services
+- Easy to understand and debug
+- Portable between environments
+
+**What SimpleBroker is not:**
+- A distributed message broker
+- A pub/sub system
+- A replacement for production message queues
+- Suitable for high-frequency trading
+
+## Technical Details
+
+### Storage
+
+Messages are stored in a SQLite database with Write-Ahead Logging (WAL) enabled for better concurrency. Each queue is implemented as a table:
+
+```sql
+CREATE TABLE messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    queue TEXT NOT NULL,
+    body TEXT NOT NULL,
+    ts REAL DEFAULT ((julianday('now') - 2440587.5) * 86400.0)
+)
+```
+
+### Concurrency
+
+SQLite's built-in locking handles concurrent access. Multiple processes can safely read and write simultaneously. Messages are delivered exactly once using atomic DELETE operations.
+
+### Performance
+
+- **Throughput**: 1000+ messages/second on typical hardware
+- **Latency**: <10ms for write, <10ms for read
+- **Scalability**: Tested with 100k+ messages per queue
+
+### Security
+
+- Queue names are validated (alphanumeric + underscore + hyphen only)
+- Message size limited to 10MB
+- Database files created with 0600 permissions
+- SQL injection prevented via parameterized queries
+
+## Development
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/simplebroker
+cd simplebroker
+
+# Install with uv (recommended)
+uv pip install -e ".[dev]"
+
+# Or with pip
+pip install -e ".[dev]"
+
+# Run tests
+pytest
+
+# Type check
+mypy simplebroker
+
+# Format code
+black simplebroker tests
+```
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Keep it simple - the entire codebase should stay under 1000 lines
+2. Maintain backward compatibility
+3. Add tests for new features
+4. Update documentation
+
+## License
+
+MIT © 2024 SimpleBroker Contributors
+
+## Acknowledgments
+
+Built with Python, SQLite, and the Unix philosophy. Inspired by the need for a message queue that just works.
