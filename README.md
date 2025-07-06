@@ -24,10 +24,13 @@ SimpleBroker gives you a zero-configuration message queue that runs anywhere Pyt
 ## Installation
 
 ```bash
-# Install with pip
+# Install with uv 
+uv add simplebroker
+
+# Or with pip
 pip install simplebroker
 
-# Or better, use pipx for isolation
+# Or with pipx for global installation (recommended)
 pipx install simplebroker
 ```
 
@@ -211,26 +214,55 @@ SQLite's built-in locking handles concurrent access. Multiple processes can safe
 
 ## Development
 
+SimpleBroker uses [`uv`](https://github.com/astral-sh/uv) for package management and [`ruff`](https://github.com/astral-sh/ruff) for linting and formatting.
+
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/simplebroker
+git clone git@github.com:VanL/simplebroker.git
 cd simplebroker
 
-# Install with uv (recommended)
-uv pip install -e ".[dev]"
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Or with pip
-pip install -e ".[dev]"
+# Create virtual environment and install dependencies
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+uv pip install -e ".[dev]"
 
 # Run tests
 pytest
 
+# Run tests with coverage
+pytest --cov=simplebroker --cov-report=term-missing
+
+# Lint and format code
+ruff check simplebroker tests  # Check for issues
+ruff check --fix simplebroker tests  # Fix auto-fixable issues
+ruff format simplebroker tests  # Format code
+
 # Type check
 mypy simplebroker
-
-# Format code
-black simplebroker tests
 ```
+
+### Development Workflow
+
+1. **Before committing**:
+   ```bash
+   ruff check --fix simplebroker tests
+   ruff format simplebroker tests
+   mypy simplebroker
+   pytest
+   ```
+
+2. **Building packages**:
+   ```bash
+   uv build  # Creates wheel and sdist in dist/
+   ```
+
+3. **Installing locally for testing**:
+   ```bash
+   uv pip install dist/simplebroker-*.whl
+   ```
 
 ## Contributing
 
@@ -240,11 +272,36 @@ Contributions are welcome! Please:
 2. Maintain backward compatibility
 3. Add tests for new features
 4. Update documentation
+5. Run `ruff` and `pytest` before submitting PRs
+
+### Setting up for development
+
+```bash
+# Fork and clone the repo
+git clone git@github.com:VanL/simplebroker.git
+cd simplebroker
+
+# Install development environment
+uv venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+
+# Create a branch for your changes
+git checkout -b my-feature
+
+# Make your changes, then validate
+ruff check --fix simplebroker tests
+ruff format simplebroker tests
+pytest
+
+# Push and create a pull request
+git push origin my-feature
+```
 
 ## License
 
-MIT © 2024 SimpleBroker Contributors
+MIT © 2025 Van Lindberg
 
 ## Acknowledgments
 
-Built with Python, SQLite, and the Unix philosophy. Inspired by the need for a message queue that just works.
+Built with Python, SQLite, and the Unix philosophy. 
