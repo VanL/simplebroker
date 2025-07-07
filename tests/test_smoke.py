@@ -35,11 +35,11 @@ def test_write_from_stdin(workdir):
     rc, out, _ = run_cli("read", "q2", cwd=workdir)
     assert rc == 0
     assert out == "hello from stdin"
-    
+
     # Test that stdin can handle special characters (but not newlines)
     rc, _, _ = run_cli("write", "q3", "-", cwd=workdir, stdin='special chars: !@#$%^&*()')
     assert rc == 0
-    
+
     rc, out, _ = run_cli("read", "q3", cwd=workdir)
     assert rc == 0
     assert out == 'special chars: !@#$%^&*()'

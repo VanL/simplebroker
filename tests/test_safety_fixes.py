@@ -180,7 +180,7 @@ def test_timestamp_uniqueness_across_instances(workdir):
             # Read all messages from this thread's queue using public API
             msgs = db.read(f"queue_{thread_id}", all_messages=True)
             assert len(msgs) == 20, f"Expected 20 messages for thread {thread_id}, got {len(msgs)}"
-            
+
             # Verify order is preserved (FIFO)
             for i, msg in enumerate(msgs):
                 expected = f"thread_{thread_id}_msg_{i}"
@@ -195,7 +195,7 @@ def test_timestamp_uniqueness_across_instances(workdir):
     with BrokerDB(str(db_path)) as db:
         for i in range(10):
             db.write("stress_test", f"rapid_{i}")
-        
+
         # Read back and verify order
         msgs = db.read("stress_test", all_messages=True)
         assert len(msgs) == 10
