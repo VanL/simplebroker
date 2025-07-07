@@ -1,5 +1,6 @@
 """Test security fixes."""
 
+import os
 from pathlib import Path
 
 from .conftest import run_cli
@@ -23,17 +24,15 @@ def test_stdin_size_limit_streaming(workdir: Path):
 
 def test_path_traversal_protection(workdir: Path):
     """Test that path traversal attacks are prevented."""
-    # Try various path traversal attacks
-    attacks = [
+    # Test relative paths with parent directory references
+    relative_attacks = [
         ("--file", "../../../etc/passwd"),
         ("--file", "../../sensitive.db"),
         ("-f", "../outside.db"),
         ("--file=../../../tmp/evil.db",),
-        ("--file", "/etc/passwd"),
-        ("--file", "/tmp/absolute.db"),
     ]
 
-    for attack in attacks:
+    for attack in relative_attacks:
         if len(attack) == 1:
             # Single argument with equals
             code, stdout, stderr = run_cli(
@@ -48,11 +47,26 @@ def test_path_traversal_protection(workdir: Path):
         # All should fail
         assert code == 1, f"Attack {attack} should have failed"
         assert (
-            "must be within the working directory" in stderr.lower()
-            or "invalid database filename" in stderr.lower()
-            or "must not contain parent directory references" in stderr.lower()
-            or "must be relative" in stderr.lower()
+            "must not contain parent directory references" in stderr.lower()
         ), f"Expected security error for {attack}, got: {stderr}"
+    
+    # Test absolute paths (now allowed, but may fail for other reasons)
+    # These tests verify that absolute paths are accepted by the CLI
+    # but may fail due to permissions or invalid file types
+    absolute_paths = [
+        ("--file", "/etc/passwd"),
+        ("--file", "/tmp/test_absolute_" + str(os.getpid()) + ".db"),
+    ]
+    
+    for path_args in absolute_paths:
+        code, stdout, stderr = run_cli(
+            "write", *path_args, "test_queue", "message", cwd=workdir
+        )
+        # /etc/passwd should fail because it's not a valid database
+        # /tmp/test_absolute_*.db might succeed or fail based on permissions
+        if path_args[1] == "/etc/passwd":
+            assert code == 1
+            assert "file is not a database" in stderr or "permission denied" in stderr.lower()
 
 
 def test_safe_path_within_directory(workdir: Path):

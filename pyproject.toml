@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["message-queue", "sqlite", "cli", "queue", "broker"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
@@ -89,7 +89,7 @@ module = "tests.*"
 ignore_errors = true
 
 [tool.ruff]
-target-version = "py313"
+target-version = "py38"
 line-length = 88
 
 [tool.ruff.lint]

@@ -11,18 +11,18 @@ from .conftest import run_cli
 @pytest.mark.slow
 def test_streaming_read_all(workdir: Path):
     """Test that read --all uses streaming and doesn't blow memory."""
-    db_path = workdir / "test.db"
+    db_filename = "test.db"
 
     # Write many messages to test streaming
     for i in range(1000):
         code, stdout, stderr = run_cli(
-            "-f", db_path, "write", "test_queue", f"message_{i}", cwd=workdir
+            "-f", db_filename, "write", "test_queue", f"message_{i}", cwd=workdir
         )
         assert code == 0
 
     # Read all messages - this should stream without loading all into memory
     code, stdout, stderr = run_cli(
-        "-f", db_path, "read", "test_queue", "--all", cwd=workdir
+        "-f", db_filename, "read", "test_queue", "--all", cwd=workdir
     )
     assert code == 0
 
@@ -33,7 +33,7 @@ def test_streaming_read_all(workdir: Path):
     assert lines[999] == "message_999"
 
     # Verify queue is now empty
-    code, stdout, stderr = run_cli("-f", db_path, "list", cwd=workdir)
+    code, stdout, stderr = run_cli("-f", db_filename, "list", cwd=workdir)
     assert code == 0
     assert stdout.strip() == ""
 
@@ -41,18 +41,18 @@ def test_streaming_read_all(workdir: Path):
 @pytest.mark.slow
 def test_streaming_peek_all(workdir: Path):
     """Test that peek --all uses streaming and doesn't blow memory."""
-    db_path = workdir / "test.db"
+    db_filename = "test.db"
 
     # Write many messages to test streaming
     for i in range(1000):
         code, stdout, stderr = run_cli(
-            "-f", db_path, "write", "test_queue", f"message_{i}", cwd=workdir
+            "-f", db_filename, "write", "test_queue", f"message_{i}", cwd=workdir
         )
         assert code == 0
 
     # Peek all messages - this should stream without loading all into memory
     code, stdout, stderr = run_cli(
-        "-f", db_path, "peek", "test_queue", "--all", cwd=workdir
+        "-f", db_filename, "peek", "test_queue", "--all", cwd=workdir
     )
     assert code == 0
 
@@ -63,7 +63,7 @@ def test_streaming_peek_all(workdir: Path):
     assert lines[999] == "message_999"
 
     # Verify messages are still in queue
-    code, stdout, stderr = run_cli("-f", db_path, "list", cwd=workdir)
+    code, stdout, stderr = run_cli("-f", db_filename, "list", cwd=workdir)
     assert code == 0
     assert "test_queue: 1000" in stdout
 

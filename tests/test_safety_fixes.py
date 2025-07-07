@@ -149,18 +149,22 @@ def test_timestamp_uniqueness_across_instances(workdir):
         try:
             # Each thread gets its own DB instance
             with BrokerDB(str(db_path)) as db:
+                local_timestamps = []
                 for i in range(20):  # Reduced from 100 to avoid lock contention
                     db.write(f"queue_{thread_id}", f"msg_{i}")
-
-                    # Get the timestamp of the message we just wrote
+                
+                # After writing all messages, get all timestamps at once
+                # This avoids accessing the connection during concurrent writes
+                with db._lock:
                     cursor = db.conn.execute(
-                        "SELECT ts FROM messages WHERE queue = ? ORDER BY ts DESC LIMIT 1",
+                        "SELECT ts FROM messages WHERE queue = ? ORDER BY id",
                         (f"queue_{thread_id}",),
                     )
-                    ts = cursor.fetchone()[0]
-
-                    with lock:
-                        timestamps.append(ts)
+                    for row in cursor:
+                        local_timestamps.append(row[0])
+                
+                with lock:
+                    timestamps.extend(local_timestamps)
         except Exception as e:
             with lock:
                 errors.append(str(e))

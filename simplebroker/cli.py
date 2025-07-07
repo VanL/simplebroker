@@ -46,7 +46,7 @@ def create_parser() -> argparse.ArgumentParser:
         "-f",
         "--file",
         default=DEFAULT_DB_NAME,
-        help=f"database filename (default: {DEFAULT_DB_NAME})",
+        help=f"database filename or absolute path (default: {DEFAULT_DB_NAME})",
     )
     parser.add_argument(
         "-q", "--quiet", action="store_true", help="suppress diagnostics"
@@ -203,6 +203,26 @@ def main() -> int:
         print(f"{PROG_NAME} {VERSION}")
         return 0
 
+    # Handle absolute paths in -f flag
+    file_path = Path(args.file)
+    if file_path.is_absolute():
+        # Extract directory and filename from absolute path
+        extracted_dir = file_path.parent
+        extracted_file = file_path.name
+        
+        # Check if user also specified -d with a different directory
+        if args.dir != Path.cwd() and args.dir != extracted_dir:
+            print(
+                f"{PROG_NAME}: error: Inconsistent paths - "
+                f"absolute path '{args.file}' conflicts with directory '{args.dir}'",
+                file=sys.stderr,
+            )
+            return 1
+        
+        # Update args to use extracted components
+        args.dir = extracted_dir
+        args.file = extracted_file
+
     # Handle cleanup flag
     if args.cleanup:
         try:
@@ -252,15 +272,11 @@ def main() -> int:
         # Prevent path traversal attacks - ensure db_path stays within working_dir
         from pathlib import PurePath
 
-        # Check if the filename is an absolute path or contains traversal attempts
-        file_path = PurePath(args.file)
-        if file_path.is_absolute():
-            raise ValueError(
-                f"Database filename must be relative, not absolute: {args.file}"
-            )
+        # Check for path traversal attempts
+        file_path_pure = PurePath(args.file)
 
         # Check for parent directory references
-        for part in file_path.parts:
+        for part in file_path_pure.parts:
             if part == "..":
                 raise ValueError(
                     f"Database filename must not contain parent directory references: {args.file}"

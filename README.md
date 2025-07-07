@@ -75,7 +75,9 @@ $ broker --cleanup
 ### Global Options
 
 - `-d, --dir PATH` - Use PATH instead of current directory
-- `-f, --file NAME` - Database filename (default: `.broker.db`)
+- `-f, --file NAME` - Database filename or absolute path (default: `.broker.db`)
+  - If an absolute path is provided, the directory is extracted automatically
+  - Cannot be used with `-d` if the directories don't match
 - `-q, --quiet` - Suppress non-error output (intended reads excepted)
 - `--cleanup` - Delete the database file and exit
 - `--version` - Show version information
@@ -157,6 +159,10 @@ done
 
 # Parallel processing with xargs
 $ broker read logfiles --all | xargs -P 4 -I {} process_log {}
+
+# Use absolute paths for databases in specific locations
+$ broker -f /var/lib/myapp/queue.db write tasks "backup database"
+$ broker -f /var/lib/myapp/queue.db read tasks
 ```
 
 ### Safe Handling with JSON Output
