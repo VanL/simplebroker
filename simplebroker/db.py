@@ -345,7 +345,10 @@ class BrokerDB:
             except sqlite3.OperationalError as e:
                 # Check if this is a database locked error
                 error_msg = str(e).lower()
-                if "database is locked" in error_msg or "database table is locked" in error_msg:
+                if (
+                    "database is locked" in error_msg
+                    or "database table is locked" in error_msg
+                ):
                     if attempt < max_retries - 1:
                         # Wait before retrying, with exponential backoff
                         wait_time = retry_delay * (2**attempt)
@@ -380,7 +383,7 @@ class BrokerDB:
                 except sqlite3.OperationalError:
                     # Let the retry logic handle this
                     raise
-                    
+
                 try:
                     # Generate hybrid timestamp within the transaction
                     timestamp = self._generate_timestamp()
@@ -493,13 +496,13 @@ class BrokerDB:
                         # Use retry logic for BEGIN IMMEDIATE
                         def _begin_transaction() -> None:
                             self.conn.execute("BEGIN IMMEDIATE")
-                        
+
                         try:
                             self._execute_with_retry(_begin_transaction)
                         except Exception:
                             # If we can't even begin transaction, we're done
                             break
-                            
+
                         try:
                             cursor = self.conn.execute(
                                 """
@@ -541,13 +544,13 @@ class BrokerDB:
                     # Use retry logic for BEGIN IMMEDIATE
                     def _begin_transaction() -> None:
                         self.conn.execute("BEGIN IMMEDIATE")
-                    
+
                     try:
                         self._execute_with_retry(_begin_transaction)
                     except Exception:
                         # If we can't begin transaction, nothing to yield
                         return
-                        
+
                     try:
                         cursor = self.conn.execute(
                             """
@@ -709,7 +712,7 @@ class BrokerDB:
                     # Rollback on any error
                     self.conn.rollback()
                     raise
-        
+
         # Execute with retry logic
         self._execute_with_retry(_do_broadcast)
 
