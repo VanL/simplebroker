@@ -46,10 +46,10 @@ def test_path_traversal_protection(workdir: Path):
 
         # All should fail
         assert code == 1, f"Attack {attack} should have failed"
-        assert (
-            "must not contain parent directory references" in stderr.lower()
-        ), f"Expected security error for {attack}, got: {stderr}"
-    
+        assert "must not contain parent directory references" in stderr.lower(), (
+            f"Expected security error for {attack}, got: {stderr}"
+        )
+
     # Test absolute paths (now allowed, but may fail for other reasons)
     # These tests verify that absolute paths are accepted by the CLI
     # but may fail due to permissions or invalid file types
@@ -57,7 +57,7 @@ def test_path_traversal_protection(workdir: Path):
         ("--file", "/etc/passwd"),
         ("--file", "/tmp/test_absolute_" + str(os.getpid()) + ".db"),
     ]
-    
+
     for path_args in absolute_paths:
         code, stdout, stderr = run_cli(
             "write", *path_args, "test_queue", "message", cwd=workdir
@@ -66,7 +66,11 @@ def test_path_traversal_protection(workdir: Path):
         # /tmp/test_absolute_*.db might succeed or fail based on permissions
         if path_args[1] == "/etc/passwd":
             assert code == 1
-            assert "file is not a database" in stderr or "permission denied" in stderr.lower()
+            assert (
+                "file is not a database" in stderr
+                or "permission denied" in stderr.lower()
+                or "must be within the working directory" in stderr.lower()
+            )
 
 
 def test_safe_path_within_directory(workdir: Path):

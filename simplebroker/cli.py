@@ -209,7 +209,7 @@ def main() -> int:
         # Extract directory and filename from absolute path
         extracted_dir = file_path.parent
         extracted_file = file_path.name
-        
+
         # Check if user also specified -d with a different directory
         if args.dir != Path.cwd() and args.dir != extracted_dir:
             print(
@@ -218,7 +218,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
-        
+
         # Update args to use extracted components
         args.dir = extracted_dir
         args.file = extracted_file

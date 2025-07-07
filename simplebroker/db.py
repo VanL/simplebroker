@@ -6,9 +6,8 @@ import sqlite3
 import threading
 import time
 import warnings
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, List, Literal, Tuple
+from typing import Any, Iterator, List, Literal, Tuple
 
 # Module constants
 MAX_QUEUE_NAME_LENGTH = 512

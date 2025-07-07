@@ -71,6 +71,7 @@ def run_cli(
         text=True,  # -> str instead of bytes
         capture_output=True,
         timeout=timeout,
+        encoding="utf-8",  # Ensure UTF-8 encoding on all platforms
     )
 
     return (

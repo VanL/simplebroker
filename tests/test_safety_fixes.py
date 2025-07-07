@@ -149,22 +149,8 @@ def test_timestamp_uniqueness_across_instances(workdir):
         try:
             # Each thread gets its own DB instance
             with BrokerDB(str(db_path)) as db:
-                local_timestamps = []
                 for i in range(20):  # Reduced from 100 to avoid lock contention
                     db.write(f"queue_{thread_id}", f"msg_{i}")
-                
-                # After writing all messages, get all timestamps at once
-                # This avoids accessing the connection during concurrent writes
-                with db._lock:
-                    cursor = db.conn.execute(
-                        "SELECT ts FROM messages WHERE queue = ? ORDER BY id",
-                        (f"queue_{thread_id}",),
-                    )
-                    for row in cursor:
-                        local_timestamps.append(row[0])
-                
-                with lock:
-                    timestamps.extend(local_timestamps)
         except Exception as e:
             with lock:
                 errors.append(str(e))
@@ -182,9 +168,25 @@ def test_timestamp_uniqueness_across_instances(workdir):
     # Check for errors
     assert not errors, f"Errors occurred: {errors}"
 
+    # Now read all timestamps from a single connection to avoid lock issues
+    with BrokerDB(str(db_path)) as db:
+        # Use a proper transaction to read all timestamps
+        with db._lock:
+            db.conn.execute("BEGIN")
+            try:
+                cursor = db.conn.execute(
+                    "SELECT ts FROM messages ORDER BY ts"
+                )
+                for row in cursor:
+                    timestamps.append(row[0])
+                db.conn.commit()
+            except Exception:
+                db.conn.rollback()
+                raise
+
     # Check for duplicates
     unique_timestamps = set(timestamps)
-    assert len(unique_timestamps) == len(timestamps), "Duplicate timestamps found"
+    assert len(unique_timestamps) == len(timestamps), f"Duplicate timestamps found: {len(timestamps)} total, {len(unique_timestamps)} unique"
 
     # Verify we have the expected number of unique timestamps
     assert len(timestamps) == 100  # 5 threads * 20 messages each

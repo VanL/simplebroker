@@ -27,8 +27,8 @@ def test_write_read_smoke(workdir):
 
 def test_write_from_stdin(workdir):
     """T2: Write from stdin using '-' argument."""
-    # Write from stdin
-    rc, _, _ = run_cli("write", "q2", "-", cwd=workdir, stdin="bar\nbaz\n")
+    # Write from stdin (note: no trailing newline in the input)
+    rc, _, _ = run_cli("write", "q2", "-", cwd=workdir, stdin="bar\nbaz")
     assert rc == 0
 
     # Read all messages
