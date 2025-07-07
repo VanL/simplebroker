@@ -7,7 +7,7 @@ from .db import BrokerDB
 
 # Exit codes
 EXIT_SUCCESS = 0
-EXIT_QUEUE_EMPTY = 3
+EXIT_QUEUE_EMPTY = 2
 
 # Security limits
 MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10MB limit

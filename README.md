@@ -93,8 +93,8 @@ $ broker --cleanup
 ### Exit Codes
 
 - `0` - Success
-- `3` - Queue is empty
 - `1` - General error
+- `2` - Queue is empty
 
 ## Examples
 

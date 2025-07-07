@@ -22,7 +22,7 @@ def test_write_read_smoke(workdir):
 
     # Read again - should be empty
     rc, _, _ = run_cli("read", "q1", cwd=workdir)
-    assert rc == 3  # EXIT_QUEUE_EMPTY
+    assert rc == 2  # EXIT_QUEUE_EMPTY
 
 
 def test_write_from_stdin(workdir):
@@ -51,4 +51,4 @@ def test_read_all_fifo(workdir):
 
     # Queue should now be empty
     rc, _, _ = run_cli("read", "fifo", cwd=workdir)
-    assert rc == 3
+    assert rc == 2

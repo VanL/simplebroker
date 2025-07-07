@@ -68,14 +68,14 @@ def test_peek_command(workdir):
 
     # Now it's gone
     rc, _, _ = run_cli("peek", "peek_test", cwd=workdir)
-    assert rc == 3  # Empty
+    assert rc == 2  # Empty
 
 
 def test_exit_codes(workdir):
     """Verify documented exit codes."""
     # Read from non-existent queue (now returns empty queue code)
     rc, _, _ = run_cli("read", "no_such_queue", cwd=workdir)
-    assert rc == 3  # EXIT_QUEUE_EMPTY
+    assert rc == 2  # EXIT_QUEUE_EMPTY
 
     # Read from empty queue (create it first)
     rc, _, _ = run_cli("write", "empty", "x", cwd=workdir)
@@ -83,4 +83,4 @@ def test_exit_codes(workdir):
     rc, _, _ = run_cli("read", "empty", cwd=workdir)
     assert rc == 0
     rc, _, _ = run_cli("read", "empty", cwd=workdir)
-    assert rc == 3  # EXIT_QUEUE_EMPTY
+    assert rc == 2  # EXIT_QUEUE_EMPTY

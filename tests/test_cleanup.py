@@ -107,7 +107,7 @@ def test_cleanup_exits_before_commands(workdir):
 
     # Double-check by trying to read - should get empty queue error
     rc, _, _ = run_cli("read", "test", cwd=workdir)
-    assert rc == 3  # EXIT_QUEUE_EMPTY
+    assert rc == 2  # EXIT_QUEUE_EMPTY
 
 
 def test_cleanup_permission_error(workdir, monkeypatch):

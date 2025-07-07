@@ -10,7 +10,7 @@ from typing import Any, List, Literal, Optional, Tuple
 
 # Module constants
 DEFAULT_DB_NAME = ".broker.db"
-MAX_QUEUE_NAME_LENGTH = 64
+MAX_QUEUE_NAME_LENGTH = 4096
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 

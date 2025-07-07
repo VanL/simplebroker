@@ -68,7 +68,7 @@ def test_concurrent_read_write(workdir):
             if rc == 0:
                 messages.append(out)
                 empty_count = 0
-            elif rc == 3:  # Queue empty
+            elif rc == 2:  # Queue empty
                 empty_count += 1
                 time.sleep(0.05)
             else:
