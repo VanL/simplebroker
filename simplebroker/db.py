@@ -184,7 +184,6 @@ class BrokerDB:
 
         return message_bodies
 
-
     def list_queues(self) -> List[Tuple[str, int]]:
         """List all queues with their message counts.
 
