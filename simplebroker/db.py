@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, List, Literal, Optional, Tuple, TypeVar
 
 # Type variable for generic return types
-T = TypeVar('T')
+T = TypeVar("T")
 
 # Module constants
 MAX_QUEUE_NAME_LENGTH = 512
@@ -342,9 +342,9 @@ class BrokerDB:
                         continue
                 # If not a locked error or last attempt, re-raise
                 raise
-        
+
         # This should never be reached, but satisfies mypy
-        assert False, "Unreachable code"
+        raise AssertionError("Unreachable code")
 
     def write(self, queue: str, message: str) -> None:
         """Write a message to a queue.
