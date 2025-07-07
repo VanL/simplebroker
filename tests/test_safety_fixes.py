@@ -179,7 +179,9 @@ def test_timestamp_uniqueness_across_instances(workdir):
         for thread_id in range(5):
             # Read all messages from this thread's queue using public API
             msgs = db.read(f"queue_{thread_id}", all_messages=True)
-            assert len(msgs) == 20, f"Expected 20 messages for thread {thread_id}, got {len(msgs)}"
+            assert len(msgs) == 20, (
+                f"Expected 20 messages for thread {thread_id}, got {len(msgs)}"
+            )
 
             # Verify order is preserved (FIFO)
             for i, msg in enumerate(msgs):
@@ -189,7 +191,9 @@ def test_timestamp_uniqueness_across_instances(workdir):
 
     # Verify we got all messages back
     assert len(messages_read) == 100, f"Expected 100 messages, got {len(messages_read)}"
-    assert set(messages_read.keys()) == set(all_messages.keys()), "Some messages were lost"
+    assert set(messages_read.keys()) == set(all_messages.keys()), (
+        "Some messages were lost"
+    )
 
     # Additional test: rapid writes to same queue to stress timestamp generation
     with BrokerDB(str(db_path)) as db:
@@ -200,7 +204,9 @@ def test_timestamp_uniqueness_across_instances(workdir):
         msgs = db.read("stress_test", all_messages=True)
         assert len(msgs) == 10
         for i, msg in enumerate(msgs):
-            assert msg == f"rapid_{i}", f"Messages out of order: expected rapid_{i}, got {msg}"
+            assert msg == f"rapid_{i}", (
+                f"Messages out of order: expected rapid_{i}, got {msg}"
+            )
 
 
 def test_sqlite_version_check(workdir, monkeypatch):
