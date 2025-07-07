@@ -3,7 +3,7 @@
 import json
 import sys
 import warnings
-from typing import Optional
+from typing import Dict, Iterator, Optional, Tuple, Union
 
 from .db import READ_COMMIT_INTERVAL, BrokerDB
 
@@ -112,6 +112,7 @@ def _read_messages(
     commit_interval = READ_COMMIT_INTERVAL if all_messages and not peek else 1
 
     # Use the appropriate stream method based on whether timestamps are needed
+    stream: Iterator[Tuple[str, Optional[int]]]
     if show_timestamps:
         stream = db.stream_read_with_timestamps(
             queue, peek=peek, all_messages=all_messages, commit_interval=commit_interval
@@ -132,7 +133,7 @@ def _read_messages(
 
         if json_output:
             # Output as line-delimited JSON (ndjson) - one JSON object per line
-            data = {"message": message}
+            data: Dict[str, Union[str, int]] = {"message": message}
             if show_timestamps and timestamp is not None:
                 data["timestamp"] = timestamp
             print(json.dumps(data))

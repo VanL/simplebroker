@@ -260,10 +260,10 @@ def test_timestamp_uniqueness_across_instances(workdir):
             sys.executable,
             "-m",
             "simplebroker",
-            "read",
+            "peek",
             "stress_test",
             "--all",
-            "--peek",
+            "--timestamps",
         ],
         cwd=str(workdir),
         capture_output=True,
@@ -271,10 +271,14 @@ def test_timestamp_uniqueness_across_instances(workdir):
         encoding="utf-8",
     )
 
-    assert result.returncode == 0, f"Failed to read stress_test: {result.stderr}"
-    msgs = result.stdout.strip().split("\n") if result.stdout.strip() else []
-    assert len(msgs) == 10
-    for i, msg in enumerate(msgs):
+    assert result.returncode == 0, f"Failed to peek stress_test: {result.stderr}"
+    lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+    assert len(lines) == 10
+    for i, line in enumerate(lines):
+        # Parse timestamp and message (format: timestamp\tmessage)
+        parts = line.split("\t", 1)
+        assert len(parts) == 2, f"Invalid format: {line}"
+        _, msg = parts
         assert msg == f"rapid_{i}", (
             f"Messages out of order: expected rapid_{i}, got {msg}"
         )
