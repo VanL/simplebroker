@@ -43,6 +43,9 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+.ruff_cache/
+.ruff/
+.pytest_cache/
 
 # SimpleBroker specific
 *.db
@@ -64,3 +67,6 @@ Thumbs.db
 .claude
 .mcp.json
 agent_history/
+.broker.db
+.broker.db-shm
+.broker.db-wal
