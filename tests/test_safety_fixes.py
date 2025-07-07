@@ -9,7 +9,8 @@ Tests verify:
 - TOCTOU fix for cleanup
 """
 
-import threading
+import multiprocessing
+import os
 
 import pytest
 
@@ -135,38 +136,55 @@ def test_broadcast_size_utf8(workdir):
     assert "exceeds maximum size" in err
 
 
+def write_messages_process(process_id, db_path, result_queue):
+    """Write messages from a separate process with its own BrokerDB instance."""
+    try:
+        # Each process gets its own DB instance
+        with BrokerDB(str(db_path)) as db:
+            for i in range(20):
+                msg = f"process_{process_id}_msg_{i}"
+                db.write(f"queue_{process_id}", msg)
+                # Report success back to parent process
+                result_queue.put(("success", process_id, msg))
+    except Exception as e:
+        # Report error back to parent process
+        result_queue.put(("error", process_id, str(e)))
+
+
 def test_timestamp_uniqueness_across_instances(workdir):
     """Test that timestamps are unique even across BrokerDB instances."""
     db_path = workdir / ".broker.db"
 
-    # Track all messages written and errors
+    # Use a multiprocessing queue to collect results from child processes
+    result_queue = multiprocessing.Queue()
+
+    # Run multiple processes, each with its own BrokerDB instance
+    processes = []
+    for i in range(5):
+        p = multiprocessing.Process(
+            target=write_messages_process,
+            args=(i, db_path, result_queue)
+        )
+        processes.append(p)
+        p.start()
+
+    # Wait for all processes to complete
+    for p in processes:
+        p.join()
+
+    # Collect results from queue
     all_messages = {}
     errors = []
-    lock = threading.Lock()
-
-    def write_messages(thread_id):
-        """Write messages from a separate BrokerDB instance."""
-        try:
-            # Each thread gets its own DB instance
-            with BrokerDB(str(db_path)) as db:
-                for i in range(20):  # Reduced from 100 to avoid lock contention
-                    msg = f"thread_{thread_id}_msg_{i}"
-                    db.write(f"queue_{thread_id}", msg)
-                    with lock:
-                        all_messages[msg] = thread_id
-        except Exception as e:
-            with lock:
-                errors.append(str(e))
-
-    # Run multiple threads, each with its own BrokerDB instance
-    threads = []
-    for i in range(5):
-        t = threading.Thread(target=write_messages, args=(i,))
-        threads.append(t)
-        t.start()
-
-    for t in threads:
-        t.join()
+    
+    # Get all results from the queue
+    while not result_queue.empty():
+        result = result_queue.get()
+        if result[0] == "success":
+            _, process_id, msg = result
+            all_messages[msg] = process_id
+        else:
+            _, process_id, error = result
+            errors.append(f"Process {process_id}: {error}")
 
     # Check for errors
     assert not errors, f"Errors occurred: {errors}"
@@ -176,20 +194,20 @@ def test_timestamp_uniqueness_across_instances(workdir):
     # messages would be lost or returned in wrong order
     messages_read = {}
     with BrokerDB(str(db_path)) as db:
-        for thread_id in range(5):
+        for process_id in range(5):
             # MODIFICATION: Use a non-destructive peek (read with peek=True) to verify.
             # This avoids write-lock contention with background DB cleanup/checkpointing,
             # making the test more robust against timing-related lock errors.
-            msgs = db.read(f"queue_{thread_id}", all_messages=True, peek=True)
+            msgs = db.read(f"queue_{process_id}", all_messages=True, peek=True)
             assert len(msgs) == 20, (
-                f"Expected 20 messages for thread {thread_id}, got {len(msgs)}"
+                f"Expected 20 messages for process {process_id}, got {len(msgs)}"
             )
 
             # Verify order is preserved (FIFO)
             for i, msg in enumerate(msgs):
-                expected = f"thread_{thread_id}_msg_{i}"
+                expected = f"process_{process_id}_msg_{i}"
                 assert msg == expected, f"Expected {expected}, got {msg}"
-                messages_read[msg] = thread_id
+                messages_read[msg] = process_id
 
     # Verify we got all messages back
     assert len(messages_read) == 100, f"Expected 100 messages, got {len(messages_read)}"
