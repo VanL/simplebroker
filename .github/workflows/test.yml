@@ -44,7 +44,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install -e ".[dev]"
+        uv pip install --system -e ".[dev]"
 
     - name: Run tests with pytest
       run: |
@@ -72,7 +72,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install -e ".[dev]"
+        uv pip install --system -e ".[dev]"
 
     - name: Run linting with ruff
       run: |
@@ -103,8 +103,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install -e ".[dev]"
-        uv pip install pytest-cov
+        uv pip install --system -e ".[dev]"
+        uv pip install --system pytest-cov
 
     - name: Run tests with coverage
       run: |
