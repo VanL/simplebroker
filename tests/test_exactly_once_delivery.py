@@ -2,13 +2,14 @@
 
 import multiprocessing
 from pathlib import Path
+from typing import List, Tuple
 
 from simplebroker.db import BrokerDB
 
 
 def read_messages_with_crash(
     db_path: str, queue: str, crash_after: int
-) -> tuple[list[str], bool]:
+) -> Tuple[List[str], bool]:
     """Read messages and simulate crash after N messages.
 
     Returns:

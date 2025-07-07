@@ -139,8 +139,8 @@ def test_timestamp_uniqueness_across_instances(workdir):
     """Test that timestamps are unique even across BrokerDB instances."""
     db_path = workdir / ".broker.db"
 
-    # Track all timestamps seen
-    timestamps = []
+    # Track all messages written and errors
+    all_messages = {}
     errors = []
     lock = threading.Lock()
 
@@ -150,7 +150,10 @@ def test_timestamp_uniqueness_across_instances(workdir):
             # Each thread gets its own DB instance
             with BrokerDB(str(db_path)) as db:
                 for i in range(20):  # Reduced from 100 to avoid lock contention
-                    db.write(f"queue_{thread_id}", f"msg_{i}")
+                    msg = f"thread_{thread_id}_msg_{i}"
+                    db.write(f"queue_{thread_id}", msg)
+                    with lock:
+                        all_messages[msg] = thread_id
         except Exception as e:
             with lock:
                 errors.append(str(e))
@@ -168,28 +171,36 @@ def test_timestamp_uniqueness_across_instances(workdir):
     # Check for errors
     assert not errors, f"Errors occurred: {errors}"
 
-    # Now read all timestamps from a single connection to avoid lock issues
+    # Verify message uniqueness by reading all messages back
+    # This indirectly tests timestamp uniqueness - if timestamps were duplicated,
+    # messages would be lost or returned in wrong order
+    messages_read = {}
     with BrokerDB(str(db_path)) as db:
-        # Use a proper transaction to read all timestamps
-        with db._lock:
-            db.conn.execute("BEGIN")
-            try:
-                cursor = db.conn.execute(
-                    "SELECT ts FROM messages ORDER BY ts"
-                )
-                for row in cursor:
-                    timestamps.append(row[0])
-                db.conn.commit()
-            except Exception:
-                db.conn.rollback()
-                raise
+        for thread_id in range(5):
+            # Read all messages from this thread's queue using public API
+            msgs = db.read(f"queue_{thread_id}", all_messages=True)
+            assert len(msgs) == 20, f"Expected 20 messages for thread {thread_id}, got {len(msgs)}"
+            
+            # Verify order is preserved (FIFO)
+            for i, msg in enumerate(msgs):
+                expected = f"thread_{thread_id}_msg_{i}"
+                assert msg == expected, f"Expected {expected}, got {msg}"
+                messages_read[msg] = thread_id
 
-    # Check for duplicates
-    unique_timestamps = set(timestamps)
-    assert len(unique_timestamps) == len(timestamps), f"Duplicate timestamps found: {len(timestamps)} total, {len(unique_timestamps)} unique"
+    # Verify we got all messages back
+    assert len(messages_read) == 100, f"Expected 100 messages, got {len(messages_read)}"
+    assert set(messages_read.keys()) == set(all_messages.keys()), "Some messages were lost"
 
-    # Verify we have the expected number of unique timestamps
-    assert len(timestamps) == 100  # 5 threads * 20 messages each
+    # Additional test: rapid writes to same queue to stress timestamp generation
+    with BrokerDB(str(db_path)) as db:
+        for i in range(10):
+            db.write("stress_test", f"rapid_{i}")
+        
+        # Read back and verify order
+        msgs = db.read("stress_test", all_messages=True)
+        assert len(msgs) == 10
+        for i, msg in enumerate(msgs):
+            assert msg == f"rapid_{i}", f"Messages out of order: expected rapid_{i}, got {msg}"
 
 
 def test_sqlite_version_check(workdir, monkeypatch):

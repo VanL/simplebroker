@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import pytest
 
@@ -42,7 +42,7 @@ def run_cli(
     cwd: Path,
     stdin: Optional[str] = None,
     timeout: float = 5.0,
-) -> tuple[int, str, str]:
+) -> Tuple[int, str, str]:
     """
     Execute the SimpleBroker CLI (`python -m simplebroker.cli …`) inside *cwd*.
 

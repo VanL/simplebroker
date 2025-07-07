@@ -21,8 +21,9 @@ def test_streaming_read_all(workdir: Path):
         assert code == 0
 
     # Read all messages - this should stream without loading all into memory
+    # Use longer timeout for Windows where subprocess communication can be slower
     code, stdout, stderr = run_cli(
-        "-f", db_filename, "read", "test_queue", "--all", cwd=workdir
+        "-f", db_filename, "read", "test_queue", "--all", cwd=workdir, timeout=60.0
     )
     assert code == 0
 
@@ -51,8 +52,9 @@ def test_streaming_peek_all(workdir: Path):
         assert code == 0
 
     # Peek all messages - this should stream without loading all into memory
+    # Use longer timeout for Windows where subprocess communication can be slower
     code, stdout, stderr = run_cli(
-        "-f", db_filename, "peek", "test_queue", "--all", cwd=workdir
+        "-f", db_filename, "peek", "test_queue", "--all", cwd=workdir, timeout=60.0
     )
     assert code == 0
 

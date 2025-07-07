@@ -105,6 +105,8 @@ select = [
 ignore = [
     "E501", # line too long (handled by black)
     "B008", # do not perform function calls in argument defaults
+    "UP045", # Use X | None - not available until Python 3.10
+    "UP006", # Use lowercase generics - not available until Python 3.9
 ]
 
 [tool.ruff.lint.isort]
