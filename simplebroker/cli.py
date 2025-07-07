@@ -3,7 +3,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import List, NoReturn
 
 from . import __version__ as VERSION
 from . import commands
@@ -101,7 +101,7 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def rearrange_args(argv: list[str]) -> list[str]:
+def rearrange_args(argv: List[str]) -> List[str]:
     """Rearrange arguments to put global options before subcommand.
 
     This allows global options to appear anywhere on the command line,
