@@ -7,7 +7,10 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Iterator, List, Literal, Optional, Tuple
+from typing import Any, Callable, Iterator, List, Literal, Optional, Tuple, TypeVar
+
+# Type variable for generic return types
+T = TypeVar('T')
 
 # Module constants
 MAX_QUEUE_NAME_LENGTH = 512
@@ -311,7 +314,9 @@ class BrokerDB:
 
             # Another process updated the timestamp, retry with the new value
 
-    def _execute_with_retry(self, operation, max_retries=3, retry_delay=0.1):
+    def _execute_with_retry(
+        self, operation: Callable[[], T], max_retries: int = 3, retry_delay: float = 0.1
+    ) -> T:
         """Execute a database operation with retry logic for locked database errors.
 
         Args:
@@ -337,6 +342,9 @@ class BrokerDB:
                         continue
                 # If not a locked error or last attempt, re-raise
                 raise
+        
+        # This should never be reached, but satisfies mypy
+        assert False, "Unreachable code"
 
     def write(self, queue: str, message: str) -> None:
         """Write a message to a queue.
@@ -352,7 +360,7 @@ class BrokerDB:
         self._check_fork_safety()
         self._validate_queue_name(queue)
 
-        def _do_write():
+        def _do_write() -> None:
             with self._lock:
                 # Use BEGIN IMMEDIATE to ensure we see all committed changes and
                 # prevent other connections from writing during our transaction
@@ -533,7 +541,7 @@ class BrokerDB:
         """
         self._check_fork_safety()
 
-        def _do_list():
+        def _do_list() -> List[Tuple[str, int]]:
             with self._lock:
                 cursor = self.conn.execute(
                     """
@@ -562,7 +570,7 @@ class BrokerDB:
         if queue is not None:
             self._validate_queue_name(queue)
 
-        def _do_purge():
+        def _do_purge() -> None:
             with self._lock:
                 if queue is None:
                     # Purge all messages
