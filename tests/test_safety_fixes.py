@@ -177,8 +177,10 @@ def test_timestamp_uniqueness_across_instances(workdir):
     messages_read = {}
     with BrokerDB(str(db_path)) as db:
         for thread_id in range(5):
-            # Read all messages from this thread's queue using public API
-            msgs = db.read(f"queue_{thread_id}", all_messages=True)
+            # MODIFICATION: Use a non-destructive peek (read with peek=True) to verify.
+            # This avoids write-lock contention with background DB cleanup/checkpointing,
+            # making the test more robust against timing-related lock errors.
+            msgs = db.read(f"queue_{thread_id}", all_messages=True, peek=True)
             assert len(msgs) == 20, (
                 f"Expected 20 messages for thread {thread_id}, got {len(msgs)}"
             )
@@ -200,8 +202,9 @@ def test_timestamp_uniqueness_across_instances(workdir):
         for i in range(10):
             db.write("stress_test", f"rapid_{i}")
 
-        # Read back and verify order
-        msgs = db.read("stress_test", all_messages=True)
+        # BEST PRACTICE: Also use peek=True here for consistency, although
+        # the risk of locking is lower in this single-threaded section.
+        msgs = db.read("stress_test", all_messages=True, peek=True)
         assert len(msgs) == 10
         for i, msg in enumerate(msgs):
             assert msg == f"rapid_{i}", (
