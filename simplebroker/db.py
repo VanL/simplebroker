@@ -313,15 +313,15 @@ class BrokerDB:
 
     def _execute_with_retry(self, operation, max_retries=3, retry_delay=0.1):
         """Execute a database operation with retry logic for locked database errors.
-        
+
         Args:
             operation: A callable that performs the database operation
             max_retries: Maximum number of retry attempts
             retry_delay: Initial delay between retries (exponential backoff applied)
-            
+
         Returns:
             The result of the operation
-            
+
         Raises:
             The last exception if all retries fail
         """
@@ -333,7 +333,7 @@ class BrokerDB:
                 if "database is locked" in str(e):
                     if attempt < max_retries - 1:
                         # Wait before retrying, with exponential backoff
-                        time.sleep(retry_delay * (2 ** attempt))
+                        time.sleep(retry_delay * (2**attempt))
                         continue
                 # If not a locked error or last attempt, re-raise
                 raise
@@ -371,7 +371,7 @@ class BrokerDB:
                     # Rollback on any error
                     self.conn.rollback()
                     raise
-        
+
         # Execute with retry logic
         self._execute_with_retry(_do_write)
 
@@ -532,7 +532,7 @@ class BrokerDB:
             RuntimeError: If called from a forked process
         """
         self._check_fork_safety()
-        
+
         def _do_list():
             with self._lock:
                 cursor = self.conn.execute(
@@ -544,7 +544,7 @@ class BrokerDB:
                 """
                 )
                 return cursor.fetchall()
-        
+
         # Execute with retry logic
         return self._execute_with_retry(_do_list)
 
@@ -571,7 +571,7 @@ class BrokerDB:
                     # Purge specific queue
                     self.conn.execute("DELETE FROM messages WHERE queue = ?", (queue,))
                 self.conn.commit()
-        
+
         # Execute with retry logic
         self._execute_with_retry(_do_purge)
 
