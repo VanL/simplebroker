@@ -8,7 +8,6 @@ from .db import BrokerDB
 # Exit codes
 EXIT_SUCCESS = 0
 EXIT_QUEUE_EMPTY = 3
-EXIT_NO_SUCH_QUEUE = 4
 
 # Security limits
 MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10MB limit
@@ -34,10 +33,6 @@ def cmd_write(db: BrokerDB, queue: str, message: str) -> int:
 
 def cmd_read(db: BrokerDB, queue: str, all_messages: bool = False) -> int:
     """Read and remove message(s) from queue."""
-    # Check if queue exists first
-    if not db.queue_exists(queue):
-        return EXIT_NO_SUCH_QUEUE
-
     messages = db.read(queue, peek=False, all_messages=all_messages)
 
     if not messages:
@@ -51,10 +46,6 @@ def cmd_read(db: BrokerDB, queue: str, all_messages: bool = False) -> int:
 
 def cmd_peek(db: BrokerDB, queue: str, all_messages: bool = False) -> int:
     """Read without removing message(s)."""
-    # Check if queue exists first
-    if not db.queue_exists(queue):
-        return EXIT_NO_SUCH_QUEUE
-
     messages = db.read(queue, peek=True, all_messages=all_messages)
 
     if not messages:

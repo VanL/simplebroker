@@ -105,9 +105,9 @@ def test_cleanup_exits_before_commands(workdir):
     db_path = workdir / ".broker.db"
     assert not db_path.exists()
 
-    # Double-check by trying to read - should get no such queue error
+    # Double-check by trying to read - should get empty queue error
     rc, _, _ = run_cli("read", "test", cwd=workdir)
-    assert rc == 4  # EXIT_NO_SUCH_QUEUE
+    assert rc == 3  # EXIT_QUEUE_EMPTY
 
 
 def test_cleanup_permission_error(workdir, monkeypatch):
@@ -127,8 +127,10 @@ def test_cleanup_permission_error(workdir, monkeypatch):
     # Try to cleanup - should get permission error
     rc, _, err = run_cli("--cleanup", cwd=workdir)
 
-    # Restore permissions before assertions (cleanup)
-    os.chmod(db_path, 0o644)
+    # Check if file still exists before trying to restore permissions
+    if db_path.exists():
+        # Restore permissions before assertions (cleanup)
+        os.chmod(db_path, 0o644)
 
     # On some systems (especially CI), permission changes might not prevent deletion
     # So we check for either success or permission error

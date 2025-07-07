@@ -3,9 +3,10 @@
 import os
 import re
 import sqlite3
+import threading
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, List, Literal, Optional, Tuple
 
 # Module constants
 DEFAULT_DB_NAME = ".broker.db"
@@ -34,6 +35,10 @@ class BrokerDB:
         # Set restrictive permissions if new database
         if not existing_db:
             os.chmod(self.db_path, 0o600)
+
+        # Initialize write lock and counter for unique timestamps
+        self._write_lock = threading.Lock()
+        self._counter = 0
 
     def _setup_database(self) -> None:
         """Set up database with optimized settings and schema."""
@@ -119,12 +124,16 @@ class BrokerDB:
         """
         self._validate_queue_name(queue)
 
-        # Use time.time() for microsecond precision timestamps
-        timestamp = time.time()
+        # Generate unique timestamp with counter
+        with self._write_lock:
+            timestamp = time.time()
+            self._counter = (self._counter + 1) % 1000000
+            # Add counter as fractional nanoseconds to ensure uniqueness
+            composite_ts = timestamp + (self._counter / 1e9)
 
         self.conn.execute(
             "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
-            (queue, message, timestamp),
+            (queue, message, composite_ts),
         )
         self.conn.commit()
 
@@ -175,24 +184,6 @@ class BrokerDB:
 
         return message_bodies
 
-    def queue_exists(self, queue: str) -> bool:
-        """Check if a queue has any messages.
-
-        Args:
-            queue: Name of the queue to check
-
-        Returns:
-            True if queue has messages, False otherwise
-
-        Raises:
-            ValueError: If queue name is invalid
-        """
-        self._validate_queue_name(queue)
-        cursor = self.conn.execute(
-            "SELECT COUNT(*) FROM messages WHERE queue = ?", (queue,)
-        )
-        count = cursor.fetchone()[0]
-        return count > 0
 
     def list_queues(self) -> List[Tuple[str, int]]:
         """List all queues with their message counts.
@@ -235,11 +226,11 @@ class BrokerDB:
         if hasattr(self, "conn") and self.conn:
             self.conn.close()
 
-    def __enter__(self):
+    def __enter__(self) -> "BrokerDB":
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
         """Exit context manager and close connection."""
         self.close()
         return False

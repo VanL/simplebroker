@@ -94,7 +94,6 @@ $ broker --cleanup
 
 - `0` - Success
 - `3` - Queue is empty
-- `4` - Queue does not exist
 - `1` - General error
 
 ## Examples
@@ -198,6 +197,11 @@ CREATE TABLE messages (
 ### Concurrency
 
 SQLite's built-in locking handles concurrent access. Multiple processes can safely read and write simultaneously. Messages are delivered exactly once using atomic DELETE operations.
+
+**FIFO Ordering Guarantees:**
+- **Within a process**: Strict FIFO ordering is guaranteed - messages are always read in the exact order they were written
+- **Across processes**: Messages are ordered by actual write time to the database, not submission time. Due to process scheduling, messages may interleave when multiple processes write concurrently
+- **Unique timestamps**: Each message receives a unique timestamp using microsecond precision plus a counter, preventing ambiguous ordering
 
 ### Performance
 

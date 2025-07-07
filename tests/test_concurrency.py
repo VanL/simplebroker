@@ -32,9 +32,12 @@ def test_parallel_writes(workdir):
     messages = out.splitlines()
     assert len(messages) == message_count
 
-    # Messages should be in FIFO order (msg_000 first)
-    assert messages[0] == "msg_000"
-    assert messages[-1] == f"msg_{message_count-1:03d}"
+    # Verify all messages arrived (order depends on process scheduling)
+    # When using separate processes, each has its own counter, so strict
+    # submission-order FIFO is not guaranteed across processes
+    expected_messages = {f"msg_{i:03d}" for i in range(message_count)}
+    actual_messages = set(messages)
+    assert actual_messages == expected_messages, "Not all messages were received"
 
 
 def test_concurrent_read_write(workdir):
