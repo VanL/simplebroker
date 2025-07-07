@@ -127,9 +127,10 @@ class BrokerDB:
 
             # Set busy timeout from environment variable or default to 5 seconds
             # This causes SQLite to automatically retry when encountering a locked database
-            # for up to the specified time in milliseconds. This handles concurrent access
-            # gracefully without requiring application-level retry logic.
-            # On Windows, you may need to increase this for high-concurrency scenarios.
+            # for up to the specified time in milliseconds. Combined with application-level
+            # retries (5 attempts with exponential backoff), this provides robust handling
+            # of concurrent access. On Windows or high-concurrency scenarios, you may need
+            # to increase this value via BROKER_BUSY_TIMEOUT environment variable.
             busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
             self.conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
 
@@ -323,7 +324,7 @@ class BrokerDB:
             # Another process updated the timestamp, retry with the new value
 
     def _execute_with_retry(
-        self, operation: Callable[[], T], max_retries: int = 3, retry_delay: float = 0.1
+        self, operation: Callable[[], T], max_retries: int = 5, retry_delay: float = 0.2
     ) -> T:
         """Execute a database operation with retry logic for locked database errors.
 
@@ -343,11 +344,14 @@ class BrokerDB:
                 return operation()
             except sqlite3.OperationalError as e:
                 # Check if this is a database locked error
-                if "database is locked" in str(e):
+                error_msg = str(e).lower()
+                if "database is locked" in error_msg or "database table is locked" in error_msg:
                     if attempt < max_retries - 1:
                         # Wait before retrying, with exponential backoff
-                        time.sleep(retry_delay * (2**attempt))
+                        wait_time = retry_delay * (2**attempt)
+                        time.sleep(wait_time)
                         continue
+                    # On last attempt, still re-raise
                 # If not a locked error or last attempt, re-raise
                 raise
 
@@ -370,9 +374,13 @@ class BrokerDB:
 
         def _do_write() -> None:
             with self._lock:
-                # Use BEGIN IMMEDIATE to ensure we see all committed changes and
-                # prevent other connections from writing during our transaction
-                self.conn.execute("BEGIN IMMEDIATE")
+                # Start a transaction - BEGIN IMMEDIATE can also throw database locked
+                try:
+                    self.conn.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError:
+                    # Let the retry logic handle this
+                    raise
+                    
                 try:
                     # Generate hybrid timestamp within the transaction
                     timestamp = self._generate_timestamp()
@@ -482,8 +490,16 @@ class BrokerDB:
                 while True:
                     # Hold lock for entire batch operation to ensure atomicity
                     with self._lock:
-                        # Start explicit transaction
-                        self.conn.execute("BEGIN IMMEDIATE")
+                        # Use retry logic for BEGIN IMMEDIATE
+                        def _begin_transaction() -> None:
+                            self.conn.execute("BEGIN IMMEDIATE")
+                        
+                        try:
+                            self._execute_with_retry(_begin_transaction)
+                        except Exception:
+                            # If we can't even begin transaction, we're done
+                            break
+                            
                         try:
                             cursor = self.conn.execute(
                                 """
@@ -522,7 +538,16 @@ class BrokerDB:
             else:
                 # For single message, use same transaction pattern for consistency
                 with self._lock:
-                    self.conn.execute("BEGIN IMMEDIATE")
+                    # Use retry logic for BEGIN IMMEDIATE
+                    def _begin_transaction() -> None:
+                        self.conn.execute("BEGIN IMMEDIATE")
+                    
+                    try:
+                        self._execute_with_retry(_begin_transaction)
+                    except Exception:
+                        # If we can't begin transaction, nothing to yield
+                        return
+                        
                     try:
                         cursor = self.conn.execute(
                             """
@@ -654,35 +679,39 @@ class BrokerDB:
         """
         self._check_fork_safety()
 
-        with self._lock:
-            # Use BEGIN IMMEDIATE to ensure we see all committed changes and
-            # prevent other connections from writing during our transaction
-            self.conn.execute("BEGIN IMMEDIATE")
-            try:
-                # Generate hybrid timestamp within the transaction
-                timestamp = self._generate_timestamp()
+        def _do_broadcast() -> None:
+            with self._lock:
+                # Use BEGIN IMMEDIATE to ensure we see all committed changes and
+                # prevent other connections from writing during our transaction
+                self.conn.execute("BEGIN IMMEDIATE")
+                try:
+                    # Generate hybrid timestamp within the transaction
+                    timestamp = self._generate_timestamp()
 
-                # Use INSERT...SELECT pattern for scalability
-                # This keeps the SQL string constant size regardless of queue count
-                # Note: We don't check the return value because:
-                # 1. SQLite's rowcount for INSERT...SELECT is unreliable (-1 or 0)
-                # 2. If no queues exist, this safely inserts 0 rows
-                # 3. The operation is atomic - either all queues get the message or none
-                self.conn.execute(
-                    """
-                    INSERT INTO messages (queue, body, ts)
-                    SELECT DISTINCT queue, ?, ?
-                    FROM messages
-                    """,
-                    (message, timestamp),
-                )
+                    # Use INSERT...SELECT pattern for scalability
+                    # This keeps the SQL string constant size regardless of queue count
+                    # Note: We don't check the return value because:
+                    # 1. SQLite's rowcount for INSERT...SELECT is unreliable (-1 or 0)
+                    # 2. If no queues exist, this safely inserts 0 rows
+                    # 3. The operation is atomic - either all queues get the message or none
+                    self.conn.execute(
+                        """
+                        INSERT INTO messages (queue, body, ts)
+                        SELECT DISTINCT queue, ?, ?
+                        FROM messages
+                        """,
+                        (message, timestamp),
+                    )
 
-                # Commit the transaction
-                self.conn.commit()
-            except Exception:
-                # Rollback on any error
-                self.conn.rollback()
-                raise
+                    # Commit the transaction
+                    self.conn.commit()
+                except Exception:
+                    # Rollback on any error
+                    self.conn.rollback()
+                    raise
+        
+        # Execute with retry logic
+        self._execute_with_retry(_do_broadcast)
 
     def close(self) -> None:
         """Close the database connection."""
