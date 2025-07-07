@@ -89,12 +89,20 @@ $ broker --cleanup
 |---------|-------------|
 | `write <queue> <message>` | Add a message to the queue |
 | `write <queue> -` | Add message from stdin |
-| `read <queue> [--all] [--json]` | Remove and return message(s) |
-| `peek <queue> [--all] [--json]` | Return message(s) without removing |
+| `read <queue> [--all] [--json] [-t\|--timestamps]` | Remove and return message(s) |
+| `peek <queue> [--all] [--json] [-t\|--timestamps]` | Return message(s) without removing |
 | `list` | Show all queues and message counts (note: counts are a snapshot and may change during concurrent operations) |
 | `purge <queue>` | Delete all messages in queue |
 | `purge --all` | Delete all queues |
 | `broadcast <message>` | Send message to all existing queues |
+
+#### Read/Peek Options
+
+- `--all` - Read/peek all messages in the queue
+- `--json` - Output in line-delimited JSON (ndjson) format for safe handling of special characters
+- `-t, --timestamps` - Include timestamps in output
+  - Regular format: `<timestamp>\t<message>` (tab-separated)
+  - JSON format: `{"message": "...", "timestamp": <timestamp>}`
 
 ### Exit Codes
 
@@ -208,6 +216,37 @@ The JSON output uses line-delimited JSON (ndjson) format:
 
 This is the recommended approach for handling messages that may contain special characters, as mentioned in the Security Considerations section.
 
+### Timestamps for Message Ordering
+
+The `-t/--timestamps` flag includes message timestamps in the output, useful for debugging and understanding message order:
+
+```bash
+# Write some messages
+$ broker write events "server started"
+$ broker write events "user login"
+$ broker write events "file uploaded"
+
+# View with timestamps (non-destructive peek)
+$ broker peek events --all --timestamps
+1837025672140161024	server started
+1837025681658085376	user login
+1837025689412308992	file uploaded
+
+# Read with timestamps and JSON for parsing
+$ broker read events --all --timestamps --json
+{"message": "server started", "timestamp": 1837025672140161024}
+{"message": "user login", "timestamp": 1837025681658085376}
+{"message": "file uploaded", "timestamp": 1837025689412308992}
+
+# Extract just timestamps with jq
+$ broker peek events --all --timestamps --json | jq '.timestamp'
+1837025672140161024
+1837025681658085376
+1837025689412308992
+```
+
+Timestamps are 64-bit values that combine physical time and a logical counter to guarantee uniqueness even for messages written at the same millisecond.
+
 ### Remote Queue via SSH
 
 ```bash
@@ -291,11 +330,9 @@ SimpleBroker can be configured via environment variables:
 - `BROKER_BUSY_TIMEOUT` - SQLite busy timeout in milliseconds (default: 5000)
 - `BROKER_READ_COMMIT_INTERVAL` - Number of messages to read before committing in `--all` mode (default: 1)
   - Default of 1 provides exactly-once delivery guarantee (~10,000 messages/second)
-  - Increase for better performance at the cost of at-least-once delivery:
-    - 10: ~96,000 messages/second (9.4x faster)
-    - 50: ~286,000 messages/second (28x faster)
-    - 100: ~335,000 messages/second (33x faster)
-  - Higher values mean more messages may be redelivered if consumer crashes
+  - Increase for better performance with at-least-once delivery guarantee
+  - With values > 1, messages are only deleted after being successfully delivered
+  - Trade-off: larger batches hold database locks longer, reducing concurrency
 
 ## Development
 

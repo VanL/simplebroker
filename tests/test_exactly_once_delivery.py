@@ -56,7 +56,7 @@ def test_single_message_immediate_commit(workdir: Path):
 
 
 def test_batch_commit_for_all_messages(workdir: Path):
-    """Test that --all commits in batches of 10 messages."""
+    """Test that --all provides at-least-once delivery with batch commits."""
     db_path = workdir / "test.db"
 
     # Write 25 messages
@@ -70,15 +70,16 @@ def test_batch_commit_for_all_messages(workdir: Path):
     assert len(messages) == 12
 
     # Check how many messages remain
-    # With improved lock granularity, each batch is committed atomically before yielding
+    # With proper at-least-once delivery, commits happen AFTER yielding
     # We read 12 messages (crashed after message 11, 0-indexed), which means:
-    # - Batch 1 (messages 0-9): Fetched, committed, yielded completely
-    # - Batch 2 (messages 10-19): Fetched, committed, but only yielded 2 messages before crash
-    # So messages 0-19 are committed and deleted, leaving messages 20-24
+    # - Batch 1 (messages 0-9): Fetched, yielded completely, committed
+    # - Batch 2 (messages 10-19): Fetched, yielded only 2 messages, then crashed
+    # Since we crashed before completing the yield of batch 2, it was NOT committed
+    # So only messages 0-9 are deleted, leaving messages 10-24
     with BrokerDB(str(db_path)) as db:
         remaining = list(db.stream_read("test_queue", peek=True, all_messages=True))
-        assert len(remaining) == 5
-        assert remaining[0] == "message20"  # First uncommitted message
+        assert len(remaining) == 15, f"Expected 15 messages, got {len(remaining)}"
+        assert remaining[0] == "message10"  # First uncommitted message
         assert remaining[-1] == "message24"  # Last message
 
 
@@ -179,13 +180,14 @@ def test_commit_interval_parameter_respected(workdir: Path):
 
     assert len(messages_read) == 8
 
-    # With improved lock granularity, batches are committed atomically
+    # With proper at-least-once delivery, commits happen AFTER yielding
     # We read 8 messages (0-7), with commit_interval=3:
-    # - Batch 1 (messages 0-2): Fetched, committed, yielded completely
-    # - Batch 2 (messages 3-5): Fetched, committed, yielded completely
-    # - Batch 3 (messages 6-8): Fetched, committed, but only yielded 2 messages before crash
-    # So messages 0-8 are committed and deleted, leaving messages 9-14
+    # - Batch 1 (messages 0-2): Fetched, yielded completely, committed
+    # - Batch 2 (messages 3-5): Fetched, yielded completely, committed
+    # - Batch 3 (messages 6-8): Fetched, yielded only 2 messages (6-7), then crashed
+    # Since we crashed before completing batch 3, it was NOT committed
+    # So only messages 0-5 are deleted, leaving messages 6-14
     with BrokerDB(str(db_path)) as db:
         remaining = list(db.stream_read("test_queue", peek=True, all_messages=True))
-        assert len(remaining) == 6
-        assert remaining[0] == "message9"  # First uncommitted message
+        assert len(remaining) == 9, f"Expected 9 messages, got {len(remaining)}"
+        assert remaining[0] == "message6"  # First uncommitted message

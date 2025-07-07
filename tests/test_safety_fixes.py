@@ -10,6 +10,8 @@ Tests verify:
 """
 
 import multiprocessing
+import subprocess
+import sys
 
 import pytest
 
@@ -135,77 +137,98 @@ def test_broadcast_size_utf8(workdir):
     assert "exceeds maximum size" in err
 
 
-def write_messages_process(process_id, db_path, result_queue):
-    """Write messages from a separate process with its own BrokerDB instance."""
-    try:
-        # Each process gets its own DB instance
-        with BrokerDB(str(db_path)) as db:
-            for i in range(20):
-                msg = f"process_{process_id}_msg_{i}"
-                db.write(f"queue_{process_id}", msg)
-                # Report success back to parent process
-                result_queue.put(("success", process_id, msg))
-    except Exception as e:
-        # Report error back to parent process
-        result_queue.put(("error", process_id, str(e)))
+def write_messages_subprocess(process_id, workdir):
+    """Write messages using the broker CLI from a subprocess."""
+    errors = []
+    messages_written = []
+
+    for i in range(20):
+        msg = f"process_{process_id}_msg_{i}"
+        # Call the broker CLI directly
+        result = subprocess.run(
+            [sys.executable, "-m", "simplebroker", "write", f"queue_{process_id}", msg],
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        if result.returncode == 0:
+            messages_written.append(msg)
+        else:
+            errors.append(f"Message {i}: {result.stderr}")
+
+    return messages_written, errors
 
 
 def test_timestamp_uniqueness_across_instances(workdir):
-    """Test that timestamps are unique even across BrokerDB instances."""
-    db_path = workdir / ".broker.db"
+    """Test that timestamps are unique even across multiple broker CLI instances."""
+    # Run multiple subprocesses, each calling the broker CLI
+    with multiprocessing.Pool(processes=5) as pool:
+        # Create args for each subprocess: (process_id, workdir)
+        args = [(i, workdir) for i in range(5)]
+        results = pool.starmap(write_messages_subprocess, args)
 
-    # Use a multiprocessing queue to collect results from child processes
-    result_queue = multiprocessing.Queue()
-
-    # Run multiple processes, each with its own BrokerDB instance
-    processes = []
-    for i in range(5):
-        p = multiprocessing.Process(
-            target=write_messages_process, args=(i, db_path, result_queue)
-        )
-        processes.append(p)
-        p.start()
-
-    # Wait for all processes to complete
-    for p in processes:
-        p.join()
-
-    # Collect results from queue
+    # Collect results
     all_messages = {}
     errors = []
 
-    # Get all results from the queue
-    while not result_queue.empty():
-        result = result_queue.get()
-        if result[0] == "success":
-            _, process_id, msg = result
+    for process_id, (messages_written, process_errors) in enumerate(results):
+        for msg in messages_written:
             all_messages[msg] = process_id
-        else:
-            _, process_id, error = result
+        for error in process_errors:
             errors.append(f"Process {process_id}: {error}")
 
     # Check for errors
     assert not errors, f"Errors occurred: {errors}"
 
-    # Verify message uniqueness by reading all messages back
-    # This indirectly tests timestamp uniqueness - if timestamps were duplicated,
-    # messages would be lost or returned in wrong order
+    # Verify message uniqueness by peeking all messages with timestamps using the CLI
+    # This directly tests timestamp uniqueness - timestamps should be unique
     messages_read = {}
-    with BrokerDB(str(db_path)) as db:
-        for process_id in range(5):
-            # MODIFICATION: Use a non-destructive peek (read with peek=True) to verify.
-            # This avoids write-lock contention with background DB cleanup/checkpointing,
-            # making the test more robust against timing-related lock errors.
-            msgs = db.read(f"queue_{process_id}", all_messages=True, peek=True)
-            assert len(msgs) == 20, (
-                f"Expected 20 messages for process {process_id}, got {len(msgs)}"
-            )
+    all_timestamps = set()
 
-            # Verify order is preserved (FIFO)
-            for i, msg in enumerate(msgs):
-                expected = f"process_{process_id}_msg_{i}"
-                assert msg == expected, f"Expected {expected}, got {msg}"
-                messages_read[msg] = process_id
+    for process_id in range(5):
+        # Use the CLI to peek all messages with timestamps
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "simplebroker",
+                "peek",
+                f"queue_{process_id}",
+                "--all",
+                "--timestamps",
+            ],
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+
+        assert result.returncode == 0, (
+            f"Failed to peek queue_{process_id}: {result.stderr}"
+        )
+
+        lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+        assert len(lines) == 20, (
+            f"Expected 20 messages for process {process_id}, got {len(lines)}"
+        )
+
+        # Verify order is preserved (FIFO) and collect timestamps
+        for i, line in enumerate(lines):
+            # Parse timestamp and message (format: timestamp\tmessage)
+            parts = line.split("\t", 1)
+            assert len(parts) == 2, f"Invalid format: {line}"
+            timestamp_str, msg = parts
+            timestamp = int(timestamp_str)
+
+            # Check for timestamp uniqueness
+            assert timestamp not in all_timestamps, f"Duplicate timestamp: {timestamp}"
+            all_timestamps.add(timestamp)
+
+            expected = f"process_{process_id}_msg_{i}"
+            assert msg == expected, f"Expected {expected}, got {msg}"
+            messages_read[msg] = process_id
 
     # Verify we got all messages back
     assert len(messages_read) == 100, f"Expected 100 messages, got {len(messages_read)}"
@@ -214,18 +237,47 @@ def test_timestamp_uniqueness_across_instances(workdir):
     )
 
     # Additional test: rapid writes to same queue to stress timestamp generation
-    with BrokerDB(str(db_path)) as db:
-        for i in range(10):
-            db.write("stress_test", f"rapid_{i}")
+    for i in range(10):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "simplebroker",
+                "write",
+                "stress_test",
+                f"rapid_{i}",
+            ],
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        assert result.returncode == 0, f"Failed to write rapid_{i}: {result.stderr}"
 
-        # BEST PRACTICE: Also use peek=True here for consistency, although
-        # the risk of locking is lower in this single-threaded section.
-        msgs = db.read("stress_test", all_messages=True, peek=True)
-        assert len(msgs) == 10
-        for i, msg in enumerate(msgs):
-            assert msg == f"rapid_{i}", (
-                f"Messages out of order: expected rapid_{i}, got {msg}"
-            )
+    # Read back with peek to verify order
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "simplebroker",
+            "read",
+            "stress_test",
+            "--all",
+            "--peek",
+        ],
+        cwd=str(workdir),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert result.returncode == 0, f"Failed to read stress_test: {result.stderr}"
+    msgs = result.stdout.strip().split("\n") if result.stdout.strip() else []
+    assert len(msgs) == 10
+    for i, msg in enumerate(msgs):
+        assert msg == f"rapid_{i}", (
+            f"Messages out of order: expected rapid_{i}, got {msg}"
+        )
 
 
 def test_sqlite_version_check(workdir, monkeypatch):

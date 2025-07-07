@@ -87,6 +87,7 @@ def _read_messages(
     peek: bool,
     all_messages: bool = False,
     json_output: bool = False,
+    show_timestamps: bool = False,
 ) -> int:
     """Common implementation for read and peek commands.
 
@@ -96,6 +97,7 @@ def _read_messages(
         peek: If True, don't delete messages (peek mode)
         all_messages: If True, read all messages
         json_output: If True, output in line-delimited JSON format (ndjson)
+        show_timestamps: If True, include timestamps in the output
 
     Returns:
         Exit code
@@ -109,28 +111,47 @@ def _read_messages(
     # Users can set BROKER_READ_COMMIT_INTERVAL env var for performance tuning
     commit_interval = READ_COMMIT_INTERVAL if all_messages and not peek else 1
 
-    for _i, message in enumerate(
-        db.stream_read(
+    # Use the appropriate stream method based on whether timestamps are needed
+    if show_timestamps:
+        stream = db.stream_read_with_timestamps(
             queue, peek=peek, all_messages=all_messages, commit_interval=commit_interval
         )
-    ):
+    else:
+        stream = (
+            (msg, None)
+            for msg in db.stream_read(
+                queue,
+                peek=peek,
+                all_messages=all_messages,
+                commit_interval=commit_interval,
+            )
+        )
+
+    for _i, (message, timestamp) in enumerate(stream):
         message_count += 1
 
         if json_output:
             # Output as line-delimited JSON (ndjson) - one JSON object per line
-            print(json.dumps({"message": message}))
+            data = {"message": message}
+            if show_timestamps and timestamp is not None:
+                data["timestamp"] = timestamp
+            print(json.dumps(data))
         else:
-            # Warn if message contains newlines (shell safety)
-            if not warned_newlines and "\n" in message:
-                warnings.warn(
-                    "Message contains newline characters which may break shell pipelines. "
-                    "Consider using --json for safe handling of special characters.",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                warned_newlines = True
+            # For regular output, prepend timestamp if requested
+            if show_timestamps and timestamp is not None:
+                print(f"{timestamp}\t{message}")
+            else:
+                # Warn if message contains newlines (shell safety)
+                if not warned_newlines and "\n" in message:
+                    warnings.warn(
+                        "Message contains newline characters which may break shell pipelines. "
+                        "Consider using --json for safe handling of special characters.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    warned_newlines = True
 
-            print(message)
+                print(message)
 
     if message_count == 0:
         return EXIT_QUEUE_EMPTY
@@ -139,20 +160,38 @@ def _read_messages(
 
 
 def cmd_read(
-    db: BrokerDB, queue: str, all_messages: bool = False, json_output: bool = False
+    db: BrokerDB,
+    queue: str,
+    all_messages: bool = False,
+    json_output: bool = False,
+    show_timestamps: bool = False,
 ) -> int:
     """Read and remove message(s) from queue."""
     return _read_messages(
-        db, queue, peek=False, all_messages=all_messages, json_output=json_output
+        db,
+        queue,
+        peek=False,
+        all_messages=all_messages,
+        json_output=json_output,
+        show_timestamps=show_timestamps,
     )
 
 
 def cmd_peek(
-    db: BrokerDB, queue: str, all_messages: bool = False, json_output: bool = False
+    db: BrokerDB,
+    queue: str,
+    all_messages: bool = False,
+    json_output: bool = False,
+    show_timestamps: bool = False,
 ) -> int:
     """Read without removing message(s)."""
     return _read_messages(
-        db, queue, peek=True, all_messages=all_messages, json_output=json_output
+        db,
+        queue,
+        peek=True,
+        all_messages=all_messages,
+        json_output=json_output,
+        show_timestamps=show_timestamps,
     )
 
 

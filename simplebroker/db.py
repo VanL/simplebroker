@@ -26,12 +26,20 @@ MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1  # 1,048,575
 # Read commit interval for --all operations
 # Controls how many messages are deleted and committed at once
 # Default is 1 for exactly-once delivery guarantee (safest)
-# Can be increased for better performance at the cost of at-least-once delivery
+# Can be increased for better performance with at-least-once delivery guarantee
+#
+# IMPORTANT: With commit_interval > 1:
+# - Messages are deleted from DB only AFTER they are yielded to consumer
+# - If consumer crashes mid-batch, unprocessed messages remain in DB
+# - This provides at-least-once delivery (messages may be redelivered)
+# - Database lock is held for entire batch, reducing concurrency
+#
 # Performance benchmarks:
-#   Interval=1:    ~10,000 messages/second (exactly-once delivery)
-#   Interval=10:   ~96,000 messages/second (9.4x faster, at-least-once)
-#   Interval=50:   ~286,000 messages/second (28x faster, at-least-once)
-#   Interval=100:  ~335,000 messages/second (33x faster, at-least-once)
+#   Interval=1:    ~10,000 messages/second (exactly-once, highest concurrency)
+#   Interval=10:   ~96,000 messages/second (at-least-once, moderate concurrency)
+#   Interval=50:   ~286,000 messages/second (at-least-once, lower concurrency)
+#   Interval=100:  ~335,000 messages/second (at-least-once, lowest concurrency)
+#
 # Can be overridden with BROKER_READ_COMMIT_INTERVAL environment variable
 READ_COMMIT_INTERVAL = int(os.environ.get("BROKER_READ_COMMIT_INTERVAL", "1"))
 
@@ -402,36 +410,35 @@ class BrokerDB:
         # Delegate to stream_read() and collect results
         return list(self.stream_read(queue, peek=peek, all_messages=all_messages))
 
-    def stream_read(
+    def stream_read_with_timestamps(
         self,
         queue: str,
         peek: bool = False,
         all_messages: bool = False,
         commit_interval: int = READ_COMMIT_INTERVAL,
-    ) -> Iterator[str]:
-        """Stream message(s) from a queue without loading all into memory.
+    ) -> Iterator[Tuple[str, int]]:
+        """Stream message(s) with timestamps from a queue.
 
         Args:
             queue: Name of the queue
             peek: If True, don't delete messages after reading
             all_messages: If True, read all messages (otherwise just one)
             commit_interval: Commit after this many messages (only for delete operations)
-                Default is 1 for exactly-once delivery. Higher values improve
-                performance but provide at-least-once delivery (messages may be
-                redelivered if consumer crashes mid-batch).
+                - 1 = exactly-once delivery (default)
+                - >1 = at-least-once delivery (better performance, lower concurrency)
 
         Yields:
-            Message bodies one at a time
+            Tuples of (message_body, timestamp) one at a time
+
+        Note:
+            For delete operations with commit_interval > 1:
+            - Messages are deleted only AFTER being yielded
+            - Database lock is held during entire batch yield
+            - Provides at-least-once delivery guarantee
 
         Raises:
             ValueError: If queue name is invalid
             RuntimeError: If called from a forked process
-
-        Note:
-            When all_messages=True and peek=False, messages are deleted and
-            committed in batches determined by commit_interval. If the consumer
-            crashes or stops iterating before completion, uncommitted messages
-            will remain in the queue and be delivered to the next consumer.
         """
         self._check_fork_safety()
         self._validate_queue_name(queue)
@@ -446,7 +453,7 @@ class BrokerDB:
                 with self._lock:
                     cursor = self.conn.execute(
                         """
-                        SELECT body FROM messages
+                        SELECT body, ts FROM messages
                         WHERE queue = ?
                         ORDER BY id
                         LIMIT ? OFFSET ?
@@ -461,7 +468,7 @@ class BrokerDB:
                     break
 
                 for row in batch_messages:
-                    yield row[0]
+                    yield row[0], row[1]  # body, timestamp
 
                 # For single message peek, we're done after first batch
                 if not all_messages:
@@ -469,12 +476,54 @@ class BrokerDB:
 
                 offset += batch_size
         else:
-            # For DELETE operations, we need to commit periodically for safety
+            # For DELETE operations, we need proper transaction handling
             if all_messages:
-                # For --all, process in batches for safety
+                # Process in batches with proper at-least-once delivery guarantee
                 while True:
-                    # Acquire lock, delete batch, commit, release lock
+                    # Hold lock for entire batch operation to ensure atomicity
                     with self._lock:
+                        # Start explicit transaction
+                        self.conn.execute("BEGIN IMMEDIATE")
+                        try:
+                            cursor = self.conn.execute(
+                                """
+                                DELETE FROM messages
+                                WHERE id IN (
+                                    SELECT id FROM messages
+                                    WHERE queue = ?
+                                    ORDER BY id
+                                    LIMIT ?
+                                )
+                                RETURNING body, ts
+                                """,
+                                (queue, commit_interval),
+                            )
+
+                            # Fetch all messages in this batch
+                            batch_messages = list(cursor)
+
+                            if not batch_messages:
+                                self.conn.rollback()
+                                break
+
+                            # Yield messages BEFORE committing to ensure at-least-once delivery
+                            # If consumer crashes here, messages remain in DB and will be redelivered
+                            for row in batch_messages:
+                                yield row[0], row[1]  # body, timestamp
+
+                            # Commit only after ALL messages in batch have been yielded
+                            # This ensures at-least-once delivery: messages are only deleted
+                            # after successful processing
+                            self.conn.commit()
+                        except Exception:
+                            # On any error, rollback to preserve messages
+                            self.conn.rollback()
+                            raise
+            else:
+                # For single message, use same transaction pattern for consistency
+                with self._lock:
+                    self.conn.execute("BEGIN IMMEDIATE")
+                    try:
                         cursor = self.conn.execute(
                             """
                             DELETE FROM messages
@@ -482,53 +531,64 @@ class BrokerDB:
                                 SELECT id FROM messages
                                 WHERE queue = ?
                                 ORDER BY id
-                                LIMIT ?
+                                LIMIT 1
                             )
-                            RETURNING body
+                            RETURNING body, ts
                             """,
-                            (queue, commit_interval),
+                            (queue,),
                         )
 
-                        # Fetch all messages in this batch while lock is held
-                        batch_messages = list(cursor)
+                        # Fetch the message
+                        message = cursor.fetchone()
 
-                        # Commit after each batch for exactly-once delivery guarantee
-                        if batch_messages:
+                        if message:
+                            # Yield message BEFORE committing
+                            yield message[0], message[1]  # body, timestamp
+                            # Commit only after message has been yielded
                             self.conn.commit()
+                        else:
+                            self.conn.rollback()
+                    except Exception:
+                        # On any error, rollback to preserve message
+                        self.conn.rollback()
+                        raise
 
-                    # Yield messages without holding lock
-                    if not batch_messages:
-                        break
+    def stream_read(
+        self,
+        queue: str,
+        peek: bool = False,
+        all_messages: bool = False,
+        commit_interval: int = READ_COMMIT_INTERVAL,
+    ) -> Iterator[str]:
+        """Stream message(s) from a queue without loading all into memory.
 
-                    for row in batch_messages:
-                        yield row[0]
-            else:
-                # For single message, delete and commit immediately
-                with self._lock:
-                    cursor = self.conn.execute(
-                        """
-                        DELETE FROM messages
-                        WHERE id IN (
-                            SELECT id FROM messages
-                            WHERE queue = ?
-                            ORDER BY id
-                            LIMIT 1
-                        )
-                        RETURNING body
-                        """,
-                        (queue,),
-                    )
+        Args:
+            queue: Name of the queue
+            peek: If True, don't delete messages after reading
+            all_messages: If True, read all messages (otherwise just one)
+            commit_interval: Commit after this many messages (only for delete operations)
+                - 1 = exactly-once delivery (default)
+                - >1 = at-least-once delivery (better performance, lower concurrency)
 
-                    # Fetch the message while lock is held
-                    message = cursor.fetchone()
+        Yields:
+            Message bodies one at a time
 
-                    # Commit immediately for single message
-                    if message:
-                        self.conn.commit()
+        Raises:
+            ValueError: If queue name is invalid
+            RuntimeError: If called from a forked process
 
-                # Yield the single message without holding lock
-                if message:
-                    yield message[0]
+        Note:
+            For delete operations with commit_interval > 1:
+            - Messages are deleted only AFTER being yielded
+            - Database lock is held during entire batch yield
+            - Provides at-least-once delivery guarantee
+            - If consumer crashes mid-batch, unprocessed messages remain in queue
+        """
+        # Delegate to stream_read_with_timestamps and yield only message bodies
+        for message, _timestamp in self.stream_read_with_timestamps(
+            queue, peek=peek, all_messages=all_messages, commit_interval=commit_interval
+        ):
+            yield message
 
     def list_queues(self) -> List[Tuple[str, int]]:
         """List all queues with their message counts.

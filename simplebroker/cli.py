@@ -73,6 +73,12 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="output in line-delimited JSON (ndjson) format",
     )
+    read_parser.add_argument(
+        "-t",
+        "--timestamps",
+        action="store_true",
+        help="include timestamps in output",
+    )
 
     # Peek command
     peek_parser = subparsers.add_parser("peek", help="read without removing")
@@ -82,6 +88,12 @@ def create_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         help="output in line-delimited JSON (ndjson) format",
+    )
+    peek_parser.add_argument(
+        "-t",
+        "--timestamps",
+        action="store_true",
+        help="include timestamps in output",
     )
 
     # List command
@@ -323,9 +335,13 @@ def main() -> int:
             if args.command == "write":
                 return commands.cmd_write(db, args.queue, args.message)
             elif args.command == "read":
-                return commands.cmd_read(db, args.queue, args.all, args.json)
+                return commands.cmd_read(
+                    db, args.queue, args.all, args.json, args.timestamps
+                )
             elif args.command == "peek":
-                return commands.cmd_peek(db, args.queue, args.all, args.json)
+                return commands.cmd_peek(
+                    db, args.queue, args.all, args.json, args.timestamps
+                )
             elif args.command == "list":
                 return commands.cmd_list(db)
             elif args.command == "purge":
