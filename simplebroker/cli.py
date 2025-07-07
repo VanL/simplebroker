@@ -3,27 +3,42 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import NoReturn
 
+from . import __version__ as VERSION
 from . import commands
 from .db import BrokerDB
 
-VERSION = "0.1.0"
-DEFAULT_DB_NAME = ".broker.db"
 PROG_NAME = "simplebroker"
+DEFAULT_DB_NAME = ".broker.db"
 
 
-def main() -> int:
-    """Main CLI entry point.
+class ArgumentParserError(Exception):
+    """Custom exception for argument parsing errors."""
+
+    pass
+
+
+class CustomArgumentParser(argparse.ArgumentParser):
+    """Custom ArgumentParser that doesn't exit on error."""
+
+    def error(self, message: str) -> NoReturn:
+        raise ArgumentParserError(message)
+
+
+def create_parser() -> argparse.ArgumentParser:
+    """Create the main parser with global options and subcommands.
 
     Returns:
-        Exit code (0 for success, 1 for error)
+        ArgumentParser configured with global options and subcommands
     """
-    # Create main parser with global options
-    parser = argparse.ArgumentParser(
-        prog=PROG_NAME, description="Simple message broker with SQLite backend"
+    parser = CustomArgumentParser(
+        prog=PROG_NAME,
+        description="Simple message broker with SQLite backend",
+        allow_abbrev=False,  # Prevent ambiguous abbreviations
     )
 
-    # Global options
+    # Add global arguments
     parser.add_argument(
         "-d", "--dir", type=Path, default=Path.cwd(), help="working directory"
     )
@@ -53,11 +68,21 @@ def main() -> int:
     read_parser = subparsers.add_parser("read", help="read and remove message")
     read_parser.add_argument("queue", help="queue name")
     read_parser.add_argument("--all", action="store_true", help="read all messages")
+    read_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="output in line-delimited JSON (ndjson) format",
+    )
 
     # Peek command
     peek_parser = subparsers.add_parser("peek", help="read without removing")
     peek_parser.add_argument("queue", help="queue name")
     peek_parser.add_argument("--all", action="store_true", help="peek all messages")
+    peek_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="output in line-delimited JSON (ndjson) format",
+    )
 
     # List command
     subparsers.add_parser("list", help="list all queues")
@@ -73,10 +98,107 @@ def main() -> int:
     )
     broadcast_parser.add_argument("message", help="message content ('-' for stdin)")
 
-    # Parse arguments
-    args = parser.parse_args()
+    return parser
 
-    # Handle version flag
+
+def rearrange_args(argv: list[str]) -> list[str]:
+    """Rearrange arguments to put global options before subcommand.
+
+    This allows global options to appear anywhere on the command line,
+    including after the subcommand.
+
+    Args:
+        argv: List of command line arguments (without program name)
+
+    Returns:
+        List of rearranged arguments
+    """
+    if not argv:
+        return argv
+
+    # Define global option flags
+    global_options = {
+        "-d",
+        "--dir",
+        "-f",
+        "--file",
+        "-q",
+        "--quiet",
+        "--version",
+        "--cleanup",
+    }
+
+    # Find subcommands
+    subcommands = {"write", "read", "peek", "list", "purge", "broadcast"}
+
+    global_args = []
+    command_args = []
+    found_command = False
+    i = 0
+
+    # Track whether we're expecting a value for a global option
+    expecting_value_for = None
+
+    while i < len(argv):
+        arg = argv[i]
+
+        # If we're expecting a value for a previous global option
+        if expecting_value_for:
+            global_args.append(arg)
+            expecting_value_for = None
+        # Check if this is a global option with equals form (e.g., --dir=/tmp)
+        elif arg.startswith("--dir=") or arg.startswith("--file="):
+            global_args.append(arg)
+        # Check if this is a global option
+        elif arg in global_options:
+            # This is a global option
+            global_args.append(arg)
+            # Check if this option takes a value
+            if arg in {"-d", "--dir", "-f", "--file"}:
+                # Mark that we're expecting a value next
+                expecting_value_for = arg
+        elif arg in subcommands and not found_command:
+            # This is the subcommand
+            found_command = True
+            command_args.append(arg)
+        else:
+            # This belongs to the command or is a positional argument
+            command_args.append(arg)
+
+        i += 1
+
+    # Combine: global options first, then command and its arguments
+    return global_args + command_args
+
+
+def main() -> int:
+    """Main CLI entry point.
+
+    Returns:
+        Exit code (0 for success, 1 for error)
+    """
+    # Create the unified parser
+    parser = create_parser()
+
+    # Parse arguments, rearranging to put global options first
+    try:
+        if len(sys.argv) == 1:
+            parser.print_help()
+            return 0
+
+        # Rearrange arguments to put global options before subcommand
+        rearranged_args = rearrange_args(sys.argv[1:])
+
+        # Use regular parse_args with rearranged arguments
+        args = parser.parse_args(rearranged_args)
+    except ArgumentParserError as e:
+        print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+        return 1
+    except SystemExit:
+        # Handle argparse's default exit behavior
+        return 1
+
+    # Handle --version flag
     if args.version:
         print(f"{PROG_NAME} {VERSION}")
         return 0
@@ -85,17 +207,25 @@ def main() -> int:
     if args.cleanup:
         try:
             db_path = args.dir / args.file
-            if db_path.exists():
-                db_path.unlink()
-                if not args.quiet:
+            # Check if file existed before deletion for messaging purposes
+            file_existed = db_path.exists()
+
+            try:
+                # Use missing_ok=True to handle TOCTOU race condition atomically
+                # This will succeed whether the file exists or not
+                db_path.unlink(missing_ok=True)
+
+                if file_existed and not args.quiet:
                     print(f"Database cleaned up: {db_path}")
-            else:
-                if not args.quiet:
-                    print(f"Database not found: {db_path}")
+                elif not file_existed and not args.quiet:
+                    print(f"Database not found, nothing to clean up: {db_path}")
+            except PermissionError:
+                print(
+                    f"{PROG_NAME}: error: Permission denied: {db_path}",
+                    file=sys.stderr,
+                )
+                return 1
             return 0
-        except PermissionError:
-            print(f"{PROG_NAME}: error: Permission denied: {db_path}", file=sys.stderr)
-            return 1
         except Exception as e:
             print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
             return 1
@@ -111,9 +241,56 @@ def main() -> int:
         if not working_dir.exists():
             raise ValueError(f"Directory not found: {working_dir}")
         if not working_dir.is_dir():
-            raise ValueError(f"Not a directory: {working_dir}")
+            # Provide more helpful error message for common mistake
+            if working_dir.is_file():
+                raise ValueError(f"Path is a file, not a directory: {working_dir}")
+            else:
+                raise ValueError(f"Not a directory: {working_dir}")
 
         db_path = working_dir / args.file
+
+        # Prevent path traversal attacks - ensure db_path stays within working_dir
+        from pathlib import PurePath
+
+        # Check if the filename is an absolute path or contains traversal attempts
+        file_path = PurePath(args.file)
+        if file_path.is_absolute():
+            raise ValueError(
+                f"Database filename must be relative, not absolute: {args.file}"
+            )
+
+        # Check for parent directory references
+        for part in file_path.parts:
+            if part == "..":
+                raise ValueError(
+                    f"Database filename must not contain parent directory references: {args.file}"
+                )
+
+        # Additional validation: resolve paths and check containment
+        try:
+            # Resolve both paths to compare them
+            resolved_db_path = db_path.resolve()
+            resolved_working_dir = working_dir.resolve()
+
+            # Check if the database path is within the working directory
+            # Use is_relative_to() if available (Python 3.9+), otherwise use relative_to()
+            if hasattr(resolved_db_path, "is_relative_to"):
+                if not resolved_db_path.is_relative_to(resolved_working_dir):
+                    raise ValueError(
+                        "Database file must be within the working directory"
+                    )
+            else:
+                # Fallback for older Python versions - try relative_to and catch exception
+                try:
+                    resolved_db_path.relative_to(resolved_working_dir)
+                except ValueError:
+                    raise ValueError(
+                        "Database file must be within the working directory"
+                    ) from None
+        except (RuntimeError, OSError):
+            # resolve() can fail on non-existent paths, which is acceptable
+            # We've already validated the path structure above
+            pass
 
         # Check if parent directory is writable
         if not db_path.parent.exists():
@@ -130,12 +307,19 @@ def main() -> int:
             if args.command == "write":
                 return commands.cmd_write(db, args.queue, args.message)
             elif args.command == "read":
-                return commands.cmd_read(db, args.queue, args.all)
+                return commands.cmd_read(db, args.queue, args.all, args.json)
             elif args.command == "peek":
-                return commands.cmd_peek(db, args.queue, args.all)
+                return commands.cmd_peek(db, args.queue, args.all, args.json)
             elif args.command == "list":
                 return commands.cmd_list(db)
             elif args.command == "purge":
+                # CRITICAL SAFETY: Require either queue name or explicit --all flag
+                if not args.queue and not args.all:
+                    print(
+                        f"{PROG_NAME}: error: purge requires either a queue name or --all flag",
+                        file=sys.stderr,
+                    )
+                    return 1
                 queue = None if args.all else args.queue
                 return commands.cmd_purge(db, queue)
             elif args.command == "broadcast":

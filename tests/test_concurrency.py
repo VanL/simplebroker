@@ -9,6 +9,27 @@ import concurrent.futures as cf
 from .conftest import run_cli
 
 
+def _read_queue_helper(args):
+    """Helper function for multiprocessing tests."""
+    _, queue_name, workdir = args
+    return run_cli("read", queue_name, cwd=workdir)
+
+
+def _read_until_empty_helper(args):
+    """Helper function for reading messages until queue is empty."""
+    reader_id, queue_name, workdir = args
+    messages = []
+    while True:
+        rc, out, _ = run_cli("read", queue_name, cwd=workdir)
+        if rc == 0:
+            messages.append(out)
+        elif rc == 2:  # Queue empty
+            break
+        else:
+            raise AssertionError(f"Unexpected return code: {rc}")
+    return messages
+
+
 def test_parallel_writes(workdir):
     """T6: Multiple concurrent writers work correctly."""
     message_count = 100  # Reduced from 500 for faster tests
@@ -91,3 +112,61 @@ def test_concurrent_read_write(workdir):
     # Should have read some messages (but maybe not all due to timing)
     assert len(messages) > 0
     assert all(msg.startswith("w") for msg in messages)
+
+
+def test_two_readers_same_message(workdir):
+    """Regression test: ensure only one reader gets each message."""
+    # Write a single message
+    rc, _, _ = run_cli("write", "q", "X", cwd=workdir)
+    assert rc == 0
+
+    # Have two readers attempt to read the message concurrently
+    with cf.ProcessPoolExecutor(2) as pool:
+        # Create args for each reader: (reader_id, queue_name, workdir)
+        args = [(i, "q", workdir) for i in range(2)]
+        results = list(pool.map(_read_queue_helper, args))
+
+    # Extract the output from each result (rc, stdout, stderr)
+    outputs = [result[1] for result in results]
+
+    # Exactly one reader should get the message "X"
+    assert outputs.count("X") == 1, f"Expected exactly one 'X', got outputs: {outputs}"
+
+    # The other reader should have gotten empty queue
+    empty_count = sum(1 for rc, _, _ in results if rc == 2)
+    assert empty_count == 1, "Expected one reader to get empty queue"
+
+
+def test_concurrent_readers_multiple_messages(workdir):
+    """Test that multiple messages are distributed among concurrent readers without duplication."""
+    num_messages = 20
+    num_readers = 4
+
+    # Write multiple messages
+    for i in range(num_messages):
+        rc, _, _ = run_cli("write", "multi", f"msg_{i:02d}", cwd=workdir)
+        assert rc == 0
+
+    # Have multiple readers read concurrently
+    with cf.ProcessPoolExecutor(num_readers) as pool:
+        # Create args for each reader: (reader_id, queue_name, workdir)
+        args = [(i, "multi", workdir) for i in range(num_readers)]
+        all_results = list(pool.map(_read_until_empty_helper, args))
+
+    # Flatten all messages read by all readers
+    all_messages = []
+    for reader_messages in all_results:
+        all_messages.extend(reader_messages)
+
+    # Should have read exactly all messages
+    assert len(all_messages) == num_messages, (
+        f"Expected {num_messages} messages, got {len(all_messages)}"
+    )
+
+    # Check for duplicates
+    assert len(set(all_messages)) == num_messages, "Found duplicate messages!"
+
+    # Verify all expected messages were read
+    expected_messages = {f"msg_{i:02d}" for i in range(num_messages)}
+    actual_messages = set(all_messages)
+    assert actual_messages == expected_messages, "Not all expected messages were read"

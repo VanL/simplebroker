@@ -41,3 +41,30 @@ def test_broadcast_no_queues(workdir):
     rc, out, _ = run_cli("list", cwd=workdir)
     assert rc == 0
     assert out == ""  # No queues
+
+
+def test_broadcast_visible_to_new_connections(workdir):
+    """Broadcast messages should be visible to new database connections."""
+    # Create two queues with initial messages
+    rc, _, _ = run_cli("write", "queue1", "initial1", cwd=workdir)
+    assert rc == 0
+
+    rc, _, _ = run_cli("write", "queue2", "initial2", cwd=workdir)
+    assert rc == 0
+
+    # Broadcast a message to all queues
+    rc, _, _ = run_cli("broadcast", "broadcast_msg", cwd=workdir)
+    assert rc == 0
+
+    # Important: Each CLI call creates a new BrokerDB connection
+    # This tests that the broadcast was properly committed
+
+    # Verify broadcast message exists in queue1 with new connection
+    rc, out, _ = run_cli("read", "queue1", "--all", cwd=workdir)
+    assert rc == 0
+    assert out.splitlines() == ["initial1", "broadcast_msg"]
+
+    # Verify broadcast message exists in queue2 with new connection
+    rc, out, _ = run_cli("read", "queue2", "--all", cwd=workdir)
+    assert rc == 0
+    assert out.splitlines() == ["initial2", "broadcast_msg"]

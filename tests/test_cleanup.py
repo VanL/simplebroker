@@ -38,7 +38,7 @@ def test_cleanup_nonexistent_database(workdir):
     # Cleanup should succeed with appropriate message
     rc, out, _ = run_cli("--cleanup", cwd=workdir)
     assert rc == 0
-    assert "Database not found" in out
+    assert "Database not found, nothing to clean up" in out
 
 
 def test_cleanup_with_quiet(workdir):

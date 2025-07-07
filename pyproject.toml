@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simplebroker"
-version = "1.0.0"
+version = "1.1.0"
 description = "A lightweight message queue backed by SQLite"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [
-    {name = "SimpleBroker Contributors", email = "hello@example.com"},
+    {name = "Van Lindberg", email = "van.lindberg@gmail.com"},
 ]
 keywords = ["message-queue", "sqlite", "cli", "queue", "broker"]
 classifiers = [
@@ -25,6 +25,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Distributed Computing",
     "Topic :: Utilities",
@@ -35,7 +36,7 @@ dependencies = []
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
-    "black>=23.0",
+    "pytest-xdist>=3.0",
     "mypy>=1.0",
     "ruff>=0.1.0",
 ]
@@ -66,13 +67,14 @@ exclude = [
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
-addopts = "-ra -q --strict-markers"
+addopts = "-ra -q --strict-markers -m 'not slow' -n auto"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
 
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.13"
+no_namespace_packages = true
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -86,13 +88,8 @@ warn_unused_ignores = true
 module = "tests.*"
 ignore_errors = true
 
-[tool.black]
-line-length = 88
-target-version = ['py38']
-include = '\.pyi?$'
-
 [tool.ruff]
-target-version = "py38"
+target-version = "py313"
 line-length = 88
 
 [tool.ruff.lint]
@@ -112,3 +109,4 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["simplebroker"]
+
