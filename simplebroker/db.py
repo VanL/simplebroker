@@ -109,9 +109,22 @@ class BrokerDB:
 
     def _setup_database(self) -> None:
         """Set up database with optimized settings and schema."""
+
+        # helper ------------------------------------------------------------
+        def _exec(sql: str, params: Optional[Tuple[Any, ...]] = None) -> sqlite3.Cursor:
+            return self._execute_with_retry(
+                lambda: self.conn.execute(sql, params or ())
+            )
+
+        # -------------------------------------------------------------------
+
         with self._lock:
-            # Check SQLite version (need 3.35+ for RETURNING clause)
-            cursor = self.conn.execute("SELECT sqlite_version()")
+            # 1. busy_timeout first so it already protects the WAL switch
+            busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
+            _exec(f"PRAGMA busy_timeout={busy_timeout}")
+
+            # 2. SQLite version check (uses retry helper)
+            cursor = _exec("SELECT sqlite_version()")
             version_str = cursor.fetchone()[0]
             major, minor, patch = map(int, version_str.split("."))
             if (major, minor) < (3, 35):
@@ -120,28 +133,16 @@ class BrokerDB:
                     f"SimpleBroker requires SQLite 3.35.0 or later for RETURNING clause support."
                 )
 
-            # Enable WAL mode for better concurrency and verify it worked
-            cursor = self.conn.execute("PRAGMA journal_mode=WAL")
+            # 3. Enable WAL - retry if DB is temporarily locked
+            cursor = _exec("PRAGMA journal_mode=WAL")
             result = cursor.fetchone()
             if result and result[0] != "wal":
                 raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
 
-            # Set busy timeout from environment variable or default to 5 seconds
-            # This causes SQLite to automatically retry when encountering a locked database
-            # for up to the specified time in milliseconds. Combined with application-level
-            # retries (5 attempts with exponential backoff), this provides robust handling
-            # of concurrent access. On Windows or high-concurrency scenarios, you may need
-            # to increase this value via BROKER_BUSY_TIMEOUT environment variable.
-            busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
-            self.conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
+            # 4. Remaining pragmas / schema setup - all via _exec
+            _exec("PRAGMA wal_autocheckpoint=1000")
 
-            # Set WAL auto-checkpoint to prevent unbounded growth of the WAL file.
-            # The default is 1000 pages, but we set it explicitly for clarity and to
-            # guard against future changes in SQLite's default behavior.
-            self.conn.execute("PRAGMA wal_autocheckpoint=1000")
-
-            # Create messages table if it doesn't exist
-            self.conn.execute(
+            _exec(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,20 +152,14 @@ class BrokerDB:
                 )
             """
             )
-
-            # Drop old index if it exists (from previous versions)
-            self.conn.execute("DROP INDEX IF EXISTS idx_queue_ts")
-
-            # Create index for efficient queue queries using id ordering
-            self.conn.execute(
+            _exec("DROP INDEX IF EXISTS idx_queue_ts")
+            _exec(
                 """
                 CREATE INDEX IF NOT EXISTS idx_queue_id
                 ON messages(queue, id)
             """
             )
-
-            # Create meta table to store last timestamp for race-free generation
-            self.conn.execute(
+            _exec(
                 """
                 CREATE TABLE IF NOT EXISTS meta (
                     key TEXT PRIMARY KEY,
@@ -172,13 +167,10 @@ class BrokerDB:
                 )
             """
             )
+            _exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('last_ts', 0)")
 
-            # Initialize last_ts if not exists
-            self.conn.execute(
-                "INSERT OR IGNORE INTO meta (key, value) VALUES ('last_ts', 0)"
-            )
-
-            self.conn.commit()
+            # final commit can also be retried
+            self._execute_with_retry(self.conn.commit)
 
     def _check_fork_safety(self) -> None:
         """Check if we're still in the original process.

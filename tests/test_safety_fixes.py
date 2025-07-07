@@ -295,11 +295,15 @@ def test_sqlite_version_check(workdir, monkeypatch):
 
     class MockConnection:
         def __init__(self, *args, **kwargs):
-            pass
+            self.call_count = 0
 
         def execute(self, query, params=None):
+            self.call_count += 1
             if "sqlite_version" in query:
                 return MockCursor()
+            elif "PRAGMA busy_timeout" in query:
+                # Allow busy_timeout to succeed
+                return None
             # For other queries, raise to trigger error
             raise RuntimeError("Mock connection")
 
