@@ -33,11 +33,11 @@ def _read_until_empty_helper(args):
 def test_parallel_writes(workdir):
     """T6: Multiple concurrent writers work correctly."""
     import sys
-    
+
     # On Windows, reduce concurrency to avoid file locking issues
     if sys.platform == "win32":
         message_count = 50  # Further reduced for Windows
-        max_workers = 4     # Fewer concurrent workers on Windows
+        max_workers = 4  # Fewer concurrent workers on Windows
     else:
         message_count = 100  # Reduced from 500 for faster tests
         max_workers = 8
@@ -48,6 +48,7 @@ def test_parallel_writes(workdir):
         if rc != 0 and sys.platform == "win32":
             # On Windows, retry once if we get a locking error
             import time
+
             time.sleep(0.1)
             rc, _, err = run_cli("write", "concurrent", f"msg_{idx:03d}", cwd=workdir)
         return rc, idx, err
@@ -60,7 +61,7 @@ def test_parallel_writes(workdir):
     failures = [(idx, err) for rc, idx, err in results if rc != 0]
     if failures:
         print(f"Failed writes: {failures}")
-    
+
     # All writes should succeed
     assert all(rc == 0 for rc, _, _ in results)
 
