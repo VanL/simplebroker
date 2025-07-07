@@ -10,7 +10,6 @@ Tests verify:
 """
 
 import multiprocessing
-import os
 
 import pytest
 
@@ -162,8 +161,7 @@ def test_timestamp_uniqueness_across_instances(workdir):
     processes = []
     for i in range(5):
         p = multiprocessing.Process(
-            target=write_messages_process,
-            args=(i, db_path, result_queue)
+            target=write_messages_process, args=(i, db_path, result_queue)
         )
         processes.append(p)
         p.start()
@@ -175,7 +173,7 @@ def test_timestamp_uniqueness_across_instances(workdir):
     # Collect results from queue
     all_messages = {}
     errors = []
-    
+
     # Get all results from the queue
     while not result_queue.empty():
         result = result_queue.get()
