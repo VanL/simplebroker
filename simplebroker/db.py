@@ -115,6 +115,10 @@ class BrokerDB:
                 raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
 
             # Set busy timeout from environment variable or default to 5 seconds
+            # This causes SQLite to automatically retry when encountering a locked database
+            # for up to the specified time in milliseconds. This handles concurrent access
+            # gracefully without requiring application-level retry logic.
+            # On Windows, you may need to increase this for high-concurrency scenarios.
             busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
             self.conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
 
@@ -307,6 +311,33 @@ class BrokerDB:
 
             # Another process updated the timestamp, retry with the new value
 
+    def _execute_with_retry(self, operation, max_retries=3, retry_delay=0.1):
+        """Execute a database operation with retry logic for locked database errors.
+        
+        Args:
+            operation: A callable that performs the database operation
+            max_retries: Maximum number of retry attempts
+            retry_delay: Initial delay between retries (exponential backoff applied)
+            
+        Returns:
+            The result of the operation
+            
+        Raises:
+            The last exception if all retries fail
+        """
+        for attempt in range(max_retries):
+            try:
+                return operation()
+            except sqlite3.OperationalError as e:
+                # Check if this is a database locked error
+                if "database is locked" in str(e):
+                    if attempt < max_retries - 1:
+                        # Wait before retrying, with exponential backoff
+                        time.sleep(retry_delay * (2 ** attempt))
+                        continue
+                # If not a locked error or last attempt, re-raise
+                raise
+
     def write(self, queue: str, message: str) -> None:
         """Write a message to a queue.
 
@@ -321,24 +352,28 @@ class BrokerDB:
         self._check_fork_safety()
         self._validate_queue_name(queue)
 
-        with self._lock:
-            # Use BEGIN IMMEDIATE to ensure we see all committed changes and
-            # prevent other connections from writing during our transaction
-            self.conn.execute("BEGIN IMMEDIATE")
-            try:
-                # Generate hybrid timestamp within the transaction
-                timestamp = self._generate_timestamp()
+        def _do_write():
+            with self._lock:
+                # Use BEGIN IMMEDIATE to ensure we see all committed changes and
+                # prevent other connections from writing during our transaction
+                self.conn.execute("BEGIN IMMEDIATE")
+                try:
+                    # Generate hybrid timestamp within the transaction
+                    timestamp = self._generate_timestamp()
 
-                self.conn.execute(
-                    "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
-                    (queue, message, timestamp),
-                )
-                # Commit the transaction
-                self.conn.commit()
-            except Exception:
-                # Rollback on any error
-                self.conn.rollback()
-                raise
+                    self.conn.execute(
+                        "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
+                        (queue, message, timestamp),
+                    )
+                    # Commit the transaction
+                    self.conn.commit()
+                except Exception:
+                    # Rollback on any error
+                    self.conn.rollback()
+                    raise
+        
+        # Execute with retry logic
+        self._execute_with_retry(_do_write)
 
     def read(
         self, queue: str, peek: bool = False, all_messages: bool = False
@@ -497,17 +532,21 @@ class BrokerDB:
             RuntimeError: If called from a forked process
         """
         self._check_fork_safety()
-        with self._lock:
-            cursor = self.conn.execute(
+        
+        def _do_list():
+            with self._lock:
+                cursor = self.conn.execute(
+                    """
+                    SELECT queue, COUNT(*) as count
+                    FROM messages
+                    GROUP BY queue
+                    ORDER BY queue
                 """
-                SELECT queue, COUNT(*) as count
-                FROM messages
-                GROUP BY queue
-                ORDER BY queue
-            """
-            )
-
-            return cursor.fetchall()
+                )
+                return cursor.fetchall()
+        
+        # Execute with retry logic
+        return self._execute_with_retry(_do_list)
 
     def purge(self, queue: Optional[str] = None) -> None:
         """Delete messages from queue(s).
@@ -523,15 +562,18 @@ class BrokerDB:
         if queue is not None:
             self._validate_queue_name(queue)
 
-        with self._lock:
-            if queue is None:
-                # Purge all messages
-                self.conn.execute("DELETE FROM messages")
-            else:
-                # Purge specific queue
-                self.conn.execute("DELETE FROM messages WHERE queue = ?", (queue,))
-
-            self.conn.commit()
+        def _do_purge():
+            with self._lock:
+                if queue is None:
+                    # Purge all messages
+                    self.conn.execute("DELETE FROM messages")
+                else:
+                    # Purge specific queue
+                    self.conn.execute("DELETE FROM messages WHERE queue = ?", (queue,))
+                self.conn.commit()
+        
+        # Execute with retry logic
+        self._execute_with_retry(_do_purge)
 
     def broadcast(self, message: str) -> None:
         """Broadcast a message to all existing queues atomically.
