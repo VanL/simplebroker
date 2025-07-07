@@ -78,9 +78,9 @@ jobs:
       run: |
         ruff check simplebroker tests
 
-    - name: Check formatting with black
+    - name: Check formatting with ruff
       run: |
-        black --check simplebroker tests
+        ruff format --check simplebroker tests
 
     - name: Type check with mypy
       run: |

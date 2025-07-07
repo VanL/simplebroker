@@ -44,6 +44,12 @@ def test_concurrent_read_write(workdir):
     """Readers and writers can work concurrently."""
     import time
 
+    # Initialize the database by writing and reading one message
+    rc, _, _ = run_cli("write", "mixed", "init", cwd=workdir)
+    assert rc == 0
+    rc, _, _ = run_cli("read", "mixed", cwd=workdir)
+    assert rc == 0
+
     def writer():
         """Write messages continuously."""
         for i in range(10):
@@ -58,7 +64,7 @@ def test_concurrent_read_write(workdir):
         messages = []
         empty_count = 0
         while empty_count < 3:  # Stop after 3 empty reads
-            rc, out, _ = run_cli("read", "mixed", cwd=workdir)
+            rc, out, err = run_cli("read", "mixed", cwd=workdir)
             if rc == 0:
                 messages.append(out)
                 empty_count = 0
@@ -66,6 +72,8 @@ def test_concurrent_read_write(workdir):
                 empty_count += 1
                 time.sleep(0.05)
             else:
+                # Unexpected error - print for debugging
+                print(f"Unexpected return code {rc}, stderr: {err}")
                 return rc, messages
         return 0, messages
 
