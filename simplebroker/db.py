@@ -8,7 +8,7 @@ import time
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, List, Literal, Tuple
 
 # Module constants
 MAX_QUEUE_NAME_LENGTH = 512
@@ -221,7 +221,7 @@ class BrokerDB:
         # Pack physical time in upper 44 bits and logical counter in lower 20 bits
         return (physical_ms << LOGICAL_COUNTER_BITS) | logical
 
-    def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
+    def _decode_hybrid_timestamp(self, ts: int) -> Tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
 
         Args:
@@ -343,7 +343,7 @@ class BrokerDB:
 
     def read(
         self, queue: str, peek: bool = False, all_messages: bool = False
-    ) -> list[str]:
+    ) -> List[str]:
         """Read message(s) from a queue.
 
         Args:
@@ -488,7 +488,7 @@ class BrokerDB:
                 if message:
                     yield message[0]
 
-    def list_queues(self) -> list[tuple[str, int]]:
+    def list_queues(self) -> List[Tuple[str, int]]:
         """List all queues with their message counts.
 
         Returns:
