@@ -1,6 +1,7 @@
 """Database module for SimpleBroker - handles all SQLite operations."""
 
 import os
+import random
 import re
 import sqlite3
 import threading
@@ -324,7 +325,11 @@ class BrokerDB:
             # Another process updated the timestamp, retry with the new value
 
     def _execute_with_retry(
-        self, operation: Callable[[], T], max_retries: int = 5, retry_delay: float = 0.2
+        self,
+        operation: Callable[[], T],
+        *,
+        max_retries: int = 10,
+        retry_delay: float = 0.05,
     ) -> T:
         """Execute a database operation with retry logic for locked database errors.
 
@@ -339,22 +344,25 @@ class BrokerDB:
         Raises:
             The last exception if all retries fail
         """
+        locked_markers = (
+            "database is locked",
+            "database table is locked",
+            "database schema is locked",
+            "database is busy",
+            "database busy",
+        )
+
         for attempt in range(max_retries):
             try:
                 return operation()
             except sqlite3.OperationalError as e:
-                # Check if this is a database locked error
-                error_msg = str(e).lower()
-                if (
-                    "database is locked" in error_msg
-                    or "database table is locked" in error_msg
-                ):
+                msg = str(e).lower()
+                if any(marker in msg for marker in locked_markers):
                     if attempt < max_retries - 1:
-                        # Wait before retrying, with exponential backoff
-                        wait_time = retry_delay * (2**attempt)
-                        time.sleep(wait_time)
+                        # exponential back-off + 0-25 ms jitter
+                        wait = retry_delay * (2**attempt) + random.uniform(0, 0.025)
+                        time.sleep(wait)
                         continue
-                    # On last attempt, still re-raise
                 # If not a locked error or last attempt, re-raise
                 raise
 
