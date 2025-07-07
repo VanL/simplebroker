@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -39,7 +40,7 @@ def workdir(tmp_path: Path, monkeypatch) -> Path:
 def run_cli(
     *args,
     cwd: Path,
-    stdin: str | None = None,
+    stdin: Optional[str] = None,
     timeout: float = 5.0,
 ) -> tuple[int, str, str]:
     """

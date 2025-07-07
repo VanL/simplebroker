@@ -7,7 +7,7 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Iterator, List, Literal, Tuple
+from typing import Any, Iterator, List, Literal, Optional, Tuple
 
 # Module constants
 MAX_QUEUE_NAME_LENGTH = 512
@@ -509,7 +509,7 @@ class BrokerDB:
 
             return cursor.fetchall()
 
-    def purge(self, queue: str | None = None) -> None:
+    def purge(self, queue: Optional[str] = None) -> None:
         """Delete messages from queue(s).
 
         Args:

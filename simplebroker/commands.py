@@ -3,6 +3,7 @@
 import json
 import sys
 import warnings
+from typing import Optional
 
 from .db import READ_COMMIT_INTERVAL, BrokerDB
 
@@ -166,7 +167,7 @@ def cmd_list(db: BrokerDB) -> int:
     return EXIT_SUCCESS
 
 
-def cmd_purge(db: BrokerDB, queue: str | None = None) -> int:
+def cmd_purge(db: BrokerDB, queue: Optional[str] = None) -> int:
     """Remove messages from queue(s)."""
     db.purge(queue)
     return EXIT_SUCCESS
