@@ -1,4 +1,9 @@
-"""Test exactly-once delivery guarantee for streaming reads."""
+"""Test exactly-once and at-least-once delivery guarantees for streaming reads.
+
+The delivery guarantee depends on the commit_interval parameter:
+- commit_interval=1 (default): Exactly-once delivery - messages are committed BEFORE yielding
+- commit_interval>1: At-least-once delivery - messages are committed AFTER yielding in batches
+"""
 
 import multiprocessing
 from pathlib import Path
@@ -34,7 +39,7 @@ def read_messages_with_crash(
 
 
 def test_single_message_immediate_commit(workdir: Path):
-    """Test that single message reads commit immediately."""
+    """Test that single message reads provide exactly-once delivery."""
     db_path = workdir / "test.db"
 
     # Write a message
@@ -70,7 +75,7 @@ def test_batch_commit_for_all_messages(workdir: Path):
     assert len(messages) == 12
 
     # Check how many messages remain
-    # With proper at-least-once delivery, commits happen AFTER yielding
+    # With at-least-once delivery (commit_interval=10), commits happen AFTER yielding
     # We read 12 messages (crashed after message 11, 0-indexed), which means:
     # - Batch 1 (messages 0-9): Fetched, yielded completely, committed
     # - Batch 2 (messages 10-19): Fetched, yielded only 2 messages, then crashed
@@ -112,6 +117,71 @@ def _read_all_messages_worker(db_path: str, result_list):
             )
         )
         result_list.extend(messages)
+
+
+def test_exactly_once_delivery_with_default_interval(workdir: Path):
+    """Test that default commit_interval=1 provides exactly-once delivery."""
+    db_path = workdir / "test.db"
+
+    # Write 10 messages
+    with BrokerDB(str(db_path)) as db:
+        for i in range(10):
+            db.write("test_queue", f"message{i}")
+
+    # Read with default commit_interval=1
+    messages_read = []
+    with BrokerDB(str(db_path)) as db:
+        for i, message in enumerate(
+            db.stream_read("test_queue", peek=False, all_messages=True)
+        ):
+            messages_read.append(message)
+            if i == 4:  # Read 5 messages (0-4), then simulate crash
+                break
+
+    assert len(messages_read) == 5
+
+    # With exactly-once delivery (commit_interval=1), commits happen BEFORE yielding
+    # Each message is individually committed before being yielded
+    # We read 5 messages (0-4), each was committed before yielding
+    # So messages 0-4 are deleted, leaving messages 5-9
+    with BrokerDB(str(db_path)) as db:
+        remaining = list(db.stream_read("test_queue", peek=True, all_messages=True))
+        assert len(remaining) == 5, f"Expected 5 messages, got {len(remaining)}"
+        assert remaining[0] == "message5"  # First unread message
+        assert remaining[-1] == "message9"  # Last message
+
+
+def test_exactly_once_with_explicit_interval_1(workdir: Path):
+    """Test that explicit commit_interval=1 provides exactly-once delivery."""
+    db_path = workdir / "test.db"
+
+    # Write 15 messages
+    with BrokerDB(str(db_path)) as db:
+        for i in range(15):
+            db.write("test_queue", f"message{i}")
+
+    # Read with explicit commit_interval=1
+    messages_read = []
+    with BrokerDB(str(db_path)) as db:
+        for i, message in enumerate(
+            db.stream_read(
+                "test_queue", peek=False, all_messages=True, commit_interval=1
+            )
+        ):
+            messages_read.append(message)
+            if i == 7:  # Read 8 messages (0-7), then simulate crash
+                break
+
+    assert len(messages_read) == 8
+
+    # With exactly-once delivery (commit_interval=1), each message is committed individually
+    # Messages 0-7 were each committed before being yielded
+    # So messages 0-7 are deleted, leaving messages 8-14
+    with BrokerDB(str(db_path)) as db:
+        remaining = list(db.stream_read("test_queue", peek=True, all_messages=True))
+        assert len(remaining) == 7, f"Expected 7 messages, got {len(remaining)}"
+        assert remaining[0] == "message8"  # First unread message
+        assert remaining[-1] == "message14"  # Last message
 
 
 def test_concurrent_readers_safety(workdir: Path):
@@ -180,7 +250,7 @@ def test_commit_interval_parameter_respected(workdir: Path):
 
     assert len(messages_read) == 8
 
-    # With proper at-least-once delivery, commits happen AFTER yielding
+    # With at-least-once delivery (commit_interval=3), commits happen AFTER yielding
     # We read 8 messages (0-7), with commit_interval=3:
     # - Batch 1 (messages 0-2): Fetched, yielded completely, committed
     # - Batch 2 (messages 3-5): Fetched, yielded completely, committed

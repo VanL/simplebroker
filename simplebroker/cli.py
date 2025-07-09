@@ -83,6 +83,9 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cleanup", action="store_true", help="delete the database file and exit"
     )
+    parser.add_argument(
+        "--vacuum", action="store_true", help="remove claimed messages and exit"
+    )
 
     # Create subparsers for commands
     subparsers = parser.add_subparsers(title="commands", dest="command", help=None)
@@ -143,6 +146,7 @@ def rearrange_args(argv: List[str]) -> List[str]:
         "--quiet",
         "--version",
         "--cleanup",
+        "--vacuum",
     }
 
     # Find subcommands
@@ -268,6 +272,21 @@ def main() -> int:
                 )
                 return 1
             return 0
+        except Exception as e:
+            print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+            return 1
+
+    # Handle vacuum flag
+    if args.vacuum:
+        try:
+            db_path = args.dir / args.file
+            if not db_path.exists():
+                if not args.quiet:
+                    print(f"Database not found: {db_path}")
+                return 0
+
+            with BrokerDB(str(db_path)) as db:
+                return commands.cmd_vacuum(db)
         except Exception as e:
             print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
             return 1

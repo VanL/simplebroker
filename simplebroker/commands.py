@@ -464,11 +464,33 @@ def cmd_peek(
 
 def cmd_list(db: BrokerDB) -> int:
     """List all queues with counts."""
-    queues = db.list_queues()
+    # Get full queue stats including claimed messages
+    queue_stats = db.get_queue_stats()
 
-    # queues is a list of (queue_name, count) tuples, already sorted
-    for queue_name, count in queues:
-        print(f"{queue_name}: {count}")
+    # Show each queue with unclaimed count (and total if different)
+    for queue_name, unclaimed, total in queue_stats:
+        if unclaimed == total:
+            print(f"{queue_name}: {unclaimed}")
+        else:
+            print(
+                f"{queue_name}: {unclaimed} ({total} total, {total - unclaimed} claimed)"
+            )
+
+    # Show overall claimed message stats
+    with db._lock:
+        cursor = db.conn.execute("""
+            SELECT
+                COUNT(*) as claimed,
+                (SELECT COUNT(*) FROM messages) as total
+            FROM messages WHERE claimed = 1
+        """)
+        stats = cursor.fetchone()
+        claimed_count = stats[0]
+        total_count = stats[1]
+
+    if total_count > 0 and claimed_count > 0:
+        claimed_pct = (claimed_count / total_count) * 100
+        print(f"\nTotal claimed messages: {claimed_count} ({claimed_pct:.1f}%)")
 
     return EXIT_SUCCESS
 
@@ -484,4 +506,29 @@ def cmd_broadcast(db: BrokerDB, message: str) -> int:
     content = _get_message_content(message)
     # Use optimized broadcast method that does single INSERT...SELECT
     db.broadcast(content)
+    return EXIT_SUCCESS
+
+
+def cmd_vacuum(db: BrokerDB) -> int:
+    """Vacuum claimed messages from the database."""
+    import time
+
+    start_time = time.time()
+
+    # Count claimed messages before vacuum
+    with db._lock:
+        cursor = db.conn.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
+        claimed_count = cursor.fetchone()[0]
+
+    if claimed_count == 0:
+        print("No claimed messages to vacuum")
+        return EXIT_SUCCESS
+
+    # Run vacuum
+    db.vacuum()
+
+    # Calculate elapsed time
+    elapsed = time.time() - start_time
+    print(f"Vacuumed {claimed_count} claimed messages in {elapsed:.1f}s")
+
     return EXIT_SUCCESS

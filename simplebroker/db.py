@@ -117,6 +117,7 @@ class BrokerDB:
         # Enable check_same_thread=False to allow sharing across threads
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._setup_database()
+        self._ensure_schema_v2()
 
         # Set restrictive permissions if new database
         if not existing_db:
@@ -191,16 +192,24 @@ class BrokerDB:
             # 6. Remaining pragmas / schema setup - all via _exec
             _exec("PRAGMA wal_autocheckpoint=1000")
 
-            _exec(
-                """
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    queue TEXT NOT NULL,
-                    body TEXT NOT NULL,
-                    ts INTEGER NOT NULL
-                )
-            """
+            # Check if table exists before creating
+            cursor = _exec(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
             )
+            if not cursor.fetchone():
+                # Table doesn't exist, create with new schema
+                _exec(
+                    """
+                    CREATE TABLE messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        queue TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        ts INTEGER NOT NULL,
+                        claimed INTEGER DEFAULT 0
+                    )
+                """
+                )
+            # If table exists, schema migration will handle adding claimed column
             # Drop redundant indexes if they exist (from older versions)
             _exec("DROP INDEX IF EXISTS idx_messages_queue_ts")
             _exec("DROP INDEX IF EXISTS idx_queue_id")
@@ -218,6 +227,19 @@ class BrokerDB:
                 ON messages(queue, ts, id)
             """
             )
+
+            # Create partial index for unclaimed messages (only if claimed column exists)
+            cursor = _exec(
+                "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='claimed'"
+            )
+            if cursor.fetchone()[0] > 0:
+                _exec(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_messages_unclaimed
+                    ON messages(queue, claimed, id)
+                    WHERE claimed = 0
+                """
+                )
             _exec(
                 """
                 CREATE TABLE IF NOT EXISTS meta (
@@ -230,6 +252,34 @@ class BrokerDB:
 
             # final commit can also be retried
             self._execute_with_retry(self.conn.commit)
+
+    def _ensure_schema_v2(self) -> None:
+        """Migrate to schema with claimed column."""
+        with self._lock:
+            # Check if migration needed
+            cursor = self.conn.execute(
+                "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='claimed'"
+            )
+            if cursor.fetchone()[0] > 0:
+                return  # Already migrated
+
+            # Perform migration
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+                self.conn.execute(
+                    "ALTER TABLE messages ADD COLUMN claimed INTEGER DEFAULT 0"
+                )
+                self.conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_messages_unclaimed
+                    ON messages(queue, claimed, id)
+                    WHERE claimed = 0
+                """)
+                self.conn.commit()
+            except Exception as e:
+                self.conn.rollback()
+                # If the error is because column already exists, that's fine
+                if "duplicate column name" not in str(e):
+                    raise
 
     def _check_fork_safety(self) -> None:
         """Check if we're still in the original process.
@@ -453,6 +503,13 @@ class BrokerDB:
         # Execute with retry logic
         self._execute_with_retry(_do_write)
 
+        # Check vacuum need with sampling (1% of writes)
+        # Only check if auto vacuum is enabled
+        if int(os.environ.get("BROKER_AUTO_VACUUM", "1")) == 1:
+            if random.random() < 0.01:
+                if self._should_vacuum():
+                    self._vacuum_claimed_messages()
+
     def read(
         self, queue: str, peek: bool = False, all_messages: bool = False
     ) -> List[str]:
@@ -494,10 +551,13 @@ class BrokerDB:
             Tuples of (message_body, timestamp)
 
         Note:
-            For delete operations with commit_interval > 1:
-            - Messages are deleted only AFTER being yielded
-            - Database lock is held during entire batch yield
-            - Provides at-least-once delivery guarantee
+            For delete operations:
+            - When commit_interval=1 (exactly-once delivery):
+              * Messages are claimed and committed BEFORE being yielded
+              * If consumer crashes after commit, message is lost (never duplicated)
+            - When commit_interval>1 (at-least-once delivery):
+              * Messages are claimed, yielded, then committed as a batch
+              * If consumer crashes mid-batch, uncommitted messages can be re-delivered
 
         Raises:
             ValueError: If queue name is invalid
@@ -507,7 +567,7 @@ class BrokerDB:
         self._validate_queue_name(queue)
 
         # Build WHERE clause dynamically for better maintainability
-        where_conditions = ["queue = ?"]
+        where_conditions = ["queue = ?", "claimed = 0"]
         params: List[Any] = [queue]
 
         if since_timestamp is not None:
@@ -552,58 +612,130 @@ class BrokerDB:
         else:
             # For DELETE operations, we need proper transaction handling
             if all_messages:
-                # Process in batches with proper at-least-once delivery guarantee
+                # Process in batches with different semantics based on commit_interval
                 while True:
-                    # Hold lock for entire batch operation to ensure atomicity
-                    with self._lock:
-                        # Use retry logic for BEGIN IMMEDIATE
-                        def _begin_transaction() -> None:
-                            self.conn.execute("BEGIN IMMEDIATE")
+                    batch_messages = []
 
-                        try:
-                            self._execute_with_retry(_begin_transaction)
-                        except Exception:
-                            # If we can't even begin transaction, we're done
-                            break
+                    if commit_interval == 1:
+                        # Exactly-once delivery: commit BEFORE yielding each message
+                        # Acquire lock only for the claim operation
+                        with self._lock:
+                            # Use retry logic for BEGIN IMMEDIATE
+                            def _begin_transaction() -> None:
+                                self.conn.execute("BEGIN IMMEDIATE")
 
-                        try:
-                            query = f"""
-                                DELETE FROM messages
-                                WHERE id IN (
-                                    SELECT id FROM messages
-                                    WHERE {where_clause}
-                                    ORDER BY id
-                                    LIMIT ?
-                                )
-                                RETURNING body, ts
-                                """
-                            cursor = self.conn.execute(
-                                query,
-                                tuple(params + [commit_interval]),
-                            )
-
-                            # Fetch all messages in this batch
-                            batch_messages = list(cursor)
-
-                            if not batch_messages:
-                                self.conn.rollback()
+                            try:
+                                self._execute_with_retry(_begin_transaction)
+                            except Exception:
+                                # If we can't even begin transaction, we're done
                                 break
 
-                            # Yield messages BEFORE committing to ensure at-least-once delivery
-                            # If consumer crashes here, messages remain in DB and will be redelivered
-                            for row in batch_messages:
-                                yield row[0], row[1]  # body, timestamp
+                            try:
+                                query = f"""
+                                    UPDATE messages
+                                    SET claimed = 1
+                                    WHERE id IN (
+                                        SELECT id FROM messages
+                                        WHERE {where_clause}
+                                        ORDER BY id
+                                        LIMIT 1
+                                    )
+                                    RETURNING body, ts
+                                    """
+                                cursor = self.conn.execute(
+                                    query,
+                                    tuple(params),
+                                )
 
-                            # Commit only after ALL messages in batch have been yielded
-                            # This ensures at-least-once delivery: messages are only deleted
-                            # after successful processing
-                            self.conn.commit()
-                        except Exception:
-                            # On any error, rollback to preserve messages
-                            self.conn.rollback()
-                            raise
+                                # Fetch the message
+                                message = cursor.fetchone()
+
+                                if not message:
+                                    self.conn.rollback()
+                                    break
+
+                                # Commit IMMEDIATELY before yielding
+                                # This ensures exactly-once delivery semantics
+                                self.conn.commit()
+
+                                # Store message to yield after lock release
+                                batch_messages = [message]
+                            except Exception:
+                                # On any error, rollback to preserve messages
+                                self.conn.rollback()
+                                raise
+
+                        # Lock is now released, yield message without holding it
+                        # Message is already safely claimed in the database
+                        for row in batch_messages:
+                            yield row[0], row[1]  # body, timestamp
+                    else:
+                        # At-least-once delivery: commit AFTER yielding the batch
+                        # First, claim the batch
+                        with self._lock:
+                            # Use retry logic for BEGIN IMMEDIATE
+                            def _begin_transaction() -> None:
+                                self.conn.execute("BEGIN IMMEDIATE")
+
+                            try:
+                                self._execute_with_retry(_begin_transaction)
+                            except Exception:
+                                # If we can't even begin transaction, we're done
+                                break
+
+                            try:
+                                query = f"""
+                                    UPDATE messages
+                                    SET claimed = 1
+                                    WHERE id IN (
+                                        SELECT id FROM messages
+                                        WHERE {where_clause}
+                                        ORDER BY id
+                                        LIMIT ?
+                                    )
+                                    RETURNING body, ts
+                                    """
+                                cursor = self.conn.execute(
+                                    query,
+                                    tuple(params + [commit_interval]),
+                                )
+
+                                # Fetch all messages in this batch
+                                batch_messages = list(cursor)
+
+                                if not batch_messages:
+                                    self.conn.rollback()
+                                    break
+
+                                # DO NOT commit yet - keep transaction open
+                            except Exception:
+                                # On any error, rollback to preserve messages
+                                self.conn.rollback()
+                                raise
+
+                        # Yield messages while transaction is still open but lock is released
+                        # This allows consumer to process messages before commit
+                        for row in batch_messages:
+                            yield row[0], row[1]  # body, timestamp
+
+                        # After successfully yielding all messages, commit the transaction
+                        # This provides at-least-once delivery semantics
+                        with self._lock:
+                            try:
+                                self.conn.commit()
+                            except Exception:
+                                # If commit fails, messages will be re-delivered
+                                self.conn.rollback()
+                                raise
+
+                    # If no messages were found, we're done
+                    if not batch_messages:
+                        break
             else:
                 # For single message, use same transaction pattern for consistency
+                message = None
+
+                # Acquire lock only for the claim operation
                 with self._lock:
                     # Use retry logic for BEGIN IMMEDIATE
                     def _begin_transaction() -> None:
@@ -617,7 +749,8 @@ class BrokerDB:
 
                     try:
                         query = f"""
-                            DELETE FROM messages
+                            UPDATE messages
+                            SET claimed = 1
                             WHERE id IN (
                                 SELECT id FROM messages
                                 WHERE {where_clause}
@@ -635,9 +768,8 @@ class BrokerDB:
                         message = cursor.fetchone()
 
                         if message:
-                            # Yield message BEFORE committing
-                            yield message[0], message[1]  # body, timestamp
-                            # Commit only after message has been yielded
+                            # Commit IMMEDIATELY to mark message as claimed
+                            # This ensures exactly-once delivery semantics
                             self.conn.commit()
                         else:
                             self.conn.rollback()
@@ -645,6 +777,11 @@ class BrokerDB:
                         # On any error, rollback to preserve message
                         self.conn.rollback()
                         raise
+
+                # Lock is now released, yield message without holding it
+                # Message is already safely claimed in the database
+                if message:
+                    yield message[0], message[1]  # body, timestamp
 
     def stream_read(
         self,
@@ -672,11 +809,13 @@ class BrokerDB:
             RuntimeError: If called from a forked process
 
         Note:
-            For delete operations with commit_interval > 1:
-            - Messages are deleted only AFTER being yielded
-            - Database lock is held during entire batch yield
-            - Provides at-least-once delivery guarantee
-            - If consumer crashes mid-batch, unprocessed messages remain in queue
+            For delete operations:
+            - When commit_interval=1 (exactly-once delivery):
+              * Messages are claimed and committed BEFORE being yielded
+              * If consumer crashes after commit, message is lost (never duplicated)
+            - When commit_interval>1 (at-least-once delivery):
+              * Messages are claimed, yielded, then committed as a batch
+              * If consumer crashes mid-batch, uncommitted messages can be re-delivered
         """
         # Delegate to stream_read_with_timestamps and yield only message bodies
         for message, _timestamp in self.stream_read_with_timestamps(
@@ -689,10 +828,10 @@ class BrokerDB:
             yield message
 
     def list_queues(self) -> List[Tuple[str, int]]:
-        """List all queues with their message counts.
+        """List all queues with their unclaimed message counts.
 
         Returns:
-            List of (queue_name, message_count) tuples, sorted by name
+            List of (queue_name, unclaimed_message_count) tuples, sorted by name
 
         Raises:
             RuntimeError: If called from a forked process
@@ -705,6 +844,7 @@ class BrokerDB:
                     """
                     SELECT queue, COUNT(*) as count
                     FROM messages
+                    WHERE claimed = 0
                     GROUP BY queue
                     ORDER BY queue
                 """
@@ -713,6 +853,35 @@ class BrokerDB:
 
         # Execute with retry logic
         return self._execute_with_retry(_do_list)
+
+    def get_queue_stats(self) -> List[Tuple[str, int, int]]:
+        """Get all queues with both unclaimed and total message counts.
+
+        Returns:
+            List of (queue_name, unclaimed_count, total_count) tuples, sorted by name
+
+        Raises:
+            RuntimeError: If called from a forked process
+        """
+        self._check_fork_safety()
+
+        def _do_stats() -> List[Tuple[str, int, int]]:
+            with self._lock:
+                cursor = self.conn.execute(
+                    """
+                    SELECT
+                        queue,
+                        SUM(CASE WHEN claimed = 0 THEN 1 ELSE 0 END) as unclaimed,
+                        COUNT(*) as total
+                    FROM messages
+                    GROUP BY queue
+                    ORDER BY queue
+                """
+                )
+                return cursor.fetchall()
+
+        # Execute with retry logic
+        return self._execute_with_retry(_do_stats)
 
     def purge(self, queue: Optional[str] = None) -> None:
         """Delete messages from queue(s).
@@ -785,6 +954,120 @@ class BrokerDB:
 
         # Execute with retry logic
         self._execute_with_retry(_do_broadcast)
+
+    def _should_vacuum(self) -> bool:
+        """Check if vacuum needed (fast approximation)."""
+        with self._lock:
+            # Use a single table scan with conditional aggregation for better performance
+            stats = self.conn.execute("""
+                SELECT
+                    SUM(CASE WHEN claimed = 1 THEN 1 ELSE 0 END) as claimed,
+                    COUNT(*) as total
+                FROM messages
+            """).fetchone()
+
+            claimed_count = stats[0] or 0  # Handle NULL case
+            total_count = stats[1] or 0
+
+            if total_count == 0:
+                return False
+
+            # Trigger if >=10% claimed OR >10k claimed messages
+            threshold_pct = float(os.environ.get("BROKER_VACUUM_THRESHOLD", "10")) / 100
+            return bool(
+                (claimed_count >= total_count * threshold_pct)
+                or (claimed_count > 10000)
+            )
+
+    def _vacuum_claimed_messages(self) -> None:
+        """Delete claimed messages in batches."""
+        # Use file-based lock to prevent concurrent vacuums
+        vacuum_lock_path = self.db_path.with_suffix(".vacuum.lock")
+        lock_acquired = False
+
+        # Check for stale lock file (older than 5 minutes)
+        stale_lock_timeout = int(
+            os.environ.get("BROKER_VACUUM_LOCK_TIMEOUT", "300")
+        )  # 5 minutes default
+        if vacuum_lock_path.exists():
+            try:
+                lock_age = time.time() - vacuum_lock_path.stat().st_mtime
+                if lock_age > stale_lock_timeout:
+                    # Remove stale lock file
+                    vacuum_lock_path.unlink(missing_ok=True)
+                    warnings.warn(
+                        f"Removed stale vacuum lock file (age: {lock_age:.1f}s)",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+            except OSError:
+                # If we can't stat or remove the file, proceed anyway
+                pass
+
+        try:
+            # Try to acquire exclusive lock
+            # Use open with write mode and exclusive create flag
+            lock_fd = os.open(
+                str(vacuum_lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY
+            )
+            try:
+                # Write PID to lock file for debugging
+                os.write(lock_fd, f"{os.getpid()}\n".encode())
+                lock_acquired = True
+
+                batch_size = int(os.environ.get("BROKER_VACUUM_BATCH_SIZE", "1000"))
+
+                # Use separate transaction per batch
+                while True:
+                    with self._lock:
+                        self.conn.execute("BEGIN IMMEDIATE")
+                        try:
+                            # SQLite doesn't support DELETE with LIMIT, so we need to use a subquery
+                            result = self.conn.execute(
+                                """
+                                DELETE FROM messages
+                                WHERE id IN (
+                                    SELECT id FROM messages
+                                    WHERE claimed = 1
+                                    LIMIT ?
+                                )
+                            """,
+                                (batch_size,),
+                            )
+                            self.conn.commit()
+                            if result.rowcount == 0:
+                                break
+                        except Exception:
+                            self.conn.rollback()
+                            raise
+
+                    # Brief pause between batches to allow other operations
+                    time.sleep(0.001)
+            finally:
+                os.close(lock_fd)
+        except FileExistsError:
+            # Another process is vacuuming
+            pass
+        except OSError as e:
+            # Handle other OS errors (permissions, etc.)
+            warnings.warn(
+                f"Could not acquire vacuum lock: {e}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        finally:
+            # Only clean up lock file if we created it
+            if lock_acquired:
+                vacuum_lock_path.unlink(missing_ok=True)
+
+    def vacuum(self) -> None:
+        """Manually trigger vacuum of claimed messages.
+
+        Raises:
+            RuntimeError: If called from a forked process
+        """
+        self._check_fork_safety()
+        self._vacuum_claimed_messages()
 
     def close(self) -> None:
         """Close the database connection."""

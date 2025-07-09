@@ -80,6 +80,7 @@ $ broker --cleanup
   - Cannot be used with `-d` if the directories don't match
 - `-q, --quiet` - Suppress non-error output (intended reads excepted)
 - `--cleanup` - Delete the database file and exit
+- `--vacuum` - Remove claimed messages and exit
 - `--version` - Show version information
 - `--help` - Show help message
 
@@ -91,7 +92,7 @@ $ broker --cleanup
 | `write <queue> -` | Add message from stdin |
 | `read <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Remove and return message(s) |
 | `peek <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Return message(s) without removing |
-| `list` | Show all queues and message counts (note: counts are a snapshot and may change during concurrent operations) |
+| `list` | Show all queues and message counts (includes claimed messages) |
 | `purge <queue>` | Delete all messages in queue |
 | `purge --all` | Delete all queues |
 | `broadcast <message>` | Send message to all existing queues |
@@ -442,11 +443,24 @@ SQLite's built-in locking handles concurrent access. Multiple processes can safe
 - **Guaranteed by SQLite's autoincrement**: Each message receives a globally unique, monotonically increasing ID
 - **No ordering ambiguity**: Even when multiple processes write simultaneously, SQLite ensures strict serialization
 
+### Message Lifecycle and Claim Optimization
+
+SimpleBroker uses a two-phase message lifecycle for performance optimization that's transparent to users:
+
+1. **Claim Phase**: When messages are read, they're marked as "claimed" instead of being immediately deleted. This allows for extremely fast read operations (~3x faster) by avoiding expensive DELETE operations in the critical path.
+
+2. **Vacuum Phase**: Claimed messages are periodically cleaned up by an automatic background process or manually via the `broker --vacuum` command. This ensures the database doesn't grow unbounded while keeping read operations fast.
+
+This optimization is completely transparent - messages are still delivered exactly once, and from the user's perspective, a read message is gone. The cleanup happens automatically based on configurable thresholds.
+
 ### Performance
 
 - **Throughput**: 1000+ messages/second on typical hardware
 - **Latency**: <10ms for write, <10ms for read
 - **Scalability**: Tested with 100k+ messages per queue
+- **Read optimization**: ~3x faster reads due to the claim-based message lifecycle optimization
+
+**Note on CLI vs Library Usage**: For CLI-only use, startup cost predominates the overall performance. If you need to process 1000+ messages per second, use the library interface directly to avoid the overhead of repeated process creation.
 
 ### Security
 
@@ -478,6 +492,18 @@ SimpleBroker can be configured via environment variables:
   - Increase for better performance with at-least-once delivery guarantee
   - With values > 1, messages are only deleted after being successfully delivered
   - Trade-off: larger batches hold database locks longer, reducing concurrency
+- `BROKER_AUTO_VACUUM` - Enable automatic vacuum of claimed messages (default: true)
+  - When enabled, vacuum runs automatically when thresholds are exceeded
+  - Set to `false` to disable automatic cleanup and run `broker vacuum` manually
+- `BROKER_VACUUM_THRESHOLD` - Number of claimed messages before auto-vacuum triggers (default: 10000)
+  - Higher values reduce vacuum frequency but use more disk space
+  - Lower values keep the database smaller but run vacuum more often
+- `BROKER_VACUUM_BATCH_SIZE` - Number of messages to delete per vacuum batch (default: 1000)
+  - Larger batches are more efficient but hold locks longer
+  - Smaller batches are more responsive but less efficient
+- `BROKER_VACUUM_LOCK_TIMEOUT` - Seconds before a vacuum lock is considered stale (default: 300)
+  - Prevents orphaned lock files from blocking vacuum operations
+  - Lock files older than this are automatically removed
 
 ## Development
 
