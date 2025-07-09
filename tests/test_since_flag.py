@@ -1070,12 +1070,22 @@ def test_since_unit_suffixes(workdir):
             assert "Invalid timestamp" in err, f"Wrong error for {desc}: {err}"
 
     # Test that suffixes work correctly with actual timestamps
-    # Sleep briefly to ensure current time is after all messages
-    time.sleep(0.1)  # 100ms to ensure clear separation
-    # Get current time in different units
-    now_s = int(time.time())
-    now_ms = int(time.time() * 1000)
-    now_ns = int(time.time() * 1_000_000_000)
+    # Note: `test_since_unit_suffixes` relies on
+    # int(time.time()) which truncates the fractional part.
+    # If the last message is written at 12 :00 :00.900 and the call to
+    # `time.time()` happens 120 ms later (12 :00 :01.020) the integer seconds
+    # value is still **12 :00 :01 → 1 020 ms earlier than the real clock
+    # value** used by the message.
+    # Because `--since` uses a strict “greater than” comparison, the truncated
+    # value can be **earlier than the message timestamps**, so the queue still
+    # matches and the assertion `out == ""` fails.
+    # This can be a particular problem with different CI/CD environments
+    # where the time resolution can vary. So we make this deterministic by
+    # setting a future timestamp that is guaranteed to be after the last message.
+    future = time.time() + 2  # At least 2 seconds after the last message
+    now_s = int(future)
+    now_ms = int(future * 1000)
+    now_ns = int(future * 1_000_000_000)
 
     # All of these should filter out our old messages
     for suffix_ts in [f"{now_s}s", f"{now_ms}ms", f"{now_ns}ns"]:
