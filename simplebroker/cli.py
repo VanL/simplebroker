@@ -104,7 +104,10 @@ def create_parser() -> argparse.ArgumentParser:
     add_read_peek_args(peek_parser)
 
     # List command
-    subparsers.add_parser("list", help="list all queues")
+    list_parser = subparsers.add_parser("list", help="list all queues")
+    list_parser.add_argument(
+        "--stats", action="store_true", help="show statistics including claimed messages"
+    )
 
     # Purge command
     purge_parser = subparsers.add_parser("purge", help="remove messages")
@@ -376,7 +379,8 @@ def main() -> int:
                     db, args.queue, args.all, args.json, args.timestamps, since_str
                 )
             elif args.command == "list":
-                return commands.cmd_list(db)
+                show_stats = getattr(args, "stats", False)
+                return commands.cmd_list(db, show_stats)
             elif args.command == "purge":
                 # argparse mutual exclusion ensures exactly one of queue or --all is provided
                 queue = None if args.all else args.queue

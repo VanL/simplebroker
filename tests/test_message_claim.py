@@ -351,8 +351,8 @@ def test_backward_compatibility_cli(workdir: Path):
     rc, _, _ = run_cli("read", "compat_queue", cwd=workdir)
     assert rc == 2  # EXIT_QUEUE_EMPTY
 
-    # List queues should still work
-    rc, out, _ = run_cli("list", cwd=workdir)
+    # List queues should still work with --stats flag to show claimed messages
+    rc, out, _ = run_cli("list", "--stats", cwd=workdir)
     assert rc == 0
     assert "compat_queue" in out
 

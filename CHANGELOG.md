@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.3.0] - 2025-07-09
 - Performance optimizations
-- New --vacuum flag
+- New --vacuum flag and list --stats command to manage claimed messages
 
 ### Changed
 - Improved differentiation between empty queue and filtered messages situations

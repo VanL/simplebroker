@@ -92,7 +92,7 @@ $ broker --cleanup
 | `write <queue> -` | Add message from stdin |
 | `read <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Remove and return message(s) |
 | `peek <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Return message(s) without removing |
-| `list` | Show all queues and message counts (includes claimed messages) |
+| `list [--stats]` | Show queues with unclaimed messages (use `--stats` to include claimed) |
 | `purge <queue>` | Delete all messages in queue |
 | `purge --all` | Delete all queues |
 | `broadcast <message>` | Send message to all existing queues |
@@ -452,6 +452,8 @@ SimpleBroker uses a two-phase message lifecycle for performance optimization tha
 2. **Vacuum Phase**: Claimed messages are periodically cleaned up by an automatic background process or manually via the `broker --vacuum` command. This ensures the database doesn't grow unbounded while keeping read operations fast.
 
 This optimization is completely transparent - messages are still delivered exactly once, and from the user's perspective, a read message is gone. The cleanup happens automatically based on configurable thresholds.
+
+**Note on `list` command**: By default, `broker list` only shows queues with unclaimed messages. To see all queues including those with only claimed messages awaiting vacuum, use `broker list --stats`. This also displays claim statistics for each queue.
 
 ### Performance
 

@@ -462,35 +462,40 @@ def cmd_peek(
     )
 
 
-def cmd_list(db: BrokerDB) -> int:
+def cmd_list(db: BrokerDB, show_stats: bool = False) -> int:
     """List all queues with counts."""
     # Get full queue stats including claimed messages
     queue_stats = db.get_queue_stats()
 
+    # Filter to only show queues with unclaimed messages when not showing stats
+    if not show_stats:
+        queue_stats = [(q, u, t) for q, u, t in queue_stats if u > 0]
+    
     # Show each queue with unclaimed count (and total if different)
     for queue_name, unclaimed, total in queue_stats:
-        if unclaimed == total:
-            print(f"{queue_name}: {unclaimed}")
-        else:
+        if show_stats and unclaimed != total:
             print(
                 f"{queue_name}: {unclaimed} ({total} total, {total - unclaimed} claimed)"
             )
+        else:
+            print(f"{queue_name}: {unclaimed}")
 
-    # Show overall claimed message stats
-    with db._lock:
-        cursor = db.conn.execute("""
-            SELECT
-                COUNT(*) as claimed,
-                (SELECT COUNT(*) FROM messages) as total
-            FROM messages WHERE claimed = 1
-        """)
-        stats = cursor.fetchone()
-        claimed_count = stats[0]
-        total_count = stats[1]
+    # Only show overall claimed message stats if --stats flag is used
+    if show_stats:
+        with db._lock:
+            cursor = db.conn.execute("""
+                SELECT
+                    COUNT(*) as claimed,
+                    (SELECT COUNT(*) FROM messages) as total
+                FROM messages WHERE claimed = 1
+            """)
+            stats = cursor.fetchone()
+            claimed_count = stats[0]
+            total_count = stats[1]
 
-    if total_count > 0 and claimed_count > 0:
-        claimed_pct = (claimed_count / total_count) * 100
-        print(f"\nTotal claimed messages: {claimed_count} ({claimed_pct:.1f}%)")
+        if total_count > 0 and claimed_count > 0:
+            claimed_pct = (claimed_count / total_count) * 100
+            print(f"\nTotal claimed messages: {claimed_count} ({claimed_pct:.1f}%)")
 
     return EXIT_SUCCESS
 
