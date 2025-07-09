@@ -128,7 +128,8 @@ def test_since_basic_filtering(workdir):
     rc, out, _ = run_cli(
         "peek", "test_queue", "--all", "--since", str(ts2), cwd=workdir
     )
-    assert rc == 2  # EXIT_QUEUE_EMPTY
+    assert rc == 0  # Should succeed but return no messages
+    assert out == ""
 
 
 def test_since_exact_boundary(workdir):
@@ -141,7 +142,8 @@ def test_since_exact_boundary(workdir):
 
     # Read with --since equal to the message timestamp -> expect empty
     rc, out, _ = run_cli("read", "boundary_queue", "--since", str(ts), cwd=workdir)
-    assert rc == 2  # EXIT_QUEUE_EMPTY
+    assert rc == 0  # Should succeed but return no messages
+    assert out == ""
 
     # Read with --since one less than timestamp -> expect message
     rc, out, _ = run_cli("read", "boundary_queue", "--since", str(ts - 1), cwd=workdir)
@@ -159,14 +161,15 @@ def test_since_empty_queue(workdir):
 
 
 def test_since_no_matches(workdir):
-    """Test --since with future timestamp returns exit code 2."""
+    """Test --since with future timestamp returns exit code 0 (success with no messages)."""
     # Write a message
     run_cli("write", "future_queue", "message", cwd=workdir)
 
     # Use a very large timestamp that's unlikely to be reached
     future_ts = str(2**63 - 1)
     rc, out, _ = run_cli("read", "future_queue", "--since", future_ts, cwd=workdir)
-    assert rc == 2  # EXIT_QUEUE_EMPTY
+    assert rc == 0  # Should succeed but return no messages
+    assert out == ""  # No messages returned
 
     # Verify message is still there
     rc, out, _ = run_cli("read", "future_queue", cwd=workdir)
@@ -362,7 +365,8 @@ def test_since_human_readable_formats(workdir):
             assert len(messages) >= 1, f"No messages found for {desc}"
         else:
             # Should find no messages (timestamp is in the future)
-            assert rc == 2, f"Expected empty for {desc} but got: {out}"
+            assert rc == 0, f"Expected success for {desc} but got rc={rc}"
+            assert out == "", f"Expected no messages for {desc} but got: {out}"
 
     # Clean up
     run_cli("purge", queue_name, cwd=workdir)
@@ -400,7 +404,8 @@ def test_since_iso_date_precise_boundary(workdir):
     rc, out, _ = run_cli(
         "peek", queue_name, "--all", "--since", "2030-01-01", cwd=workdir
     )
-    assert rc == 2  # Empty
+    assert rc == 0  # Should succeed but return no messages
+    assert out == ""
 
     # Test precise midnight boundary
     # Create ISO strings that test the boundary
@@ -461,7 +466,8 @@ def test_since_iso_date_formats(workdir):
     rc, out, _ = run_cli(
         "peek", queue_name, "--since", tomorrow.strftime("%Y-%m-%d"), cwd=workdir
     )
-    assert rc == 2
+    assert rc == 0  # Should succeed but return no messages
+    assert out == ""
 
 
 def test_since_iso_datetime_formats(workdir):
@@ -682,8 +688,9 @@ def test_since_checkpoint_pattern(workdir):
             "--timestamps",
             cwd=workdir,
         )
-        if rc == 2:  # No more messages
+        if rc == 2:  # Queue is now empty (all messages consumed)
             break
+        assert rc == 0  # Should succeed when messages exist
 
         lines = out.strip().split("\n")
         for line in lines:
@@ -722,7 +729,8 @@ def test_since_multiple_readers(workdir):
             messages = out.strip().split("\n")
             assert len(messages) == expected_count
         else:
-            assert rc == 2
+            assert rc == 0  # Should succeed with --since
+            assert out == ""  # But return no messages
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = [
@@ -783,7 +791,8 @@ def test_since_large_queue_performance(workdir):
             messages = out.strip().split("\n")
             assert len(messages) == expected_count
         else:
-            assert rc == 2
+            assert rc == 0  # Should succeed with --since
+            assert out == ""  # But return no messages
 
         # Performance assertion: should achieve at least 2000 messages/second
         # Add 50ms overhead for process spawn and setup
@@ -863,7 +872,8 @@ def test_since_max_timestamp(workdir):
     # Read with maximum timestamp
     max_ts = str(2**63 - 1)
     rc, out, _ = run_cli("read", queue_name, "--since", max_ts, cwd=workdir)
-    assert rc == 2  # No messages should have timestamp > max
+    assert rc == 0  # Should succeed but return no messages
+    assert out == ""  # No messages should have timestamp > max
 
     # Verify message still exists
     rc, out, _ = run_cli("read", queue_name, cwd=workdir)
@@ -962,10 +972,11 @@ def test_since_timestamp_heuristic(workdir):
     assert large_unix_ts_ms < BOUNDARY  # Still treated as Unix
 
     # This should filter out our existing message (since it's in the future)
-    rc, _, _ = run_cli(
+    rc, out, _ = run_cli(
         "peek", queue_name, "--since", str(large_unix_ts_ms), cwd=workdir
     )
-    assert rc == 2  # Empty
+    assert rc == 0  # Should succeed but return no messages
+    assert out == ""
 
     # Test boundary behavior with realistic values
     # A 13-digit value (typical milliseconds) - should be treated as Unix ms
@@ -987,8 +998,11 @@ def test_since_timestamp_heuristic(workdir):
     # Test a large native timestamp from current time
     current_native = int(time.time() * 1000) << 20
     assert current_native > BOUNDARY  # Should be treated as native
-    rc, _, _ = run_cli("peek", queue_name, "--since", str(current_native), cwd=workdir)
-    assert rc == 2  # Empty (future timestamp)
+    rc, out, _ = run_cli(
+        "peek", queue_name, "--since", str(current_native), cwd=workdir
+    )
+    assert rc == 0  # Should succeed but return no messages
+    assert out == ""  # Empty (future timestamp)
 
 
 def test_since_hybrid_timestamp_ordering(workdir):
@@ -1057,7 +1071,7 @@ def test_since_unit_suffixes(workdir):
 
     # Test that suffixes work correctly with actual timestamps
     # Sleep briefly to ensure current time is after all messages
-    time.sleep(0.01)  # 10ms should be enough
+    time.sleep(0.1)  # 100ms to ensure clear separation
     # Get current time in different units
     now_s = int(time.time())
     now_ms = int(time.time() * 1000)
@@ -1065,10 +1079,12 @@ def test_since_unit_suffixes(workdir):
 
     # All of these should filter out our old messages
     for suffix_ts in [f"{now_s}s", f"{now_ms}ms", f"{now_ns}ns"]:
-        rc, _, _ = run_cli(
+        rc, out, err = run_cli(
             "peek", queue_name, "--all", "--since", suffix_ts, cwd=workdir
         )
-        assert rc == 2  # Should be empty (all messages are older)
+        assert rc == 0  # Queue exists with messages, but none match the filter
+        assert out == ""  # Verify no messages are returned
+        assert err == "", f"Unexpected error for {suffix_ts}: {err}"
 
 
 def test_since_negative_timestamps(workdir):
@@ -1206,8 +1222,9 @@ def test_since_naive_datetime_utc_assumption(workdir):
 
     # Test 1: Using exact naive datetime should filter out the message
     # (since --since uses > comparison)
-    rc, _, _ = run_cli("peek", queue_name, "--since", naive_iso_str, cwd=workdir)
-    assert rc == 2  # Empty
+    rc, out, _ = run_cli("peek", queue_name, "--since", naive_iso_str, cwd=workdir)
+    assert rc == 0  # Should succeed but return no messages
+    assert out == ""
 
     # Test 2: Using naive datetime 1 second earlier should return the message
     dt_earlier = dt_naive - datetime.timedelta(seconds=1)

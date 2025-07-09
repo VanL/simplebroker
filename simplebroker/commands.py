@@ -383,6 +383,22 @@ def _read_messages(
                 print(message)
 
     if message_count == 0:
+        # When using --since, we need to distinguish between:
+        # 1. Queue doesn't exist or is empty -> return 2
+        # 2. Queue has messages but none match filter -> return 0
+        if since_timestamp is not None:
+            # Check if queue has any messages at all
+            queue_exists = False
+            for _ in db.stream_read_with_timestamps(
+                queue, peek=True, all_messages=False
+            ):
+                queue_exists = True
+                break
+
+            if queue_exists:
+                # Queue has messages, but none matched the filter
+                return EXIT_SUCCESS
+
         return EXIT_QUEUE_EMPTY
 
     return EXIT_SUCCESS

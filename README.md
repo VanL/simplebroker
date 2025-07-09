@@ -312,6 +312,9 @@ This pattern is perfect for:
 - Incremental data pipelines
 - Distributed processing with multiple consumers
 
+Note that simplebroker may return 0 (SUCCESS) even if no messages are returned if the
+queue exists and has messages, but none match the --since filter.
+
 ### Robust Worker with Checkpointing
 
 Here's a complete example of a resilient worker that processes messages in batches and can resume from where it left off after failures:
