@@ -192,24 +192,18 @@ class BrokerDB:
             # 6. Remaining pragmas / schema setup - all via _exec
             _exec("PRAGMA wal_autocheckpoint=1000")
 
-            # Check if table exists before creating
-            cursor = _exec(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
-            )
-            if not cursor.fetchone():
-                # Table doesn't exist, create with new schema
-                _exec(
-                    """
-                    CREATE TABLE messages (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        queue TEXT NOT NULL,
-                        body TEXT NOT NULL,
-                        ts INTEGER NOT NULL,
-                        claimed INTEGER DEFAULT 0
-                    )
+            # Create table if it doesn't exist (using IF NOT EXISTS to handle race conditions)
+            _exec(
                 """
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    queue TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    ts INTEGER NOT NULL,
+                    claimed INTEGER DEFAULT 0
                 )
-            # If table exists, schema migration will handle adding claimed column
+            """
+            )
             # Drop redundant indexes if they exist (from older versions)
             _exec("DROP INDEX IF EXISTS idx_messages_queue_ts")
             _exec("DROP INDEX IF EXISTS idx_queue_id")
