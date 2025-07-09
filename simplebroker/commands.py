@@ -470,7 +470,7 @@ def cmd_list(db: BrokerDB, show_stats: bool = False) -> int:
     # Filter to only show queues with unclaimed messages when not showing stats
     if not show_stats:
         queue_stats = [(q, u, t) for q, u, t in queue_stats if u > 0]
-    
+
     # Show each queue with unclaimed count (and total if different)
     for queue_name, unclaimed, total in queue_stats:
         if show_stats and unclaimed != total:

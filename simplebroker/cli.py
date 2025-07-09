@@ -106,7 +106,9 @@ def create_parser() -> argparse.ArgumentParser:
     # List command
     list_parser = subparsers.add_parser("list", help="list all queues")
     list_parser.add_argument(
-        "--stats", action="store_true", help="show statistics including claimed messages"
+        "--stats",
+        action="store_true",
+        help="show statistics including claimed messages",
     )
 
     # Purge command
