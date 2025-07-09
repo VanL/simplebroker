@@ -12,6 +12,9 @@ from .db import BrokerDB
 PROG_NAME = "simplebroker"
 DEFAULT_DB_NAME = ".broker.db"
 
+# Cache the parser for better startup performance
+_PARSER_CACHE = None
+
 
 class ArgumentParserError(Exception):
     """Custom exception for argument parsing errors."""
@@ -24,6 +27,31 @@ class CustomArgumentParser(argparse.ArgumentParser):
 
     def error(self, message: str) -> NoReturn:
         raise ArgumentParserError(message)
+
+
+def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
+    """Add shared arguments for read and peek commands."""
+    parser.add_argument("queue", help="queue name")
+    parser.add_argument("--all", action="store_true", help="read/peek all messages")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="output in line-delimited JSON (ndjson) format",
+    )
+    parser.add_argument(
+        "-t",
+        "--timestamps",
+        action="store_true",
+        help="include timestamps in output",
+    )
+    parser.add_argument(
+        "--since",
+        type=str,
+        metavar="TIMESTAMP",
+        help="return messages after timestamp (supports: ISO date '2024-01-15', "
+        "Unix time '1705329000' or '1705329000s', milliseconds '1705329000000ms', "
+        "or native hybrid timestamp)",
+    )
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -66,43 +94,20 @@ def create_parser() -> argparse.ArgumentParser:
 
     # Read command
     read_parser = subparsers.add_parser("read", help="read and remove message")
-    read_parser.add_argument("queue", help="queue name")
-    read_parser.add_argument("--all", action="store_true", help="read all messages")
-    read_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="output in line-delimited JSON (ndjson) format",
-    )
-    read_parser.add_argument(
-        "-t",
-        "--timestamps",
-        action="store_true",
-        help="include timestamps in output",
-    )
+    add_read_peek_args(read_parser)
 
     # Peek command
     peek_parser = subparsers.add_parser("peek", help="read without removing")
-    peek_parser.add_argument("queue", help="queue name")
-    peek_parser.add_argument("--all", action="store_true", help="peek all messages")
-    peek_parser.add_argument(
-        "--json",
-        action="store_true",
-        help="output in line-delimited JSON (ndjson) format",
-    )
-    peek_parser.add_argument(
-        "-t",
-        "--timestamps",
-        action="store_true",
-        help="include timestamps in output",
-    )
+    add_read_peek_args(peek_parser)
 
     # List command
     subparsers.add_parser("list", help="list all queues")
 
     # Purge command
     purge_parser = subparsers.add_parser("purge", help="remove messages")
-    purge_parser.add_argument("queue", nargs="?", help="queue name to purge")
-    purge_parser.add_argument("--all", action="store_true", help="purge all queues")
+    group = purge_parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("queue", nargs="?", help="queue name to purge")
+    group.add_argument("--all", action="store_true", help="purge all queues")
 
     # Broadcast command
     broadcast_parser = subparsers.add_parser(
@@ -189,8 +194,11 @@ def main() -> int:
     Returns:
         Exit code (0 for success, 1 for error)
     """
-    # Create the unified parser
-    parser = create_parser()
+    # Use cached parser for better startup performance
+    global _PARSER_CACHE
+    if _PARSER_CACHE is None:
+        _PARSER_CACHE = create_parser()
+    parser = _PARSER_CACHE
 
     # Parse arguments, rearranging to put global options first
     try:
@@ -217,7 +225,9 @@ def main() -> int:
 
     # Handle absolute paths in -f flag
     file_path = Path(args.file)
-    if file_path.is_absolute():
+    absolute_path_provided = file_path.is_absolute()
+
+    if absolute_path_provided:
         # Extract directory and filename from absolute path
         extracted_dir = file_path.parent
         extracted_file = file_path.name
@@ -295,30 +305,32 @@ def main() -> int:
                 )
 
         # Additional validation: resolve paths and check containment
-        try:
-            # Resolve both paths to compare them
-            resolved_db_path = db_path.resolve()
-            resolved_working_dir = working_dir.resolve()
+        # Skip containment check if absolute path was provided
+        if not absolute_path_provided:
+            try:
+                # Resolve both paths to compare them
+                resolved_db_path = db_path.resolve()
+                resolved_working_dir = working_dir.resolve()
 
-            # Check if the database path is within the working directory
-            # Use is_relative_to() if available (Python 3.9+), otherwise use relative_to()
-            if hasattr(resolved_db_path, "is_relative_to"):
-                if not resolved_db_path.is_relative_to(resolved_working_dir):
-                    raise ValueError(
-                        "Database file must be within the working directory"
-                    )
-            else:
-                # Fallback for older Python versions - try relative_to and catch exception
-                try:
-                    resolved_db_path.relative_to(resolved_working_dir)
-                except ValueError:
-                    raise ValueError(
-                        "Database file must be within the working directory"
-                    ) from None
-        except (RuntimeError, OSError):
-            # resolve() can fail on non-existent paths, which is acceptable
-            # We've already validated the path structure above
-            pass
+                # Check if the database path is within the working directory
+                # Use is_relative_to() if available (Python 3.9+), otherwise use relative_to()
+                if hasattr(resolved_db_path, "is_relative_to"):
+                    if not resolved_db_path.is_relative_to(resolved_working_dir):
+                        raise ValueError(
+                            "Database file must be within the working directory"
+                        )
+                else:
+                    # Fallback for older Python versions - try relative_to and catch exception
+                    try:
+                        resolved_db_path.relative_to(resolved_working_dir)
+                    except ValueError:
+                        raise ValueError(
+                            "Database file must be within the working directory"
+                        ) from None
+            except (RuntimeError, OSError):
+                # resolve() can fail on non-existent paths, which is acceptable
+                # We've already validated the path structure above
+                pass
 
         # Check if parent directory is writable
         if not db_path.parent.exists():
@@ -335,23 +347,19 @@ def main() -> int:
             if args.command == "write":
                 return commands.cmd_write(db, args.queue, args.message)
             elif args.command == "read":
+                since_str = getattr(args, "since", None)
                 return commands.cmd_read(
-                    db, args.queue, args.all, args.json, args.timestamps
+                    db, args.queue, args.all, args.json, args.timestamps, since_str
                 )
             elif args.command == "peek":
+                since_str = getattr(args, "since", None)
                 return commands.cmd_peek(
-                    db, args.queue, args.all, args.json, args.timestamps
+                    db, args.queue, args.all, args.json, args.timestamps, since_str
                 )
             elif args.command == "list":
                 return commands.cmd_list(db)
             elif args.command == "purge":
-                # CRITICAL SAFETY: Require either queue name or explicit --all flag
-                if not args.queue and not args.all:
-                    print(
-                        f"{PROG_NAME}: error: purge requires either a queue name or --all flag",
-                        file=sys.stderr,
-                    )
-                    return 1
+                # argparse mutual exclusion ensures exactly one of queue or --all is provided
                 queue = None if args.all else args.queue
                 return commands.cmd_purge(db, queue)
             elif args.command == "broadcast":

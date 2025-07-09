@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 import warnings
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Iterator, List, Literal, Optional, Tuple, TypeVar
 
@@ -16,6 +17,35 @@ T = TypeVar("T")
 # Module constants
 MAX_QUEUE_NAME_LENGTH = 512
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
+
+
+# Cache for queue name validation
+@lru_cache(maxsize=1024)
+def _validate_queue_name_cached(queue: str) -> Optional[str]:
+    """Validate queue name and return error message or None if valid.
+
+    This is a module-level function to enable LRU caching.
+
+    Args:
+        queue: Queue name to validate
+
+    Returns:
+        Error message if invalid, None if valid
+    """
+    if not queue:
+        return "Invalid queue name: cannot be empty"
+
+    if len(queue) > MAX_QUEUE_NAME_LENGTH:
+        return f"Invalid queue name: exceeds {MAX_QUEUE_NAME_LENGTH} characters"
+
+    if not QUEUE_NAME_PATTERN.match(queue):
+        return (
+            "Invalid queue name: must contain only letters, numbers, periods, "
+            "underscores, and hyphens. Cannot begin with a hyphen or a period"
+        )
+
+    return None
+
 
 # Hybrid timestamp constants
 # 44 bits for physical time (milliseconds since epoch, good until year 2527)
@@ -123,7 +153,26 @@ class BrokerDB:
             busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
             _exec(f"PRAGMA busy_timeout={busy_timeout}")
 
-            # 2. SQLite version check (uses retry helper)
+            # 2. Configure cache size (default 10MB)
+            cache_mb = int(os.environ.get("BROKER_CACHE_MB", "10"))
+            _exec(f"PRAGMA cache_size=-{cache_mb * 1000}")  # Negative value = KB
+
+            # 3. Configure synchronous mode (default FULL for safety)
+            # FULL: Safe against OS crashes and power loss
+            # NORMAL: Safe against app crashes, small risk on power loss (but faster)
+            # OFF: Fast but unsafe (not recommended)
+            sync_mode = os.environ.get("BROKER_SYNC_MODE", "FULL").upper()
+            if sync_mode in ["FULL", "NORMAL", "OFF"]:
+                _exec(f"PRAGMA synchronous={sync_mode}")
+            else:
+                warnings.warn(
+                    f"Invalid BROKER_SYNC_MODE '{sync_mode}', using FULL",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                _exec("PRAGMA synchronous=FULL")
+
+            # 4. SQLite version check (uses retry helper)
             cursor = _exec("SELECT sqlite_version()")
             version_str = cursor.fetchone()[0]
             major, minor, patch = map(int, version_str.split("."))
@@ -133,13 +182,13 @@ class BrokerDB:
                     f"SimpleBroker requires SQLite 3.35.0 or later for RETURNING clause support."
                 )
 
-            # 3. Enable WAL - retry if DB is temporarily locked
+            # 5. Enable WAL - retry if DB is temporarily locked
             cursor = _exec("PRAGMA journal_mode=WAL")
             result = cursor.fetchone()
             if result and result[0] != "wal":
                 raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
 
-            # 4. Remaining pragmas / schema setup - all via _exec
+            # 6. Remaining pragmas / schema setup - all via _exec
             _exec("PRAGMA wal_autocheckpoint=1000")
 
             _exec(
@@ -152,11 +201,21 @@ class BrokerDB:
                 )
             """
             )
-            _exec("DROP INDEX IF EXISTS idx_queue_ts")
+            # Drop redundant indexes if they exist (from older versions)
+            _exec("DROP INDEX IF EXISTS idx_messages_queue_ts")
+            _exec("DROP INDEX IF EXISTS idx_queue_id")
+            _exec("DROP INDEX IF EXISTS idx_queue_ts")  # Even older version
+
+            # Create only the composite covering index
+            # This single index serves all our query patterns efficiently:
+            # - WHERE queue = ? (uses first column)
+            # - WHERE queue = ? AND ts > ? (uses first two columns)
+            # - WHERE queue = ? ORDER BY id (uses first column + sorts by id)
+            # - WHERE queue = ? AND ts > ? ORDER BY id LIMIT ? (uses all three)
             _exec(
                 """
-                CREATE INDEX IF NOT EXISTS idx_queue_id
-                ON messages(queue, id)
+                CREATE INDEX IF NOT EXISTS idx_messages_queue_ts_id
+                ON messages(queue, ts, id)
             """
             )
             _exec(
@@ -195,18 +254,10 @@ class BrokerDB:
         Raises:
             ValueError: If queue name is invalid
         """
-        if not queue:
-            raise ValueError("Invalid queue name: cannot be empty")
-
-        if len(queue) > MAX_QUEUE_NAME_LENGTH:
-            raise ValueError(
-                f"Invalid queue name: exceeds {MAX_QUEUE_NAME_LENGTH} characters"
-            )
-
-        if not QUEUE_NAME_PATTERN.match(queue):
-            raise ValueError(
-                "Invalid queue name: must contain only letters, numbers, periods, underscores, and hyphens. Cannot begin with a hyphen or a period"
-            )
+        # Use cached validation function
+        error = _validate_queue_name_cached(queue)
+        if error:
+            raise ValueError(error)
 
     def _encode_hybrid_timestamp(self, physical_ms: int, logical: int) -> int:
         """Encode physical time and logical counter into a 64-bit hybrid timestamp.
@@ -424,22 +475,23 @@ class BrokerDB:
     def stream_read_with_timestamps(
         self,
         queue: str,
-        peek: bool = False,
+        *,
         all_messages: bool = False,
         commit_interval: int = READ_COMMIT_INTERVAL,
+        peek: bool = False,
+        since_timestamp: Optional[int] = None,
     ) -> Iterator[Tuple[str, int]]:
-        """Stream message(s) with timestamps from a queue.
+        """Stream messages with timestamps from a queue.
 
         Args:
-            queue: Name of the queue
-            peek: If True, don't delete messages after reading
-            all_messages: If True, read all messages (otherwise just one)
-            commit_interval: Commit after this many messages (only for delete operations)
-                - 1 = exactly-once delivery (default)
-                - >1 = at-least-once delivery (better performance, lower concurrency)
+            queue: Queue name to read from
+            all_messages: If True, read all messages; if False, read one
+            commit_interval: Number of messages to read per transaction batch
+            peek: If True, don't delete messages (peek operation)
+            since_timestamp: If provided, only return messages with ts > since_timestamp
 
         Yields:
-            Tuples of (message_body, timestamp) one at a time
+            Tuples of (message_body, timestamp)
 
         Note:
             For delete operations with commit_interval > 1:
@@ -454,6 +506,16 @@ class BrokerDB:
         self._check_fork_safety()
         self._validate_queue_name(queue)
 
+        # Build WHERE clause dynamically for better maintainability
+        where_conditions = ["queue = ?"]
+        params: List[Any] = [queue]
+
+        if since_timestamp is not None:
+            where_conditions.append("ts > ?")
+            params.append(since_timestamp)
+
+        where_clause = " AND ".join(where_conditions)
+
         if peek:
             # For peek mode, fetch in batches to avoid holding lock while yielding
             offset = 0
@@ -462,14 +524,15 @@ class BrokerDB:
             while True:
                 # Acquire lock, fetch batch, release lock
                 with self._lock:
-                    cursor = self.conn.execute(
-                        """
+                    query = f"""
                         SELECT body, ts FROM messages
-                        WHERE queue = ?
+                        WHERE {where_clause}
                         ORDER BY id
                         LIMIT ? OFFSET ?
-                        """,
-                        (queue, batch_size, offset),
+                        """
+                    cursor = self.conn.execute(
+                        query,
+                        tuple(params + [batch_size, offset]),
                     )
                     # Fetch all rows in this batch while lock is held
                     batch_messages = list(cursor)
@@ -504,18 +567,19 @@ class BrokerDB:
                             break
 
                         try:
-                            cursor = self.conn.execute(
-                                """
+                            query = f"""
                                 DELETE FROM messages
                                 WHERE id IN (
                                     SELECT id FROM messages
-                                    WHERE queue = ?
+                                    WHERE {where_clause}
                                     ORDER BY id
                                     LIMIT ?
                                 )
                                 RETURNING body, ts
-                                """,
-                                (queue, commit_interval),
+                                """
+                            cursor = self.conn.execute(
+                                query,
+                                tuple(params + [commit_interval]),
                             )
 
                             # Fetch all messages in this batch
@@ -552,18 +616,19 @@ class BrokerDB:
                         return
 
                     try:
-                        cursor = self.conn.execute(
-                            """
+                        query = f"""
                             DELETE FROM messages
                             WHERE id IN (
                                 SELECT id FROM messages
-                                WHERE queue = ?
+                                WHERE {where_clause}
                                 ORDER BY id
                                 LIMIT 1
                             )
                             RETURNING body, ts
-                            """,
-                            (queue,),
+                            """
+                        cursor = self.conn.execute(
+                            query,
+                            tuple(params),
                         )
 
                         # Fetch the message
@@ -587,6 +652,7 @@ class BrokerDB:
         peek: bool = False,
         all_messages: bool = False,
         commit_interval: int = READ_COMMIT_INTERVAL,
+        since_timestamp: Optional[int] = None,
     ) -> Iterator[str]:
         """Stream message(s) from a queue without loading all into memory.
 
@@ -614,7 +680,11 @@ class BrokerDB:
         """
         # Delegate to stream_read_with_timestamps and yield only message bodies
         for message, _timestamp in self.stream_read_with_timestamps(
-            queue, peek=peek, all_messages=all_messages, commit_interval=commit_interval
+            queue,
+            peek=peek,
+            all_messages=all_messages,
+            commit_interval=commit_interval,
+            since_timestamp=since_timestamp,
         ):
             yield message
 

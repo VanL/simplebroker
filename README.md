@@ -19,7 +19,7 @@ SimpleBroker gives you a zero-configuration message queue that runs anywhere Pyt
 - **Simple CLI** - Intuitive commands that work with pipes and scripts
 - **Portable** - Each directory gets its own isolated `.broker.db`
 - **Fast** - 1000+ messages/second throughput
-- **Lightweight** - ~700 lines of code, no external dependencies
+- **Lightweight** - ~1500 lines of code, no external dependencies
 
 ## Installation
 
@@ -89,8 +89,8 @@ $ broker --cleanup
 |---------|-------------|
 | `write <queue> <message>` | Add a message to the queue |
 | `write <queue> -` | Add message from stdin |
-| `read <queue> [--all] [--json] [-t\|--timestamps]` | Remove and return message(s) |
-| `peek <queue> [--all] [--json] [-t\|--timestamps]` | Return message(s) without removing |
+| `read <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Remove and return message(s) |
+| `peek <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Return message(s) without removing |
 | `list` | Show all queues and message counts (note: counts are a snapshot and may change during concurrent operations) |
 | `purge <queue>` | Delete all messages in queue |
 | `purge --all` | Delete all queues |
@@ -103,6 +103,28 @@ $ broker --cleanup
 - `-t, --timestamps` - Include timestamps in output
   - Regular format: `<timestamp>\t<message>` (tab-separated)
   - JSON format: `{"message": "...", "timestamp": <timestamp>}`
+- `--since <timestamp>` - Return only messages with timestamp > the given value
+  - Accepts multiple formats:
+    - Native 64-bit timestamp as returned by `--timestamps` (e.g., `1837025672140161024`)
+    - ISO 8601 date/datetime (e.g., `2024-01-15`, `2024-01-15T14:30:00Z`)
+      - Date-only strings (`YYYY-MM-DD`) are interpreted as the beginning of that day in UTC (00:00:00Z)
+      - Naive datetime strings (without timezone) are assumed to be in UTC
+    - Unix timestamp in seconds (e.g., `1705329000` or from `date +%s`)
+    - Unix timestamp in milliseconds (e.g., `1705329000000`)
+  - **Explicit unit suffixes** (strongly recommended for scripts):
+    - `1705329000s` - Unix seconds
+    - `1705329000000ms` - Unix milliseconds  
+    - `1705329000000000000ns` - Unix nanoseconds
+    - `1837025672140161024hyb` - Native hybrid timestamp
+    - **Best practice**: While automatic detection is convenient for interactive use, we strongly recommend using explicit unit suffixes in scripts and applications to ensure predictable behavior and future-proof your code
+  - **Automatic disambiguation**: Integer timestamps without suffixes are interpreted based on magnitude:
+    - Values < 2^44 are treated as Unix timestamps (seconds, milliseconds, or nanoseconds)
+    - Values ≥ 2^44 are treated as native hybrid timestamps
+    - This heuristic works reliably until the year ~2527
+  - Native format: high 44 bits are milliseconds since Unix epoch, low 20 bits are a counter
+  - Note: time.time() returns seconds, so the native format is `int(time.time() * 1000) << 20`
+  - Most effective when used with `--all` to process all new messages since a checkpoint
+  - Without `--all`, it finds the oldest message in the queue that is newer than `<timestamp>` and returns only that single message
 
 ### Exit Codes
 
@@ -245,7 +267,120 @@ $ broker peek events --all --timestamps --json | jq '.timestamp'
 1837025689412308992
 ```
 
-Timestamps are 64-bit values that combine physical time and a logical counter to guarantee uniqueness even for messages written at the same millisecond.
+Timestamps are 64-bit hybrid values:
+- High 44 bits: milliseconds since Unix epoch (equivalent to `int(time.time() * 1000)`)
+- Low 20 bits: logical counter for ordering within the same millisecond
+- This guarantees unique, monotonically increasing timestamps even for rapid writes
+
+### Checkpoint-based Processing
+
+The `--since` flag enables checkpoint-based consumption patterns, ideal for resilient processing:
+
+```bash
+# Process initial messages
+$ broker write tasks "task 1"
+$ broker write tasks "task 2"
+
+# Read first task and save its timestamp
+$ result=$(broker read tasks --timestamps)
+$ checkpoint=$(echo "$result" | cut -f1)
+$ echo "Processed: $(echo "$result" | cut -f2)"
+
+# More tasks arrive while processing
+$ broker write tasks "task 3"
+$ broker write tasks "task 4"
+
+# Resume from checkpoint - only get new messages
+$ broker read tasks --all --since "$checkpoint"
+task 2
+task 3
+task 4
+
+# Alternative: Use human-readable timestamps
+$ broker peek tasks --all --since "2024-01-15T14:30:00Z"
+task 3
+task 4
+
+# Or use Unix timestamp from date command
+$ broker peek tasks --all --since "$(date -d '1 hour ago' +%s)"
+task 4
+```
+
+This pattern is perfect for:
+- Resumable batch processing
+- Fault-tolerant consumers
+- Incremental data pipelines
+- Distributed processing with multiple consumers
+
+### Robust Worker with Checkpointing
+
+Here's a complete example of a resilient worker that processes messages in batches and can resume from where it left off after failures:
+
+```bash
+#!/bin/bash
+# resilient-worker.sh - Process messages with checkpoint recovery
+
+QUEUE="events"
+CHECKPOINT_FILE="/var/lib/myapp/checkpoint"
+BATCH_SIZE=100
+
+# Load last checkpoint (default to 0 if first run)
+if [ -f "$CHECKPOINT_FILE" ]; then
+    last_checkpoint=$(cat "$CHECKPOINT_FILE")
+else
+    last_checkpoint=0
+fi
+
+echo "Starting from checkpoint: $last_checkpoint"
+
+# Main processing loop
+while true; do
+    # Read batch of messages since checkpoint
+    # Note: 'read' is destructive - it removes messages from the queue
+    output=$(broker read "$QUEUE" --all --json --timestamps --since "$last_checkpoint" | head -n "$BATCH_SIZE")
+    
+    # Check if we got any messages
+    if [ -z "$output" ]; then
+        echo "No new messages, sleeping..."
+        sleep 5
+        continue
+    fi
+    
+    echo "Processing new batch..."
+    
+    # Process each message
+    echo "$output" | while IFS= read -r line; do
+        message=$(echo "$line" | jq -r '.message')
+        timestamp=$(echo "$line" | jq -r '.timestamp')
+        
+        # Process the message (your business logic here)
+        echo "Processing: $message"
+        if ! process_event "$message"; then
+            echo "Error processing message, will retry on next run"
+            echo "Checkpoint remains at last successful message: $last_checkpoint"
+            # Exit without updating checkpoint - failed message will be reprocessed
+            exit 1
+        fi
+        
+        # Atomically update checkpoint ONLY after successful processing
+        echo "$timestamp" > "$CHECKPOINT_FILE.tmp"
+        mv "$CHECKPOINT_FILE.tmp" "$CHECKPOINT_FILE"
+        
+        # Update our local variable for next iteration
+        last_checkpoint="$timestamp"
+    done
+    
+    echo "Batch complete, checkpoint at: $last_checkpoint"
+done
+```
+
+Key features of this pattern:
+- **Atomic checkpoint updates**: Uses temp file + rename for crash safety
+- **Per-message checkpointing**: Updates checkpoint after each successful message (no data loss)
+- **Batch processing**: Processes up to BATCH_SIZE messages at a time for efficiency
+- **Failure recovery**: On error, exits without updating checkpoint so failed message is retried
+- **Efficient polling**: Only queries for new messages (timestamp > checkpoint)
+- **Progress tracking**: Checkpoint file persists exact progress across restarts
 
 ### Remote Queue via SSH
 
@@ -328,6 +463,13 @@ SQLite's built-in locking handles concurrent access. Multiple processes can safe
 SimpleBroker can be configured via environment variables:
 
 - `BROKER_BUSY_TIMEOUT` - SQLite busy timeout in milliseconds (default: 5000)
+- `BROKER_CACHE_MB` - SQLite page cache size in megabytes (default: 10)
+  - Larger cache improves performance for repeated queries and large scans
+  - Recommended: 10-50 MB for typical workloads, 100+ MB for heavy use
+- `BROKER_SYNC_MODE` - SQLite synchronous mode: FULL, NORMAL, or OFF (default: FULL)
+  - `FULL`: Maximum durability, safe against power loss (default)
+  - `NORMAL`: ~25% faster writes, safe against app crashes, small risk on power loss
+  - `OFF`: Fastest but unsafe - only for testing or non-critical data
 - `BROKER_READ_COMMIT_INTERVAL` - Number of messages to read before committing in `--all` mode (default: 1)
   - Default of 1 provides exactly-once delivery guarantee (~10,000 messages/second)
   - Increase for better performance with at-least-once delivery guarantee
@@ -397,7 +539,7 @@ uv run mypy simplebroker
 
 Contributions are welcome! Please:
 
-1. Keep it simple - the entire codebase should stay under 1000 lines
+1. Keep it simple - the entire codebase should stay understandable in an afternoon
 2. Maintain backward compatibility
 3. Add tests for new features
 4. Update documentation

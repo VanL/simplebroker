@@ -54,6 +54,7 @@ dmypy.json
 *.db-wal
 .broker.db*
 test.db
+benchmark_pragma.py
 
 # OS
 .DS_Store

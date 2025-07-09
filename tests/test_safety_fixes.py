@@ -29,7 +29,7 @@ def test_purge_safety_no_args(workdir):
     # Try to purge with no arguments - should fail
     rc, _, err = run_cli("purge", cwd=workdir)
     assert rc == 1
-    assert "purge requires either a queue name or --all flag" in err
+    assert "one of the arguments queue --all is required" in err
 
     # Verify messages still exist
     rc, out, _ = run_cli("peek", "test_queue", cwd=workdir)
@@ -54,6 +54,22 @@ def test_purge_with_queue_name(workdir):
     rc, out, _ = run_cli("peek", "queue2", cwd=workdir)
     assert rc == 0
     assert out == "msg2"
+
+
+def test_purge_mutually_exclusive(workdir):
+    """Test that purge queue name and --all are mutually exclusive."""
+    # Write some messages
+    run_cli("write", "queue1", "msg1", cwd=workdir)
+
+    # Try to use both queue name and --all flag - should fail
+    rc, _, err = run_cli("purge", "queue1", "--all", cwd=workdir)
+    assert rc == 1
+    assert "not allowed with argument" in err
+
+    # Verify message still exists
+    rc, out, _ = run_cli("peek", "queue1", cwd=workdir)
+    assert rc == 0
+    assert out == "msg1"
 
 
 def test_purge_with_all_flag(workdir):
@@ -301,8 +317,8 @@ def test_sqlite_version_check(workdir, monkeypatch):
             self.call_count += 1
             if "sqlite_version" in query:
                 return MockCursor()
-            elif "PRAGMA busy_timeout" in query:
-                # Allow busy_timeout to succeed
+            elif "PRAGMA" in query:
+                # Allow all PRAGMA statements to succeed
                 return None
             # For other queries, raise to trigger error
             raise RuntimeError("Mock connection")
