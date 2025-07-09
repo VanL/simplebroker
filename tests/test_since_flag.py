@@ -1056,6 +1056,8 @@ def test_since_unit_suffixes(workdir):
             assert "Invalid timestamp" in err, f"Wrong error for {desc}: {err}"
 
     # Test that suffixes work correctly with actual timestamps
+    # Sleep briefly to ensure current time is after all messages
+    time.sleep(0.01)  # 10ms should be enough
     # Get current time in different units
     now_s = int(time.time())
     now_ms = int(time.time() * 1000)
