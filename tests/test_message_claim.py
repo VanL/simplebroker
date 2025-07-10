@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 from typing import List, Tuple
 
+import pytest
+
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
@@ -216,6 +218,10 @@ def test_concurrent_reads_no_duplicate_delivery(workdir: Path):
     assert set(all_messages) == expected
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32" and sys.version_info[:2] == (3, 8),
+    reason="Python 3.8 performance on Windows is not guaranteed",
+)
 def test_performance_improvement_with_claims(workdir: Path):
     """Test performance improvement when using claimed vs delete operations."""
     db_path = workdir / "test.db"
@@ -244,7 +250,7 @@ def test_performance_improvement_with_claims(workdir: Path):
     # Performance assertion - reading should be fast
     # Claimed approach should handle 1000 messages quickly
     # Windows filesystem operations are slower, so we allow more time
-    timeout = 5.0 if sys.platform == "win32" else 1.5
+    timeout = 6.0 if sys.platform == "win32" else 1.5
     assert read_time < timeout, (
         f"Reading {message_count} messages took {read_time:.2f}s"
     )
@@ -604,6 +610,10 @@ def test_all_flag_with_mixed_claimed_unclaimed(workdir: Path):
     conn.close()
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32" and sys.version_info[:2] == (3, 8),
+    reason="Python 3.8 performance on Windows is not guaranteed",
+)
 def test_write_performance_not_regressed(workdir: Path):
     """Test that write performance is not affected by claim feature."""
     db_path = workdir / "test.db"
@@ -620,7 +630,7 @@ def test_write_performance_not_regressed(workdir: Path):
 
     # Writing should still be fast
     # Windows needs more time due to filesystem differences
-    timeout = 5.0 if sys.platform == "win32" else 1.5
+    timeout = 6.0 if sys.platform == "win32" else 1.5
     assert write_time < timeout, (
         f"Writing {message_count} messages took {write_time:.2f}s"
     )

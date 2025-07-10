@@ -8,6 +8,7 @@ in production environments.
 import multiprocessing
 import os
 import sqlite3
+import sys
 import time
 import unittest.mock
 from pathlib import Path
@@ -266,7 +267,10 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
                 break  # Simulate interrupt
 
     elapsed = time.time() - start_time
-    assert elapsed < 0.5, f"Reading 100 messages took too long: {elapsed:.2f}s"
+    timeout = 0.75 if sys.platform == "win32" else 0.5
+    assert elapsed < timeout, (
+        f"Reading 100 messages took too long: {elapsed:.2f}s (timeout: {timeout}s)"
+    )
 
     # With exactly-once delivery, all 100 messages should be committed
     conn = sqlite3.connect(str(db_path))
@@ -294,7 +298,10 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
                 break  # Simulate interrupt mid-batch
 
     elapsed = time.time() - start_time
-    assert elapsed < 0.5, f"Reading 500 messages took too long: {elapsed:.2f}s"
+    timeout = 0.75 if sys.platform == "win32" else 0.5
+    assert elapsed < timeout, (
+        f"Reading 500 messages took too long: {elapsed:.2f}s (timeout: {timeout}s)"
+    )
 
     # With at-least-once delivery and commit_interval=1000:
     # We read 500 messages but didn't complete the batch
