@@ -245,7 +245,9 @@ def test_performance_improvement_with_claims(workdir: Path):
     # Claimed approach should handle 1000 messages quickly
     # Windows filesystem operations are slower, so we allow more time
     timeout = 5.0 if sys.platform == "win32" else 1.5
-    assert read_time < timeout, f"Reading {message_count} messages took {read_time:.2f}s"
+    assert read_time < timeout, (
+        f"Reading {message_count} messages took {read_time:.2f}s"
+    )
 
     conn.close()
 
@@ -619,7 +621,9 @@ def test_write_performance_not_regressed(workdir: Path):
     # Writing should still be fast
     # Windows needs more time due to filesystem differences
     timeout = 5.0 if sys.platform == "win32" else 1.5
-    assert write_time < timeout, f"Writing {message_count} messages took {write_time:.2f}s"
+    assert write_time < timeout, (
+        f"Writing {message_count} messages took {write_time:.2f}s"
+    )
 
     # Verify messages were written correctly
     conn = sqlite3.connect(str(db_path))
