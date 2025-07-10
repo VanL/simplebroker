@@ -219,8 +219,8 @@ def test_concurrent_reads_no_duplicate_delivery(workdir: Path):
 
 
 @pytest.mark.skipif(
-    sys.platform == "win32" and sys.version_info[:2] == (3, 8),
-    reason="Python 3.8 performance on Windows is not guaranteed",
+    sys.platform == "win32" and sys.version_info[:2] in ((3, 8), (3, 9)),
+    reason="Older Python performance on Windows is not guaranteed",
 )
 def test_performance_improvement_with_claims(workdir: Path):
     """Test performance improvement when using claimed vs delete operations."""
@@ -611,8 +611,8 @@ def test_all_flag_with_mixed_claimed_unclaimed(workdir: Path):
 
 
 @pytest.mark.skipif(
-    sys.platform == "win32" and sys.version_info[:2] == (3, 8),
-    reason="Python 3.8 performance on Windows is not guaranteed",
+    sys.platform == "win32" and sys.version_info[:2] in ((3, 8), (3, 9)),
+    reason="Older Python performance on Windows is not guaranteed",
 )
 def test_write_performance_not_regressed(workdir: Path):
     """Test that write performance is not affected by claim feature."""
