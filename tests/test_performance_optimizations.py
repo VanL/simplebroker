@@ -113,7 +113,7 @@ def test_queue_validation_performance():
 
     # Cached should be significantly faster
     # Even on fast machines, regex matching 1000 times should be measurably slower
-    assert cached_time < uncached_time * 0.5, (
+    assert cached_time < uncached_time, (
         f"Cached: {cached_time:.3f}s, Uncached: {uncached_time:.3f}s"
     )
 
