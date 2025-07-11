@@ -98,7 +98,7 @@ $ broker --cleanup
 | `purge --all` | Delete all queues |
 | `broadcast <message>` | Send message to all existing queues |
 | `watch <queue> [--peek] [--json] [-t] [--since <ts>] [--quiet]` | Watch queue for new messages |
-| `watch <queue> --transfer <dest> [--json] [-t] [--quiet]` | Transfer all messages to another queue |
+| `watch <queue> --transfer <dest> [--json] [-t] [--quiet]` | Watch for messages, transfering all messages to <dest> queue |
 
 #### Read/Peek Options
 
@@ -355,7 +355,7 @@ $ broker watch tasks --since "2024-01-15T14:30:00Z"
 $ broker watch tasks --quiet
 # Useful for scripts and automation
 
-# Transfer ALL messages from one queue to another
+# Transfer ALL messages from one queue to another, echoing each to stdout
 $ broker watch source_queue --transfer destination_queue
 # Continuously drains source queue to destination
 ```
