@@ -1,0 +1,421 @@
+"""
+Test patterns from message claim feature applied to transfer functionality.
+
+This tests the patterns that make sense for transfer operations:
+1. Concurrent transfers don't transfer the same message twice
+2. Transfer performance with large batches
+3. Transfer with vacuum interaction
+4. Schema verification for transfer operations with claimed column
+5. Transfer operations update claimed status correctly
+"""
+
+import concurrent.futures as cf
+import sqlite3
+import sys
+import time
+from pathlib import Path
+from typing import List, Tuple
+
+import pytest
+
+from simplebroker.db import BrokerDB
+
+
+def _concurrent_transfer_worker(args: Tuple[int, str, str, str]) -> List[dict]:
+    """Worker function for concurrent transfer tests."""
+    worker_id, db_path, source_queue, dest_queue = args
+    transferred = []
+
+    with BrokerDB(db_path) as db:
+        # Each worker tries to transfer 5 messages
+        for _ in range(5):
+            result = db.transfer(source_queue, dest_queue)
+            if result:
+                transferred.append(result)
+            else:
+                break  # No more messages
+
+    return transferred
+
+
+def test_concurrent_transfers_no_duplicate_transfer(workdir: Path):
+    """Test that concurrent transfers don't transfer the same message twice."""
+    db_path = workdir / "test.db"
+
+    # Write 20 messages to source queue
+    with BrokerDB(str(db_path)) as db:
+        for i in range(20):
+            db.write("source_queue", f"message{i:02d}")
+
+    # Start 4 concurrent transfer workers
+    with cf.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = []
+        for i in range(4):
+            future = executor.submit(
+                _concurrent_transfer_worker,
+                (i, str(db_path), "source_queue", "dest_queue"),
+            )
+            futures.append(future)
+
+        # Collect all transferred messages
+        all_transferred = []
+        for future in cf.as_completed(futures):
+            messages = future.result()
+            all_transferred.extend(messages)
+
+    # Verify no duplicates
+    assert len(all_transferred) == 20
+    transferred_bodies = [msg["body"] for msg in all_transferred]
+    assert len(set(transferred_bodies)) == 20  # All unique
+
+    # Verify all messages were transferred
+    expected = {f"message{i:02d}" for i in range(20)}
+    assert set(transferred_bodies) == expected
+
+    # Verify source queue is empty
+    with BrokerDB(str(db_path)) as db:
+        remaining = db.read("source_queue", peek=True, all_messages=True)
+        assert len(remaining) == 0
+
+    # Verify dest queue has all messages
+    with BrokerDB(str(db_path)) as db:
+        dest_messages = db.read("dest_queue", peek=True, all_messages=True)
+        assert len(dest_messages) == 20
+
+
+def test_transfer_updates_claimed_status(workdir: Path):
+    """Test that transfer operations move messages by updating queue column."""
+    db_path = workdir / "test.db"
+
+    # Write messages
+    with BrokerDB(str(db_path)) as db:
+        for i in range(5):
+            db.write("source", f"message{i}")
+
+    # Transfer first message
+    with BrokerDB(str(db_path)) as db:
+        result = db.transfer("source", "dest")
+        assert result is not None
+        assert result["body"] == "message0"
+
+    # Check database state
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    # Source should have 4 messages remaining (message0 was moved)
+    cursor.execute(
+        "SELECT body, claimed FROM messages WHERE queue = 'source' ORDER BY id"
+    )
+    source_messages = cursor.fetchall()
+    assert len(source_messages) == 4
+    assert source_messages[0] == ("message1", 0)  # Next message is unclaimed
+    assert all(msg[1] == 0 for msg in source_messages)  # All unclaimed
+
+    # Dest should have the transferred message
+    cursor.execute(
+        "SELECT body, claimed FROM messages WHERE queue = 'dest' ORDER BY id"
+    )
+    dest_messages = cursor.fetchall()
+    assert len(dest_messages) == 1
+    assert dest_messages[0] == ("message0", 0)  # Transferred message is unclaimed
+
+    conn.close()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" and sys.version_info[:2] in ((3, 8), (3, 9)),
+    reason="Older Python performance on Windows is not guaranteed",
+)
+def test_transfer_performance_with_large_batches(workdir: Path):
+    """Test transfer performance with large number of messages."""
+    db_path = workdir / "test.db"
+
+    # Write a large batch of messages
+    message_count = 1000
+    with BrokerDB(str(db_path)) as db:
+        for i in range(message_count):
+            db.write("perf_source", f"msg{i:04d}")
+
+    # Time transferring all messages
+    start_time = time.time()
+    transferred_count = 0
+
+    with BrokerDB(str(db_path)) as db:
+        while True:
+            result = db.transfer("perf_source", "perf_dest")
+            if result is None:
+                break
+            transferred_count += 1
+
+    transfer_time = time.time() - start_time
+
+    assert transferred_count == message_count
+
+    # Performance assertion - transfers should be fast
+    # Windows filesystem operations are slower, so we allow more time
+    timeout = 6.0 if sys.platform == "win32" else 2.0
+    assert transfer_time < timeout, (
+        f"Transferring {message_count} messages took {transfer_time:.2f}s"
+    )
+
+    # Verify all messages are in destination
+    with BrokerDB(str(db_path)) as db:
+        dest_messages = db.read("perf_dest", peek=True, all_messages=True)
+        assert len(dest_messages) == message_count
+
+
+def test_transfer_with_vacuum_interaction(workdir: Path):
+    """Test that transferred messages interact correctly with vacuum."""
+    db_path = workdir / "test.db"
+
+    # Create messages in source queue
+    with BrokerDB(str(db_path)) as db:
+        for i in range(10):
+            db.write("vacuum_source", f"msg{i}")
+
+    # Transfer half the messages
+    with BrokerDB(str(db_path)) as db:
+        for _ in range(5):
+            result = db.transfer("vacuum_source", "vacuum_dest")
+            assert result is not None
+
+    # Check state before vacuum
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    # Source should have 5 messages remaining (5 were transferred)
+    cursor.execute(
+        "SELECT COUNT(*), SUM(claimed) FROM messages WHERE queue = 'vacuum_source'"
+    )
+    source_stats = cursor.fetchone()
+    assert source_stats == (5, 0)  # 5 unclaimed messages remain
+
+    # Dest should have 5 messages, 0 claimed
+    cursor.execute(
+        "SELECT COUNT(*), SUM(claimed) FROM messages WHERE queue = 'vacuum_dest'"
+    )
+    dest_stats = cursor.fetchone()
+    assert dest_stats == (5, 0)
+
+    # Now claim some messages in source to test vacuum interaction
+    with BrokerDB(str(db_path)) as db:
+        # Read 2 messages from source to claim them
+        for _ in range(2):
+            db.read("vacuum_source")
+
+    # Run vacuum
+    with BrokerDB(str(db_path)) as db:
+        db.vacuum()
+
+    # Check state after vacuum
+    # Source should have 3 unclaimed messages (2 claimed ones removed)
+    cursor.execute(
+        "SELECT COUNT(*), SUM(claimed) FROM messages WHERE queue = 'vacuum_source'"
+    )
+    source_after = cursor.fetchone()
+    assert source_after == (3, 0)
+
+    # Dest should be unchanged
+    cursor.execute(
+        "SELECT COUNT(*), SUM(claimed) FROM messages WHERE queue = 'vacuum_dest'"
+    )
+    dest_after = cursor.fetchone()
+    assert dest_after == (5, 0)
+
+    conn.close()
+
+
+def test_transfer_schema_verification(workdir: Path):
+    """Test that transfer works correctly with claimed column schema."""
+    db_path = workdir / "test.db"
+
+    # Create database with messages
+    with BrokerDB(str(db_path)) as db:
+        db.write("schema_test", "test_message")
+
+    # Verify schema includes claimed column
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    cursor.execute("PRAGMA table_info(messages)")
+    columns = {row[1]: row[2] for row in cursor.fetchall()}
+    assert "claimed" in columns
+    assert columns["claimed"] == "INTEGER"
+
+    # Verify partial index exists for performance
+    cursor.execute("""
+        SELECT sql FROM sqlite_master
+        WHERE type = 'index' AND sql LIKE '%claimed%'
+    """)
+    index_sql = cursor.fetchone()
+    assert index_sql is not None
+    assert "WHERE claimed = 0" in index_sql[0] or "WHERE claimed=0" in index_sql[0]
+
+    # Test transfer uses the index correctly
+    with BrokerDB(str(db_path)) as db:
+        result = db.transfer("schema_test", "schema_dest")
+        assert result is not None
+        assert result["body"] == "test_message"
+
+    conn.close()
+
+
+def test_transfer_with_mixed_claimed_unclaimed(workdir: Path):
+    """Test transfer behavior with mix of claimed and unclaimed messages."""
+    db_path = workdir / "test.db"
+
+    # Write 10 messages
+    with BrokerDB(str(db_path)) as db:
+        for i in range(10):
+            db.write("mixed_source", f"message{i}")
+
+    # Read (claim) messages 0, 2, 4
+    with BrokerDB(str(db_path)) as db:
+        # Read first message
+        msg = db.read("mixed_source")
+        assert msg == ["message0"]
+
+        # Read and skip to claim specific messages
+        msg = db.read("mixed_source")
+        assert msg == ["message1"]
+        msg = db.read("mixed_source")
+        assert msg == ["message2"]
+        msg = db.read("mixed_source")
+        assert msg == ["message3"]
+        msg = db.read("mixed_source")
+        assert msg == ["message4"]
+
+    # Now transfer - should only get unclaimed messages in order
+    transferred = []
+    with BrokerDB(str(db_path)) as db:
+        for _ in range(5):
+            result = db.transfer("mixed_source", "mixed_dest")
+            if result:
+                transferred.append(result["body"])
+
+    # Should have transferred the 5 unclaimed messages
+    assert len(transferred) == 5
+    assert transferred == ["message5", "message6", "message7", "message8", "message9"]
+
+    # Verify no more messages to transfer
+    with BrokerDB(str(db_path)) as db:
+        result = db.transfer("mixed_source", "mixed_dest")
+        assert result is None
+
+
+def test_transfer_atomicity(workdir: Path):
+    """Test that transfer is atomic - either completes fully or not at all."""
+    db_path = workdir / "test.db"
+
+    # Write messages
+    with BrokerDB(str(db_path)) as db:
+        for i in range(5):
+            db.write("atomic_source", f"message{i}")
+
+    # Get initial state
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM messages WHERE queue = 'atomic_source'")
+    initial_source_count = cursor.fetchone()[0]
+    assert initial_source_count == 5
+
+    # Perform transfer
+    with BrokerDB(str(db_path)) as db:
+        result = db.transfer("atomic_source", "atomic_dest")
+        assert result is not None
+
+    # Verify atomicity - exactly one message moved
+    cursor.execute("SELECT COUNT(*) FROM messages WHERE queue = 'atomic_source'")
+    source_count = cursor.fetchone()[0]
+    assert source_count == 4  # One message was transferred
+
+    cursor.execute("SELECT COUNT(*) FROM messages WHERE queue = 'atomic_dest'")
+    dest_count = cursor.fetchone()[0]
+    assert dest_count == 1
+
+    # Verify total message count is preserved
+    cursor.execute("SELECT COUNT(*) FROM messages")
+    total_count = cursor.fetchone()[0]
+    assert total_count == 5  # Same total, just moved between queues
+
+    conn.close()
+
+
+def test_transfer_preserves_message_ordering(workdir: Path):
+    """Test that transfers preserve strict FIFO ordering."""
+    db_path = workdir / "test.db"
+
+    # Write messages with specific content to verify order
+    messages = []
+    with BrokerDB(str(db_path)) as db:
+        for i in range(10):
+            msg = f"ordered_message_{i:03d}"
+            messages.append(msg)
+            db.write("order_source", msg)
+
+    # Transfer all messages
+    transferred = []
+    with BrokerDB(str(db_path)) as db:
+        while True:
+            result = db.transfer("order_source", "order_dest")
+            if result is None:
+                break
+            transferred.append(result["body"])
+
+    # Verify order is preserved
+    assert transferred == messages
+
+    # Read from destination to verify order is maintained
+    with BrokerDB(str(db_path)) as db:
+        dest_messages = db.read("order_dest", peek=True, all_messages=True)
+        assert dest_messages == messages
+
+
+def test_transfer_empty_to_empty_queue(workdir: Path):
+    """Test transfer between non-existent/empty queues."""
+    db_path = workdir / "test.db"
+
+    with BrokerDB(str(db_path)) as db:
+        # Transfer from non-existent queue
+        result = db.transfer("does_not_exist", "also_does_not_exist")
+        assert result is None
+
+        # Create empty source queue
+        db.write("empty_source", "temp")
+        db.read("empty_source")  # Claim the message
+
+        # Transfer from empty queue
+        result = db.transfer("empty_source", "empty_dest")
+        assert result is None
+
+
+def test_multiple_sequential_transfers(workdir: Path):
+    """Test multiple sequential transfers maintain consistency."""
+    db_path = workdir / "test.db"
+
+    # Create messages in multiple source queues
+    with BrokerDB(str(db_path)) as db:
+        for i in range(5):
+            db.write("source1", f"s1_msg{i}")
+            db.write("source2", f"s2_msg{i}")
+
+    # Transfer from alternating sources
+    transferred = []
+    with BrokerDB(str(db_path)) as db:
+        for i in range(10):
+            source = "source1" if i % 2 == 0 else "source2"
+            result = db.transfer(source, "combined_dest")
+            if result:
+                transferred.append(result["body"])
+
+    assert len(transferred) == 10
+
+    # Verify both sources are empty
+    with BrokerDB(str(db_path)) as db:
+        assert db.read("source1", peek=True, all_messages=True) == []
+        assert db.read("source2", peek=True, all_messages=True) == []
+
+        # Verify destination has all messages
+        dest_messages = db.read("combined_dest", peek=True, all_messages=True)
+        assert len(dest_messages) == 10

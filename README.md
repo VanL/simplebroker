@@ -20,6 +20,7 @@ SimpleBroker gives you a zero-configuration message queue that runs anywhere Pyt
 - **Portable** - Each directory gets its own isolated `.broker.db`
 - **Fast** - 1000+ messages/second throughput
 - **Lightweight** - ~1500 lines of code, no external dependencies
+- **Real-time** - Built-in watcher for event-driven workflows
 
 ## Installation
 
@@ -96,6 +97,8 @@ $ broker --cleanup
 | `purge <queue>` | Delete all messages in queue |
 | `purge --all` | Delete all queues |
 | `broadcast <message>` | Send message to all existing queues |
+| `watch <queue> [--peek] [--json] [-t] [--since <ts>] [--quiet]` | Watch queue for new messages |
+| `watch <queue> --transfer <dest> [--json] [-t] [--quiet]` | Transfer all messages to another queue |
 
 #### Read/Peek Options
 
@@ -316,6 +319,164 @@ This pattern is perfect for:
 Note that simplebroker may return 0 (SUCCESS) even if no messages are returned if the
 queue exists and has messages, but none match the --since filter.
 
+**Edge case with future timestamps**: If you provide a `--since` timestamp that's in the future,
+no messages will match the filter (since all existing messages have past timestamps). The command
+will return exit code 0 if the queue exists with messages, or exit code 2 if the queue is empty
+or doesn't exist. This behavior is consistent with the filter semantics - the query succeeded but
+found no matching messages.
+
+### Real-time Queue Watching
+
+The `watch` command provides three modes for monitoring queues:
+
+1. **Consume** (default): Process and remove messages from the queue
+2. **Peek** (`--peek`): Monitor messages without removing them
+3. **Transfer** (`--transfer DEST`): Drain ALL messages to another queue
+
+```bash
+# Start watching a queue (consumes messages)
+$ broker watch tasks
+# Blocks and prints each message as it arrives
+
+# Watch without consuming (peek mode)
+$ broker watch tasks --peek
+# Monitors messages without removing them
+
+# Watch with timestamps and JSON output
+$ broker watch tasks --json --timestamps
+{"message": "task 1", "timestamp": 1837025672140161024}
+{"message": "task 2", "timestamp": 1837025681658085376}
+
+# Watch from a specific timestamp (not compatible with --transfer)
+$ broker watch tasks --since "2024-01-15T14:30:00Z"
+# Only shows messages newer than the given timestamp
+
+# Suppress the "Watching queue..." startup message
+$ broker watch tasks --quiet
+# Useful for scripts and automation
+
+# Transfer ALL messages from one queue to another
+$ broker watch source_queue --transfer destination_queue
+# Continuously drains source queue to destination
+```
+
+#### Transfer Mode (`--transfer`)
+
+The `--transfer` option provides continuous queue-to-queue message migration. Think of it like `tail -f` for queues - you see everything flowing through, but the messages continue on to their destination:
+
+```bash
+# Like: tail -f /var/log/app.log | tee -a /var/log/processed.log
+$ broker watch source_queue --transfer dest_queue
+```
+
+Key characteristics:
+- **Drains entire queue**: Transfers ALL messages from source to destination
+- **Atomic operation**: Each message is atomically moved before being displayed
+- **No filtering**: Incompatible with `--since` (would leave messages stranded)
+- **Complete ownership**: Assumes exclusive control of the source queue
+
+**⚠️ IMPORTANT**: `--transfer` mode is designed to **drain ALL messages** from the source queue. Unlike `--peek` or consume modes, it cannot be filtered with `--since` because this would leave older messages permanently stranded in the source queue with no way to process them.
+
+**Concurrent Usage**: Multiple transfer watchers can safely run on the same queues without data loss or duplication. Each message is atomically transferred exactly once. However, for best performance with very large queues (>100K messages), consider using a single transfer watcher to minimize lock contention.
+
+**Important ordering note**: When using `--transfer` with a destination queue that has multiple producers, the transferred messages may interleave with messages from other sources. While messages from the watched queue maintain their relative order, the overall ordering in the destination queue depends on the timing of writes from all producers.
+
+Example use case:
+```bash
+# Observe a filtered stream while transferring all messages
+# This will transfer ALL messages from 'intake' to 'priority_tasks',
+# but only print the ones containing "urgent"
+$ broker watch intake --transfer priority_tasks --json | \
+  jq 'select(.message | contains("urgent"))'
+```
+
+The watcher uses an efficient polling strategy with PRAGMA data_version for low-overhead change detection:
+- **Burst mode**: First 100 checks with zero delay for immediate message pickup
+- **Smart backoff**: Gradually increases polling interval to 0.1s maximum
+- **Low overhead**: Uses SQLite's data_version to detect changes without querying
+- **Graceful shutdown**: Handles Ctrl-C (SIGINT) cleanly
+
+Perfect for:
+- Real-time log processing
+- Event-driven workflows
+- Long-running worker processes
+- Development and debugging
+
+#### ⚠️ IMPORTANT: Message Loss in Consuming Mode
+
+When using `watch` in consuming mode (the default, without `--peek`), messages are **permanently removed from the queue** as soon as they are read, **before** your handler processes them. This means:
+
+- **If your handler fails**, the message is already gone and cannot be recovered
+- **If your process crashes**, any messages read but not yet processed are lost
+- **There is no built-in retry mechanism** for failed messages
+
+For critical messages where data loss is unacceptable, use one of these patterns:
+
+1. **Peek mode with manual acknowledgment** (recommended):
+   ```bash
+   # Watch without consuming
+   broker watch tasks --peek --json | while IFS= read -r line; do
+       message=$(echo "$line" | jq -r '.message')
+       timestamp=$(echo "$line" | jq -r '.timestamp')
+       
+       # Process the message
+       if process_task "$message"; then
+           # Only remove after successful processing
+           broker read tasks --since "$((timestamp - 1))" >/dev/null
+       else
+           echo "Failed to process, message remains in queue" >&2
+       fi
+   done
+   ```
+
+2. **Use the Python API with error handling**:
+   ```python
+   from simplebroker import Queue, QueueWatcher
+   
+   def handle_error(exception, message, timestamp):
+       # Log error and keep the message for retry
+       error_queue = Queue("failed-tasks")
+       error_queue.write(f"{message}|{exception}")
+       return True  # Continue watching
+   
+   watcher = QueueWatcher(
+       queue=Queue("tasks"),
+       handler=process_task,
+       error_handler=handle_error,
+       peek=True  # Use peek mode for safety
+   )
+   ```
+
+3. **Write to an error queue on failure**:
+   ```bash
+   broker watch tasks --json | while IFS= read -r line; do
+       message=$(echo "$line" | jq -r '.message')
+       
+       if ! process_task "$message"; then
+           # Message is gone, but save it for manual recovery
+           echo "$message" | broker write failed-tasks -
+       fi
+   done
+   ```
+
+Example worker script using watch:
+```bash
+#!/bin/bash
+# worker.sh - Process tasks in real-time
+
+broker watch tasks --json | while IFS= read -r line; do
+    message=$(echo "$line" | jq -r '.message')
+    echo "Processing: $message"
+    
+    # Your processing logic here
+    if ! process_task "$message"; then
+        echo "Failed to process: $message" >&2
+        # Could write to an error queue
+        echo "$message" | broker write failed-tasks -
+    fi
+done
+```
+
 ### Robust Worker with Checkpointing
 
 Here's a complete example of a resilient worker that processes messages in batches and can resume from where it left off after failures:
@@ -339,23 +500,30 @@ echo "Starting from checkpoint: $last_checkpoint"
 
 # Main processing loop
 while true; do
-    # Read batch of messages since checkpoint
-    # Note: 'read' is destructive - it removes messages from the queue
-    output=$(broker read "$QUEUE" --all --json --timestamps --since "$last_checkpoint" | head -n "$BATCH_SIZE")
-    
-    # Check if we got any messages
-    if [ -z "$output" ]; then
+    # Check if there are messages newer than our checkpoint
+    if ! broker peek "$QUEUE" --json --timestamps --since "$last_checkpoint" >/dev/null 2>&1; then
         echo "No new messages, sleeping..."
         sleep 5
         continue
     fi
     
-    echo "Processing new batch..."
+    echo "Processing new messages..."
     
-    # Process each message
-    echo "$output" | while IFS= read -r line; do
-        message=$(echo "$line" | jq -r '.message')
-        timestamp=$(echo "$line" | jq -r '.timestamp')
+    # Process messages one at a time to avoid data loss
+    processed=0
+    while [ $processed -lt $BATCH_SIZE ]; do
+        # Read exactly one message newer than checkpoint
+        message_data=$(broker read "$QUEUE" --json --timestamps --since "$last_checkpoint" 2>/dev/null)
+        
+        # Check if we got a message
+        if [ -z "$message_data" ]; then
+            echo "No more messages to process"
+            break
+        fi
+        
+        # Extract message and timestamp
+        message=$(echo "$message_data" | jq -r '.message')
+        timestamp=$(echo "$message_data" | jq -r '.timestamp')
         
         # Process the message (your business logic here)
         echo "Processing: $message"
@@ -372,13 +540,20 @@ while true; do
         
         # Update our local variable for next iteration
         last_checkpoint="$timestamp"
+        processed=$((processed + 1))
     done
     
-    echo "Batch complete, checkpoint at: $last_checkpoint"
+    if [ $processed -eq 0 ]; then
+        echo "No messages processed, sleeping..."
+        sleep 5
+    else
+        echo "Batch complete, processed $processed messages, checkpoint at: $last_checkpoint"
+    fi
 done
 ```
 
 Key features of this pattern:
+- **No data loss from pipe buffering**: Reads messages one at a time instead of using dangerous pipe patterns
 - **Atomic checkpoint updates**: Uses temp file + rename for crash safety
 - **Per-message checkpointing**: Updates checkpoint after each successful message (no data loss)
 - **Batch processing**: Processes up to BATCH_SIZE messages at a time for efficiency
@@ -395,6 +570,83 @@ $ echo "remote task" | ssh server "cd /app && broker write tasks -"
 # Read from remote queue  
 $ ssh server "cd /app && broker read tasks"
 ```
+
+## Python Library Usage
+
+While SimpleBroker is designed for CLI use, it also provides a Python API for more advanced use cases:
+
+### Custom Error Handling with QueueWatcher
+
+The `QueueWatcher` class allows you to watch a queue programmatically with custom error handling:
+
+```python
+from simplebroker import Queue, QueueWatcher
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def process_message(message: str, timestamp: int) -> None:
+    """Process a single message from the queue."""
+    # Your message processing logic here
+    if "error" in message.lower():
+        raise ValueError(f"Message contains error keyword: {message}")
+    print(f"Processed: {message}")
+
+def handle_error(exception: Exception, message: str, timestamp: int) -> bool | None:
+    """
+    Custom error handler called when process_message raises an exception.
+    
+    Args:
+        exception: The exception that was raised
+        message: The message that caused the error
+        timestamp: The message timestamp
+        
+    Returns:
+        - False: Stop watching the queue
+        - True or None: Continue watching the queue
+    """
+    logger.error(f"Error processing message: {exception}")
+    logger.error(f"Failed message: {message} (timestamp: {timestamp})")
+    
+    # Example: Stop watching on critical errors
+    if isinstance(exception, KeyboardInterrupt):
+        return False  # Stop watching
+    
+    # Example: Log error and continue for recoverable errors
+    if isinstance(exception, ValueError):
+        # Could write to an error queue for later processing
+        error_queue = Queue("errors")
+        error_queue.write(f"Failed at {timestamp}: {message} - {exception}")
+        return True  # Continue watching
+    
+    # Default: Continue watching for unknown errors
+    return True
+
+# Create queue and watcher
+queue = Queue("tasks")
+watcher = QueueWatcher(
+    queue=queue,
+    handler=process_message,
+    error_handler=handle_error,  # Optional: handles errors from process_message
+    peek=False  # False = consume messages, True = just observe
+)
+
+# Start watching (blocks until stopped)
+try:
+    watcher.watch()
+except KeyboardInterrupt:
+    print("Watcher stopped by user")
+```
+
+The error handler is called whenever the main message handler raises an exception. This allows you to:
+- Log errors with full context (exception, message, and timestamp)
+- Decide whether to continue watching or stop based on the error type
+- Move failed messages to an error queue for later investigation
+- Implement custom retry logic or alerting
+
+Without an error handler, exceptions from the message handler will bubble up and stop the watcher.
 
 ## Design Philosophy
 
@@ -476,6 +728,32 @@ This optimization is completely transparent - messages are still delivered exact
 - **Shell injection risks** - When piping output to shell commands, malicious message content could execute unintended commands
 - **Special characters** - Messages containing newlines or other special characters can break shell pipelines that expect single-line output
 - **Recommended practice** - Always sanitize or validate message content before using it in shell commands or other security-sensitive contexts
+
+### Tuning Watcher Performance
+
+The `watch` command's polling behavior can be tuned via environment variables:
+
+- `SIMPLEBROKER_INITIAL_CHECKS` - Number of checks with zero delay (default: 100)
+  - Controls the "burst mode" duration for immediate message pickup
+  - Higher values are better for high-throughput scenarios
+- `SIMPLEBROKER_MAX_INTERVAL` - Maximum polling interval in seconds (default: 0.1)
+  - Controls the backoff ceiling when no messages are available
+  - Lower values reduce latency but increase CPU usage
+
+Example:
+```bash
+# High-throughput configuration
+export SIMPLEBROKER_INITIAL_CHECKS=1000  # Longer burst mode
+export SIMPLEBROKER_MAX_INTERVAL=0.05    # Faster polling
+
+# Low-latency configuration  
+export SIMPLEBROKER_INITIAL_CHECKS=500   # Extended burst
+export SIMPLEBROKER_MAX_INTERVAL=0.01    # Very responsive
+
+# Power-saving configuration
+export SIMPLEBROKER_INITIAL_CHECKS=50    # Short burst
+export SIMPLEBROKER_MAX_INTERVAL=0.5     # Longer sleep
+```
 
 ### Environment Variables
 

@@ -5,6 +5,13 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - Unreleased
+### Added
+- `watch` command with three distinct modes:
+  - **Consume mode** (default): Process and remove messages
+  - **Peek mode** (`--peek`): Monitor without consuming
+  - **Transfer mode** (`--transfer`): Drain all messages to another queue
+
 ## [1.3.0] - 2025-07-09
 - Performance optimizations
 - New --vacuum flag and list --stats command to manage claimed messages

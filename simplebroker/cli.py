@@ -123,6 +123,44 @@ def create_parser() -> argparse.ArgumentParser:
     )
     broadcast_parser.add_argument("message", help="message content ('-' for stdin)")
 
+    # Watch command
+    watch_parser = subparsers.add_parser(
+        "watch", help="watch queue and consume, peek, or transfer messages"
+    )
+    watch_parser.add_argument("queue", help="queue name")
+
+    # Create mutually exclusive group for --peek and --transfer
+    watch_mode_group = watch_parser.add_mutually_exclusive_group()
+    watch_mode_group.add_argument(
+        "--peek",
+        action="store_true",
+        help="monitor without consuming messages",
+    )
+    watch_mode_group.add_argument(
+        "--transfer",
+        type=str,
+        metavar="QUEUE",
+        help="drain ALL messages to another queue (incompatible with --since)",
+    )
+
+    watch_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="output in line-delimited JSON (ndjson) format",
+    )
+    watch_parser.add_argument(
+        "-t",
+        "--timestamps",
+        action="store_true",
+        help="include timestamps in output",
+    )
+    watch_parser.add_argument(
+        "--since",
+        type=str,
+        metavar="TIMESTAMP",
+        help="watch for messages after timestamp",
+    )
+
     return parser
 
 
@@ -155,7 +193,7 @@ def rearrange_args(argv: List[str]) -> List[str]:
     }
 
     # Find subcommands
-    subcommands = {"write", "read", "peek", "list", "purge", "broadcast"}
+    subcommands = {"write", "read", "peek", "list", "purge", "broadcast", "watch"}
 
     global_args = []
     command_args = []
@@ -389,12 +427,29 @@ def main() -> int:
                 return commands.cmd_purge(db, queue)
             elif args.command == "broadcast":
                 return commands.cmd_broadcast(db, args.message)
+            elif args.command == "watch":
+                since_str = getattr(args, "since", None)
+                transfer_to = getattr(args, "transfer", None)
+                return commands.cmd_watch(
+                    db,
+                    args.queue,
+                    args.peek,
+                    args.json,
+                    args.timestamps,
+                    since_str,
+                    args.quiet,
+                    transfer_to,
+                )
 
         return 0
 
     except ValueError as e:
         print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        # Handle Ctrl-C gracefully
+        print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
+        return 0
     except Exception as e:
         if not args.quiet:
             print(f"{PROG_NAME}: {e}", file=sys.stderr)

@@ -9,7 +9,17 @@ import time
 import warnings
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Iterator, List, Literal, Optional, Tuple, TypeVar
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    TypeVar,
+)
 
 # Type variable for generic return types
 T = TypeVar("T")
@@ -1053,6 +1063,108 @@ class BrokerDB:
             # Only clean up lock file if we created it
             if lock_acquired:
                 vacuum_lock_path.unlink(missing_ok=True)
+
+    def transfer(
+        self,
+        source_queue: str,
+        dest_queue: str,
+        *,
+        message_id: Optional[int] = None,
+        require_unclaimed: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """Transfer message(s) from one queue to another atomically.
+
+        Args:
+            source_queue: Name of the queue to transfer from
+            dest_queue: Name of the queue to transfer to
+            message_id: Optional ID of specific message to transfer.
+                       If None, transfers the oldest unclaimed message.
+            require_unclaimed: If True (default), only transfer unclaimed messages.
+                             If False, transfer any message (including claimed).
+
+        Returns:
+            Dictionary with 'id', 'body' and 'ts' keys if a message was transferred,
+            None if no matching messages found
+
+        Raises:
+            ValueError: If queue names are invalid
+            RuntimeError: If called from a forked process
+        """
+        self._check_fork_safety()
+        self._validate_queue_name(source_queue)
+        self._validate_queue_name(dest_queue)
+
+        def _do_transfer() -> Optional[Dict[str, Any]]:
+            with self._lock:
+                # Use retry logic for BEGIN IMMEDIATE
+                def _begin_transaction() -> None:
+                    self.conn.execute("BEGIN IMMEDIATE")
+
+                try:
+                    self._execute_with_retry(_begin_transaction)
+                except Exception:
+                    # If we can't begin transaction, return None
+                    return None
+
+                try:
+                    if message_id is not None:
+                        # Transfer specific message by ID
+                        # Build WHERE clause based on require_unclaimed
+                        where_conditions = ["id = ?", "queue = ?"]
+                        params = [message_id, source_queue]
+
+                        if require_unclaimed:
+                            where_conditions.append("claimed = 0")
+
+                        where_clause = " AND ".join(where_conditions)
+
+                        cursor = self.conn.execute(
+                            f"""
+                            UPDATE messages
+                            SET queue = ?, claimed = 0
+                            WHERE {where_clause}
+                            RETURNING id, body, ts
+                            """,
+                            (dest_queue, *params),
+                        )
+                    else:
+                        # Transfer oldest message (existing behavior)
+                        # Always require unclaimed for bulk transfer
+
+                        cursor = self.conn.execute(
+                            """
+                            UPDATE messages
+                            SET queue = ?, claimed = 0
+                            WHERE id IN (
+                                SELECT id FROM messages
+                                WHERE queue = ? AND claimed = 0
+                                ORDER BY id
+                                LIMIT 1
+                            )
+                            RETURNING id, body, ts
+                            """,
+                            (dest_queue, source_queue),
+                        )
+
+                    # Fetch the transferred message
+                    message = cursor.fetchone()
+
+                    if message:
+                        # Commit the transaction
+                        self.conn.commit()
+                        # Return as dict with id, body, and ts
+                        return {"id": message[0], "body": message[1], "ts": message[2]}
+                    else:
+                        # No message to transfer
+                        self.conn.rollback()
+                        return None
+                except Exception:
+                    # On any error, rollback to preserve message
+                    self.conn.rollback()
+                    raise
+
+        # Execute with retry logic
+        return self._execute_with_retry(_do_transfer)
 
     def vacuum(self) -> None:
         """Manually trigger vacuum of claimed messages.

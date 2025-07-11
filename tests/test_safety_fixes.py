@@ -143,12 +143,14 @@ def test_broadcast_size_utf8(workdir):
     big_message = emoji * 2_621_440  # Just under 10MB
     too_big_message = big_message + emoji  # Just over 10MB
 
-    # This should work
-    rc, _, _ = run_cli("broadcast", "-", cwd=workdir, stdin=big_message)
+    # This should work (increase timeout for large message)
+    rc, _, _ = run_cli("broadcast", "-", cwd=workdir, stdin=big_message, timeout=30)
     assert rc == 0
 
     # This should fail
-    rc, _, err = run_cli("broadcast", "-", cwd=workdir, stdin=too_big_message)
+    rc, _, err = run_cli(
+        "broadcast", "-", cwd=workdir, stdin=too_big_message, timeout=30
+    )
     assert rc == 1
     assert "exceeds maximum size" in err
 

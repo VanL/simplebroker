@@ -86,27 +86,52 @@ def _parse_as_unix(timestamp_str: str) -> Optional[int]:
         Hybrid timestamp if valid Unix format, None otherwise
     """
     try:
-        unix_ts = float(timestamp_str)
+        # First check if it's a valid number format
+        # Handle both integer and float strings
+        if "." in timestamp_str:
+            # Contains decimal point - parse as float for validation
+            unix_ts = float(timestamp_str)
+            if unix_ts < 0:
+                raise ValueError("Invalid timestamp: cannot be negative")
 
-        # Check for negative values
-        if unix_ts < 0:
-            raise ValueError("Invalid timestamp: cannot be negative")
+            # Split to get integer and fractional parts
+            int_part, frac_part = timestamp_str.split(".", 1)
+            integer_digits = len(int_part)
+        else:
+            # Pure integer - avoid float conversion to preserve precision
+            # Validate it's a number
+            int_val = int(timestamp_str)
+            if int_val < 0:
+                raise ValueError("Invalid timestamp: cannot be negative")
+
+            integer_digits = len(timestamp_str.lstrip("0") or "0")
+            unix_ts = int_val
 
         # Heuristic based on number of digits for the integer part
         # Current time (2025) is ~10 digits in seconds, ~13 digits in ms, ~19 digits in ns
         # This provides a more stable heuristic than hardcoded future dates
-        integer_part = str(int(unix_ts))
-        num_digits = len(integer_part)
 
-        if num_digits > 16:  # Likely nanoseconds (current time has 19 digits)
+        if integer_digits > 16:  # Likely nanoseconds (current time has 19 digits)
             # Assume nanoseconds, convert to milliseconds
-            ms_since_epoch = int(unix_ts / 1_000_000)
-        elif num_digits > 11:  # Likely milliseconds (current time has 13 digits)
+            if "." in timestamp_str:
+                ms_since_epoch = int(unix_ts / 1_000_000)
+            else:
+                # Use integer division to avoid precision loss
+                ms_since_epoch = int(timestamp_str) // 1_000_000
+        elif integer_digits > 11:  # Likely milliseconds (current time has 13 digits)
             # Assume milliseconds (already in correct unit)
-            ms_since_epoch = int(unix_ts)
+            if "." in timestamp_str:
+                ms_since_epoch = int(unix_ts)
+            else:
+                ms_since_epoch = int(timestamp_str)
         else:  # Likely seconds (current time has 10 digits)
             # Assume seconds, convert to milliseconds
-            ms_since_epoch = int(unix_ts * 1000)
+            if "." in timestamp_str:
+                # Preserve fractional seconds
+                ms_since_epoch = int(unix_ts * 1000)
+            else:
+                # Pure integer - multiply without float conversion
+                ms_since_epoch = int(timestamp_str) * 1000
 
         hybrid_ts = ms_since_epoch << 20
         # Ensure it fits in SQLite's signed 64-bit integer
@@ -420,6 +445,7 @@ def cmd_read(
             since_timestamp = _validate_timestamp(since_str)
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
+            sys.stderr.flush()  # Ensure error is visible before exit
             return 1  # General error
 
     return _read_messages(
@@ -449,6 +475,7 @@ def cmd_peek(
             since_timestamp = _validate_timestamp(since_str)
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
+            sys.stderr.flush()  # Ensure error is visible before exit
             return 1  # General error
 
     return _read_messages(
@@ -535,5 +562,116 @@ def cmd_vacuum(db: BrokerDB) -> int:
     # Calculate elapsed time
     elapsed = time.time() - start_time
     print(f"Vacuumed {claimed_count} claimed messages in {elapsed:.1f}s")
+
+    return EXIT_SUCCESS
+
+
+def cmd_watch(
+    db: BrokerDB,
+    queue: str,
+    peek: bool = False,
+    json_output: bool = False,
+    show_timestamps: bool = False,
+    since_str: Optional[str] = None,
+    quiet: bool = False,
+    transfer_to: Optional[str] = None,
+) -> int:
+    """Watch queue for new messages in real-time."""
+    import sys
+
+    from .watcher import QueueTransferWatcher, QueueWatcher
+
+    # Check for incompatible options
+    if transfer_to and since_str:
+        print(
+            "simplebroker: error: --transfer drains ALL messages from source queue, "
+            "incompatible with --since filtering",
+            file=sys.stderr,
+        )
+        sys.stderr.flush()
+        return 1
+
+    # Validate timestamp if provided
+    since_timestamp = None
+    if since_str is not None:
+        try:
+            since_timestamp = _validate_timestamp(since_str)
+        except ValueError as e:
+            print(f"simplebroker: error: {e}", file=sys.stderr)
+            sys.stderr.flush()  # Ensure error is visible before exit
+            return 1  # General error
+
+    # Print informational message unless quiet mode
+    if not quiet:
+        if transfer_to:
+            print(
+                f"Watching queue '{queue}' and transferring to '{transfer_to}'... Press Ctrl-C to exit",
+                file=sys.stderr,
+            )
+        else:
+            mode = "monitoring" if peek else "consuming"
+            print(
+                f"Watching queue '{queue}' ({mode} mode)... Press Ctrl-C to exit",
+                file=sys.stderr,
+            )
+
+    # Declare watcher type to avoid mypy error
+    watcher: Union[QueueWatcher, QueueTransferWatcher]
+
+    if transfer_to:
+        # Use QueueTransferWatcher for transfers
+        def transfer_handler(body: str, ts: int) -> None:
+            """Print transferred message according to formatting options."""
+            if json_output:
+                data: Dict[str, Union[str, int]] = {
+                    "message": body,
+                    "source_queue": queue,  # Original source queue
+                    "dest_queue": transfer_to,  # Destination queue
+                }
+                if show_timestamps:
+                    data["timestamp"] = ts
+                print(json.dumps(data), flush=True)
+            elif show_timestamps:
+                print(f"{ts}\t{body}", flush=True)
+            else:
+                print(body, flush=True)
+
+        # Create and run transfer watcher
+        watcher = QueueTransferWatcher(
+            db,
+            queue,
+            transfer_to,
+            transfer_handler,
+        )
+    else:
+        # Use regular QueueWatcher
+        def handler(msg: str, ts: float) -> None:
+            """Print message according to formatting options."""
+            if json_output:
+                data: Dict[str, Union[str, float]] = {"message": msg}
+                if show_timestamps:
+                    data["timestamp"] = int(ts)
+                print(json.dumps(data), flush=True)
+            elif show_timestamps:
+                print(f"{int(ts)}\t{msg}", flush=True)
+            else:
+                print(msg, flush=True)
+
+        # Create and run watcher with since_timestamp for efficient filtering
+        watcher = QueueWatcher(
+            db,
+            queue,
+            handler,
+            peek=peek,
+            since_timestamp=since_timestamp,
+        )
+
+    try:
+        watcher.run_forever()
+    except KeyboardInterrupt:
+        # Graceful exit on Ctrl-C
+        if not quiet:
+            print("\nStopping...", file=sys.stderr)
+        return EXIT_SUCCESS
 
     return EXIT_SUCCESS
