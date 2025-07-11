@@ -222,7 +222,9 @@ class TestQueueWatcher:
                 expected_codes = (0, 1)
             else:
                 expected_codes = (0,)
-            assert exit_code in expected_codes, f"Process exited with code {exit_code}, expected {expected_codes}"
+            assert exit_code in expected_codes, (
+                f"Process exited with code {exit_code}, expected {expected_codes}"
+            )
 
             # Optionally check output
             stdout, stderr = proc.communicate()
