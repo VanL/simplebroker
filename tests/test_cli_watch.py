@@ -64,17 +64,25 @@ class TestWatchCommand:
             # Give it time to start and process the first message
             time.sleep(1.0)  # Increased wait time for parallel test execution
 
-            # Send SIGINT
-            proc.send_signal(signal.SIGINT)
+            # Send SIGINT on Unix, terminate on Windows
+            if sys.platform == "win32":
+                proc.terminate()
+            else:
+                proc.send_signal(signal.SIGINT)
 
             # Should exit gracefully
             return_code = proc.wait(timeout=3.0)
             stdout, stderr = proc.communicate()
 
-            # Check exit code - both 0 and -2 are acceptable
-            # 0 means graceful exit, -2 means killed by SIGINT (platform-dependent)
-            assert return_code in (0, -2), (
-                f"Expected exit code 0 or -2, got {return_code}"
+            # Check exit code - both 0 and -2 are acceptable on Unix, 1 on Windows
+            # 0 means graceful exit, -2 means killed by SIGINT (Unix)
+            # 1 means terminated (Windows)
+            if sys.platform == "win32":
+                expected_codes = (0, 1)
+            else:
+                expected_codes = (0, -2)
+            assert return_code in expected_codes, (
+                f"Expected exit code {expected_codes}, got {return_code}"
             )
 
             # Should have processed the message OR at least started watching
