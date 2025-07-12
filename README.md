@@ -98,7 +98,7 @@ $ broker --cleanup
 | `delete --all` | Delete all queues |
 | `broadcast <message>` | Send message to all existing queues |
 | `watch <queue> [--peek] [--json] [-t] [--since <ts>] [--quiet]` | Watch queue for new messages |
-| `watch <queue> --move <dest> [--json] [-t] [--quiet]` | Watch for messages, moveing all messages to <dest> queue |
+| `watch <queue> --move <dest> [--json] [-t] [--quiet]` | Watch for messages, moving all messages to `<dest>` queue |
 
 #### Read/Peek Options
 
