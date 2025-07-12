@@ -1,14 +1,14 @@
 """
 Miscellaneous tests for SimpleBroker.
 
-T5 – List queues and purge operations
+T5 – List queues and delete operations
 """
 
 from .conftest import run_cli
 
 
-def test_list_and_purge(workdir):
-    """T5: List shows counts, purge removes messages."""
+def test_list_and_delete(workdir):
+    """T5: List shows counts, delete removes messages."""
     # Create two queues with messages
     rc, _, _ = run_cli("write", "q1", "x", cwd=workdir)
     assert rc == 0
@@ -26,7 +26,7 @@ def test_list_and_purge(workdir):
     assert lines == ["q1: 1", "q2: 2"]
 
     # Purge q1
-    rc, _, _ = run_cli("purge", "q1", cwd=workdir)
+    rc, _, _ = run_cli("delete", "q1", cwd=workdir)
     assert rc == 0
 
     # List should show q1 is gone
@@ -36,7 +36,7 @@ def test_list_and_purge(workdir):
     assert "q2: 2" in out
 
     # Purge all
-    rc, _, _ = run_cli("purge", "--all", cwd=workdir)
+    rc, _, _ = run_cli("delete", "--all", cwd=workdir)
     assert rc == 0
 
     # List should be empty

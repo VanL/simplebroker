@@ -5,12 +5,18 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.4.0] - Unreleased
+## [1.5.0] - 2025-07-12
+### Changed
+- **BREAKING**: Renamed `purge` command to `delete` for consistency
+- **BREAKING**: Renamed `watch --transfer` to `watch --move` for clarity
+- Added UNIQUE constraint on timestamp column for improved data integrity
+
+## [1.4.0] - 2025-07-11
 ### Added
 - `watch` command with three distinct modes:
   - **Consume mode** (default): Process and remove messages
   - **Peek mode** (`--peek`): Monitor without consuming
-  - **Transfer mode** (`--transfer`): Drain all messages to another queue
+  - **Move mode** (`--move`): Drain all messages to another queue
 
 ## [1.3.0] - 2025-07-09
 - Performance optimizations

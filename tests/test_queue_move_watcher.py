@@ -1,4 +1,4 @@
-"""Tests for the QueueTransferWatcher feature."""
+"""Tests for the QueueMoveWatcher feature."""
 
 import threading
 import time
@@ -10,11 +10,11 @@ from simplebroker.db import BrokerDB
 
 # Import will be available after implementation
 pytest.importorskip("simplebroker.watcher")
-from simplebroker.watcher import QueueTransferWatcher
+from simplebroker.watcher import QueueMoveWatcher
 
 
-class TransferCollector:
-    """Helper to collect transferred messages and track events."""
+class MoveCollector:
+    """Helper to collect moved messages and track events."""
 
     def __init__(self):
         self.messages: List[Tuple[str, int]] = []
@@ -72,35 +72,35 @@ def broker(temp_db):
     db.close()
 
 
-class TestQueueTransferWatcher:
-    """Test the QueueTransferWatcher class."""
+class TestQueueMoveWatcher:
+    """Test the QueueMoveWatcher class."""
 
-    def test_basic_transfer_functionality(self, broker, temp_db):
-        """Test basic message transfer from one queue to another."""
+    def test_basic_move_functionality(self, broker, temp_db):
+        """Test basic message move from one queue to another."""
         # Add messages to source queue
         broker.write("source_queue", "message1")
         broker.write("source_queue", "message2")
         broker.write("source_queue", "message3")
 
-        collector = TransferCollector()
+        collector = MoveCollector()
 
-        # Create transfer watcher
-        watcher = QueueTransferWatcher(
+        # Create move watcher
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source_queue",
             dest_queue="dest_queue",
             handler=collector.handler,
         )
 
-        # Run transfer
+        # Run move
         thread = watcher.run_async()
-        time.sleep(0.3)  # Allow time for transfers
+        time.sleep(0.3)  # Allow time for moves
 
         watcher.stop()
         thread.join(timeout=2.0)
 
-        # Verify all messages were transferred
-        assert watcher.transfer_count == 3
+        # Verify all messages were moved
+        assert watcher.move_count == 3
 
         # Verify handler was called for each message
         handler_calls = collector.get_handler_calls()
@@ -121,7 +121,7 @@ class TestQueueTransferWatcher:
         assert len(from_messages) == 0
 
     def test_handler_execution_verification(self, broker, temp_db):
-        """Test that handler is called for each transferred message."""
+        """Test that handler is called for each moved message."""
         # Add messages
         broker.write("source", "msg1")
         broker.write("source", "msg2")
@@ -137,7 +137,7 @@ class TestQueueTransferWatcher:
                 }
             )
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
@@ -158,15 +158,15 @@ class TestQueueTransferWatcher:
         assert handler_calls[1]["queue"] == "dest"
 
     def test_handler_failure_isolation(self, broker, temp_db):
-        """Test that handler failures don't prevent message transfer."""
+        """Test that handler failures don't prevent message move."""
         # Add messages
         broker.write("source", "message1")
         broker.write("source", "fail_message")
         broker.write("source", "message3")
 
-        collector = TransferCollector()
+        collector = MoveCollector()
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
@@ -180,8 +180,8 @@ class TestQueueTransferWatcher:
         watcher.stop()
         thread.join(timeout=2.0)
 
-        # Verify all messages were transferred despite handler failure
-        assert watcher.transfer_count == 3
+        # Verify all messages were moved despite handler failure
+        assert watcher.move_count == 3
 
         # Verify messages are in destination queue
         dest_messages = list(broker.read("dest", all_messages=True))
@@ -200,19 +200,19 @@ class TestQueueTransferWatcher:
         assert [body for body, ts in handler_calls] == ["message1", "message3"]
 
     def test_order_preservation_global_id(self, broker, temp_db):
-        """Test that transferred messages maintain their global ID order."""
+        """Test that moved messages maintain their global ID order."""
         # Add messages - they'll get sequential global IDs
         broker.write("source", "msg1")  # ID=1
         broker.write("source", "msg2")  # ID=2
         broker.write("source", "msg3")  # ID=3
 
-        transferred_ids = []
+        moved_ids = []
 
         def capture_id_handler(body: str, ts: int):
             # We can't capture ID anymore with new signature
-            transferred_ids.append(body)
+            moved_ids.append(body)
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
@@ -225,9 +225,9 @@ class TestQueueTransferWatcher:
         watcher.stop()
         thread.join(timeout=2.0)
 
-        # Verify messages were transferred in order
-        assert len(transferred_ids) == 3
-        assert transferred_ids == ["msg1", "msg2", "msg3"]  # Should maintain order
+        # Verify messages were moved in order
+        assert len(moved_ids) == 3
+        assert moved_ids == ["msg1", "msg2", "msg3"]  # Should maintain order
 
     def test_mixed_source_ordering_behavior(self, broker, temp_db):
         """Test ordering when destination queue already has messages."""
@@ -245,8 +245,8 @@ class TestQueueTransferWatcher:
         # Write more to source
         broker.write("source", "src3")  # ID=6
 
-        # Transfer from source to dest
-        watcher = QueueTransferWatcher(
+        # Move from source to dest
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
@@ -268,9 +268,9 @@ class TestQueueTransferWatcher:
 
     def test_empty_queue_handling(self, broker, temp_db):
         """Test watcher behavior with empty source queue."""
-        collector = TransferCollector()
+        collector = MoveCollector()
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="empty_source",
             dest_queue="dest",
@@ -285,13 +285,13 @@ class TestQueueTransferWatcher:
         # Add message while watcher is running
         broker.write("empty_source", "delayed_message")
 
-        time.sleep(0.15)  # Wait for transfer
+        time.sleep(0.15)  # Wait for move
 
         watcher.stop()
         thread.join(timeout=2.0)
 
-        # Verify message was transferred
-        assert watcher.transfer_count == 1
+        # Verify message was moved
+        assert watcher.move_count == 1
         handler_calls = collector.get_handler_calls()
         assert len(handler_calls) == 1
         assert handler_calls[0][0] == "delayed_message"  # body is first element
@@ -301,31 +301,31 @@ class TestQueueTransferWatcher:
         assert dest_messages == ["delayed_message"]
 
     def test_concurrent_operations(self, broker, temp_db):
-        """Test concurrent writes during transfer operations."""
-        transferred_count = 0
-        transferred_lock = threading.Lock()
+        """Test concurrent writes during move operations."""
+        moved_count = 0
+        moved_lock = threading.Lock()
 
         def counting_handler(body: str, ts: int):
-            nonlocal transferred_count
-            with transferred_lock:
-                transferred_count += 1
+            nonlocal moved_count
+            with moved_lock:
+                moved_count += 1
 
         # Add initial messages
         for i in range(5):
             broker.write("source", f"initial_{i}")
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
             handler=counting_handler,
         )
 
-        # Start transfer
+        # Start move
         thread = watcher.run_async()
-        time.sleep(0.05)  # Let initial transfers start
+        time.sleep(0.05)  # Let initial moves start
 
-        # Add more messages while transferring
+        # Add more messages while moving
         writer_thread = threading.Thread(
             target=lambda: [
                 broker.write("source", f"concurrent_{i}") or time.sleep(0.01)
@@ -341,9 +341,9 @@ class TestQueueTransferWatcher:
         thread.join(timeout=2.0)
         writer_thread.join(timeout=2.0)
 
-        # All 10 messages should be transferred
-        with transferred_lock:
-            assert transferred_count == 10
+        # All 10 messages should be moved
+        with moved_lock:
+            assert moved_count == 10
 
         # Verify all messages in destination
         dest_messages = list(broker.read("dest", all_messages=True))
@@ -354,20 +354,20 @@ class TestQueueTransferWatcher:
         assert len(source_messages) == 0
 
     def test_transaction_safety(self, broker, temp_db):
-        """Test that transfers are atomic and transactional."""
+        """Test that moves are atomic and transactional."""
         # This test simulates transaction behavior by checking atomicity
 
         # Add a message
         broker.write("source", "atomic_test")
 
-        transfer_completed = threading.Event()
+        move_completed = threading.Event()
 
         def slow_handler(body: str, ts: int):
             # Simulate slow processing
-            transfer_completed.set()
+            move_completed.set()
             time.sleep(0.1)
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
@@ -376,8 +376,8 @@ class TestQueueTransferWatcher:
 
         thread = watcher.run_async()
 
-        # Wait for transfer to complete (handler called)
-        transfer_completed.wait(timeout=1.0)
+        # Wait for move to complete (handler called)
+        move_completed.wait(timeout=1.0)
 
         # At this point, message should be in dest, not in source
         # even though handler is still running
@@ -393,10 +393,8 @@ class TestQueueTransferWatcher:
 
     def test_same_queue_validation(self, broker, temp_db):
         """Test that source_queue and dest_queue must be different."""
-        with pytest.raises(
-            ValueError, match="Cannot transfer messages to the same queue"
-        ):
-            QueueTransferWatcher(
+        with pytest.raises(ValueError, match="Cannot move messages to the same queue"):
+            QueueMoveWatcher(
                 broker=broker,
                 source_queue="same_queue",
                 dest_queue="same_queue",
@@ -404,17 +402,17 @@ class TestQueueTransferWatcher:
             )
 
     def test_max_messages_limit(self, broker, temp_db):
-        """Test max_messages parameter limits transfers."""
+        """Test max_messages parameter limits moves."""
         # Add 10 messages
         for i in range(10):
             broker.write("source", f"msg_{i}")
 
-        transferred = []
+        moved = []
 
         def track_handler(body: str, ts: int):
-            transferred.append(body)
+            moved.append(body)
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
@@ -425,10 +423,10 @@ class TestQueueTransferWatcher:
         # Run synchronously to ensure it stops at limit
         watcher.run()
 
-        # Should have transferred exactly 5 messages
-        assert watcher.transfer_count == 5
-        assert len(transferred) == 5
-        assert transferred == ["msg_0", "msg_1", "msg_2", "msg_3", "msg_4"]
+        # Should have moved exactly 5 messages
+        assert watcher.move_count == 5
+        assert len(moved) == 5
+        assert moved == ["msg_0", "msg_1", "msg_2", "msg_3", "msg_4"]
 
         # 5 messages should remain in source
         source_messages = list(broker.read("source", all_messages=True))
@@ -443,7 +441,7 @@ class TestQueueTransferWatcher:
         for i in range(5):
             broker.write("source", f"msg_{i}")
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
@@ -452,20 +450,20 @@ class TestQueueTransferWatcher:
         )
 
         thread = watcher.run_async()
-        time.sleep(0.1)  # Let some transfers happen
+        time.sleep(0.1)  # Let some moves happen
 
         # Signal stop
         stop_event.set()
         thread.join(timeout=2.0)
 
-        # Should have stopped (may have transferred some but not necessarily all)
+        # Should have stopped (may have moved some but not necessarily all)
         assert not thread.is_alive()
-        assert watcher.transfer_count >= 0
-        assert watcher.transfer_count <= 5
+        assert watcher.move_count >= 0
+        assert watcher.move_count <= 5
 
-    def test_transfer_properties(self, broker, temp_db):
-        """Test QueueTransferWatcher properties."""
-        watcher = QueueTransferWatcher(
+    def test_move_properties(self, broker, temp_db):
+        """Test QueueMoveWatcher properties."""
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source_queue",
             dest_queue="dest_queue",
@@ -474,19 +472,19 @@ class TestQueueTransferWatcher:
 
         assert watcher.source_queue == "source_queue"
         assert watcher.dest_queue == "dest_queue"
-        assert watcher.transfer_count == 0
+        assert watcher.move_count == 0
 
-        # Add and transfer a message
+        # Add and move a message
         broker.write("source_queue", "test")
         thread = watcher.run_async()
         time.sleep(0.1)
         watcher.stop()
         thread.join(timeout=2.0)
 
-        assert watcher.transfer_count == 1
+        assert watcher.move_count == 1
 
     def test_message_preservation(self, broker, temp_db):
-        """Test that message ID, content, and timestamp are preserved during transfer."""
+        """Test that message ID, content, and timestamp are preserved during move."""
         # Write a message and capture its details
         broker.write("source", "preserved_content")
 
@@ -504,7 +502,7 @@ class TestQueueTransferWatcher:
             preserved_data["ts"] = ts
             preserved_data["queue"] = "dest"  # We know it's destination
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
@@ -522,29 +520,29 @@ class TestQueueTransferWatcher:
         assert preserved_data["ts"] == original_ts
         assert preserved_data["queue"] == "dest"  # Only queue changes
 
-    def test_large_volume_transfer(self, broker, temp_db):
-        """Test transferring a large number of messages."""
+    def test_large_volume_move(self, broker, temp_db):
+        """Test moving a large number of messages."""
         num_messages = 100
 
         # Add many messages
         for i in range(num_messages):
             broker.write("source", f"msg_{i:04d}")
 
-        transferred_count = 0
+        moved_count = 0
 
         def count_handler(body: str, ts: int):
-            nonlocal transferred_count
-            transferred_count += 1
+            nonlocal moved_count
+            moved_count += 1
 
         start_time = time.time()
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
             handler=count_handler,
             poll_interval=0.001,  # Fast polling for performance test
-            max_messages=num_messages,  # Stop after transferring all messages
+            max_messages=num_messages,  # Stop after moving all messages
         )
 
         # Run synchronously to measure time
@@ -552,9 +550,9 @@ class TestQueueTransferWatcher:
 
         elapsed = time.time() - start_time
 
-        # Verify all transferred
-        assert watcher.transfer_count == num_messages
-        assert transferred_count == num_messages
+        # Verify all moved
+        assert watcher.move_count == num_messages
+        assert moved_count == num_messages
 
         # Verify destination has all messages
         dest_messages = list(broker.read("dest", all_messages=True))
@@ -565,7 +563,7 @@ class TestQueueTransferWatcher:
         assert len(source_messages) == 0
 
         # Performance check (should be reasonably fast)
-        assert elapsed < 5.0, f"Transfer took {elapsed:.2f}s, expected < 5s"
+        assert elapsed < 5.0, f"Move took {elapsed:.2f}s, expected < 5s"
 
     def test_error_handler_called_on_handler_failure(self, broker, temp_db):
         """Test that error_handler is properly called when handler fails."""
@@ -583,7 +581,7 @@ class TestQueueTransferWatcher:
             error_message = body
             return None
 
-        watcher = QueueTransferWatcher(
+        watcher = QueueMoveWatcher(
             broker=broker,
             source_queue="source",
             dest_queue="dest",
@@ -602,7 +600,7 @@ class TestQueueTransferWatcher:
         assert error_message is not None
         assert error_message == "error_message"
 
-        # Message should still be transferred
-        assert watcher.transfer_count == 1
+        # Message should still be moved
+        assert watcher.move_count == 1
         dest_messages = list(broker.read("dest", all_messages=True))
         assert dest_messages == ["error_message"]

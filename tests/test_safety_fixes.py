@@ -20,14 +20,14 @@ from simplebroker.db import BrokerDB
 from .conftest import run_cli
 
 
-def test_purge_safety_no_args(workdir):
-    """Test that purge with no arguments is rejected for safety."""
+def test_delete_safety_no_args(workdir):
+    """Test that delete with no arguments is rejected for safety."""
     # Write some messages first
     rc, _, _ = run_cli("write", "test_queue", "message1", cwd=workdir)
     assert rc == 0
 
-    # Try to purge with no arguments - should fail
-    rc, _, err = run_cli("purge", cwd=workdir)
+    # Try to delete with no arguments - should fail
+    rc, _, err = run_cli("delete", cwd=workdir)
     assert rc == 1
     assert "one of the arguments queue --all is required" in err
 
@@ -37,14 +37,14 @@ def test_purge_safety_no_args(workdir):
     assert out == "message1"
 
 
-def test_purge_with_queue_name(workdir):
-    """Test that purge with specific queue name works."""
+def test_delete_with_queue_name(workdir):
+    """Test that delete with specific queue name works."""
     # Write to multiple queues
     run_cli("write", "queue1", "msg1", cwd=workdir)
     run_cli("write", "queue2", "msg2", cwd=workdir)
 
     # Purge only queue1
-    rc, _, _ = run_cli("purge", "queue1", cwd=workdir)
+    rc, _, _ = run_cli("delete", "queue1", cwd=workdir)
     assert rc == 0
 
     # Verify queue1 is empty but queue2 still has messages
@@ -56,13 +56,13 @@ def test_purge_with_queue_name(workdir):
     assert out == "msg2"
 
 
-def test_purge_mutually_exclusive(workdir):
-    """Test that purge queue name and --all are mutually exclusive."""
+def test_delete_mutually_exclusive(workdir):
+    """Test that delete queue name and --all are mutually exclusive."""
     # Write some messages
     run_cli("write", "queue1", "msg1", cwd=workdir)
 
     # Try to use both queue name and --all flag - should fail
-    rc, _, err = run_cli("purge", "queue1", "--all", cwd=workdir)
+    rc, _, err = run_cli("delete", "queue1", "--all", cwd=workdir)
     assert rc == 1
     assert "not allowed with argument" in err
 
@@ -72,14 +72,14 @@ def test_purge_mutually_exclusive(workdir):
     assert out == "msg1"
 
 
-def test_purge_with_all_flag(workdir):
-    """Test that purge --all works correctly."""
+def test_delete_with_all_flag(workdir):
+    """Test that delete --all works correctly."""
     # Write to multiple queues
     run_cli("write", "queue1", "msg1", cwd=workdir)
     run_cli("write", "queue2", "msg2", cwd=workdir)
 
     # Purge all queues
-    rc, _, _ = run_cli("purge", "--all", cwd=workdir)
+    rc, _, _ = run_cli("delete", "--all", cwd=workdir)
     assert rc == 0
 
     # Verify both queues are empty

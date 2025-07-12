@@ -1,15 +1,15 @@
-"""Test that --transfer and --since are mutually exclusive."""
+"""Test that --move and --since are mutually exclusive."""
 
 import subprocess
 import sys
 from pathlib import Path
 
 
-def test_transfer_since_mutual_exclusion(tmp_path: Path) -> None:
-    """Test that --transfer and --since cannot be used together."""
+def test_move_since_mutual_exclusion(tmp_path: Path) -> None:
+    """Test that --move and --since cannot be used together."""
     db_path = tmp_path / "test.db"
 
-    # Try to use both --transfer and --since together
+    # Try to use both --move and --since together
     result = subprocess.run(
         [
             sys.executable,
@@ -19,7 +19,7 @@ def test_transfer_since_mutual_exclusion(tmp_path: Path) -> None:
             str(db_path),
             "watch",
             "source",
-            "--transfer",
+            "--move",
             "destination",
             "--since",
             "2024-01-01",
@@ -31,11 +31,11 @@ def test_transfer_since_mutual_exclusion(tmp_path: Path) -> None:
     # Should fail with error
     assert result.returncode == 1
     assert "incompatible with --since" in result.stderr.lower()
-    assert "--transfer drains all messages" in result.stderr.lower()
+    assert "--move drains all messages" in result.stderr.lower()
 
 
-def test_transfer_without_since_works(tmp_path: Path) -> None:
-    """Test that --transfer works without --since."""
+def test_move_without_since_works(tmp_path: Path) -> None:
+    """Test that --move works without --since."""
     db_path = tmp_path / "test.db"
 
     # First write a message
@@ -53,7 +53,7 @@ def test_transfer_without_since_works(tmp_path: Path) -> None:
         check=True,
     )
 
-    # Start transfer in background
+    # Start move in background
     proc = subprocess.Popen(
         [
             sys.executable,
@@ -63,7 +63,7 @@ def test_transfer_without_since_works(tmp_path: Path) -> None:
             str(db_path),
             "watch",
             "source",
-            "--transfer",
+            "--move",
             "destination",
             "--quiet",
         ],
@@ -72,7 +72,7 @@ def test_transfer_without_since_works(tmp_path: Path) -> None:
         text=True,
     )
 
-    # Give it a moment to transfer the message
+    # Give it a moment to move the message
     import time
 
     time.sleep(1)
@@ -81,10 +81,10 @@ def test_transfer_without_since_works(tmp_path: Path) -> None:
     proc.terminate()
     stdout, stderr = proc.communicate()
 
-    # Should have transferred the message
+    # Should have moved the message
     assert "test message" in stdout
 
-    # Verify message was transferred
+    # Verify message was moved
     result = subprocess.run(
         [
             sys.executable,
@@ -102,8 +102,8 @@ def test_transfer_without_since_works(tmp_path: Path) -> None:
     assert "test message" in result.stdout
 
 
-def test_watch_with_since_without_transfer_works(tmp_path: Path) -> None:
-    """Test that watch with --since works when not using --transfer."""
+def test_watch_with_since_without_move_works(tmp_path: Path) -> None:
+    """Test that watch with --since works when not using --move."""
     db_path = tmp_path / "test.db"
 
     # Write a message

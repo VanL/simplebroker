@@ -33,7 +33,7 @@ from typing import Any, Callable, NamedTuple, Optional, Type
 
 from .db import BrokerDB
 
-__all__ = ["QueueWatcher", "QueueTransferWatcher", "Message"]
+__all__ = ["QueueWatcher", "QueueMoveWatcher", "Message"]
 
 
 class Message(NamedTuple):
@@ -683,11 +683,11 @@ class QueueWatcher:
                 logger.error(f"Handler error: {e}")
 
 
-class QueueTransferWatcher(QueueWatcher):
+class QueueMoveWatcher(QueueWatcher):
     """
-    Watches a source queue and atomically transfers messages to a destination queue.
+    Watches a source queue and atomically moves messages to a destination queue.
 
-    The transfer happens atomically BEFORE the handler is called, ensuring that
+    The move happens atomically BEFORE the handler is called, ensuring that
     messages are safely moved even if the handler fails. The handler receives
     the message for observation purposes only.
     """
@@ -705,29 +705,29 @@ class QueueTransferWatcher(QueueWatcher):
         max_messages: Optional[int] = None,
     ):
         """
-        Initialize a QueueTransferWatcher.
+        Initialize a QueueMoveWatcher.
 
         Args:
             broker: SimpleBroker instance
-            source_queue: Name of source queue to transfer messages from
-            dest_queue: Name of destination queue to transfer messages to
-            handler: Function called with (message_body, timestamp) for each transferred message
+            source_queue: Name of source queue to move messages from
+            dest_queue: Name of destination queue to move messages to
+            handler: Function called with (message_body, timestamp) for each moved message
             poll_interval: Seconds between polls when queue is empty
             error_handler: Called when handler raises an exception
             stop_event: Event to signal watcher shutdown
-            max_messages: Maximum messages to transfer before stopping
+            max_messages: Maximum messages to move before stopping
 
         Raises:
             ValueError: If source_queue == dest_queue
         """
 
         if source_queue == dest_queue:
-            raise ValueError("Cannot transfer messages to the same queue")
+            raise ValueError("Cannot move messages to the same queue")
 
-        # Store transfer-specific attributes
+        # Store move-specific attributes
         self._source_queue = source_queue
         self._dest_queue = dest_queue
-        self._transfer_count = 0
+        self._move_count = 0
         self._max_messages = max_messages
 
         # Wrap the user's handler to handle Message tuples
@@ -746,17 +746,17 @@ class QueueTransferWatcher(QueueWatcher):
         )
 
         # Store the original handler and error_handler
-        self._transfer_handler = handler
-        self._transfer_error_handler = error_handler
+        self._move_handler = handler
+        self._move_error_handler = error_handler
 
         # Override stop event if provided
         if stop_event is not None:
             self._stop_event = stop_event
 
     @property
-    def transfer_count(self) -> int:
-        """Total number of successfully transferred messages."""
-        return self._transfer_count
+    def move_count(self) -> int:
+        """Total number of successfully moved messages."""
+        return self._move_count
 
     @property
     def source_queue(self) -> str:
@@ -769,7 +769,7 @@ class QueueTransferWatcher(QueueWatcher):
         return self._dest_queue
 
     def start(self) -> threading.Thread:
-        """Start the transfer watcher in a background thread.
+        """Start the move watcher in a background thread.
 
         This is a convenience method that calls run_async().
 
@@ -779,14 +779,14 @@ class QueueTransferWatcher(QueueWatcher):
         return self.run_async()
 
     def run(self) -> None:
-        """Run the transfer watcher synchronously until max_messages or stop_event.
+        """Run the move watcher synchronously until max_messages or stop_event.
 
         This is a convenience method that calls run_forever().
         """
         self.run_forever()
 
     def _drain_queue(self) -> None:
-        """Transfer ALL messages from source to destination queue."""
+        """Move ALL messages from source to destination queue."""
         found_messages = False
         db_retry_count = 0
         max_db_retries = 3
@@ -813,34 +813,32 @@ class QueueTransferWatcher(QueueWatcher):
         # Process messages one at a time until source queue is empty
         while True:
             try:
-                # Use db.transfer() to atomically move oldest unclaimed message
-                result = db.transfer(
+                # Use db.move() to atomically move oldest unclaimed message
+                result = db.move(
                     self._source_queue, self._dest_queue, require_unclaimed=True
                 )
 
                 if result is None:
-                    # No more unclaimed messages to transfer
+                    # No more unclaimed messages to move
                     break
 
                 found_messages = True
-                self._transfer_count += 1
+                self._move_count += 1
 
-                # Create Message object with actual ID from transfer result
-                transferred_msg = Message(
+                # Create Message object with actual ID from move result
+                moved_msg = Message(
                     result["id"], result["body"], result["ts"], self._dest_queue
                 )
 
-                # Call handler with transferred message (body, timestamp)
+                # Call handler with moved message (body, timestamp)
                 try:
-                    self._transfer_handler(
-                        transferred_msg.body, transferred_msg.timestamp
-                    )
+                    self._move_handler(moved_msg.body, moved_msg.timestamp)
                 except Exception as e:
-                    # Handler error doesn't affect transfer (already done)
-                    if self._transfer_error_handler:
+                    # Handler error doesn't affect move (already done)
+                    if self._move_error_handler:
                         try:
-                            error_result = self._transfer_error_handler(
-                                e, transferred_msg.body, transferred_msg.timestamp
+                            error_result = self._move_error_handler(
+                                e, moved_msg.body, moved_msg.timestamp
                             )
                             if error_result is False:
                                 self._stop_event.set()
@@ -851,7 +849,7 @@ class QueueTransferWatcher(QueueWatcher):
                         logger.error(f"Handler error: {e}")
 
                 # Check if we've reached max messages
-                if self._max_messages and self._transfer_count >= self._max_messages:
+                if self._max_messages and self._move_count >= self._max_messages:
                     logger.info(f"Reached max_messages limit ({self._max_messages})")
                     self._stop_event.set()
                     raise _StopLoop
@@ -859,7 +857,7 @@ class QueueTransferWatcher(QueueWatcher):
             except _StopLoop:
                 raise
             except Exception as e:
-                logger.error(f"Unexpected error during transfer: {e}")
+                logger.error(f"Unexpected error during move: {e}")
                 raise
 
             # Check if we should stop after each message

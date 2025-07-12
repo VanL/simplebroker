@@ -25,14 +25,14 @@ SimpleBroker gives you a zero-configuration message queue that runs anywhere Pyt
 ## Installation
 
 ```bash
-# Install with uv 
+# Use pipx for global installation (recommended)
+pipx install simplebroker
+
+# Or install with uv to use as a library
 uv add simplebroker
 
 # Or with pip
 pip install simplebroker
-
-# Or with pipx for global installation (recommended)
-pipx install simplebroker
 ```
 
 The CLI is available as both `broker` and `simplebroker`.
@@ -94,11 +94,11 @@ $ broker --cleanup
 | `read <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Remove and return message(s) |
 | `peek <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Return message(s) without removing |
 | `list [--stats]` | Show queues with unclaimed messages (use `--stats` to include claimed) |
-| `purge <queue>` | Delete all messages in queue |
-| `purge --all` | Delete all queues |
+| `delete <queue>` | Delete all messages in queue |
+| `delete --all` | Delete all queues |
 | `broadcast <message>` | Send message to all existing queues |
 | `watch <queue> [--peek] [--json] [-t] [--since <ts>] [--quiet]` | Watch queue for new messages |
-| `watch <queue> --transfer <dest> [--json] [-t] [--quiet]` | Watch for messages, transfering all messages to <dest> queue |
+| `watch <queue> --move <dest> [--json] [-t] [--quiet]` | Watch for messages, moveing all messages to <dest> queue |
 
 #### Read/Peek Options
 
@@ -179,7 +179,7 @@ $ broker read worker2  # -> "shutdown signal"
 
 **Note on broadcast behavior**: The `broadcast` command sends a message to all *existing* queues at the moment of execution. There's a small race window - if a new queue is created after the broadcast starts but before it completes, that queue won't receive the message. This is by design to keep the operation simple and atomic.
 
-### Integration with Unix Tools
+## Integration with Unix Tools
 
 ```bash
 # Store command output
@@ -242,7 +242,9 @@ The JSON output uses line-delimited JSON (ndjson) format:
 
 This is the recommended approach for handling messages that may contain special characters, as mentioned in the Security Considerations section.
 
-### Timestamps for Message Ordering
+## Timestamps
+
+### Using Timestamps for Message Ordering
 
 The `-t/--timestamps` flag includes message timestamps in the output, useful for debugging and understanding message order:
 
@@ -271,14 +273,51 @@ $ broker peek events --all --timestamps --json | jq '.timestamp'
 1837025689412308992
 ```
 
-Timestamps are 64-bit hybrid values:
+Timestamps are 64-bit hybrid values that serve dual purposes as both timestamps and unique message IDs:
 - High 44 bits: milliseconds since Unix epoch (equivalent to `int(time.time() * 1000)`)
 - Low 20 bits: logical counter for ordering within the same millisecond
-- This guarantees unique, monotonically increasing timestamps even for rapid writes
+- Guaranteed monotonically increasing timestamps even for rapid writes
+- Each timestamp is unique within the system and can be used as a message identifier
+
+### Using Timestamps as Message IDs
+
+Since each timestamp is guaranteed to be globally unique (enforced by a database constraint),
+you can use them as message identifiers for tracking, deduplication, or correlation:
+
+```bash
+# Save message ID for later reference
+$ result=$(broker write events "user_signup" | broker read events --timestamps --json)
+$ msg_id=$(echo "$result" | jq '.timestamp')
+$ echo "Processed signup event: $msg_id"
+Processed signup event: 1837025672140161024
+
+# Use timestamp as correlation ID in logs
+$ broker write tasks "process_order_123"
+$ broker read tasks --timestamps --json | jq -r '"Task ID: \(.timestamp) - \(.message)"'
+Task ID: 1837025681658085376 - process_order_123
+
+# Track message processing status
+$ broker write jobs "generate_report"
+$ job_id=$(broker read jobs --timestamps --json | jq '.timestamp')
+$ echo "$job_id:pending" | broker write job_status -
+$ # ... after processing ...
+$ echo "$job_id:complete" | broker write job_status -
+
+```
+
+The timestamp format provides several advantages over traditional UUIDs:
+- **Time-ordered**: Messages naturally sort by creation time
+- **Compact**: 64-bit integers vs 128-bit UUIDs
+- **Meaningful**: Can extract creation time from the ID
+- **No collisions**: Guaranteed unique even with concurrent writers
+
+This makes SimpleBroker timestamps useful for distributed systems that need both
+unique identification and temporal ordering, similar to Twitter's Snowflake IDs
+or UUID7, but with stronger uniqueness guarantees enforced at the database level.
 
 ### Checkpoint-based Processing
 
-The `--since` flag enables checkpoint-based consumption patterns, ideal for resilient processing:
+The `--since` flag enables checkpoint-based consumption patterns, enabling resilient processing:
 
 ```bash
 # Process initial messages
@@ -325,13 +364,14 @@ will return exit code 0 if the queue exists with messages, or exit code 2 if the
 or doesn't exist. This behavior is consistent with the filter semantics - the query succeeded but
 found no matching messages.
 
-### Real-time Queue Watching
+
+## Real-time Queue Watching
 
 The `watch` command provides three modes for monitoring queues:
 
 1. **Consume** (default): Process and remove messages from the queue
 2. **Peek** (`--peek`): Monitor messages without removing them
-3. **Transfer** (`--transfer DEST`): Drain ALL messages to another queue
+3. **Move** (`--move DEST`): Drain ALL messages to another queue
 
 ```bash
 # Start watching a queue (consumes messages)
@@ -347,7 +387,7 @@ $ broker watch tasks --json --timestamps
 {"message": "task 1", "timestamp": 1837025672140161024}
 {"message": "task 2", "timestamp": 1837025681658085376}
 
-# Watch from a specific timestamp (not compatible with --transfer)
+# Watch from a specific timestamp (not compatible with --move)
 $ broker watch tasks --since "2024-01-15T14:30:00Z"
 # Only shows messages newer than the given timestamp
 
@@ -355,38 +395,38 @@ $ broker watch tasks --since "2024-01-15T14:30:00Z"
 $ broker watch tasks --quiet
 # Useful for scripts and automation
 
-# Transfer ALL messages from one queue to another, echoing each to stdout
-$ broker watch source_queue --transfer destination_queue
+# Move ALL messages from one queue to another, echoing each to stdout
+$ broker watch source_queue --move destination_queue
 # Continuously drains source queue to destination
 ```
 
-#### Transfer Mode (`--transfer`)
+#### Move Mode (`--move`)
 
-The `--transfer` option provides continuous queue-to-queue message migration. Think of it like `tail -f` for queues - you see everything flowing through, but the messages continue on to their destination:
+The `--move` option provides continuous queue-to-queue message migration. Think of it like `tail -f` for queues - you see everything flowing through, but the messages continue on to their destination:
 
 ```bash
 # Like: tail -f /var/log/app.log | tee -a /var/log/processed.log
-$ broker watch source_queue --transfer dest_queue
+$ broker watch source_queue --move dest_queue
 ```
 
 Key characteristics:
-- **Drains entire queue**: Transfers ALL messages from source to destination
+- **Drains entire queue**: Moves ALL messages from source to destination
 - **Atomic operation**: Each message is atomically moved before being displayed
 - **No filtering**: Incompatible with `--since` (would leave messages stranded)
 - **Complete ownership**: Assumes exclusive control of the source queue
 
-**⚠️ IMPORTANT**: `--transfer` mode is designed to **drain ALL messages** from the source queue. Unlike `--peek` or consume modes, it cannot be filtered with `--since` because this would leave older messages permanently stranded in the source queue with no way to process them.
+**⚠️ IMPORTANT**: `--move` mode is designed to **drain ALL messages** from the source queue. Unlike `--peek` or consume modes, it cannot be filtered with `--since` because this would leave older messages permanently stranded in the source queue with no way to process them.
 
-**Concurrent Usage**: Multiple transfer watchers can safely run on the same queues without data loss or duplication. Each message is atomically transferred exactly once. However, for best performance with very large queues (>100K messages), consider using a single transfer watcher to minimize lock contention.
+**Concurrent Usage**: Multiple move watchers can safely run on the same queues without data loss or duplication. Each message is atomically moved exactly once. However, for best performance with very large queues (>100K messages), consider using a single move watcher to minimize lock contention.
 
-**Important ordering note**: When using `--transfer` with a destination queue that has multiple producers, the transferred messages may interleave with messages from other sources. While messages from the watched queue maintain their relative order, the overall ordering in the destination queue depends on the timing of writes from all producers.
+**Important ordering note**: When using `--move` with a destination queue that has multiple producers, the moved messages may interleave with messages from other sources. While messages from the watched queue maintain their relative order, the overall ordering in the destination queue depends on the timing of writes from all producers.
 
 Example use case:
 ```bash
-# Observe a filtered stream while transferring all messages
-# This will transfer ALL messages from 'intake' to 'priority_tasks',
+# Observe a filtered stream while moving all messages
+# This will move ALL messages from 'intake' to 'priority_tasks',
 # but only print the ones containing "urgent"
-$ broker watch intake --transfer priority_tasks --json | \
+$ broker watch intake --move priority_tasks --json | \
   jq 'select(.message | contains("urgent"))'
 ```
 
@@ -588,7 +628,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def process_message(message: str, timestamp: int) -> None:
-    """Process a single message from the queue."""
+    """Process a single message from the queue.
+    
+    Args:
+        message: The message content
+        timestamp: The unique message ID (hybrid timestamp)
+    """
+    # The timestamp serves as a unique message identifier
+    print(f"Processing message ID {timestamp}: {message}")
+    
     # Your message processing logic here
     if "error" in message.lower():
         raise ValueError(f"Message contains error keyword: {message}")
@@ -675,12 +723,16 @@ CREATE TABLE messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,  -- Ensures strict FIFO ordering
     queue TEXT NOT NULL,
     body TEXT NOT NULL,
-    ts INTEGER NOT NULL                       -- Millisecond timestamp + hybrid logical clock 
+    ts INTEGER NOT NULL UNIQUE             -- Unique hybrid timestamp serves as message ID
 )
 ```
 
-The `id` column guarantees global FIFO ordering across all processes.
-Note: FIFO ordering is strictly guaranteed by the `id` column, not the timestamp.
+The `id` column guarantees global FIFO ordering across all processes. However, this is
+an internal implementation detail not exposed to users. Instead, the `ts` column serves
+as the public message identifier. With its UNIQUE constraint and hybrid timestamp algorithm
+(combining physical time and a logical counter), timestamps are guaranteed to be globally
+unique across all processes and can be used as message IDs, similar to how UUID7 provides
+both unique identification and time-ordering in a single value.
 
 ### Concurrency
 

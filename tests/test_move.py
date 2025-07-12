@@ -1,4 +1,4 @@
-"""Test queue transfer functionality."""
+"""Test queue move functionality."""
 
 import os
 import tempfile
@@ -8,8 +8,8 @@ import pytest
 from simplebroker.db import BrokerDB
 
 
-def test_transfer_basic():
-    """Test basic message transfer between queues."""
+def test_move_basic():
+    """Test basic message move between queues."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -19,8 +19,8 @@ def test_transfer_basic():
             db.write("source", "msg2")
             db.write("source", "msg3")
 
-            # Transfer first message
-            result = db.transfer("source", "dest")
+            # Move first message
+            result = db.move("source", "dest")
             assert result is not None
             assert result["body"] == "msg1"
             assert "ts" in result
@@ -29,24 +29,24 @@ def test_transfer_basic():
             messages = db.read("source", peek=True, all_messages=True)
             assert messages == ["msg2", "msg3"]
 
-            # Verify dest has the transferred message
+            # Verify dest has the moved message
             messages = db.read("dest", peek=True, all_messages=True)
             assert messages == ["msg1"]
 
 
-def test_transfer_empty_queue():
-    """Test transfer from empty queue returns None."""
+def test_move_empty_queue():
+    """Test move from empty queue returns None."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
         with BrokerDB(db_path) as db:
-            # Transfer from non-existent/empty queue
-            result = db.transfer("empty", "dest")
+            # Move from non-existent/empty queue
+            result = db.move("empty", "dest")
             assert result is None
 
 
-def test_transfer_preserves_order():
-    """Test that transfer preserves FIFO order."""
+def test_move_preserves_order():
+    """Test that move preserves FIFO order."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -55,23 +55,23 @@ def test_transfer_preserves_order():
             for i in range(5):
                 db.write("source", f"msg{i}")
 
-            # Transfer messages one by one
-            transferred = []
+            # Move messages one by one
+            moved = []
             for _ in range(5):
-                result = db.transfer("source", "dest")
+                result = db.move("source", "dest")
                 assert result is not None
-                transferred.append(result["body"])
+                moved.append(result["body"])
 
             # Verify FIFO order was preserved
-            assert transferred == ["msg0", "msg1", "msg2", "msg3", "msg4"]
+            assert moved == ["msg0", "msg1", "msg2", "msg3", "msg4"]
 
             # Source should be empty
-            result = db.transfer("source", "dest")
+            result = db.move("source", "dest")
             assert result is None
 
 
-def test_transfer_only_unclaimed():
-    """Test that transfer only moves unclaimed messages."""
+def test_move_only_unclaimed():
+    """Test that move only moves unclaimed messages."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -85,33 +85,33 @@ def test_transfer_only_unclaimed():
             claimed = db.read("source")
             assert claimed == ["msg1"]
 
-            # Transfer should get the first unclaimed message
-            result = db.transfer("source", "dest")
+            # Move should get the first unclaimed message
+            result = db.move("source", "dest")
             assert result is not None
             assert result["body"] == "msg2"
 
             # Verify remaining messages
             messages = db.read("source", peek=True, all_messages=True)
-            assert messages == ["msg3"]  # msg1 is claimed, msg2 was transferred
+            assert messages == ["msg3"]  # msg1 is claimed, msg2 was moved
 
 
-def test_transfer_invalid_queue_names():
-    """Test that transfer validates queue names."""
+def test_move_invalid_queue_names():
+    """Test that move validates queue names."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
         with BrokerDB(db_path) as db:
             # Invalid source queue
             with pytest.raises(ValueError, match="Invalid queue name"):
-                db.transfer(".invalid", "dest")
+                db.move(".invalid", "dest")
 
             # Invalid destination queue
             with pytest.raises(ValueError, match="Invalid queue name"):
-                db.transfer("source", "-invalid")
+                db.move("source", "-invalid")
 
 
-def test_transfer_same_queue():
-    """Test transfer to same queue (should work but be a no-op effectively)."""
+def test_move_same_queue():
+    """Test move to same queue (should work but be a no-op effectively)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -119,8 +119,8 @@ def test_transfer_same_queue():
             db.write("queue", "msg1")
             db.write("queue", "msg2")
 
-            # Transfer to same queue
-            result = db.transfer("queue", "queue")
+            # Move to same queue
+            result = db.move("queue", "queue")
             assert result is not None
             assert result["body"] == "msg1"
 
@@ -129,8 +129,8 @@ def test_transfer_same_queue():
             assert messages == ["msg1", "msg2"]
 
 
-def test_transfer_atomic():
-    """Test that transfer is atomic (all-or-nothing)."""
+def test_move_atomic():
+    """Test that move is atomic (all-or-nothing)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -138,12 +138,12 @@ def test_transfer_atomic():
             # Add message to source
             db.write("source", "important_message")
 
-            # Concurrent transfer attempts should be safe
+            # Concurrent move attempts should be safe
             # (In a real concurrent test, only one would succeed)
-            result1 = db.transfer("source", "dest1")
-            result2 = db.transfer("source", "dest2")
+            result1 = db.move("source", "dest1")
+            result2 = db.move("source", "dest2")
 
-            # Only one transfer should succeed
+            # Only one move should succeed
             assert (result1 is None) != (result2 is None)  # XOR
 
             # Message should be in exactly one destination
@@ -158,8 +158,8 @@ def test_transfer_atomic():
                 assert dest2_msgs == ["important_message"]
 
 
-def test_transfer_with_existing_dest_messages():
-    """Test transfer to queue that already has messages."""
+def test_move_with_existing_dest_messages():
+    """Test move to queue that already has messages."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -172,8 +172,8 @@ def test_transfer_with_existing_dest_messages():
             db.write("source", "new1")
             db.write("source", "new2")
 
-            # Transfer a message
-            result = db.transfer("source", "dest")
+            # Move a message
+            result = db.move("source", "dest")
             assert result is not None
             assert result["body"] == "new1"
 

@@ -369,7 +369,7 @@ def test_since_human_readable_formats(workdir):
             assert out == "", f"Expected no messages for {desc} but got: {out}"
 
     # Clean up
-    run_cli("purge", queue_name, cwd=workdir)
+    run_cli("delete", queue_name, cwd=workdir)
 
 
 def test_since_iso_date_precise_boundary(workdir):

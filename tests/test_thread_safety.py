@@ -109,8 +109,8 @@ def test_concurrent_operations_different_queues():
                         db.read(queue_name, peek=True)
                     elif op == "list":
                         db.list_queues()
-                    elif op == "purge":
-                        db.purge(queue_name)
+                    elif op == "delete":
+                        db.delete(queue_name)
                     time.sleep(0.001)
 
             # Define operations for different queues
@@ -125,7 +125,7 @@ def test_concurrent_operations_different_queues():
                     ("write", "msgA"),
                     ("peek", None),
                     ("write", "msgB"),
-                    ("purge", None),
+                    ("delete", None),
                 ],
                 "queue3": [
                     ("write", "msgX"),
@@ -151,7 +151,7 @@ def test_concurrent_operations_different_queues():
             # queue1 should have 1 message (wrote 2, read 1)
             assert queues.get("queue1", 0) == 1
 
-            # queue2 should be empty (purged)
+            # queue2 should be empty (deleted)
             assert queues.get("queue2", 0) == 0
 
             # queue3 should have 2 messages (wrote 3, read 1)

@@ -1,4 +1,4 @@
-"""Integration tests for enhanced transfer functionality."""
+"""Integration tests for enhanced move functionality."""
 
 import os
 import tempfile
@@ -6,8 +6,8 @@ import tempfile
 from simplebroker.db import BrokerDB
 
 
-def test_transfer_with_concurrent_operations():
-    """Test transfer with concurrent reads and writes."""
+def test_move_with_concurrent_operations():
+    """Test move with concurrent reads and writes."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -24,11 +24,11 @@ def test_transfer_with_concurrent_operations():
                 )
                 messages = cursor.fetchall()
 
-            # Transfer specific messages by ID
-            # Transfer msg3, msg5, msg7 to dest
+            # Move specific messages by ID
+            # Move msg3, msg5, msg7 to dest
             for idx in [3, 5, 7]:
                 msg_id = messages[idx][0]
-                result = db.transfer("source", "dest", message_id=msg_id)
+                result = db.move("source", "dest", message_id=msg_id)
                 assert result is not None
                 assert result["body"] == f"msg{idx}"
 
@@ -39,13 +39,13 @@ def test_transfer_with_concurrent_operations():
             assert "msg5" not in source_msgs
             assert "msg7" not in source_msgs
 
-            # Verify dest queue has transferred messages
+            # Verify dest queue has moved messages
             dest_msgs = db.read("dest", peek=True, all_messages=True)
             assert set(dest_msgs) == {"msg3", "msg5", "msg7"}
 
 
-def test_transfer_claimed_message_workflow():
-    """Test real-world workflow of transferring claimed messages."""
+def test_move_claimed_message_workflow():
+    """Test real-world workflow of moving claimed messages."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -71,8 +71,8 @@ def test_transfer_claimed_message_workflow():
                 )
                 job2_id = cursor.fetchone()[0]
 
-            # Transfer the failed job to error queue (allowing claimed messages)
-            result = db.transfer(
+            # Move the failed job to error queue (allowing claimed messages)
+            result = db.move(
                 "processing", "error", message_id=job2_id, require_unclaimed=False
             )
             assert result is not None
@@ -87,8 +87,8 @@ def test_transfer_claimed_message_workflow():
             assert processing_msgs == ["job3"]
 
 
-def test_transfer_maintains_fifo_within_queues():
-    """Test that transfers maintain FIFO order within each queue."""
+def test_move_maintains_fifo_within_queues():
+    """Test that moves maintain FIFO order within each queue."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -109,10 +109,10 @@ def test_transfer_maintains_fifo_within_queues():
                 )
                 q1_messages = cursor.fetchall()
 
-            # Transfer q1-msg1 and q1-msg3 to queue2
+            # Move q1-msg1 and q1-msg3 to queue2
             for idx in [1, 3]:
                 msg_id = q1_messages[idx][0]
-                db.transfer("queue1", "queue2", message_id=msg_id)
+                db.move("queue1", "queue2", message_id=msg_id)
 
             # Verify queue1 order preserved
             q1_remaining = db.read("queue1", peek=True, all_messages=True)
@@ -121,7 +121,7 @@ def test_transfer_maintains_fifo_within_queues():
             # Verify queue2 has all messages
             q2_all = db.read("queue2", peek=True, all_messages=True)
             assert len(q2_all) == 5
-            # Messages are ordered by ID, so transferred messages (with lower IDs)
+            # Messages are ordered by ID, so moved messages (with lower IDs)
             # will appear before the original queue2 messages
             assert set(q2_all) == {
                 "q2-msg0",

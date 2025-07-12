@@ -1,4 +1,4 @@
-"""Test message ID-based transfer functionality."""
+"""Test message ID-based move functionality."""
 
 import os
 import tempfile
@@ -6,8 +6,8 @@ import tempfile
 from simplebroker.db import BrokerDB
 
 
-def test_transfer_by_message_id():
-    """Test transferring a specific message by ID."""
+def test_move_by_message_id():
+    """Test moving a specific message by ID."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -25,9 +25,9 @@ def test_transfer_by_message_id():
                 )
                 messages = cursor.fetchall()
 
-            # Transfer the middle message (msg2) by ID
+            # Move the middle message (msg2) by ID
             msg2_id = messages[1][0]
-            result = db.transfer("source", "dest", message_id=msg2_id)
+            result = db.move("source", "dest", message_id=msg2_id)
 
             assert result is not None
             assert result["body"] == "msg2"
@@ -42,16 +42,16 @@ def test_transfer_by_message_id():
             assert dest_messages == ["msg2"]
 
 
-def test_transfer_by_id_not_found():
-    """Test transferring a non-existent message ID returns None."""
+def test_move_by_id_not_found():
+    """Test moving a non-existent message ID returns None."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
         with BrokerDB(db_path) as db:
             db.write("source", "msg1")
 
-            # Try to transfer non-existent ID
-            result = db.transfer("source", "dest", message_id=99999)
+            # Try to move non-existent ID
+            result = db.move("source", "dest", message_id=99999)
             assert result is None
 
             # Original message should still be in source
@@ -59,8 +59,8 @@ def test_transfer_by_id_not_found():
             assert messages == ["msg1"]
 
 
-def test_transfer_by_id_wrong_queue():
-    """Test transferring a message ID from wrong queue returns None."""
+def test_move_by_id_wrong_queue():
+    """Test moving a message ID from wrong queue returns None."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -75,8 +75,8 @@ def test_transfer_by_id_wrong_queue():
                 )
                 msg_id = cursor.fetchone()[0]
 
-            # Try to transfer from queue2 (wrong queue)
-            result = db.transfer("queue2", "dest", message_id=msg_id)
+            # Try to move from queue2 (wrong queue)
+            result = db.move("queue2", "dest", message_id=msg_id)
             assert result is None
 
             # Message should still be in queue1
@@ -84,8 +84,8 @@ def test_transfer_by_id_wrong_queue():
             assert messages == ["msg1"]
 
 
-def test_transfer_claimed_message_with_require_unclaimed():
-    """Test that claimed messages are not transferred when require_unclaimed=True."""
+def test_move_claimed_message_with_require_unclaimed():
+    """Test that claimed messages are not moved when require_unclaimed=True."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -105,20 +105,20 @@ def test_transfer_claimed_message_with_require_unclaimed():
                 )
                 messages = cursor.fetchall()
 
-            # Try to transfer claimed message (msg1) with require_unclaimed=True (default)
+            # Try to move claimed message (msg1) with require_unclaimed=True (default)
             msg1_id = messages[0][0]
-            result = db.transfer("source", "dest", message_id=msg1_id)
-            assert result is None  # Should not transfer claimed message
+            result = db.move("source", "dest", message_id=msg1_id)
+            assert result is None  # Should not move claimed message
 
-            # Try to transfer unclaimed message (msg2)
+            # Try to move unclaimed message (msg2)
             msg2_id = messages[1][0]
-            result = db.transfer("source", "dest", message_id=msg2_id)
+            result = db.move("source", "dest", message_id=msg2_id)
             assert result is not None
             assert result["body"] == "msg2"
 
 
-def test_transfer_claimed_message_without_require_unclaimed():
-    """Test that claimed messages CAN be transferred when require_unclaimed=False."""
+def test_move_claimed_message_without_require_unclaimed():
+    """Test that claimed messages CAN be moved when require_unclaimed=False."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -138,8 +138,8 @@ def test_transfer_claimed_message_without_require_unclaimed():
                 )
                 msg1_id = cursor.fetchone()[0]
 
-            # Transfer claimed message with require_unclaimed=False
-            result = db.transfer(
+            # Move claimed message with require_unclaimed=False
+            result = db.move(
                 "source", "dest", message_id=msg1_id, require_unclaimed=False
             )
             assert result is not None
@@ -154,8 +154,8 @@ def test_transfer_claimed_message_without_require_unclaimed():
             assert source_messages == ["msg2"]
 
 
-def test_transfer_by_id_preserves_timestamp():
-    """Test that transfer preserves the original timestamp."""
+def test_move_by_id_preserves_timestamp():
+    """Test that move preserves the original timestamp."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -169,8 +169,8 @@ def test_transfer_by_id_preserves_timestamp():
                 )
                 msg_id, original_ts = cursor.fetchone()
 
-            # Transfer the message
-            result = db.transfer("source", "dest", message_id=msg_id)
+            # Move the message
+            result = db.move("source", "dest", message_id=msg_id)
             assert result is not None
             assert result["ts"] == original_ts
 
@@ -185,8 +185,8 @@ def test_transfer_by_id_preserves_timestamp():
             assert dest_ts == original_ts
 
 
-def test_transfer_mixed_mode():
-    """Test mixing ID-based and bulk transfer modes."""
+def test_move_mixed_mode():
+    """Test mixing ID-based and bulk move modes."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -203,18 +203,18 @@ def test_transfer_mixed_mode():
                 )
                 messages = cursor.fetchall()
 
-            # Transfer specific message by ID (msg2)
+            # Move specific message by ID (msg2)
             msg2_id = messages[2][0]
-            result = db.transfer("source", "dest1", message_id=msg2_id)
+            result = db.move("source", "dest1", message_id=msg2_id)
             assert result["body"] == "msg2"
 
-            # Transfer oldest unclaimed (should be msg0)
-            result = db.transfer("source", "dest2")
+            # Move oldest unclaimed (should be msg0)
+            result = db.move("source", "dest2")
             assert result["body"] == "msg0"
 
-            # Transfer by ID again (msg4)
+            # Move by ID again (msg4)
             msg4_id = messages[4][0]
-            result = db.transfer("source", "dest1", message_id=msg4_id)
+            result = db.move("source", "dest1", message_id=msg4_id)
             assert result["body"] == "msg4"
 
             # Verify remaining messages

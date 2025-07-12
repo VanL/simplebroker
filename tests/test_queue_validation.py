@@ -113,9 +113,9 @@ def test_queue_names_in_other_commands(workdir):
         assert rc == 1, f"peek command should reject queue name '{name}'"
         assert "Invalid queue name" in err
 
-        # Test in purge command
-        rc, _, err = run_cli("purge", name, cwd=workdir)
-        assert rc == 1, f"purge command should reject queue name '{name}'"
+        # Test in delete command
+        rc, _, err = run_cli("delete", name, cwd=workdir)
+        assert rc == 1, f"delete command should reject queue name '{name}'"
         assert "Invalid queue name" in err
 
     # Test with direct DB access for hyphen-starting names
@@ -135,7 +135,7 @@ def test_queue_names_in_other_commands(workdir):
                 list(db.stream_read_with_timestamps("-invalid"))
 
             with pytest.raises(ValueError, match="Invalid queue name"):
-                db.purge("-")
+                db.delete("-")
     finally:
         os.unlink(db_path)
 

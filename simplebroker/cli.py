@@ -112,10 +112,10 @@ def create_parser() -> argparse.ArgumentParser:
     )
 
     # Purge command
-    purge_parser = subparsers.add_parser("purge", help="remove messages")
-    group = purge_parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("queue", nargs="?", help="queue name to purge")
-    group.add_argument("--all", action="store_true", help="purge all queues")
+    delete_parser = subparsers.add_parser("delete", help="remove messages")
+    group = delete_parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("queue", nargs="?", help="queue name to delete")
+    group.add_argument("--all", action="store_true", help="delete all queues")
 
     # Broadcast command
     broadcast_parser = subparsers.add_parser(
@@ -125,11 +125,11 @@ def create_parser() -> argparse.ArgumentParser:
 
     # Watch command
     watch_parser = subparsers.add_parser(
-        "watch", help="watch queue and consume, peek, or transfer messages"
+        "watch", help="watch queue and consume, peek, or move messages"
     )
     watch_parser.add_argument("queue", help="queue name")
 
-    # Create mutually exclusive group for --peek and --transfer
+    # Create mutually exclusive group for --peek and --move
     watch_mode_group = watch_parser.add_mutually_exclusive_group()
     watch_mode_group.add_argument(
         "--peek",
@@ -137,7 +137,7 @@ def create_parser() -> argparse.ArgumentParser:
         help="monitor without consuming messages",
     )
     watch_mode_group.add_argument(
-        "--transfer",
+        "--move",
         type=str,
         metavar="QUEUE",
         help="drain ALL messages to another queue (incompatible with --since)",
@@ -193,7 +193,7 @@ def rearrange_args(argv: List[str]) -> List[str]:
     }
 
     # Find subcommands
-    subcommands = {"write", "read", "peek", "list", "purge", "broadcast", "watch"}
+    subcommands = {"write", "read", "peek", "list", "delete", "broadcast", "watch"}
 
     global_args = []
     command_args = []
@@ -421,15 +421,15 @@ def main() -> int:
             elif args.command == "list":
                 show_stats = getattr(args, "stats", False)
                 return commands.cmd_list(db, show_stats)
-            elif args.command == "purge":
+            elif args.command == "delete":
                 # argparse mutual exclusion ensures exactly one of queue or --all is provided
                 queue = None if args.all else args.queue
-                return commands.cmd_purge(db, queue)
+                return commands.cmd_delete(db, queue)
             elif args.command == "broadcast":
                 return commands.cmd_broadcast(db, args.message)
             elif args.command == "watch":
                 since_str = getattr(args, "since", None)
-                transfer_to = getattr(args, "transfer", None)
+                move_to = getattr(args, "move", None)
                 return commands.cmd_watch(
                     db,
                     args.queue,
@@ -438,7 +438,7 @@ def main() -> int:
                     args.timestamps,
                     since_str,
                     args.quiet,
-                    transfer_to,
+                    move_to,
                 )
 
         return 0

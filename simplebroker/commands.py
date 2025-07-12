@@ -527,9 +527,9 @@ def cmd_list(db: BrokerDB, show_stats: bool = False) -> int:
     return EXIT_SUCCESS
 
 
-def cmd_purge(db: BrokerDB, queue: Optional[str] = None) -> int:
+def cmd_delete(db: BrokerDB, queue: Optional[str] = None) -> int:
     """Remove messages from queue(s)."""
-    db.purge(queue)
+    db.delete(queue)
     return EXIT_SUCCESS
 
 
@@ -574,17 +574,17 @@ def cmd_watch(
     show_timestamps: bool = False,
     since_str: Optional[str] = None,
     quiet: bool = False,
-    transfer_to: Optional[str] = None,
+    move_to: Optional[str] = None,
 ) -> int:
     """Watch queue for new messages in real-time."""
     import sys
 
-    from .watcher import QueueTransferWatcher, QueueWatcher
+    from .watcher import QueueMoveWatcher, QueueWatcher
 
     # Check for incompatible options
-    if transfer_to and since_str:
+    if move_to and since_str:
         print(
-            "simplebroker: error: --transfer drains ALL messages from source queue, "
+            "simplebroker: error: --move drains ALL messages from source queue, "
             "incompatible with --since filtering",
             file=sys.stderr,
         )
@@ -603,9 +603,9 @@ def cmd_watch(
 
     # Print informational message unless quiet mode
     if not quiet:
-        if transfer_to:
+        if move_to:
             print(
-                f"Watching queue '{queue}' and transferring to '{transfer_to}'... Press Ctrl-C to exit",
+                f"Watching queue '{queue}' and moving to '{move_to}'... Press Ctrl-C to exit",
                 file=sys.stderr,
             )
         else:
@@ -616,17 +616,17 @@ def cmd_watch(
             )
 
     # Declare watcher type to avoid mypy error
-    watcher: Union[QueueWatcher, QueueTransferWatcher]
+    watcher: Union[QueueWatcher, QueueMoveWatcher]
 
-    if transfer_to:
-        # Use QueueTransferWatcher for transfers
-        def transfer_handler(body: str, ts: int) -> None:
-            """Print transferred message according to formatting options."""
+    if move_to:
+        # Use QueueMoveWatcher for moves
+        def move_handler(body: str, ts: int) -> None:
+            """Print moved message according to formatting options."""
             if json_output:
                 data: Dict[str, Union[str, int]] = {
                     "message": body,
                     "source_queue": queue,  # Original source queue
-                    "dest_queue": transfer_to,  # Destination queue
+                    "dest_queue": move_to,  # Destination queue
                 }
                 if show_timestamps:
                     data["timestamp"] = ts
@@ -636,12 +636,12 @@ def cmd_watch(
             else:
                 print(body, flush=True)
 
-        # Create and run transfer watcher
-        watcher = QueueTransferWatcher(
+        # Create and run move watcher
+        watcher = QueueMoveWatcher(
             db,
             queue,
-            transfer_to,
-            transfer_handler,
+            move_to,
+            move_handler,
         )
     else:
         # Use regular QueueWatcher
