@@ -3,7 +3,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import List, NoReturn, Union
+from typing import List, NoReturn
 
 from . import __version__ as VERSION
 from . import commands
