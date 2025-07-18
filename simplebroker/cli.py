@@ -3,10 +3,11 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import List, NoReturn
+from typing import List, NoReturn, Union
 
 from . import __version__ as VERSION
 from . import commands
+from .commands import TIMESTAMP_EXACT_NUM_DIGITS
 from .db import BrokerDB
 
 PROG_NAME = "simplebroker"
@@ -43,6 +44,14 @@ def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
         "--timestamps",
         action="store_true",
         help="include timestamps in output",
+    )
+    parser.add_argument(
+        "-m",
+        "--message",
+        type=str,
+        metavar="ID",
+        dest="message_id",
+        help="operate on specific message by timestamp/ID",
     )
     parser.add_argument(
         "--since",
@@ -116,6 +125,56 @@ def create_parser() -> argparse.ArgumentParser:
     group = delete_parser.add_mutually_exclusive_group(required=True)
     group.add_argument("queue", nargs="?", help="queue name to delete")
     group.add_argument("--all", action="store_true", help="delete all queues")
+    delete_parser.add_argument(
+        "-m",
+        "--message",
+        type=str,
+        metavar="ID",
+        dest="message_id",
+        help="delete specific message by timestamp/ID",
+    )
+
+    # Move command
+    move_parser = subparsers.add_parser(
+        "move", help="atomically transfer messages between queues"
+    )
+    move_parser.add_argument("source_queue", help="source queue name")
+    move_parser.add_argument("dest_queue", help="destination queue name")
+
+    # Create mutually exclusive group for -m and --all
+    move_exclusive = move_parser.add_mutually_exclusive_group()
+    move_exclusive.add_argument(
+        "-m",
+        "--message",
+        type=str,
+        metavar="ID",
+        dest="message_id",
+        help="move specific message by timestamp/ID",
+    )
+    move_exclusive.add_argument(
+        "--all",
+        action="store_true",
+        help="move all messages from source to destination",
+    )
+
+    # --since can be used with or without --all
+    move_parser.add_argument(
+        "--since",
+        type=str,
+        metavar="TIMESTAMP",
+        help="only move messages newer than timestamp",
+    )
+    move_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="output in line-delimited JSON (ndjson) format",
+    )
+    move_parser.add_argument(
+        "-t",
+        "--timestamps",
+        action="store_true",
+        help="include timestamps in output",
+    )
 
     # Broadcast command
     broadcast_parser = subparsers.add_parser(
@@ -193,7 +252,16 @@ def rearrange_args(argv: List[str]) -> List[str]:
     }
 
     # Find subcommands
-    subcommands = {"write", "read", "peek", "list", "delete", "broadcast", "watch"}
+    subcommands = {
+        "write",
+        "read",
+        "peek",
+        "list",
+        "delete",
+        "move",
+        "broadcast",
+        "watch",
+    }
 
     global_args = []
     command_args = []
@@ -261,9 +329,16 @@ def main() -> int:
     except ArgumentParserError as e:
         print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
         return 1
-    except SystemExit:
+    except SystemExit as e:  # e.code: Union[int, str, None]
         # Handle argparse's default exit behavior
-        return 1
+        # Help exits with 0, errors exit with 2
+        if e.code is None:
+            return 1
+        try:
+            return int(e.code)
+        except (ValueError, TypeError):
+            # If code can't be converted to int, return error code 1
+            return 1
 
     # Handle --version flag
     if args.version:
@@ -410,13 +485,53 @@ def main() -> int:
                 return commands.cmd_write(db, args.queue, args.message)
             elif args.command == "read":
                 since_str = getattr(args, "since", None)
+                message_id_str = getattr(args, "message_id", None)
+
+                # Validate message_id format early (fail fast)
+                if message_id_str is not None:
+                    if (
+                        len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
+                        or not message_id_str.isdigit()
+                    ):
+                        return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
+
+                    # Check mutual exclusivity
+                    if args.all or since_str:
+                        parser.error("--message cannot be used with --all or --since")
+
                 return commands.cmd_read(
-                    db, args.queue, args.all, args.json, args.timestamps, since_str
+                    db,
+                    args.queue,
+                    args.all,
+                    args.json,
+                    args.timestamps,
+                    since_str,
+                    message_id_str,
                 )
             elif args.command == "peek":
                 since_str = getattr(args, "since", None)
+                message_id_str = getattr(args, "message_id", None)
+
+                # Validate message_id format early (fail fast)
+                if message_id_str is not None:
+                    if (
+                        len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
+                        or not message_id_str.isdigit()
+                    ):
+                        return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
+
+                    # Check mutual exclusivity
+                    if args.all or since_str:
+                        parser.error("--message cannot be used with --all or --since")
+
                 return commands.cmd_peek(
-                    db, args.queue, args.all, args.json, args.timestamps, since_str
+                    db,
+                    args.queue,
+                    args.all,
+                    args.json,
+                    args.timestamps,
+                    since_str,
+                    message_id_str,
                 )
             elif args.command == "list":
                 show_stats = getattr(args, "stats", False)
@@ -424,7 +539,47 @@ def main() -> int:
             elif args.command == "delete":
                 # argparse mutual exclusion ensures exactly one of queue or --all is provided
                 queue = None if args.all else args.queue
-                return commands.cmd_delete(db, queue)
+                message_id_str = getattr(args, "message_id", None)
+
+                # Validate message_id format early (fail fast)
+                if message_id_str is not None:
+                    if (
+                        len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
+                        or not message_id_str.isdigit()
+                    ):
+                        return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
+
+                    # Require queue when using --message
+                    if queue is None:
+                        parser.error("--message requires a queue name")
+
+                return commands.cmd_delete(db, queue, message_id_str)
+            elif args.command == "move":
+                # Get arguments
+                all_messages = getattr(args, "all", False)
+                json_output = getattr(args, "json", False)
+                show_timestamps = getattr(args, "timestamps", False)
+                message_id_str = getattr(args, "message_id", None)
+                since_str = getattr(args, "since", None)
+
+                # Validate message_id format early (fail fast)
+                if message_id_str is not None:
+                    if (
+                        len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
+                        or not message_id_str.isdigit()
+                    ):
+                        return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
+
+                return commands.cmd_move(
+                    db,
+                    args.source_queue,
+                    args.dest_queue,
+                    all_messages=all_messages,
+                    json_output=json_output,
+                    show_timestamps=show_timestamps,
+                    message_id_str=message_id_str,
+                    since_str=since_str,
+                )
             elif args.command == "broadcast":
                 return commands.cmd_broadcast(db, args.message)
             elif args.command == "watch":

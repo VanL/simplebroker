@@ -615,7 +615,11 @@ class BrokerDB:
                 raise
 
     def read(
-        self, queue: str, peek: bool = False, all_messages: bool = False
+        self,
+        queue: str,
+        peek: bool = False,
+        all_messages: bool = False,
+        exact_timestamp: Optional[int] = None,
     ) -> List[str]:
         """Read message(s) from a queue.
 
@@ -623,6 +627,7 @@ class BrokerDB:
             queue: Name of the queue
             peek: If True, don't delete messages after reading
             all_messages: If True, read all messages (otherwise just one)
+            exact_timestamp: If provided, read only the message with this exact timestamp
 
         Returns:
             List of message bodies
@@ -631,6 +636,14 @@ class BrokerDB:
             ValueError: If queue name is invalid
         """
         # Delegate to stream_read() and collect results
+        if exact_timestamp is not None:
+            # For exact timestamp, use stream_read_with_timestamps and extract bodies
+            messages = []
+            for body, _ in self.stream_read_with_timestamps(
+                queue, peek=peek, all_messages=False, exact_timestamp=exact_timestamp
+            ):
+                messages.append(body)
+            return messages
         return list(self.stream_read(queue, peek=peek, all_messages=all_messages))
 
     def stream_read_with_timestamps(
@@ -641,6 +654,7 @@ class BrokerDB:
         commit_interval: int = READ_COMMIT_INTERVAL,
         peek: bool = False,
         since_timestamp: Optional[int] = None,
+        exact_timestamp: Optional[int] = None,
     ) -> Iterator[Tuple[str, int]]:
         """Stream messages with timestamps from a queue.
 
@@ -650,6 +664,7 @@ class BrokerDB:
             commit_interval: Number of messages to read per transaction batch
             peek: If True, don't delete messages (peek operation)
             since_timestamp: If provided, only return messages with ts > since_timestamp
+            exact_timestamp: If provided, only return message with this exact timestamp
 
         Yields:
             Tuples of (message_body, timestamp)
@@ -671,12 +686,20 @@ class BrokerDB:
         self._validate_queue_name(queue)
 
         # Build WHERE clause dynamically for better maintainability
-        where_conditions = ["queue = ?", "claimed = 0"]
-        params: List[Any] = [queue]
+        # When exact_timestamp is provided, put ts first to use the unique index efficiently
+        params: List[Any]
+        if exact_timestamp is not None:
+            # Optimize for unique index on ts column
+            where_conditions = ["ts = ?", "queue = ?", "claimed = 0"]
+            params = [exact_timestamp, queue]
+        else:
+            # Normal ordering for queue-based queries
+            where_conditions = ["queue = ?", "claimed = 0"]
+            params = [queue]
 
-        if since_timestamp is not None:
-            where_conditions.append("ts > ?")
-            params.append(since_timestamp)
+            if since_timestamp is not None:
+                where_conditions.append("ts > ?")
+                params.append(since_timestamp)
 
         where_clause = " AND ".join(where_conditions)
 
@@ -1372,6 +1395,194 @@ class BrokerDB:
 
         # Execute with retry logic
         return self._execute_with_retry(_do_move)
+
+    def move_messages(
+        self,
+        source_queue: str,
+        dest_queue: str,
+        *,
+        all_messages: bool = False,
+        message_id: Optional[int] = None,
+        since_timestamp: Optional[int] = None,
+    ) -> List[Tuple[str, int]]:
+        """Move messages between queues, returning list of (body, timestamp) tuples.
+
+        Args:
+            source_queue: Name of the queue to move from
+            dest_queue: Name of the queue to move to
+            all_messages: If True, move all matching messages
+            message_id: If provided, move only the message with this timestamp
+            since_timestamp: If provided, only move messages with timestamp > this value
+
+        Returns:
+            List of (body, timestamp) tuples for moved messages
+
+        Raises:
+            ValueError: If queue names are invalid or source equals destination
+            RuntimeError: If called from a forked process
+        """
+        self._check_fork_safety()
+        self._validate_queue_name(source_queue)
+        self._validate_queue_name(dest_queue)
+
+        if source_queue == dest_queue:
+            raise ValueError("Source and destination queues cannot be the same")
+
+        def _do_move_messages() -> List[Tuple[str, int]]:
+            with self._lock:
+                # Use retry logic for BEGIN IMMEDIATE
+                def _begin_transaction() -> None:
+                    self.conn.execute("BEGIN IMMEDIATE")
+
+                try:
+                    self._execute_with_retry(_begin_transaction)
+                except Exception:
+                    # If we can't begin transaction, return empty list
+                    return []
+
+                try:
+                    # Build the appropriate SQL based on parameters
+                    if message_id is not None:
+                        # Move specific message by timestamp
+                        cursor = self.conn.execute(
+                            """
+                            UPDATE messages
+                            SET queue = ?, claimed = 0
+                            WHERE ts = ? AND queue = ? AND claimed = 0
+                            RETURNING body, ts
+                            """,
+                            (dest_queue, message_id, source_queue),
+                        )
+                    elif all_messages:
+                        if since_timestamp is not None:
+                            # Move all messages newer than timestamp
+                            cursor = self.conn.execute(
+                                """
+                                WITH to_move AS (
+                                    SELECT id FROM messages
+                                    WHERE queue = ? AND claimed = 0 AND ts > ?
+                                    ORDER BY id
+                                )
+                                UPDATE messages
+                                SET queue = ?, claimed = 0
+                                WHERE id IN (SELECT id FROM to_move)
+                                RETURNING body, ts, id
+                                """,
+                                (source_queue, since_timestamp, dest_queue),
+                            )
+                        else:
+                            # Move all unclaimed messages
+                            cursor = self.conn.execute(
+                                """
+                                WITH to_move AS (
+                                    SELECT id FROM messages
+                                    WHERE queue = ? AND claimed = 0
+                                    ORDER BY id
+                                )
+                                UPDATE messages
+                                SET queue = ?, claimed = 0
+                                WHERE id IN (SELECT id FROM to_move)
+                                RETURNING body, ts, id
+                                """,
+                                (source_queue, dest_queue),
+                            )
+                    else:
+                        # Move single oldest message (with optional since filter)
+                        if since_timestamp is not None:
+                            cursor = self.conn.execute(
+                                """
+                                UPDATE messages
+                                SET queue = ?, claimed = 0
+                                WHERE id IN (
+                                    SELECT id FROM messages
+                                    WHERE queue = ? AND claimed = 0 AND ts > ?
+                                    ORDER BY id
+                                    LIMIT 1
+                                )
+                                RETURNING body, ts
+                                """,
+                                (dest_queue, source_queue, since_timestamp),
+                            )
+                        else:
+                            cursor = self.conn.execute(
+                                """
+                                UPDATE messages
+                                SET queue = ?, claimed = 0
+                                WHERE id IN (
+                                    SELECT id FROM messages
+                                    WHERE queue = ? AND claimed = 0
+                                    ORDER BY id
+                                    LIMIT 1
+                                )
+                                RETURNING body, ts
+                                """,
+                                (dest_queue, source_queue),
+                            )
+
+                    # Fetch all moved messages
+                    # For bulk moves, we need to sort by id to maintain FIFO order
+                    # SQLite doesn't support ORDER BY in RETURNING clause
+                    rows = cursor.fetchall()
+
+                    if all_messages and rows:
+                        # Sort by id (third column) for bulk moves to ensure FIFO order
+                        if len(rows[0]) > 2:  # Has id column
+                            rows = sorted(rows, key=lambda x: x[2])
+
+                    messages = []
+                    for row in rows:
+                        messages.append((row[0], row[1]))  # (body, timestamp)
+
+                    if messages:
+                        # Commit the transaction
+                        self.conn.commit()
+                    else:
+                        # No messages to move
+                        self.conn.rollback()
+
+                    return messages
+
+                except Exception:
+                    # On any error, rollback to preserve messages
+                    self.conn.rollback()
+                    raise
+
+        # Execute with retry logic
+        return self._execute_with_retry(_do_move_messages)
+
+    def queue_exists_and_has_messages(self, queue: str) -> bool:
+        """Check if a queue exists and has messages.
+
+        Args:
+            queue: Name of the queue to check
+
+        Returns:
+            True if queue exists and has at least one message, False otherwise
+
+        Raises:
+            ValueError: If queue name is invalid
+            RuntimeError: If called from a forked process
+        """
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+
+        def _do_check() -> bool:
+            with self._lock:
+                cursor = self.conn.execute(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1 FROM messages
+                        WHERE queue = ?
+                        LIMIT 1
+                    )
+                    """,
+                    (queue,),
+                )
+                result = cursor.fetchone()
+                return bool(result[0]) if result else False
+
+        # Execute with retry logic
+        return self._execute_with_retry(_do_check)
 
     def vacuum(self) -> None:
         """Manually trigger vacuum of claimed messages.

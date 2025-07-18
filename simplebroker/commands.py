@@ -14,6 +14,47 @@ EXIT_QUEUE_EMPTY = 2
 # Security limits
 MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10MB limit
 
+# Timestamp constants
+TIMESTAMP_EXACT_NUM_DIGITS = 19  # Exact number of digits for message ID timestamps
+
+
+def parse_exact_message_id(message_id_str: str) -> Optional[int]:
+    """Parse a message ID string with strict 19-digit validation.
+
+    This function enforces the exact specification requirement that message IDs
+    must be exactly 19 digits. It does NOT accept other timestamp formats like
+    ISO dates, Unix timestamps with suffixes, etc.
+
+    Args:
+        message_id_str: String that should contain exactly 19 digits
+
+    Returns:
+        The parsed timestamp as int if valid, None if invalid format
+
+    Note:
+        This is the ONLY validation function that should be used for -m/--message
+        flag to ensure specification compliance.
+    """
+    if not message_id_str:
+        return None
+
+    # Must be exactly 19 characters
+    if len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS:
+        return None
+
+    # Must contain only digits
+    if not message_id_str.isdigit():
+        return None
+
+    # Convert to int (no need for try/except as we verified it's all digits)
+    timestamp = int(message_id_str)
+
+    # Verify it's within valid range for SQLite (signed 64-bit)
+    if timestamp >= 2**63:
+        return None
+
+    return timestamp
+
 
 def _parse_as_iso(timestamp_str: str) -> Optional[int]:
     """Try to parse string as ISO 8601 date/datetime.
@@ -347,6 +388,7 @@ def _read_messages(
     json_output: bool = False,
     show_timestamps: bool = False,
     since_timestamp: Optional[int] = None,
+    exact_timestamp: Optional[int] = None,
 ) -> int:
     """Common implementation for read and peek commands.
 
@@ -358,6 +400,7 @@ def _read_messages(
         json_output: If True, output in line-delimited JSON format (ndjson)
         show_timestamps: If True, include timestamps in the output
         since_timestamp: If provided, only return messages with ts > since_timestamp
+        exact_timestamp: If provided, only return message with this exact timestamp
 
     Returns:
         Exit code
@@ -379,6 +422,7 @@ def _read_messages(
         all_messages=all_messages,
         commit_interval=commit_interval,
         since_timestamp=since_timestamp,
+        exact_timestamp=exact_timestamp,
     )
 
     for _i, (message, timestamp) in enumerate(stream):
@@ -387,7 +431,7 @@ def _read_messages(
         if json_output:
             # Output as line-delimited JSON (ndjson) - one JSON object per line
             data: Dict[str, Union[str, int]] = {"message": message}
-            if show_timestamps and timestamp is not None:
+            if timestamp is not None:  # Always include timestamp in JSON
                 data["timestamp"] = timestamp
             print(json.dumps(data))
         else:
@@ -436,6 +480,7 @@ def cmd_read(
     json_output: bool = False,
     show_timestamps: bool = False,
     since_str: Optional[str] = None,
+    message_id_str: Optional[str] = None,
 ) -> int:
     """Read and remove message(s) from queue."""
     # Validate timestamp if provided
@@ -448,6 +493,14 @@ def cmd_read(
             sys.stderr.flush()  # Ensure error is visible before exit
             return 1  # General error
 
+    # Validate exact timestamp if provided
+    exact_timestamp = None
+    if message_id_str is not None:
+        exact_timestamp = parse_exact_message_id(message_id_str)
+        if exact_timestamp is None:
+            # Silent failure per specification - return 2 for all invalid cases
+            return EXIT_QUEUE_EMPTY
+
     return _read_messages(
         db,
         queue,
@@ -456,6 +509,7 @@ def cmd_read(
         json_output=json_output,
         show_timestamps=show_timestamps,
         since_timestamp=since_timestamp,
+        exact_timestamp=exact_timestamp,
     )
 
 
@@ -466,6 +520,7 @@ def cmd_peek(
     json_output: bool = False,
     show_timestamps: bool = False,
     since_str: Optional[str] = None,
+    message_id_str: Optional[str] = None,
 ) -> int:
     """Read without removing message(s)."""
     # Validate timestamp if provided
@@ -478,6 +533,14 @@ def cmd_peek(
             sys.stderr.flush()  # Ensure error is visible before exit
             return 1  # General error
 
+    # Validate exact timestamp if provided
+    exact_timestamp = None
+    if message_id_str is not None:
+        exact_timestamp = parse_exact_message_id(message_id_str)
+        if exact_timestamp is None:
+            # Silent failure per specification - return 2 for all invalid cases
+            return EXIT_QUEUE_EMPTY
+
     return _read_messages(
         db,
         queue,
@@ -486,6 +549,7 @@ def cmd_peek(
         json_output=json_output,
         show_timestamps=show_timestamps,
         since_timestamp=since_timestamp,
+        exact_timestamp=exact_timestamp,
     )
 
 
@@ -527,10 +591,111 @@ def cmd_list(db: BrokerDB, show_stats: bool = False) -> int:
     return EXIT_SUCCESS
 
 
-def cmd_delete(db: BrokerDB, queue: Optional[str] = None) -> int:
+def cmd_delete(
+    db: BrokerDB, queue: Optional[str] = None, message_id_str: Optional[str] = None
+) -> int:
     """Remove messages from queue(s)."""
+    # Handle delete by timestamp
+    if message_id_str is not None and queue is not None:
+        # Validate exact timestamp
+        exact_timestamp = parse_exact_message_id(message_id_str)
+        if exact_timestamp is None:
+            # Silent failure per specification - return 2 for all invalid cases
+            return EXIT_QUEUE_EMPTY
+
+        # Use read with exact_timestamp and discard the output
+        messages = db.read(
+            queue, peek=False, all_messages=False, exact_timestamp=exact_timestamp
+        )
+        # Return 0 for success (message deleted) or 2 for not found
+        return EXIT_SUCCESS if messages else EXIT_QUEUE_EMPTY
+
+    # Normal delete behavior
     db.delete(queue)
     return EXIT_SUCCESS
+
+
+def cmd_move(
+    db: BrokerDB,
+    source_queue: str,
+    dest_queue: str,
+    all_messages: bool = False,
+    json_output: bool = False,
+    show_timestamps: bool = False,
+    message_id_str: Optional[str] = None,
+    since_str: Optional[str] = None,
+) -> int:
+    """Move message(s) between queues."""
+    # Check for same source and destination
+    if source_queue == dest_queue:
+        print(
+            "simplebroker: error: Source and destination queues cannot be the same",
+            file=sys.stderr,
+        )
+        sys.stderr.flush()
+        return 1  # General error
+
+    # Validate timestamp if provided
+    since_timestamp = None
+    if since_str is not None:
+        try:
+            since_timestamp = _validate_timestamp(since_str)
+        except ValueError as e:
+            print(f"simplebroker: error: {e}", file=sys.stderr)
+            sys.stderr.flush()
+            return 1  # General error
+
+    # Validate exact timestamp if provided
+    exact_timestamp = None
+    if message_id_str is not None:
+        exact_timestamp = parse_exact_message_id(message_id_str)
+        if exact_timestamp is None:
+            # Silent failure per specification - return 2 for all invalid cases
+            return EXIT_QUEUE_EMPTY
+
+    try:
+        # Move messages using the new DB method
+        moved_messages = db.move_messages(
+            source_queue,
+            dest_queue,
+            all_messages=all_messages,
+            message_id=exact_timestamp,
+            since_timestamp=since_timestamp,
+        )
+
+        # Handle no messages moved
+        if not moved_messages:
+            # Distinguish between empty queue and no matches
+            if since_timestamp is not None:
+                # Check if queue has any messages at all
+                if db.queue_exists_and_has_messages(source_queue):
+                    # Queue has messages but none matched the filter
+                    return EXIT_SUCCESS
+            return EXIT_QUEUE_EMPTY
+
+        # Output moved messages
+        for body, timestamp in moved_messages:
+            if json_output:
+                data = {"message": body, "timestamp": timestamp}
+                print(json.dumps(data))
+            elif show_timestamps:
+                print(f"{timestamp}\t{body}")
+            else:
+                print(body)
+
+        return EXIT_SUCCESS
+
+    except ValueError as e:
+        # This handles "Source and destination queues cannot be the same" from DB layer
+        # but we already check this above, so this is just a safety net
+        print(f"simplebroker: error: {e}", file=sys.stderr)
+        sys.stderr.flush()
+        return 1
+    except Exception as e:
+        # Handle any other database errors
+        print(f"simplebroker: error: {e}", file=sys.stderr)
+        sys.stderr.flush()
+        return 1
 
 
 def cmd_broadcast(db: BrokerDB, message: str) -> int:
@@ -627,9 +792,8 @@ def cmd_watch(
                     "message": body,
                     "source_queue": queue,  # Original source queue
                     "dest_queue": move_to,  # Destination queue
+                    "timestamp": ts,  # Always include timestamp in JSON
                 }
-                if show_timestamps:
-                    data["timestamp"] = ts
                 print(json.dumps(data), flush=True)
             elif show_timestamps:
                 print(f"{ts}\t{body}", flush=True)
@@ -649,8 +813,7 @@ def cmd_watch(
             """Print message according to formatting options."""
             if json_output:
                 data: Dict[str, Union[str, float]] = {"message": msg}
-                if show_timestamps:
-                    data["timestamp"] = int(ts)
+                data["timestamp"] = int(ts)  # Always include timestamp in JSON
                 print(json.dumps(data), flush=True)
             elif show_timestamps:
                 print(f"{int(ts)}\t{msg}", flush=True)

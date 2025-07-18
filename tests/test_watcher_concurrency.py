@@ -86,8 +86,16 @@ class TestWorkerPool:
         for watcher, _thread, _db in workers:
             watcher.stop()
 
-        for _watcher, thread, _db in workers:
+        for watcher, thread, _db in workers:
             thread.join(timeout=5.0)
+            # Verify thread termination
+            if thread.is_alive():
+                # Force kill the watcher if still running
+                watcher._strategy._stop_event.set()
+                thread.join(timeout=1.0)
+                assert not thread.is_alive(), (
+                    "Worker thread failed to stop after 6 seconds"
+                )
 
         # Collect all processed messages
         all_messages = []

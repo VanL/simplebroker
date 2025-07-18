@@ -60,6 +60,10 @@ $ broker read myqueue --all
 # Peek without removing
 $ broker peek myqueue
 
+# Move messages between queues
+$ broker move myqueue processed
+$ broker move errors retry --all
+
 # List all queues
 $ broker list
 myqueue: 3
@@ -91,22 +95,77 @@ $ broker --cleanup
 |---------|-------------|
 | `write <queue> <message>` | Add a message to the queue |
 | `write <queue> -` | Add message from stdin |
-| `read <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Remove and return message(s) |
-| `peek <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>]` | Return message(s) without removing |
+| `read <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>] [-m <id>]` | Remove and return message(s) |
+| `peek <queue> [--all] [--json] [-t\|--timestamps] [--since <ts>] [-m <id>]` | Return message(s) without removing |
+| `move <source> <dest> [-m <id>] [--all] [--since <ts>] [--json] [-t]` | Atomically transfer messages between queues |
 | `list [--stats]` | Show queues with unclaimed messages (use `--stats` to include claimed) |
-| `delete <queue>` | Delete all messages in queue |
-| `delete --all` | Delete all queues |
+| `delete <queue> [-m <id>]` | Delete all messages in queue or specific message by ID* |
+| `delete --all` | Delete all queues* |
 | `broadcast <message>` | Send message to all existing queues |
 | `watch <queue> [--peek] [--json] [-t] [--since <ts>] [--quiet]` | Watch queue for new messages |
 | `watch <queue> --move <dest> [--json] [-t] [--quiet]` | Watch for messages, moving all messages to `<dest>` queue |
 
-#### Read/Peek Options
+## Move Command
+
+The `move` command atomically transfers messages between queues, preserving their original timestamps and FIFO order. This is ideal for:
+- Rebalancing workloads
+- Reorganizing queue structures
+- Error recovery (moving from DLQ back to processing)
+- Queue migrations
+
+### Basic Usage
+
+```bash
+# Move one message from 'pending' to 'processing'
+broker move pending processing
+
+# Move all messages
+broker move pending processing --all
+
+# Move a specific message by timestamp
+broker move errors retry -m 17053290000000001234567890
+
+# Move messages newer than a timestamp
+broker move pending urgent --since '2024-01-15T10:30:00'
+```
+
+### Output Formats
+
+```bash
+# Default output
+$ broker move pending processing
+Message moved successfully
+
+# JSON output with timestamps
+$ broker move pending processing --json -t
+{"id":"17053290000000001234567890","timestamp":"2024-01-15T10:30:00.000Z","message":"Task data"}
+```
+
+### Exit Codes
+
+- `0`: Messages moved successfully
+- `1`: Error (invalid arguments, database issues)
+- `2`: No messages to move (source empty or no matches)
+
+### Move vs Watch --move
+
+- `move`: One-time atomic transfer, preserves timestamps
+- `watch --move`: Continuous drain operation, updates timestamps
+
+**\* Note on Delete Operations**: For performance reasons, the `delete` command marks messages as "claimed" rather than immediately removing them from the database. These claimed messages are invisible to all read/peek operations and will be permanently removed during the next vacuum cycle (automatic or manual via `broker --vacuum`). From the user's perspective, deleted messages are immediately gone and cannot be accessed.
+
+#### Read/Peek/Delete Options
 
 - `--all` - Read/peek all messages in the queue
-- `--json` - Output in line-delimited JSON (ndjson) format for safe handling of special characters
-- `-t, --timestamps` - Include timestamps in output
+- `--json` - Output in line-delimited JSON (ndjson) format for safe handling of special characters (timestamps always included)
+- `-t, --timestamps` - Include timestamps in output (redundant when used with `--json`)
   - Regular format: `<timestamp>\t<message>` (tab-separated)
-  - JSON format: `{"message": "...", "timestamp": <timestamp>}`
+  - JSON format: `{"message": "...", "timestamp": <timestamp>}` (always included)
+- `-m, --message <id>` - Operate on a specific message by its timestamp/ID
+  - Requires exactly 19 digits (the timestamp format returned by `-t`)
+  - Returns exit code 2 if message not found or invalid format
+  - Cannot be used with `--all` or `--since`
+  - For `delete`, requires specifying the queue name
 - `--since <timestamp>` - Return only messages with timestamp > the given value
   - Accepts multiple formats:
     - Native 64-bit timestamp as returned by `--timestamps` (e.g., `1837025672140161024`)
@@ -212,7 +271,7 @@ $ broker read alerts | wc -l
 # Solution: Use --json for safe handling
 $ broker write alerts "ERROR: Database connection failed\nRetrying in 5 seconds..."
 $ broker read alerts --json
-{"message": "ERROR: Database connection failed\nRetrying in 5 seconds..."}
+{"message": "ERROR: Database connection failed\nRetrying in 5 seconds...", "timestamp": 1837025672140161024}
 
 # Parse JSON safely in scripts
 $ broker read alerts --json | jq -r '.message'
@@ -224,9 +283,9 @@ $ broker write safe "Line 1\nLine 2"
 $ broker write safe 'Message with "quotes"'
 $ broker write safe "Tab\there"
 $ broker read safe --all --json
-{"message": "Line 1\nLine 2"}
-{"message": "Message with \"quotes\""}
-{"message": "Tab\there"}
+{"message": "Line 1\nLine 2", "timestamp": 1837025672140161024}
+{"message": "Message with \"quotes\"", "timestamp": 1837025681658085376}
+{"message": "Tab\there", "timestamp": 1837025689412308992}
 
 # Parse each line with jq
 $ broker read safe --all --json | jq -r '.message'
@@ -237,7 +296,8 @@ Tab	here
 ```
 
 The JSON output uses line-delimited JSON (ndjson) format:
-- Each message is output on its own line as: `{"message": "content"}`
+- Each message is output on its own line as: `{"message": "content", "timestamp": <timestamp>}`
+- Timestamps are always included in JSON output
 - This format is streaming-friendly and works well with tools like `jq`
 
 This is the recommended approach for handling messages that may contain special characters, as mentioned in the Security Considerations section.
@@ -260,14 +320,14 @@ $ broker peek events --all --timestamps
 1837025681658085376	user login
 1837025689412308992	file uploaded
 
-# Read with timestamps and JSON for parsing
-$ broker read events --all --timestamps --json
+# Read with JSON (timestamps always included)
+$ broker read events --all --json
 {"message": "server started", "timestamp": 1837025672140161024}
 {"message": "user login", "timestamp": 1837025681658085376}
 {"message": "file uploaded", "timestamp": 1837025689412308992}
 
 # Extract just timestamps with jq
-$ broker peek events --all --timestamps --json | jq '.timestamp'
+$ broker peek events --all --json | jq '.timestamp'
 1837025672140161024
 1837025681658085376
 1837025689412308992
@@ -286,19 +346,19 @@ you can use them as message identifiers for tracking, deduplication, or correlat
 
 ```bash
 # Save message ID for later reference
-$ result=$(broker write events "user_signup" | broker read events --timestamps --json)
+$ result=$(broker write events "user_signup" | broker read events --json)
 $ msg_id=$(echo "$result" | jq '.timestamp')
 $ echo "Processed signup event: $msg_id"
 Processed signup event: 1837025672140161024
 
 # Use timestamp as correlation ID in logs
 $ broker write tasks "process_order_123"
-$ broker read tasks --timestamps --json | jq -r '"Task ID: \(.timestamp) - \(.message)"'
+$ broker read tasks --json | jq -r '"Task ID: \(.timestamp) - \(.message)"'
 Task ID: 1837025681658085376 - process_order_123
 
 # Track message processing status
 $ broker write jobs "generate_report"
-$ job_id=$(broker read jobs --timestamps --json | jq '.timestamp')
+$ job_id=$(broker read jobs --json | jq '.timestamp')
 $ echo "$job_id:pending" | broker write job_status -
 $ # ... after processing ...
 $ echo "$job_id:complete" | broker write job_status -
@@ -313,7 +373,56 @@ The timestamp format provides several advantages over traditional UUIDs:
 
 This makes SimpleBroker timestamps useful for distributed systems that need both
 unique identification and temporal ordering, similar to Twitter's Snowflake IDs
-or UUID7, but with stronger uniqueness guarantees enforced at the database level.
+or UUID7, with uniqueness guarantees enforced at the database level.
+
+### Operating on Specific Messages
+
+The `-m/--message` flag allows you to read, peek, or delete a specific message by its timestamp ID:
+
+```bash
+# Write some messages
+$ broker write events "user login"
+$ broker write events "file upload"
+$ broker write events "user logout"
+
+# Get message IDs using peek with timestamps
+$ broker peek events --all -t
+1837025672140161024	user login
+1837025681658085376	file upload
+1837025689412308992	user logout
+
+# Read a specific message by its ID (removes it from queue)
+$ broker read events -m 1837025681658085376
+file upload
+
+# Verify it's gone
+$ broker peek events --all
+user login
+user logout
+
+# Peek at a specific message without removing it
+$ broker peek events -m 1837025689412308992
+user logout
+
+# Delete a specific message
+$ broker delete events -m 1837025689412308992
+
+# Message IDs are queue-specific - cannot use ID from one queue on another
+$ broker write other_queue "different message"
+$ broker read other_queue -m 1837025672140161024  # Returns exit code 2
+```
+
+This feature is useful for:
+- **Selective message processing**: Cherry-pick specific messages from a queue
+- **Error recovery**: Remove problematic messages identified by their ID
+- **Debugging**: Inspect specific messages without affecting queue order
+- **Audit trails**: Track individual message lifecycle using IDs
+
+**Important notes**:
+- Message IDs must be exactly 19 digits (as returned by `-t/--timestamps`)
+- IDs are bound to their queue - you cannot access a message using an ID from a different queue
+- Invalid IDs or non-existent messages return exit code 2 (same as empty queue)
+- The `-m` flag cannot be combined with `--all` or `--since`
 
 ### Checkpoint-based Processing
 
@@ -382,8 +491,8 @@ $ broker watch tasks
 $ broker watch tasks --peek
 # Monitors messages without removing them
 
-# Watch with timestamps and JSON output
-$ broker watch tasks --json --timestamps
+# Watch with JSON output (timestamps always included)
+$ broker watch tasks --json
 {"message": "task 1", "timestamp": 1837025672140161024}
 {"message": "task 2", "timestamp": 1837025681658085376}
 
@@ -541,7 +650,7 @@ echo "Starting from checkpoint: $last_checkpoint"
 # Main processing loop
 while true; do
     # Check if there are messages newer than our checkpoint
-    if ! broker peek "$QUEUE" --json --timestamps --since "$last_checkpoint" >/dev/null 2>&1; then
+    if ! broker peek "$QUEUE" --json --since "$last_checkpoint" >/dev/null 2>&1; then
         echo "No new messages, sleeping..."
         sleep 5
         continue
@@ -553,7 +662,7 @@ while true; do
     processed=0
     while [ $processed -lt $BATCH_SIZE ]; do
         # Read exactly one message newer than checkpoint
-        message_data=$(broker read "$QUEUE" --json --timestamps --since "$last_checkpoint" 2>/dev/null)
+        message_data=$(broker read "$QUEUE" --json --since "$last_checkpoint" 2>/dev/null)
         
         # Check if we got a message
         if [ -z "$message_data" ]; then
@@ -609,6 +718,81 @@ $ echo "remote task" | ssh server "cd /app && broker write tasks -"
 
 # Read from remote queue  
 $ ssh server "cd /app && broker read tasks"
+```
+
+## Advanced Examples
+
+### Dead Letter Queue Pattern
+
+**Simplified with move command:**
+
+```bash
+# Process messages, moving failures to DLQ
+while msg=$(broker read tasks); do
+    if ! process_task "$msg"; then
+        # Write to DLQ (timestamp will be current time)
+        echo "$msg" | broker write dlq -
+    fi
+done
+
+# Retry failed messages by moving back from DLQ
+broker move dlq tasks --all
+```
+
+**Original pattern (still valid for retry tracking):**
+
+```bash
+# Implement DLQ with retry tracking
+while true; do
+    msg=$(broker read tasks 2>/dev/null)
+    if [ $? -eq 2 ]; then
+        sleep 1
+        continue
+    fi
+    
+    # Track retry count
+    retry_count=$(echo "$msg" | jq -r '.retry_count // 0')
+    
+    if ! process_task "$msg"; then
+        if [ $retry_count -lt 3 ]; then
+            # Increment retry count and re-queue
+            echo "$msg" | jq ".retry_count = $((retry_count + 1))" | \
+                broker write tasks -
+        else
+            # Move to DLQ after max retries
+            echo "$msg" | broker write dlq -
+        fi
+    fi
+done
+```
+
+### Work Stealing Pattern
+
+**Simplified with move command:**
+
+```bash
+# Rebalance work between queues
+broker move overflow-tasks worker1-tasks
+broker move overflow-tasks worker2-tasks
+
+# Or continuously redistribute
+while true; do
+    for worker in worker1 worker2 worker3; do
+        broker move overflow-tasks "${worker}-tasks" || true
+    done
+    sleep 5
+done
+```
+
+### Queue Migration
+
+```bash
+# Migrate from old queue structure to new
+broker move old-orders order-events --all
+broker move old-payments payment-events --all
+
+# Or selectively migrate recent messages
+broker move legacy-queue new-queue --since '2024-01-01'
 ```
 
 ## Python Library Usage
@@ -711,6 +895,27 @@ SimpleBroker follows the Unix philosophy: do one thing well. It's not trying to 
 - A pub/sub system
 - A replacement for production message queues
 - Suitable for high-frequency trading
+
+## Performance Considerations
+
+1. **Database Location**: Use SSDs for better performance
+2. **Queue Names**: Shorter names = smaller database
+3. **Message Size**: Each message is stored as-is; consider compression for large payloads
+4. **Vacuum**: Run `broker --vacuum` periodically to reclaim space from deleted messages
+5. **Bulk Operations**: 
+   - `move --all` is atomic and efficient for queue transfers
+   - `watch --move` is better for continuous draining
+   - Use `--since` to limit operation scope
+
+## Architecture
+
+SimpleBroker uses a single SQLite database with a simple schema:
+
+- **Table**: `messages`
+- **Columns**: `queue`, `message`, `timestamp`, `claimed`
+- **Indexes**: Optimized for queue operations and timestamp ordering
+
+Each message gets a hybrid timestamp combining Unix time and nanosecond precision for FIFO ordering. The `move` command preserves these timestamps during transfers, maintaining message order and timing information.
 
 ## Technical Details
 

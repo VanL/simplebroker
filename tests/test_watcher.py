@@ -213,8 +213,22 @@ class TestQueueWatcher:
             else:
                 proc.send_signal(signal.SIGINT)
 
-            # Wait for graceful exit
-            exit_code = proc.wait(timeout=5.0)
+            # Wait for graceful exit using communicate to avoid deadlock
+            try:
+                stdout, stderr = proc.communicate(timeout=5.0)
+                exit_code = proc.returncode
+            except subprocess.TimeoutExpired:
+                # More aggressive cleanup
+                proc.kill()
+                try:
+                    stdout, stderr = proc.communicate(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    # Force termination on Unix
+                    if sys.platform != "win32":
+                        import os
+
+                        os.kill(proc.pid, signal.SIGKILL)
+                pytest.fail("Subprocess did not terminate within timeout after SIGINT")
 
             # Check that it exited cleanly
             # On Windows, terminated processes may exit with code 1
@@ -227,9 +241,10 @@ class TestQueueWatcher:
             )
 
             # Optionally check output
-            stdout, stderr = proc.communicate()
             if stderr:
-                print(f"Subprocess stderr: {stderr.decode()}")
+                print(
+                    f"Subprocess stderr: {stderr.decode() if isinstance(stderr, bytes) else stderr}"
+                )
 
         except subprocess.TimeoutExpired:
             pytest.fail("Subprocess did not terminate within timeout after SIGINT")
