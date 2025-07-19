@@ -14,7 +14,7 @@ SimpleBroker is a zero-configuration message queue that runs anywhere Python run
 ## Table of Contents
 
 - [Features](#features)
-- [Ideal Use Cases](#ideal-use-cases)
+- [Use Cases](#use-cases)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Command Reference](#command-reference)
@@ -48,7 +48,7 @@ SimpleBroker is a zero-configuration message queue that runs anywhere Python run
 - **Lightweight** - ~1500 lines of code, no external dependencies
 - **Real-time** - Built-in watcher for event-driven workflows
 
-## Ideal Use Cases
+## Use Cases
 
 - **Shell Scripting:** Decouple stages of a complex script
 - **Background Jobs:** Manage tasks for cron jobs or systemd services
