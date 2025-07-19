@@ -1,7 +1,6 @@
 """Database module for SimpleBroker - handles all SQLite operations."""
 
 import os
-import random
 import re
 import threading
 import time
@@ -63,6 +62,10 @@ from ._sql import (
 )
 from ._sql import (
     DROP_OLD_INDEXES,
+    build_claim_batch_query,
+    build_claim_single_query,
+    build_move_by_id_query,
+    build_peek_query,
 )
 from ._sql import (
     GET_DISTINCT_QUEUES as SQL_SELECT_DISTINCT_QUEUES,
@@ -99,6 +102,13 @@ T = TypeVar("T")
 # Module constants
 MAX_QUEUE_NAME_LENGTH = 512
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
+MAX_MESSAGE_SIZE = int(
+    os.environ.get("BROKER_MAX_MESSAGE_SIZE", str(10 * 1024 * 1024))
+)  # Default 10MB
+
+# Database magic string and schema version
+SIMPLEBROKER_MAGIC = "simplebroker-v1"
+SCHEMA_VERSION = 1
 
 
 # Cache for queue name validation
@@ -188,8 +198,15 @@ class BrokerCore:
         # SQL runner for all database operations
         self._runner = runner
 
+        # Write counter for vacuum scheduling
+        self._write_count = 0
+        self._vacuum_interval = int(
+            os.environ.get("BROKER_AUTO_VACUUM_INTERVAL", "100")
+        )
+
         # Setup database (must be done before creating TimestampGenerator)
         self._setup_database()
+        self._verify_database_magic()
         self._ensure_schema_v2()
         self._ensure_schema_v3()
 
@@ -234,8 +251,65 @@ class BrokerCore:
             self._execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_META))
             self._execute_with_retry(lambda: self._runner.run(SQL_INSERT_META_LAST_TS))
 
+            # Insert magic string and schema version if not exists
+            self._execute_with_retry(
+                lambda: self._runner.run(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('magic', ?)",
+                    (SIMPLEBROKER_MAGIC,),
+                )
+            )
+            self._execute_with_retry(
+                lambda: self._runner.run(
+                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                    (SCHEMA_VERSION,),
+                )
+            )
+
             # final commit can also be retried
             self._execute_with_retry(self._runner.commit)
+
+    def _verify_database_magic(self) -> None:
+        """Verify database magic string and schema version for existing databases."""
+        with self._lock:
+            try:
+                # Check if meta table exists
+                rows = list(
+                    self._runner.run(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='meta'",
+                        fetch=True,
+                    )
+                )
+                if not rows or rows[0][0] == 0:
+                    # New database, no verification needed
+                    return
+
+                # Check magic string
+                rows = list(
+                    self._runner.run(
+                        "SELECT value FROM meta WHERE key = 'magic'", fetch=True
+                    )
+                )
+                if rows and rows[0][0] != SIMPLEBROKER_MAGIC:
+                    raise RuntimeError(
+                        f"Database magic string mismatch. Expected '{SIMPLEBROKER_MAGIC}', "
+                        f"found '{rows[0][0]}'. This database may not be a SimpleBroker database."
+                    )
+
+                # Check schema version
+                rows = list(
+                    self._runner.run(
+                        "SELECT value FROM meta WHERE key = 'schema_version'",
+                        fetch=True,
+                    )
+                )
+                if rows and rows[0][0] > SCHEMA_VERSION:
+                    raise RuntimeError(
+                        f"Database schema version {rows[0][0]} is newer than supported version "
+                        f"{SCHEMA_VERSION}. Please upgrade SimpleBroker."
+                    )
+            except OperationalError:
+                # If we can't read meta table, it might be corrupted
+                pass
 
     def _ensure_schema_v2(self) -> None:
         """Migrate to schema with claimed column."""
@@ -385,8 +459,9 @@ class BrokerCore:
                 msg = str(e).lower()
                 if any(marker in msg for marker in locked_markers):
                     if attempt < max_retries - 1:
-                        # exponential back-off + 0-25 ms jitter
-                        wait = retry_delay * (2**attempt) + random.uniform(0, 0.025)
+                        # exponential back-off + 0-25 ms jitter using time-based pseudo-random
+                        jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
+                        wait = retry_delay * (2**attempt) + jitter
                         time.sleep(wait)
                         continue
                 # If not a locked error or last attempt, re-raise
@@ -396,7 +471,7 @@ class BrokerCore:
         raise AssertionError("Unreachable code")
 
     def write(self, queue: str, message: str) -> None:
-        """Write a message to a queue with fast-path for normal cases.
+        """Write a message to a queue with resilience against timestamp conflicts.
 
         Args:
             queue: Name of the queue
@@ -404,19 +479,34 @@ class BrokerCore:
 
         Raises:
             ValueError: If queue name is invalid
-            RuntimeError: If called from a forked process or extreme conditions
-                         prevent writing after all resilience measures
+            RuntimeError: If called from a forked process or timestamp conflict
+                         cannot be resolved after retries
         """
         self._check_fork_safety()
         self._validate_queue_name(queue)
 
-        # Constants for fast-path retries
-        MAX_NORMAL_RETRIES = 5
-        FAST_BACKOFF_MS = 0.001  # 1ms
+        # Check message size
+        message_size = len(message.encode("utf-8"))
+        if message_size > MAX_MESSAGE_SIZE:
+            raise ValueError(
+                f"Message size ({message_size} bytes) exceeds maximum allowed size "
+                f"({MAX_MESSAGE_SIZE} bytes). Adjust BROKER_MAX_MESSAGE_SIZE if needed."
+            )
 
-        # Fast path: handle normal concurrency efficiently
-        for attempt in range(MAX_NORMAL_RETRIES):
+        # Constants
+        MAX_TS_RETRIES = 3
+        RETRY_BACKOFF_BASE = 0.001  # 1ms
+
+        # Metrics initialization (if not exists)
+        if not hasattr(self, "_ts_conflict_count"):
+            self._ts_conflict_count = 0
+        if not hasattr(self, "_ts_resync_count"):
+            self._ts_resync_count = 0
+
+        # Retry loop for timestamp conflicts
+        for attempt in range(MAX_TS_RETRIES):
             try:
+                # Use existing _do_write logic wrapped in retry handler
                 self._do_write_with_ts_retry(queue, message)
                 return  # Success!
 
@@ -424,126 +514,95 @@ class BrokerCore:
                 if "UNIQUE constraint failed: messages.ts" not in str(e):
                     raise  # Not a timestamp conflict, re-raise
 
-                # For the first few attempts, just retry quickly
-                # This handles 99.9% of normal concurrency cases
-                if attempt < MAX_NORMAL_RETRIES - 1:
-                    time.sleep(FAST_BACKOFF_MS * (attempt + 1))
-                    continue
+                # Track conflict for metrics
+                self._ts_conflict_count += 1
 
-        # If we get here, something unusual is happening
-        # Fall back to the resilience mechanism for extreme cases
-        self._resilient_write(queue, message)
+                if attempt == 0:
+                    # First retry: Simple backoff (handles transient issues)
+                    # Log at debug level - this might be a transient race
+                    self._log_ts_conflict("transient", attempt)
+                    time.sleep(RETRY_BACKOFF_BASE)
 
-    def _resilient_write(self, queue: str, message: str) -> None:
-        """Handle extreme cases like clock regression or database tampering.
+                elif attempt == 1:
+                    # Second retry: Resynchronize state
+                    # Log at warning level - this indicates state inconsistency
+                    self._log_ts_conflict("resync_needed", attempt)
+                    self._resync_timestamp_generator()
+                    self._ts_resync_count += 1
+                    time.sleep(RETRY_BACKOFF_BASE * 2)
 
-        This method is called only when normal concurrency handling fails,
-        indicating unusual conditions that require deeper investigation.
+                else:
+                    # Final failure: Exhausted all strategies
+                    # Log at error level - this should never happen
+                    self._log_ts_conflict("failed", attempt)
+                    raise RuntimeError(
+                        f"Failed to write message after {MAX_TS_RETRIES} attempts "
+                        f"including timestamp resynchronization. "
+                        f"Queue: {queue}, Conflicts: {self._ts_conflict_count}, "
+                        f"Resyncs: {self._ts_resync_count}. "
+                        f"This indicates a severe issue that should be reported."
+                    ) from e
+
+        # This should never be reached due to the return/raise logic above
+        raise AssertionError("Unreachable code in write retry loop")
+
+    def _log_ts_conflict(self, conflict_type: str, attempt: int) -> None:
+        """Log timestamp conflict information for diagnostics.
 
         Args:
-            queue: Name of the queue
-            message: Message body to write
-
-        Raises:
-            RuntimeError: If write fails even after resilience measures
+            conflict_type: Type of conflict (transient/resync_needed/failed)
+            attempt: Current retry attempt number
         """
-        # Initialize metrics if needed
-        if not hasattr(self, "_ts_conflict_count"):
-            self._ts_conflict_count = 0
-        if not hasattr(self, "_ts_resync_count"):
-            self._ts_resync_count = 0
-
-        self._ts_conflict_count += 1
-
-        # Log this as unusual
-        warnings.warn(
-            "Timestamp conflicts persisted beyond normal concurrency. "
-            "Checking for clock regression or database inconsistency.",
-            RuntimeWarning,
-            stacklevel=3,
-        )
-
-        # First, check for clock regression
-        with self._lock:
-            # Get current timestamp info
-            try:
-                self._runner.begin_immediate()
-
-                # Get the current max timestamp
-                rows = list(
-                    self._runner.run("SELECT MAX(ts) FROM messages", fetch=True)
+        # Use warnings for now, can be replaced with proper logging
+        if conflict_type == "transient":
+            # Debug level - might be normal under extreme concurrency
+            if os.environ.get("BROKER_DEBUG"):
+                warnings.warn(
+                    f"Timestamp conflict detected (attempt {attempt + 1}), retrying...",
+                    RuntimeWarning,
+                    stacklevel=4,
                 )
-                max_ts = rows[0][0] if rows and rows[0][0] is not None else 0
-
-                # Check meta table too
-                rows = list(
-                    self._runner.run(
-                        "SELECT value FROM meta WHERE key = 'last_ts'", fetch=True
-                    )
-                )
-                # meta_ts = rows[0][0] if rows else 0  # For debugging if needed
-
-                self._runner.rollback()
-
-                # Decode to check physical time
-                if max_ts > 0:
-                    physical_ms = max_ts >> 20
-                    now_ms = int(time.time() * 1000)
-
-                    if now_ms < physical_ms - 1000:  # Clock is >1 second behind
-                        wait_time = (physical_ms - now_ms) / 1000 + 0.1
-                        warnings.warn(
-                            f"Clock regression detected! Clock: {now_ms}ms, "
-                            f"Last timestamp: {physical_ms}ms. "
-                            f"Waiting {wait_time:.1f}s for clock to catch up.",
-                            RuntimeWarning,
-                            stacklevel=3,
-                        )
-                        # Wait for clock to catch up
-                        time.sleep(wait_time)
-
-            except Exception:
-                # If we can't check, proceed anyway
-                pass
-
-        # Try resynchronization
-        self._resync_timestamp_generator()
-        self._ts_resync_count += 1
-
-        # Give the system a moment to settle
-        time.sleep(0.01)
-
-        # Final attempt with fresh state
-        try:
-            self._do_write_with_ts_retry(queue, message)
-        except IntegrityError as e:
-            # If it still fails, this is truly exceptional
-            raise RuntimeError(
-                f"Failed to write message after resynchronization. "
-                f"This may indicate database corruption or ongoing manual modification. "
-                f"Total conflicts: {self._ts_conflict_count}, "
-                f"Resyncs: {self._ts_resync_count}. "
-                f"Error: {e}"
-            ) from e
+        elif conflict_type == "resync_needed":
+            # Warning level - indicates state inconsistency
+            warnings.warn(
+                f"Timestamp conflict persisted (attempt {attempt + 1}), "
+                f"resynchronizing state...",
+                RuntimeWarning,
+                stacklevel=4,
+            )
+        elif conflict_type == "failed":
+            # Error level - should never happen
+            warnings.warn(
+                f"Timestamp conflict unresolvable after {attempt + 1} attempts!",
+                RuntimeWarning,
+                stacklevel=4,
+            )
 
     def _do_write_with_ts_retry(self, queue: str, message: str) -> None:
         """Execute write within retry context. Separates retry logic from transaction logic."""
-        # Use existing _execute_with_retry for database lock handling
-        self._execute_with_retry(lambda: self._do_write_transaction(queue, message))
+        # Generate timestamp outside transaction for better concurrency
+        # The timestamp generator has its own internal transaction for atomicity
+        timestamp = self._generate_timestamp()
 
-        # Check vacuum need with sampling (1% of writes)
+        # Use existing _execute_with_retry for database lock handling
+        self._execute_with_retry(
+            lambda: self._do_write_transaction(queue, message, timestamp)
+        )
+
+        # Increment write counter and check vacuum need
         # Only check if auto vacuum is enabled
         if int(os.environ.get("BROKER_AUTO_VACUUM", "1")) == 1:
-            if random.random() < 0.01:
+            self._write_count += 1
+            if self._write_count >= self._vacuum_interval:
+                self._write_count = 0  # Reset counter
                 if self._should_vacuum():
                     self._vacuum_claimed_messages()
 
-    def _do_write_transaction(self, queue: str, message: str) -> None:
+    def _do_write_transaction(self, queue: str, message: str, timestamp: int) -> None:
         """Core write transaction logic."""
         with self._lock:
             self._runner.begin_immediate()
             try:
-                timestamp = self._generate_timestamp()
                 self._runner.run(
                     SQL_INSERT_MESSAGE,
                     (queue, message, timestamp),
@@ -640,8 +699,6 @@ class BrokerCore:
                 where_conditions.append("ts > ?")
                 params.append(since_timestamp)
 
-        where_clause = " AND ".join(where_conditions)
-
         if peek:
             # For peek mode, fetch in batches to avoid holding lock while yielding
             offset = 0
@@ -650,12 +707,7 @@ class BrokerCore:
             while True:
                 # Acquire lock, fetch batch, release lock
                 with self._lock:
-                    query = f"""
-                        SELECT body, ts FROM messages
-                        WHERE {where_clause}
-                        ORDER BY id
-                        LIMIT ? OFFSET ?
-                        """
+                    query = build_peek_query(where_conditions)
                     batch_messages = self._runner.run(
                         query, tuple(params + [batch_size, offset]), fetch=True
                     )
@@ -691,17 +743,7 @@ class BrokerCore:
                                 break
 
                             try:
-                                query = f"""
-                                    UPDATE messages
-                                    SET claimed = 1
-                                    WHERE id IN (
-                                        SELECT id FROM messages
-                                        WHERE {where_clause}
-                                        ORDER BY id
-                                        LIMIT 1
-                                    )
-                                    RETURNING body, ts
-                                    """
+                                query = build_claim_single_query(where_conditions)
                                 rows = self._runner.run(
                                     query, tuple(params), fetch=True
                                 )
@@ -741,17 +783,7 @@ class BrokerCore:
                                 break
 
                             try:
-                                query = f"""
-                                    UPDATE messages
-                                    SET claimed = 1
-                                    WHERE id IN (
-                                        SELECT id FROM messages
-                                        WHERE {where_clause}
-                                        ORDER BY id
-                                        LIMIT ?
-                                    )
-                                    RETURNING body, ts
-                                    """
+                                query = build_claim_batch_query(where_conditions)
                                 batch_messages = self._runner.run(
                                     query, tuple(params + [commit_interval]), fetch=True
                                 )
@@ -798,17 +830,7 @@ class BrokerCore:
                         return
 
                     try:
-                        query = f"""
-                            UPDATE messages
-                            SET claimed = 1
-                            WHERE id IN (
-                                SELECT id FROM messages
-                                WHERE {where_clause}
-                                ORDER BY id
-                                LIMIT 1
-                            )
-                            RETURNING body, ts
-                            """
+                        query = build_claim_single_query(where_conditions)
                         rows = self._runner.run(query, tuple(params), fetch=True)
 
                         # Fetch the message
@@ -1031,10 +1053,15 @@ class BrokerCore:
                     rows = self._runner.run(SQL_SELECT_DISTINCT_QUEUES, fetch=True)
                     queues = [row[0] for row in rows]
 
-                    # Insert message to each queue with unique timestamp
-                    # Generate timestamps within the transaction for consistency
+                    # Generate timestamps for all queues upfront (before inserts)
+                    # This reduces transaction time and improves concurrency
+                    queue_timestamps = []
                     for queue in queues:
                         timestamp = self._generate_timestamp()
+                        queue_timestamps.append((queue, timestamp))
+
+                    # Insert message to each queue with pre-generated timestamp
+                    for queue, timestamp in queue_timestamps:
                         self._runner.run(
                             SQL_INSERT_MESSAGE,
                             (queue, message, timestamp),
@@ -1179,15 +1206,8 @@ class BrokerCore:
                         if require_unclaimed:
                             where_conditions.append("claimed = 0")
 
-                        where_clause = " AND ".join(where_conditions)
-
                         rows = self._runner.run(
-                            f"""
-                            UPDATE messages
-                            SET queue = ?, claimed = 0
-                            WHERE {where_clause}
-                            RETURNING id, body, ts
-                            """,
+                            build_move_by_id_query(where_conditions),
                             (dest_queue, *params),
                             fetch=True,
                         )

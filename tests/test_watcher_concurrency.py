@@ -65,7 +65,7 @@ class TestWorkerPool:
                 peek=False,
             )
 
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             workers.append((watcher, thread, None))
 
         # Let workers start and begin polling
@@ -156,7 +156,7 @@ class TestWorkerPool:
                 "jobs",
                 slow_handler,
             )
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             workers.append((watcher, thread))
 
         # Process for a while
@@ -188,7 +188,7 @@ class TestWorkerPool:
                 "dynamic_queue",
                 collector.handler,
             )
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             workers.append((watcher, thread, worker_db))
 
         # Add some messages
@@ -208,7 +208,7 @@ class TestWorkerPool:
             "dynamic_queue",
             late_collector.handler,
         )
-        late_thread = late_watcher.run_async()
+        late_thread = late_watcher.run_in_thread()
         workers.append((late_watcher, late_thread, late_db))
 
         # Give the late worker time to start polling
@@ -279,7 +279,7 @@ class TestMixedMode:
             peek_handler,
             peek=True,
         )
-        peek_thread = peek_watcher.run_async()
+        peek_thread = peek_watcher.run_in_thread()
 
         # Start read watcher
         read_db = BrokerDB(temp_db)
@@ -289,7 +289,7 @@ class TestMixedMode:
             read_handler,
             peek=False,
         )
-        read_thread = read_watcher.run_async()
+        read_thread = read_watcher.run_in_thread()
 
         time.sleep(0.1)
 
@@ -346,7 +346,7 @@ class TestMixedMode:
                 make_handler(messages, lock),
                 peek=True,
             )
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             collectors.append((messages, lock))
             watchers.append((watcher, thread, peek_db))
 
@@ -401,7 +401,7 @@ class TestMixedMode:
             "concurrent",
             handler,
         )
-        watcher_thread = watcher.run_async()
+        watcher_thread = watcher.run_in_thread()
 
         # Start concurrent writers
         def writer_func(writer_id: int):
@@ -457,7 +457,7 @@ class TestEdgeCases:
             handler,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.2)  # Let it poll a few times
 
         # Should not have called handler
@@ -486,7 +486,7 @@ class TestEdgeCases:
                 lambda m, t: None,
             )
 
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             time.sleep(0.01)
             watcher.stop()
             thread.join(timeout=2.0)

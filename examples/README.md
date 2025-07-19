@@ -76,6 +76,26 @@ See **[example_extension_implementation.md](example_extension_implementation.md)
 - **Testing with Mock Runner** - Comprehensive mock runner for unit tests
 - **Complete Async Queue** - Production-ready async queue with all features
 
+### High-Performance Async Implementation
+
+- **[async_pooled_broker.py](async_pooled_broker.py)** - Production-ready async implementation
+  - Uses aiosqlite and aiosqlitepool for high-performance async operations
+  - Full AsyncBrokerCore implementation with feature parity
+  - Connection pooling for optimal concurrency
+  - Comprehensive examples and benchmarks included
+  
+- **[async_simple_example.py](async_simple_example.py)** - Simple async usage examples
+  - Worker pattern with async/await
+  - Graceful shutdown handling
+  - Batch processing examples
+  - Error handling and retry patterns
+
+- **[ASYNC_README.md](ASYNC_README.md)** - Complete async implementation documentation
+  - Installation and setup instructions
+  - Performance benchmarks
+  - Best practices and patterns
+  - Integration with existing sync code
+
 ## Running the Examples
 
 1. Basic logging example:
@@ -83,7 +103,22 @@ See **[example_extension_implementation.md](example_extension_implementation.md)
    python examples/logging_runner.py
    ```
 
-2. For advanced examples, copy the code from `example_extension_implementation.md` and adapt as needed.
+2. High-performance async examples:
+   ```bash
+   # Install dependencies
+   uv add aiosqlite aiosqlitepool
+   
+   # Run comprehensive async examples with benchmarks
+   python examples/async_pooled_broker.py
+   
+   # Run simple async worker example
+   python examples/async_simple_example.py
+   
+   # Run batch processing example
+   python examples/async_simple_example.py batch
+   ```
+
+3. For advanced examples, copy the code from `example_extension_implementation.md` and adapt as needed.
 
 ## Creating Your Own Extension
 

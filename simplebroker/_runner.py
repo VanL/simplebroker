@@ -7,8 +7,9 @@ its core philosophy and performance characteristics.
 
 import os
 import sqlite3
+import threading
 import warnings
-from typing import Any, Iterable, Protocol, Tuple
+from typing import Any, Iterable, Protocol, Tuple, cast
 
 from ._exceptions import DataError, IntegrityError, OperationalError
 
@@ -67,17 +68,50 @@ class SQLRunner(Protocol):
 
 
 class SQLiteRunner:
-    """Default synchronous SQLite implementation."""
+    """Default synchronous SQLite implementation with thread-local connections."""
 
     def __init__(self, db_path: str):
         self._db_path = db_path
-        self._conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._setup_connection()
+        self._thread_local = threading.local()
+        # Store PID to detect fork
+        self._pid = os.getpid()
+        # For backward compatibility, expose _conn as a property
+        # that returns the current thread's connection
 
-    def _setup_connection(self) -> None:
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """Backward compatibility property for accessing connection."""
+        return self._get_connection()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get or create a thread-local connection.
+
+        This ensures each thread has its own SQLite connection, avoiding
+        potential deadlocks and following SQLite best practices for
+        multi-threaded applications.
+        """
+        # Check if we've been forked
+        current_pid = os.getpid()
+        if current_pid != self._pid:
+            # Process was forked, clear thread-local storage
+            self._thread_local = threading.local()
+            self._pid = current_pid
+
+        # Check if this thread has a connection
+        if not hasattr(self._thread_local, "conn"):
+            # Create new connection for this thread with autocommit mode
+            # This is crucial for proper transaction handling
+            self._thread_local.conn = sqlite3.connect(
+                self._db_path, isolation_level=None
+            )
+            self._setup_connection(self._thread_local.conn)
+
+        return cast(sqlite3.Connection, self._thread_local.conn)
+
+    def _setup_connection(self, conn: sqlite3.Connection) -> None:
         """Apply all PRAGMA settings from existing BrokerDB."""
         # Check SQLite version (requires 3.35.0+ for RETURNING clause)
-        cursor = self._conn.execute("SELECT sqlite_version()")
+        cursor = conn.execute("SELECT sqlite_version()")
         if cursor:
             version = cursor.fetchone()
             if version:
@@ -90,11 +124,11 @@ class SQLiteRunner:
 
         # Busy timeout (default 5000ms)
         busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
-        self._conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
+        conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
 
         # Cache size (default 10MB)
         cache_mb = int(os.environ.get("BROKER_CACHE_MB", "10"))
-        self._conn.execute(f"PRAGMA cache_size=-{cache_mb * 1000}")
+        conn.execute(f"PRAGMA cache_size=-{cache_mb * 1000}")
 
         # Synchronous mode (default FULL)
         sync_mode = os.environ.get("BROKER_SYNC_MODE", "FULL").upper()
@@ -105,24 +139,25 @@ class SQLiteRunner:
                 stacklevel=4,
             )
             sync_mode = "FULL"
-        self._conn.execute(f"PRAGMA synchronous={sync_mode}")
+        conn.execute(f"PRAGMA synchronous={sync_mode}")
 
         # Enable WAL mode
-        cursor = self._conn.execute("PRAGMA journal_mode=WAL")
+        cursor = conn.execute("PRAGMA journal_mode=WAL")
         if cursor:
             result = cursor.fetchone()
             if result and result[0].lower() != "wal":
                 raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
 
         # WAL autocheckpoint
-        self._conn.execute("PRAGMA wal_autocheckpoint=1000")
+        conn.execute("PRAGMA wal_autocheckpoint=1000")
 
     def run(
         self, sql: str, params: Tuple[Any, ...] = (), *, fetch: bool = False
     ) -> Iterable[Tuple[Any, ...]]:
         """Execute SQL and optionally return rows."""
         try:
-            cursor = self._conn.execute(sql, params)
+            conn = self._get_connection()
+            cursor = conn.execute(sql, params)
             # Only fetch if explicitly requested
             if fetch:
                 return cursor.fetchall()
@@ -137,7 +172,8 @@ class SQLiteRunner:
     def begin_immediate(self) -> None:
         """Start an immediate transaction."""
         try:
-            self._conn.execute("BEGIN IMMEDIATE")
+            conn = self._get_connection()
+            conn.execute("BEGIN IMMEDIATE")
         except sqlite3.OperationalError as e:
             raise OperationalError(str(e)) from e
         except sqlite3.IntegrityError as e:
@@ -148,7 +184,8 @@ class SQLiteRunner:
     def commit(self) -> None:
         """Commit the current transaction."""
         try:
-            self._conn.commit()
+            conn = self._get_connection()
+            conn.commit()
         except sqlite3.OperationalError as e:
             raise OperationalError(str(e)) from e
         except sqlite3.IntegrityError as e:
@@ -159,7 +196,8 @@ class SQLiteRunner:
     def rollback(self) -> None:
         """Rollback the current transaction."""
         try:
-            self._conn.rollback()
+            conn = self._get_connection()
+            conn.rollback()
         except sqlite3.OperationalError as e:
             raise OperationalError(str(e)) from e
         except sqlite3.IntegrityError as e:
@@ -169,4 +207,10 @@ class SQLiteRunner:
 
     def close(self) -> None:
         """Close the connection and release resources."""
-        self._conn.close()
+        # Close the current thread's connection if it exists
+        if hasattr(self._thread_local, "conn"):
+            try:
+                self._thread_local.conn.close()
+            except Exception:
+                pass  # Ignore errors during cleanup
+            delattr(self._thread_local, "conn")

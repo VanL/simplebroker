@@ -325,3 +325,61 @@ DROP_OLD_INDEXES = [
     "DROP INDEX IF EXISTS idx_queue_id",
     "DROP INDEX IF EXISTS idx_queue_ts",
 ]
+
+# ============================================================================
+# DYNAMIC SQL BUILDERS
+# ============================================================================
+
+
+def build_peek_query(where_conditions: list[str]) -> str:
+    """Build SELECT query for peek operations with dynamic WHERE clause."""
+    where_clause = " AND ".join(where_conditions)
+    return f"""
+        SELECT body, ts FROM messages
+        WHERE {where_clause}
+        ORDER BY id
+        LIMIT ? OFFSET ?
+        """
+
+
+def build_claim_single_query(where_conditions: list[str]) -> str:
+    """Build UPDATE query for claiming single message."""
+    where_clause = " AND ".join(where_conditions)
+    return f"""
+        UPDATE messages
+        SET claimed = 1
+        WHERE id IN (
+            SELECT id FROM messages
+            WHERE {where_clause}
+            ORDER BY id
+            LIMIT 1
+        )
+        RETURNING body, ts
+        """
+
+
+def build_claim_batch_query(where_conditions: list[str]) -> str:
+    """Build UPDATE query for claiming batch of messages."""
+    where_clause = " AND ".join(where_conditions)
+    return f"""
+        UPDATE messages
+        SET claimed = 1
+        WHERE id IN (
+            SELECT id FROM messages
+            WHERE {where_clause}
+            ORDER BY id
+            LIMIT ?
+        )
+        RETURNING body, ts
+        """
+
+
+def build_move_by_id_query(where_conditions: list[str]) -> str:
+    """Build UPDATE query for moving message by ID."""
+    where_clause = " AND ".join(where_conditions)
+    return f"""
+        UPDATE messages
+        SET queue = ?, claimed = 0
+        WHERE {where_clause}
+        RETURNING id, body, ts
+        """

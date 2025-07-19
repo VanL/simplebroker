@@ -88,6 +88,10 @@ warn_unused_ignores = true
 module = "tests.*"
 ignore_errors = true
 
+[[tool.mypy.overrides]]
+module = ["aiosqlite", "aiosqlitepool"]
+ignore_missing_imports = true
+
 [tool.ruff]
 target-version = "py38"
 line-length = 88

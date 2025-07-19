@@ -74,7 +74,7 @@ class TestQueueWatcher:
         )
 
         # Run in background thread - should create its own connection
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.2)
 
         watcher.stop()
@@ -105,7 +105,7 @@ class TestQueueWatcher:
         )
 
         # Run watcher in background
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
 
         # Wait for processing (fast polling will pick up messages quickly)
         time.sleep(0.2)
@@ -141,7 +141,7 @@ class TestQueueWatcher:
             peek=True,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.2)
 
         watcher.stop()
@@ -165,7 +165,7 @@ class TestQueueWatcher:
             lambda msg, ts: None,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.1)  # Let it start
 
         # Stop should work
@@ -341,7 +341,7 @@ class TestQueueWatcher:
                 error_handler=error_handler,
             )
 
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             time.sleep(0.2)
 
             watcher.stop()
@@ -373,7 +373,7 @@ class TestQueueWatcher:
             error_handler=error_handler,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.2)
 
         thread.join(timeout=2.0)
@@ -404,7 +404,7 @@ class TestQueueWatcher:
                 collector.handler,
                 peek=False,
             )
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             workers.append((watcher, thread))
 
         # Let workers process messages
@@ -445,7 +445,7 @@ class TestQueueWatcher:
             peek_collector.handler,
             peek=True,
         )
-        peek_thread = peek_watcher.run_async()
+        peek_thread = peek_watcher.run_in_thread()
 
         # Start read watcher
         read_db = BrokerDB(temp_db)
@@ -455,7 +455,7 @@ class TestQueueWatcher:
             read_collector.handler,
             peek=False,
         )
-        read_thread = read_watcher.run_async()
+        read_thread = read_watcher.run_in_thread()
 
         time.sleep(0.1)
 
@@ -538,7 +538,7 @@ class TestQueueWatcher:
             # Access internal strategy for testing
             strategy = watcher._strategy
 
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             time.sleep(0.1)
 
             # Should be initialized
@@ -566,7 +566,7 @@ class TestQueueWatcher:
             initial_collector.handler,
             peek=True,
         )
-        thread = initial_watcher.run_async()
+        thread = initial_watcher.run_in_thread()
         time.sleep(0.1)
         initial_watcher.stop()
         thread.join(timeout=2.0)
@@ -593,7 +593,7 @@ class TestQueueWatcher:
         )
 
         # Start watcher and let it process messages
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.1)  # Give it time to process
 
         # Stop watcher
@@ -620,7 +620,7 @@ class TestQueueWatcher:
             initial_collector.handler,
             peek=True,
         )
-        thread = initial_watcher.run_async()
+        thread = initial_watcher.run_in_thread()
         time.sleep(0.2)
         initial_watcher.stop()
         thread.join(timeout=2.0)
@@ -647,7 +647,7 @@ class TestQueueWatcher:
         )
 
         # Start watcher and let it process messages
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.2)  # Give it time to process all messages
 
         # Stop watcher
@@ -678,7 +678,7 @@ class TestPollingStrategy:
             watcher = QueueWatcher(db, "version_test", handler)
 
             # Start watcher
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
 
             # Give watcher time to start
             time.sleep(0.1)
@@ -755,7 +755,7 @@ class TestErrorScenarios:
                 failing_handler,
             )
 
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             time.sleep(0.2)
 
             watcher.stop()
@@ -782,7 +782,7 @@ class TestErrorScenarios:
                 error_handler=bad_error_handler,
             )
 
-            thread = watcher.run_async()
+            thread = watcher.run_in_thread()
             time.sleep(0.2)
 
             watcher.stop()
@@ -850,7 +850,7 @@ class TestErrorScenarios:
         )
 
         # Run watcher
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.3)  # Allow time for processing
 
         # Thread should have stopped due to error_handler returning False

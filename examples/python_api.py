@@ -216,8 +216,8 @@ def custom_watcher_example() -> None:
 
     # Watch for a short time (in practice, this would run continuously)
 
-    # Use run_async() which returns and starts a thread
-    watcher_thread = watcher.run_async()
+    # Use run_in_thread() which returns and starts a thread
+    watcher_thread = watcher.run_in_thread()
 
     try:
         # Let it process for a bit

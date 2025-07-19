@@ -33,37 +33,61 @@ class TimestampGenerator:
     def __init__(self, runner: "SQLRunner"):
         self._runner = runner
         self._lock = threading.Lock()
+        self._initialized = False
         self._last_ts = 0
         self._counter = 0
-        self._initialized = False
         self._pid = os.getpid()
 
     def _initialize(self) -> None:
-        """Load last timestamp from database."""
-        if not self._initialized:
-            try:
-                result = self._runner.run(
-                    "SELECT value FROM meta WHERE key = 'last_ts'", fetch=True
-                )
-                result_list = list(result)
-                if result_list:
-                    self._last_ts = result_list[0][0]
-                self._initialized = True
-            except Exception:
-                # Table may not exist yet, that's OK
-                self._initialized = True
+        """Initialize state from database."""
+        if self._initialized:
+            return
+
+        # Load last timestamp from meta table
+        result = self._runner.run(
+            "SELECT value FROM meta WHERE key = 'last_ts'", fetch=True
+        )
+        result_list = list(result)
+        if result_list:
+            self._last_ts = result_list[0][0]
+        else:
+            self._last_ts = 0
+
+        self._initialized = True
+
+    def _encode_hybrid_timestamp(self, physical_ms: int, logical: int) -> int:
+        """Encode physical time and logical counter into a 64-bit hybrid timestamp.
+
+        Args:
+            physical_ms: Physical time in milliseconds since epoch
+            logical: Logical counter (0 to MAX_LOGICAL_COUNTER)
+
+        Returns:
+            64-bit hybrid timestamp
+        """
+        return (physical_ms << 20) | logical
+
+    def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
+        """Decode a 64-bit hybrid timestamp into physical time and logical counter.
+
+        Args:
+            ts: 64-bit hybrid timestamp
+
+        Returns:
+            Tuple of (physical_ms, logical_counter)
+        """
+        physical_ms = ts >> 20
+        logical_counter = ts & ((1 << 20) - 1)
+        return physical_ms, logical_counter
 
     def generate(self) -> int:
-        """Generate next hybrid timestamp.
-
-        Must be called within a transaction to ensure atomicity.
+        """Generate the next hybrid timestamp.
 
         Returns:
             64-bit timestamp value
 
         Raises:
-            IntegrityError: If timestamp update conflicts after retries
-            TimestampError: If timestamp is too far in future
+            IntegrityError: If timestamp update conflicts
         """
         # Check for fork safety
         current_pid = os.getpid()
@@ -77,68 +101,43 @@ class TimestampGenerator:
         # Lazy initialization
         self._initialize()
 
-        # Retry loop for handling concurrent updates
-        max_retries = 3  # Reduced from 10 - fail fast if something is wrong
-        for retry in range(max_retries):
-            with self._lock:
-                # Current time in milliseconds
-                now_ms = int(time.time() * 1000)
+        with self._lock:
+            # Current time in milliseconds
+            now_ms = int(time.time() * 1000)
 
-                # Extract physical time from last timestamp
-                last_physical = self._last_ts >> 20
+            # Extract physical time from last timestamp
+            last_physical = self._last_ts >> 20
 
-                if now_ms > last_physical:
-                    # New millisecond, reset counter
+            if now_ms > last_physical:
+                # New millisecond, reset counter
+                self._counter = 0
+                new_ts = (now_ms << 20) | self._counter
+            else:
+                # Same millisecond, increment counter
+                self._counter += 1
+                if self._counter >= (1 << 20):
+                    # Counter overflow, wait for next millisecond
+                    while now_ms <= last_physical:
+                        time.sleep(0.001)
+                        now_ms = int(time.time() * 1000)
                     self._counter = 0
-                    new_ts = (now_ms << 20) | self._counter
-                else:
-                    # Same millisecond, increment counter
-                    self._counter += 1
-                    if self._counter >= (1 << 20):
-                        # Counter overflow, wait for next millisecond
-                        while now_ms <= last_physical:
-                            time.sleep(0.001)
-                            now_ms = int(time.time() * 1000)
-                        self._counter = 0
-                    new_ts = (now_ms << 20) | self._counter
+                new_ts = (now_ms << 20) | self._counter
 
-                # Ensure it fits in SQLite's signed 64-bit integer
-                if new_ts >= 2**63:
-                    raise TimestampError("Timestamp too far in future")
+            # Ensure it fits in SQLite's signed 64-bit integer
+            if new_ts >= 2**63:
+                raise TimestampError("Timestamp too far in future")
 
-                # Update database with RETURNING to check success atomically
-                updated = self._runner.run(
-                    "UPDATE meta SET value = ? WHERE key = 'last_ts' AND value = ? RETURNING 1",
+            # Update database (must be in transaction)
+            try:
+                self._runner.run(
+                    "UPDATE meta SET value = ? WHERE key = 'last_ts' AND value = ?",
                     (new_ts, self._last_ts),
-                    fetch=True,
                 )
+            except IntegrityError:
+                raise IntegrityError("Timestamp update conflict") from None
 
-                if list(updated):
-                    # Success! We won the race
-                    self._last_ts = new_ts
-                    return new_ts
-
-                # Someone else won the race - reload the current value
-                result = self._runner.run(
-                    "SELECT value FROM meta WHERE key = 'last_ts'", fetch=True
-                )
-                result_list = list(result)
-                if result_list:
-                    self._last_ts = result_list[0][0]
-                    # Reset counter since we're loading external state
-                    self._counter = 0
-                    # Small backoff to reduce contention
-                    if retry < max_retries - 1:
-                        time.sleep(0.001 * (retry + 1))
-                    # Continue to next iteration
-                else:
-                    # This shouldn't happen - meta table should always have last_ts
-                    raise IntegrityError("Meta table missing last_ts entry")
-
-        # If we exhausted retries, something is seriously wrong
-        raise IntegrityError(
-            f"Failed to generate timestamp after {max_retries} retries"
-        )
+            self._last_ts = new_ts
+            return new_ts
 
     @staticmethod
     def validate(timestamp_str: str, exact: bool = False) -> int:
@@ -210,16 +209,7 @@ class TimestampGenerator:
                 if val < 0:
                     raise TimestampError("Invalid timestamp: cannot be negative")
 
-                if unit is None and len(timestamp_str) == TIMESTAMP_EXACT_NUM_DIGITS:
-                    # Might be a native hybrid timestamp
-                    if isinstance(val, float):
-                        raise TimestampError(
-                            "Invalid timestamp: native timestamps must be 19-digit integers"
-                        )
-                    if val >= 2**63:
-                        raise TimestampError("Invalid timestamp: exceeds maximum value")
-                    return val
-                elif unit == "s":
+                if unit == "s":
                     # Unix seconds
                     ms_since_epoch = int(val * 1000)
                 elif unit == "ms":

@@ -15,7 +15,7 @@ Typical usage:
     watcher.run_forever()  # blocking
 
     # Or run in background thread:
-    thread = watcher.run_async()
+    thread = watcher.run_in_thread()
     # ... do other work ...
     watcher.stop()
     thread.join()
@@ -223,7 +223,7 @@ class QueueWatcher:
         ----------
         db : Union[BrokerDB, str, Path]
             Either a BrokerDB instance or a path to the database file.
-            When using run_async(), it's recommended to pass a path to ensure
+            When using run_in_thread(), it's recommended to pass a path to ensure
             each thread creates its own connection. If a BrokerDB instance is
             provided, its path will be extracted for thread-safe operation.
         queue : str
@@ -489,7 +489,7 @@ class QueueWatcher:
         self._stop_event.set()
         self._strategy.notify_activity()  # Wake up wait_for_activity
 
-    def run_async(self) -> threading.Thread:
+    def run_in_thread(self) -> threading.Thread:
         """
         Start the watcher in a new background thread.
 
@@ -701,7 +701,8 @@ class QueueMoveWatcher(QueueWatcher):
         dest_queue: str,
         handler: Callable[[str, int], None],
         *,
-        poll_interval: float = 0.1,
+        initial_checks: int = 100,
+        max_interval: float = 0.1,
         error_handler: Optional[Callable[[Exception, str, int], Optional[bool]]] = None,
         stop_event: Optional[threading.Event] = None,
         max_messages: Optional[int] = None,
@@ -714,7 +715,8 @@ class QueueMoveWatcher(QueueWatcher):
             source_queue: Name of source queue to move messages from
             dest_queue: Name of destination queue to move messages to
             handler: Function called with (message_body, timestamp) for each moved message
-            poll_interval: Seconds between polls when queue is empty
+            initial_checks: Number of checks to perform with zero delay for burst handling
+            max_interval: Maximum polling interval in seconds (not a fixed interval)
             error_handler: Called when handler raises an exception
             stop_event: Event to signal watcher shutdown
             max_messages: Maximum messages to move before stopping
@@ -743,7 +745,8 @@ class QueueMoveWatcher(QueueWatcher):
             source_queue,  # Watch the source queue
             wrapped_handler,
             peek=True,  # Force peek mode
-            max_interval=poll_interval,
+            initial_checks=initial_checks,
+            max_interval=max_interval,
             error_handler=None,  # We'll handle errors ourselves
         )
 
@@ -773,12 +776,12 @@ class QueueMoveWatcher(QueueWatcher):
     def start(self) -> threading.Thread:
         """Start the move watcher in a background thread.
 
-        This is a convenience method that calls run_async().
+        This is a convenience method that calls run_in_thread().
 
         Returns:
             The thread running the watcher.
         """
-        return self.run_async()
+        return self.run_in_thread()
 
     def run(self) -> None:
         """Run the move watcher synchronously until max_messages or stop_event.

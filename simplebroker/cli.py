@@ -570,6 +570,10 @@ def main() -> int:
                     ):
                         return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
 
+                    # Check mutual exclusivity
+                    if since_str:
+                        parser.error("--message cannot be used with --since")
+
                 return commands.cmd_move(
                     db,
                     args.source_queue,

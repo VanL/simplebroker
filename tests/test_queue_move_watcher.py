@@ -93,7 +93,7 @@ class TestQueueMoveWatcher:
         )
 
         # Run move
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.3)  # Allow time for moves
 
         watcher.stop()
@@ -144,7 +144,7 @@ class TestQueueMoveWatcher:
             handler=tracking_handler,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.2)
 
         watcher.stop()
@@ -174,7 +174,7 @@ class TestQueueMoveWatcher:
             error_handler=collector.capture_error_handler,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.3)
 
         watcher.stop()
@@ -219,7 +219,7 @@ class TestQueueMoveWatcher:
             handler=capture_id_handler,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.2)
 
         watcher.stop()
@@ -250,10 +250,10 @@ class TestQueueMoveWatcher:
             broker=broker,
             source_queue="source",
             dest_queue="dest",
-            handler=lambda msg: None,
+            handler=lambda body, ts: None,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.2)
 
         watcher.stop()
@@ -275,11 +275,11 @@ class TestQueueMoveWatcher:
             source_queue="empty_source",
             dest_queue="dest",
             handler=collector.handler,
-            poll_interval=0.05,  # Faster polling for test
+            max_interval=0.05,  # Faster polling for test
         )
 
         # Start watcher on empty queue
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.1)  # Let it poll a few times
 
         # Add message while watcher is running
@@ -322,7 +322,7 @@ class TestQueueMoveWatcher:
         )
 
         # Start move
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.05)  # Let initial moves start
 
         # Add more messages while moving
@@ -374,7 +374,7 @@ class TestQueueMoveWatcher:
             handler=slow_handler,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
 
         # Wait for move to complete (handler called)
         move_completed.wait(timeout=1.0)
@@ -398,7 +398,7 @@ class TestQueueMoveWatcher:
                 broker=broker,
                 source_queue="same_queue",
                 dest_queue="same_queue",
-                handler=lambda msg: None,
+                handler=lambda body, ts: None,
             )
 
     def test_max_messages_limit(self, broker, temp_db):
@@ -445,11 +445,11 @@ class TestQueueMoveWatcher:
             broker=broker,
             source_queue="source",
             dest_queue="dest",
-            handler=lambda msg: None,
+            handler=lambda body, ts: None,
             stop_event=stop_event,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.1)  # Let some moves happen
 
         # Signal stop
@@ -467,7 +467,7 @@ class TestQueueMoveWatcher:
             broker=broker,
             source_queue="source_queue",
             dest_queue="dest_queue",
-            handler=lambda msg: None,
+            handler=lambda body, ts: None,
         )
 
         assert watcher.source_queue == "source_queue"
@@ -476,7 +476,7 @@ class TestQueueMoveWatcher:
 
         # Add and move a message
         broker.write("source_queue", "test")
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.1)
         watcher.stop()
         thread.join(timeout=2.0)
@@ -511,7 +511,7 @@ class TestQueueMoveWatcher:
             handler=capture_handler,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.1)
         watcher.stop()
         thread.join(timeout=2.0)
@@ -543,7 +543,7 @@ class TestQueueMoveWatcher:
             source_queue="source",
             dest_queue="dest",
             handler=count_handler,
-            poll_interval=0.001,  # Fast polling for performance test
+            max_interval=0.001,  # Fast polling for performance test
             max_messages=num_messages,  # Stop after moving all messages
         )
 
@@ -591,7 +591,7 @@ class TestQueueMoveWatcher:
             error_handler=error_handler,
         )
 
-        thread = watcher.run_async()
+        thread = watcher.run_in_thread()
         time.sleep(0.1)
         watcher.stop()
         thread.join(timeout=2.0)

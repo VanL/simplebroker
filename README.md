@@ -166,9 +166,9 @@ $ broker --cleanup
 **Best practice:** Heuristics are used to distinguish between different values for interactive use, but explicit suffixes (s/ms/ns) are recommended for clarity if referring to particular times. 
 
 ### Exit Codes
-- `0` - Success
-- `1` - General error
-- `2` - Queue empty or no matching messages
+- `0` - Success (returns 0 even when no messages match filters like `--since`)
+- `1` - General error (e.g., database access error, invalid arguments)
+- `2` - Queue empty or no matching messages (only when queue is actually empty or no messages match the criteria)
 
 **Note:** The `delete` command marks messages as "claimed" for performance. Use `--vacuum` to permanently remove them.
 
@@ -521,23 +521,37 @@ with Queue("tasks") as q:
     q.write("process order 123")
     message = q.read()  # Returns: "process order 123"
 
-# Watch with error handling
+# Safe peek-and-acknowledge pattern (recommended for critical data)
 def process_message(message: str, timestamp: int):
+    """Process message and acknowledge only on success."""
     logging.info(f"Processing: {message}")
+    
+    # Simulate processing that might fail
     if "error" in message:
         raise ValueError("Simulated processing failure")
+    
+    # If we get here, processing succeeded
+    # Now explicitly acknowledge by deleting the message
+    with Queue("tasks") as q:
+        q.delete(message_id=timestamp)
+    logging.info(f"Message {timestamp} acknowledged")
 
 def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
-    """Log error and move to dead-letter queue."""
+    """Log error and optionally move to dead-letter queue."""
     logging.error(f"Failed to process message {timestamp}: {exception}")
-    Queue("errors").write(f"{timestamp}:{message}:{exception}")
+    # Message remains in queue for retry since we're using peek=True
+    
+    # Optional: After N retries, move to dead-letter queue
+    # Queue("errors").write(f"{timestamp}:{message}:{exception}")
+    
     return True  # Continue watching
 
+# Use peek=True for safe mode - messages aren't removed until explicitly acknowledged
 watcher = QueueWatcher(
     queue=Queue("tasks"),
     handler=process_message,
     error_handler=handle_error,
-    peek=False  # False = consume messages, True = just observe
+    peek=True  # True = safe mode - just observe, don't consume
 )
 
 # Start watching (blocks until stopped)
@@ -545,6 +559,125 @@ try:
     watcher.watch()
 except KeyboardInterrupt:
     print("Watcher stopped by user")
+```
+
+### Thread-Based Background Processing
+
+Use `run_in_thread()` to run watchers in background threads:
+
+```python
+from pathlib import Path
+from simplebroker import QueueWatcher
+
+def handle_message(msg: str, ts: int):
+    print(f"Processing: {msg}")
+
+# Create watcher with database path (recommended for thread safety)
+watcher = QueueWatcher(
+    Path("my.db"),
+    "orders",
+    handle_message
+)
+
+# Start in background thread
+thread = watcher.run_in_thread()
+
+# Do other work...
+
+# Stop when done
+watcher.stop()
+thread.join()
+```
+
+### Async Integration Patterns
+
+SimpleBroker is synchronous by design for simplicity, but can be easily integrated with async applications. Here's how to build an async wrapper using only stdlib:
+
+```python
+import asyncio
+import concurrent.futures
+from simplebroker import BrokerDB
+
+class AsyncBroker:
+    """Minimal async wrapper using thread pool executor."""
+    
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._executor = concurrent.futures.ThreadPoolExecutor()
+        
+    async def push(self, queue: str, message: str) -> int:
+        """Push message asynchronously."""
+        loop = asyncio.get_event_loop()
+        with BrokerDB(self.db_path) as db:
+            return await loop.run_in_executor(
+                self._executor, 
+                db.push, 
+                queue, 
+                message
+            )
+    
+    async def pop(self, queue: str) -> str | None:
+        """Pop message asynchronously."""
+        loop = asyncio.get_event_loop()
+        with BrokerDB(self.db_path) as db:
+            return await loop.run_in_executor(
+                self._executor,
+                db.pop,
+                queue
+            )
+
+# Usage
+async def main():
+    broker = AsyncBroker("async.db")
+    
+    # Push messages concurrently
+    await asyncio.gather(
+        broker.push("tasks", "Task 1"),
+        broker.push("tasks", "Task 2"),
+        broker.push("tasks", "Task 3")
+    )
+    
+    # Pop messages
+    while msg := await broker.pop("tasks"):
+        print(f"Got: {msg}")
+```
+
+**Key async integration strategies:**
+
+1. **Thread Pool Executor**: Run SimpleBroker's sync methods in threads
+2. **One DB Connection Per Operation**: Create fresh connections for thread safety
+3. **Async Context Managers**: Manage lifecycle and cleanup
+4. **Streaming Generators**: For continuous message consumption
+
+See [`examples/async_wrapper.py`](examples/async_wrapper.py) for a complete async wrapper implementation including:
+- Async context manager for proper cleanup
+- Background watcher with asyncio coordination
+- Streaming message consumption
+- Concurrent queue operations
+
+### Custom Extensions
+
+SimpleBroker's simple design makes it easy to extend:
+
+```python
+from simplebroker import BrokerDB
+
+class PriorityQueue(BrokerDB):
+    """Example: Add priority support to queues."""
+    
+    def push_with_priority(self, queue: str, message: str, priority: int = 0):
+        """Push message with priority (higher = more important)."""
+        # Encode priority in message or use custom table
+        return self.push(f"{queue}:p{priority}", message)
+    
+    def pop_highest_priority(self, queue_prefix: str):
+        """Pop from highest priority queue first."""
+        # Check queues in priority order
+        for priority in range(9, -1, -1):
+            msg = self.pop(f"{queue_prefix}:p{priority}")
+            if msg:
+                return msg
+        return None
 ```
 
 See [`examples/`](examples/) directory for more patterns including async processing and custom runners.
