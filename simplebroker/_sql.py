@@ -4,6 +4,8 @@ This module contains all SQL statements used by SimpleBroker's database operatio
 These templates can be imported by both sync and async implementations.
 """
 
+from typing import List
+
 # ============================================================================
 # TABLE CREATION
 # ============================================================================
@@ -331,7 +333,7 @@ DROP_OLD_INDEXES = [
 # ============================================================================
 
 
-def build_peek_query(where_conditions: list[str]) -> str:
+def build_peek_query(where_conditions: List[str]) -> str:
     """Build SELECT query for peek operations with dynamic WHERE clause."""
     where_clause = " AND ".join(where_conditions)
     return f"""
@@ -342,7 +344,7 @@ def build_peek_query(where_conditions: list[str]) -> str:
         """
 
 
-def build_claim_single_query(where_conditions: list[str]) -> str:
+def build_claim_single_query(where_conditions: List[str]) -> str:
     """Build UPDATE query for claiming single message."""
     where_clause = " AND ".join(where_conditions)
     return f"""
@@ -358,7 +360,7 @@ def build_claim_single_query(where_conditions: list[str]) -> str:
         """
 
 
-def build_claim_batch_query(where_conditions: list[str]) -> str:
+def build_claim_batch_query(where_conditions: List[str]) -> str:
     """Build UPDATE query for claiming batch of messages."""
     where_clause = " AND ".join(where_conditions)
     return f"""
@@ -374,7 +376,7 @@ def build_claim_batch_query(where_conditions: list[str]) -> str:
         """
 
 
-def build_move_by_id_query(where_conditions: list[str]) -> str:
+def build_move_by_id_query(where_conditions: List[str]) -> str:
     """Build UPDATE query for moving message by ID."""
     where_clause = " AND ".join(where_conditions)
     return f"""
