@@ -8,6 +8,7 @@ import os
 import threading
 import time
 from datetime import datetime
+from typing import Tuple
 from typing import TYPE_CHECKING, Optional
 
 from ._exceptions import IntegrityError, TimestampError
@@ -67,7 +68,7 @@ class TimestampGenerator:
         """
         return (physical_ms << 20) | logical
 
-    def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
+    def _decode_hybrid_timestamp(self, ts: int) -> Tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
 
         Args:
