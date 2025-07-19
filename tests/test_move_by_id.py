@@ -17,13 +17,15 @@ def test_move_by_message_id():
             db.write("source", "msg2")
             db.write("source", "msg3")
 
-            # Get message IDs by peeking
+            # Get message IDs using _runner
             with db._lock:
-                cursor = db.conn.execute(
-                    "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
-                    ("source",),
+                messages = list(
+                    db._runner.run(
+                        "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
+                        ("source",),
+                        fetch=True,
+                    )
                 )
-                messages = cursor.fetchall()
 
             # Move the middle message (msg2) by ID
             msg2_id = messages[1][0]
@@ -68,12 +70,16 @@ def test_move_by_id_wrong_queue():
             # Add message to queue1
             db.write("queue1", "msg1")
 
-            # Get the message ID
+            # Get the message ID using _runner
             with db._lock:
-                cursor = db.conn.execute(
-                    "SELECT id FROM messages WHERE queue = ?", ("queue1",)
+                result = list(
+                    db._runner.run(
+                        "SELECT id FROM messages WHERE queue = ?",
+                        ("queue1",),
+                        fetch=True,
+                    )
                 )
-                msg_id = cursor.fetchone()[0]
+                msg_id = result[0][0]
 
             # Try to move from queue2 (wrong queue)
             result = db.move("queue2", "dest", message_id=msg_id)
@@ -97,13 +103,15 @@ def test_move_claimed_message_with_require_unclaimed():
             claimed = db.read("source")
             assert claimed == ["msg1"]
 
-            # Get message IDs
+            # Get message IDs using _runner
             with db._lock:
-                cursor = db.conn.execute(
-                    "SELECT id, body, claimed FROM messages WHERE queue = ? ORDER BY id",
-                    ("source",),
+                messages = list(
+                    db._runner.run(
+                        "SELECT id, body, claimed FROM messages WHERE queue = ? ORDER BY id",
+                        ("source",),
+                        fetch=True,
+                    )
                 )
-                messages = cursor.fetchall()
 
             # Try to move claimed message (msg1) with require_unclaimed=True (default)
             msg1_id = messages[0][0]
@@ -130,13 +138,16 @@ def test_move_claimed_message_without_require_unclaimed():
             claimed = db.read("source")
             assert claimed == ["msg1"]
 
-            # Get message ID of claimed message
+            # Get message ID of claimed message using _runner
             with db._lock:
-                cursor = db.conn.execute(
-                    "SELECT id FROM messages WHERE queue = ? AND body = ?",
-                    ("source", "msg1"),
+                result = list(
+                    db._runner.run(
+                        "SELECT id FROM messages WHERE queue = ? AND body = ?",
+                        ("source", "msg1"),
+                        fetch=True,
+                    )
                 )
-                msg1_id = cursor.fetchone()[0]
+                msg1_id = result[0][0]
 
             # Move claimed message with require_unclaimed=False
             result = db.move(
@@ -162,25 +173,32 @@ def test_move_by_id_preserves_timestamp():
         with BrokerDB(db_path) as db:
             db.write("source", "msg1")
 
-            # Get message ID and timestamp
+            # Get message ID and timestamp using _runner
             with db._lock:
-                cursor = db.conn.execute(
-                    "SELECT id, ts FROM messages WHERE queue = ?", ("source",)
+                result = list(
+                    db._runner.run(
+                        "SELECT id, ts FROM messages WHERE queue = ?",
+                        ("source",),
+                        fetch=True,
+                    )
                 )
-                msg_id, original_ts = cursor.fetchone()
+                msg_id, original_ts = result[0]
 
             # Move the message
             result = db.move("source", "dest", message_id=msg_id)
             assert result is not None
             assert result["ts"] == original_ts
 
-            # Verify timestamp is preserved in destination
+            # Verify timestamp is preserved in destination using _runner
             with db._lock:
-                cursor = db.conn.execute(
-                    "SELECT ts FROM messages WHERE queue = ? AND body = ?",
-                    ("dest", "msg1"),
+                result = list(
+                    db._runner.run(
+                        "SELECT ts FROM messages WHERE queue = ? AND body = ?",
+                        ("dest", "msg1"),
+                        fetch=True,
+                    )
                 )
-                dest_ts = cursor.fetchone()[0]
+                dest_ts = result[0][0]
 
             assert dest_ts == original_ts
 
@@ -195,13 +213,15 @@ def test_move_mixed_mode():
             for i in range(5):
                 db.write("source", f"msg{i}")
 
-            # Get message IDs
+            # Get message IDs using _runner
             with db._lock:
-                cursor = db.conn.execute(
-                    "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
-                    ("source",),
+                messages = list(
+                    db._runner.run(
+                        "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
+                        ("source",),
+                        fetch=True,
+                    )
                 )
-                messages = cursor.fetchall()
 
             # Move specific message by ID (msg2)
             msg2_id = messages[2][0]

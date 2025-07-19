@@ -32,8 +32,10 @@ UNIT_SUFFIX_TESTS = [
     ("1705329000.5s", "Unix float seconds with suffix", True),
     ("1705329000000ms", "Unix milliseconds with suffix", True),
     ("1705329000000000000ns", "Unix nanoseconds with suffix", True),
-    ("1837025672140161024hyb", "Native hybrid with suffix", True),
+    ("1837025672140161024", "Native hybrid", True),
+    ("1837025672140161024hyb", "Native hybrid with hyb suffix", False),
     ("1.5hyb", "Float hybrid timestamp", False),
+    ("1.532", "Float seconds", True),  # Should work - like time.time() output
     ("1e10s", "Scientific notation", False),
 ]
 

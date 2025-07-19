@@ -56,37 +56,39 @@ class DatabaseCorruptor:
     def corrupt_meta_timestamp(self, new_value: int = 0) -> None:
         """Set meta.last_ts to a specific value."""
         with self.db._lock:
-            self.db.conn.execute(
+            self.db._runner.run(
                 "UPDATE meta SET value = ? WHERE key = 'last_ts'", (new_value,)
             )
-            self.db.conn.commit()
+            self.db._runner.commit()
 
     def inject_future_message(self, queue: str, future_offset: int = 10000) -> None:
         """Insert a message with a timestamp in the future."""
         with self.db._lock:
             current_ts = self.db._generate_timestamp()
             future_ts = current_ts + future_offset
-            self.db.conn.execute(
+            self.db._runner.run(
                 "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
                 (queue, "Future message", future_ts),
             )
-            self.db.conn.commit()
+            self.db._runner.commit()
 
     def get_max_timestamp(self) -> int:
         """Get the maximum timestamp currently in messages table."""
         with self.db._lock:
-            cursor = self.db.conn.execute("SELECT MAX(ts) FROM messages")
-            result = cursor.fetchone()[0]
-            return result if result is not None else 0
+            result = list(
+                self.db._runner.run("SELECT MAX(ts) FROM messages", fetch=True)
+            )
+            return result[0][0] if result and result[0][0] is not None else 0
 
     def get_meta_timestamp(self) -> int:
         """Get the current meta.last_ts value."""
         with self.db._lock:
-            cursor = self.db.conn.execute(
-                "SELECT value FROM meta WHERE key = 'last_ts'"
+            result = list(
+                self.db._runner.run(
+                    "SELECT value FROM meta WHERE key = 'last_ts'", fetch=True
+                )
             )
-            result = cursor.fetchone()
-            return result[0] if result else 0
+            return result[0][0] if result else 0
 
 
 class ConflictSimulator:
@@ -106,7 +108,7 @@ class ConflictSimulator:
             # But reset meta to previous value, simulating another process
             # getting the same timestamp
             with self.db._lock:
-                self.db.conn.execute(
+                self.db._runner.run(
                     "UPDATE meta SET value = value - 1 WHERE key = 'last_ts'"
                 )
             return ts
@@ -136,10 +138,14 @@ def verify_timestamp_monotonicity(db: BrokerDB, queue: str) -> List[int]:
     timestamps = []
 
     with db._lock:
-        cursor = db.conn.execute(
-            "SELECT ts FROM messages WHERE queue = ? ORDER BY id", (queue,)
+        rows = list(
+            db._runner.run(
+                "SELECT ts FROM messages WHERE queue = ? ORDER BY id",
+                (queue,),
+                fetch=True,
+            )
         )
-        for row in cursor:
+        for row in rows:
             timestamps.append(row[0])
 
     # Verify monotonicity
@@ -156,10 +162,12 @@ def verify_timestamp_monotonicity(db: BrokerDB, queue: str) -> List[int]:
 def count_unique_timestamps(db: BrokerDB) -> tuple[int, int]:
     """Count total and unique timestamps in database."""
     with db._lock:
-        cursor = db.conn.execute("SELECT COUNT(*) FROM messages")
-        total = cursor.fetchone()[0]
+        result = list(db._runner.run("SELECT COUNT(*) FROM messages", fetch=True))
+        total = result[0][0]
 
-        cursor = db.conn.execute("SELECT COUNT(DISTINCT ts) FROM messages")
-        unique = cursor.fetchone()[0]
+        result = list(
+            db._runner.run("SELECT COUNT(DISTINCT ts) FROM messages", fetch=True)
+        )
+        unique = result[0][0]
 
     return total, unique

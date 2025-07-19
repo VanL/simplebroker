@@ -5,6 +5,25 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2025-07-19
+### Added
+- **New Python API** for programmatic queue operations:
+  - `Queue` class with context manager support for simplified message handling
+  - `QueueWatcher` and `QueueMoveWatcher` for real-time monitoring
+- **Extension system** for custom backends:
+  - `SQLRunner` protocol in `simplebroker.ext` for alternative database implementations
+  - `TimestampGenerator` exposed for consistent timestamp handling across extensions
+  - Example implementations included in new `examples/` directory
+- `move` command to transfer specific messages by ID between queues
+- Comprehensive examples directory with Python API usage and shell script patterns
+
+### Changed
+- **BREAKING**: Complete internal refactoring (CLI remains unchanged):
+  - Core logic split into `BrokerCore` (database-agnostic) and runner implementations
+
+### Technical
+- Maintains full backward compatibility for CLI usage
+
 ## [1.5.0] - 2025-07-12
 ### Changed
 - **BREAKING**: Renamed `purge` command to `delete` for consistency

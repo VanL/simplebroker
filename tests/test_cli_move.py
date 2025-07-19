@@ -176,7 +176,6 @@ class TestTimestampFormats:
             (f"{unix_seconds}s", "Unix seconds"),
             (f"{unix_millis}ms", "Unix milliseconds"),
             (f"{unix_nanos}ns", "Unix nanoseconds"),
-            (f"{middle_ts}hyb", "Native hybrid"),
         ]
 
         for ts_str, desc in test_cases:

@@ -7,7 +7,7 @@ from typing import List, NoReturn
 
 from . import __version__ as VERSION
 from . import commands
-from .commands import TIMESTAMP_EXACT_NUM_DIGITS
+from ._timestamp import TIMESTAMP_EXACT_NUM_DIGITS
 from .db import BrokerDB
 
 PROG_NAME = "simplebroker"

@@ -143,8 +143,10 @@ class PollingStrategy:
             if self._db is None:
                 return False
 
-            cursor = self._db.conn.execute("PRAGMA data_version")
-            version = cursor.fetchone()[0]
+            rows = list(self._db._runner.run("PRAGMA data_version", fetch=True))
+            if not rows:
+                return False
+            version = rows[0][0]
 
             if self._data_version is None:
                 self._data_version = version

@@ -490,10 +490,12 @@ class TestQueueMoveWatcher:
 
         # Read to get message details
         with broker._lock:
-            cursor = broker.conn.execute(
-                "SELECT id, body, ts FROM messages WHERE queue = ? LIMIT 1", ("source",)
+            result = broker._runner.run(
+                "SELECT id, body, ts FROM messages WHERE queue = ? LIMIT 1",
+                ("source",),
+                fetch=True,
             )
-            original_id, original_body, original_ts = cursor.fetchone()
+            original_id, original_body, original_ts = result[0]
 
         preserved_data = {}
 

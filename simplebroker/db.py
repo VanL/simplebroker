@@ -3,7 +3,6 @@
 import os
 import random
 import re
-import sqlite3
 import threading
 import time
 import warnings
@@ -20,6 +19,79 @@ from typing import (
     Tuple,
     TypeVar,
 )
+
+from ._exceptions import (
+    IntegrityError,
+    OperationalError,
+)
+from ._runner import SQLiteRunner, SQLRunner
+from ._sql import (
+    CHECK_CLAIMED_COLUMN as SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED,
+)
+from ._sql import (
+    CHECK_QUEUE_EXISTS as SQL_SELECT_EXISTS_MESSAGES_BY_QUEUE,
+)
+from ._sql import (
+    CHECK_TS_UNIQUE_CONSTRAINT as SQL_SELECT_MESSAGES_SQL,
+)
+from ._sql import (
+    CHECK_TS_UNIQUE_INDEX as SQL_SELECT_COUNT_MESSAGES_TS_UNIQUE,
+)
+from ._sql import (
+    CREATE_MESSAGES_TABLE as SQL_CREATE_TABLE_MESSAGES,
+)
+from ._sql import (
+    CREATE_META_TABLE as SQL_CREATE_TABLE_META,
+)
+from ._sql import (
+    CREATE_QUEUE_TS_ID_INDEX as SQL_CREATE_IDX_MESSAGES_QUEUE_TS_ID,
+)
+from ._sql import (
+    CREATE_TS_UNIQUE_INDEX as SQL_CREATE_IDX_MESSAGES_TS_UNIQUE,
+)
+from ._sql import (
+    CREATE_UNCLAIMED_INDEX as SQL_CREATE_IDX_MESSAGES_UNCLAIMED,
+)
+from ._sql import (
+    DELETE_ALL_MESSAGES as SQL_DELETE_ALL_MESSAGES,
+)
+from ._sql import (
+    DELETE_CLAIMED_BATCH as SQL_VACUUM_DELETE_BATCH,
+)
+from ._sql import (
+    DELETE_QUEUE_MESSAGES as SQL_DELETE_MESSAGES_BY_QUEUE,
+)
+from ._sql import (
+    DROP_OLD_INDEXES,
+)
+from ._sql import (
+    GET_DISTINCT_QUEUES as SQL_SELECT_DISTINCT_QUEUES,
+)
+from ._sql import (
+    GET_LAST_TS as SQL_SELECT_LAST_TS,
+)
+from ._sql import (
+    GET_MAX_MESSAGE_TS as SQL_SELECT_MAX_TS,
+)
+from ._sql import (
+    GET_QUEUE_STATS as SQL_SELECT_QUEUES_STATS,
+)
+from ._sql import (
+    GET_VACUUM_STATS as SQL_SELECT_STATS_CLAIMED_TOTAL,
+)
+from ._sql import (
+    INIT_LAST_TS as SQL_INSERT_META_LAST_TS,
+)
+from ._sql import (
+    INSERT_MESSAGE as SQL_INSERT_MESSAGE,
+)
+from ._sql import (
+    LIST_QUEUES_UNCLAIMED as SQL_SELECT_QUEUES_UNCLAIMED,
+)
+from ._sql import (
+    UPDATE_LAST_TS as SQL_UPDATE_META_LAST_TS,
+)
+from ._timestamp import TimestampGenerator
 
 # Type variable for generic return types
 T = TypeVar("T")
@@ -85,8 +157,12 @@ MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1  # 1,048,575
 READ_COMMIT_INTERVAL = int(os.environ.get("BROKER_READ_COMMIT_INTERVAL", "1"))
 
 
-class BrokerDB:
-    """Handles all database operations for SimpleBroker.
+class BrokerCore:
+    """Core database operations for SimpleBroker.
+
+    This is the extensible base class that uses SQLRunner for all database
+    operations. It provides all the core functionality of SimpleBroker
+    without being tied to a specific database implementation.
 
     This class is thread-safe and can be shared across multiple threads
     in the same process. All database operations are protected by a lock
@@ -94,14 +170,14 @@ class BrokerDB:
 
     Note: While thread-safe for shared instances, this class should not
     be pickled or passed between processes. Each process should create
-    its own BrokerDB instance.
+    its own BrokerCore instance.
     """
 
-    def __init__(self, db_path: str):
-        """Initialize database connection and create schema.
+    def __init__(self, runner: SQLRunner):
+        """Initialize with a SQL runner.
 
         Args:
-            db_path: Path to SQLite database file
+            runner: SQL runner instance for database operations
         """
         # Thread lock for protecting all database operations
         self._lock = threading.Lock()
@@ -109,116 +185,31 @@ class BrokerDB:
         # Store the process ID to detect fork()
         self._pid = os.getpid()
 
-        # Handle Path.resolve() edge cases on exotic filesystems
-        try:
-            self.db_path = Path(db_path).expanduser().resolve()
-        except (OSError, ValueError) as e:
-            # Fall back to using the path as-is if resolve() fails
-            self.db_path = Path(db_path).expanduser()
-            warnings.warn(
-                f"Could not resolve path {db_path}: {e}", RuntimeWarning, stacklevel=2
-            )
+        # SQL runner for all database operations
+        self._runner = runner
 
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Check if database already existed
-        existing_db = self.db_path.exists()
-
-        # Enable check_same_thread=False to allow sharing across threads
-        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        # Setup database (must be done before creating TimestampGenerator)
         self._setup_database()
         self._ensure_schema_v2()
         self._ensure_schema_v3()
 
-        # Set restrictive permissions if new database
-        if not existing_db:
-            try:
-                # Set file permissions to owner read/write only
-                # IMPORTANT WINDOWS LIMITATION:
-                # On Windows, chmod() only affects the read-only bit, not full POSIX permissions.
-                # The 0o600 permission translates to removing the read-only flag on Windows,
-                # while on Unix-like systems it properly sets owner-only read/write (rw-------).
-                # This is a fundamental Windows filesystem limitation, not a Python issue.
-                # The call is safe on all platforms and provides the best available security.
-                os.chmod(self.db_path, 0o600)
-            except OSError as e:
-                # Don't crash on permission issues, just warn
-                warnings.warn(
-                    f"Could not set file permissions on {self.db_path}: {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
+        # Timestamp generator (created after database setup so meta table exists)
+        self._timestamp_gen = TimestampGenerator(self._runner)
 
     def _setup_database(self) -> None:
         """Set up database with optimized settings and schema."""
-
-        # helper ------------------------------------------------------------
-        def _exec(sql: str, params: Optional[Tuple[Any, ...]] = None) -> sqlite3.Cursor:
-            return self._execute_with_retry(
-                lambda: self.conn.execute(sql, params or ())
-            )
-
-        # -------------------------------------------------------------------
-
         with self._lock:
-            # 1. busy_timeout first so it already protects the WAL switch
-            busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
-            _exec(f"PRAGMA busy_timeout={busy_timeout}")
-
-            # 2. Configure cache size (default 10MB)
-            cache_mb = int(os.environ.get("BROKER_CACHE_MB", "10"))
-            _exec(f"PRAGMA cache_size=-{cache_mb * 1000}")  # Negative value = KB
-
-            # 3. Configure synchronous mode (default FULL for safety)
-            # FULL: Safe against OS crashes and power loss
-            # NORMAL: Safe against app crashes, small risk on power loss (but faster)
-            # OFF: Fast but unsafe (not recommended)
-            sync_mode = os.environ.get("BROKER_SYNC_MODE", "FULL").upper()
-            if sync_mode in ["FULL", "NORMAL", "OFF"]:
-                _exec(f"PRAGMA synchronous={sync_mode}")
-            else:
-                warnings.warn(
-                    f"Invalid BROKER_SYNC_MODE '{sync_mode}', using FULL",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
-                _exec("PRAGMA synchronous=FULL")
-
-            # 4. SQLite version check (uses retry helper)
-            cursor = _exec("SELECT sqlite_version()")
-            version_str = cursor.fetchone()[0]
-            major, minor, patch = map(int, version_str.split("."))
-            if (major, minor) < (3, 35):
-                raise RuntimeError(
-                    f"SQLite version {version_str} is too old. "
-                    f"SimpleBroker requires SQLite 3.35.0 or later for RETURNING clause support."
-                )
-
-            # 5. Enable WAL - retry if DB is temporarily locked
-            cursor = _exec("PRAGMA journal_mode=WAL")
-            result = cursor.fetchone()
-            if result and result[0] != "wal":
-                raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
-
-            # 6. Remaining pragmas / schema setup - all via _exec
-            _exec("PRAGMA wal_autocheckpoint=1000")
-
             # Create table if it doesn't exist (using IF NOT EXISTS to handle race conditions)
-            _exec(
-                """
-                CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    queue TEXT NOT NULL,
-                    body TEXT NOT NULL,
-                    ts INTEGER NOT NULL UNIQUE,
-                    claimed INTEGER DEFAULT 0
-                )
-            """
+            self._execute_with_retry(
+                lambda: self._runner.run(SQL_CREATE_TABLE_MESSAGES)
             )
             # Drop redundant indexes if they exist (from older versions)
-            _exec("DROP INDEX IF EXISTS idx_messages_queue_ts")
-            _exec("DROP INDEX IF EXISTS idx_queue_id")
-            _exec("DROP INDEX IF EXISTS idx_queue_ts")  # Even older version
+            for drop_sql in DROP_OLD_INDEXES:
+                # Create a closure to capture the sql value
+                def drop_index(sql: str = drop_sql) -> Any:
+                    return self._runner.run(sql)
+
+                self._execute_with_retry(drop_index)
 
             # Create only the composite covering index
             # This single index serves all our query patterns efficiently:
@@ -226,62 +217,46 @@ class BrokerDB:
             # - WHERE queue = ? AND ts > ? (uses first two columns)
             # - WHERE queue = ? ORDER BY id (uses first column + sorts by id)
             # - WHERE queue = ? AND ts > ? ORDER BY id LIMIT ? (uses all three)
-            _exec(
-                """
-                CREATE INDEX IF NOT EXISTS idx_messages_queue_ts_id
-                ON messages(queue, ts, id)
-            """
+            self._execute_with_retry(
+                lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS_ID)
             )
 
             # Create partial index for unclaimed messages (only if claimed column exists)
-            cursor = _exec(
-                "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='claimed'"
-            )
-            if cursor.fetchone()[0] > 0:
-                _exec(
-                    """
-                    CREATE INDEX IF NOT EXISTS idx_messages_unclaimed
-                    ON messages(queue, claimed, id)
-                    WHERE claimed = 0
-                """
+            rows = self._execute_with_retry(
+                lambda: list(
+                    self._runner.run(SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True)
                 )
-            _exec(
-                """
-                CREATE TABLE IF NOT EXISTS meta (
-                    key TEXT PRIMARY KEY,
-                    value INTEGER NOT NULL
-                )
-            """
             )
-            _exec("INSERT OR IGNORE INTO meta (key, value) VALUES ('last_ts', 0)")
+            if rows and rows[0][0] > 0:
+                self._execute_with_retry(
+                    lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
+                )
+            self._execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_META))
+            self._execute_with_retry(lambda: self._runner.run(SQL_INSERT_META_LAST_TS))
 
             # final commit can also be retried
-            self._execute_with_retry(self.conn.commit)
+            self._execute_with_retry(self._runner.commit)
 
     def _ensure_schema_v2(self) -> None:
         """Migrate to schema with claimed column."""
         with self._lock:
             # Check if migration needed
-            cursor = self.conn.execute(
-                "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='claimed'"
+            rows = list(
+                self._runner.run(SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True)
             )
-            if cursor.fetchone()[0] > 0:
+            if rows and rows[0][0] > 0:
                 return  # Already migrated
 
             # Perform migration
             try:
-                self.conn.execute("BEGIN IMMEDIATE")
-                self.conn.execute(
+                self._runner.begin_immediate()
+                self._runner.run(
                     "ALTER TABLE messages ADD COLUMN claimed INTEGER DEFAULT 0"
                 )
-                self.conn.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_messages_unclaimed
-                    ON messages(queue, claimed, id)
-                    WHERE claimed = 0
-                """)
-                self.conn.commit()
+                self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
+                self._runner.commit()
             except Exception as e:
-                self.conn.rollback()
+                self._runner.rollback()
                 # If the error is because column already exists, that's fine
                 if "duplicate column name" not in str(e):
                     raise
@@ -290,32 +265,24 @@ class BrokerDB:
         """Add unique constraint to timestamp column."""
         with self._lock:
             # Check if unique constraint already exists
-            cursor = self.conn.execute("""
-                SELECT sql FROM sqlite_master
-                WHERE type='table' AND name='messages'
-            """)
-            result = cursor.fetchone()
-            if result and "ts INTEGER NOT NULL UNIQUE" in result[0]:
+            rows = list(self._runner.run(SQL_SELECT_MESSAGES_SQL, fetch=True))
+            if rows and rows[0][0] and "ts INTEGER NOT NULL UNIQUE" in rows[0][0]:
                 return  # Already has unique constraint
 
             # Check if unique index already exists
-            cursor = self.conn.execute("""
-                SELECT COUNT(*) FROM sqlite_master
-                WHERE type='index' AND name='idx_messages_ts_unique'
-            """)
-            if cursor.fetchone()[0] > 0:
+            rows = list(
+                self._runner.run(SQL_SELECT_COUNT_MESSAGES_TS_UNIQUE, fetch=True)
+            )
+            if rows and rows[0][0] > 0:
                 return  # Already has unique index
 
             # Create unique index on timestamp column
             try:
-                self.conn.execute("BEGIN IMMEDIATE")
-                self.conn.execute("""
-                    CREATE UNIQUE INDEX idx_messages_ts_unique
-                    ON messages(ts)
-                """)
-                self.conn.commit()
-            except sqlite3.IntegrityError as e:
-                self.conn.rollback()
+                self._runner.begin_immediate()
+                self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
+                self._runner.commit()
+            except IntegrityError as e:
+                self._runner.rollback()
                 if "UNIQUE constraint failed" in str(e):
                     raise RuntimeError(
                         "Cannot add unique constraint on timestamp column: "
@@ -324,7 +291,7 @@ class BrokerDB:
                     ) from e
                 raise
             except Exception as e:
-                self.conn.rollback()
+                self._runner.rollback()
                 # If the error is because index already exists, that's fine
                 if "already exists" not in str(e):
                     raise
@@ -357,26 +324,17 @@ class BrokerDB:
         if error:
             raise ValueError(error)
 
-    def _encode_hybrid_timestamp(self, physical_ms: int, logical: int) -> int:
-        """Encode physical time and logical counter into a 64-bit hybrid timestamp.
+    def _generate_timestamp(self) -> int:
+        """Generate a timestamp using the TimestampGenerator.
 
-        Args:
-            physical_ms: Physical time in milliseconds since epoch
-            logical: Logical counter value (0 to MAX_LOGICAL_COUNTER)
+        This is a compatibility method that delegates to the timestamp generator.
 
         Returns:
-            64-bit hybrid timestamp
-
-        Raises:
-            ValueError: If logical counter exceeds maximum value
+            64-bit hybrid timestamp that serves as both timestamp and unique message ID
         """
-        if logical > MAX_LOGICAL_COUNTER:
-            raise ValueError(
-                f"Logical counter {logical} exceeds maximum {MAX_LOGICAL_COUNTER}"
-            )
-
-        # Pack physical time in upper 44 bits and logical counter in lower 20 bits
-        return (physical_ms << LOGICAL_COUNTER_BITS) | logical
+        # Note: The timestamp generator handles its own locking and state management
+        # We don't need to hold self._lock here
+        return self._timestamp_gen.generate()
 
     def _decode_hybrid_timestamp(self, ts: int) -> Tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
@@ -387,87 +345,10 @@ class BrokerDB:
         Returns:
             Tuple of (physical_ms, logical_counter)
         """
-        # Extract physical time from upper 44 bits
-        physical_ms = ts >> LOGICAL_COUNTER_BITS
-        # Extract logical counter from lower 20 bits
-        logical = ts & MAX_LOGICAL_COUNTER
-        return physical_ms, logical
-
-    def _generate_timestamp(self) -> int:
-        """Generate a hybrid timestamp that is guaranteed to be monotonically increasing.
-
-        This method must be called within a transaction to ensure consistency.
-        Uses atomic UPDATE...RETURNING to prevent race conditions between processes.
-
-        The generated timestamp serves dual purposes:
-        1. As a timestamp for temporal ordering of messages
-        2. As a globally unique message identifier (enforced by UNIQUE constraint)
-
-        The algorithm:
-        1. Get current time in milliseconds
-        2. Atomically read and update the last timestamp in the meta table
-        3. Compute next timestamp based on current time and last timestamp:
-           - If current_time > last_physical: use current_time with counter=0
-           - If current_time == last_physical: use current_time with counter+1
-           - If current_time < last_physical (clock regression): use last_physical with counter+1
-           - If counter would overflow: advance physical time by 1ms and reset counter
-        4. Return the encoded hybrid timestamp
-
-        Returns:
-            64-bit hybrid timestamp that serves as both timestamp and unique message ID
-        """
-        # Get current time in milliseconds
-        current_ms = int(time.time() * 1000)
-
-        # We need to loop in case of concurrent updates
-        while True:
-            # Get the last timestamp
-            cursor = self.conn.execute("SELECT value FROM meta WHERE key = 'last_ts'")
-            result = cursor.fetchone()
-            last_ts = result[0] if result else 0
-
-            # Compute the next timestamp
-            if last_ts == 0:
-                # First message, use current time with counter 0
-                new_ts = self._encode_hybrid_timestamp(current_ms, 0)
-            else:
-                # Decode the last timestamp
-                last_physical_ms, last_logical = self._decode_hybrid_timestamp(last_ts)
-
-                if current_ms > last_physical_ms:
-                    # Clock has advanced, reset counter to 0
-                    new_ts = self._encode_hybrid_timestamp(current_ms, 0)
-                elif current_ms == last_physical_ms:
-                    # Same millisecond, increment counter
-                    new_logical = last_logical + 1
-                    if new_logical > MAX_LOGICAL_COUNTER:
-                        # Counter overflow, advance physical time
-                        new_ts = self._encode_hybrid_timestamp(current_ms + 1, 0)
-                    else:
-                        new_ts = self._encode_hybrid_timestamp(current_ms, new_logical)
-                else:
-                    # Clock regression detected, use last physical time and increment counter
-                    new_logical = last_logical + 1
-                    if new_logical > MAX_LOGICAL_COUNTER:
-                        # Counter overflow during clock regression, advance physical time
-                        new_ts = self._encode_hybrid_timestamp(last_physical_ms + 1, 0)
-                    else:
-                        new_ts = self._encode_hybrid_timestamp(
-                            last_physical_ms, new_logical
-                        )
-
-            # Try to atomically update the last timestamp
-            # This will only succeed if the value hasn't changed since we read it
-            cursor = self.conn.execute(
-                "UPDATE meta SET value = ? WHERE key = 'last_ts' AND value = ?",
-                (new_ts, last_ts),
-            )
-
-            if cursor.rowcount > 0:
-                # Success! We atomically reserved this timestamp
-                return new_ts
-
-            # Another process updated the timestamp, retry with the new value
+        # Extract physical time (upper 44 bits) and logical counter (lower 20 bits)
+        physical_ms = ts >> 20
+        logical_counter = ts & ((1 << 20) - 1)
+        return physical_ms, logical_counter
 
     def _execute_with_retry(
         self,
@@ -500,7 +381,7 @@ class BrokerDB:
         for attempt in range(max_retries):
             try:
                 return operation()
-            except sqlite3.OperationalError as e:
+            except OperationalError as e:
                 msg = str(e).lower()
                 if any(marker in msg for marker in locked_markers):
                     if attempt < max_retries - 1:
@@ -515,7 +396,7 @@ class BrokerDB:
         raise AssertionError("Unreachable code")
 
     def write(self, queue: str, message: str) -> None:
-        """Write a message to a queue with resilience against timestamp conflicts.
+        """Write a message to a queue with fast-path for normal cases.
 
         Args:
             queue: Name of the queue
@@ -523,69 +404,127 @@ class BrokerDB:
 
         Raises:
             ValueError: If queue name is invalid
-            RuntimeError: If called from a forked process or timestamp conflict
-                         cannot be resolved after retries
+            RuntimeError: If called from a forked process or extreme conditions
+                         prevent writing after all resilience measures
         """
         self._check_fork_safety()
         self._validate_queue_name(queue)
 
-        # Constants
-        MAX_TS_RETRIES = 3
-        RETRY_BACKOFF_BASE = 0.001  # 1ms
+        # Constants for fast-path retries
+        MAX_NORMAL_RETRIES = 5
+        FAST_BACKOFF_MS = 0.001  # 1ms
 
-        # Metrics initialization (if not exists)
+        # Fast path: handle normal concurrency efficiently
+        for attempt in range(MAX_NORMAL_RETRIES):
+            try:
+                self._do_write_with_ts_retry(queue, message)
+                return  # Success!
+
+            except IntegrityError as e:
+                if "UNIQUE constraint failed: messages.ts" not in str(e):
+                    raise  # Not a timestamp conflict, re-raise
+
+                # For the first few attempts, just retry quickly
+                # This handles 99.9% of normal concurrency cases
+                if attempt < MAX_NORMAL_RETRIES - 1:
+                    time.sleep(FAST_BACKOFF_MS * (attempt + 1))
+                    continue
+
+        # If we get here, something unusual is happening
+        # Fall back to the resilience mechanism for extreme cases
+        self._resilient_write(queue, message)
+
+    def _resilient_write(self, queue: str, message: str) -> None:
+        """Handle extreme cases like clock regression or database tampering.
+
+        This method is called only when normal concurrency handling fails,
+        indicating unusual conditions that require deeper investigation.
+
+        Args:
+            queue: Name of the queue
+            message: Message body to write
+
+        Raises:
+            RuntimeError: If write fails even after resilience measures
+        """
+        # Initialize metrics if needed
         if not hasattr(self, "_ts_conflict_count"):
             self._ts_conflict_count = 0
         if not hasattr(self, "_ts_resync_count"):
             self._ts_resync_count = 0
 
-        # Retry loop for timestamp conflicts
-        for attempt in range(MAX_TS_RETRIES):
+        self._ts_conflict_count += 1
+
+        # Log this as unusual
+        warnings.warn(
+            "Timestamp conflicts persisted beyond normal concurrency. "
+            "Checking for clock regression or database inconsistency.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+        # First, check for clock regression
+        with self._lock:
+            # Get current timestamp info
             try:
-                # Use existing _do_write logic wrapped in retry handler
-                self._do_write_with_ts_retry(queue, message)
-                return  # Success!
+                self._runner.begin_immediate()
 
-            except sqlite3.IntegrityError as e:
-                if "UNIQUE constraint failed: messages.ts" not in str(e):
-                    raise  # Not a timestamp conflict, re-raise
+                # Get the current max timestamp
+                rows = list(
+                    self._runner.run("SELECT MAX(ts) FROM messages", fetch=True)
+                )
+                max_ts = rows[0][0] if rows and rows[0][0] is not None else 0
 
-                # Track conflict for metrics
-                self._ts_conflict_count += 1
-
-                if attempt == 0:
-                    # First retry: Simple backoff (handles transient issues)
-                    # Log at debug level - this might be a transient race
-                    self._log_ts_conflict("transient", attempt)
-                    time.sleep(
-                        RETRY_BACKOFF_BASE + random.uniform(0, RETRY_BACKOFF_BASE)
+                # Check meta table too
+                rows = list(
+                    self._runner.run(
+                        "SELECT value FROM meta WHERE key = 'last_ts'", fetch=True
                     )
+                )
+                # meta_ts = rows[0][0] if rows else 0  # For debugging if needed
 
-                elif attempt == 1:
-                    # Second retry: Resynchronize state
-                    # Log at warning level - this indicates state inconsistency
-                    self._log_ts_conflict("resync_needed", attempt)
-                    self._resync_timestamp_generator()
-                    self._ts_resync_count += 1
-                    time.sleep(
-                        RETRY_BACKOFF_BASE * 2
-                        + random.uniform(0, RETRY_BACKOFF_BASE * 2)
-                    )
+                self._runner.rollback()
 
-                else:
-                    # Final failure: Exhausted all strategies
-                    # Log at error level - this should never happen
-                    self._log_ts_conflict("failed", attempt)
-                    raise RuntimeError(
-                        f"Failed to write message after {MAX_TS_RETRIES} attempts "
-                        f"including timestamp resynchronization. "
-                        f"Queue: {queue}, Conflicts: {self._ts_conflict_count}, "
-                        f"Resyncs: {self._ts_resync_count}. "
-                        f"This indicates a severe issue that should be reported."
-                    ) from e
+                # Decode to check physical time
+                if max_ts > 0:
+                    physical_ms = max_ts >> 20
+                    now_ms = int(time.time() * 1000)
 
-        # This should never be reached due to the return/raise logic above
-        raise AssertionError("Unreachable code in write retry loop")
+                    if now_ms < physical_ms - 1000:  # Clock is >1 second behind
+                        wait_time = (physical_ms - now_ms) / 1000 + 0.1
+                        warnings.warn(
+                            f"Clock regression detected! Clock: {now_ms}ms, "
+                            f"Last timestamp: {physical_ms}ms. "
+                            f"Waiting {wait_time:.1f}s for clock to catch up.",
+                            RuntimeWarning,
+                            stacklevel=3,
+                        )
+                        # Wait for clock to catch up
+                        time.sleep(wait_time)
+
+            except Exception:
+                # If we can't check, proceed anyway
+                pass
+
+        # Try resynchronization
+        self._resync_timestamp_generator()
+        self._ts_resync_count += 1
+
+        # Give the system a moment to settle
+        time.sleep(0.01)
+
+        # Final attempt with fresh state
+        try:
+            self._do_write_with_ts_retry(queue, message)
+        except IntegrityError as e:
+            # If it still fails, this is truly exceptional
+            raise RuntimeError(
+                f"Failed to write message after resynchronization. "
+                f"This may indicate database corruption or ongoing manual modification. "
+                f"Total conflicts: {self._ts_conflict_count}, "
+                f"Resyncs: {self._ts_resync_count}. "
+                f"Error: {e}"
+            ) from e
 
     def _do_write_with_ts_retry(self, queue: str, message: str) -> None:
         """Execute write within retry context. Separates retry logic from transaction logic."""
@@ -602,16 +541,16 @@ class BrokerDB:
     def _do_write_transaction(self, queue: str, message: str) -> None:
         """Core write transaction logic."""
         with self._lock:
-            self.conn.execute("BEGIN IMMEDIATE")
+            self._runner.begin_immediate()
             try:
                 timestamp = self._generate_timestamp()
-                self.conn.execute(
-                    "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
+                self._runner.run(
+                    SQL_INSERT_MESSAGE,
                     (queue, message, timestamp),
                 )
-                self.conn.commit()
+                self._runner.commit()
             except Exception:
-                self.conn.rollback()
+                self._runner.rollback()
                 raise
 
     def read(
@@ -717,12 +656,9 @@ class BrokerDB:
                         ORDER BY id
                         LIMIT ? OFFSET ?
                         """
-                    cursor = self.conn.execute(
-                        query,
-                        tuple(params + [batch_size, offset]),
+                    batch_messages = self._runner.run(
+                        query, tuple(params + [batch_size, offset]), fetch=True
                     )
-                    # Fetch all rows in this batch while lock is held
-                    batch_messages = list(cursor)
 
                 # Yield results without holding lock
                 if not batch_messages:
@@ -748,11 +684,8 @@ class BrokerDB:
                         # Acquire lock only for the claim operation
                         with self._lock:
                             # Use retry logic for BEGIN IMMEDIATE
-                            def _begin_transaction() -> None:
-                                self.conn.execute("BEGIN IMMEDIATE")
-
                             try:
-                                self._execute_with_retry(_begin_transaction)
+                                self._execute_with_retry(self._runner.begin_immediate)
                             except Exception:
                                 # If we can't even begin transaction, we're done
                                 break
@@ -769,27 +702,27 @@ class BrokerDB:
                                     )
                                     RETURNING body, ts
                                     """
-                                cursor = self.conn.execute(
-                                    query,
-                                    tuple(params),
+                                rows = self._runner.run(
+                                    query, tuple(params), fetch=True
                                 )
 
                                 # Fetch the message
-                                message = cursor.fetchone()
+                                rows_list = list(rows) if rows else []
+                                message = rows_list[0] if rows_list else None
 
                                 if not message:
-                                    self.conn.rollback()
+                                    self._runner.rollback()
                                     break
 
                                 # Commit IMMEDIATELY before yielding
                                 # This ensures exactly-once delivery semantics
-                                self.conn.commit()
+                                self._runner.commit()
 
                                 # Store message to yield after lock release
                                 batch_messages = [message]
                             except Exception:
                                 # On any error, rollback to preserve messages
-                                self.conn.rollback()
+                                self._runner.rollback()
                                 raise
 
                         # Lock is now released, yield message without holding it
@@ -801,11 +734,8 @@ class BrokerDB:
                         # First, claim the batch
                         with self._lock:
                             # Use retry logic for BEGIN IMMEDIATE
-                            def _begin_transaction() -> None:
-                                self.conn.execute("BEGIN IMMEDIATE")
-
                             try:
-                                self._execute_with_retry(_begin_transaction)
+                                self._execute_with_retry(self._runner.begin_immediate)
                             except Exception:
                                 # If we can't even begin transaction, we're done
                                 break
@@ -822,22 +752,18 @@ class BrokerDB:
                                     )
                                     RETURNING body, ts
                                     """
-                                cursor = self.conn.execute(
-                                    query,
-                                    tuple(params + [commit_interval]),
+                                batch_messages = self._runner.run(
+                                    query, tuple(params + [commit_interval]), fetch=True
                                 )
 
-                                # Fetch all messages in this batch
-                                batch_messages = list(cursor)
-
                                 if not batch_messages:
-                                    self.conn.rollback()
+                                    self._runner.rollback()
                                     break
 
                                 # DO NOT commit yet - keep transaction open
                             except Exception:
                                 # On any error, rollback to preserve messages
-                                self.conn.rollback()
+                                self._runner.rollback()
                                 raise
 
                         # Yield messages while transaction is still open but lock is released
@@ -849,10 +775,10 @@ class BrokerDB:
                         # This provides at-least-once delivery semantics
                         with self._lock:
                             try:
-                                self.conn.commit()
+                                self._runner.commit()
                             except Exception:
                                 # If commit fails, messages will be re-delivered
-                                self.conn.rollback()
+                                self._runner.rollback()
                                 raise
 
                     # If no messages were found, we're done
@@ -865,11 +791,8 @@ class BrokerDB:
                 # Acquire lock only for the claim operation
                 with self._lock:
                     # Use retry logic for BEGIN IMMEDIATE
-                    def _begin_transaction() -> None:
-                        self.conn.execute("BEGIN IMMEDIATE")
-
                     try:
-                        self._execute_with_retry(_begin_transaction)
+                        self._execute_with_retry(self._runner.begin_immediate)
                     except Exception:
                         # If we can't begin transaction, nothing to yield
                         return
@@ -886,23 +809,21 @@ class BrokerDB:
                             )
                             RETURNING body, ts
                             """
-                        cursor = self.conn.execute(
-                            query,
-                            tuple(params),
-                        )
+                        rows = self._runner.run(query, tuple(params), fetch=True)
 
                         # Fetch the message
-                        message = cursor.fetchone()
+                        rows_list = list(rows) if rows else []
+                        message = rows_list[0] if rows_list else None
 
                         if message:
                             # Commit IMMEDIATELY to mark message as claimed
                             # This ensures exactly-once delivery semantics
-                            self.conn.commit()
+                            self._runner.commit()
                         else:
-                            self.conn.rollback()
+                            self._runner.rollback()
                     except Exception:
                         # On any error, rollback to preserve message
-                        self.conn.rollback()
+                        self._runner.rollback()
                         raise
 
                 # Lock is now released, yield message without holding it
@@ -969,25 +890,19 @@ class BrokerDB:
         """
         with self._lock:
             try:
-                self.conn.execute("BEGIN IMMEDIATE")
+                self._runner.begin_immediate()
 
                 # Get current values for logging
-                cursor = self.conn.execute(
-                    "SELECT value FROM meta WHERE key = 'last_ts'"
-                )
-                result = cursor.fetchone()
-                old_last_ts = result[0] if result else 0
+                rows = list(self._runner.run(SQL_SELECT_LAST_TS, fetch=True))
+                old_last_ts = rows[0][0] if rows and rows[0][0] is not None else 0
 
-                cursor = self.conn.execute("SELECT MAX(ts) FROM messages")
-                result = cursor.fetchone()
-                max_msg_ts = result[0] if result else 0
+                rows = list(self._runner.run(SQL_SELECT_MAX_TS, fetch=True))
+                max_msg_ts = rows[0][0] if rows and rows[0][0] is not None else 0
 
                 # Only resync if actually inconsistent
                 if max_msg_ts > old_last_ts:
-                    self.conn.execute(
-                        "UPDATE meta SET value = ? WHERE key = 'last_ts'", (max_msg_ts,)
-                    )
-                    self.conn.commit()
+                    self._runner.run(SQL_UPDATE_META_LAST_TS, (max_msg_ts,))
+                    self._runner.commit()
 
                     # Decode timestamps for logging
                     old_physical, old_logical = self._decode_hybrid_timestamp(
@@ -1008,45 +923,13 @@ class BrokerDB:
                     )
                 else:
                     # State was actually consistent, just commit
-                    self.conn.commit()
+                    self._runner.commit()
 
             except Exception as e:
-                self.conn.rollback()
+                self._runner.rollback()
                 raise RuntimeError(
                     f"Failed to resynchronize timestamp generator: {e}"
                 ) from e
-
-    def _log_ts_conflict(self, conflict_type: str, attempt: int) -> None:
-        """Log timestamp conflict information for diagnostics.
-
-        Args:
-            conflict_type: Type of conflict (transient/resync_needed/failed)
-            attempt: Current retry attempt number
-        """
-        # Use warnings for now, can be replaced with proper logging
-        if conflict_type == "transient":
-            # Debug level - might be normal under extreme concurrency
-            if os.environ.get("BROKER_DEBUG"):
-                warnings.warn(
-                    f"Timestamp conflict detected (attempt {attempt + 1}), retrying...",
-                    RuntimeWarning,
-                    stacklevel=4,
-                )
-        elif conflict_type == "resync_needed":
-            # Warning level - indicates state inconsistency
-            warnings.warn(
-                f"Timestamp conflict persisted (attempt {attempt + 1}), "
-                f"resynchronizing state...",
-                RuntimeWarning,
-                stacklevel=4,
-            )
-        elif conflict_type == "failed":
-            # Error level - should never happen
-            warnings.warn(
-                f"Timestamp conflict unresolvable after {attempt + 1} attempts!",
-                RuntimeWarning,
-                stacklevel=4,
-            )
 
     def get_conflict_metrics(self) -> Dict[str, int]:
         """Get metrics about timestamp conflicts for monitoring.
@@ -1077,16 +960,7 @@ class BrokerDB:
 
         def _do_list() -> List[Tuple[str, int]]:
             with self._lock:
-                cursor = self.conn.execute(
-                    """
-                    SELECT queue, COUNT(*) as count
-                    FROM messages
-                    WHERE claimed = 0
-                    GROUP BY queue
-                    ORDER BY queue
-                """
-                )
-                return cursor.fetchall()
+                return list(self._runner.run(SQL_SELECT_QUEUES_UNCLAIMED, fetch=True))
 
         # Execute with retry logic
         return self._execute_with_retry(_do_list)
@@ -1104,18 +978,7 @@ class BrokerDB:
 
         def _do_stats() -> List[Tuple[str, int, int]]:
             with self._lock:
-                cursor = self.conn.execute(
-                    """
-                    SELECT
-                        queue,
-                        SUM(CASE WHEN claimed = 0 THEN 1 ELSE 0 END) as unclaimed,
-                        COUNT(*) as total
-                    FROM messages
-                    GROUP BY queue
-                    ORDER BY queue
-                """
-                )
-                return cursor.fetchall()
+                return list(self._runner.run(SQL_SELECT_QUEUES_STATS, fetch=True))
 
         # Execute with retry logic
         return self._execute_with_retry(_do_stats)
@@ -1138,11 +1001,11 @@ class BrokerDB:
             with self._lock:
                 if queue is None:
                     # Purge all messages
-                    self.conn.execute("DELETE FROM messages")
+                    self._runner.run(SQL_DELETE_ALL_MESSAGES)
                 else:
                     # Purge specific queue
-                    self.conn.execute("DELETE FROM messages WHERE queue = ?", (queue,))
-                self.conn.commit()
+                    self._runner.run(SQL_DELETE_MESSAGES_BY_QUEUE, (queue,))
+                self._runner.commit()
 
         # Execute with retry logic
         self._execute_with_retry(_do_delete)
@@ -1162,28 +1025,26 @@ class BrokerDB:
             with self._lock:
                 # Use BEGIN IMMEDIATE to ensure we see all committed changes and
                 # prevent other connections from writing during our transaction
-                self.conn.execute("BEGIN IMMEDIATE")
+                self._runner.begin_immediate()
                 try:
                     # Get all unique queues first
-                    cursor = self.conn.execute(
-                        "SELECT DISTINCT queue FROM messages ORDER BY queue"
-                    )
-                    queues = [row[0] for row in cursor.fetchall()]
+                    rows = self._runner.run(SQL_SELECT_DISTINCT_QUEUES, fetch=True)
+                    queues = [row[0] for row in rows]
 
                     # Insert message to each queue with unique timestamp
                     # Generate timestamps within the transaction for consistency
                     for queue in queues:
                         timestamp = self._generate_timestamp()
-                        self.conn.execute(
-                            "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
+                        self._runner.run(
+                            SQL_INSERT_MESSAGE,
                             (queue, message, timestamp),
                         )
 
                     # Commit the transaction
-                    self.conn.commit()
+                    self._runner.commit()
                 except Exception:
                     # Rollback on any error
-                    self.conn.rollback()
+                    self._runner.rollback()
                     raise
 
         # Execute with retry logic
@@ -1193,12 +1054,8 @@ class BrokerDB:
         """Check if vacuum needed (fast approximation)."""
         with self._lock:
             # Use a single table scan with conditional aggregation for better performance
-            stats = self.conn.execute("""
-                SELECT
-                    SUM(CASE WHEN claimed = 1 THEN 1 ELSE 0 END) as claimed,
-                    COUNT(*) as total
-                FROM messages
-            """).fetchone()
+            rows = list(self._runner.run(SQL_SELECT_STATS_CLAIMED_TOTAL, fetch=True))
+            stats = rows[0] if rows else (0, 0)
 
             claimed_count = stats[0] or 0  # Handle NULL case
             total_count = stats[1] or 0
@@ -1215,6 +1072,12 @@ class BrokerDB:
 
     def _vacuum_claimed_messages(self) -> None:
         """Delete claimed messages in batches."""
+        # Skip vacuum if no db_path available (extensible runners)
+        if not hasattr(self, "db_path"):
+            # For non-SQLite runners, vacuum is a no-op
+            # Custom runners are responsible for their own cleanup/vacuum mechanisms
+            return
+
         # Use file-based lock to prevent concurrent vacuums
         vacuum_lock_path = self.db_path.with_suffix(".vacuum.lock")
         lock_acquired = False
@@ -1249,34 +1112,7 @@ class BrokerDB:
                 os.write(lock_fd, f"{os.getpid()}\n".encode())
                 lock_acquired = True
 
-                batch_size = int(os.environ.get("BROKER_VACUUM_BATCH_SIZE", "1000"))
-
-                # Use separate transaction per batch
-                while True:
-                    with self._lock:
-                        self.conn.execute("BEGIN IMMEDIATE")
-                        try:
-                            # SQLite doesn't support DELETE with LIMIT, so we need to use a subquery
-                            result = self.conn.execute(
-                                """
-                                DELETE FROM messages
-                                WHERE id IN (
-                                    SELECT id FROM messages
-                                    WHERE claimed = 1
-                                    LIMIT ?
-                                )
-                            """,
-                                (batch_size,),
-                            )
-                            self.conn.commit()
-                            if result.rowcount == 0:
-                                break
-                        except Exception:
-                            self.conn.rollback()
-                            raise
-
-                    # Brief pause between batches to allow other operations
-                    time.sleep(0.001)
+                self._do_vacuum_without_lock()
             finally:
                 os.close(lock_fd)
         except FileExistsError:
@@ -1327,11 +1163,8 @@ class BrokerDB:
         def _do_move() -> Optional[Dict[str, Any]]:
             with self._lock:
                 # Use retry logic for BEGIN IMMEDIATE
-                def _begin_transaction() -> None:
-                    self.conn.execute("BEGIN IMMEDIATE")
-
                 try:
-                    self._execute_with_retry(_begin_transaction)
+                    self._execute_with_retry(self._runner.begin_immediate)
                 except Exception:
                     # If we can't begin transaction, return None
                     return None
@@ -1348,7 +1181,7 @@ class BrokerDB:
 
                         where_clause = " AND ".join(where_conditions)
 
-                        cursor = self.conn.execute(
+                        rows = self._runner.run(
                             f"""
                             UPDATE messages
                             SET queue = ?, claimed = 0
@@ -1356,12 +1189,13 @@ class BrokerDB:
                             RETURNING id, body, ts
                             """,
                             (dest_queue, *params),
+                            fetch=True,
                         )
                     else:
                         # Move oldest message (existing behavior)
                         # Always require unclaimed for bulk move
 
-                        cursor = self.conn.execute(
+                        rows = self._runner.run(
                             """
                             UPDATE messages
                             SET queue = ?, claimed = 0
@@ -1374,23 +1208,25 @@ class BrokerDB:
                             RETURNING id, body, ts
                             """,
                             (dest_queue, source_queue),
+                            fetch=True,
                         )
 
                     # Fetch the moved message
-                    message = cursor.fetchone()
+                    rows_list = list(rows) if rows else []
+                    message = rows_list[0] if rows_list else None
 
                     if message:
                         # Commit the transaction
-                        self.conn.commit()
+                        self._runner.commit()
                         # Return as dict with id, body, and ts
                         return {"id": message[0], "body": message[1], "ts": message[2]}
                     else:
                         # No message to move
-                        self.conn.rollback()
+                        self._runner.rollback()
                         return None
                 except Exception:
                     # On any error, rollback to preserve message
-                    self.conn.rollback()
+                    self._runner.rollback()
                     raise
 
         # Execute with retry logic
@@ -1431,11 +1267,8 @@ class BrokerDB:
         def _do_move_messages() -> List[Tuple[str, int]]:
             with self._lock:
                 # Use retry logic for BEGIN IMMEDIATE
-                def _begin_transaction() -> None:
-                    self.conn.execute("BEGIN IMMEDIATE")
-
                 try:
-                    self._execute_with_retry(_begin_transaction)
+                    self._execute_with_retry(self._runner.begin_immediate)
                 except Exception:
                     # If we can't begin transaction, return empty list
                     return []
@@ -1444,7 +1277,7 @@ class BrokerDB:
                     # Build the appropriate SQL based on parameters
                     if message_id is not None:
                         # Move specific message by timestamp
-                        cursor = self.conn.execute(
+                        rows = self._runner.run(
                             """
                             UPDATE messages
                             SET queue = ?, claimed = 0
@@ -1452,11 +1285,12 @@ class BrokerDB:
                             RETURNING body, ts
                             """,
                             (dest_queue, message_id, source_queue),
+                            fetch=True,
                         )
                     elif all_messages:
                         if since_timestamp is not None:
                             # Move all messages newer than timestamp
-                            cursor = self.conn.execute(
+                            rows = self._runner.run(
                                 """
                                 WITH to_move AS (
                                     SELECT id FROM messages
@@ -1469,10 +1303,11 @@ class BrokerDB:
                                 RETURNING body, ts, id
                                 """,
                                 (source_queue, since_timestamp, dest_queue),
+                                fetch=True,
                             )
                         else:
                             # Move all unclaimed messages
-                            cursor = self.conn.execute(
+                            rows = self._runner.run(
                                 """
                                 WITH to_move AS (
                                     SELECT id FROM messages
@@ -1485,11 +1320,12 @@ class BrokerDB:
                                 RETURNING body, ts, id
                                 """,
                                 (source_queue, dest_queue),
+                                fetch=True,
                             )
                     else:
                         # Move single oldest message (with optional since filter)
                         if since_timestamp is not None:
-                            cursor = self.conn.execute(
+                            rows = self._runner.run(
                                 """
                                 UPDATE messages
                                 SET queue = ?, claimed = 0
@@ -1502,9 +1338,10 @@ class BrokerDB:
                                 RETURNING body, ts
                                 """,
                                 (dest_queue, source_queue, since_timestamp),
+                                fetch=True,
                             )
                         else:
-                            cursor = self.conn.execute(
+                            rows = self._runner.run(
                                 """
                                 UPDATE messages
                                 SET queue = ?, claimed = 0
@@ -1517,17 +1354,19 @@ class BrokerDB:
                                 RETURNING body, ts
                                 """,
                                 (dest_queue, source_queue),
+                                fetch=True,
                             )
 
-                    # Fetch all moved messages
                     # For bulk moves, we need to sort by id to maintain FIFO order
                     # SQLite doesn't support ORDER BY in RETURNING clause
-                    rows = cursor.fetchall()
 
                     if all_messages and rows:
                         # Sort by id (third column) for bulk moves to ensure FIFO order
-                        if len(rows[0]) > 2:  # Has id column
-                            rows = sorted(rows, key=lambda x: x[2])
+                        rows_list = list(rows)
+                        if rows_list and len(rows_list[0]) > 2:  # Has id column
+                            rows = sorted(rows_list, key=lambda x: x[2])
+                        else:
+                            rows = rows_list
 
                     messages = []
                     for row in rows:
@@ -1535,16 +1374,16 @@ class BrokerDB:
 
                     if messages:
                         # Commit the transaction
-                        self.conn.commit()
+                        self._runner.commit()
                     else:
                         # No messages to move
-                        self.conn.rollback()
+                        self._runner.rollback()
 
                     return messages
 
                 except Exception:
                     # On any error, rollback to preserve messages
-                    self.conn.rollback()
+                    self._runner.rollback()
                     raise
 
         # Execute with retry logic
@@ -1568,21 +1407,45 @@ class BrokerDB:
 
         def _do_check() -> bool:
             with self._lock:
-                cursor = self.conn.execute(
-                    """
-                    SELECT EXISTS(
-                        SELECT 1 FROM messages
-                        WHERE queue = ?
-                        LIMIT 1
+                rows = list(
+                    self._runner.run(
+                        SQL_SELECT_EXISTS_MESSAGES_BY_QUEUE, (queue,), fetch=True
                     )
-                    """,
-                    (queue,),
                 )
-                result = cursor.fetchone()
-                return bool(result[0]) if result else False
+                return bool(rows[0][0]) if rows else False
 
         # Execute with retry logic
         return self._execute_with_retry(_do_check)
+
+    def _do_vacuum_without_lock(self) -> None:
+        """Perform the actual vacuum operation without file locking."""
+        batch_size = int(os.environ.get("BROKER_VACUUM_BATCH_SIZE", "1000"))
+
+        # Use separate transaction per batch
+        while True:
+            with self._lock:
+                self._runner.begin_immediate()
+                try:
+                    # First check if there are any claimed messages
+                    check_result = list(
+                        self._runner.run(
+                            "SELECT EXISTS(SELECT 1 FROM messages WHERE claimed = 1 LIMIT 1)",
+                            fetch=True,
+                        )
+                    )
+                    if not check_result or not check_result[0][0]:
+                        self._runner.rollback()
+                        break
+
+                    # SQLite doesn't support DELETE with LIMIT, so we need to use a subquery
+                    self._runner.run(SQL_VACUUM_DELETE_BATCH, (batch_size,))
+                    self._runner.commit()
+                except Exception:
+                    self._runner.rollback()
+                    raise
+
+            # Brief pause between batches to allow other operations
+            time.sleep(0.001)
 
     def vacuum(self) -> None:
         """Manually trigger vacuum of claimed messages.
@@ -1596,10 +1459,9 @@ class BrokerDB:
     def close(self) -> None:
         """Close the database connection."""
         with self._lock:
-            if hasattr(self, "conn") and self.conn:
-                self.conn.close()
+            self._runner.close()
 
-    def __enter__(self) -> "BrokerDB":
+    def __enter__(self) -> "BrokerCore":
         """Enter context manager."""
         return self
 
@@ -1607,6 +1469,102 @@ class BrokerDB:
         """Exit context manager and close connection."""
         self.close()
         return False
+
+    def __getstate__(self) -> None:
+        """Prevent pickling of BrokerCore instances.
+
+        Database connections and locks cannot be pickled/shared across processes.
+        Each process should create its own BrokerCore instance.
+        """
+        raise TypeError(
+            "BrokerCore instances cannot be pickled. "
+            "Create a new instance in each process."
+        )
+
+    def __setstate__(self, state: object) -> None:
+        """Prevent unpickling of BrokerCore instances."""
+        raise TypeError(
+            "BrokerCore instances cannot be unpickled. "
+            "Create a new instance in each process."
+        )
+
+    def __del__(self) -> None:
+        """Ensure database connection is closed on object destruction."""
+        try:
+            self.close()
+        except Exception:
+            # Ignore any errors during cleanup
+            pass
+
+
+class BrokerDB(BrokerCore):
+    """SQLite-based database implementation for SimpleBroker.
+
+    This class maintains backward compatibility while using the extensible
+    BrokerCore implementation. It creates a SQLiteRunner and manages the
+    database connection lifecycle.
+
+    This class is thread-safe and can be shared across multiple threads
+    in the same process. All database operations are protected by a lock
+    to prevent concurrent access issues.
+
+    Note: While thread-safe for shared instances, this class should not
+    be pickled or passed between processes. Each process should create
+    its own BrokerDB instance.
+    """
+
+    def __init__(self, db_path: str):
+        """Initialize database connection and create schema.
+
+        Args:
+            db_path: Path to SQLite database file
+        """
+        # Handle Path.resolve() edge cases on exotic filesystems
+        try:
+            self.db_path = Path(db_path).expanduser().resolve()
+        except (OSError, ValueError) as e:
+            # Fall back to using the path as-is if resolve() fails
+            self.db_path = Path(db_path).expanduser()
+            warnings.warn(
+                f"Could not resolve path {db_path}: {e}", RuntimeWarning, stacklevel=2
+            )
+
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Check if database already existed
+        existing_db = self.db_path.exists()
+
+        # Create SQLite runner
+        self._runner = SQLiteRunner(str(self.db_path))
+
+        # Store conn reference internally for compatibility
+        self._conn = self._runner._conn
+
+        # Initialize parent
+        super().__init__(self._runner)
+
+        # Set restrictive permissions if new database
+        if not existing_db:
+            try:
+                # Set file permissions to owner read/write only
+                # IMPORTANT WINDOWS LIMITATION:
+                # On Windows, chmod() only affects the read-only bit, not full POSIX permissions.
+                # The 0o600 permission translates to removing the read-only flag on Windows,
+                # while on Unix-like systems it properly sets owner-only read/write (rw-------).
+                # This is a fundamental Windows filesystem limitation, not a Python issue.
+                # The call is safe on all platforms and provides the best available security.
+                os.chmod(self.db_path, 0o600)
+            except OSError as e:
+                # Don't crash on permission issues, just warn
+                warnings.warn(
+                    f"Could not set file permissions on {self.db_path}: {e}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+
+    def __enter__(self) -> "BrokerDB":
+        """Enter context manager."""
+        return self
 
     def __getstate__(self) -> None:
         """Prevent pickling of BrokerDB instances.
@@ -1625,11 +1583,3 @@ class BrokerDB:
             "BrokerDB instances cannot be unpickled. "
             "Create a new instance in each process."
         )
-
-    def __del__(self) -> None:
-        """Ensure database connection is closed on object destruction."""
-        try:
-            self.close()
-        except Exception:
-            # Ignore any errors during cleanup
-            pass

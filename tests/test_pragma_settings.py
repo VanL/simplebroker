@@ -13,28 +13,30 @@ def test_default_pragma_settings(tmp_path):
 
     with BrokerDB(str(db_path)) as db:
         # Check cache size - default should be 10MB = 10000KB
-        cursor = db.conn.execute("PRAGMA cache_size")
-        cache_size = cursor.fetchone()[0]
+        result = db._runner.run("PRAGMA cache_size", fetch=True)
+        cache_size = result[0][0]
         assert cache_size == -10000  # Negative means KB
 
         # Check synchronous mode - default should be FULL (2)
-        cursor = db.conn.execute("PRAGMA synchronous")
-        sync_mode = cursor.fetchone()[0]
+        result = db._runner.run("PRAGMA synchronous", fetch=True)
+        sync_mode = result[0][0]
         assert sync_mode == 2  # FULL = 2
 
         # Check that composite index exists
-        cursor = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'"
+        result = db._runner.run(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'",
+            fetch=True,
         )
-        assert cursor.fetchone() is not None
+        assert len(result) > 0
 
         # Check that old indexes don't exist
         for old_index in ["idx_messages_queue_ts", "idx_queue_id", "idx_queue_ts"]:
-            cursor = db.conn.execute(
+            result = db._runner.run(
                 "SELECT name FROM sqlite_master WHERE type='index' AND name=?",
                 (old_index,),
+                fetch=True,
             )
-            assert cursor.fetchone() is None
+            assert len(result) == 0
 
 
 def test_custom_cache_size(tmp_path, monkeypatch):
@@ -43,8 +45,8 @@ def test_custom_cache_size(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path)) as db:
-        cursor = db.conn.execute("PRAGMA cache_size")
-        cache_size = cursor.fetchone()[0]
+        result = db._runner.run("PRAGMA cache_size", fetch=True)
+        cache_size = result[0][0]
         assert cache_size == -25000  # 25MB = 25000KB
 
 
@@ -54,8 +56,8 @@ def test_custom_sync_mode_normal(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path)) as db:
-        cursor = db.conn.execute("PRAGMA synchronous")
-        sync_mode = cursor.fetchone()[0]
+        result = db._runner.run("PRAGMA synchronous", fetch=True)
+        sync_mode = result[0][0]
         assert sync_mode == 1  # NORMAL = 1
 
 
@@ -65,8 +67,8 @@ def test_custom_sync_mode_off(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path)) as db:
-        cursor = db.conn.execute("PRAGMA synchronous")
-        sync_mode = cursor.fetchone()[0]
+        result = db._runner.run("PRAGMA synchronous", fetch=True)
+        sync_mode = result[0][0]
         assert sync_mode == 0  # OFF = 0
 
 
@@ -77,8 +79,8 @@ def test_invalid_sync_mode_defaults_to_full(tmp_path, monkeypatch):
 
     with pytest.warns(RuntimeWarning, match="Invalid BROKER_SYNC_MODE 'INVALID'"):
         with BrokerDB(str(db_path)) as db:
-            cursor = db.conn.execute("PRAGMA synchronous")
-            sync_mode = cursor.fetchone()[0]
+            result = db._runner.run("PRAGMA synchronous", fetch=True)
+            sync_mode = result[0][0]
             assert sync_mode == 2  # FULL = 2
 
 
@@ -88,8 +90,8 @@ def test_sync_mode_case_insensitive(tmp_path, monkeypatch):
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path)) as db:
-        cursor = db.conn.execute("PRAGMA synchronous")
-        sync_mode = cursor.fetchone()[0]
+        result = db._runner.run("PRAGMA synchronous", fetch=True)
+        sync_mode = result[0][0]
         assert sync_mode == 1  # NORMAL = 1
 
 
@@ -141,13 +143,15 @@ def test_index_migration_from_old_database(tmp_path):
     # Now open with BrokerDB - should remove old indexes and create new one
     with BrokerDB(str(db_path)) as db:
         # Check that old indexes are gone
-        cursor = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_queue_ts', 'idx_queue_id')"
+        result = db._runner.run(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_queue_ts', 'idx_queue_id')",
+            fetch=True,
         )
-        assert cursor.fetchone() is None
+        assert len(result) == 0
 
         # Check that new composite index exists
-        cursor = db.conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'"
+        result = db._runner.run(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'",
+            fetch=True,
         )
-        assert cursor.fetchone() is not None
+        assert len(result) > 0

@@ -18,11 +18,11 @@ def test_move_with_concurrent_operations():
 
             # Get message IDs
             with db._lock:
-                cursor = db.conn.execute(
+                messages = db._runner.run(
                     "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
                     ("source",),
+                    fetch=True,
                 )
-                messages = cursor.fetchall()
 
             # Move specific messages by ID
             # Move msg3, msg5, msg7 to dest
@@ -65,11 +65,12 @@ def test_move_claimed_message_workflow():
 
             # Get ID of the failed job
             with db._lock:
-                cursor = db.conn.execute(
+                rows = db._runner.run(
                     "SELECT id FROM messages WHERE queue = ? AND body = ? AND claimed = 1",
                     ("processing", "job2"),
+                    fetch=True,
                 )
-                job2_id = cursor.fetchone()[0]
+                job2_id = rows[0][0]
 
             # Move the failed job to error queue (allowing claimed messages)
             result = db.move(
@@ -103,11 +104,11 @@ def test_move_maintains_fifo_within_queues():
 
             # Get message IDs from queue1
             with db._lock:
-                cursor = db.conn.execute(
+                q1_messages = db._runner.run(
                     "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
                     ("queue1",),
+                    fetch=True,
                 )
-                q1_messages = cursor.fetchall()
 
             # Move q1-msg1 and q1-msg3 to queue2
             for idx in [1, 3]:
