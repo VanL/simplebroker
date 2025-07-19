@@ -12,6 +12,7 @@ import warnings
 from typing import Any, Iterable, Protocol, Tuple, cast
 
 from ._exceptions import DataError, IntegrityError, OperationalError
+from .helpers import _execute_with_retry
 
 
 class SQLRunner(Protocol):
@@ -104,7 +105,7 @@ class SQLiteRunner:
             self._thread_local.conn = sqlite3.connect(
                 self._db_path, isolation_level=None
             )
-            self._setup_connection(self._thread_local.conn)
+            _execute_with_retry(lambda: self._setup_connection(self._thread_local.conn))
 
         return cast(sqlite3.Connection, self._thread_local.conn)
 

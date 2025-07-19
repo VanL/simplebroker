@@ -95,6 +95,7 @@ from ._sql import (
     UPDATE_LAST_TS as SQL_UPDATE_META_LAST_TS,
 )
 from ._timestamp import TimestampGenerator
+from .helpers import _execute_with_retry
 
 # Type variable for generic return types
 T = TypeVar("T")
@@ -217,16 +218,14 @@ class BrokerCore:
         """Set up database with optimized settings and schema."""
         with self._lock:
             # Create table if it doesn't exist (using IF NOT EXISTS to handle race conditions)
-            self._execute_with_retry(
-                lambda: self._runner.run(SQL_CREATE_TABLE_MESSAGES)
-            )
+            _execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_MESSAGES))
             # Drop redundant indexes if they exist (from older versions)
             for drop_sql in DROP_OLD_INDEXES:
                 # Create a closure to capture the sql value
                 def drop_index(sql: str = drop_sql) -> Any:
                     return self._runner.run(sql)
 
-                self._execute_with_retry(drop_index)
+                _execute_with_retry(drop_index)
 
             # Create only the composite covering index
             # This single index serves all our query patterns efficiently:
@@ -234,31 +233,31 @@ class BrokerCore:
             # - WHERE queue = ? AND ts > ? (uses first two columns)
             # - WHERE queue = ? ORDER BY id (uses first column + sorts by id)
             # - WHERE queue = ? AND ts > ? ORDER BY id LIMIT ? (uses all three)
-            self._execute_with_retry(
+            _execute_with_retry(
                 lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS_ID)
             )
 
             # Create partial index for unclaimed messages (only if claimed column exists)
-            rows = self._execute_with_retry(
+            rows = _execute_with_retry(
                 lambda: list(
                     self._runner.run(SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True)
                 )
             )
             if rows and rows[0][0] > 0:
-                self._execute_with_retry(
+                _execute_with_retry(
                     lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
                 )
-            self._execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_META))
-            self._execute_with_retry(lambda: self._runner.run(SQL_INSERT_META_LAST_TS))
+            _execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_META))
+            _execute_with_retry(lambda: self._runner.run(SQL_INSERT_META_LAST_TS))
 
             # Insert magic string and schema version if not exists
-            self._execute_with_retry(
+            _execute_with_retry(
                 lambda: self._runner.run(
                     "INSERT OR IGNORE INTO meta (key, value) VALUES ('magic', ?)",
                     (SIMPLEBROKER_MAGIC,),
                 )
             )
-            self._execute_with_retry(
+            _execute_with_retry(
                 lambda: self._runner.run(
                     "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
                     (SCHEMA_VERSION,),
@@ -266,7 +265,7 @@ class BrokerCore:
             )
 
             # final commit can also be retried
-            self._execute_with_retry(self._runner.commit)
+            _execute_with_retry(self._runner.commit)
 
     def _verify_database_magic(self) -> None:
         """Verify database magic string and schema version for existing databases."""
@@ -585,7 +584,7 @@ class BrokerCore:
         timestamp = self._generate_timestamp()
 
         # Use existing _execute_with_retry for database lock handling
-        self._execute_with_retry(
+        _execute_with_retry(
             lambda: self._do_write_transaction(queue, message, timestamp)
         )
 
@@ -737,7 +736,7 @@ class BrokerCore:
                         with self._lock:
                             # Use retry logic for BEGIN IMMEDIATE
                             try:
-                                self._execute_with_retry(self._runner.begin_immediate)
+                                _execute_with_retry(self._runner.begin_immediate)
                             except Exception:
                                 # If we can't even begin transaction, we're done
                                 break
@@ -777,7 +776,7 @@ class BrokerCore:
                         with self._lock:
                             # Use retry logic for BEGIN IMMEDIATE
                             try:
-                                self._execute_with_retry(self._runner.begin_immediate)
+                                _execute_with_retry(self._runner.begin_immediate)
                             except Exception:
                                 # If we can't even begin transaction, we're done
                                 break
@@ -824,7 +823,7 @@ class BrokerCore:
                 with self._lock:
                     # Use retry logic for BEGIN IMMEDIATE
                     try:
-                        self._execute_with_retry(self._runner.begin_immediate)
+                        _execute_with_retry(self._runner.begin_immediate)
                     except Exception:
                         # If we can't begin transaction, nothing to yield
                         return
@@ -985,7 +984,7 @@ class BrokerCore:
                 return list(self._runner.run(SQL_SELECT_QUEUES_UNCLAIMED, fetch=True))
 
         # Execute with retry logic
-        return self._execute_with_retry(_do_list)
+        return _execute_with_retry(_do_list)
 
     def get_queue_stats(self) -> List[Tuple[str, int, int]]:
         """Get all queues with both unclaimed and total message counts.
@@ -1003,7 +1002,7 @@ class BrokerCore:
                 return list(self._runner.run(SQL_SELECT_QUEUES_STATS, fetch=True))
 
         # Execute with retry logic
-        return self._execute_with_retry(_do_stats)
+        return _execute_with_retry(_do_stats)
 
     def delete(self, queue: Optional[str] = None) -> None:
         """Delete messages from queue(s).
@@ -1030,7 +1029,7 @@ class BrokerCore:
                 self._runner.commit()
 
         # Execute with retry logic
-        self._execute_with_retry(_do_delete)
+        _execute_with_retry(_do_delete)
 
     def broadcast(self, message: str) -> None:
         """Broadcast a message to all existing queues atomically.
@@ -1075,7 +1074,7 @@ class BrokerCore:
                     raise
 
         # Execute with retry logic
-        self._execute_with_retry(_do_broadcast)
+        _execute_with_retry(_do_broadcast)
 
     def _should_vacuum(self) -> bool:
         """Check if vacuum needed (fast approximation)."""
@@ -1191,7 +1190,7 @@ class BrokerCore:
             with self._lock:
                 # Use retry logic for BEGIN IMMEDIATE
                 try:
-                    self._execute_with_retry(self._runner.begin_immediate)
+                    _execute_with_retry(self._runner.begin_immediate)
                 except Exception:
                     # If we can't begin transaction, return None
                     return None
@@ -1250,7 +1249,7 @@ class BrokerCore:
                     raise
 
         # Execute with retry logic
-        return self._execute_with_retry(_do_move)
+        return _execute_with_retry(_do_move)
 
     def move_messages(
         self,
@@ -1288,7 +1287,7 @@ class BrokerCore:
             with self._lock:
                 # Use retry logic for BEGIN IMMEDIATE
                 try:
-                    self._execute_with_retry(self._runner.begin_immediate)
+                    _execute_with_retry(self._runner.begin_immediate)
                 except Exception:
                     # If we can't begin transaction, return empty list
                     return []
@@ -1407,7 +1406,7 @@ class BrokerCore:
                     raise
 
         # Execute with retry logic
-        return self._execute_with_retry(_do_move_messages)
+        return _execute_with_retry(_do_move_messages)
 
     def queue_exists_and_has_messages(self, queue: str) -> bool:
         """Check if a queue exists and has messages.
@@ -1435,7 +1434,7 @@ class BrokerCore:
                 return bool(rows[0][0]) if rows else False
 
         # Execute with retry logic
-        return self._execute_with_retry(_do_check)
+        return _execute_with_retry(_do_check)
 
     def _do_vacuum_without_lock(self) -> None:
         """Perform the actual vacuum operation without file locking."""
