@@ -8,8 +8,7 @@ import os
 import threading
 import time
 from datetime import datetime
-from typing import Tuple
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from ._exceptions import IntegrityError, TimestampError
 
