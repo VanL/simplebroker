@@ -22,7 +22,7 @@ SimpleBroker is a zero-configuration message queue that runs anywhere Python run
   - [Commands](#commands)
   - [Command Options](#command-options)
   - [Exit Codes](#exit-codes)
-- [⚠️ Critical Safety Notes](#️-critical-safety-notes)
+- [Critical Safety Notes](#️-critical-safety-notes)
   - [Potential Data Loss with `watch`](#potential-data-loss-with-watch)
   - [Safe Message Handling](#safe-message-handling)
 - [Core Concepts](#core-concepts)
@@ -172,15 +172,21 @@ $ broker --cleanup
 
 **Note:** The `delete` command marks messages as "claimed" for performance. Use `--vacuum` to permanently remove them.
 
-## ⚠️ Critical Safety Notes
+## Critical Safety Notes
 
-### Potential Data Loss with `watch`
+### Safe Message Handling
 
-When using `watch` in its default consuming mode, messages are **permanently removed** from the queue *before* your script or handler processes them. If your script fails or crashes, **the message is lost forever**.
+Messages can contain any characters including newlines, control characters, and shell metacharacters:
+- **Shell injection risks** - When piping output to shell commands, malicious message content could execute unintended commands
+- **Special characters** - Messages containing newlines or other special characters can break shell pipelines that expect single-line output
+- **Queue names** - Limited to alphanumeric + underscore/hyphen/period (cannot start with hyphen or period)
+- **Message size** - Limited to 10MB
 
-**For critical data, you MUST use a safe processing pattern.**
+**Always use `--json` for safe handling** - see examples below.
 
-**Recommended Safe Watch Pattern (Peek and Acknowledge):**
+### Robust message handling with `watch`
+
+When using `watch` in its default consuming mode, messages are **permanently removed** from the queue *before* your script or handler processes them. If your script fails or crashes, **the message is lost**. For critical data, you must use a safe processing pattern (move or peek-then-delete) that ensures that your data is not removed until you can acknowledge receipt. Example:
 
 ```bash
 #!/bin/bash
@@ -202,16 +208,6 @@ broker watch tasks --peek --json | while IFS= read -r line; do
     fi
 done
 ```
-
-### Safe Message Handling
-
-Messages can contain any characters including newlines, control characters, and shell metacharacters:
-- **Shell injection risks** - When piping output to shell commands, malicious message content could execute unintended commands
-- **Special characters** - Messages containing newlines or other special characters can break shell pipelines that expect single-line output
-- **Queue names** - Limited to alphanumeric + underscore/hyphen/period (cannot start with hyphen or period)
-- **Message size** - Limited to 10MB
-
-**Always use `--json` for safe handling** - see examples below.
 
 ## Core Concepts
 
