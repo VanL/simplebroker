@@ -22,7 +22,7 @@ SimpleBroker is a zero-configuration message queue that runs anywhere Python run
   - [Commands](#commands)
   - [Command Options](#command-options)
   - [Exit Codes](#exit-codes)
-- [⚠️ Critical Safety Notes](#️-critical-safety-notes)
+- [Critical Safety Notes](#️-critical-safety-notes)
   - [Potential Data Loss with `watch`](#potential-data-loss-with-watch)
   - [Safe Message Handling](#safe-message-handling)
 - [Core Concepts](#core-concepts)
@@ -172,7 +172,7 @@ $ broker --cleanup
 
 **Note:** The `delete` command marks messages as "claimed" for performance. Use `--vacuum` to permanently remove them.
 
-## ⚠️ Critical Safety Notes
+## Critical Safety Notes
 
 ### Potential Data Loss with `watch`
 
