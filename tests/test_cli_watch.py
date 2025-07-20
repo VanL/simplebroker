@@ -105,7 +105,7 @@ class TestWatchCommand:
         try:
             # Should immediately output the message
             # Give it a moment to process
-            time.sleep(0.5)
+            time.sleep(1.0)
 
             # Terminate the process and read output
             proc.terminate()
@@ -178,9 +178,14 @@ class TestWatchCommand:
                 f"stdout: {stdout!r}, stderr: {stderr!r}"
             )
 
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            pytest.fail("Watch command did not exit after SIGINT")
+        finally:
+            # Always clean up the process
+            if proc.poll() is None:  # Check if process is still running
+                proc.kill()
+                try:
+                    proc.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass  # Process is being killed, ignore timeout
 
     def test_watch_peek_mode(self, workdir):
         """Test watch in peek mode doesn't consume messages."""
@@ -255,7 +260,7 @@ class TestWatchCommand:
             import json
 
             # Give the process time to output the message
-            time.sleep(0.5)
+            time.sleep(1.0)
 
             # Terminate and collect output
             proc.terminate()
@@ -337,14 +342,14 @@ class TestWatchCommand:
             import json
 
             # Give the process time to start and output initial message
-            time.sleep(0.5)
+            time.sleep(1.0)
 
             # Write another message to trigger more output
             rc, _, _ = run_cli("write", "timestamptest", "trigger message", cwd=workdir)
             assert rc == 0
 
             # Give time for processing
-            time.sleep(0.5)
+            time.sleep(1.0)
 
             # Terminate the process and collect all output
             proc.terminate()
@@ -434,16 +439,21 @@ class TestWatchCommand:
                 time.sleep(0.1)
 
             # Give time to process
-            time.sleep(0.5)
+            time.sleep(1.0)
 
             # Terminate watcher
             proc.terminate()
-            stdout, stderr = proc.communicate()
+            stdout, stderr = proc.communicate(timeout=2)  # Add timeout
 
             # Should have received all messages
             for msg in messages:
                 assert msg in stdout
 
-        except Exception:
-            proc.kill()
-            raise
+        finally:
+            # Always clean up the process
+            if proc.poll() is None:  # Check if process is still running
+                proc.kill()
+                try:
+                    proc.communicate(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass  # Process is being killed, ignore timeout

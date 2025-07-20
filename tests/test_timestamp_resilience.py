@@ -313,6 +313,13 @@ def test_metrics_can_be_reset(workdir):
 
 def test_concurrent_writes_simple(workdir):
     """Simple test of concurrent writes without complex multiprocessing."""
+    import warnings
+
+    # Filter out the timestamp conflict warning which is expected in this test
+    warnings.filterwarnings(
+        "ignore", message="Timestamp conflict persisted", category=RuntimeWarning
+    )
+
     db_path = workdir / "test.db"
 
     # Create the database first

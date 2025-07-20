@@ -497,10 +497,13 @@ class QueueWatcher:
         -------
         threading.Thread
             The thread running the watcher. The thread is configured as
-            `daemon=False` to prevent the main application from exiting
-            silently while the watcher is active.
+            `daemon=True` to prevent hanging test runners or applications
+            that forget to call stop(). For production use, always call
+            stop() and join() the thread for clean shutdown.
         """
-        thread = threading.Thread(target=self.run_forever, daemon=False)
+        # Daemon thread so that an accidentally-left watcher cannot block
+        # interpreter shutdown (e.g. during test runs).
+        thread = threading.Thread(target=self.run_forever, daemon=True)
         thread.start()
         return thread
 
@@ -519,6 +522,13 @@ class QueueWatcher:
     def _sigint_handler(self, signum: int, frame: Any) -> None:
         """Convert SIGINT to graceful shutdown."""
         self.stop()
+
+    def __del__(self) -> None:
+        """Safety net to stop watcher if garbage collected while running."""
+        try:
+            self.stop()
+        except Exception:
+            pass
 
     def _drain_queue(self) -> None:
         """Process all currently available messages with DB error handling.

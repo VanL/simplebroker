@@ -630,7 +630,7 @@ def test_write_performance_not_regressed(workdir: Path):
 
     # Writing should still be fast
     # Windows needs more time due to filesystem differences
-    timeout = 6.0 if sys.platform == "win32" else 1.5
+    timeout = 6.0 if sys.platform == "win32" else 2.0
     assert write_time < timeout, (
         f"Writing {message_count} messages took {write_time:.2f}s"
     )

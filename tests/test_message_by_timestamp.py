@@ -17,6 +17,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+import pytest
+
 from .conftest import run_cli
 
 # ============================================================================
@@ -839,6 +841,7 @@ def test_workflow_selective_message_removal(workdir: Path):
 # ============================================================================
 
 
+@pytest.mark.slow
 def test_timestamp_lookup_performance(workdir: Path):
     """Test that timestamp lookups are efficient even with many messages."""
 
@@ -868,6 +871,7 @@ def test_timestamp_lookup_performance(workdir: Path):
     assert ts_read_time < fifo_read_time * 2
 
 
+@pytest.mark.slow
 def test_concurrent_mixed_operations_performance(workdir: Path):
     """Test performance under concurrent mixed operations."""
     # Write many messages

@@ -13,13 +13,14 @@ from ._exceptions import (
     QueueNameError,
     TimestampError,
 )
-from ._runner import SQLiteRunner, SQLRunner
+from ._runner import SetupPhase, SQLiteRunner, SQLRunner
 from ._timestamp import TimestampGenerator
 
 __all__ = [
     # Protocols and implementations
     "SQLRunner",
     "SQLiteRunner",
+    "SetupPhase",
     "TimestampGenerator",
     # Exceptions
     "BrokerError",

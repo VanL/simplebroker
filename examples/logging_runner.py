@@ -4,7 +4,7 @@
 from typing import Any, Iterable, List, Tuple
 
 from simplebroker import Queue
-from simplebroker.ext import SQLRunner
+from simplebroker.ext import SetupPhase, SQLRunner
 
 
 class LoggingRunner(SQLRunner):
@@ -37,6 +37,13 @@ class LoggingRunner(SQLRunner):
     def close(self) -> None:
         self._log.append("CLOSE")
         self._inner.close()
+
+    def setup(self, phase: SetupPhase) -> None:
+        self._log.append(f"SETUP: {phase.value}")
+        self._inner.setup(phase)
+
+    def is_setup_complete(self, phase: SetupPhase) -> bool:
+        return self._inner.is_setup_complete(phase)
 
     def get_log(self) -> list[str]:
         return self._log.copy()

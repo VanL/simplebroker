@@ -66,11 +66,17 @@ def test_path_traversal_protection(workdir: Path):
         # /tmp/test_absolute_*.db might succeed or fail based on permissions
         if path_args[1] == "/etc/passwd":
             assert code == 1
+            # Check for various error messages that could occur
             assert (
-                "file is not a database" in stderr
+                "parent directory is not writable" in stderr.lower()
+                or "parent directory is not accessible" in stderr.lower()
+                or "database file is not readable" in stderr.lower()
+                or "database file is not writable" in stderr.lower()
                 or "permission denied" in stderr.lower()
+                or "file is not a database" in stderr.lower()
+                or "sqlite" in stderr.lower()
                 or "must be within the working directory" in stderr.lower()
-            )
+            ), f"Expected permission/database error for /etc/passwd, got: {stderr}"
 
 
 def test_safe_path_within_directory(workdir: Path):

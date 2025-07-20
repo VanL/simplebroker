@@ -1,6 +1,7 @@
 """CLI entry point for SimpleBroker."""
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import List, NoReturn
@@ -469,9 +470,29 @@ def main() -> int:
                 # We've already validated the path structure above
                 pass
 
-        # Check if parent directory is writable
+        # 1) Check if parent directory exists
         if not db_path.parent.exists():
             raise ValueError(f"Parent directory not found: {db_path.parent}")
+
+        # 2) Check if parent directory is accessible (executable/writable)
+        if not os.access(db_path.parent, os.X_OK):
+            raise ValueError(f"Parent directory is not accessible: {db_path.parent}")
+
+        if not os.access(db_path.parent, os.W_OK):
+            raise ValueError(f"Parent directory is not writable: {db_path.parent}")
+
+        # 3) Check if file exists and permissions
+        if db_path.exists():
+            # Check if it's a regular file
+            if not db_path.is_file():
+                raise ValueError(f"Path exists but is not a regular file: {db_path}")
+
+            # Check if file is readable/writable
+            if not os.access(db_path, os.R_OK):
+                raise ValueError(f"Database file is not readable: {db_path}")
+
+            if not os.access(db_path, os.W_OK):
+                raise ValueError(f"Database file is not writable: {db_path}")
 
     except ValueError as e:
         print(f"{PROG_NAME}: error: {e}", file=sys.stderr)

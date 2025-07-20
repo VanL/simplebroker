@@ -23,7 +23,7 @@ from ._exceptions import (
     IntegrityError,
     OperationalError,
 )
-from ._runner import SQLiteRunner, SQLRunner
+from ._runner import SetupPhase, SQLiteRunner, SQLRunner
 from ._sql import (
     CHECK_CLAIMED_COLUMN as SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED,
 )
@@ -1478,6 +1478,9 @@ class BrokerCore:
     def close(self) -> None:
         """Close the database connection."""
         with self._lock:
+            # Clean up any marker files (especially for mocked paths in tests)
+            if hasattr(self._runner, "cleanup_marker_files"):
+                self._runner.cleanup_marker_files()
             self._runner.close()
 
     def __enter__(self) -> "BrokerCore":
@@ -1556,11 +1559,19 @@ class BrokerDB(BrokerCore):
         # Create SQLite runner
         self._runner = SQLiteRunner(str(self.db_path))
 
+        # Phase 1: Critical connection setup (WAL mode, etc)
+        # This must happen before any database operations
+        self._runner.setup(SetupPhase.CONNECTION)
+
         # Store conn reference internally for compatibility
         self._conn = self._runner._conn
 
-        # Initialize parent
+        # Initialize parent (will create schema)
         super().__init__(self._runner)
+
+        # Phase 2: Performance optimizations (can be done after schema)
+        # This applies to all future connections
+        self._runner.setup(SetupPhase.OPTIMIZATION)
 
         # Set restrictive permissions if new database
         if not existing_db:

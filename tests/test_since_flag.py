@@ -656,6 +656,8 @@ def test_since_during_concurrent_writes(workdir):
 
         # Verify we only got messages after checkpoint
         messages = out.strip().split("\n")
+        # Filter out empty strings from split
+        messages = [msg for msg in messages if msg]
         for msg in messages:
             assert msg.startswith("concurrent_")
 

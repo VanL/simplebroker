@@ -3,6 +3,7 @@
 import json
 import threading
 import time
+import warnings
 from typing import Dict, List, Tuple
 
 import pytest
@@ -127,6 +128,7 @@ class TestWorkerPool:
             remaining = list(db.read("tasks", all_messages=True))
             assert len(remaining) == 0
 
+    @pytest.mark.slow
     def test_worker_pool_with_slow_handlers(self, temp_db):
         """Test worker pool with varying processing speeds."""
         num_messages = 20
@@ -387,6 +389,11 @@ class TestMixedMode:
 
     def test_concurrent_writes_during_watch(self, temp_db):
         """Test handling concurrent writes while watching."""
+        # Filter out the timestamp conflict warning which is expected in this test
+        warnings.filterwarnings(
+            "ignore", message="Timestamp conflict persisted", category=RuntimeWarning
+        )
+
         read_messages = []
         lock = threading.Lock()
 

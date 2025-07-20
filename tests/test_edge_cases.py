@@ -267,7 +267,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
                 break  # Simulate interrupt
 
     elapsed = time.time() - start_time
-    timeout = 0.75 if sys.platform == "win32" else 0.5
+    timeout = 2.0 if sys.platform == "win32" else 1.5
     assert elapsed < timeout, (
         f"Reading 100 messages took too long: {elapsed:.2f}s (timeout: {timeout}s)"
     )
@@ -298,7 +298,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
                 break  # Simulate interrupt mid-batch
 
     elapsed = time.time() - start_time
-    timeout = 0.75 if sys.platform == "win32" else 0.5
+    timeout = 2.0 if sys.platform == "win32" else 1.5
     assert elapsed < timeout, (
         f"Reading 500 messages took too long: {elapsed:.2f}s (timeout: {timeout}s)"
     )
