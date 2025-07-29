@@ -16,15 +16,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from simplebroker.db import BrokerDB, _validate_queue_name_cached
 
 # Calibration test parameters (smaller subsets for quick measurement)
-CALIBRATION_WRITE_COUNT = 20  # Subset of BASIC_WRITE_COUNT
-CALIBRATION_VALIDATION_COUNT = 500  # Subset of VALIDATION_ITERATIONS
-CALIBRATION_CLAIM_COUNT = 100  # Subset for claim test
+CALIBRATION_WRITE_COUNT = 1000  # Subset of BASIC_WRITE_COUNT
+CALIBRATION_VALIDATION_COUNT = 50000  # Subset of VALIDATION_ITERATIONS
+CALIBRATION_CLAIM_COUNT = 1000  # Subset for claim test
 
 # Reference baseline times from Apple M2 Max (in seconds)
 REFERENCE_BASELINES = {
-    "write_test": 0.006,  # ~20 messages at 0.015s/50 messages
-    "validation_test": 0.0005,  # ~500 iterations at 0.001s/1000 iterations
-    "claim_test": 0.006,  # ~100 messages
+    "write_test": 0.1050,
+    "validation_test": 0.0021,
+    "claim_test": 0.2100,
 }
 
 

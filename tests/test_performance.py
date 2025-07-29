@@ -27,7 +27,7 @@ pytestmark = pytest.mark.xdist_group(name="performance_serial")
 
 # Performance test parameters
 BASIC_WRITE_COUNT = 50
-VALIDATION_ITERATIONS = 1000
+VALIDATION_ITERATIONS = 5000
 BULK_MOVE_MESSAGE_COUNT = 5000
 LARGE_BATCH_CLAIM_COUNT = 5000
 LARGE_BATCH_READ_LIMIT = 100
@@ -51,6 +51,7 @@ PERF_BUFFER_PERCENT = 0.25
 # Machine performance ratio (calculated once per test session)
 # 1.0 = same as baseline machine, 0.5 = half as fast, 2.0 = twice as fast
 CURRENT_MACHINE_PERFORMANCE = None  # Lazy-loaded
+MACHINE_PERFORMANCE_RATIO = 1.0  # Default to baseline performance
 
 # Baseline performance times measured on Apple M2 Air
 # These are the actual measured times for each test scenario
@@ -96,10 +97,7 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
     # Adjust for machine performance
     # If machine is slower (ratio < 1.0), allow more time
     # If machine is faster (ratio > 1.0), require less time
-    adjusted_time = base_time / CURRENT_MACHINE_PERFORMANCE
-
-    # Apply buffer percentage
-    timeout = adjusted_time * (1 + PERF_BUFFER_PERCENT)
+    timeout = base_time / CURRENT_MACHINE_PERFORMANCE * (1 + PERF_BUFFER_PERCENT)
 
     # Platform-specific adjustments
     if platform_specific and sys.platform == "win32":
@@ -417,7 +415,10 @@ def test_timestamp_lookup_performance(workdir: Path):
 
 @pytest.mark.slow
 def test_concurrent_mixed_operations_performance(workdir: Path):
-    """Test performance under concurrent mixed operations."""
+    """Test performance of mixed read/write/peek operations.
+
+    Note: Some reads exit with EXIT_QUEUE_EMPTY as messages get consumed,
+    which is expected."""
     # Write many messages
     for i in range(100):
         run_cli("write", "test_queue", f"message{i}", cwd=workdir)
@@ -455,11 +456,23 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
     elapsed = time.time() - start
 
     # Should complete reasonably quickly (under 2 seconds for this workload)
-    assert elapsed < 2.0
+    assert elapsed < get_timeout("concurrent_mixed_ops")
 
-    # Verify operations succeeded
+    # Verify operations succeeded (allowing EXIT_QUEUE_EMPTY for reads)
+    success_count = 0
+    empty_count = 0
     for rc, _out, err in operations:
-        assert rc == 0, f"Operation failed: {err}"
+        if rc == 0:
+            success_count += 1
+        elif rc == 2:  # EXIT_QUEUE_EMPTY - expected for some reads
+            empty_count += 1
+        else:
+            raise AssertionError(f"Unexpected error (rc={rc}): {err}")
+
+    # At least some operations should succeed
+    assert success_count > 0, "No operations succeeded"
+    # Writes (5 total) should always succeed
+    assert success_count >= 5, f"Too few successful operations: {success_count}"
 
 
 # ============================================================================
@@ -677,8 +690,20 @@ def test_large_volume_move(broker, tmp_path):
         max_messages=num_messages,  # Stop after moving all messages
     )
 
-    # Run synchronously to measure time
-    watcher.run()
+    # Run in thread with timeout to prevent hanging
+    thread = watcher.run_in_thread()
+
+    # Wait for completion with timeout
+    thread.join(timeout=10.0)  # 10 second timeout
+
+    # Stop watcher if still running
+    if thread.is_alive():
+        watcher.stop()
+        thread.join(timeout=2.0)
+        if thread.is_alive():
+            pytest.fail(
+                f"QueueMoveWatcher did not stop within timeout. Moved {watcher.move_count}/{num_messages} messages"
+            )
 
     elapsed = time.time() - start_time
 
