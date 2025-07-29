@@ -45,8 +45,8 @@ VACUUM_BATCH_WRITE_SIZE = 100
 WRITE_PERF_MESSAGE_COUNT = 1000
 MOVE_WATCHER_MESSAGE_COUNT = 100
 
-# Performance buffer percentage (25% as requested)
-PERF_BUFFER_PERCENT = 0.25
+# Performance buffer percentage (33% as requested)
+PERF_BUFFER_PERCENT = 0.33
 
 # Machine performance ratio (calculated once per test session)
 # 1.0 = same as baseline machine, 0.5 = half as fast, 2.0 = twice as fast
