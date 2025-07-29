@@ -56,11 +56,16 @@ def test_chmod_called_on_new_database(tmp_path):
         db.close()
 
         # Verify chmod was called with correct permissions
-        mock_chmod.assert_called_once_with(db_path, 0o600)
+        # Now also called for marker files, so check database file specifically
+        chmod_calls = [
+            call for call in mock_chmod.call_args_list if call[0][0] == db_path
+        ]
+        assert len(chmod_calls) == 1
+        assert chmod_calls[0][0] == (db_path, 0o600)
 
 
 def test_chmod_not_called_on_existing_database(tmp_path):
-    """Test that chmod is not called for existing databases."""
+    """Test that chmod is not called for existing database file itself."""
     db_path = tmp_path / "existing.db"
 
     # Create the database first
@@ -72,8 +77,14 @@ def test_chmod_not_called_on_existing_database(tmp_path):
         db = BrokerDB(str(db_path))
         db.close()
 
-        # Verify chmod was NOT called
-        mock_chmod.assert_not_called()
+        # Verify chmod was NOT called on the database file itself
+        # (it may be called on lock files, which is expected)
+        db_chmod_calls = [
+            call for call in mock_chmod.call_args_list if call[0][0] == str(db_path)
+        ]
+        assert len(db_chmod_calls) == 0, (
+            f"chmod should not be called on existing database file, but was called with {db_chmod_calls}"
+        )
 
 
 def test_normal_operation_still_works(tmp_path):

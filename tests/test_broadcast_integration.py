@@ -22,8 +22,8 @@ def test_broadcast_with_since_filtering(workdir):
     # Get checkpoint timestamp before broadcast
     # Small delay to ensure broadcast has a later timestamp
     time.sleep(0.01)
-    current_time_ms = int(time.time() * 1000)
-    checkpoint = current_time_ms << 20  # Convert to hybrid timestamp format
+    current_time_us = int(time.time() * 1_000_000)
+    checkpoint = current_time_us << 12  # Convert to hybrid timestamp format
 
     # Broadcast a message
     time.sleep(0.01)

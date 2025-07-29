@@ -3,12 +3,14 @@
 import os
 import tempfile
 import threading
+import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
 
 from simplebroker.db import BrokerDB
+from simplebroker.helpers import interruptible_sleep
 from simplebroker.watcher import (
     PollingStrategy,
     QueueMoveWatcher,
@@ -16,8 +18,10 @@ from simplebroker.watcher import (
     _StopLoop,
 )
 
+from .helpers.watcher_base import WatcherTestBase
 
-class TestWatcherEdgeCases:
+
+class TestWatcherEdgeCases(WatcherTestBase):
     """Test edge cases in QueueWatcher."""
 
     def test_invalid_handler_type(self):
@@ -146,7 +150,8 @@ class TestWatcherEdgeCases:
 
     def test_polling_strategy_pragma_failures(self):
         """Test handling of repeated PRAGMA data_version failures."""
-        strategy = PollingStrategy()
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
         mock_db = Mock()
 
         # Simulate repeated failures
@@ -168,55 +173,63 @@ class TestWatcherEdgeCases:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            call_count = 0
-
-            def handler(msg, ts):
-                nonlocal call_count
-                call_count += 1
-                if call_count < 3:
-                    raise Exception("Simulated failure")
-
-            watcher = QueueWatcher(str(db_path), "queue", handler)
-
-            # Mock drain_queue to raise exceptions
-            original_drain = watcher._drain_queue
+            attempt_times = []
             drain_count = 0
 
-            def failing_drain():
-                nonlocal drain_count
-                drain_count += 1
-                if drain_count < 3:
-                    raise Exception("Drain failed")
-                # Stop after successful drain
-                watcher.stop()
-                original_drain()
+            with self.create_test_watcher(
+                str(db_path), "queue", lambda m, t: None
+            ) as watcher:
+                # Mock drain_queue to track retry timing
+                original_drain = watcher._drain_queue
 
-            watcher._drain_queue = failing_drain
+                def failing_drain():
+                    nonlocal drain_count
+                    attempt_times.append(time.time())
+                    drain_count += 1
+                    if drain_count < 3:
+                        raise Exception("Drain failed")
+                    # Stop after successful drain
+                    watcher.stop()
+                    original_drain()
 
-            # Run with mocked sleep to avoid actual delays
-            with patch("time.sleep") as mock_sleep:
-                watcher.run_forever()
+                watcher._drain_queue = failing_drain
 
-                # Verify exponential backoff was used
-                assert mock_sleep.call_count >= 2
-                sleep_times = [call[0][0] for call in mock_sleep.call_args_list]
-                assert sleep_times[0] == 2  # 2^1
-                assert sleep_times[1] == 4  # 2^2
+                # Run with timeout
+                self.run_watcher_with_timeout(watcher, timeout=10.0)
+
+                # Verify retries happened with exponential backoff
+                assert drain_count >= 3
+                assert len(attempt_times) >= 3
+
+                # Check that delays increased (exponential backoff)
+                # Note: actual delays will be affected by interruptible_sleep
+                if len(attempt_times) > 1:
+                    first_delay = attempt_times[1] - attempt_times[0]
+                    second_delay = (
+                        attempt_times[2] - attempt_times[1]
+                        if len(attempt_times) > 2
+                        else 0
+                    )
+
+                    # Second delay should be longer (exponential backoff)
+                    if second_delay > 0:
+                        assert second_delay > first_delay * 1.5  # Allow some variance
 
     def test_watcher_max_retries_exceeded(self):
         """Test that watcher fails after max retries."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            watcher = QueueWatcher(str(db_path), "queue", lambda m, t: None)
+            with self.create_test_watcher(
+                str(db_path), "queue", lambda m, t: None
+            ) as watcher:
+                # Mock drain_queue to always fail
+                def failing_drain():
+                    raise Exception("Persistent failure")
 
-            # Mock drain_queue to always fail
-            def failing_drain():
-                raise Exception("Persistent failure")
+                watcher._drain_queue = failing_drain
 
-            watcher._drain_queue = failing_drain
-
-            with patch("time.sleep"):  # Speed up test
+                # Should fail after max retries
                 with pytest.raises(Exception, match="Persistent failure"):
                     watcher.run_forever()
 
@@ -288,8 +301,136 @@ class TestWatcherEdgeCases:
             thread.start()
             thread.join(timeout=5)
 
+    def test_absolute_timeout_exceeded(self):
+        """Test that watcher fails after MAX_TOTAL_RETRY_TIME."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
 
-class TestQueueMoveWatcherEdgeCases:
+            with self.create_test_watcher(
+                str(db_path), "queue", lambda m, t: None
+            ) as watcher:
+                # Mock time.time() to simulate time passing faster
+                original_time = time.time
+                start_real_time = original_time()
+
+                def mock_time():
+                    # Make time appear to pass 100x faster
+                    elapsed = original_time() - start_real_time
+                    return start_real_time + (elapsed * 100)
+
+                # Mock drain_queue to always fail
+                def failing_drain():
+                    # Use real sleep to let the retry loop run
+                    time.sleep(0.01)
+                    raise Exception("Persistent failure")
+
+                watcher._drain_queue = failing_drain
+
+                # Patch time.time to make timeout trigger quickly
+                with patch("simplebroker.watcher.time.time", mock_time):
+                    # Should raise TimeoutError after simulated 300s (3s real time)
+                    with pytest.raises(TimeoutError) as exc_info:
+                        watcher.run_forever()
+
+                    assert "retry timeout exceeded" in str(exc_info.value)
+                    assert "300s" in str(exc_info.value)  # Default timeout
+
+    def test_check_stop_centralization(self):
+        """Test that _check_stop is used consistently."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+
+            check_count = 0
+
+            with self.create_test_watcher(
+                str(db_path), "queue", lambda m, t: None
+            ) as watcher:
+                original_check_stop = watcher._check_stop
+
+                def mock_check_stop():
+                    nonlocal check_count
+                    check_count += 1
+                    if check_count > 3:
+                        raise _StopLoop
+                    # Call original to maintain normal behavior
+                    original_check_stop()
+
+                watcher._check_stop = mock_check_stop
+
+                # Should exit after a few checks
+                watcher.run_forever()
+                assert check_count > 3  # Called multiple times
+
+    def test_interruptible_sleep_responsiveness(self):
+        """Test that watcher responds quickly to stop signals."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            broker = BrokerDB(db_path)
+
+            # Write a message
+            broker.write("slow_queue", "test message")
+
+            process_start = None
+
+            def slow_handler(msg, ts):
+                nonlocal process_start
+                process_start = time.time()
+                # Simulate slow processing with interruptible sleep
+                interruptible_sleep(1.0, watcher._stop_event)
+
+            with self.create_test_watcher(
+                broker, "slow_queue", slow_handler
+            ) as watcher:
+                # Start watcher
+                thread = watcher.run_in_thread()
+                time.sleep(0.1)  # Let it start processing
+
+                # Stop should interrupt the sleep
+                start_stop = time.time()
+                watcher.stop()
+                thread.join(timeout=0.5)  # Should complete quickly
+                stop_time = time.time() - start_stop
+
+                assert stop_time < 0.5, f"Stop took {stop_time:.2f}s, should be < 0.5s"
+                assert not thread.is_alive()
+
+    def test_concurrent_stop_safety(self):
+        """Test stopping watcher from multiple threads."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            broker = BrokerDB(db_path)
+
+            # Add many messages
+            for i in range(50):
+                broker.write("concurrent_queue", f"msg{i}")
+
+            def slow_handler(msg, ts):
+                time.sleep(0.01)  # Slow processing
+
+            with self.create_test_watcher(
+                broker, "concurrent_queue", slow_handler
+            ) as watcher:
+                thread = watcher.run_in_thread()
+                time.sleep(0.1)  # Let it start
+
+                # Multiple threads try to stop
+                stop_threads = []
+                for _ in range(5):
+                    t = threading.Thread(target=watcher.stop)
+                    stop_threads.append(t)
+                    t.start()
+
+                # All should complete quickly
+                for t in stop_threads:
+                    t.join(timeout=0.5)
+                    assert not t.is_alive()
+
+                # Main thread should stop
+                thread.join(timeout=1.0)
+                assert not thread.is_alive()
+
+
+class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
     """Test edge cases in QueueMoveWatcher."""
 
     def test_same_queue_error(self):
@@ -360,7 +501,8 @@ class TestQueueMoveWatcherEdgeCases:
 
     def test_polling_strategy_activity_detection(self):
         """Test that polling strategy detects database changes."""
-        strategy = PollingStrategy()
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
         mock_db = Mock()
 
         # First call returns version 1

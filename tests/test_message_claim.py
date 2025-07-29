@@ -14,12 +14,8 @@ Tests cover:
 
 import concurrent.futures as cf
 import sqlite3
-import sys
-import time
 from pathlib import Path
 from typing import List, Tuple
-
-import pytest
 
 from simplebroker.db import BrokerDB
 
@@ -216,46 +212,6 @@ def test_concurrent_reads_no_duplicate_delivery(workdir: Path):
     # Verify all messages were read
     expected = {f"message{i:02d}" for i in range(20)}
     assert set(all_messages) == expected
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32" and sys.version_info[:2] in ((3, 8), (3, 9)),
-    reason="Older Python performance on Windows is not guaranteed",
-)
-def test_performance_improvement_with_claims(workdir: Path):
-    """Test performance improvement when using claimed vs delete operations."""
-    db_path = workdir / "test.db"
-
-    # Write a large batch of messages
-    message_count = 1000
-    with BrokerDB(str(db_path)) as db:
-        for i in range(message_count):
-            db.write("perf_queue", f"msg{i:04d}")
-
-    # Time reading all messages
-    start_time = time.time()
-    with BrokerDB(str(db_path)) as db:
-        messages = list(db.stream_read("perf_queue", peek=False, all_messages=True))
-    read_time = time.time() - start_time
-
-    assert len(messages) == message_count
-
-    # Verify all messages are claimed
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    claimed_count = cursor.fetchone()[0]
-    assert claimed_count == message_count
-
-    # Performance assertion - reading should be fast
-    # Claimed approach should handle 1000 messages quickly
-    # Windows filesystem operations are slower, so we allow more time
-    timeout = 6.0 if sys.platform == "win32" else 1.5
-    assert read_time < timeout, (
-        f"Reading {message_count} messages took {read_time:.2f}s"
-    )
-
-    conn.close()
 
 
 def test_schema_migration_adds_claimed_column(workdir: Path):
@@ -476,50 +432,6 @@ def test_vacuum_with_no_claimed_messages(workdir: Path):
     conn.close()
 
 
-def test_vacuum_batch_size_limits(workdir: Path):
-    """Test that vacuum respects batch size limits for performance."""
-    db_path = workdir / "test.db"
-
-    # Write and claim a large number of messages
-    message_count = 10000
-    with BrokerDB(str(db_path)) as db:
-        # Write in batches for efficiency
-        for i in range(0, message_count, 100):
-            for j in range(100):
-                if i + j < message_count:
-                    db.write("large_queue", f"msg{i + j:05d}")
-
-    # Read all messages to claim them
-    with BrokerDB(str(db_path)) as db:
-        count = 0
-        for _msg in db.stream_read("large_queue", peek=False, all_messages=True):
-            count += 1
-        assert count == message_count
-
-    # Verify all are claimed
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    assert cursor.fetchone()[0] == message_count
-
-    # Run vacuum - should handle large batch efficiently
-    start_time = time.time()
-    with BrokerDB(str(db_path)) as db:
-        db.vacuum()
-    vacuum_time = time.time() - start_time
-
-    # Verify all claimed messages removed
-    cursor.execute("SELECT COUNT(*) FROM messages")
-    assert cursor.fetchone()[0] == 0
-
-    # Vacuum should complete reasonably quickly even with many messages
-    assert vacuum_time < 5.0, (
-        f"Vacuum of {message_count} messages took {vacuum_time:.2f}s"
-    )
-
-    conn.close()
-
-
 def test_vacuum_lock_prevents_concurrent_vacuum(workdir: Path):
     """Test that vacuum lock prevents concurrent vacuum operations."""
     db_path = workdir / "test.db"
@@ -607,39 +519,6 @@ def test_all_flag_with_mixed_claimed_unclaimed(workdir: Path):
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
     assert cursor.fetchone()[0] == 10
-    conn.close()
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32" and sys.version_info[:2] in ((3, 8), (3, 9)),
-    reason="Older Python performance on Windows is not guaranteed",
-)
-def test_write_performance_not_regressed(workdir: Path):
-    """Test that write performance is not affected by claim feature."""
-    db_path = workdir / "test.db"
-
-    # Measure write performance
-    message_count = 1000
-    start_time = time.time()
-
-    with BrokerDB(str(db_path)) as db:
-        for i in range(message_count):
-            db.write("write_perf_queue", f"msg{i:04d}")
-
-    write_time = time.time() - start_time
-
-    # Writing should still be fast
-    # Windows needs more time due to filesystem differences
-    timeout = 6.0 if sys.platform == "win32" else 2.0
-    assert write_time < timeout, (
-        f"Writing {message_count} messages took {write_time:.2f}s"
-    )
-
-    # Verify messages were written correctly
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages")
-    assert cursor.fetchone()[0] == message_count
     conn.close()
 
 

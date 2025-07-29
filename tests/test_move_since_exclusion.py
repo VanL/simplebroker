@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests.conftest import managed_subprocess
+
 
 def test_move_since_mutual_exclusion(tmp_path: Path) -> None:
     """Test that --move and --since cannot be used together."""
@@ -54,7 +56,7 @@ def test_move_without_since_works(tmp_path: Path) -> None:
     )
 
     # Start move in background
-    proc = subprocess.Popen(
+    with managed_subprocess(
         [
             sys.executable,
             "-m",
@@ -66,23 +68,14 @@ def test_move_without_since_works(tmp_path: Path) -> None:
             "--move",
             "destination",
             "--quiet",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+        ]
+    ) as proc:
+        # Wait for the message to be processed
+        proc.wait_for_output("test message", timeout=2.0)
 
-    # Give it a moment to move the message
-    import time
-
-    time.sleep(1)
-
-    # Terminate it (it would run forever waiting for new messages)
-    proc.terminate()
-    stdout, stderr = proc.communicate()
-
-    # Should have moved the message
-    assert "test message" in stdout
+        # Process automatically terminated on exit
+        # Should have moved the message
+        assert "test message" in proc.stdout
 
     # Verify message was moved
     result = subprocess.run(
@@ -122,7 +115,7 @@ def test_watch_with_since_without_move_works(tmp_path: Path) -> None:
     )
 
     # Start watch with --since in background
-    proc = subprocess.Popen(
+    with managed_subprocess(
         [
             sys.executable,
             "-m",
@@ -135,20 +128,11 @@ def test_watch_with_since_without_move_works(tmp_path: Path) -> None:
             "0",  # From beginning
             "--peek",
             "--quiet",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+        ]
+    ) as proc:
+        # Wait for the message to appear in output
+        proc.wait_for_output("test message", timeout=1.0)
 
-    # Give it a moment to start
-    import time
-
-    time.sleep(0.5)
-
-    # Terminate it
-    proc.terminate()
-    stdout, stderr = proc.communicate()
-
-    # Should have seen the message
-    assert "test message" in stdout
+        # Process automatically terminated on exit
+        # Should have seen the message
+        assert "test message" in proc.stdout

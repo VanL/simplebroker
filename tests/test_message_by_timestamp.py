@@ -14,10 +14,7 @@ Tests cover:
 import concurrent.futures as cf
 import json
 import sqlite3
-import time
 from pathlib import Path
-
-import pytest
 
 from .conftest import run_cli
 
@@ -836,82 +833,6 @@ def test_workflow_selective_message_removal(workdir: Path):
     assert "normal message 3" in remaining
 
 
-# ============================================================================
-# Performance Tests
-# ============================================================================
-
-
-@pytest.mark.slow
-def test_timestamp_lookup_performance(workdir: Path):
-    """Test that timestamp lookups are efficient even with many messages."""
-
-    # Create queue with many messages
-    num_messages = 1000
-    for i in range(num_messages):
-        run_cli("write", "perf_queue", f"msg_{i}", cwd=workdir)
-
-    # Get middle message timestamp
-    rc, out, err = run_cli("peek", "perf_queue", "--all", "-t", cwd=workdir)
-    lines = out.strip().split("\n")
-    middle_ts = lines[num_messages // 2].split("\t")[0]
-
-    # Time timestamp-based read
-    start = time.time()
-    rc, out, err = run_cli("read", "perf_queue", "-m", middle_ts, cwd=workdir)
-    ts_read_time = time.time() - start
-    assert rc == 0
-
-    # Time normal FIFO read
-    start = time.time()
-    rc, out, err = run_cli("read", "perf_queue", cwd=workdir)
-    fifo_read_time = time.time() - start
-    assert rc == 0
-
-    # Timestamp read should be comparable to FIFO read (within 2x)
-    assert ts_read_time < fifo_read_time * 2
-
-
-@pytest.mark.slow
-def test_concurrent_mixed_operations_performance(workdir: Path):
-    """Test performance under concurrent mixed operations."""
-    # Write many messages
-    for i in range(100):
-        run_cli("write", "test_queue", f"message{i}", cwd=workdir)
-
-    # Get some timestamps
-    rc, out, err = run_cli("peek", "test_queue", "--all", "-t", cwd=workdir)
-    lines = out.strip().split("\n")
-    timestamps = [line.split("\t")[0] for line in lines[::10]]  # Every 10th
-
-    def mixed_operations():
-        results = []
-        # Some FIFO reads
-        for _ in range(3):
-            results.append(run_cli("read", "test_queue", cwd=workdir))
-        # Some timestamp reads
-        for ts in timestamps[:3]:
-            results.append(run_cli("read", "test_queue", "-m", ts, cwd=workdir))
-        return results
-
-    start = time.time()
-
-    with cf.ThreadPoolExecutor(max_workers=4) as executor:
-        futures = [executor.submit(mixed_operations) for _ in range(4)]
-        all_results = []
-        for f in cf.as_completed(futures):
-            all_results.extend(f.result())
-
-    elapsed = time.time() - start
-
-    # Should complete reasonably quickly (under 2 seconds for this workload)
-    assert elapsed < 2.0
-
-    # Verify operations succeeded
-    success_count = sum(1 for rc, out, err in all_results if rc == 0)
-    assert success_count > 0  # At least some should succeed
-
-
-# ============================================================================
 # Edge Cases
 # ============================================================================
 

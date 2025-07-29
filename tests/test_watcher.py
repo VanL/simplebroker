@@ -1,6 +1,7 @@
 """Tests for the watcher feature."""
 
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -14,6 +15,8 @@ from simplebroker.db import BrokerDB
 # Import will be available after implementation
 pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueWatcher
+
+from .helpers.watcher_base import WatcherTestBase
 
 
 class MessageCollector:
@@ -54,7 +57,7 @@ def broker_db(temp_db):
     db.close()
 
 
-class TestQueueWatcher:
+class TestQueueWatcher(WatcherTestBase):
     """Test the QueueWatcher class."""
 
     def test_thread_safety_with_brokerdb_instance(self, broker_db, temp_db):
@@ -159,23 +162,26 @@ class TestQueueWatcher:
 
     def test_graceful_shutdown_stop_method(self, temp_db):
         """Test graceful shutdown via stop() method."""
-        watcher = QueueWatcher(
+        with self.create_test_watcher(
             temp_db,
             "test_queue",
             lambda msg, ts: None,
-        )
+        ) as watcher:
+            thread = watcher.run_in_thread()
+            time.sleep(0.1)  # Let it start
 
-        thread = watcher.run_in_thread()
-        time.sleep(0.1)  # Let it start
+            # Test graceful stop timing
+            start_time = time.time()
+            watcher.stop()
+            thread.join(timeout=2.0)
+            stop_time = time.time() - start_time
 
-        # Stop should work
-        watcher.stop()
-        thread.join(timeout=2.0)
-        assert not thread.is_alive()
+            assert not thread.is_alive()
+            assert stop_time < 2.0, f"Stop took {stop_time:.2f}s"
 
     def test_graceful_shutdown_sigint(self, temp_db, tmp_path):
         """Test graceful shutdown via SIGINT using subprocess."""
-        import subprocess
+        from tests.conftest import managed_subprocess
 
         # This test uses a subprocess to properly test SIGINT handling
         # without interfering with the test runner
@@ -189,13 +195,9 @@ class TestQueueWatcher:
             db.write("sigint_test_queue", "test_message")
 
         # Launch the watcher script as a subprocess
-        proc = subprocess.Popen(
-            [sys.executable, str(helper_script), str(temp_db), str(ready_file)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-        try:
+        with managed_subprocess(
+            [sys.executable, str(helper_script), str(temp_db), str(ready_file)]
+        ) as proc:
             # Wait for the watcher to be ready
             for _ in range(50):  # Wait up to 5 seconds
                 if ready_file.exists():
@@ -205,29 +207,19 @@ class TestQueueWatcher:
                 pytest.fail("Watcher subprocess did not become ready in time")
 
             # Verify process is still running
-            assert proc.poll() is None, "Subprocess terminated prematurely"
+            assert proc.proc.poll() is None, "Subprocess terminated prematurely"
 
             # Send SIGINT signal (Ctrl-C) on Unix, terminate on Windows
             if sys.platform == "win32":
                 proc.terminate()
             else:
-                proc.send_signal(signal.SIGINT)
+                proc.proc.send_signal(signal.SIGINT)
 
-            # Wait for graceful exit using communicate to avoid deadlock
+            # Wait for graceful exit
             try:
-                stdout, stderr = proc.communicate(timeout=5.0)
-                exit_code = proc.returncode
+                proc.proc.wait(timeout=5.0)
+                exit_code = proc.proc.returncode
             except subprocess.TimeoutExpired:
-                # More aggressive cleanup
-                proc.kill()
-                try:
-                    stdout, stderr = proc.communicate(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    # Force termination on Unix
-                    if sys.platform != "win32":
-                        import os
-
-                        os.kill(proc.pid, signal.SIGKILL)
                 pytest.fail("Subprocess did not terminate within timeout after SIGINT")
 
             # Check that it exited cleanly
@@ -241,24 +233,16 @@ class TestQueueWatcher:
             )
 
             # Optionally check output
-            if stderr:
-                print(
-                    f"Subprocess stderr: {stderr.decode() if isinstance(stderr, bytes) else stderr}"
-                )
-
-        except subprocess.TimeoutExpired:
-            pytest.fail("Subprocess did not terminate within timeout after SIGINT")
-        finally:
-            # Ensure subprocess is terminated
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
+            stderr_output = proc.stderr
+            if stderr_output:
+                print(f"Subprocess stderr: {stderr_output}")
 
     def test_sigint_handler_installation(self, temp_db, tmp_path):
         """Test that signal handler is correctly installed in main thread."""
         # Use a subprocess to test signal handler installation properly
-        import subprocess
         import textwrap
+
+        from tests.conftest import run_subprocess
 
         # Create a test script that verifies signal handler installation
         test_script = tmp_path / "test_signal_install.py"
@@ -301,16 +285,13 @@ class TestQueueWatcher:
         )
 
         # Run the subprocess
-        result = subprocess.run(
-            [sys.executable, str(test_script), str(temp_db)],
-            capture_output=True,
-            text=True,
-            timeout=5.0,
+        returncode, stdout, stderr = run_subprocess(
+            [sys.executable, str(test_script), str(temp_db)], timeout=5.0
         )
 
         # Check results
-        assert result.returncode == 0, f"Test failed: {result.stdout} {result.stderr}"
-        assert "PASS" in result.stdout
+        assert returncode == 0, f"Test failed: {stdout} {stderr}"
+        assert "PASS" in stdout
 
     def test_handler_exception_handling(self, broker_db, temp_db):
         """Test that handler exceptions don't crash the watcher."""
@@ -366,23 +347,22 @@ class TestQueueWatcher:
         def error_handler(exc: Exception, msg: str, ts: int) -> bool:
             return False  # Stop on error
 
-        watcher = QueueWatcher(
+        with self.create_test_watcher(
             temp_db,
             "test_queue",
             handler,
             error_handler=error_handler,
-        )
+        ) as watcher:
+            thread = watcher.run_in_thread()
+            time.sleep(0.2)
 
-        thread = watcher.run_in_thread()
-        time.sleep(0.2)
+            thread.join(timeout=2.0)
 
-        thread.join(timeout=2.0)
-
-        # Should have stopped after first error
-        assert processed == []
-        # Second message should still be in queue
-        remaining = list(broker_db.read("test_queue", all_messages=True))
-        assert remaining == ["good_message"]
+            # Should have stopped after first error
+            assert processed == []
+            # Second message should still be in queue
+            remaining = list(broker_db.read("test_queue", all_messages=True))
+            assert remaining == ["good_message"]
 
     def test_multiple_workers_exactly_once(self, temp_db):
         """Test multiple workers ensure exactly-once delivery."""
@@ -702,7 +682,10 @@ class TestPollingStrategy:
         from simplebroker.watcher import PollingStrategy
 
         # Test the burst handling and gradual backoff
+        # Create a stop event for the strategy
+        stop_event = threading.Event()
         strategy = PollingStrategy(
+            stop_event=stop_event,
             initial_checks=5,  # Small number for testing
             max_interval=0.1,
         )
@@ -710,33 +693,34 @@ class TestPollingStrategy:
         # Initialize the strategy
         with BrokerDB(temp_db) as db:
             strategy.start(db)
+            try:
+                # First 5 checks should have zero delay
+                for i in range(5):
+                    assert strategy._get_delay() == 0
+                    strategy._check_count = i + 1
 
-            # First 5 checks should have zero delay
-            for i in range(5):
-                assert strategy._get_delay() == 0
-                strategy._check_count = i + 1
+                # After initial checks, delay should gradually increase
+                strategy._check_count = 5
+                delay1 = strategy._get_delay()
+                assert delay1 == 0  # First check after burst still 0
 
-            # After initial checks, delay should gradually increase
-            strategy._check_count = 5
-            delay1 = strategy._get_delay()
-            assert delay1 == 0  # First check after burst still 0
+                strategy._check_count = 6
+                delay2 = strategy._get_delay()
+                assert 0 < delay2 < 0.1  # Should start increasing
 
-            strategy._check_count = 6
-            delay2 = strategy._get_delay()
-            assert 0 < delay2 < 0.1  # Should start increasing
+                strategy._check_count = 105
+                delay3 = strategy._get_delay()
+                assert delay3 == 0.1  # Should reach max
 
-            strategy._check_count = 105
-            delay3 = strategy._get_delay()
-            assert delay3 == 0.1  # Should reach max
-
-            # Activity should reset counter
-            strategy.notify_activity()
-            assert strategy._check_count == 0
-
-        strategy.stop()
+                # Activity should reset counter
+                strategy.notify_activity()
+                assert strategy._check_count == 0
+            finally:
+                # Signal the strategy to stop before closing the database
+                stop_event.set()
 
 
-class TestErrorScenarios:
+class TestErrorScenarios(WatcherTestBase):
     """Test various error scenarios."""
 
     def test_handler_exception_no_error_handler(
@@ -841,30 +825,27 @@ class TestErrorScenarios:
             return False  # Stop processing
 
         # Create consuming watcher (peek=False)
-        watcher = QueueWatcher(
+        with self.create_test_watcher(
             temp_db,
             "test_queue",
             failing_handler,
             peek=False,
             error_handler=error_handler,
-        )
+        ) as watcher:
+            # Run watcher with timeout
+            thread = self.run_watcher_with_timeout(watcher, timeout=2.0)
 
-        # Run watcher
-        thread = watcher.run_in_thread()
-        time.sleep(0.3)  # Allow time for processing
+            # Thread should have stopped due to error_handler returning False
+            assert not thread.is_alive()
 
-        # Thread should have stopped due to error_handler returning False
-        thread.join(timeout=2.0)
-        assert not thread.is_alive()
+            # Check processed messages - should only have message1
+            assert processed_messages == ["message1"]
 
-        # Check processed messages - should only have message1
-        assert processed_messages == ["message1"]
-
-        # Check remaining messages in queue
-        remaining = list(broker_db.read("test_queue", all_messages=True))
-        # Only message3 should be in the queue (message2 was consumed before handler failed)
-        assert len(remaining) == 1
-        assert remaining[0] == "message3"
+            # Check remaining messages in queue
+            remaining = list(broker_db.read("test_queue", all_messages=True))
+            # Only message3 should be in the queue (message2 was consumed before handler failed)
+            assert len(remaining) == 1
+            assert remaining[0] == "message3"
 
     def test_signal_handler_restoration(self, temp_db):
         """Test that original signal handlers are restored after the watcher stops."""

@@ -13,6 +13,8 @@ from simplebroker.db import BrokerDB
 pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueWatcher
 
+from .helpers.watcher_base import WatcherTestBase
+
 
 class ConcurrentCollector:
     """Thread-safe collector for concurrent testing."""
@@ -42,7 +44,7 @@ def temp_db(tmp_path):
     return tmp_path / "test.db"
 
 
-class TestWorkerPool:
+class TestWorkerPool(WatcherTestBase):
     """Test worker pool scenarios."""
 
     def test_worker_pool_exactly_once_delivery(self, temp_db):
@@ -254,7 +256,7 @@ class TestWorkerPool:
         assert sum(worker_counts.values()) == 100
 
 
-class TestMixedMode:
+class TestMixedMode(WatcherTestBase):
     """Test mixed peek and read watchers."""
 
     def test_mixed_peek_read_basic(self, temp_db):
@@ -403,36 +405,39 @@ class TestMixedMode:
 
         # Start watcher
         watcher_db = BrokerDB(temp_db)
-        watcher = QueueWatcher(
+        with self.create_test_watcher(
             watcher_db,
             "concurrent",
             handler,
-        )
-        watcher_thread = watcher.run_in_thread()
+        ) as watcher:
+            watcher_thread = watcher.run_in_thread()
 
-        # Start concurrent writers
-        def writer_func(writer_id: int):
-            with BrokerDB(temp_db) as db:
-                for i in range(20):
-                    db.write("concurrent", f"w{writer_id}_m{i}")
-                    time.sleep(0.01)
+            # Start concurrent writers
+            def writer_func(writer_id: int):
+                with BrokerDB(temp_db) as db:
+                    for i in range(20):
+                        db.write("concurrent", f"w{writer_id}_m{i}")
+                        time.sleep(0.01)
 
-        writer_threads = []
-        for i in range(3):
-            t = threading.Thread(target=writer_func, args=(i,))
-            t.start()
-            writer_threads.append(t)
+            writer_threads = []
+            for i in range(3):
+                t = threading.Thread(target=writer_func, args=(i,))
+                t.start()
+                writer_threads.append(t)
 
-        # Wait for writers
-        for t in writer_threads:
-            t.join()
+            # Wait for writers with timeout
+            for t in writer_threads:
+                t.join(timeout=10.0)
+                assert not t.is_alive(), "Writer thread didn't complete"
 
-        # Let watcher catch up
-        time.sleep(0.5)
+            # Let watcher catch up briefly
+            time.sleep(0.5)
 
-        # Stop watcher
-        watcher.stop()
-        watcher_thread.join(timeout=5.0)
+            # Stop watcher with timeout
+            watcher.stop()
+            watcher_thread.join(timeout=2.0)
+            assert not watcher_thread.is_alive(), "Watcher didn't stop cleanly"
+
         watcher_db.close()
 
         # Should have all 60 messages
@@ -447,7 +452,7 @@ class TestMixedMode:
         assert set(read_messages) == expected
 
 
-class TestEdgeCases:
+class TestEdgeCases(WatcherTestBase):
     """Test edge cases and error conditions."""
 
     def test_empty_queue_behavior(self, temp_db):

@@ -8,10 +8,11 @@ its core philosophy and performance characteristics.
 import os
 import sqlite3
 import threading
+import time
 import warnings
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterable, Literal, Protocol, Set, Tuple, cast
+from typing import Any, Iterable, Literal, Protocol, Set, Tuple, Union, cast
 
 from ._exceptions import DataError, IntegrityError, OperationalError
 from .helpers import _execute_with_retry
@@ -131,8 +132,19 @@ class SQLiteRunner:
         # Check if we've been forked
         current_pid = os.getpid()
         if current_pid != self._pid:
-            # Process was forked, clear thread-local storage
+            # Process was forked, need to clean up inherited connection
+            if hasattr(self._thread_local, "conn"):
+                try:
+                    # Close the stale connection from parent process
+                    self._thread_local.conn.close()
+                except Exception:
+                    # Ignore errors - connection might already be closed
+                    pass
+            # Clear thread-local storage for the new process
             self._thread_local = threading.local()
+            # Also reset setup phases for the new process
+            with self._setup_lock:
+                self._completed_phases.clear()
             self._pid = current_pid
 
         # Check if this thread has a connection
@@ -171,6 +183,18 @@ class SQLiteRunner:
         # Always set busy timeout for each connection
         busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
         conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
+
+        # Set WAL autocheckpoint for each connection
+        # Default to 1000 pages (≈1MB) if not specified
+        wal_autocheckpoint = int(os.environ.get("BROKER_WAL_AUTOCHECKPOINT", "1000"))
+        if wal_autocheckpoint < 0:
+            warnings.warn(
+                f"Invalid BROKER_WAL_AUTOCHECKPOINT '{wal_autocheckpoint}', "
+                "must be >= 0. Using default of 1000.",
+                stacklevel=2,
+            )
+            wal_autocheckpoint = 1000
+        conn.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
 
         # Apply optimization settings if that phase is complete
         if SetupPhase.OPTIMIZATION in self._completed_phases:
@@ -220,8 +244,7 @@ class SQLiteRunner:
                                 f"Failed to enable WAL mode, got: {result}"
                             )
 
-                # Set WAL autocheckpoint
-                setup_conn.execute("PRAGMA wal_autocheckpoint=1000")
+                # WAL autocheckpoint is now set per-connection in _apply_connection_settings
 
             finally:
                 setup_conn.close()
@@ -238,8 +261,9 @@ class SQLiteRunner:
     def _apply_optimization_settings(self, conn: sqlite3.Connection) -> None:
         """Apply optimization settings to a connection."""
         # Cache size (default 10MB)
+        # Negative values mean KiB (kibibytes), so we multiply by 1024
         cache_mb = int(os.environ.get("BROKER_CACHE_MB", "10"))
-        conn.execute(f"PRAGMA cache_size=-{cache_mb * 1000}")
+        conn.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
 
         # Synchronous mode (default FULL)
         sync_mode = os.environ.get("BROKER_SYNC_MODE", "FULL").upper()
@@ -321,6 +345,18 @@ class SQLiteRunner:
 
         Args:
             phase: The setup phase to execute
+
+        File Locking Strategy:
+            - Unix/Linux/macOS: Uses fcntl for truly atomic file locking
+            - Windows with msvcrt: Uses Windows locking API for proper exclusive locks
+            - Windows without msvcrt: Falls back to open(path, 'x') which has a race
+              condition between checking file existence and creating it. This is a
+              check-then-act operation that could allow multiple processes to think
+              they have the lock if they check at the same time.
+
+        The Windows fallback is less robust but better than no locking. Production
+        Windows deployments should ensure msvcrt is available (it's part of the
+        Python standard library on Windows).
         """
         # Quick check without lock
         if phase in self._completed_phases:
@@ -341,7 +377,6 @@ class SQLiteRunner:
             return
 
         # Import here to avoid circular dependency
-        import time
 
         # Platform-specific file locking
         try:
@@ -350,30 +385,131 @@ class SQLiteRunner:
             has_fcntl = True
         except ImportError:
             has_fcntl = False
+            # Try Windows-specific locking
+            try:
+                import msvcrt
+
+                has_msvcrt = True
+            except ImportError:
+                has_msvcrt = False
 
         # Try to acquire file lock with timeout
         max_wait = 10.0  # seconds
         start_time = time.time()
-        lock_file = None
+        lock_file: Union[Any, None] = None
+        lock_acquired = False
 
-        while True:
+        while not lock_acquired:
             try:
-                lock_file = open(lock_path, "w")
                 if has_fcntl:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    # Unix-like systems
+                    try:
+                        # Create or open lock file
+                        lock_file = open(lock_path, "w")
+                        # Set restrictive permissions for security
+                        try:
+                            os.chmod(lock_path, 0o600)
+                        except OSError:
+                            # Don't fail on permission issues (e.g., Windows)
+                            pass
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        lock_acquired = True
+                    except OSError:
+                        if lock_file:
+                            lock_file.close()
+                            lock_file = None
+                        # Continue trying until timeout
+                        if time.time() - start_time > max_wait:
+                            raise OperationalError(
+                                f"Timeout waiting for setup lock: {phase.value}"
+                            ) from None
+                        # Note: Using time.sleep here instead of interruptible_sleep because:
+                        # 1. This is low-level database setup code without a stop event
+                        # 2. The wait is very short (50ms) for file lock acquisition
+                        # 3. This runs during initialization, not in long-running threads
+                        time.sleep(0.05)
+                        continue
                 else:
-                    # Windows fallback - try exclusive open
-                    lock_file.close()
-                    lock_file = open(lock_path, "x")
-                break
+                    # Windows file locking fallback
+                    if has_msvcrt:
+                        # Use msvcrt for proper Windows file locking
+                        try:
+                            # Open or create the lock file
+                            lock_file = open(lock_path, "a+b")
+                            lock_file.seek(0)
+                            # Set restrictive permissions for security
+                            try:
+                                os.chmod(lock_path, 0o600)
+                            except OSError:
+                                # Windows may not support chmod
+                                pass
+
+                            # Try to acquire exclusive lock with msvcrt
+                            # msvcrt.locking raises OSError if lock cannot be acquired
+                            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
+                            lock_acquired = True
+                        except OSError:
+                            # Lock is held by another process
+                            if lock_file:
+                                lock_file.close()
+                                lock_file = None
+
+                            if time.time() - start_time > max_wait:
+                                raise OperationalError(
+                                    f"Timeout waiting for setup lock: {phase.value}"
+                                ) from None
+                            # Note: Using time.sleep for file lock acquisition (see comment above)
+                            time.sleep(0.05)
+                            continue
+                    else:
+                        # Last resort: Windows without msvcrt
+                        # WARNING: This approach uses 'x' mode which is NOT truly atomic
+                        # It's a check-then-act operation susceptible to race conditions
+                        # between checking if file exists and creating it exclusively.
+                        # This should only be used when msvcrt is not available.
+                        if lock_path.exists():
+                            # Check if lock is stale (older than max_wait)
+                            try:
+                                if time.time() - lock_path.stat().st_mtime > max_wait:
+                                    # Stale lock, remove it
+                                    lock_path.unlink()
+                            except OSError:
+                                pass  # Another process might have removed it
+
+                            # Wait before retry
+                            if time.time() - start_time > max_wait:
+                                raise OperationalError(
+                                    f"Timeout waiting for setup lock: {phase.value}"
+                                ) from None
+                            # Note: Using time.sleep for file lock acquisition (see comment above)
+                            time.sleep(0.05)  # Shorter wait on Windows
+                            continue
+
+                        # Try to create lock file exclusively
+                        # NOTE: Race condition exists here between check and creation
+                        try:
+                            lock_file = open(lock_path, "x")
+                            # Set restrictive permissions for security
+                            try:
+                                os.chmod(lock_path, 0o600)
+                            except OSError:
+                                # Some systems may not support chmod
+                                pass
+                            lock_acquired = True
+                        except FileExistsError:
+                            # File was created by another process, retry
+                            pass
             except OSError:
                 if lock_file:
                     lock_file.close()
+                    lock_file = None
+
                 if time.time() - start_time > max_wait:
                     raise OperationalError(
                         f"Timeout waiting for setup lock: {phase.value}"
                     ) from None
-                time.sleep(0.1)
+                # Note: Using time.sleep for file lock acquisition (see comment above)
+                time.sleep(0.05)  # Shorter wait for faster retries
 
         try:
             # Double-check with thread lock
@@ -402,7 +538,12 @@ class SQLiteRunner:
                 # Mark as complete
                 self._completed_phases.add(phase)
                 try:
-                    marker_path.touch()
+                    # Create marker file - only set permissions if it doesn't exist
+                    if not marker_path.exists():
+                        marker_path.touch(mode=0o600)
+                    else:
+                        # File exists, just touch it to update timestamp
+                        marker_path.touch()
                     # Track for cleanup
                     self._created_files.add(marker_path)
                 except (ValueError, OSError, TypeError):
@@ -417,11 +558,21 @@ class SQLiteRunner:
                         fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
                     except OSError:
                         pass
+                elif "has_msvcrt" in locals() and has_msvcrt:
+                    try:
+                        # Unlock before closing on Windows
+                        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+                    except OSError:
+                        pass
                 lock_file.close()
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
+
+            # Only unlink lock file if we're not using msvcrt
+            # (msvcrt needs the file to exist for other processes to lock)
+            if not ("has_msvcrt" in locals() and has_msvcrt):
+                try:
+                    lock_path.unlink()
+                except OSError:
+                    pass
 
     def is_setup_complete(self, phase: SetupPhase) -> bool:
         """Check if a setup phase has been completed.

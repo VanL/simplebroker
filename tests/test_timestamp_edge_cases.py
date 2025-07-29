@@ -128,30 +128,44 @@ class TestTimestampEdgeCases:
         # Mock time to return a value that would exceed 2^63 when shifted
         with patch("simplebroker._timestamp.time") as mock_time:
             # 2^43 milliseconds would overflow when shifted by 20
-            mock_time.time.return_value = (1 << 43) / 1000.0
+            # time_ns() returns nanoseconds, so multiply by 1e9
+            mock_time.time_ns.return_value = int((1 << 43) * 1_000_000)
 
             with pytest.raises(TimestampError, match="too far in future"):
                 gen.generate()
 
     def test_timestamp_generator_update_conflict(self):
-        """Test handling of timestamp update conflicts."""
+        """Test handling of timestamp update conflicts - exhausted retries."""
         mock_runner = Mock()
 
-        # Use TimeAdvancer to ensure consistent time behavior
-        time_advancer = TimeAdvancer(start_time=1.0)
+        # Mock time_ns to return consistent nanoseconds
+        with patch("simplebroker._timestamp.time") as mock_time:
+            mock_time.time_ns.return_value = 1_000_000_000  # 1 second in nanoseconds
 
-        with patch("simplebroker._timestamp.time", Mock(time=time_advancer)):
-            # Set up runner mock to fail on update
+            # Set up runner mock to simulate conflicts
+            # Each call to run will be for either SELECT or UPDATE operations
             mock_runner.run.side_effect = [
                 [(0,)],  # Initial read during _initialize
-                IntegrityError(
-                    "UNIQUE constraint failed"
-                ),  # Update fails during generate
+                [],  # UPDATE returns empty (someone else updated) - retry 1
+                [(1000,)],  # SELECT to peek latest value after conflict
+                [],  # UPDATE returns empty again - retry 2
+                [(2000,)],  # SELECT to peek latest value
+                [],  # UPDATE returns empty again - retry 3
+                [(3000,)],  # SELECT to peek latest value
+                [],  # UPDATE returns empty again - retry 4
+                [(4000,)],  # SELECT to peek latest value
+                [],  # UPDATE returns empty again - retry 5
+                [(5000,)],  # SELECT to peek latest value
+                [],  # UPDATE returns empty again - retry 6
+                [(6000,)],  # SELECT to peek latest value
             ]
 
             gen = TimestampGenerator(mock_runner)
 
-            with pytest.raises(IntegrityError, match="Timestamp update conflict"):
+            # Should exhaust all 6 retries and raise IntegrityError
+            with pytest.raises(
+                IntegrityError, match="unable to generate unique timestamp"
+            ):
                 gen.generate()
 
     def test_parse_numeric_edge_cases(self):
@@ -210,7 +224,8 @@ class TestTimestampEdgeCases:
         # Generate should detect fork and reinitialize
         mock_runner.run.return_value = [(2000,)]  # New last_ts
 
-        with patch("simplebroker._timestamp.time", Mock(time=Mock(return_value=1.0))):
+        with patch("simplebroker._timestamp.time") as mock_time:
+            mock_time.time_ns.return_value = 2_000_000_000  # 2 seconds in nanoseconds
             gen.generate()
 
         # Verify reinitialization

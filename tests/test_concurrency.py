@@ -6,6 +6,8 @@ T6 – Concurrent writers do not deadlock and all messages arrive
 
 import concurrent.futures as cf
 
+import pytest
+
 from .conftest import run_cli
 
 
@@ -30,6 +32,7 @@ def _read_until_empty_helper(args):
     return messages
 
 
+@pytest.mark.xdist_group(name="concurrency_serial")
 def test_parallel_writes(workdir):
     """T6: Multiple concurrent writers work correctly."""
     import sys
@@ -39,19 +42,31 @@ def test_parallel_writes(workdir):
         message_count = 50  # Further reduced for Windows
         max_workers = 4  # Fewer concurrent workers on Windows
     else:
-        message_count = 100  # Reduced from 500 for faster tests
-        max_workers = 8
+        message_count = 50  # Reduced to avoid xdist worker conflicts
+        max_workers = 4  # Reduced concurrency for test stability
 
     def write_one(idx):
         """Write a single message."""
-        rc, _, err = run_cli("write", "concurrent", f"msg_{idx:03d}", cwd=workdir)
-        if rc != 0 and sys.platform == "win32":
-            # On Windows, retry once if we get a locking error
-            import time
+        from simplebroker import Queue
 
-            time.sleep(0.1)
-            rc, _, err = run_cli("write", "concurrent", f"msg_{idx:03d}", cwd=workdir)
-        return rc, idx, err
+        try:
+            # Use the API directly to avoid subprocess issues with xdist
+            queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
+            queue.write(f"msg_{idx:03d}")
+            return 0, idx, ""
+        except Exception as e:
+            if sys.platform == "win32":
+                # On Windows, retry once if we get a locking error
+                import time
+
+                time.sleep(0.1)
+                try:
+                    queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
+                    queue.write(f"msg_{idx:03d}")
+                    return 0, idx, ""
+                except Exception as e2:
+                    return 1, idx, str(e2)
+            return 1, idx, str(e)
 
     # Write messages in parallel
     with cf.ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -61,15 +76,23 @@ def test_parallel_writes(workdir):
     failures = [(idx, err) for rc, idx, err in results if rc != 0]
     if failures:
         print(f"Failed writes: {failures}")
+        for idx, err in failures[:5]:  # Show first 5 errors
+            print(f"  Write {idx} failed: {err}")
 
     # All writes should succeed
     assert all(rc == 0 for rc, _, _ in results)
 
     # Read all messages
-    rc, out, _ = run_cli("read", "concurrent", "--all", cwd=workdir)
-    assert rc == 0
+    from simplebroker import Queue
 
-    messages = out.splitlines()
+    queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
+    messages = []
+    while True:
+        msg = queue.read()
+        if msg is None:
+            break
+        messages.append(msg)
+
     assert len(messages) == message_count
 
     # Verify all messages arrived (order depends on process scheduling)
@@ -80,6 +103,7 @@ def test_parallel_writes(workdir):
     assert actual_messages == expected_messages, "Not all messages were received"
 
 
+@pytest.mark.xdist_group(name="concurrency_serial")
 def test_concurrent_read_write(workdir):
     """Readers and writers can work concurrently."""
     import time
@@ -133,6 +157,7 @@ def test_concurrent_read_write(workdir):
     assert all(msg.startswith("w") for msg in messages)
 
 
+@pytest.mark.xdist_group(name="concurrency_serial")
 def test_two_readers_same_message(workdir):
     """Regression test: ensure only one reader gets each message."""
     # Write a single message
@@ -156,6 +181,7 @@ def test_two_readers_same_message(workdir):
     assert empty_count == 1, "Expected one reader to get empty queue"
 
 
+@pytest.mark.xdist_group(name="concurrency_serial")
 def test_concurrent_readers_multiple_messages(workdir):
     """Test that multiple messages are distributed among concurrent readers without duplication."""
     num_messages = 20

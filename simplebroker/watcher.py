@@ -31,7 +31,9 @@ import time
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, Optional, Type
 
+from ._exceptions import OperationalError
 from .db import BrokerDB
+from .helpers import interruptible_sleep
 
 __all__ = ["QueueWatcher", "QueueMoveWatcher", "Message"]
 
@@ -80,6 +82,7 @@ class PollingStrategy:
 
     def __init__(
         self,
+        stop_event: threading.Event,
         initial_checks: int = 100,
         max_interval: float = 0.1,
         burst_sleep: float = 0.0002,
@@ -88,7 +91,7 @@ class PollingStrategy:
         self._max_interval = max_interval
         self._burst_sleep = burst_sleep
         self._check_count = 0
-        self._stop_event = threading.Event()
+        self._stop_event = stop_event
         self._data_version: Optional[int] = None
         self._db: Optional[BrokerDB] = None
         self._pragma_failures = 0
@@ -105,7 +108,7 @@ class PollingStrategy:
 
         if delay == 0:
             # Micro-sleep to prevent CPU spinning while maintaining responsiveness
-            time.sleep(self._burst_sleep)
+            interruptible_sleep(self._burst_sleep, self._stop_event)
         else:
             # Wait with timeout
             self._stop_event.wait(timeout=delay)
@@ -121,11 +124,6 @@ class PollingStrategy:
         self._db = db
         self._check_count = 0
         self._data_version = None
-        self._stop_event.clear()
-
-    def stop(self) -> None:
-        """Stop the polling loop."""
-        self._stop_event.set()
 
     def _get_delay(self) -> float:
         """Calculate delay based on check count."""
@@ -215,6 +213,7 @@ class QueueWatcher:
         max_interval: float = 0.1,
         error_handler: Optional[Callable[[Exception, str, int], Optional[bool]]] = None,
         since_timestamp: Optional[int] = None,
+        batch_processing: bool = False,
     ) -> None:
         """
         Initializes the watcher.
@@ -258,6 +257,13 @@ class QueueWatcher:
             ensures that if a handler fails, the message will be re-processed on the
             next poll, providing at-least-once notification semantics.
             If None, processes all messages.
+        batch_processing : bool, optional
+            If True, process all available messages in a single batch for better
+            performance. If False (default), process messages one at a time for
+            maximum safety. When False, the watcher will process exactly one message
+            per poll cycle in all modes, ensuring that handler failures don't affect
+            other messages. This is especially important in consuming mode where
+            messages are permanently removed before processing.
         """
         # Extract database path for thread-safe operation
         self._provided_db: Optional[BrokerDB]
@@ -284,6 +290,8 @@ class QueueWatcher:
         self._stop_event = threading.Event()
         # Initialize _last_seen_ts with since_timestamp if provided, otherwise 0
         self._last_seen_ts = since_timestamp if since_timestamp is not None else 0
+        # Store batch processing preference
+        self._batch_processing = batch_processing
 
         # Thread-local storage for database connections
         self._thread_local = threading.local()
@@ -322,6 +330,7 @@ class QueueWatcher:
 
         # Create polling strategy with optimized settings
         self._strategy = PollingStrategy(
+            stop_event=self._stop_event,
             initial_checks=env_initial_checks,
             max_interval=env_max_interval,
             burst_sleep=env_burst_sleep,
@@ -419,8 +428,17 @@ class QueueWatcher:
 
             retry_count = 0
             max_retries = 3
+            start_time = time.time()
+            MAX_TOTAL_RETRY_TIME = 300  # 5 minutes max
 
             while retry_count < max_retries:
+                # Check absolute timeout
+                if time.time() - start_time > MAX_TOTAL_RETRY_TIME:
+                    raise TimeoutError(
+                        f"Watcher retry timeout exceeded ({MAX_TOTAL_RETRY_TIME}s). "
+                        f"Retries: {retry_count}, Time elapsed: {time.time() - start_time:.1f}s"
+                    )
+
                 try:
                     # Initialize strategy with thread-local database
                     self._strategy.start(self._get_db())
@@ -429,12 +447,13 @@ class QueueWatcher:
                     self._drain_queue()
 
                     # Main loop
-                    while not self._stop_event.is_set():
+                    while True:
+                        self._check_stop()  # Check at start of each iteration
+
                         # Wait for activity
                         self._strategy.wait_for_activity()
 
-                        if self._stop_event.is_set():
-                            break
+                        self._check_stop()  # Check after waiting
 
                         # Process available messages
                         self._drain_queue()
@@ -458,21 +477,17 @@ class QueueWatcher:
                             f"Watcher error (retry {retry_count}/{max_retries}): {e}. "
                             f"Retrying in {wait_time} seconds..."
                         )
-                        time.sleep(wait_time)
+                        if not interruptible_sleep(wait_time, self._stop_event):
+                            # Sleep was interrupted, exit retry loop
+                            logger.info("Watcher retry interrupted by stop signal")
+                            break
                         # Clean up before retry
                         try:
-                            self._strategy.stop()
                             self._cleanup_thread_local()
                         except Exception:
                             pass
 
         finally:
-            # Clean up
-            try:
-                self._strategy.stop()
-            except Exception as e:
-                logger.warning(f"Error stopping strategy: {e}")
-
             # Clean up thread-local connections
             self._cleanup_thread_local()
 
@@ -488,6 +503,15 @@ class QueueWatcher:
         """
         self._stop_event.set()
         self._strategy.notify_activity()  # Wake up wait_for_activity
+
+    def _check_stop(self) -> None:
+        """Centralized stop check that can be easily mocked in tests.
+
+        Raises:
+            _StopLoop: If stop has been requested
+        """
+        if self._stop_event.is_set():
+            raise _StopLoop
 
     def run_in_thread(self) -> threading.Thread:
         """
@@ -572,77 +596,138 @@ class QueueWatcher:
                     f"Database connection error (retry {db_retry_count}/{max_db_retries}): {e}. "
                     f"Retrying in {wait_time} seconds..."
                 )
-                time.sleep(wait_time)
+                if not interruptible_sleep(wait_time, self._stop_event):
+                    # Sleep was interrupted, raise to exit
+                    raise _StopLoop from None
 
         # Determine if we should process one at a time
-        # (when we have an error handler that might stop processing)
-        process_one_at_time = self._error_handler is not None and not self._peek
+        # Default to one-at-a-time for safety unless batch processing is explicitly enabled
 
         if self._peek:
-            # In peek mode, we can safely process all at once since we're not consuming
+            # In peek mode, process based on batch_processing setting
             # Pass since_timestamp to filter at database level
-            for body, ts in db.stream_read_with_timestamps(
-                self._queue,
-                all_messages=True,
-                peek=True,
-                commit_interval=1,
-                since_timestamp=self._last_seen_ts,
-            ):
-                # No need to skip messages - database already filtered them
+            operational_error_count = 0
+            max_operational_retries = 5
+
+            while operational_error_count < max_operational_retries:
                 try:
-                    self._dispatch(body, ts)
-                    # Only update _last_seen_ts after successful dispatch
-                    self._last_seen_ts = max(self._last_seen_ts, ts)
-                    found_messages = True
-                except _StopLoop:
-                    # Re-raise to exit the loop
-                    raise
-                except Exception:
-                    # Don't update timestamp if dispatch failed
-                    # This ensures we'll retry the message next time
-                    pass
-
-                if self._stop_event.is_set():
-                    raise _StopLoop
-        else:
-            # Consuming mode
-            try:
-                while True:
-                    # Process one at a time if we might need to stop on error
-                    messages_found_this_iteration = False
-
                     for body, ts in db.stream_read_with_timestamps(
                         self._queue,
-                        all_messages=not process_one_at_time,  # Process all at once unless we need fine control
-                        peek=False,
+                        all_messages=self._batch_processing,  # Respect batch processing preference
+                        peek=True,
                         commit_interval=1,
+                        since_timestamp=self._last_seen_ts,
                     ):
+                        # No need to skip messages - database already filtered them
                         try:
                             self._dispatch(body, ts)
+                            # Only update _last_seen_ts after successful dispatch
+                            self._last_seen_ts = max(self._last_seen_ts, ts)
                             found_messages = True
-                            messages_found_this_iteration = True
                         except _StopLoop:
-                            # Re-raise to exit the outer loop
+                            # Re-raise to exit the loop
                             raise
+                        except Exception:
+                            # Don't update timestamp if dispatch failed
+                            # This ensures we'll retry the message next time
+                            pass
 
-                        # If processing one at a time, break after each message
-                        # Note: stream_read_with_timestamps already handles commits
-                        if process_one_at_time:
+                        # If not batch processing, break after first message
+                        if not self._batch_processing:
                             break
 
-                    if self._stop_event.is_set():
-                        raise _StopLoop
+                    # Successfully completed, break out of retry loop
+                    break
 
-                    # If we're processing one at a time and found nothing, we're done
-                    if process_one_at_time and not messages_found_this_iteration:
-                        break
+                except OperationalError as e:
+                    operational_error_count += 1
+                    if operational_error_count >= max_operational_retries:
+                        logger.error(
+                            f"Failed after {max_operational_retries} operational errors: {e}"
+                        )
+                        raise
+                    # Exponential backoff with jitter
+                    jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
+                    wait_time = 0.05 * (2**operational_error_count) + jitter
+                    logger.warning(
+                        f"OperationalError during peek (retry {operational_error_count}/{max_operational_retries}): {e}. "
+                        f"Retrying in {wait_time:.3f} seconds..."
+                    )
+                    if not interruptible_sleep(wait_time, self._stop_event):
+                        # Sleep was interrupted, raise to exit
+                        raise _StopLoop from None
+        else:
+            # Consuming mode
+            operational_error_count = 0
+            max_operational_retries = 5
 
-                    # If we're processing all at once, we're done after one iteration
-                    if not process_one_at_time:
-                        break
-            except _StopLoop:
-                # Exit gracefully when stop is requested
-                pass
+            while operational_error_count < max_operational_retries:
+                try:
+                    # If batch processing is disabled, process exactly one message per drain call
+                    if not self._batch_processing:
+                        # Read and process exactly one message
+                        for body, ts in db.stream_read_with_timestamps(
+                            self._queue,
+                            all_messages=False,  # Only get one message
+                            peek=False,
+                            commit_interval=1,
+                        ):
+                            try:
+                                self._dispatch(body, ts)
+                                found_messages = True
+                            except _StopLoop:
+                                raise
+
+                            # Always break after first message when not batch processing
+                            break
+                    else:
+                        # Batch processing enabled - process all available messages
+                        while True:
+                            # Check stop before each batch iteration
+                            self._check_stop()
+
+                            messages_found_this_iteration = False
+
+                            for body, ts in db.stream_read_with_timestamps(
+                                self._queue,
+                                all_messages=True,  # Process all messages
+                                peek=False,
+                                commit_interval=1,
+                            ):
+                                try:
+                                    self._dispatch(body, ts)
+                                    found_messages = True
+                                    messages_found_this_iteration = True
+                                except _StopLoop:
+                                    raise
+
+                            # No more messages found, exit the loop
+                            if not messages_found_this_iteration:
+                                break
+
+                    # Successfully completed, break out of retry loop
+                    break
+
+                except OperationalError as e:
+                    operational_error_count += 1
+                    if operational_error_count >= max_operational_retries:
+                        logger.error(
+                            f"Failed after {max_operational_retries} operational errors: {e}"
+                        )
+                        raise
+                    # Exponential backoff with jitter
+                    jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
+                    wait_time = 0.05 * (2**operational_error_count) + jitter
+                    logger.warning(
+                        f"OperationalError during consume (retry {operational_error_count}/{max_operational_retries}): {e}. "
+                        f"Retrying in {wait_time:.3f} seconds..."
+                    )
+                    if not interruptible_sleep(wait_time, self._stop_event):
+                        # Sleep was interrupted, raise to exit
+                        raise _StopLoop from None
+                except _StopLoop:
+                    # Re-raise to exit the watcher
+                    raise
 
         # Notify strategy that we found messages (helps with polling backoff)
         if found_messages:
@@ -758,6 +843,7 @@ class QueueMoveWatcher(QueueWatcher):
             initial_checks=initial_checks,
             max_interval=max_interval,
             error_handler=None,  # We'll handle errors ourselves
+            batch_processing=False,  # Always process one at a time for moves
         )
 
         # Store the original handler and error_handler
@@ -823,10 +909,18 @@ class QueueMoveWatcher(QueueWatcher):
                     f"Database connection error (retry {db_retry_count}/{max_db_retries}): {e}. "
                     f"Retrying in {wait_time} seconds..."
                 )
-                time.sleep(wait_time)
+                if not interruptible_sleep(wait_time, self._stop_event):
+                    # Sleep was interrupted, exit
+                    return
 
         # Process messages one at a time until source queue is empty
+        operational_error_count = 0
+        max_operational_retries = 5
+
         while True:
+            # Check for stop signal before each move for responsiveness
+            self._check_stop()
+
             try:
                 # Use db.move() to atomically move oldest unclaimed message
                 result = db.move(
@@ -837,6 +931,8 @@ class QueueMoveWatcher(QueueWatcher):
                     # No more unclaimed messages to move
                     break
 
+                # Reset error count on successful operation
+                operational_error_count = 0
                 found_messages = True
                 self._move_count += 1
 
@@ -871,13 +967,27 @@ class QueueMoveWatcher(QueueWatcher):
 
             except _StopLoop:
                 raise
+            except OperationalError as e:
+                operational_error_count += 1
+                if operational_error_count >= max_operational_retries:
+                    logger.error(
+                        f"Failed after {max_operational_retries} operational errors: {e}"
+                    )
+                    raise
+                # Exponential backoff with jitter
+                jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
+                wait_time = 0.05 * (2**operational_error_count) + jitter
+                logger.warning(
+                    f"OperationalError during move (retry {operational_error_count}/{max_operational_retries}): {e}. "
+                    f"Retrying in {wait_time:.3f} seconds..."
+                )
+                if not interruptible_sleep(wait_time, self._stop_event):
+                    # Sleep was interrupted, exit
+                    return
+                continue  # Retry the loop
             except Exception as e:
                 logger.error(f"Unexpected error during move: {e}")
                 raise
-
-            # Check if we should stop after each message
-            if self._stop_event.is_set():
-                raise _StopLoop
 
         # Notify strategy that we found messages
         if found_messages:

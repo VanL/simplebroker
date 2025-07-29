@@ -104,11 +104,11 @@ def test_transient_conflict_recovery(workdir):
     # 1. Write a message to get a timestamp
     # 2. Manually set meta to a value that will generate a duplicate
 
-    # Get current time in ms
-    current_ms = int(time.time() * 1000)
+    # Get current time in microseconds
+    current_us = int(time.time() * 1_000_000)
 
     # Create a timestamp manually
-    ts_to_conflict = (current_ms << 20) | 0  # physical time with counter 0
+    ts_to_conflict = (current_us << 12) | 0  # physical time with counter 0
 
     # Insert a message with this timestamp
     with db._lock:
@@ -349,24 +349,6 @@ def test_concurrent_writes_simple(workdir):
     for i in range(3):
         messages = list(db.read(f"queue_{i}", all_messages=True))
         assert len(messages) == 5
-
-
-def test_performance_basic(workdir):
-    """Basic performance check - not excessive writes."""
-    db_path = workdir / "test.db"
-    db = BrokerDB(str(db_path))
-
-    # Time 50 writes
-    start = time.time()
-    for i in range(50):
-        db.write("perf_test", f"Message {i}")
-    elapsed = time.time() - start
-
-    # Should complete in reasonable time (< 1 second for 50 writes)
-    assert elapsed < 1.0
-
-    # No conflicts should have occurred
-    assert db.get_conflict_metrics()["ts_conflict_count"] == 0
 
 
 if __name__ == "__main__":

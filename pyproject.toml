@@ -25,7 +25,6 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Distributed Computing",
     "Topic :: Utilities",
@@ -39,6 +38,7 @@ dev = [
     "pytest-xdist>=3.0",
     "mypy>=1.0",
     "ruff>=0.1.0",
+    "pytest-timeout>=2.4.0",
 ]
 
 [project.scripts]
@@ -67,7 +67,7 @@ exclude = [
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
-addopts = "-ra -q --strict-markers -m 'not slow' -n auto"
+addopts = "-ra -q --strict-markers -m 'not slow' -n auto --dist loadgroup"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]

@@ -82,8 +82,18 @@ from simplebroker.db import (
     MAX_MESSAGE_SIZE,
     SCHEMA_VERSION,
     SIMPLEBROKER_MAGIC,
-    _validate_queue_name_cached,
 )
+
+
+def _validate_queue_name(queue: str) -> Optional[str]:
+    """Validate queue name and return error message or None if valid."""
+    if not queue:
+        return "Queue name cannot be empty"
+    if len(queue) > 256:
+        return f"Queue name too long ({len(queue)} > 256 characters)"
+    if not queue.replace("-", "").replace("_", "").replace(".", "").isalnum():
+        return "Queue name can only contain letters, numbers, hyphens, underscores, and dots"
+    return None
 
 
 class AsyncSQLRunner(Protocol):
@@ -163,7 +173,7 @@ class PooledAsyncSQLiteRunner:
         await conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
 
         cache_mb = int(os.environ.get("BROKER_CACHE_MB", "10"))
-        await conn.execute(f"PRAGMA cache_size=-{cache_mb * 1000}")
+        await conn.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
 
         sync_mode = os.environ.get("BROKER_SYNC_MODE", "FULL").upper()
         if sync_mode not in ("OFF", "NORMAL", "FULL", "EXTRA"):
@@ -202,8 +212,11 @@ class PooledAsyncSQLiteRunner:
                 raise OperationalError(str(e)) from e
             except aiosqlite.IntegrityError as e:
                 raise IntegrityError(str(e)) from e
-            except aiosqlite.DataError as e:
-                raise DataError(str(e)) from e
+            except aiosqlite.DatabaseError as e:
+                # aiosqlite doesn't expose DataError directly
+                if "DATATYPE MISMATCH" in str(e).upper():
+                    raise DataError(str(e)) from e
+                raise
         else:
             # Get connection from pool
             async with pool.acquire() as conn:
@@ -217,8 +230,11 @@ class PooledAsyncSQLiteRunner:
                     raise OperationalError(str(e)) from e
                 except aiosqlite.IntegrityError as e:
                     raise IntegrityError(str(e)) from e
-                except aiosqlite.DataError as e:
-                    raise DataError(str(e)) from e
+                except aiosqlite.DatabaseError as e:
+                    # aiosqlite doesn't expose DataError directly
+                    if "DATATYPE MISMATCH" in str(e).upper():
+                        raise DataError(str(e)) from e
+                    raise
 
     async def begin_immediate(self) -> None:
         """Start an immediate transaction."""
@@ -537,7 +553,7 @@ class AsyncBrokerCore:
 
     def _validate_queue_name(self, queue: str) -> None:
         """Validate queue name."""
-        error = _validate_queue_name_cached(queue)
+        error = _validate_queue_name(queue)
         if error:
             raise ValueError(error)
 

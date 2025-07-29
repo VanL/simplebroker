@@ -26,6 +26,12 @@ class OperationalError(BrokerError, sqlite3.OperationalError):
     pass
 
 
+class StopException(OperationalError):
+    """Exception raised when an operation is interrupted by a stop signal."""
+
+    pass
+
+
 class IntegrityError(BrokerError, sqlite3.IntegrityError):
     """Database integrity constraint violated.
 

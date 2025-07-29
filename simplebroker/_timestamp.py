@@ -5,13 +5,14 @@ that all SimpleBroker extensions must use to ensure consistency.
 """
 
 import os
+import random
 import threading
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional, Tuple
 
-from ._exceptions import IntegrityError, TimestampError
-from .helpers import interruptible_sleep
+from ._exceptions import IntegrityError, OperationalError, TimestampError
+from .helpers import _execute_with_retry
 
 if TYPE_CHECKING:
     from ._runner import SQLRunner
@@ -39,7 +40,13 @@ US_PER_SECOND = 1_000_000  # Microseconds per second
 MS_PER_US = 1000  # Microseconds per millisecond
 NS_PER_US = 1000  # Nanoseconds per microsecond
 NS_PER_SECOND = 1_000_000_000  # Nanoseconds per second
-WAIT_FOR_NEXT_INCREMENT = 0.0001  # Sleep duration in seconds when waiting for the clock to advance
+WAIT_FOR_NEXT_INCREMENT = (
+    0.0001  # Sleep duration in seconds when waiting for the clock to advance
+)
+
+MAX_ITERATIONS = (
+    10000  # Number of times we will loop before concluding the clock is broken
+)
 
 
 class TimestampGenerator:
@@ -104,72 +111,119 @@ class TimestampGenerator:
         return physical_us, logical_counter
 
     def generate(self) -> int:
-        """Generate the next hybrid timestamp.
-
-        Returns:
-            64-bit timestamp value
-
-        Raises:
-            IntegrityError: If timestamp update conflicts
         """
-        # Check for fork safety
-        current_pid = os.getpid()
-        if current_pid != self._pid:
-            # We're in a forked process, reinitialize
-            self._pid = current_pid
-            self._initialized = False
-            self._last_ts = 0
-            self._counter = 0
+        Robust, lock-free (DB-wise) timestamp generator.
+        """
+        self._ensure_pid()
 
-        # Lazy initialization
-        self._initialize()
-
-        with self._lock:
-            # Current time in microseconds (convert from nanoseconds)
-            now_us = time.time_ns() // NS_PER_US
-
-            # Extract physical time from last timestamp
-            last_physical = self._last_ts >> LOGICAL_COUNTER_BITS
-
-            if now_us > last_physical:
-                # New microsecond, reset counter
-                self._counter = 0
-                new_ts = (now_us << LOGICAL_COUNTER_BITS) | self._counter
-            else:
-                # Same microsecond, increment counter
-                self._counter += 1
-                if self._counter >= MAX_LOGICAL_COUNTER:
-                    # Counter overflow, wait for next microsecond
-                    # Note: We use time.sleep here instead of interruptible_sleep because:
-                    # 1. This is a very short wait (0.0001 seconds)
-                    # 2. Timestamp generation is atomic and shouldn't be interrupted
-                    # 3. There's no associated stop event for this operation
-                    while now_us <= last_physical:
-                        time.sleep(WAIT_FOR_NEXT_INCREMENT)
-                        now_us = time.time_ns() // NS_PER_US
-                    self._counter = 0
-                new_ts = (now_us << LOGICAL_COUNTER_BITS) | self._counter
+        # one local fast-path loop, *no* DB locks are held here
+        for _ in range(6):  # hard upper bound
+            physical_us, logical = self._next_components()
+            new_ts = self._encode_hybrid_timestamp(physical_us, logical)
 
             # Ensure it fits in SQLite's signed 64-bit integer
             if new_ts >= SQLITE_MAX_INT64:
                 raise TimestampError("Timestamp too far in future")
 
-            # Update database (must be in transaction)
-            try:
-                result = self._runner.run(
-                    "UPDATE meta SET value = ? WHERE key = 'last_ts' AND value = ? RETURNING value",
-                    (new_ts, self._last_ts),
-                    fetch=True,
-                )
-                result_list = list(result)
-                if not result_list:
-                    # If no rows were updated, it means the last_ts was changed by another process
-                    raise IntegrityError("Timestamp update conflict after retry")
-            except IntegrityError:
-                raise IntegrityError("Timestamp update conflict") from None
+            # >>> single atomic write – no BEGIN <<< -----------------
+            if self._store_if_greater(new_ts):
+                self._last_ts = new_ts
+                return new_ts
+            # ---------------------------------------------------------
 
-            self._last_ts = new_ts
-            return new_ts
+            # Someone beat us – read their value and try again
+            latest = self._peek_last_ts()
+            if latest is None:
+                # meta row disappeared – DB is corrupt
+                raise TimestampError("meta.last_ts missing")
+            self._last_ts = latest
+
+        # should never reach here
+        raise IntegrityError("unable to generate unique timestamp (exhausted retries)")
+
+    # -- internal helpers -------------------------------------
+
+    def _ensure_pid(self) -> None:
+        """
+        Handle fork() transparently – cheap check, no DB access.
+        """
+        pid = os.getpid()
+        if pid != self._pid:
+            self._pid = pid
+            self._initialized = False  # force lazy init
+            self._last_ts = 0
+            self._counter = 0
+
+    # -----------------------------------------------------------------
+    # 1. compute next physical/logical pair entirely in memory
+    # -----------------------------------------------------------------
+    def _next_components(self) -> Tuple[int, int]:
+        """
+        Called with self._lock already held.
+        """
+        with self._lock:
+            if not self._initialized:
+                self._initialize()  # cheap SELECT, autocommit
+
+            now_us = time.time_ns() // NS_PER_US
+            last_phys = self._last_ts >> LOGICAL_COUNTER_BITS
+
+            if now_us > last_phys:
+                self._counter = 0
+            else:
+                self._counter += 1
+                if self._counter >= MAX_LOGICAL_COUNTER:
+                    # wait for clock to advance
+                    num_iterations = 0
+                    while now_us <= last_phys and num_iterations < MAX_ITERATIONS:
+                        jitter = random.uniform(
+                            WAIT_FOR_NEXT_INCREMENT / 2, WAIT_FOR_NEXT_INCREMENT
+                        )
+                        time.sleep(jitter)
+                        now_us = time.time_ns() // NS_PER_US
+                        num_iterations += 1
+                    self._counter = 0
+
+            return now_us, self._counter
+
+    # -----------------------------------------------------------------
+    # 2. try to store the new value if it is higher
+    # -----------------------------------------------------------------
+    def _store_if_greater(self, new_ts: int) -> bool:
+        """
+        Try to atomically update meta.last_ts.
+        Returns True if we stored the value, False if someone else already
+        wrote a higher one.
+        """
+
+        def _op() -> bool:
+            rows = self._runner.run(
+                """
+                UPDATE meta
+                SET    value = ?
+                WHERE  key   = 'last_ts'
+                  AND  value < ?
+                RETURNING value
+                """,
+                (new_ts, new_ts),
+                fetch=True,
+            )
+            # rows is non-empty if the UPDATE happened
+            return bool(list(rows))
+
+        try:
+            return _execute_with_retry(_op, max_retries=5, retry_delay=0.002)
+        except OperationalError as e:  # pragma busy_timeout etc.
+            raise TimestampError(f"database busy while writing timestamp: {e}") from e
+
+    # -----------------------------------------------------------------
+    # 3. lightweight read helper when we lost the race
+    # -----------------------------------------------------------------
+    def _peek_last_ts(self) -> Optional[int]:
+        rows = list(
+            self._runner.run("SELECT value FROM meta WHERE key='last_ts'", fetch=True)
+        )
+        return rows[0][0] if rows else None
 
     @staticmethod
     def validate(timestamp_str: str, exact: bool = False) -> int:

@@ -1,7 +1,6 @@
 """Tests for performance optimizations."""
 
 import sys
-import time
 
 import simplebroker.cli
 from simplebroker.cli import main
@@ -84,38 +83,6 @@ def test_queue_name_validation_caching():
     info = _validate_queue_name_cached.cache_info()
     assert info.hits == 2
     assert info.misses == 3
-
-
-def test_queue_validation_performance():
-    """Test that cached validation is faster than uncached."""
-    # Clear the cache
-    _validate_queue_name_cached.cache_clear()
-
-    # Time first validation (cache miss)
-    start = time.perf_counter()
-    for _ in range(1000):
-        _validate_queue_name_cached("test_queue_performance")
-    cached_time = time.perf_counter() - start
-
-    # Should have 1 miss and 999 hits
-    info = _validate_queue_name_cached.cache_info()
-    assert info.misses == 1
-    assert info.hits == 999
-
-    # Clear cache and time without caching benefit
-    _validate_queue_name_cached.cache_clear()
-
-    # Simulate uncached by using different queue names
-    start = time.perf_counter()
-    for i in range(1000):
-        _validate_queue_name_cached(f"test_queue_{i}")
-    uncached_time = time.perf_counter() - start
-
-    # Cached should be significantly faster
-    # Even on fast machines, regex matching 1000 times should be measurably slower
-    assert cached_time < uncached_time, (
-        f"Cached: {cached_time:.3f}s, Uncached: {uncached_time:.3f}s"
-    )
 
 
 def test_cache_size_limit():

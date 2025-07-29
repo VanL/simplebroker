@@ -235,6 +235,9 @@ def rearrange_args(argv: List[str]) -> List[str]:
 
     Returns:
         List of rearranged arguments
+
+    Raises:
+        ArgumentParserError: If a global option that requires a value is missing its value
     """
     if not argv:
         return argv
@@ -251,6 +254,9 @@ def rearrange_args(argv: List[str]) -> List[str]:
         "--cleanup",
         "--vacuum",
     }
+
+    # Options that require values
+    options_with_values = {"-d", "--dir", "-f", "--file"}
 
     # Find subcommands
     subcommands = {
@@ -277,17 +283,32 @@ def rearrange_args(argv: List[str]) -> List[str]:
 
         # If we're expecting a value for a previous global option
         if expecting_value_for:
+            # Check if this looks like another flag (starts with -)
+            if arg.startswith("-"):
+                # This is likely another flag, not a value
+                raise ArgumentParserError(
+                    f"option {expecting_value_for} requires an argument"
+                )
             global_args.append(arg)
             expecting_value_for = None
         # Check if this is a global option with equals form (e.g., --dir=/tmp)
-        elif arg.startswith("--dir=") or arg.startswith("--file="):
+        elif "=" in arg and arg.split("=")[0] in global_options:
+            # Handle --option=value format
+            option_name = arg.split("=")[0]
+            if option_name in options_with_values:
+                # Check if value is provided after =
+                if "=" == arg[-1]:
+                    # Ends with = but no value
+                    raise ArgumentParserError(
+                        f"option {option_name} requires an argument"
+                    )
             global_args.append(arg)
         # Check if this is a global option
         elif arg in global_options:
             # This is a global option
             global_args.append(arg)
             # Check if this option takes a value
-            if arg in {"-d", "--dir", "-f", "--file"}:
+            if arg in options_with_values:
                 # Mark that we're expecting a value next
                 expecting_value_for = arg
         elif arg in subcommands and not found_command:
@@ -299,6 +320,10 @@ def rearrange_args(argv: List[str]) -> List[str]:
             command_args.append(arg)
 
         i += 1
+
+    # Check if we're still expecting a value at the end
+    if expecting_value_for:
+        raise ArgumentParserError(f"option {expecting_value_for} requires an argument")
 
     # Combine: global options first, then command and its arguments
     return global_args + command_args
@@ -442,14 +467,15 @@ def main() -> int:
                     f"Database filename must not contain parent directory references: {args.file}"
                 )
 
-        # Additional validation: resolve paths and check containment
-        # Skip containment check if absolute path was provided
-        if not absolute_path_provided:
-            try:
-                # Resolve both paths to compare them
-                resolved_db_path = db_path.resolve()
-                resolved_working_dir = working_dir.resolve()
+        # Resolve symlinks BEFORE validation and use resolved path throughout
+        # This prevents symlink-based path traversal attacks
+        try:
+            # Always resolve the database path to handle symlinks
+            resolved_db_path = db_path.resolve()
+            resolved_working_dir = working_dir.resolve()
 
+            # For non-absolute paths, ensure the resolved path is within working directory
+            if not absolute_path_provided:
                 # Check if the database path is within the working directory
                 # Use is_relative_to() if available (Python 3.9+), otherwise use relative_to()
                 if hasattr(resolved_db_path, "is_relative_to"):
@@ -465,10 +491,21 @@ def main() -> int:
                         raise ValueError(
                             "Database file must be within the working directory"
                         ) from None
-            except (RuntimeError, OSError):
-                # resolve() can fail on non-existent paths, which is acceptable
-                # We've already validated the path structure above
-                pass
+
+            # Use the resolved path from now on to prevent symlink attacks
+            db_path = resolved_db_path
+
+        except (RuntimeError, OSError):
+            # resolve() can fail if parent directories don't exist yet
+            # In this case, we create a resolved path based on resolved working dir
+            if not absolute_path_provided:
+                try:
+                    resolved_working_dir = working_dir.resolve()
+                    # Manually construct the resolved path
+                    db_path = resolved_working_dir / args.file
+                except (RuntimeError, OSError):
+                    # If we can't resolve even the working directory, keep original
+                    pass
 
         # 1) Check if parent directory exists
         if not db_path.parent.exists():

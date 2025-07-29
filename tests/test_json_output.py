@@ -4,20 +4,7 @@ import json
 import time
 
 from .conftest import run_cli
-
-
-def validate_timestamp(ts):
-    """Validate that a timestamp meets SimpleBroker specifications."""
-    assert isinstance(ts, int), f"Timestamp must be int, got {type(ts)}"
-    assert len(str(ts)) == 19, (
-        f"Timestamp must be exactly 19 digits, got {len(str(ts))} digits: {ts}"
-    )
-    # Check reasonable range (approximately year 2020-2100)
-    # Lower bound: 2020-01-01 ≈ 1577836800000 ms << 20 ≈ 1.65e18
-    # Upper bound: 2100-01-01 ≈ 4102444800000 ms << 20 ≈ 4.30e18
-    assert 1_650_000_000_000_000_000 < ts < 4_300_000_000_000_000_000, (
-        f"Timestamp {ts} outside reasonable range (2020-2100)"
-    )
+from .helpers.timestamp_validation import validate_timestamp
 
 
 def test_read_json_single_message(workdir):
@@ -269,4 +256,6 @@ def test_json_timestamp_edge_cases(workdir):
     for i in range(1, len(timestamps)):
         diff = timestamps[i] - timestamps[i - 1]
         # Difference should be positive but not too large (< 1 minute)
-        assert 0 < diff < (60 * 1000 << 20), f"Unexpected timestamp difference: {diff}"
+        assert 0 < diff < (60 * 1_000_000 << 12), (
+            f"Unexpected timestamp difference: {diff}"
+        )

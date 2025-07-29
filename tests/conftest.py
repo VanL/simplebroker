@@ -16,6 +16,15 @@ from typing import Optional, Tuple
 
 import pytest
 
+# Import cleanup fixtures
+from tests.helpers.cleanup import cleanup_at_exit, cleanup_watchers
+
+# Import subprocess utilities
+from tests.helpers.subprocess import ManagedProcess, managed_subprocess, run_subprocess
+
+# Import watcher patching
+from tests.helpers.watcher_patch import patch_watchers
+
 
 # --------------------------------------------------------------------------- #
 # Fixtures
@@ -80,3 +89,18 @@ def run_cli(
         completed.stdout.strip(),
         completed.stderr.strip(),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Export subprocess utilities for use in tests
+# --------------------------------------------------------------------------- #
+__all__ = [
+    "run_cli",
+    "workdir",
+    "managed_subprocess",
+    "run_subprocess",
+    "ManagedProcess",
+    "cleanup_watchers",
+    "cleanup_at_exit",
+    "patch_watchers",
+]

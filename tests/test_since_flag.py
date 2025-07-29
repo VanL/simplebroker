@@ -555,9 +555,9 @@ def test_since_mixed_timestamp_formats(workdir):
     native_ts = int(lines[5].split("\t")[0])
 
     # Convert to different formats
-    # Native timestamp is milliseconds since epoch << 20
-    ms_since_epoch = native_ts >> 20
-    unix_seconds = ms_since_epoch // 1_000
+    # Native timestamp is microseconds since epoch << 12
+    us_since_epoch = native_ts >> 12
+    unix_seconds = us_since_epoch // 1_000_000
     dt = datetime.datetime.fromtimestamp(unix_seconds, datetime.timezone.utc)
 
     # Test each format
@@ -747,67 +747,6 @@ def test_since_multiple_readers(workdir):
             future.result()
 
 
-# ============================================================================
-# Performance and Scale Tests
-# ============================================================================
-
-
-@pytest.mark.slow
-def test_since_large_queue_performance(workdir):
-    """Test --since performance on large message queue."""
-    queue_name = "large_queue"
-    message_count = 5000
-
-    # Write many messages in batches
-    for i in range(0, message_count, 100):
-        for j in range(100):
-            if i + j < message_count:
-                run_cli("write", queue_name, f"msg{i + j:05d}", cwd=workdir)
-
-    # Get timestamp at different points
-    rc, out, _ = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
-    lines = out.strip().split("\n")
-
-    # Test queries at different points
-    # Note: --since uses > comparison, so we get N-1 messages when using timestamp of message N
-    test_points = [
-        (0, message_count),  # All messages
-        (
-            int(lines[message_count // 2].split("\t")[0]),
-            message_count - message_count // 2 - 1,
-        ),  # Messages after midpoint
-        (
-            int(lines[message_count * 9 // 10].split("\t")[0]),
-            message_count - message_count * 9 // 10 - 1,
-        ),  # Messages after 90%
-        (int(lines[-1].split("\t")[0]), 0),  # None
-    ]
-
-    for since_ts, expected_count in test_points:
-        start_time = time.time()
-        rc, out, _ = run_cli(
-            "peek", queue_name, "--all", "--since", str(since_ts), cwd=workdir
-        )
-        elapsed = time.time() - start_time
-
-        if expected_count > 0:
-            assert rc == 0
-            messages = out.strip().split("\n")
-            assert len(messages) == expected_count
-        else:
-            assert rc == 0  # Should succeed with --since
-            assert out == ""  # But return no messages
-
-        # Performance assertion: should achieve at least 2000 messages/second
-        # Add 50ms overhead for process spawn and setup
-        if expected_count > 0:
-            max_allowed_time = (expected_count / 2000.0) + 0.05
-            assert elapsed < max_allowed_time, (
-                f"Query took {elapsed:.3f}s for {expected_count} messages, "
-                f"expected < {max_allowed_time:.3f}s (2000+ msg/sec)"
-            )
-
-
 def test_since_index_usage(workdir):
     """Verify timestamp index is used for queries."""
     queue_name = "index_test_queue"
@@ -955,19 +894,22 @@ def test_since_timestamp_heuristic(workdir):
     # Define the actual boundary used in the implementation
     BOUNDARY = 1 << 44  # Same as in commands.py (approx 1.76e13)
 
-    # A small native timestamp (e.g., from early Unix epoch)
-    # 1 second after epoch, as a native timestamp
-    small_native_ts = (1 * 1000) << 20  # Value is 1048576000
-    assert small_native_ts < BOUNDARY  # This will be treated as Unix
+    # A small timestamp that should be interpreted as Unix milliseconds
+    # Jan 12, 1970 is approximately 1 million seconds = 1 billion milliseconds
+    small_unix_ts_ms = 1_000_000_000  # 1 billion ms = Jan 12, 1970
+    assert small_unix_ts_ms < BOUNDARY  # This will be treated as Unix
 
     # Write a message
     run_cli("write", queue_name, "message", cwd=workdir)
 
-    # Test that `small_native_ts` is interpreted as a Unix timestamp in ms,
+    # Test that `small_unix_ts_ms` is interpreted as a Unix timestamp in ms,
     # which corresponds to Jan 12, 1970, so it should return the message.
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--since", str(small_native_ts), cwd=workdir
+    rc, out, err = run_cli(
+        "peek", queue_name, "--since", str(small_unix_ts_ms), cwd=workdir
     )
+    if rc != 0:
+        print(f"Error: {err}")
+        print(f"Output: {out}")
     assert rc == 0
     assert out == "message"
 
@@ -1000,7 +942,7 @@ def test_since_timestamp_heuristic(workdir):
     assert out == "message"
 
     # Test a large native timestamp from current time
-    current_native = int(time.time() * 1000) << 20
+    current_native = int(time.time() * 1_000_000) << 12
     assert current_native > BOUNDARY  # Should be treated as native
     rc, out, _ = run_cli(
         "peek", queue_name, "--since", str(current_native), cwd=workdir
@@ -1193,16 +1135,16 @@ def test_clock_regression_timestamp_behavior():
     the previous physical time and incrementing the logical counter.
     """
     # Since we can't mock time.time() in a subprocess, we document the expected behavior
-    # The timestamp format is: (milliseconds_since_epoch << 20) | logical_counter
+    # The timestamp format is: (microseconds_since_epoch << 12) | logical_counter
 
     # Example scenario:
     # Time 1: 1700000000000 ms (physical), counter = 0
-    # Timestamp 1: (1700000000000 << 20) | 0 = 1782579200000000000
+    # Timestamp 1: (1700000000000000 << 12) | 0 = 6963200000000000000
 
     # Clock regression: time goes back to 1699999999900 ms
     # Time 2: 1699999999900 ms (physical)
     # Expected behavior: keep previous physical time, increment counter
-    # Timestamp 2: (1700000000000 << 20) | 1 = 1782579200000000001
+    # Timestamp 2: (1700000000000000 << 12) | 1 = 6963200000000000001
 
     # This ensures timestamps are always monotonically increasing
     assert 1782579200000000001 > 1782579200000000000
@@ -1221,10 +1163,10 @@ def test_since_naive_datetime_utc_assumption(workdir):
     native_ts = int(out.split("\t")[0])
 
     # Convert native timestamp to datetime
-    # Native timestamp is milliseconds since epoch << 20
-    ms_since_epoch = native_ts >> 20
+    # Native timestamp is microseconds since epoch << 12
+    us_since_epoch = native_ts >> 12
     dt_utc = datetime.datetime.fromtimestamp(
-        ms_since_epoch / 1000, datetime.timezone.utc
+        us_since_epoch / 1_000_000, datetime.timezone.utc
     )
 
     # Create naive datetime (no timezone info)

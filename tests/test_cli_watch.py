@@ -1,18 +1,18 @@
 """Tests for the broker watch CLI command."""
 
 import signal
-import subprocess
 import sys
 import time
 
-import pytest
+from tests.conftest import managed_subprocess
+from tests.helpers.timestamp_validation import validate_timestamp
 
 
 def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages=None):
     """Wait for JSON output from a process with timeout.
 
     Args:
-        proc: The subprocess
+        proc: The ManagedProcess instance
         expected_count: Expected number of JSON lines (if known)
         timeout: Maximum time to wait in seconds
         expected_messages: Set of expected message contents (optional)
@@ -23,36 +23,32 @@ def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages
     import json
 
     start = time.time()
-    output_lines = []
     json_objects = []
 
     while time.time() - start < timeout:
-        try:
-            # Non-blocking read with timeout
-            line = proc.stdout.readline()
-            if line:
-                line = line.strip()
-                if line:  # Skip empty lines
-                    try:
-                        data = json.loads(line)
-                        json_objects.append(data)
-                        output_lines.append(line)
+        # Get current stdout
+        output = proc.stdout
+        lines = output.strip().split("\n") if output else []
 
-                        # If we have expected messages, check if we've seen them all
-                        if expected_messages:
-                            found_messages = {obj["message"] for obj in json_objects}
-                            if expected_messages.issubset(found_messages):
-                                return json_objects
+        # Parse all lines as JSON
+        for line in lines[len(json_objects) :]:  # Only process new lines
+            if line.strip():
+                try:
+                    data = json.loads(line)
+                    json_objects.append(data)
 
-                        # If we have expected count, check if we've reached it
-                        if expected_count and len(json_objects) >= expected_count:
+                    # If we have expected messages, check if we've seen them all
+                    if expected_messages:
+                        found_messages = {obj["message"] for obj in json_objects}
+                        if expected_messages.issubset(found_messages):
                             return json_objects
-                    except json.JSONDecodeError:
-                        # Skip non-JSON lines (like startup messages)
-                        pass
-        except Exception:
-            # Handle any read errors
-            pass
+
+                    # If we have expected count, check if we've reached it
+                    if expected_count and len(json_objects) >= expected_count:
+                        return json_objects
+                except json.JSONDecodeError:
+                    # Skip non-JSON lines (like startup messages)
+                    pass
 
         time.sleep(0.1)
 
@@ -69,18 +65,6 @@ def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages
     return json_objects
 
 
-def validate_timestamp(ts):
-    """Validate that a timestamp meets SimpleBroker specifications."""
-    assert isinstance(ts, int), f"Timestamp must be int, got {type(ts)}"
-    assert len(str(ts)) == 19, (
-        f"Timestamp must be exactly 19 digits, got {len(str(ts))} digits: {ts}"
-    )
-    # Check reasonable range (approximately year 2020-2100)
-    assert 1_650_000_000_000_000_000 < ts < 4_300_000_000_000_000_000, (
-        f"Timestamp {ts} outside reasonable range (2020-2100)"
-    )
-
-
 class TestWatchCommand:
     """Test the broker watch command."""
 
@@ -94,34 +78,10 @@ class TestWatchCommand:
 
         # Start watch in subprocess
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "watchtest"]
-        proc = subprocess.Popen(
-            cmd,
-            cwd=workdir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
-        try:
-            # Should immediately output the message
-            # Give it a moment to process
-            time.sleep(1.0)
-
-            # Terminate the process and read output
-            proc.terminate()
-            stdout, stderr = proc.communicate(timeout=2.0)
-            assert "hello" in stdout
-
-        except subprocess.TimeoutExpired:
-            # Process didn't terminate cleanly
-            proc.kill()
-            stdout, stderr = proc.communicate()
-            pytest.fail("Watch command did not terminate within timeout")
-        finally:
-            # Ensure process is terminated
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
+        with managed_subprocess(cmd, cwd=workdir) as proc:
+            # Wait for the message to appear in output
+            assert proc.wait_for_output("hello", timeout=2.0)
+            # Process automatically terminated on exit
 
     def test_watch_sigint_handling(self, workdir):
         """Test that watch command handles SIGINT gracefully."""
@@ -133,33 +93,19 @@ class TestWatchCommand:
 
         # Start watch command
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "siginttest"]
-        proc = subprocess.Popen(
-            cmd,
-            cwd=workdir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
-        try:
-            # Give it time to start and process the first message
-            time.sleep(1.0)  # Increased wait time for parallel test execution
+        with managed_subprocess(cmd, cwd=workdir) as proc:
+            # Wait for it to start and process the first message
+            proc.wait_for_output("message1", timeout=2.0)
 
             # Send SIGINT on Unix, terminate on Windows
             if sys.platform == "win32":
                 proc.terminate()
             else:
-                proc.send_signal(signal.SIGINT)
+                proc.proc.send_signal(signal.SIGINT)
 
-            # Should exit gracefully
-            # Use communicate() to avoid deadlock when reading from pipes
-            try:
-                stdout, stderr = proc.communicate(timeout=3.0)
-                return_code = proc.returncode
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-                pytest.fail("Watch command did not exit after SIGINT")
+            # Wait for process to exit
+            proc.proc.wait(timeout=3.0)
+            return_code = proc.proc.returncode
 
             # Check exit code - both 0 and -2 are acceptable on Unix, 1 on Windows
             # 0 means graceful exit, -2 means killed by SIGINT (Unix)
@@ -173,19 +119,11 @@ class TestWatchCommand:
             )
 
             # Should have processed the message OR at least started watching
-            # In parallel tests, the process might be killed before outputting
+            stdout = proc.stdout
+            stderr = proc.stderr
             assert "message1" in stdout or "Watching queue" in stderr, (
                 f"stdout: {stdout!r}, stderr: {stderr!r}"
             )
-
-        finally:
-            # Always clean up the process
-            if proc.poll() is None:  # Check if process is still running
-                proc.kill()
-                try:
-                    proc.communicate(timeout=1)
-                except subprocess.TimeoutExpired:
-                    pass  # Process is being killed, ignore timeout
 
     def test_watch_peek_mode(self, workdir):
         """Test watch in peek mode doesn't consume messages."""
@@ -197,48 +135,27 @@ class TestWatchCommand:
 
         # Start watch in peek mode
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "--peek", "peektest"]
-        proc = subprocess.Popen(
-            cmd,
-            cwd=workdir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        with managed_subprocess(cmd, cwd=workdir) as proc:
+            # Wait for the message to appear in output
+            assert proc.wait_for_output("peekmsg", timeout=2.0)
 
-        try:
-            # Let it run briefly
-            time.sleep(1.0)  # Increased wait time for parallel test execution
-
-            # Terminate and get output using communicate to avoid deadlock
-            proc.terminate()
-            try:
-                stdout, stderr = proc.communicate(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-                pytest.fail("Watch command did not terminate within timeout")
+            # Get output
+            stdout = proc.stdout
+            stderr = proc.stderr
 
             # Should have seen the message OR at least started watching
             assert "peekmsg" in stdout or "Watching queue" in stderr, (
                 f"stdout: {stdout!r}, stderr: {stderr!r}"
             )
 
-            # Message should still be in queue
-            rc, out, err = run_cli("read", "peektest", cwd=workdir)
-            assert rc == 0
-            assert out == "peekmsg"
-
-        except Exception:
-            proc.kill()
-            raise
-        finally:
-            # Ensure process is terminated
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
+        # Message should still be in queue
+        rc, out, err = run_cli("read", "peektest", cwd=workdir)
+        assert rc == 0
+        assert out == "peekmsg"
 
     def test_watch_json_output(self, workdir):
         """Test watch with JSON output format."""
+
         from tests.conftest import run_cli
 
         # Write a message
@@ -247,42 +164,9 @@ class TestWatchCommand:
 
         # Start watch with JSON output
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "--json", "jsontest"]
-        proc = subprocess.Popen(
-            cmd,
-            cwd=workdir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,  # Line buffered
-        )
-
-        try:
-            import json
-
-            # Give the process time to output the message
-            time.sleep(1.0)
-
-            # Terminate and collect output
-            proc.terminate()
-            try:
-                stdout, stderr = proc.communicate(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-                pytest.fail(
-                    f"Process did not terminate cleanly. stdout: {stdout}, stderr: {stderr}"
-                )
-
-            # Parse JSON output
-            json_objects = []
-            for line in stdout.strip().split("\n"):
-                if line.strip():
-                    try:
-                        data = json.loads(line)
-                        json_objects.append(data)
-                    except json.JSONDecodeError:
-                        # Skip non-JSON lines
-                        pass
+        with managed_subprocess(cmd, cwd=workdir) as proc:
+            # Wait for JSON output
+            json_objects = wait_for_json_output(proc, expected_count=1, timeout=2.0)
 
             # Validate the output
             assert len(json_objects) >= 1, (
@@ -295,21 +179,6 @@ class TestWatchCommand:
                 assert "timestamp" in data
                 # Validate timestamp using helper function
                 validate_timestamp(data["timestamp"])
-
-        except Exception as e:
-            if proc.poll() is None:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-            else:
-                stdout, stderr = "", ""
-            # Include output in error for debugging
-            raise AssertionError(
-                f"Test failed: {e}\nstdout: {stdout}\nstderr: {stderr}"
-            ) from None
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
 
     def test_watch_json_includes_timestamps(self, workdir):
         """Test that watch --json includes timestamps by default."""
@@ -328,49 +197,20 @@ class TestWatchCommand:
             "--json",
             "timestamptest",
         ]
-        proc = subprocess.Popen(
-            cmd,
-            cwd=workdir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,  # Line buffered
-        )
-
-        collected_messages = []
-        try:
-            import json
-
-            # Give the process time to start and output initial message
-            time.sleep(1.0)
+        with managed_subprocess(cmd, cwd=workdir) as proc:
+            # Wait for initial message
+            wait_for_json_output(proc, expected_count=1, timeout=2.0)
 
             # Write another message to trigger more output
             rc, _, _ = run_cli("write", "timestamptest", "trigger message", cwd=workdir)
             assert rc == 0
 
-            # Give time for processing
-            time.sleep(1.0)
-
-            # Terminate the process and collect all output
-            proc.terminate()
-            try:
-                stdout, stderr = proc.communicate(timeout=2.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-                pytest.fail(
-                    f"Process did not terminate cleanly. stdout: {stdout}, stderr: {stderr}"
-                )
-
-            # Parse JSON output line by line
-            for line in stdout.strip().split("\n"):
-                if line.strip():
-                    try:
-                        data = json.loads(line)
-                        collected_messages.append(data)
-                    except json.JSONDecodeError:
-                        # Skip non-JSON lines
-                        pass
+            # Wait for both messages
+            collected_messages = wait_for_json_output(
+                proc,
+                expected_messages={"initial message", "trigger message"},
+                timeout=2.0,
+            )
 
             # Verify we got messages
             assert len(collected_messages) >= 2, (
@@ -395,37 +235,13 @@ class TestWatchCommand:
                 # Verify message content
                 assert data["message"] in ["initial message", "trigger message"]
 
-        except Exception as e:
-            if proc.poll() is None:
-                proc.kill()
-                stdout, stderr = proc.communicate()
-            else:
-                stdout, stderr = "", ""
-            # Include output in error for debugging
-            raise AssertionError(
-                f"Test failed: {e}\nstdout: {stdout}\nstderr: {stderr}"
-            ) from None
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
-
     def test_watch_continuous_messages(self, workdir):
         """Test watch continues to process new messages."""
         from tests.conftest import run_cli
 
         # Start watch first (empty queue)
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "continuous"]
-        proc = subprocess.Popen(
-            cmd,
-            cwd=workdir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,  # Line buffered
-        )
-
-        try:
+        with managed_subprocess(cmd, cwd=workdir) as proc:
             # Give watcher time to start
             time.sleep(0.2)
 
@@ -436,24 +252,12 @@ class TestWatchCommand:
                 messages.append(msg)
                 rc, _, _ = run_cli("write", "continuous", msg, cwd=workdir)
                 assert rc == 0
-                time.sleep(0.1)
+                # Wait for each message to appear
+                assert proc.wait_for_output(msg, timeout=1.0)
 
-            # Give time to process
-            time.sleep(1.0)
-
-            # Terminate watcher
-            proc.terminate()
-            stdout, stderr = proc.communicate(timeout=2)  # Add timeout
+            # Get final output
+            stdout = proc.stdout
 
             # Should have received all messages
             for msg in messages:
                 assert msg in stdout
-
-        finally:
-            # Always clean up the process
-            if proc.poll() is None:  # Check if process is still running
-                proc.kill()
-                try:
-                    proc.communicate(timeout=1)
-                except subprocess.TimeoutExpired:
-                    pass  # Process is being killed, ignore timeout

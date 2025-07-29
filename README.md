@@ -138,8 +138,8 @@ $ broker --cleanup
 | `peek <queue> [options]` | Return message(s) without removing |
 | `move <source> <dest> [options]` | Atomically transfer messages between queues |
 | `list [--stats]` | Show queues and message counts |
-| `delete <queue> [-m <id>]` | Delete queue or specific message |
-| `delete --all` | Delete all queues |
+| `delete <queue> [-m <id>]` | Delete queue or specific message (marks for removal; use `--vacuum` to reclaim space) |
+| `delete --all` | Delete all queues (marks for removal; use `--vacuum` to reclaim space) |
 | `broadcast <message\|->` | Send message to all existing queues |
 | `watch <queue> [options]` | Watch queue for new messages |
 
@@ -168,7 +168,7 @@ $ broker --cleanup
 ### Exit Codes
 - `0` - Success (returns 0 even when no messages match filters like `--since`)
 - `1` - General error (e.g., database access error, invalid arguments)
-- `2` - Queue empty or no matching messages (only when queue is actually empty or no messages match the criteria)
+- `2` - Queue empty, no matching messages, or invalid message ID format (only when queue is actually empty, no messages match the criteria, or the provided message ID has an invalid format)
 
 **Note:** The `delete` command marks messages as "claimed" for performance. Use `--vacuum` to permanently remove them.
 
@@ -222,8 +222,8 @@ Timestamps are:
 - **Meaningful** - Can extract creation time from the ID
 
 The format:
-- High 44 bits: milliseconds since Unix epoch
-- Low 20 bits: logical counter for sub-millisecond ordering
+- High 52 bits: microseconds since Unix epoch
+- Low 12 bits: logical counter for sub-microsecond ordering
 - Similar to Twitter's Snowflake IDs or UUID7
 
 
@@ -351,7 +351,7 @@ $ broker -f /var/lib/myapp/queue.db write tasks "backup database"
 $ broker -f /var/lib/myapp/queue.db read tasks
 
 # Reserving work using move
-$ msg_json=$(broker move todo in-process --json --limit 1 2>/dev/null)
+$ msg_json=$(broker move todo in-process --json 2>/dev/null)
   if [ -n "$msg_json" ]; then
       msg_id=$(echo "$msg_json" | jq -r '.[0].id')
       msg_data=$(echo "$msg_json" | jq -r '.[0].data')
@@ -698,6 +698,11 @@ See [`examples/`](examples/) directory for more patterns including async process
 - `BROKER_SYNC_MODE` - SQLite synchronous mode: FULL, NORMAL, or OFF (default: FULL)
   - `FULL`: Maximum durability, safe against power loss (default)
   - `NORMAL`: ~25% faster writes, safe against app crashes, small risk on power loss
+- `BROKER_WAL_AUTOCHECKPOINT` - WAL auto-checkpoint threshold in pages (default: 1000)
+  - Controls when SQLite automatically moves WAL data to the main database
+  - Default of 1000 pages ≈ 1MB (with 1KB page size)
+  - Increase for high-traffic scenarios to reduce checkpoint frequency
+  - Set to 0 to disable automatic checkpoints (manual control only)
   - `OFF`: Fastest but unsafe - only for testing or non-critical data
 
 **Read Performance:**

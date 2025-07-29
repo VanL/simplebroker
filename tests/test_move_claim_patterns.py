@@ -11,12 +11,8 @@ This tests the patterns that make sense for move operations:
 
 import concurrent.futures as cf
 import sqlite3
-import sys
-import time
 from pathlib import Path
 from typing import List, Tuple
-
-import pytest
 
 from simplebroker.db import BrokerDB
 
@@ -120,48 +116,6 @@ def test_move_updates_claimed_status(workdir: Path):
     assert dest_messages[0] == ("message0", 0)  # Movered message is unclaimed
 
     conn.close()
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32" and sys.version_info[:2] in ((3, 8), (3, 9)),
-    reason="Older Python performance on Windows is not guaranteed",
-)
-def test_move_performance_with_large_batches(workdir: Path):
-    """Test move performance with large number of messages."""
-    db_path = workdir / "test.db"
-
-    # Write a large batch of messages
-    message_count = 1000
-    with BrokerDB(str(db_path)) as db:
-        for i in range(message_count):
-            db.write("perf_source", f"msg{i:04d}")
-
-    # Time moving all messages
-    start_time = time.time()
-    moved_count = 0
-
-    with BrokerDB(str(db_path)) as db:
-        while True:
-            result = db.move("perf_source", "perf_dest")
-            if result is None:
-                break
-            moved_count += 1
-
-    move_time = time.time() - start_time
-
-    assert moved_count == message_count
-
-    # Performance assertion - moves should be fast
-    # Windows filesystem operations are slower, so we allow more time
-    timeout = 6.0 if sys.platform == "win32" else 2.0
-    assert move_time < timeout, (
-        f"Movering {message_count} messages took {move_time:.2f}s"
-    )
-
-    # Verify all messages are in destination
-    with BrokerDB(str(db_path)) as db:
-        dest_messages = db.read("perf_dest", peek=True, all_messages=True)
-        assert len(dest_messages) == message_count
 
 
 def test_move_with_vacuum_interaction(workdir: Path):

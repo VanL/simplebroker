@@ -12,10 +12,10 @@ def test_default_pragma_settings(tmp_path):
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path)) as db:
-        # Check cache size - default should be 10MB = 10000KB
+        # Check cache size - default should be 10MB = 10240KiB
         result = db._runner.run("PRAGMA cache_size", fetch=True)
         cache_size = result[0][0]
-        assert cache_size == -10000  # Negative means KB
+        assert cache_size == -10240  # Negative means KiB
 
         # Check synchronous mode - default should be FULL (2)
         result = db._runner.run("PRAGMA synchronous", fetch=True)
@@ -47,7 +47,7 @@ def test_custom_cache_size(tmp_path, monkeypatch):
     with BrokerDB(str(db_path)) as db:
         result = db._runner.run("PRAGMA cache_size", fetch=True)
         cache_size = result[0][0]
-        assert cache_size == -25000  # 25MB = 25000KB
+        assert cache_size == -25600  # 25MB = 25600KiB
 
 
 def test_custom_sync_mode_normal(tmp_path, monkeypatch):
@@ -111,6 +111,41 @@ def test_write_with_normal_sync_works(tmp_path, monkeypatch):
         assert len(messages) == 10
         for i, msg in enumerate(messages):
             assert msg == f"message {i}"
+
+
+def test_custom_wal_autocheckpoint(tmp_path, monkeypatch):
+    """Test that BROKER_WAL_AUTOCHECKPOINT environment variable works."""
+    monkeypatch.setenv("BROKER_WAL_AUTOCHECKPOINT", "5000")
+    db_path = tmp_path / "test.db"
+
+    with BrokerDB(str(db_path)) as db:
+        # The setting should be applied to the connection used by the runner
+        result = db._runner.run("PRAGMA wal_autocheckpoint", fetch=True)
+        autocheckpoint = result[0][0]
+        assert autocheckpoint == 5000
+
+
+def test_invalid_wal_autocheckpoint_defaults(tmp_path, monkeypatch):
+    """Test that invalid BROKER_WAL_AUTOCHECKPOINT defaults to 1000 with warning."""
+    monkeypatch.setenv("BROKER_WAL_AUTOCHECKPOINT", "-100")
+    db_path = tmp_path / "test.db"
+
+    with pytest.warns(UserWarning, match="Invalid BROKER_WAL_AUTOCHECKPOINT '-100'"):
+        with BrokerDB(str(db_path)) as db:
+            result = db._runner.run("PRAGMA wal_autocheckpoint", fetch=True)
+            autocheckpoint = result[0][0]
+            assert autocheckpoint == 1000  # Default value
+
+
+def test_wal_autocheckpoint_zero_disables(tmp_path, monkeypatch):
+    """Test that BROKER_WAL_AUTOCHECKPOINT=0 disables automatic checkpoints."""
+    monkeypatch.setenv("BROKER_WAL_AUTOCHECKPOINT", "0")
+    db_path = tmp_path / "test.db"
+
+    with BrokerDB(str(db_path)) as db:
+        result = db._runner.run("PRAGMA wal_autocheckpoint", fetch=True)
+        autocheckpoint = result[0][0]
+        assert autocheckpoint == 0  # Disabled
 
 
 def test_index_migration_from_old_database(tmp_path):

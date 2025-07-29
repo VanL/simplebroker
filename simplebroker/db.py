@@ -9,7 +9,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import (
     Any,
-    Callable,
     Dict,
     Iterator,
     List,
@@ -416,58 +415,12 @@ class BrokerCore:
             ts: 64-bit hybrid timestamp
 
         Returns:
-            Tuple of (physical_ms, logical_counter)
+            Tuple of (physical_us, logical_counter)
         """
-        # Extract physical time (upper 44 bits) and logical counter (lower 20 bits)
-        physical_ms = ts >> 20
-        logical_counter = ts & ((1 << 20) - 1)
-        return physical_ms, logical_counter
-
-    def _execute_with_retry(
-        self,
-        operation: Callable[[], T],
-        *,
-        max_retries: int = 10,
-        retry_delay: float = 0.05,
-    ) -> T:
-        """Execute a database operation with retry logic for locked database errors.
-
-        Args:
-            operation: A callable that performs the database operation
-            max_retries: Maximum number of retry attempts
-            retry_delay: Initial delay between retries (exponential backoff applied)
-
-        Returns:
-            The result of the operation
-
-        Raises:
-            The last exception if all retries fail
-        """
-        locked_markers = (
-            "database is locked",
-            "database table is locked",
-            "database schema is locked",
-            "database is busy",
-            "database busy",
-        )
-
-        for attempt in range(max_retries):
-            try:
-                return operation()
-            except OperationalError as e:
-                msg = str(e).lower()
-                if any(marker in msg for marker in locked_markers):
-                    if attempt < max_retries - 1:
-                        # exponential back-off + 0-25 ms jitter using time-based pseudo-random
-                        jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
-                        wait = retry_delay * (2**attempt) + jitter
-                        time.sleep(wait)
-                        continue
-                # If not a locked error or last attempt, re-raise
-                raise
-
-        # This should never be reached, but satisfies mypy
-        raise AssertionError("Unreachable code")
+        # Extract physical time (upper 52 bits) and logical counter (lower 12 bits)
+        physical_us = ts >> 12
+        logical_counter = ts & ((1 << 12) - 1)
+        return physical_us, logical_counter
 
     def write(self, queue: str, message: str) -> None:
         """Write a message to a queue with resilience against timestamp conflicts.
@@ -520,6 +473,10 @@ class BrokerCore:
                     # First retry: Simple backoff (handles transient issues)
                     # Log at debug level - this might be a transient race
                     self._log_ts_conflict("transient", attempt)
+                    # Note: Using time.sleep here instead of interruptible_sleep because:
+                    # 1. This is a very short wait (0.001s) for timestamp conflict resolution
+                    # 2. This is within a database transaction that shouldn't be interrupted
+                    # 3. No associated stop event exists at this low level
                     time.sleep(RETRY_BACKOFF_BASE)
 
                 elif attempt == 1:
@@ -528,6 +485,7 @@ class BrokerCore:
                     self._log_ts_conflict("resync_needed", attempt)
                     self._resync_timestamp_generator()
                     self._ts_resync_count += 1
+                    # Note: Same reason as above - short wait for timestamp conflict
                     time.sleep(RETRY_BACKOFF_BASE * 2)
 
                 else:
@@ -935,8 +893,8 @@ class BrokerCore:
 
                     warnings.warn(
                         f"Timestamp generator resynchronized. "
-                        f"Old: {old_last_ts} ({old_physical}ms + {old_logical}), "
-                        f"New: {max_msg_ts} ({new_physical}ms + {new_logical}). "
+                        f"Old: {old_last_ts} ({old_physical}us + {old_logical}), "
+                        f"New: {max_msg_ts} ({new_physical}us + {new_logical}). "
                         f"Gap: {max_msg_ts - old_last_ts} timestamps. "
                         f"This indicates past state inconsistency.",
                         RuntimeWarning,
@@ -1131,7 +1089,7 @@ class BrokerCore:
             # Try to acquire exclusive lock
             # Use open with write mode and exclusive create flag
             lock_fd = os.open(
-                str(vacuum_lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                str(vacuum_lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode=0o600
             )
             try:
                 # Write PID to lock file for debugging
@@ -1464,6 +1422,8 @@ class BrokerCore:
                     raise
 
             # Brief pause between batches to allow other operations
+            # Note: Using time.sleep here for a very short pause (1ms) during vacuum
+            # This is a background maintenance operation without stop event
             time.sleep(0.001)
 
     def vacuum(self) -> None:

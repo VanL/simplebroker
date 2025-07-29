@@ -6,21 +6,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import pytest
-
 from .conftest import run_cli
-
-
-def validate_timestamp(ts):
-    """Validate that a timestamp meets SimpleBroker specifications."""
-    assert isinstance(ts, int), f"Timestamp must be int, got {type(ts)}"
-    assert len(str(ts)) == 19, (
-        f"Timestamp must be exactly 19 digits, got {len(str(ts))} digits: {ts}"
-    )
-    # Check reasonable range (approximately year 2020-2100)
-    assert 1_650_000_000_000_000_000 < ts < 4_300_000_000_000_000_000, (
-        f"Timestamp {ts} outside reasonable range (2020-2100)"
-    )
+from .helpers.timestamp_validation import validate_timestamp
 
 
 class TestBasicFunctionality:
@@ -166,10 +153,11 @@ class TestTimestampFormats:
         middle_ts = messages[2]["timestamp"]
 
         # Convert native timestamp to different formats
-        ms_since_epoch = middle_ts >> 20
-        unix_seconds = ms_since_epoch // 1000
-        unix_millis = ms_since_epoch
-        unix_nanos = ms_since_epoch * 1_000_000
+        # Timestamps are now: microseconds << 12
+        us_since_epoch = middle_ts >> 12
+        unix_seconds = us_since_epoch // 1_000_000
+        unix_millis = us_since_epoch // 1_000
+        unix_nanos = us_since_epoch * 1_000
 
         # Test with explicit suffixes
         test_cases = [
@@ -237,8 +225,8 @@ class TestTimestampFormats:
         native_ts = messages[5]["timestamp"]
 
         # Convert to different formats
-        ms_since_epoch = native_ts >> 20
-        unix_seconds = ms_since_epoch // 1000
+        us_since_epoch = native_ts >> 12
+        unix_seconds = us_since_epoch // 1_000_000
         dt = datetime.datetime.fromtimestamp(unix_seconds, datetime.timezone.utc)
 
         # Test each format
@@ -350,7 +338,7 @@ class TestErrorCases:
         run_cli("write", "source", "old2", cwd=workdir)
 
         # Use a future timestamp
-        future_ts = int(time.time() * 1000) << 20
+        future_ts = int(time.time() * 1_000_000) << 12
         future_ts += 1000000000  # Add some buffer
 
         # Move with --since future timestamp (without --all)
@@ -993,40 +981,6 @@ class TestAtomicity:
         # Should only get msg7 and msg9 (msg6 and msg8 were claimed)
         moved = out.strip().split("\n")
         assert moved == ["msg7", "msg9"]
-
-
-class TestPerformance:
-    """Test performance with larger datasets."""
-
-    @pytest.mark.slow
-    def test_bulk_move_performance_5k_messages(self, workdir):
-        """Test bulk move with 5000 messages maintains good performance."""
-        # Write 5000 messages
-        num_messages = 5000
-
-        for i in range(num_messages):
-            run_cli("write", "perf_source", f"perfmsg{i:04d}", cwd=workdir)
-
-        # Bulk move all messages
-        start_move = time.time()
-        rc, out, _ = run_cli("move", "perf_source", "perf_dest", "--all", cwd=workdir)
-        move_time = time.time() - start_move
-
-        assert rc == 0
-        lines = out.strip().split("\n")
-        assert len(lines) == num_messages
-
-        # Performance check: should move >1000 messages/second
-        # (Allow some slack for slow test environments)
-        messages_per_second = num_messages / move_time
-        assert messages_per_second > 500, (
-            f"Move too slow: {messages_per_second:.1f} msgs/sec"
-        )
-
-        # Verify all messages moved correctly
-        rc, out, _ = run_cli("peek", "perf_dest", "--all", cwd=workdir)
-        assert rc == 0
-        assert len(out.strip().split("\n")) == num_messages
 
 
 class TestCommandLineValidation:

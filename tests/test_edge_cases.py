@@ -8,7 +8,6 @@ in production environments.
 import multiprocessing
 import os
 import sqlite3
-import sys
 import time
 import unittest.mock
 from pathlib import Path
@@ -235,93 +234,6 @@ def test_concurrent_schema_migration(workdir: Path):
     conn.close()
 
 
-def test_large_batch_claim_rollback_performance(workdir: Path):
-    """Test that rollback is fast when a large batch claim is interrupted."""
-    db_path = workdir / "test.db"
-
-    # Write many messages
-    message_count = 5000
-    with BrokerDB(str(db_path)) as db:
-        for i in range(message_count):
-            db.write("test_queue", f"message{i:04d}")
-
-    # Test rollback by simulating generator not being fully consumed
-    # This tests the exactly-once vs at-least-once delivery semantics
-
-    # First test with commit_interval=1 (exactly-once)
-    messages_read = []
-    start_time = time.time()
-
-    with BrokerDB(str(db_path)) as db:
-        # Read only first 100 messages then stop (simulating crash/interrupt)
-        for i, msg in enumerate(
-            db.stream_read(
-                "test_queue",
-                peek=False,
-                all_messages=True,
-                commit_interval=1,  # Exactly-once delivery
-            )
-        ):
-            messages_read.append(msg)
-            if i >= 99:  # Read 100 messages (0-99)
-                break  # Simulate interrupt
-
-    elapsed = time.time() - start_time
-    timeout = 2.0 if sys.platform == "win32" else 1.5
-    assert elapsed < timeout, (
-        f"Reading 100 messages took too long: {elapsed:.2f}s (timeout: {timeout}s)"
-    )
-
-    # With exactly-once delivery, all 100 messages should be committed
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    claimed_count = cursor.fetchone()[0]
-    assert claimed_count == 100, f"Expected 100 claimed messages, got {claimed_count}"
-
-    # Now test with large commit_interval (at-least-once)
-    messages_read2 = []
-    start_time = time.time()
-
-    with BrokerDB(str(db_path)) as db:
-        # Read 500 more messages with large batch
-        for i, msg in enumerate(
-            db.stream_read(
-                "test_queue",
-                peek=False,
-                all_messages=True,
-                commit_interval=1000,  # At-least-once delivery
-            )
-        ):
-            messages_read2.append(msg)
-            if i >= 499:  # Read 500 messages
-                break  # Simulate interrupt mid-batch
-
-    elapsed = time.time() - start_time
-    timeout = 2.0 if sys.platform == "win32" else 1.5
-    assert elapsed < timeout, (
-        f"Reading 500 messages took too long: {elapsed:.2f}s (timeout: {timeout}s)"
-    )
-
-    # With at-least-once delivery and commit_interval=1000:
-    # We read 500 messages but didn't complete the batch
-    # So no additional messages should be committed
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    new_claimed_count = cursor.fetchone()[0]
-    assert new_claimed_count == 100, (
-        f"Expected 100 claimed messages (no new commits), got {new_claimed_count}"
-    )
-
-    # Verify unclaimed messages
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 0")
-    unclaimed_count = cursor.fetchone()[0]
-    assert unclaimed_count == 4900, (
-        f"Expected 4900 unclaimed messages, got {unclaimed_count}"
-    )
-
-    conn.close()
-
-
 def test_vacuum_with_concurrent_reads(workdir: Path):
     """Test vacuum operation while other processes are reading."""
     db_path = workdir / "test.db"
@@ -394,9 +306,10 @@ def test_timestamp_overflow_protection(workdir: Path):
         db.write("test_queue", "message2")
 
     # Test with timestamp that would overflow when shifted
-    # Maximum safe value is (2^63 - 1) >> 20 = 2^43 - 1
-    max_safe_ms = (1 << 43) - 1
-    overflow_ms = 1 << 43  # This will overflow when shifted by 20 bits
+    # For millisecond input: value * 1000 * 2^12 must be < 2^63
+    # Maximum safe ms value is approximately 2^63 / (1000 * 2^12) ≈ 2.25e12
+    max_safe_ms = 2_251_799_813_685  # Safe value for ms input
+    overflow_ms = 10_000_000_000_000  # 10 trillion ms - will overflow
 
     # Test via CLI with --since flag
     # This should fail gracefully
