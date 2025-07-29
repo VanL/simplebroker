@@ -76,33 +76,34 @@ class TestWatcherEdgeCases(WatcherTestBase):
     def test_message_size_limit_exceeded(self):
         """Test handling of messages exceeding 10MB limit."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = BrokerDB(str(Path(tmpdir) / "test.db"))
+            with BrokerDB(str(Path(tmpdir) / "test.db")) as db:
+                # Create a message larger than 10MB
+                large_message = "x" * (11 * 1024 * 1024)  # 11MB
 
-            # Create a message larger than 10MB
-            large_message = "x" * (11 * 1024 * 1024)  # 11MB
+                handled = []
+                errors = []
 
-            handled = []
-            errors = []
+                def handler(msg, ts):
+                    handled.append((msg, ts))
 
-            def handler(msg, ts):
-                handled.append((msg, ts))
+                def error_handler(exc, msg, ts):
+                    errors.append((exc, msg, ts))
+                    return True  # Continue processing
 
-            def error_handler(exc, msg, ts):
-                errors.append((exc, msg, ts))
-                return True  # Continue processing
+                watcher = QueueWatcher(
+                    db, "queue", handler, error_handler=error_handler
+                )
 
-            watcher = QueueWatcher(db, "queue", handler, error_handler=error_handler)
+                # Directly test dispatch with oversized message
+                watcher._dispatch(large_message, 12345)
 
-            # Directly test dispatch with oversized message
-            watcher._dispatch(large_message, 12345)
+                # Verify handler was not called
+                assert len(handled) == 0
 
-            # Verify handler was not called
-            assert len(handled) == 0
-
-            # Verify error handler was called
-            assert len(errors) == 1
-            assert isinstance(errors[0][0], ValueError)
-            assert "exceeds 10MB limit" in str(errors[0][0])
+                # Verify error handler was called
+                assert len(errors) == 1
+                assert isinstance(errors[0][0], ValueError)
+                assert "exceeds 10MB limit" in str(errors[0][0])
             assert errors[0][1].endswith("...")  # Truncated message
 
     def test_error_handler_returns_false(self):
@@ -371,10 +372,12 @@ class TestWatcherEdgeCases(WatcherTestBase):
             broker.write("slow_queue", "test message")
 
             process_start = None
+            handler_started = threading.Event()
 
             def slow_handler(msg, ts):
                 nonlocal process_start
                 process_start = time.time()
+                handler_started.set()  # Signal that handler has started
                 # Simulate slow processing with interruptible sleep
                 interruptible_sleep(1.0, watcher._stop_event)
 
@@ -383,7 +386,12 @@ class TestWatcherEdgeCases(WatcherTestBase):
             ) as watcher:
                 # Start watcher
                 thread = watcher.run_in_thread()
-                time.sleep(0.1)  # Let it start processing
+
+                # Wait for handler to start processing
+                if not handler_started.wait(timeout=2.0):
+                    watcher.stop()
+                    thread.join(timeout=1.0)
+                    pytest.fail("Handler did not start processing within timeout")
 
                 # Stop should interrupt the sleep
                 start_stop = time.time()
@@ -404,14 +412,28 @@ class TestWatcherEdgeCases(WatcherTestBase):
             for i in range(50):
                 broker.write("concurrent_queue", f"msg{i}")
 
+            processing_started = threading.Event()
+            process_count = 0
+            process_lock = threading.Lock()
+
             def slow_handler(msg, ts):
+                nonlocal process_count
+                with process_lock:
+                    process_count += 1
+                    if process_count == 1:
+                        processing_started.set()  # Signal first message processed
                 time.sleep(0.01)  # Slow processing
 
             with self.create_test_watcher(
                 broker, "concurrent_queue", slow_handler
             ) as watcher:
                 thread = watcher.run_in_thread()
-                time.sleep(0.1)  # Let it start
+
+                # Wait for processing to start
+                if not processing_started.wait(timeout=2.0):
+                    watcher.stop()
+                    thread.join(timeout=1.0)
+                    pytest.fail("Handler did not start processing within timeout")
 
                 # Multiple threads try to stop
                 stop_threads = []

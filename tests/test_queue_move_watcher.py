@@ -312,7 +312,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
 
         # Start move
         thread = watcher.run_in_thread()
-        time.sleep(0.05)  # Let initial moves start
+
+        # Wait a bit to ensure watcher is running
+        # This is acceptable as we're not testing timing, just concurrent safety
+        time.sleep(0.05)
 
         # Add more messages while moving
         write_errors = []

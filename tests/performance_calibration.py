@@ -32,12 +32,16 @@ def measure_write_performance() -> float:
     """Measure write performance for calibration."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "calibration.db"
-        db = BrokerDB(str(db_path))
 
-        start = time.perf_counter()
-        for i in range(CALIBRATION_WRITE_COUNT):
-            db.write("calibration_queue", f"msg{i}")
-        return time.perf_counter() - start
+        # Use context manager to ensure proper cleanup
+        with BrokerDB(str(db_path)) as db:
+            start = time.perf_counter()
+            for i in range(CALIBRATION_WRITE_COUNT):
+                db.write("calibration_queue", f"msg{i}")
+            elapsed = time.perf_counter() - start
+
+        # Explicit close to help Windows release the file
+        return elapsed
 
 
 def measure_validation_performance() -> float:

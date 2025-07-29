@@ -272,11 +272,19 @@ def test_vacuum_with_concurrent_reads(workdir: Path):
 
     # Start reader thread
     reader_thread = threading.Thread(target=continuous_reader)
+    reader_started = threading.Event()
+
+    def continuous_reader_with_signal():
+        reader_started.set()  # Signal that reader has started
+        continuous_reader()
+
+    reader_thread = threading.Thread(target=continuous_reader_with_signal)
     reader_thread.start()
 
     try:
-        # Give reader time to start
-        time.sleep(0.1)
+        # Wait for reader to actually start (with timeout)
+        if not reader_started.wait(timeout=2.0):
+            raise TimeoutError("Reader thread did not start within timeout")
 
         # Run vacuum while reader is active
         with BrokerDB(str(db_path)) as db:

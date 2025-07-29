@@ -41,6 +41,24 @@ class MessageCollector:
         with self.lock:
             return self.messages.copy()
 
+    def wait_for_messages(self, count: int, timeout: float = 5.0) -> bool:
+        """Wait for a specific number of messages to be collected.
+
+        Args:
+            count: Expected number of messages
+            timeout: Maximum time to wait in seconds
+
+        Returns:
+            True if the expected count was reached, False if timeout
+        """
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            with self.lock:
+                if len(self.messages) >= count:
+                    return True
+            time.sleep(0.01)  # Small sleep to avoid busy waiting
+        return False
+
 
 @pytest.fixture
 def temp_db(tmp_path):
@@ -78,7 +96,14 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Run in background thread - should create its own connection
         thread = watcher.run_in_thread()
-        time.sleep(0.2)
+
+        # Wait for both messages to be processed
+        if not collector.wait_for_messages(2, timeout=2.0):
+            watcher.stop()
+            thread.join(timeout=2.0)
+            pytest.fail(
+                f"Timeout waiting for messages. Got {len(collector.get_messages())} messages"
+            )
 
         watcher.stop()
         thread.join(timeout=2.0)
@@ -601,7 +626,15 @@ class TestQueueWatcher(WatcherTestBase):
             peek=True,
         )
         thread = initial_watcher.run_in_thread()
-        time.sleep(0.2)
+
+        # Wait for all 50 messages to be collected
+        if not initial_collector.wait_for_messages(50, timeout=5.0):
+            initial_watcher.stop()
+            thread.join(timeout=2.0)
+            pytest.fail(
+                f"Timeout waiting for messages. Got {len(initial_collector.get_messages())} messages"
+            )
+
         initial_watcher.stop()
         thread.join(timeout=2.0)
 
@@ -628,7 +661,14 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Start watcher and let it process messages
         thread = watcher.run_in_thread()
-        time.sleep(0.2)  # Give it time to process all messages
+
+        # Wait for all 50 new messages to be collected
+        if not collector.wait_for_messages(50, timeout=5.0):
+            watcher.stop()
+            thread.join(timeout=2.0)
+            pytest.fail(
+                f"Timeout waiting for messages. Got {len(collector.get_messages())} messages"
+            )
 
         # Stop watcher
         watcher.stop()

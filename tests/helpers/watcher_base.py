@@ -116,35 +116,39 @@ class WatcherTestBase:
             except Exception:
                 pass
 
-    def wait_for_messages(
+    def run_watcher_until_messages(
         self,
         watcher: Union[QueueWatcher, QueueMoveWatcher],
+        collector,  # MessageCollector instance
         expected_count: int,
-        timeout: float = 2.0,
-    ) -> bool:
-        """Wait for watcher to process expected number of messages.
+        timeout: float = 5.0,
+    ) -> threading.Thread:
+        """Run watcher until expected messages are collected.
 
         Args:
-            watcher: The watcher instance
+            watcher: The watcher to run
+            collector: MessageCollector instance tracking messages
             expected_count: Number of messages to wait for
             timeout: Maximum time to wait
 
         Returns:
-            True if expected count reached, False if timeout
+            The watcher thread
+
+        Raises:
+            pytest.fail: If timeout is reached before collecting expected messages
         """
-        start_time = time.time()
-        message_count = 0
+        thread = watcher.run_in_thread()
 
-        # This would need to be implemented based on handler tracking
-        # For now, just a placeholder showing the pattern
-        while time.time() - start_time < timeout:
-            # Check current message count
-            # In real implementation, handler would track this
-            if message_count >= expected_count:
-                return True
-            time.sleep(0.01)  # Small sleep to avoid busy loop
+        # Wait for messages to be collected
+        if not collector.wait_for_messages(expected_count, timeout=timeout):
+            watcher.stop()
+            thread.join(timeout=self.STOP_TIMEOUT)
+            pytest.fail(
+                f"Timeout waiting for {expected_count} messages. "
+                f"Got {len(collector.get_messages())} messages"
+            )
 
-        return False
+        return thread
 
     def assert_watcher_stops_quickly(
         self, watcher: Union[QueueWatcher, QueueMoveWatcher], max_stop_time: float = 0.5

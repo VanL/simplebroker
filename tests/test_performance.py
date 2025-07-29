@@ -116,23 +116,24 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
 def test_timestamp_performance_basic(workdir):
     """Basic performance check - not excessive writes."""
     db_path = workdir / "test.db"
-    db = BrokerDB(str(db_path))
 
-    # Time BASIC_WRITE_COUNT writes
-    start = time.time()
-    for i in range(BASIC_WRITE_COUNT):
-        db.write("perf_test", f"Message {i}")
-    elapsed = time.time() - start
+    # Use context manager for proper cleanup
+    with BrokerDB(str(db_path)) as db:
+        # Time BASIC_WRITE_COUNT writes
+        start = time.time()
+        for i in range(BASIC_WRITE_COUNT):
+            db.write("perf_test", f"Message {i}")
+        elapsed = time.time() - start
 
-    # Should complete within timeout
-    timeout = get_timeout("basic_write_50")
-    assert elapsed < timeout, (
-        f"Writing {BASIC_WRITE_COUNT} messages took {elapsed:.3f}s, "
-        f"expected < {timeout:.3f}s"
-    )
+        # Should complete within timeout
+        timeout = get_timeout("basic_write_50")
+        assert elapsed < timeout, (
+            f"Writing {BASIC_WRITE_COUNT} messages took {elapsed:.3f}s, "
+            f"expected < {timeout:.3f}s"
+        )
 
-    # No conflicts should have occurred
-    assert db.get_conflict_metrics()["ts_conflict_count"] == 0
+        # No conflicts should have occurred
+        assert db.get_conflict_metrics()["ts_conflict_count"] == 0
 
 
 # ============================================================================
@@ -631,11 +632,11 @@ def test_write_performance_not_regressed(workdir: Path):
 
     write_time = time.time() - start_time
 
-    # Writing should still be fast
-    # Windows needs more time due to filesystem differences
-    timeout = 6.0 if sys.platform == "win32" else 2.0
+    # Use calibrated timeout system
+    timeout = get_timeout("write_1k_messages")
     assert write_time < timeout, (
-        f"Writing {message_count} messages took {write_time:.2f}s"
+        f"Writing {message_count} messages took {write_time:.2f}s, "
+        f"expected < {timeout:.2f}s"
     )
 
     # Verify messages were written correctly
