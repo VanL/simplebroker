@@ -10,7 +10,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from queue import Empty, Queue
-from typing import IO, Dict, List, Optional, Union
+from typing import IO, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +295,7 @@ def managed_subprocess(
 
 
 # Convenience function for quick subprocess runs
-def run_subprocess(cmd: Union[str, List[str]], **kwargs) -> tuple[int, str, str]:
+def run_subprocess(cmd: Union[str, List[str]], **kwargs) -> Tuple[int, str, str]:
     """
     Run a subprocess and return (returncode, stdout, stderr).
 
