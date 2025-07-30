@@ -152,7 +152,7 @@ class ManagedProcess:
                 self._stdout_reader.join(timeout=0.5)
         if self._stderr_reader:
             self._stderr_reader.stop()
-            # On Windows, give reader threads time to exit cleanly  
+            # On Windows, give reader threads time to exit cleanly
             if sys.platform == "win32":
                 self._stderr_reader.join(timeout=0.5)
 
@@ -302,7 +302,7 @@ def managed_subprocess(
             # might still be reading when pipes are closed
             if managed:
                 managed.cleanup_readers()
-            
+
             # Final cleanup - drain pipes to prevent zombies
             try:
                 # Only communicate if process hasn't been killed yet
