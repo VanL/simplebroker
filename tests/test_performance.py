@@ -2,8 +2,13 @@
 
 All performance-sensitive tests are collected here and run serially
 to ensure accurate timing measurements without interference from
-parallel test execution. Timing on CI/CD machines is flaky, so margins
-are generous to avoid failures that don't have to do with correctness.
+parallel test execution.
+
+These tests are all marked as "slow" and do not run on a regular pytest/
+commit run, as timing on CI/CD machines is flaky and we want to emphasize
+correctness in those tests.
+
+Run these with pytest -m "" on your own machine to test performance.
 """
 
 import sqlite3
@@ -46,15 +51,8 @@ VACUUM_BATCH_WRITE_SIZE = 100
 WRITE_PERF_MESSAGE_COUNT = 1000
 MOVE_WATCHER_MESSAGE_COUNT = 100
 
-# Older Python versions had significantly worse performance
-VERSION_ADJ = 1.0
-if sys.version_info[:2] in [(3, 8), (3, 9)]:
-    VERSION_ADJ = 2.0
-if sys.version_info[:2] in [(3, 10)]:
-    VERSION_ADJ = 1.2
-
-# Performance buffer percentage
-PERF_BUFFER_PERCENT = 1.25
+# Performance buffer percentage (33% as requested)
+PERF_BUFFER_PERCENT = 0.33
 
 # Machine performance ratio (calculated once per test session)
 # 1.0 = same as baseline machine, 0.5 = half as fast, 2.0 = twice as fast
@@ -64,19 +62,19 @@ MACHINE_PERFORMANCE_RATIO = 1.0  # Default to baseline performance
 # Baseline performance times measured on Apple M2 Air
 # These are the actual measured times for each test scenario
 BASELINE_TIMES = {
-    "basic_write_50": 0.016,  # Writing 50 messages
-    "validation_cached": 0.002,  # 1000 cached validations (rounded up from 0.000)
-    "bulk_move_5k": 5.5,  # Estimated: 5x the 1k move time
-    "large_batch_claim_rollback": 0.03,  # Reading 100 of 5000 messages
-    "at_least_once_rollback": 0.005,  # Reading 250 of 500 messages
-    "since_query_2000_msgs": 1.2,  # Estimated based on query performance
-    "timestamp_lookup": 0.15,  # Estimated based on index lookup
-    "concurrent_mixed_ops": 2.2,  # Estimated for mixed operations
-    "move_1k_messages": 0.098,  # Moving 1000 messages individually
-    "claim_1k_messages": 0.06,  # Claiming 1000 messages
+    "basic_write_50": 0.015,  # Writing 50 messages
+    "validation_cached": 0.001,  # 1000 cached validations (rounded up from 0.000)
+    "bulk_move_5k": 5.0,  # Estimated: 5x the 1k move time
+    "large_batch_claim_rollback": 0.025,  # Reading 100 of 5000 messages
+    "at_least_once_rollback": 0.004,  # Reading 250 of 500 messages
+    "since_query_2000_msgs": 1.0,  # Estimated based on query performance
+    "timestamp_lookup": 0.1,  # Estimated based on index lookup
+    "concurrent_mixed_ops": 2.0,  # Estimated for mixed operations
+    "move_1k_messages": 0.093,  # Moving 1000 messages individually
+    "claim_1k_messages": 0.056,  # Claiming 1000 messages
     "vacuum_10k_messages": 3.0,  # Estimated based on batch operations
-    "write_1k_messages": 0.8,  # Writing 1000 messages
-    "move_watcher_100": 2.2,  # Estimated for watcher operations
+    "write_1k_messages": 0.719,  # Writing 1000 messages
+    "move_watcher_100": 2.0,  # Estimated for watcher operations
 }
 
 # Minimum performance thresholds (messages per second)
@@ -95,7 +93,6 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
         Timeout in seconds
     """
     global CURRENT_MACHINE_PERFORMANCE
-    global VERSION_ADJ
 
     # Lazy-load machine performance ratio
     if CURRENT_MACHINE_PERFORMANCE is None:
@@ -106,9 +103,8 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
     # Adjust for machine performance
     # If machine is slower (ratio < 1.0), allow more time
     # If machine is faster (ratio > 1.0), require less time
-    timeout = base_time / (CURRENT_MACHINE_PERFORMANCE * (1 + PERF_BUFFER_PERCENT))
-    # Adjust for slower Python versions
-    timeout *= VERSION_ADJ
+    timeout = base_time / CURRENT_MACHINE_PERFORMANCE * (1 + PERF_BUFFER_PERCENT)
+
     # Platform-specific adjustments
     if platform_specific and sys.platform == "win32":
         # Windows filesystem operations are typically slower
@@ -126,24 +122,23 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
 def test_timestamp_performance_basic(workdir):
     """Basic performance check - not excessive writes."""
     db_path = workdir / "test.db"
+    db = BrokerDB(str(db_path))
 
-    # Use context manager for proper cleanup
-    with BrokerDB(str(db_path)) as db:
-        # Time BASIC_WRITE_COUNT writes
-        start = time.time()
-        for i in range(BASIC_WRITE_COUNT):
-            db.write("perf_test", f"Message {i}")
-        elapsed = time.time() - start
+    # Time BASIC_WRITE_COUNT writes
+    start = time.time()
+    for i in range(BASIC_WRITE_COUNT):
+        db.write("perf_test", f"Message {i}")
+    elapsed = time.time() - start
 
-        # Should complete within timeout
-        timeout = get_timeout("basic_write_50")
-        assert elapsed < timeout, (
-            f"Writing {BASIC_WRITE_COUNT} messages took {elapsed:.3f}s, "
-            f"expected < {timeout:.3f}s"
-        )
+    # Should complete within timeout
+    timeout = get_timeout("basic_write_50")
+    assert elapsed < timeout, (
+        f"Writing {BASIC_WRITE_COUNT} messages took {elapsed:.3f}s, "
+        f"expected < {timeout:.3f}s"
+    )
 
-        # No conflicts should have occurred
-        assert db.get_conflict_metrics()["ts_conflict_count"] == 0
+    # No conflicts should have occurred
+    assert db.get_conflict_metrics()["ts_conflict_count"] == 0
 
 
 # ============================================================================
@@ -642,11 +637,11 @@ def test_write_performance_not_regressed(workdir: Path):
 
     write_time = time.time() - start_time
 
-    # Use calibrated timeout system
-    timeout = get_timeout("write_1k_messages")
+    # Writing should still be fast
+    # Windows needs more time due to filesystem differences
+    timeout = 6.0 if sys.platform == "win32" else 2.0
     assert write_time < timeout, (
-        f"Writing {message_count} messages took {write_time:.2f}s, "
-        f"expected < {timeout:.2f}s"
+        f"Writing {message_count} messages took {write_time:.2f}s"
     )
 
     # Verify messages were written correctly

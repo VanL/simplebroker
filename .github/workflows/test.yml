@@ -48,7 +48,7 @@ jobs:
 
     - name: Run tests with pytest
       run: |
-        pytest -v --tb=short -m "" --override-ini="addopts=-ra -q --strict-markers"
+        pytest -v --tb=short --override-ini="addopts=-ra -q --strict-markers"
 
     - name: Test CLI installation
       run: |
