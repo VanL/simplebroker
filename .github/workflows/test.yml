@@ -117,5 +117,5 @@ jobs:
         flags: unittests
         name: codecov-umbrella
         fail_ci_if_error: false
-        token: ${{ serets.CODECOV_TOKEN }}
+        token: ${{ secrets.CODECOV_TOKEN }}
         slug: VanL/simplebroker 
