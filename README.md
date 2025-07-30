@@ -1,5 +1,11 @@
 # SimpleBroker
 
+  [![CI](https://github.com/VanL/simplebroker/actions/workflows/ci.yml/badge.svg)](https://github.com/VanL/simplebroker/actions/workflows
+  /ci.yml)
+  [![codecov](https://codecov.io/gh/VanL/simplebroker/branch/main/graph/badge.svg)](https://codecov.io/gh/VanL/simplebroker)
+  [![PyPI version](https://badge.fury.io/py/simplebroker.svg)](https://badge.fury.io/py/simplebroker)
+  [![Python versions](https://img.shields.io/pypi/pyversions/simplebroker.svg)](https://pypi.org/project/simplebroker/)
+
 *A lightweight message queue backed by SQLite. No setup required, just works.*
 
 ```bash
