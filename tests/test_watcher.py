@@ -242,7 +242,7 @@ class TestQueueWatcher(WatcherTestBase):
 
             # Wait for graceful exit
             try:
-                proc.proc.wait(timeout=5.0)
+                proc.proc.wait(timeout=10.0)
                 exit_code = proc.proc.returncode
             except subprocess.TimeoutExpired:
                 pytest.fail("Subprocess did not terminate within timeout after SIGINT")

@@ -1,6 +1,6 @@
 """SimpleBroker - A lightweight message queue backed by SQLite."""
 
-__version__ = "2.0.0"
+__version__ = "2.0.1"
 
 # Import main components
 # Import BrokerDB for backward compatibility (but don't export it)
