@@ -500,6 +500,7 @@ class TestQueueWatcher(WatcherTestBase):
     def test_run_forever_blocking(self, temp_db):
         """Test that run_forever blocks until stopped."""
         run_completed = threading.Event()
+        watcher_created = threading.Event()
         watcher_ref = None
 
         def run_watcher():
@@ -511,6 +512,7 @@ class TestQueueWatcher(WatcherTestBase):
                 lambda m, t: None,
             )
             watcher_ref = watcher
+            watcher_created.set()  # Signal that watcher is created
             try:
                 watcher.run_forever()
                 run_completed.set()
@@ -520,8 +522,11 @@ class TestQueueWatcher(WatcherTestBase):
         thread = threading.Thread(target=run_watcher)
         thread.start()
 
-        # Wait for watcher to be created
-        time.sleep(0.1)
+        # Wait for watcher to be created with timeout
+        if not watcher_created.wait(timeout=2.0):
+            thread.join(timeout=1.0)
+            pytest.fail("Watcher was not created within timeout")
+
         assert thread.is_alive()
         assert not run_completed.is_set()
 
