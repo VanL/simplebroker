@@ -81,7 +81,13 @@ class WatcherTestBase:
             yield watcher
         finally:
             try:
-                watcher.stop()  # Always attempt cleanup
+                # Check if a thread was started
+                if hasattr(watcher, "_thread") and watcher._thread:
+                    # Stop and join the thread
+                    watcher.stop(join=True, timeout=2.0)  # Explicitly join with timeout
+                else:
+                    # No thread started, just stop
+                    watcher.stop()
             except Exception:
                 pass  # Ignore errors during cleanup
 
@@ -112,7 +118,13 @@ class WatcherTestBase:
             yield watcher
         finally:
             try:
-                watcher.stop()
+                # Check if a thread was started
+                if hasattr(watcher, "_thread") and watcher._thread:
+                    # Stop and join the thread
+                    watcher.stop(join=True, timeout=2.0)  # Explicitly join with timeout
+                else:
+                    # No thread started, just stop
+                    watcher.stop()
             except Exception:
                 pass
 

@@ -110,44 +110,54 @@ class TestWatcherEdgeCases(WatcherTestBase):
         """Test that error handler returning False stops the watcher."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
+            try:
 
-            def handler(msg, ts):
-                raise ValueError("Handler error")
+                def handler(msg, ts):
+                    raise ValueError("Handler error")
 
-            def error_handler(exc, msg, ts):
-                return False  # Request stop
+                def error_handler(exc, msg, ts):
+                    return False  # Request stop
 
-            watcher = QueueWatcher(db, "queue", handler, error_handler=error_handler)
+                watcher = QueueWatcher(
+                    db, "queue", handler, error_handler=error_handler
+                )
 
-            # Test dispatch
-            with pytest.raises(_StopLoop):
-                watcher._dispatch("test", 12345)
+                # Test dispatch
+                with pytest.raises(_StopLoop):
+                    watcher._dispatch("test", 12345)
 
-            # Verify stop event was set
-            assert watcher._stop_event.is_set()
+                # Verify stop event was set
+                assert watcher._stop_event.is_set()
+            finally:
+                db.close()
 
     def test_error_handler_itself_fails(self):
         """Test handling when error handler itself raises an exception."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
+            try:
 
-            def handler(msg, ts):
-                raise ValueError("Handler error")
+                def handler(msg, ts):
+                    raise ValueError("Handler error")
 
-            def error_handler(exc, msg, ts):
-                raise RuntimeError("Error handler failed")
+                def error_handler(exc, msg, ts):
+                    raise RuntimeError("Error handler failed")
 
-            watcher = QueueWatcher(db, "queue", handler, error_handler=error_handler)
+                watcher = QueueWatcher(
+                    db, "queue", handler, error_handler=error_handler
+                )
 
-            # Should log but not crash
-            with patch("simplebroker.watcher.logger") as mock_logger:
-                watcher._dispatch("test", 12345)
+                # Should log but not crash
+                with patch("simplebroker.watcher.logger") as mock_logger:
+                    watcher._dispatch("test", 12345)
 
-                # Verify both errors were logged
-                mock_logger.error.assert_called()
-                error_call_args = str(mock_logger.error.call_args)
-                assert "Error handler failed" in error_call_args
-                assert "Handler error" in error_call_args
+                    # Verify both errors were logged
+                    mock_logger.error.assert_called()
+                    error_call_args = str(mock_logger.error.call_args)
+                    assert "Error handler failed" in error_call_args
+                    assert "Handler error" in error_call_args
+            finally:
+                db.close()
 
     def test_polling_strategy_pragma_failures(self):
         """Test handling of repeated PRAGMA data_version failures."""
@@ -263,19 +273,52 @@ class TestWatcherEdgeCases(WatcherTestBase):
             db_path = Path(tmpdir) / "test.db"
 
             with patch("simplebroker.watcher.logger") as mock_logger:
-                with QueueWatcher(str(db_path), "queue", lambda m, t: None) as watcher:
-                    # Mock stop to raise
-                    watcher.stop = Mock(side_effect=Exception("Stop failed"))
-                    # Mock cleanup to raise
-                    watcher._cleanup_thread_local = Mock(
-                        side_effect=Exception("Cleanup failed")
-                    )
+                watcher = QueueWatcher(str(db_path), "queue", lambda m, t: None)
+                # Start the watcher manually so we can control cleanup
+                thread = watcher.run_in_thread()
+
+                # Wait a moment to ensure thread is running
+                time.sleep(0.1)
+
+                # Mock stop to raise AFTER actually stopping the thread
+                original_stop = watcher.stop
+                stop_called = False
+
+                def failing_stop(*args, **kwargs):
+                    nonlocal stop_called
+                    if not stop_called:
+                        # First call - actually stop the thread
+                        stop_called = True
+                        original_stop(*args, **kwargs)
+                        # Then raise the exception for testing
+                        raise Exception("Stop failed")
+                    else:
+                        # Subsequent calls - just call original
+                        original_stop(*args, **kwargs)
+
+                watcher.stop = failing_stop
+
+                # Simulate context manager exit
+                try:
+                    watcher.__exit__(None, None, None)
+                except Exception:
+                    pass  # Expected from our mock
+
+                # Wait a moment for thread to finish
+                thread.join(timeout=2.0)
+
+                # Ensure thread is really stopped
+                assert not thread.is_alive()
 
                 # Should have logged warning for stop failure
                 assert mock_logger.warning.call_count >= 1
-                # Verify the warning message
-                mock_logger.warning.assert_called_with(
-                    "Error during stop in __exit__: Stop failed"
+                # Verify the warning message was logged
+                warning_calls = [
+                    str(call) for call in mock_logger.warning.call_args_list
+                ]
+                assert any(
+                    "Error during stop in __exit__: Stop failed" in call
+                    for call in warning_calls
                 )
 
     def test_signal_handler_not_main_thread(self):
@@ -371,89 +414,95 @@ class TestWatcherEdgeCases(WatcherTestBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             broker = BrokerDB(db_path)
+            try:
+                # Write a message
+                broker.write("slow_queue", "test message")
 
-            # Write a message
-            broker.write("slow_queue", "test message")
+                process_start = None
+                handler_started = threading.Event()
 
-            process_start = None
-            handler_started = threading.Event()
+                def slow_handler(msg, ts):
+                    nonlocal process_start
+                    process_start = time.time()
+                    handler_started.set()  # Signal that handler has started
+                    # Simulate slow processing with interruptible sleep
+                    interruptible_sleep(1.0, watcher._stop_event)
 
-            def slow_handler(msg, ts):
-                nonlocal process_start
-                process_start = time.time()
-                handler_started.set()  # Signal that handler has started
-                # Simulate slow processing with interruptible sleep
-                interruptible_sleep(1.0, watcher._stop_event)
+                with self.create_test_watcher(
+                    broker, "slow_queue", slow_handler
+                ) as watcher:
+                    # Start watcher
+                    thread = watcher.run_in_thread()
 
-            with self.create_test_watcher(
-                broker, "slow_queue", slow_handler
-            ) as watcher:
-                # Start watcher
-                thread = watcher.run_in_thread()
+                    # Wait for handler to start processing
+                    if not handler_started.wait(timeout=2.0):
+                        watcher.stop()
+                        thread.join(timeout=1.0)
+                        pytest.fail("Handler did not start processing within timeout")
 
-                # Wait for handler to start processing
-                if not handler_started.wait(timeout=2.0):
+                    # Stop should interrupt the sleep
+                    start_stop = time.time()
                     watcher.stop()
-                    thread.join(timeout=1.0)
-                    pytest.fail("Handler did not start processing within timeout")
+                    thread.join(timeout=0.5)  # Should complete quickly
+                    stop_time = time.time() - start_stop
 
-                # Stop should interrupt the sleep
-                start_stop = time.time()
-                watcher.stop()
-                thread.join(timeout=0.5)  # Should complete quickly
-                stop_time = time.time() - start_stop
-
-                assert stop_time < 0.5, f"Stop took {stop_time:.2f}s, should be < 0.5s"
-                assert not thread.is_alive()
+                    assert stop_time < 0.5, (
+                        f"Stop took {stop_time:.2f}s, should be < 0.5s"
+                    )
+                    assert not thread.is_alive()
+            finally:
+                broker.close()
 
     def test_concurrent_stop_safety(self):
         """Test stopping watcher from multiple threads."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             broker = BrokerDB(db_path)
+            try:
+                # Add many messages
+                for i in range(50):
+                    broker.write("concurrent_queue", f"msg{i}")
 
-            # Add many messages
-            for i in range(50):
-                broker.write("concurrent_queue", f"msg{i}")
+                processing_started = threading.Event()
+                process_count = 0
+                process_lock = threading.Lock()
 
-            processing_started = threading.Event()
-            process_count = 0
-            process_lock = threading.Lock()
+                def slow_handler(msg, ts):
+                    nonlocal process_count
+                    with process_lock:
+                        process_count += 1
+                        if process_count == 1:
+                            processing_started.set()  # Signal first message processed
+                    time.sleep(0.01)  # Slow processing
 
-            def slow_handler(msg, ts):
-                nonlocal process_count
-                with process_lock:
-                    process_count += 1
-                    if process_count == 1:
-                        processing_started.set()  # Signal first message processed
-                time.sleep(0.01)  # Slow processing
+                with self.create_test_watcher(
+                    broker, "concurrent_queue", slow_handler
+                ) as watcher:
+                    thread = watcher.run_in_thread()
 
-            with self.create_test_watcher(
-                broker, "concurrent_queue", slow_handler
-            ) as watcher:
-                thread = watcher.run_in_thread()
+                    # Wait for processing to start
+                    if not processing_started.wait(timeout=2.0):
+                        watcher.stop()
+                        thread.join(timeout=1.0)
+                        pytest.fail("Handler did not start processing within timeout")
 
-                # Wait for processing to start
-                if not processing_started.wait(timeout=2.0):
-                    watcher.stop()
+                    # Multiple threads try to stop
+                    stop_threads = []
+                    for _ in range(5):
+                        t = threading.Thread(target=watcher.stop)
+                        stop_threads.append(t)
+                        t.start()
+
+                    # All should complete quickly
+                    for t in stop_threads:
+                        t.join(timeout=0.5)
+                        assert not t.is_alive()
+
+                    # Main thread should stop
                     thread.join(timeout=1.0)
-                    pytest.fail("Handler did not start processing within timeout")
-
-                # Multiple threads try to stop
-                stop_threads = []
-                for _ in range(5):
-                    t = threading.Thread(target=watcher.stop)
-                    stop_threads.append(t)
-                    t.start()
-
-                # All should complete quickly
-                for t in stop_threads:
-                    t.join(timeout=0.5)
-                    assert not t.is_alive()
-
-                # Main thread should stop
-                thread.join(timeout=1.0)
-                assert not thread.is_alive()
+                    assert not thread.is_alive()
+            finally:
+                broker.close()
 
 
 class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
@@ -473,57 +522,61 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
         """Test that handler errors don't affect move (already completed)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
+            try:
+                # Add a message to source queue
+                db.write("source", "test message")
 
-            # Add a message to source queue
-            db.write("source", "test message")
+                handler_called = []
 
-            handler_called = []
+                def handler(msg, ts):
+                    handler_called.append((msg, ts))
+                    raise ValueError("Handler failed")
 
-            def handler(msg, ts):
-                handler_called.append((msg, ts))
-                raise ValueError("Handler failed")
+                def error_handler(exc, msg, ts):
+                    return True  # Continue
 
-            def error_handler(exc, msg, ts):
-                return True  # Continue
+                watcher = QueueMoveWatcher(
+                    db,
+                    "source",
+                    "dest",
+                    handler,
+                    error_handler=error_handler,
+                    max_messages=1,
+                )
 
-            watcher = QueueMoveWatcher(
-                db,
-                "source",
-                "dest",
-                handler,
-                error_handler=error_handler,
-                max_messages=1,
-            )
+                # Run move - should handle the error internally
+                watcher.run()
 
-            # Run move - should handle the error internally
-            watcher.run()
+                # Verify message was moved despite handler error
+                # Get queue counts from list_queues
+                queues = dict(db.list_queues())
+                assert queues.get("source", 0) == 0
+                assert queues.get("dest", 0) == 1
 
-            # Verify message was moved despite handler error
-            # Get queue counts from list_queues
-            queues = dict(db.list_queues())
-            assert queues.get("source", 0) == 0
-            assert queues.get("dest", 0) == 1
-
-            # Verify handler was called
-            assert len(handler_called) == 1
-            assert handler_called[0][0] == "test message"
+                # Verify handler was called
+                assert len(handler_called) == 1
+                assert handler_called[0][0] == "test message"
+            finally:
+                db.close()
 
     def test_move_unexpected_error(self):
         """Test handling of unexpected errors during move."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
+            try:
+                watcher = QueueMoveWatcher(db, "source", "dest", lambda m, t: None)
 
-            watcher = QueueMoveWatcher(db, "source", "dest", lambda m, t: None)
+                # Mock db.move to raise unexpected error
 
-            # Mock db.move to raise unexpected error
+                def failing_move(*args, **kwargs):
+                    raise RuntimeError("Unexpected move error")
 
-            def failing_move(*args, **kwargs):
-                raise RuntimeError("Unexpected move error")
-
-            # Patch the db's move method
-            with patch.object(watcher._get_db(), "move", side_effect=failing_move):
-                with pytest.raises(RuntimeError, match="Unexpected move error"):
-                    watcher._drain_queue()
+                # Patch the db's move method
+                with patch.object(watcher._get_db(), "move", side_effect=failing_move):
+                    with pytest.raises(RuntimeError, match="Unexpected move error"):
+                        watcher._drain_queue()
+            finally:
+                db.close()
 
     def test_polling_strategy_activity_detection(self):
         """Test that polling strategy detects database changes."""
