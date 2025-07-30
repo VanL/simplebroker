@@ -114,6 +114,10 @@ class SQLiteRunner:
         self._created_files: Set[Path] = set()
         # Track if we created the database file (for cleanup of test mocks)
         self._created_db = False
+        # Track all connections across all threads for robust cleanup
+        # Note: sqlite3.Connection doesn't support weak references, so we use a regular set
+        self._all_connections: Set[sqlite3.Connection] = set()
+        self._connections_lock = threading.Lock()
         # For backward compatibility, expose _conn as a property
         # that returns the current thread's connection
 
@@ -145,6 +149,9 @@ class SQLiteRunner:
             # Also reset setup phases for the new process
             with self._setup_lock:
                 self._completed_phases.clear()
+            # Clear tracked connections from parent process
+            with self._connections_lock:
+                self._all_connections.clear()
             self._pid = current_pid
 
         # Check if this thread has a connection
@@ -157,6 +164,10 @@ class SQLiteRunner:
             self._thread_local.conn = sqlite3.connect(
                 self._db_path, isolation_level=None
             )
+
+            # Track the new connection for centralized cleanup
+            with self._connections_lock:
+                self._all_connections.add(self._thread_local.conn)
 
             # Track if we created the database (for test cleanup)
             if not db_existed and os.path.exists(self._db_path):
@@ -331,14 +342,23 @@ class SQLiteRunner:
             raise DataError(str(e)) from e
 
     def close(self) -> None:
-        """Close the connection and release resources."""
-        # Close the current thread's connection if it exists
+        """Close all connections created by this runner and release resources."""
+        # Close ALL connections created by this runner instance across all threads
+        # This is critical for preventing resource leaks and file locking issues on Windows
+        with self._connections_lock:
+            for conn in self._all_connections:
+                try:
+                    conn.close()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+            self._all_connections.clear()
+
+        # Also clean up the current thread's local storage for good hygiene
         if hasattr(self._thread_local, "conn"):
             try:
-                self._thread_local.conn.close()
+                delattr(self._thread_local, "conn")
             except Exception:
-                pass  # Ignore errors during cleanup
-            delattr(self._thread_local, "conn")
+                pass
 
     def setup(self, phase: SetupPhase) -> None:
         """Run specific setup phase in an idempotent manner.

@@ -156,13 +156,17 @@ class TestSQLiteRunnerErrorHandling:
             # Create a connection
             _ = runner._get_connection()
 
-            # Store the real connection for cleanup
-            real_conn = runner._thread_local.conn
-
             # Mock the connection to raise an error on close
             mock_conn = Mock()
             mock_conn.close.side_effect = Exception("close failed")
+
+            # Replace the real connection with the mock in both places
+            real_conn = runner._thread_local.conn
             runner._thread_local.conn = mock_conn
+            # Also update the set to contain the mock
+            with runner._connections_lock:
+                runner._all_connections.discard(real_conn)
+                runner._all_connections.add(mock_conn)
 
             # Should not raise
             runner.close()
@@ -173,7 +177,7 @@ class TestSQLiteRunnerErrorHandling:
             # Verify thread local was cleaned up
             assert not hasattr(runner._thread_local, "conn")
 
-            # Clean up the real connection to avoid Windows file locking
+            # Clean up the real connection manually
             try:
                 real_conn.close()
             except Exception:
@@ -220,21 +224,18 @@ class TestSQLiteRunnerForkSafety:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             runner = SQLiteRunner(str(Path(tmpdir) / "test.db"))
-            try:
-                # Get initial connection
-                runner._get_connection()
-                initial_pid = runner._pid
 
-                # Simulate fork by changing PID
-                runner._pid = initial_pid - 1  # Different PID
+            # Get initial connection
+            runner._get_connection()
+            initial_pid = runner._pid
 
-                # Get connection again - should reinitialize
-                runner._get_connection()
+            # Simulate fork by changing PID
+            runner._pid = initial_pid - 1  # Different PID
 
-                # Verify reinitialization
-                assert runner._pid == os.getpid()
-                # Thread local should have been reset
-                assert hasattr(runner._thread_local, "conn")
-            finally:
-                # Clean up to avoid Windows file locking
-                runner.close()
+            # Get connection again - should reinitialize
+            runner._get_connection()
+
+            # Verify reinitialization
+            assert runner._pid == os.getpid()
+            # Thread local should have been reset
+            assert hasattr(runner._thread_local, "conn")
