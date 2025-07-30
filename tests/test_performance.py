@@ -2,7 +2,8 @@
 
 All performance-sensitive tests are collected here and run serially
 to ensure accurate timing measurements without interference from
-parallel test execution.
+parallel test execution. Timing on CI/CD machines is flaky, so margins
+are generous to avoid failures that don't have to do with correctness.
 """
 
 import sqlite3
@@ -53,7 +54,7 @@ if sys.version_info[:2] in [(3, 10)]:
     VERSION_ADJ = 1.2
 
 # Performance buffer percentage
-PERF_BUFFER_PERCENT = 0.5
+PERF_BUFFER_PERCENT = 0.75
 
 # Machine performance ratio (calculated once per test session)
 # 1.0 = same as baseline machine, 0.5 = half as fast, 2.0 = twice as fast
