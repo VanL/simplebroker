@@ -94,6 +94,7 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
         Timeout in seconds
     """
     global CURRENT_MACHINE_PERFORMANCE
+    global VERSION_ADJ
 
     # Lazy-load machine performance ratio
     if CURRENT_MACHINE_PERFORMANCE is None:
@@ -104,8 +105,9 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
     # Adjust for machine performance
     # If machine is slower (ratio < 1.0), allow more time
     # If machine is faster (ratio > 1.0), require less time
-    timeout = base_time / CURRENT_MACHINE_PERFORMANCE * (1 + PERF_BUFFER_PERCENT)
-
+    timeout = base_time / (CURRENT_MACHINE_PERFORMANCE * (1 + PERF_BUFFER_PERCENT))
+    # Adjust for slower Python versions
+    timeout *= VERSION_ADJ
     # Platform-specific adjustments
     if platform_specific and sys.platform == "win32":
         # Windows filesystem operations are typically slower
