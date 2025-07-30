@@ -156,6 +156,9 @@ class TestSQLiteRunnerErrorHandling:
             # Create a connection
             _ = runner._get_connection()
 
+            # Store the real connection for cleanup
+            real_conn = runner._thread_local.conn
+
             # Mock the connection to raise an error on close
             mock_conn = Mock()
             mock_conn.close.side_effect = Exception("close failed")
@@ -169,6 +172,12 @@ class TestSQLiteRunnerErrorHandling:
 
             # Verify thread local was cleaned up
             assert not hasattr(runner._thread_local, "conn")
+
+            # Clean up the real connection to avoid Windows file locking
+            try:
+                real_conn.close()
+            except Exception:
+                pass
 
     def test_wal_mode_failure(self):
         """Test handling of WAL mode setup failure."""
@@ -211,18 +220,21 @@ class TestSQLiteRunnerForkSafety:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             runner = SQLiteRunner(str(Path(tmpdir) / "test.db"))
+            try:
+                # Get initial connection
+                runner._get_connection()
+                initial_pid = runner._pid
 
-            # Get initial connection
-            runner._get_connection()
-            initial_pid = runner._pid
+                # Simulate fork by changing PID
+                runner._pid = initial_pid - 1  # Different PID
 
-            # Simulate fork by changing PID
-            runner._pid = initial_pid - 1  # Different PID
+                # Get connection again - should reinitialize
+                runner._get_connection()
 
-            # Get connection again - should reinitialize
-            runner._get_connection()
-
-            # Verify reinitialization
-            assert runner._pid == os.getpid()
-            # Thread local should have been reset
-            assert hasattr(runner._thread_local, "conn")
+                # Verify reinitialization
+                assert runner._pid == os.getpid()
+                # Thread local should have been reset
+                assert hasattr(runner._thread_local, "conn")
+            finally:
+                # Clean up to avoid Windows file locking
+                runner.close()

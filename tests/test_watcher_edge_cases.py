@@ -110,44 +110,48 @@ class TestWatcherEdgeCases(WatcherTestBase):
         """Test that error handler returning False stops the watcher."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
+            try:
+                def handler(msg, ts):
+                    raise ValueError("Handler error")
 
-            def handler(msg, ts):
-                raise ValueError("Handler error")
+                def error_handler(exc, msg, ts):
+                    return False  # Request stop
 
-            def error_handler(exc, msg, ts):
-                return False  # Request stop
+                watcher = QueueWatcher(db, "queue", handler, error_handler=error_handler)
 
-            watcher = QueueWatcher(db, "queue", handler, error_handler=error_handler)
+                # Test dispatch
+                with pytest.raises(_StopLoop):
+                    watcher._dispatch("test", 12345)
 
-            # Test dispatch
-            with pytest.raises(_StopLoop):
-                watcher._dispatch("test", 12345)
-
-            # Verify stop event was set
-            assert watcher._stop_event.is_set()
+                # Verify stop event was set
+                assert watcher._stop_event.is_set()
+            finally:
+                db.close()
 
     def test_error_handler_itself_fails(self):
         """Test handling when error handler itself raises an exception."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
+            try:
+                def handler(msg, ts):
+                    raise ValueError("Handler error")
 
-            def handler(msg, ts):
-                raise ValueError("Handler error")
+                def error_handler(exc, msg, ts):
+                    raise RuntimeError("Error handler failed")
 
-            def error_handler(exc, msg, ts):
-                raise RuntimeError("Error handler failed")
+                watcher = QueueWatcher(db, "queue", handler, error_handler=error_handler)
 
-            watcher = QueueWatcher(db, "queue", handler, error_handler=error_handler)
+                # Should log but not crash
+                with patch("simplebroker.watcher.logger") as mock_logger:
+                    watcher._dispatch("test", 12345)
 
-            # Should log but not crash
-            with patch("simplebroker.watcher.logger") as mock_logger:
-                watcher._dispatch("test", 12345)
-
-                # Verify both errors were logged
-                mock_logger.error.assert_called()
-                error_call_args = str(mock_logger.error.call_args)
-                assert "Error handler failed" in error_call_args
-                assert "Handler error" in error_call_args
+                    # Verify both errors were logged
+                    mock_logger.error.assert_called()
+                    error_call_args = str(mock_logger.error.call_args)
+                    assert "Error handler failed" in error_call_args
+                    assert "Handler error" in error_call_args
+            finally:
+                db.close()
 
     def test_polling_strategy_pragma_failures(self):
         """Test handling of repeated PRAGMA data_version failures."""
@@ -469,57 +473,61 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
         """Test that handler errors don't affect move (already completed)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
+            try:
+                # Add a message to source queue
+                db.write("source", "test message")
 
-            # Add a message to source queue
-            db.write("source", "test message")
+                handler_called = []
 
-            handler_called = []
+                def handler(msg, ts):
+                    handler_called.append((msg, ts))
+                    raise ValueError("Handler failed")
 
-            def handler(msg, ts):
-                handler_called.append((msg, ts))
-                raise ValueError("Handler failed")
+                def error_handler(exc, msg, ts):
+                    return True  # Continue
 
-            def error_handler(exc, msg, ts):
-                return True  # Continue
+                watcher = QueueMoveWatcher(
+                    db,
+                    "source",
+                    "dest",
+                    handler,
+                    error_handler=error_handler,
+                    max_messages=1,
+                )
 
-            watcher = QueueMoveWatcher(
-                db,
-                "source",
-                "dest",
-                handler,
-                error_handler=error_handler,
-                max_messages=1,
-            )
+                # Run move - should handle the error internally
+                watcher.run()
 
-            # Run move - should handle the error internally
-            watcher.run()
+                # Verify message was moved despite handler error
+                # Get queue counts from list_queues
+                queues = dict(db.list_queues())
+                assert queues.get("source", 0) == 0
+                assert queues.get("dest", 0) == 1
 
-            # Verify message was moved despite handler error
-            # Get queue counts from list_queues
-            queues = dict(db.list_queues())
-            assert queues.get("source", 0) == 0
-            assert queues.get("dest", 0) == 1
-
-            # Verify handler was called
-            assert len(handler_called) == 1
-            assert handler_called[0][0] == "test message"
+                # Verify handler was called
+                assert len(handler_called) == 1
+                assert handler_called[0][0] == "test message"
+            finally:
+                db.close()
 
     def test_move_unexpected_error(self):
         """Test handling of unexpected errors during move."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
+            try:
+                watcher = QueueMoveWatcher(db, "source", "dest", lambda m, t: None)
 
-            watcher = QueueMoveWatcher(db, "source", "dest", lambda m, t: None)
+                # Mock db.move to raise unexpected error
 
-            # Mock db.move to raise unexpected error
+                def failing_move(*args, **kwargs):
+                    raise RuntimeError("Unexpected move error")
 
-            def failing_move(*args, **kwargs):
-                raise RuntimeError("Unexpected move error")
-
-            # Patch the db's move method
-            with patch.object(watcher._get_db(), "move", side_effect=failing_move):
-                with pytest.raises(RuntimeError, match="Unexpected move error"):
-                    watcher._drain_queue()
+                # Patch the db's move method
+                with patch.object(watcher._get_db(), "move", side_effect=failing_move):
+                    with pytest.raises(RuntimeError, match="Unexpected move error"):
+                        watcher._drain_queue()
+            finally:
+                db.close()
 
     def test_polling_strategy_activity_detection(self):
         """Test that polling strategy detects database changes."""

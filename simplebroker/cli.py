@@ -474,6 +474,30 @@ def main() -> int:
             resolved_db_path = db_path.resolve()
             resolved_working_dir = working_dir.resolve()
 
+            # On Windows, resolve() might not fully resolve symlink chains
+            # Keep resolving until we reach a non-symlink or hit an error
+            max_symlink_depth = 40  # Prevent infinite loops
+            depth = 0
+            while resolved_db_path.is_symlink() and depth < max_symlink_depth:
+                try:
+                    # Read the symlink target and resolve it
+                    if hasattr(resolved_db_path, "readlink"):
+                        # Python 3.9+
+                        target = resolved_db_path.readlink()
+                    else:
+                        # Python 3.8 and older
+                        target = Path(os.readlink(str(resolved_db_path)))
+
+                    if target.is_absolute():
+                        resolved_db_path = target.resolve()
+                    else:
+                        # Relative symlink - resolve relative to parent
+                        resolved_db_path = (resolved_db_path.parent / target).resolve()
+                    depth += 1
+                except (OSError, RuntimeError):
+                    # If we can't read/resolve the symlink, use what we have
+                    break
+
             # For non-absolute paths, ensure the resolved path is within working directory
             if not absolute_path_provided:
                 # Check if the database path is within the working directory
