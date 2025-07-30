@@ -88,37 +88,32 @@ def test_cleanup_finalizer_with_exception():
 
         # Create a persistent queue
         queue = Queue("test", db_path=db_path, persistent=True)
+        
+        # Save the original runner for cleanup
+        original_runner_close = queue._runner.close
 
-        # Store original runner for cleanup
-        original_runner = queue._runner
+        # Ensure the queue is initialized
+        queue._ensure_core()
+        
+        # Mock the runner's close method to raise an exception
+        queue._runner.close = Mock(side_effect=Exception("Test exception"))
 
-        try:
-            # Mock the runner's close method to raise an exception
-            queue._runner.close = Mock(side_effect=Exception("Test exception"))
+        # Patch the logger to verify warning is logged
+        with patch("simplebroker.queue.logger") as mock_logger:
+            # Call the finalizer function directly
+            queue._finalizer()
 
-            # Patch the logger to verify warning is logged
-            with patch("simplebroker.queue.logger") as mock_logger:
-                # Call the finalizer function directly
-                queue._finalizer()
-
-                # Verify the warning was logged
-                mock_logger.warning.assert_called_once()
-                assert "Error during Queue finalizer cleanup" in str(
-                    mock_logger.warning.call_args
-                )
-                assert "Test exception" in str(mock_logger.warning.call_args)
-        finally:
-            # Ensure proper cleanup on Windows
-            if hasattr(original_runner, "close"):
-                try:
-                    original_runner.close()
-                except Exception:
-                    pass
-            queue.close()
-            del original_runner
-
-            # Force garbage collection
-            ensure_windows_cleanup()
+            # Verify the warning was logged
+            mock_logger.warning.assert_called_once()
+            assert "Error during Queue finalizer cleanup" in str(
+                mock_logger.warning.call_args
+            )
+            assert "Test exception" in str(mock_logger.warning.call_args)
+            
+        # Clean up - use the original close method
+        queue._runner.close = original_runner_close
+        queue.close()
+        ensure_windows_cleanup()
 
 
 def test_cleanup_finalizer_with_none_runner():
