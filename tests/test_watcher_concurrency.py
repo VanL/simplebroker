@@ -430,8 +430,13 @@ class TestMixedMode(WatcherTestBase):
                 t.join(timeout=10.0)
                 assert not t.is_alive(), "Writer thread didn't complete"
 
-            # Let watcher catch up briefly
-            time.sleep(0.5)
+            # Wait for the watcher to process all messages
+            start_time = time.time()
+            while time.time() - start_time < 5.0:  # 5 second timeout
+                with lock:
+                    if len(read_messages) >= 60:
+                        break
+                time.sleep(0.05)  # Check every 50ms
 
             # Stop watcher with timeout
             watcher.stop()

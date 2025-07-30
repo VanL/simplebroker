@@ -80,6 +80,13 @@ def cleanup_watchers():
     # Force garbage collection
     gc.collect()
 
+    # On Windows, add a small delay to ensure file handles are released
+    import sys
+
+    if sys.platform == "win32":
+        time.sleep(0.1)
+        gc.collect()  # Second GC pass on Windows
+
     # Check for remaining threads
     active_threads = threading.enumerate()
     watcher_threads = [t for t in active_threads if "watcher" in t.name.lower()]

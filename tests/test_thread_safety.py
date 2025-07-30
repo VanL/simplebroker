@@ -17,9 +17,7 @@ def test_shared_brokerdb_thread_safety():
         db_path = Path(tmpdir) / "test.db"
 
         # Create a single shared BrokerDB instance
-        db = BrokerDB(str(db_path))
-
-        try:
+        with BrokerDB(str(db_path)) as db:
             messages_written = []
             messages_read = []
             write_lock = threading.Lock()
@@ -86,17 +84,12 @@ def test_shared_brokerdb_thread_safety():
             # Check no duplicates were read
             assert len(messages_read) == len(set(messages_read))
 
-        finally:
-            db.close()
-
 
 def test_concurrent_operations_different_queues():
     """Test concurrent operations on different queues."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        db = BrokerDB(str(db_path))
-
-        try:
+        with BrokerDB(str(db_path)) as db:
 
             def queue_worker(queue_name, operations):
                 """Perform various operations on a queue."""
@@ -156,9 +149,6 @@ def test_concurrent_operations_different_queues():
 
             # queue3 should have 2 messages (wrote 3, read 1)
             assert queues.get("queue3", 0) == 2
-
-        finally:
-            db.close()
 
 
 def test_brokerdb_not_picklable():

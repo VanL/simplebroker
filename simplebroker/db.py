@@ -1,5 +1,6 @@
 """Database module for SimpleBroker - handles all SQLite operations."""
 
+import gc
 import os
 import re
 import threading
@@ -1449,6 +1450,8 @@ class BrokerCore:
             if hasattr(self._runner, "cleanup_marker_files"):
                 self._runner.cleanup_marker_files()
             self._runner.close()
+            # Force garbage collection to release any lingering references on Windows
+            gc.collect()
 
     def __enter__(self) -> "BrokerCore":
         """Enter context manager."""

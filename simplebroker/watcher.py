@@ -28,6 +28,7 @@ import os
 import signal
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, Optional, Type
 
@@ -336,6 +337,38 @@ class QueueWatcher:
             burst_sleep=env_burst_sleep,
         )
 
+        # Automatic cleanup finalizer (important on Windows where open file
+        # handles prevent TemporaryDirectory from removing .db files)
+        # If user code forgets to call stop() / join the thread, the watcher
+        # object will eventually be garbage-collected when the test function
+        # returns. The finalizer below makes sure the background thread is
+        # stopped and joined and that the thread-local BrokerDB is closed,
+        # so every SQLite connection is released before the temp directory
+        # is removed.
+        def _auto_cleanup(wref: weakref.ReferenceType[QueueWatcher]) -> None:
+            obj = wref()
+            if obj is None:  # already GC'ed
+                return
+            try:
+                obj.stop()
+            except Exception:
+                pass
+
+            thr = getattr(obj, "_thread", None)  # set by run_in_thread()
+            if isinstance(thr, threading.Thread) and thr.is_alive():
+                try:
+                    thr.join(timeout=1.0)  # don't hang indefinitely
+                except Exception:
+                    pass
+
+            # ensure the per-thread BrokerDB is closed
+            try:
+                obj._cleanup_thread_local()
+            except Exception:
+                pass
+
+        self._finalizer = weakref.finalize(self, _auto_cleanup, weakref.ref(self))
+
     def _get_db(self) -> BrokerDB:
         """Get a thread-local database connection.
 
@@ -406,6 +439,10 @@ class QueueWatcher:
         except Exception as e:
             logger.warning(f"Error during stop in __exit__: {e}")
 
+        # Detach the finalizer - manual cleanup succeeded
+        if hasattr(self, "_finalizer"):
+            self._finalizer.detach()
+
         try:
             self._cleanup_thread_local()
         except Exception as e:
@@ -448,15 +485,18 @@ class QueueWatcher:
 
                     # Main loop
                     while True:
-                        self._check_stop()  # Check at start of each iteration
-
-                        # Wait for activity
+                        # Wait until something might have happened
                         self._strategy.wait_for_activity()
 
-                        self._check_stop()  # Check after waiting
-
-                        # Process available messages
+                        # Always try to drain the queue first; this guarantees
+                        # that a stop request does not prevent us from
+                        # finishing already-visible work, so connections can
+                        # be closed and no messages get lost.
                         self._drain_queue()
+
+                        # Stop afterwards - if requested we break out, but only
+                        # after the last drain finished.
+                        self._check_stop()
 
                     # If we get here, we exited normally
                     break
@@ -529,6 +569,8 @@ class QueueWatcher:
         # interpreter shutdown (e.g. during test runs).
         thread = threading.Thread(target=self.run_forever, daemon=True)
         thread.start()
+        # Store reference for the finalizer
+        self._thread = thread
         return thread
 
     def is_running(self) -> bool:
@@ -853,6 +895,33 @@ class QueueMoveWatcher(QueueWatcher):
         # Override stop event if provided
         if stop_event is not None:
             self._stop_event = stop_event
+
+        # Automatic cleanup finalizer (same as parent class)
+        # This ensures proper cleanup even if the move watcher is
+        # not explicitly stopped
+        def _auto_cleanup_move(wref: weakref.ReferenceType[QueueMoveWatcher]) -> None:
+            obj = wref()
+            if obj is None:  # already GC'ed
+                return
+            try:
+                obj.stop()
+            except Exception:
+                pass
+
+            thr = getattr(obj, "_thread", None)  # set by run_in_thread()
+            if isinstance(thr, threading.Thread) and thr.is_alive():
+                try:
+                    thr.join(timeout=1.0)  # don't hang indefinitely
+                except Exception:
+                    pass
+
+            # ensure the per-thread BrokerDB is closed
+            try:
+                obj._cleanup_thread_local()
+            except Exception:
+                pass
+
+        self._finalizer = weakref.finalize(self, _auto_cleanup_move, weakref.ref(self))  # type: ignore[arg-type]
 
     @property
     def move_count(self) -> int:
