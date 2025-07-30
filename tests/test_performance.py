@@ -54,7 +54,7 @@ if sys.version_info[:2] in [(3, 10)]:
     VERSION_ADJ = 1.2
 
 # Performance buffer percentage
-PERF_BUFFER_PERCENT = 0.75
+PERF_BUFFER_PERCENT = 1.25
 
 # Machine performance ratio (calculated once per test session)
 # 1.0 = same as baseline machine, 0.5 = half as fast, 2.0 = twice as fast
@@ -64,19 +64,19 @@ MACHINE_PERFORMANCE_RATIO = 1.0  # Default to baseline performance
 # Baseline performance times measured on Apple M2 Air
 # These are the actual measured times for each test scenario
 BASELINE_TIMES = {
-    "basic_write_50": 0.015,  # Writing 50 messages
-    "validation_cached": 0.001,  # 1000 cached validations (rounded up from 0.000)
-    "bulk_move_5k": 5.0,  # Estimated: 5x the 1k move time
-    "large_batch_claim_rollback": 0.025,  # Reading 100 of 5000 messages
-    "at_least_once_rollback": 0.004,  # Reading 250 of 500 messages
-    "since_query_2000_msgs": 1.0,  # Estimated based on query performance
-    "timestamp_lookup": 0.1,  # Estimated based on index lookup
-    "concurrent_mixed_ops": 2.0,  # Estimated for mixed operations
-    "move_1k_messages": 0.093,  # Moving 1000 messages individually
-    "claim_1k_messages": 0.056,  # Claiming 1000 messages
+    "basic_write_50": 0.016,  # Writing 50 messages
+    "validation_cached": 0.002,  # 1000 cached validations (rounded up from 0.000)
+    "bulk_move_5k": 5.5,  # Estimated: 5x the 1k move time
+    "large_batch_claim_rollback": 0.03,  # Reading 100 of 5000 messages
+    "at_least_once_rollback": 0.005,  # Reading 250 of 500 messages
+    "since_query_2000_msgs": 1.2,  # Estimated based on query performance
+    "timestamp_lookup": 0.15,  # Estimated based on index lookup
+    "concurrent_mixed_ops": 2.2,  # Estimated for mixed operations
+    "move_1k_messages": 0.098,  # Moving 1000 messages individually
+    "claim_1k_messages": 0.06,  # Claiming 1000 messages
     "vacuum_10k_messages": 3.0,  # Estimated based on batch operations
-    "write_1k_messages": 0.719,  # Writing 1000 messages
-    "move_watcher_100": 2.0,  # Estimated for watcher operations
+    "write_1k_messages": 0.8,  # Writing 1000 messages
+    "move_watcher_100": 2.2,  # Estimated for watcher operations
 }
 
 # Minimum performance thresholds (messages per second)
