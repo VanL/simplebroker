@@ -562,12 +562,13 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
     def test_move_unexpected_error(self):
         """Test handling of unexpected errors during move."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            db = BrokerDB(str(Path(tmpdir) / "test.db"))
-            try:
-                watcher = QueueMoveWatcher(db, "source", "dest", lambda m, t: None)
+            db_path = Path(tmpdir) / "test.db"
 
+            # Use context manager for proper cleanup
+            with self.create_test_move_watcher(
+                str(db_path), "source", "dest", lambda m, t: None
+            ) as watcher:
                 # Mock db.move to raise unexpected error
-
                 def failing_move(*args, **kwargs):
                     raise RuntimeError("Unexpected move error")
 
@@ -575,8 +576,6 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
                 with patch.object(watcher._get_db(), "move", side_effect=failing_move):
                     with pytest.raises(RuntimeError, match="Unexpected move error"):
                         watcher._drain_queue()
-            finally:
-                db.close()
 
     def test_polling_strategy_activity_detection(self):
         """Test that polling strategy detects database changes."""

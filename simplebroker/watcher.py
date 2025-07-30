@@ -3,6 +3,44 @@
 This module provides an efficient polling mechanism to consume or monitor
 queues with minimal overhead and fast response times.
 
+IMPORTANT FOR PEOPLE SUBCLASSING/USING API: Proper Resource Cleanup
+-------------------------------------------------------------------
+Watchers create background threads and database connections that must be
+properly cleaned up to avoid resource leaks, especially on Windows where
+file locking is strict. Always use one of these patterns:
+
+1. Context Manager (RECOMMENDED - automatic cleanup):
+    with QueueWatcher("my.db", "tasks", handler) as watcher:
+        # Thread starts automatically in __enter__
+        time.sleep(60)  # Do work
+    # Thread is stopped and joined automatically in __exit__
+
+2. Manual Management (ensure stop() is called):
+    watcher = QueueWatcher("my.db", "tasks", handler)
+    thread = watcher.run_in_thread()
+    try:
+        # Do work
+    finally:
+        watcher.stop()  # This joins the thread by default, ensuring cleanup
+
+3. Signal Handling (for long-running services):
+    import signal
+    watcher = QueueWatcher("my.db", "tasks", handler)
+
+    def shutdown(signum, frame):
+        watcher.stop()  # Ensures clean shutdown
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+    watcher.run_forever()  # Handles SIGINT (Ctrl+C) automatically
+
+WARNING: Not calling stop() can cause:
+- Thread leaks (threads continue running after main program exits)
+- Database connection leaks (SQLite connections remain open)
+- File locking issues on Windows (database files can't be deleted)
+- Resource exhaustion in long-running applications
+
 Typical usage:
     from pathlib import Path
     from simplebroker.watcher import QueueWatcher
@@ -349,6 +387,15 @@ class QueueWatcher:
         # stopped and joined and that the thread-local BrokerDB is closed,
         # so every SQLite connection is released before the temp directory
         # is removed.
+        #
+        # WARNING: This is a safety net, NOT a replacement for proper cleanup!
+        # --------------------------------------------------------------------
+        # The finalizer runs during garbage collection, which is:
+        # - Non-deterministic (might not run immediately)
+        # - Not guaranteed (might not run at all in some cases)
+        # - Too late (resources held longer than necessary)
+        #
+        # Always use context managers or call stop() explicitly!
         def _auto_cleanup(wref: weakref.ReferenceType[QueueWatcher]) -> None:
             obj = wref()
             if obj is None:  # already GC'ed
@@ -411,6 +458,16 @@ class QueueWatcher:
     def __enter__(self) -> QueueWatcher:
         """Enter the context manager and start the watcher in a background thread.
 
+        This method is called when entering a `with` statement. It automatically
+        starts the watcher in a background thread, making it easy to ensure
+        proper cleanup:
+
+        Example:
+            with QueueWatcher("my.db", "tasks", handler) as watcher:
+                # Watcher thread is now running
+                time.sleep(60)  # Process messages for 60 seconds
+            # Thread is automatically stopped and joined when exiting the block
+
         Returns
         -------
         QueueWatcher
@@ -428,7 +485,18 @@ class QueueWatcher:
         """Exit the context manager.
 
         Ensures proper cleanup of resources including stopping the watcher
-        and closing any thread-local database connections.
+        and closing any thread-local database connections. This method is
+        called automatically when exiting a `with` block, even if an
+        exception occurs.
+
+        IMPORTANT: This method ensures that:
+        1. The background thread is stopped (stop event is set)
+        2. The thread is joined (waits for it to actually terminate)
+        3. Database connections are closed
+        4. The finalizer is detached (cleanup is complete)
+
+        This prevents resource leaks and file locking issues, especially
+        on Windows where SQLite connections can prevent file deletion.
 
         Parameters
         ----------
@@ -542,12 +610,42 @@ class QueueWatcher:
         thread finishes (or timeout seconds, whichever comes first). Calling
         stop() multiple times is safe.
 
+        CRITICAL: Always call this method before your program exits!
+        ---------------------------------------------------------
+        Not calling stop() can cause:
+        - Thread leaks (background thread continues running)
+        - Database connection leaks (SQLite connections stay open)
+        - File locking on Windows (can't delete database files)
+        - Resource exhaustion in long-running applications
+
+        The join parameter (default True) is important because it ensures
+        the thread has actually terminated before this method returns. This
+        prevents race conditions where the main program exits while the
+        watcher thread is still cleaning up.
+
+        Example usage:
+            # Simple case - join by default
+            watcher.stop()  # Waits up to 2 seconds for thread to finish
+
+            # Quick stop without waiting (risky!)
+            watcher.stop(join=False)  # Returns immediately
+
+            # Custom timeout
+            watcher.stop(timeout=5.0)  # Wait up to 5 seconds
+
+        Thread-safety: This method uses a lock to ensure that multiple
+        concurrent calls to stop() are handled correctly. Only the first
+        caller will perform the join operation.
+
         Parameters
         ----------
         join : bool, optional
             Whether to wait for the thread to finish. Default is True.
+            Set to False only if you will join the thread separately.
         timeout : float, optional
             Maximum time to wait for thread to finish. Default is 2.0 seconds.
+            If the thread doesn't finish within this time, the method returns
+            anyway (thread might still be running).
         """
         with self._stop_lock:  # idempotent / thread-safe
             if self._stop_event.is_set():
@@ -585,6 +683,39 @@ class QueueWatcher:
         """
         Start the watcher in a new background thread.
 
+        IMPORTANT: You MUST call stop() when done!
+        -----------------------------------------
+        This method starts a background thread that will continue running
+        until explicitly stopped. The thread is marked as daemon=True as
+        a safety measure, but you should NOT rely on this for cleanup.
+
+        Proper usage patterns:
+
+        1. With context manager (RECOMMENDED):
+            with QueueWatcher(db, queue, handler) as watcher:
+                # Thread is started automatically
+                # ... do work ...
+            # Thread is stopped automatically
+
+        2. Manual management:
+            watcher = QueueWatcher(db, queue, handler)
+            thread = watcher.run_in_thread()
+            try:
+                # ... do work ...
+            finally:
+                watcher.stop()  # CRITICAL: Always call stop()!
+
+        3. Don't do this (resource leak):
+            watcher = QueueWatcher(db, queue, handler)
+            watcher.run_in_thread()  # Thread starts
+            # Program exits without calling stop() - BAD!
+
+        Why daemon=True is not enough:
+        - Daemon threads are killed abruptly when the program exits
+        - Database connections may not be closed properly
+        - File locks may persist (especially on Windows)
+        - No guarantee of processing the final message
+
         Returns
         -------
         threading.Thread
@@ -615,7 +746,9 @@ class QueueWatcher:
 
     def _sigint_handler(self, signum: int, frame: Any) -> None:
         """Convert SIGINT to graceful shutdown."""
-        self.stop()
+        # When handling SIGINT in run_forever(), we're in the main thread
+        # and there's no separate thread to join, so set join=False
+        self.stop(join=False)
 
     def __del__(self) -> None:
         """Safety net to stop watcher if garbage collected while running."""
@@ -857,6 +990,33 @@ class QueueMoveWatcher(QueueWatcher):
     The move happens atomically BEFORE the handler is called, ensuring that
     messages are safely moved even if the handler fails. The handler receives
     the message for observation purposes only.
+
+    IMPORTANT: Resource Cleanup Requirements
+    ---------------------------------------
+    This class inherits from QueueWatcher and has the same cleanup requirements:
+    - Always call stop() when done
+    - Use context managers when possible
+    - Ensure threads are joined before program exit
+
+    Example usage:
+        # Context manager (recommended)
+        with QueueMoveWatcher(db, "inbox", "processed", handler) as watcher:
+            # Moves messages for 60 seconds
+            time.sleep(60)
+        # Thread stopped and resources cleaned up automatically
+
+        # Manual management
+        watcher = QueueMoveWatcher(db, "inbox", "processed", handler)
+        thread = watcher.run_in_thread()
+        try:
+            # Process until max_messages reached or stopped
+            thread.join()
+        finally:
+            watcher.stop()  # Ensure cleanup even if join times out
+
+    The same warnings apply as for QueueWatcher - not calling stop() will
+    lead to thread leaks, database connection leaks, and file locking issues
+    on Windows.
     """
 
     def __init__(
@@ -944,6 +1104,9 @@ class QueueMoveWatcher(QueueWatcher):
 
         This is a convenience method that calls run_in_thread().
 
+        IMPORTANT: You MUST call stop() when done!
+        See the warnings in run_in_thread() and stop() for details.
+
         Returns:
             The thread running the watcher.
         """
@@ -953,6 +1116,14 @@ class QueueMoveWatcher(QueueWatcher):
         """Run the move watcher synchronously until max_messages or stop_event.
 
         This is a convenience method that calls run_forever().
+
+        This method blocks until:
+        - max_messages have been moved (if specified)
+        - stop() is called from another thread
+        - SIGINT (Ctrl+C) is received (if in main thread)
+
+        No additional cleanup is needed after this method returns, as it
+        runs synchronously in the current thread.
         """
         self.run_forever()
 
