@@ -271,8 +271,12 @@ class TestWatcherEdgeCases(WatcherTestBase):
                         side_effect=Exception("Cleanup failed")
                     )
 
-                # Should have logged both warnings
-                assert mock_logger.warning.call_count >= 2
+                # Should have logged warning for stop failure
+                assert mock_logger.warning.call_count >= 1
+                # Verify the warning message
+                mock_logger.warning.assert_called_with(
+                    "Error during stop in __exit__: Stop failed"
+                )
 
     def test_signal_handler_not_main_thread(self):
         """Test that signal handler is not installed in non-main threads."""

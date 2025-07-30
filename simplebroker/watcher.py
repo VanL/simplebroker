@@ -297,6 +297,10 @@ class QueueWatcher:
         # Thread-local storage for database connections
         self._thread_local = threading.local()
 
+        # Thread reference and lock for stop synchronization
+        self._thread: Optional[threading.Thread] = None
+        self._stop_lock = threading.Lock()
+
         # Read environment variables with defaults and error handling
         try:
             env_initial_checks = int(
@@ -405,13 +409,14 @@ class QueueWatcher:
                 delattr(self._thread_local, "db")
 
     def __enter__(self) -> QueueWatcher:
-        """Enter the context manager.
+        """Enter the context manager and start the watcher in a background thread.
 
         Returns
         -------
         QueueWatcher
             Returns self for use in with statements.
         """
+        self._thread = self.run_in_thread()
         return self
 
     def __exit__(
@@ -435,18 +440,10 @@ class QueueWatcher:
             The traceback if an exception occurred.
         """
         try:
+            # stop() now handles thread joining, cleanup, and finalizer detaching
             self.stop()
         except Exception as e:
             logger.warning(f"Error during stop in __exit__: {e}")
-
-        # Detach the finalizer - manual cleanup succeeded
-        if hasattr(self, "_finalizer"):
-            self._finalizer.detach()
-
-        try:
-            self._cleanup_thread_local()
-        except Exception as e:
-            logger.warning(f"Error during cleanup in __exit__: {e}")
 
     def run_forever(self) -> None:
         """
@@ -513,7 +510,7 @@ class QueueWatcher:
                         raise
                     else:
                         wait_time = 2**retry_count  # Exponential backoff
-                        logger.warning(
+                        logger.debug(
                             f"Watcher error (retry {retry_count}/{max_retries}): {e}. "
                             f"Retrying in {wait_time} seconds..."
                         )
@@ -535,14 +532,45 @@ class QueueWatcher:
             if signal_context is not None:
                 signal_context.__exit__(None, None, None)
 
-    def stop(self) -> None:
+    def stop(self, *, join: bool = True, timeout: float = 2.0) -> None:
         """
         Request a graceful shutdown. This method is thread-safe and can be
         called from another thread or a signal handler. The watcher will stop
         after processing the current message, if any.
+
+        If join is True (default), this call also waits until the background
+        thread finishes (or timeout seconds, whichever comes first). Calling
+        stop() multiple times is safe.
+
+        Parameters
+        ----------
+        join : bool, optional
+            Whether to wait for the thread to finish. Default is True.
+        timeout : float, optional
+            Maximum time to wait for thread to finish. Default is 2.0 seconds.
         """
-        self._stop_event.set()
-        self._strategy.notify_activity()  # Wake up wait_for_activity
+        with self._stop_lock:  # idempotent / thread-safe
+            if self._stop_event.is_set():
+                join = False  # someone else already did the join
+            else:
+                self._stop_event.set()
+                self._strategy.notify_activity()  # Wake up wait_for_activity
+
+            if join and self._thread and self._thread.is_alive():
+                # Don't join if we're the current thread (would deadlock)
+                if self._thread is not threading.current_thread():
+                    self._thread.join(timeout=timeout)
+
+            # After the thread is gone we can close the per-thread DB
+            if not self._thread or not self._thread.is_alive():
+                try:
+                    self._cleanup_thread_local()
+                except Exception:
+                    pass
+
+            # detach finalizer - resources are already released
+            if hasattr(self, "_finalizer"):
+                self._finalizer.detach()
 
     def _check_stop(self) -> None:
         """Centralized stop check that can be easily mocked in tests.
@@ -634,7 +662,7 @@ class QueueWatcher:
                     )
                     raise
                 wait_time = 2**db_retry_count  # Exponential backoff
-                logger.warning(
+                logger.debug(
                     f"Database connection error (retry {db_retry_count}/{max_db_retries}): {e}. "
                     f"Retrying in {wait_time} seconds..."
                 )
@@ -691,7 +719,7 @@ class QueueWatcher:
                     # Exponential backoff with jitter
                     jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
                     wait_time = 0.05 * (2**operational_error_count) + jitter
-                    logger.warning(
+                    logger.debug(
                         f"OperationalError during peek (retry {operational_error_count}/{max_operational_retries}): {e}. "
                         f"Retrying in {wait_time:.3f} seconds..."
                     )
@@ -760,7 +788,7 @@ class QueueWatcher:
                     # Exponential backoff with jitter
                     jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
                     wait_time = 0.05 * (2**operational_error_count) + jitter
-                    logger.warning(
+                    logger.debug(
                         f"OperationalError during consume (retry {operational_error_count}/{max_operational_retries}): {e}. "
                         f"Retrying in {wait_time:.3f} seconds..."
                     )
@@ -896,33 +924,6 @@ class QueueMoveWatcher(QueueWatcher):
         if stop_event is not None:
             self._stop_event = stop_event
 
-        # Automatic cleanup finalizer (same as parent class)
-        # This ensures proper cleanup even if the move watcher is
-        # not explicitly stopped
-        def _auto_cleanup_move(wref: weakref.ReferenceType[QueueMoveWatcher]) -> None:
-            obj = wref()
-            if obj is None:  # already GC'ed
-                return
-            try:
-                obj.stop()
-            except Exception:
-                pass
-
-            thr = getattr(obj, "_thread", None)  # set by run_in_thread()
-            if isinstance(thr, threading.Thread) and thr.is_alive():
-                try:
-                    thr.join(timeout=1.0)  # don't hang indefinitely
-                except Exception:
-                    pass
-
-            # ensure the per-thread BrokerDB is closed
-            try:
-                obj._cleanup_thread_local()
-            except Exception:
-                pass
-
-        self._finalizer = weakref.finalize(self, _auto_cleanup_move, weakref.ref(self))  # type: ignore[arg-type]
-
     @property
     def move_count(self) -> int:
         """Total number of successfully moved messages."""
@@ -974,7 +975,7 @@ class QueueMoveWatcher(QueueWatcher):
                     )
                     raise
                 wait_time = 2**db_retry_count  # Exponential backoff
-                logger.warning(
+                logger.debug(
                     f"Database connection error (retry {db_retry_count}/{max_db_retries}): {e}. "
                     f"Retrying in {wait_time} seconds..."
                 )
@@ -1046,7 +1047,7 @@ class QueueMoveWatcher(QueueWatcher):
                 # Exponential backoff with jitter
                 jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
                 wait_time = 0.05 * (2**operational_error_count) + jitter
-                logger.warning(
+                logger.debug(
                     f"OperationalError during move (retry {operational_error_count}/{max_operational_retries}): {e}. "
                     f"Retrying in {wait_time:.3f} seconds..."
                 )

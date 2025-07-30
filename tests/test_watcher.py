@@ -933,3 +933,61 @@ class TestErrorScenarios(WatcherTestBase):
 
         # Verify signal handler was restored after run
         assert handler_after_run == original_handler
+
+
+def test_context_manager_usage(temp_db):
+    """Test that QueueWatcher works properly as a context manager."""
+    messages_received = []
+
+    def handler(msg: str, ts: int):
+        messages_received.append((msg, ts))
+
+    # Add messages to the queue
+    broker_db = BrokerDB(temp_db)
+    broker_db.write("context_queue", "message1")
+    broker_db.write("context_queue", "message2")
+    broker_db.write("context_queue", "message3")
+    broker_db.close()
+
+    # Use watcher as a context manager
+    with QueueWatcher(temp_db, "context_queue", handler, peek=False) as watcher:
+        # The thread should be started automatically
+        assert hasattr(watcher, "_thread")
+        assert watcher._thread is not None
+        assert watcher._thread.is_alive()
+
+        # Wait for messages to be processed
+        start_time = time.time()
+        while len(messages_received) < 3 and time.time() - start_time < 2.0:
+            time.sleep(0.05)
+
+    # After exiting context, thread should be stopped
+    assert not watcher._thread.is_alive()
+
+    # Verify all messages were processed
+    assert len(messages_received) == 3
+    assert [msg for msg, _ in messages_received] == ["message1", "message2", "message3"]
+
+    # Verify queue is empty (consumed mode)
+    broker_db = BrokerDB(temp_db)
+    remaining = list(broker_db.read("context_queue", all_messages=True))
+    assert len(remaining) == 0
+    broker_db.close()
+
+
+def test_context_manager_with_exception(temp_db):
+    """Test that cleanup happens properly even when exception occurs in context."""
+
+    def handler(msg: str, ts: int):
+        pass
+
+    # Test that cleanup happens even with exception
+    try:
+        with QueueWatcher(temp_db, "error_queue", handler) as watcher:
+            assert watcher._thread.is_alive()
+            raise ValueError("Test exception")
+    except ValueError:
+        pass  # Expected
+
+    # Thread should still be stopped after exception
+    assert not watcher._thread.is_alive()

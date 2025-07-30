@@ -585,6 +585,27 @@ watcher.stop()
 thread.join()
 ```
 
+### Context Manager Support
+
+For cleaner resource management, watchers can be used as context managers which automatically start the thread and ensure proper cleanup:
+
+```python
+import time
+from simplebroker import QueueWatcher
+
+def handle_message(msg: str, ts: int):
+    print(f"Received: {msg}")
+
+# Automatic thread management with context manager
+with QueueWatcher("my.db", "notifications", handle_message) as watcher:
+    # Thread is started automatically
+    # Do other work while watcher processes messages
+    time.sleep(10)
+    
+# Thread is automatically stopped and joined when exiting the context
+# Ensures proper cleanup even if an exception occurs
+```
+
 ### Async Integration Patterns
 
 SimpleBroker is synchronous by design for simplicity, but can be easily integrated with async applications. Here's how to build an async wrapper using only stdlib:
