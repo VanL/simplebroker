@@ -114,6 +114,7 @@ def test_cleanup_finalizer_with_exception():
                     original_runner.close()
                 except Exception:
                     pass
+            queue.close()
             del original_runner
 
             # Force garbage collection
