@@ -44,10 +44,23 @@ class OutputReader(threading.Thread):
                         self.queue.put(chunk)
                     else:
                         break
+        except ValueError as e:
+            # Handle "I/O operation on closed file" gracefully on Windows
+            if "closed file" in str(e):
+                logger.debug("Stream closed during read (expected on Windows)")
+            else:
+                logger.debug(f"Output reader error: {e}")
+        except OSError as e:
+            # Handle OS-level errors gracefully
+            logger.debug(f"OS error in output reader: {e}")
         except Exception as e:
-            logger.debug(f"Output reader error: {e}")
+            logger.debug(f"Unexpected output reader error: {e}")
         finally:
-            self.stream.close()
+            try:
+                self.stream.close()
+            except (ValueError, OSError):
+                # Stream already closed
+                pass
 
     def stop(self):
         """Signal the reader to stop."""
@@ -134,8 +147,14 @@ class ManagedProcess:
         """Stop and cleanup output readers."""
         if self._stdout_reader:
             self._stdout_reader.stop()
+            # On Windows, give reader threads time to exit cleanly
+            if sys.platform == "win32":
+                self._stdout_reader.join(timeout=0.5)
         if self._stderr_reader:
             self._stderr_reader.stop()
+            # On Windows, give reader threads time to exit cleanly  
+            if sys.platform == "win32":
+                self._stderr_reader.join(timeout=0.5)
 
 
 @contextmanager
@@ -224,8 +243,13 @@ def managed_subprocess(
             elif isinstance(stdin, bytes) and text:
                 stdin = stdin.decode(encoding)
 
-            proc.stdin.write(stdin)
-            proc.stdin.close()
+            try:
+                proc.stdin.write(stdin)
+                proc.stdin.flush()
+                proc.stdin.close()
+            except (BrokenPipeError, OSError) as e:
+                # Process may have exited before we could write stdin
+                logger.debug(f"Failed to write stdin: {e}")
 
         yield managed
 
@@ -273,19 +297,23 @@ def managed_subprocess(
                         except ProcessLookupError:
                             pass  # Already dead
 
+            # Stop output readers BEFORE final cleanup
+            # This prevents race conditions on Windows where reader threads
+            # might still be reading when pipes are closed
+            if managed:
+                managed.cleanup_readers()
+            
             # Final cleanup - drain pipes to prevent zombies
             try:
-                proc.communicate(timeout=0.5)
+                # Only communicate if process hasn't been killed yet
+                if proc.poll() is None or sys.platform != "win32":
+                    proc.communicate(timeout=0.5)
             except subprocess.TimeoutExpired:
                 pass
             except ValueError:
                 pass  # Pipes already closed
             except OSError:
                 pass  # File descriptors already closed
-
-            # Stop output readers
-            if managed:
-                managed.cleanup_readers()
 
             # Verify termination
             if proc.poll() is None:
