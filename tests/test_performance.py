@@ -45,6 +45,13 @@ VACUUM_BATCH_WRITE_SIZE = 100
 WRITE_PERF_MESSAGE_COUNT = 1000
 MOVE_WATCHER_MESSAGE_COUNT = 100
 
+# Older Python versions had significantly worse performance 
+VERSION_ADJ = 1.0
+if sys.version_info[:2] in [(3, 8), (3, 9)]: 
+    VERSION_ADJ = 2.0
+if sys.version_info[:2] in [(3, 10)]:
+    VERSION_ADJ = 1.2
+
 # Performance buffer percentage
 PERF_BUFFER_PERCENT = 0.5
 
