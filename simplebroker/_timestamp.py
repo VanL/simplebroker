@@ -118,7 +118,7 @@ class TimestampGenerator:
 
         # one local fast-path loop, *no* DB locks are held here
         # Windows has coarser timer resolution, so we may need more retries
-        max_retries = 20 if os.name == 'nt' else 6
+        max_retries = 20 if os.name == "nt" else 6
         for _ in range(max_retries):  # hard upper bound
             physical_us, logical = self._next_components()
             new_ts = self._encode_hybrid_timestamp(physical_us, logical)
@@ -141,7 +141,7 @@ class TimestampGenerator:
             self._last_ts = latest
 
             # On Windows, add a small random delay to reduce contention
-            if os.name == 'nt':
+            if os.name == "nt":
                 time.sleep(random.uniform(0.0001, 0.001))
 
         # Fall back to resilience mechanism

@@ -111,13 +111,16 @@ class TestWatcherEdgeCases(WatcherTestBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
             try:
+
                 def handler(msg, ts):
                     raise ValueError("Handler error")
 
                 def error_handler(exc, msg, ts):
                     return False  # Request stop
 
-                watcher = QueueWatcher(db, "queue", handler, error_handler=error_handler)
+                watcher = QueueWatcher(
+                    db, "queue", handler, error_handler=error_handler
+                )
 
                 # Test dispatch
                 with pytest.raises(_StopLoop):
@@ -133,13 +136,16 @@ class TestWatcherEdgeCases(WatcherTestBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db = BrokerDB(str(Path(tmpdir) / "test.db"))
             try:
+
                 def handler(msg, ts):
                     raise ValueError("Handler error")
 
                 def error_handler(exc, msg, ts):
                     raise RuntimeError("Error handler failed")
 
-                watcher = QueueWatcher(db, "queue", handler, error_handler=error_handler)
+                watcher = QueueWatcher(
+                    db, "queue", handler, error_handler=error_handler
+                )
 
                 # Should log but not crash
                 with patch("simplebroker.watcher.logger") as mock_logger:

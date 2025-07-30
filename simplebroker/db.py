@@ -467,7 +467,8 @@ class BrokerCore:
                 # Check for both direct timestamp conflicts and generator exhaustion
                 is_ts_conflict = (
                     "UNIQUE constraint failed: messages.ts" in error_msg
-                    or "unable to generate unique timestamp (exhausted retries)" in error_msg
+                    or "unable to generate unique timestamp (exhausted retries)"
+                    in error_msg
                 )
                 if not is_ts_conflict:
                     raise  # Not a timestamp conflict, re-raise
