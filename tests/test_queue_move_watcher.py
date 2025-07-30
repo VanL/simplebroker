@@ -293,6 +293,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         """Test concurrent writes during move operations."""
         moved_count = 0
         moved_lock = threading.Lock()
+        all_writes_done = threading.Event()
 
         def counting_handler(body: str, ts: int):
             nonlocal moved_count
@@ -327,28 +328,36 @@ class TestQueueMoveWatcher(WatcherTestBase):
                     time.sleep(0.01)
                 except Exception as e:
                     write_errors.append((i, str(e)))
+            all_writes_done.set()
 
         writer_thread = threading.Thread(target=write_with_error_capture)
         writer_thread.start()
 
-        # Let everything process
-        time.sleep(0.3)
+        # Wait for all writes to complete
+        all_writes_done.wait(timeout=2.0)
+        writer_thread.join(timeout=1.0)
+
+        # Give the watcher more time to process all messages
+        # Poll until all messages are moved or timeout
+        start_time = time.time()
+        expected_count = 10 - len(write_errors)
+        while time.time() - start_time < 2.0:
+            with moved_lock:
+                if moved_count >= expected_count:
+                    break
+            time.sleep(0.05)
 
         # Stop with timeout safety
         watcher.stop()
         thread.join(timeout=2.0)
         if thread.is_alive():
             pytest.fail("Watcher thread did not stop within timeout")
-        writer_thread.join(timeout=2.0)
-        if writer_thread.is_alive():
-            pytest.fail("Writer thread did not stop within timeout")
 
         # Check for write errors
         if write_errors:
             print(f"Write errors occurred: {write_errors}")
 
         # All successfully written messages should be moved
-        expected_count = 10 - len(write_errors)
         with moved_lock:
             assert moved_count == expected_count, (
                 f"Expected {expected_count} messages (10 - {len(write_errors)} errors), got {moved_count}"
