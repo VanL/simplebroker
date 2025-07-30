@@ -114,6 +114,7 @@ def test_cleanup_finalizer_with_exception():
                     original_runner.close()
                 except Exception:
                     pass
+            del original_runner
 
             # Force garbage collection
             ensure_windows_cleanup()
