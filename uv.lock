@@ -543,7 +543,7 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
