@@ -88,13 +88,13 @@ def test_cleanup_finalizer_with_exception():
 
         # Create a persistent queue
         queue = Queue("test", db_path=db_path, persistent=True)
-        
+
         # Save the original runner for cleanup
         original_runner_close = queue._runner.close
 
         # Ensure the queue is initialized
         queue._ensure_core()
-        
+
         # Mock the runner's close method to raise an exception
         queue._runner.close = Mock(side_effect=Exception("Test exception"))
 
@@ -109,7 +109,7 @@ def test_cleanup_finalizer_with_exception():
                 mock_logger.warning.call_args
             )
             assert "Test exception" in str(mock_logger.warning.call_args)
-            
+
         # Clean up - use the original close method
         queue._runner.close = original_runner_close
         queue.close()
