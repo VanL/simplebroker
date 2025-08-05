@@ -61,20 +61,37 @@ Typical usage:
 
 from __future__ import annotations
 
+import contextlib
 import logging
-import os
+import random
 import signal
+import sys
 import threading
 import time
 import weakref
-from pathlib import Path
-from typing import Any, Callable, NamedTuple, Optional, Type
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
 
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    try:
+        from typing_extensions import Self
+    except ImportError:
+        # Fallback for when typing_extensions is not available
+        from typing import TypeVar
+
+        Self = TypeVar("Self", bound="QueueWatcher")
+
+from ._constants import MAX_MESSAGE_SIZE, MAX_TOTAL_RETRY_TIME, load_config
 from ._exceptions import OperationalError
 from .db import BrokerDB
 from .helpers import interruptible_sleep
 
-__all__ = ["QueueWatcher", "QueueMoveWatcher", "Message"]
+if TYPE_CHECKING:
+    from pathlib import Path
+
+__all__ = ["Message", "QueueMoveWatcher", "QueueWatcher"]
 
 
 class Message(NamedTuple):
@@ -89,9 +106,357 @@ class Message(NamedTuple):
 # Create logger for this module
 logger = logging.getLogger(__name__)
 
+# Load configuration once at module level
+_config = load_config()
+
 
 class _StopLoop(Exception):
     """Internal sentinel for graceful shutdown."""
+
+
+class BaseWatcher(ABC):
+    """Base class for all watchers with common retry and error handling logic.
+
+    This abstract base class provides:
+    - Database connection retry logic
+    - Operational error retry logic
+    - Common error handler patterns
+    - Thread and resource management
+
+    Subclasses must implement _drain_queue() to define their specific
+    message processing behavior.
+    """
+
+    _db_arg: str | Path
+
+    def __init__(
+        self,
+        db: BrokerDB | str | Path,
+        stop_event: threading.Event | None = None,
+    ) -> None:
+        """Initialize base watcher.
+
+        Args:
+            db: Database instance or path
+            stop_event: Optional event to signal watcher shutdown
+
+        """
+        # Handle different db input types
+        if isinstance(db, BrokerDB):
+            self._db_arg = db.db_path
+        else:
+            self._db_arg = db
+
+        # Event to signal the watcher to stop
+        self._stop_event = stop_event or threading.Event()
+
+        # Weak reference to the thread running this watcher (for cleanup warnings)
+        self._thread: weakref.ref[threading.Thread] | None = None
+
+        # Thread-local storage for database connections
+        self._thread_local = threading.local()
+
+        # Track if we have a thread-local db to close
+        self._has_thread_db = False
+
+        # Thread-safe lock for stop synchronization
+        self._stop_lock = threading.Lock()
+
+    def _get_db(self) -> BrokerDB:
+        """Get thread-local database connection.
+
+        Each thread gets its own BrokerDB instance to ensure thread safety.
+        The connection is cached in thread-local storage and reused.
+        """
+        if not hasattr(self._thread_local, "db"):
+            self._thread_local.db = BrokerDB(str(self._db_arg))
+            self._has_thread_db = True
+        return cast(BrokerDB, self._thread_local.db)
+
+    def _get_db_with_retry(self) -> BrokerDB:
+        """Get database connection with exponential backoff retry."""
+        max_retries = 3
+
+        for attempt in range(max_retries):
+            try:
+                return self._get_db()
+            except Exception as e:
+                if attempt >= max_retries - 1:
+                    if _config["BROKER_LOGGING_ENABLED"]:
+                        logger.exception(
+                            f"Failed to get database connection after {max_retries} retries: {e}",
+                        )
+                    raise
+
+                wait_time = 2 ** (attempt + 1)  # Exponential backoff
+                if _config["BROKER_LOGGING_ENABLED"]:
+                    logger.debug(
+                        f"Database connection error (retry {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time} seconds...",
+                    )
+
+                if not interruptible_sleep(wait_time, self._stop_event):
+                    raise _StopLoop from None
+
+        # This should never be reached, but mypy needs it
+        raise RuntimeError("Failed to get database connection")
+
+    def _process_with_retry(
+        self, process_func: Callable[[], Any], operation_name: str
+    ) -> Any:
+        """Execute a processing function with operational error retry.
+
+        Args:
+            process_func: Function to execute with retry
+            operation_name: Name of operation for logging
+
+        Returns:
+            Result from process_func
+
+        Raises:
+            OperationalError: If all retries exhausted
+            _StopLoop: If stop requested during retry
+
+        """
+        max_retries = 5
+
+        for attempt in range(max_retries):
+            try:
+                return process_func()
+            except OperationalError as e:
+                if attempt >= max_retries - 1:
+                    if _config["BROKER_LOGGING_ENABLED"]:
+                        logger.exception(
+                            f"Failed after {max_retries} operational errors: {e}",
+                        )
+                    raise
+
+                wait_time = self._calculate_retry_wait_time(attempt)
+                if _config["BROKER_LOGGING_ENABLED"]:
+                    logger.debug(
+                        f"OperationalError during {operation_name} "
+                        f"(retry {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time:.3f} seconds...",
+                    )
+
+                if not interruptible_sleep(wait_time, self._stop_event):
+                    raise _StopLoop from None
+            except _StopLoop:
+                raise
+
+        # This should never be reached
+        raise RuntimeError("Failed to process with retry")
+
+    def _calculate_retry_wait_time(self, attempt: int) -> float:
+        """Calculate retry wait time with exponential backoff and jitter."""
+        base_wait: float = 0.05 * (2**attempt)
+        jitter: float = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
+        return float(base_wait + jitter)
+
+    def _handle_handler_error(
+        self,
+        e: Exception,
+        message: str,
+        timestamp: int,
+        error_handler: Callable[[Exception, str, int], bool | None] | None,
+    ) -> None:
+        """Handle errors from message handler.
+
+        Args:
+            e: The exception that was raised
+            message: The message being processed
+            timestamp: The message timestamp
+            error_handler: Optional error handler callback
+
+        Raises:
+            _StopLoop: If error handler returns False
+
+        """
+        if error_handler is not None:
+            stop_requested = False
+            try:
+                result = error_handler(e, message, timestamp)
+                if result is False:
+                    # Error handler says stop
+                    stop_requested = True
+                # True or None means continue
+            except Exception as eh_error:
+                # Error handler itself failed
+                if _config["BROKER_LOGGING_ENABLED"]:
+                    logger.exception(
+                        f"Error handler failed: {eh_error}\nOriginal error: {e}",
+                    )
+
+            # Raise _StopLoop outside the try block to avoid catching it
+            if stop_requested:
+                # Set stop event to ensure the watcher stops completely
+                self._stop_event.set()
+                raise _StopLoop from None
+        # Default behavior: log error and continue
+        elif _config["BROKER_LOGGING_ENABLED"]:
+            logger.error(f"Handler error: {e}")
+
+    def _check_stop(self) -> None:
+        """Check if stop has been requested and raise _StopLoop if so."""
+        if self._stop_event.is_set():
+            raise _StopLoop
+
+    def stop(self, *, join: bool = True, timeout: float = 2.0) -> None:
+        """Request a graceful shutdown.
+
+        This method is thread-safe and can be called from another thread or
+        a signal handler. The watcher will stop after processing the current
+        message, if any.
+
+        If join is True (default), this call also waits until the background
+        thread finishes (or timeout seconds, whichever comes first). Calling
+        stop() multiple times is safe.
+
+        CRITICAL: Always call this method before your program exits!
+        ---------------------------------------------------------
+        Not calling stop() can cause:
+        - Thread leaks (background thread continues running)
+        - Database connection leaks (SQLite connections stay open)
+        - File locking on Windows (can't delete database files)
+        - Resource exhaustion in long-running applications
+
+        The join parameter (default True) is important because it ensures
+        the thread has actually terminated before this method returns. This
+        prevents race conditions where the main program exits while the
+        watcher thread is still cleaning up.
+
+        Thread-safety: This method uses a lock to ensure that multiple
+        concurrent calls to stop() are handled correctly. Only the first
+        caller will perform the join operation.
+
+        Args:
+            join: Whether to wait for the thread to finish. Default is True.
+                Set to False only if you will join the thread separately.
+            timeout: Maximum time to wait for thread to finish. Default is 2.0 seconds.
+                If the thread doesn't finish within this time, the method returns
+                anyway (thread might still be running).
+
+        """
+        # Use stop_lock if available (from subclasses), otherwise just proceed
+        lock = getattr(self, "_stop_lock", None)
+
+        if lock:
+            with lock:  # idempotent / thread-safe
+                self._perform_stop(join, timeout)
+        else:
+            self._perform_stop(join, timeout)
+
+    def _perform_stop(self, join: bool, timeout: float) -> None:
+        """Internal method to perform the actual stop operations."""
+        if self._stop_event.is_set():
+            join = False  # someone else already did the join
+        else:
+            self._stop_event.set()
+            # Notify strategy if it exists (from subclasses)
+            strategy = getattr(self, "_strategy", None)
+            if strategy and hasattr(strategy, "notify_activity"):
+                strategy.notify_activity()  # Wake up wait_for_activity
+
+        if join and self._thread is not None:
+            thread = self._thread()  # Get strong reference from weak ref
+            if (
+                thread is not None
+                and thread.is_alive()
+                and thread != threading.current_thread()
+            ):
+                thread.join(timeout)
+
+        # After the thread is gone we can close the per-thread DB
+        thread_ref = self._thread
+        if thread_ref is None:
+            should_cleanup = True
+        else:
+            thread = thread_ref()
+            should_cleanup = thread is None or not thread.is_alive()
+
+        if should_cleanup:
+            with contextlib.suppress(Exception):
+                self._cleanup_thread_local()
+
+        # detach finalizer if it exists - resources are already released
+        if hasattr(self, "_finalizer"):
+            self._finalizer.detach()
+
+    def _cleanup_thread_local(self) -> None:
+        """Clean up thread-local database connections.
+
+        Closes any active database connection for the current thread and removes
+        it from thread-local storage. This method is called during shutdown and
+        error recovery to ensure proper resource cleanup.
+        """
+        if hasattr(self._thread_local, "db"):
+            try:
+                self._thread_local.db.close()
+            except Exception as e:
+                if _config["BROKER_LOGGING_ENABLED"]:
+                    logger.warning(f"Error closing thread-local database: {e}")
+            finally:
+                delattr(self._thread_local, "db")
+                self._has_thread_db = False
+
+    def is_running(self) -> bool:
+        """Check if the watcher is currently running."""
+        return not self._stop_event.is_set()
+
+    @abstractmethod
+    def _drain_queue(self) -> None:
+        """Process messages - must be implemented by subclasses."""
+
+    def run_forever(self) -> None:
+        """Run the watcher continuously until stopped.
+
+        This method blocks until stop() is called or SIGINT is received.
+        """
+        msg = "Subclasses must implement run_forever"
+        raise NotImplementedError(msg)
+
+    def run_in_thread(self) -> threading.Thread:
+        """Start the watcher in a new background thread.
+
+        Returns:
+            The thread running the watcher
+
+        """
+        msg = "Subclasses must implement run_in_thread"
+        raise NotImplementedError(msg)
+
+    def __enter__(self) -> Self:
+        """Enter context manager - start watcher in background thread."""
+        self.run_in_thread()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
+        """Exit context manager - stop and clean up."""
+        self.stop()
+
+    def __del__(self) -> None:
+        """Destructor warns if watcher wasn't properly stopped."""
+        if hasattr(self, "_thread") and self._thread is not None:
+            thread = self._thread()
+            if thread is not None and thread.is_alive():
+                # Resource leak detected
+                import warnings
+
+                warnings.warn(
+                    f"{self.__class__.__name__} instance was not properly stopped. "
+                    "This will leak threads and database connections. "
+                    "Always call stop() or use a context manager.",
+                    ResourceWarning,
+                    stacklevel=2,
+                )
+                # Attempt cleanup
+                with contextlib.suppress(Exception):
+                    self.stop(join=False)
 
 
 class SignalHandlerContext:
@@ -100,16 +465,16 @@ class SignalHandlerContext:
     def __init__(self, signum: int, handler: Callable[[int, Any], None]) -> None:
         self.signum = signum
         self.handler = handler
-        self.original_handler: Optional[Callable[[int, Any], None] | int] = None
+        self.original_handler: Callable[[int, Any], None] | int | None = None
 
-    def __enter__(self) -> SignalHandlerContext:
+    def __enter__(self) -> Self:
         self.original_handler = signal.signal(self.signum, self.handler)
         return self
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
         exc_tb: Any,
     ) -> None:
         if self.original_handler is not None:
@@ -125,21 +490,22 @@ class PollingStrategy:
         initial_checks: int = 100,
         max_interval: float = 0.1,
         burst_sleep: float = 0.0002,
-    ):
+    ) -> None:
         self._initial_checks = initial_checks
         self._max_interval = max_interval
         self._burst_sleep = burst_sleep
         self._check_count = 0
         self._stop_event = stop_event
-        self._data_version: Optional[int] = None
-        self._db: Optional[BrokerDB] = None
+        self._data_version: int | None = None
+        self._db: BrokerDB | None = None
         self._pragma_failures = 0
 
     def wait_for_activity(self) -> None:
         """Wait for activity with optimized polling."""
         # Check data version first for immediate activity detection
         if self._db and self._check_data_version():
-            self._check_count = 0  # Reset on activity
+            # Don't reset here - let notify_activity handle it when messages are actually processed
+            # Also don't increment check count since we detected activity
             return
 
         # Calculate delay based on check count
@@ -152,6 +518,7 @@ class PollingStrategy:
             # Wait with timeout
             self._stop_event.wait(timeout=delay)
 
+        # Only increment if we actually waited (no activity detected)
         self._check_count += 1
 
     def notify_activity(self) -> None:
@@ -166,13 +533,24 @@ class PollingStrategy:
 
     def _get_delay(self) -> float:
         """Calculate delay based on check count."""
+        base_delay = self._calculate_base_delay()
+
+        if base_delay > 0:
+            # Add 10-20% jitter to prevent synchronized polling
+            jitter_factor = _config["BROKER_JITTER_FACTOR"]
+            jitter = random.uniform(-jitter_factor, jitter_factor) * base_delay
+            return max(0, base_delay + jitter)
+
+        return base_delay
+
+    def _calculate_base_delay(self) -> float:
+        """Calculate base delay without jitter."""
         if self._check_count < self._initial_checks:
             # First 100 checks: no delay (burst handling)
             return 0
-        else:
-            # Gradual increase to max_interval
-            progress = (self._check_count - self._initial_checks) / 100
-            return min(progress * self._max_interval, self._max_interval)
+        # Gradual increase to max_interval
+        progress = (self._check_count - self._initial_checks) / 100
+        return min(progress * self._max_interval, self._max_interval)
 
     def _check_data_version(self) -> bool:
         """Check PRAGMA data_version for changes."""
@@ -188,7 +566,7 @@ class PollingStrategy:
             if self._data_version is None:
                 self._data_version = version
                 return False
-            elif version != self._data_version:
+            if version != self._data_version:
                 self._data_version = version
                 return True  # Change detected!
 
@@ -197,16 +575,16 @@ class PollingStrategy:
             # Track PRAGMA failures
             self._pragma_failures += 1
             if self._pragma_failures >= 10:
+                msg = f"PRAGMA data_version failed 10 times consecutively. Last error: {e}"
                 raise RuntimeError(
-                    f"PRAGMA data_version failed 10 times consecutively. Last error: {e}"
+                    msg,
                 ) from None
             # Fallback to regular polling if PRAGMA fails
             return False
 
 
-class QueueWatcher:
-    """
-    Monitors a queue for new messages and invokes a handler for each one.
+class QueueWatcher(BaseWatcher):
+    """Monitors a queue for new messages and invokes a handler for each one.
 
     This class provides an efficient polling mechanism with burst handling
     and minimal overhead. It uses PRAGMA data_version for change detection
@@ -250,12 +628,12 @@ class QueueWatcher:
         peek: bool = False,
         initial_checks: int = 100,
         max_interval: float = 0.1,
-        error_handler: Optional[Callable[[Exception, str, int], Optional[bool]]] = None,
-        since_timestamp: Optional[int] = None,
+        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
+        since_timestamp: int | None = None,
         batch_processing: bool = False,
+        stop_event: threading.Event | None = None,
     ) -> None:
-        """
-        Initializes the watcher.
+        """Initializes the watcher.
 
         Parameters
         ----------
@@ -303,73 +681,57 @@ class QueueWatcher:
             per poll cycle in all modes, ensuring that handler failures don't affect
             other messages. This is especially important in consuming mode where
             messages are permanently removed before processing.
+
         """
-        # Extract database path for thread-safe operation
-        self._provided_db: Optional[BrokerDB]
-        if isinstance(db, BrokerDB):
-            self._db_path = db.db_path
-            # Keep the original DB for single-threaded compatibility
-            self._provided_db = db
-        else:
-            self._db_path = Path(db)
-            self._provided_db = None
+        # Initialize parent class
+        super().__init__(db, stop_event)
+
+        # Keep the original DB for single-threaded compatibility
+        self._provided_db = db if isinstance(db, BrokerDB) else None
 
         self._queue = queue
         # Validate handler is callable
         if not callable(handler):
-            raise TypeError(f"handler must be callable, got {type(handler).__name__}")
+            msg = f"handler must be callable, got {type(handler).__name__}"
+            raise TypeError(msg)
         self._handler = handler
         self._peek = peek
         # Validate error_handler is callable if provided
         if error_handler is not None and not callable(error_handler):
+            msg = f"error_handler must be callable if provided, got {type(error_handler).__name__}"
             raise TypeError(
-                f"error_handler must be callable if provided, got {type(error_handler).__name__}"
+                msg,
             )
         self._error_handler = error_handler
-        self._stop_event = threading.Event()
         # Initialize _last_seen_ts with since_timestamp if provided, otherwise 0
         self._last_seen_ts = since_timestamp if since_timestamp is not None else 0
         # Store batch processing preference
         self._batch_processing = batch_processing
 
-        # Thread-local storage for database connections
-        self._thread_local = threading.local()
-
-        # Thread reference and lock for stop synchronization
-        self._thread: Optional[threading.Thread] = None
-        self._stop_lock = threading.Lock()
+        # Two-phase detection configuration
+        self._skip_idle_check = _config["BROKER_SKIP_IDLE_CHECK"]
 
         # Read environment variables with defaults and error handling
         try:
-            env_initial_checks = int(
-                os.environ.get("SIMPLEBROKER_INITIAL_CHECKS", str(initial_checks))
-            )
+            env_initial_checks = _config["SIMPLEBROKER_INITIAL_CHECKS"]
         except ValueError:
-            logger.warning(
-                f"Invalid SIMPLEBROKER_INITIAL_CHECKS value, using default: {initial_checks}"
-            )
+            if _config["BROKER_LOGGING_ENABLED"]:
+                logger.warning(
+                    f"Invalid SIMPLEBROKER_INITIAL_CHECKS value, using default: {initial_checks}",
+                )
             env_initial_checks = initial_checks
 
         # Use max_interval with env var fallback
         try:
-            env_max_interval = float(
-                os.environ.get("SIMPLEBROKER_MAX_INTERVAL", str(max_interval))
-            )
-        except ValueError:
-            logger.warning(
-                f"Invalid SIMPLEBROKER_MAX_INTERVAL value, using default: {max_interval}"
-            )
+            env_max_interval = _config["SIMPLEBROKER_MAX_INTERVAL"]
+        except (ValueError, KeyError):
+            if _config["BROKER_LOGGING_ENABLED"]:
+                logger.warning(
+                    f"Invalid SIMPLEBROKER_MAX_INTERVAL value, using default: {max_interval}",
+                )
             env_max_interval = max_interval
 
-        try:
-            env_burst_sleep = float(
-                os.environ.get("SIMPLEBROKER_BURST_SLEEP", "0.0002")
-            )
-        except ValueError:
-            logger.warning(
-                "Invalid SIMPLEBROKER_BURST_SLEEP value, using default: 0.0002"
-            )
-            env_burst_sleep = 0.0002
+        env_burst_sleep = _config["SIMPLEBROKER_BURST_SLEEP"]
 
         # Create polling strategy with optimized settings
         self._strategy = PollingStrategy(
@@ -400,10 +762,8 @@ class QueueWatcher:
             obj = wref()
             if obj is None:  # already GC'ed
                 return
-            try:
+            with contextlib.suppress(Exception):
                 obj.stop()
-            except Exception:
-                pass
 
             thr = getattr(obj, "_thread", None)  # set by run_in_thread()
             if isinstance(thr, threading.Thread) and thr.is_alive():
@@ -413,49 +773,12 @@ class QueueWatcher:
                     pass
 
             # ensure the per-thread BrokerDB is closed
-            try:
+            with contextlib.suppress(Exception):
                 obj._cleanup_thread_local()
-            except Exception:
-                pass
 
         self._finalizer = weakref.finalize(self, _auto_cleanup, weakref.ref(self))
 
-    def _get_db(self) -> BrokerDB:
-        """Get a thread-local database connection.
-
-        Creates a new connection if one doesn't exist for the current thread.
-        Always creates a thread-local DB for safety, even if a BrokerDB was provided.
-
-        Returns
-        -------
-        BrokerDB
-            A thread-local database connection for the current thread.
-        """
-        # Check if we have a connection for this thread
-        if not hasattr(self._thread_local, "db"):
-            # Always create a new thread-local connection for safety
-            self._thread_local.db = BrokerDB(str(self._db_path))
-
-        db: BrokerDB = self._thread_local.db
-        return db
-
-    def _cleanup_thread_local(self) -> None:
-        """Clean up thread-local database connections.
-
-        Closes any active database connection for the current thread and removes
-        it from thread-local storage. This method is called during shutdown and
-        error recovery to ensure proper resource cleanup.
-        """
-        if hasattr(self._thread_local, "db"):
-            try:
-                # Always close thread-local DBs (we no longer reuse provided DBs)
-                self._thread_local.db.close()
-            except Exception as e:
-                logger.warning(f"Error closing thread-local database: {e}")
-            finally:
-                delattr(self._thread_local, "db")
-
-    def __enter__(self) -> QueueWatcher:
+    def __enter__(self) -> Self:
         """Enter the context manager and start the watcher in a background thread.
 
         This method is called when entering a `with` statement. It automatically
@@ -468,18 +791,20 @@ class QueueWatcher:
                 time.sleep(60)  # Process messages for 60 seconds
             # Thread is automatically stopped and joined when exiting the block
 
-        Returns
+        Returns:
         -------
         QueueWatcher
             Returns self for use in with statements.
+
         """
-        self._thread = self.run_in_thread()
+        thread = self.run_in_thread()
+        self._thread = weakref.ref(thread)
         return self
 
     def __exit__(
         self,
-        exc_type: Optional[Type[BaseException]],
-        exc_val: Optional[BaseException],
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
         exc_tb: Any,
     ) -> None:
         """Exit the context manager.
@@ -506,16 +831,17 @@ class QueueWatcher:
             The exception instance if an exception occurred.
         exc_tb : TracebackType | None
             The traceback if an exception occurred.
+
         """
         try:
             # stop() now handles thread joining, cleanup, and finalizer detaching
             self.stop()
         except Exception as e:
-            logger.warning(f"Error during stop in __exit__: {e}")
+            if _config["BROKER_LOGGING_ENABLED"]:
+                logger.warning(f"Error during stop in __exit__: {e}")
 
     def run_forever(self) -> None:
-        """
-        Start watching the queue. This method blocks until stop() is called
+        """Start watching the queue. This method blocks until stop() is called
         or a SIGINT (Ctrl-C) is received.
         """
         signal_context = None
@@ -524,21 +850,24 @@ class QueueWatcher:
             # Only install signal handler if we're in the main thread
             if threading.current_thread() is threading.main_thread():
                 signal_context = SignalHandlerContext(
-                    signal.SIGINT, self._sigint_handler
+                    signal.SIGINT,
+                    self._sigint_handler,
                 )
                 signal_context.__enter__()
 
             retry_count = 0
             max_retries = 3
             start_time = time.time()
-            MAX_TOTAL_RETRY_TIME = 300  # 5 minutes max
 
             while retry_count < max_retries:
                 # Check absolute timeout
                 if time.time() - start_time > MAX_TOTAL_RETRY_TIME:
-                    raise TimeoutError(
+                    msg = (
                         f"Watcher retry timeout exceeded ({MAX_TOTAL_RETRY_TIME}s). "
                         f"Retries: {retry_count}, Time elapsed: {time.time() - start_time:.1f}s"
+                    )
+                    raise TimeoutError(
+                        msg,
                     )
 
                 try:
@@ -553,15 +882,22 @@ class QueueWatcher:
                         # Wait until something might have happened
                         self._strategy.wait_for_activity()
 
+                        # Check stop before processing
+                        self._check_stop()
+
+                        # Two-phase detection: check if we actually have messages
+                        if not getattr(self, "_skip_idle_check", False):
+                            if not self._has_pending_messages(
+                                self._get_db_with_retry(),
+                            ):
+                                # No messages for this queue, skip drain
+                                continue
+
                         # Always try to drain the queue first; this guarantees
                         # that a stop request does not prevent us from
                         # finishing already-visible work, so connections can
                         # be closed and no messages get lost.
                         self._drain_queue()
-
-                        # Stop afterwards - if requested we break out, but only
-                        # after the last drain finished.
-                        self._check_stop()
 
                     # If we get here, we exited normally
                     break
@@ -572,25 +908,22 @@ class QueueWatcher:
                 except Exception as e:
                     retry_count += 1
                     if retry_count >= max_retries:
-                        logger.error(
-                            f"Watcher failed after {max_retries} retries. Last error: {e}"
+                        logger.exception(
+                            f"Watcher failed after {max_retries} retries. Last error: {e}",
                         )
                         raise
-                    else:
-                        wait_time = 2**retry_count  # Exponential backoff
-                        logger.debug(
-                            f"Watcher error (retry {retry_count}/{max_retries}): {e}. "
-                            f"Retrying in {wait_time} seconds..."
-                        )
-                        if not interruptible_sleep(wait_time, self._stop_event):
-                            # Sleep was interrupted, exit retry loop
-                            logger.info("Watcher retry interrupted by stop signal")
-                            break
-                        # Clean up before retry
-                        try:
-                            self._cleanup_thread_local()
-                        except Exception:
-                            pass
+                    wait_time = 2**retry_count  # Exponential backoff
+                    logger.debug(
+                        f"Watcher error (retry {retry_count}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time} seconds...",
+                    )
+                    if not interruptible_sleep(wait_time, self._stop_event):
+                        # Sleep was interrupted, exit retry loop
+                        logger.info("Watcher retry interrupted by stop signal")
+                        break
+                    # Clean up before retry
+                    with contextlib.suppress(Exception):
+                        self._cleanup_thread_local()
 
         finally:
             # Clean up thread-local connections
@@ -600,88 +933,8 @@ class QueueWatcher:
             if signal_context is not None:
                 signal_context.__exit__(None, None, None)
 
-    def stop(self, *, join: bool = True, timeout: float = 2.0) -> None:
-        """
-        Request a graceful shutdown. This method is thread-safe and can be
-        called from another thread or a signal handler. The watcher will stop
-        after processing the current message, if any.
-
-        If join is True (default), this call also waits until the background
-        thread finishes (or timeout seconds, whichever comes first). Calling
-        stop() multiple times is safe.
-
-        CRITICAL: Always call this method before your program exits!
-        ---------------------------------------------------------
-        Not calling stop() can cause:
-        - Thread leaks (background thread continues running)
-        - Database connection leaks (SQLite connections stay open)
-        - File locking on Windows (can't delete database files)
-        - Resource exhaustion in long-running applications
-
-        The join parameter (default True) is important because it ensures
-        the thread has actually terminated before this method returns. This
-        prevents race conditions where the main program exits while the
-        watcher thread is still cleaning up.
-
-        Example usage:
-            # Simple case - join by default
-            watcher.stop()  # Waits up to 2 seconds for thread to finish
-
-            # Quick stop without waiting (risky!)
-            watcher.stop(join=False)  # Returns immediately
-
-            # Custom timeout
-            watcher.stop(timeout=5.0)  # Wait up to 5 seconds
-
-        Thread-safety: This method uses a lock to ensure that multiple
-        concurrent calls to stop() are handled correctly. Only the first
-        caller will perform the join operation.
-
-        Parameters
-        ----------
-        join : bool, optional
-            Whether to wait for the thread to finish. Default is True.
-            Set to False only if you will join the thread separately.
-        timeout : float, optional
-            Maximum time to wait for thread to finish. Default is 2.0 seconds.
-            If the thread doesn't finish within this time, the method returns
-            anyway (thread might still be running).
-        """
-        with self._stop_lock:  # idempotent / thread-safe
-            if self._stop_event.is_set():
-                join = False  # someone else already did the join
-            else:
-                self._stop_event.set()
-                self._strategy.notify_activity()  # Wake up wait_for_activity
-
-            if join and self._thread and self._thread.is_alive():
-                # Don't join if we're the current thread (would deadlock)
-                if self._thread is not threading.current_thread():
-                    self._thread.join(timeout=timeout)
-
-            # After the thread is gone we can close the per-thread DB
-            if not self._thread or not self._thread.is_alive():
-                try:
-                    self._cleanup_thread_local()
-                except Exception:
-                    pass
-
-            # detach finalizer - resources are already released
-            if hasattr(self, "_finalizer"):
-                self._finalizer.detach()
-
-    def _check_stop(self) -> None:
-        """Centralized stop check that can be easily mocked in tests.
-
-        Raises:
-            _StopLoop: If stop has been requested
-        """
-        if self._stop_event.is_set():
-            raise _StopLoop
-
     def run_in_thread(self) -> threading.Thread:
-        """
-        Start the watcher in a new background thread.
+        """Start the watcher in a new background thread.
 
         IMPORTANT: You MUST call stop() when done!
         -----------------------------------------
@@ -723,26 +976,15 @@ class QueueWatcher:
             `daemon=True` to prevent hanging test runners or applications
             that forget to call stop(). For production use, always call
             stop() and join() the thread for clean shutdown.
+
         """
         # Daemon thread so that an accidentally-left watcher cannot block
         # interpreter shutdown (e.g. during test runs).
         thread = threading.Thread(target=self.run_forever, daemon=True)
         thread.start()
-        # Store reference for the finalizer
-        self._thread = thread
+        # Store weak reference for the finalizer
+        self._thread = weakref.ref(thread)
         return thread
-
-    def is_running(self) -> bool:
-        """
-        Check if the watcher is currently running.
-
-        Returns
-        -------
-        bool
-            True if the watcher's run() method is actively processing messages,
-            False if the watcher has been stopped or hasn't started yet.
-        """
-        return not self._stop_event.is_set()
 
     def _sigint_handler(self, signum: int, frame: Any) -> None:
         """Convert SIGINT to graceful shutdown."""
@@ -752,10 +994,25 @@ class QueueWatcher:
 
     def __del__(self) -> None:
         """Safety net to stop watcher if garbage collected while running."""
-        try:
+        with contextlib.suppress(Exception):
             self.stop()
-        except Exception:
-            pass
+
+    def _has_pending_messages(self, db: BrokerDB) -> bool:
+        """Fast check if queue has unclaimed messages with retry on operational errors."""
+
+        def check_func() -> bool:
+            sql = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0"
+            params: list[Any] = [self._queue]
+
+            if self._last_seen_ts:
+                sql += " AND ts > ?"
+                params.append(self._last_seen_ts)
+
+            sql += " LIMIT 1)"
+            rows = list(db._runner.run(sql, tuple(params), fetch=True))
+            return bool(rows[0][0]) if rows else False
+
+        return bool(self._process_with_retry(check_func, "pending_messages_check"))
 
     def _drain_queue(self) -> None:
         """Process all currently available messages with DB error handling.
@@ -778,214 +1035,147 @@ class QueueWatcher:
         by this watcher. They remain available for other consumers or for
         manual removal after successful processing.
         """
+        # Get database connection with retry
+        db = self._get_db_with_retry()
+
+        # Process messages based on mode
         found_messages = False
-        db_retry_count = 0
-        max_db_retries = 3
-
-        while db_retry_count < max_db_retries:
-            try:
-                # Get thread-local database connection
-                db = self._get_db()
-                break
-            except Exception as e:
-                db_retry_count += 1
-                if db_retry_count >= max_db_retries:
-                    logger.error(
-                        f"Failed to get database connection after {max_db_retries} retries: {e}"
-                    )
-                    raise
-                wait_time = 2**db_retry_count  # Exponential backoff
-                logger.debug(
-                    f"Database connection error (retry {db_retry_count}/{max_db_retries}): {e}. "
-                    f"Retrying in {wait_time} seconds..."
-                )
-                if not interruptible_sleep(wait_time, self._stop_event):
-                    # Sleep was interrupted, raise to exit
-                    raise _StopLoop from None
-
-        # Determine if we should process one at a time
-        # Default to one-at-a-time for safety unless batch processing is explicitly enabled
-
         if self._peek:
-            # In peek mode, process based on batch_processing setting
-            # Pass since_timestamp to filter at database level
-            operational_error_count = 0
-            max_operational_retries = 5
-
-            while operational_error_count < max_operational_retries:
-                try:
-                    for body, ts in db.stream_read_with_timestamps(
-                        self._queue,
-                        all_messages=self._batch_processing,  # Respect batch processing preference
-                        peek=True,
-                        commit_interval=1,
-                        since_timestamp=self._last_seen_ts,
-                    ):
-                        # No need to skip messages - database already filtered them
-                        try:
-                            self._dispatch(body, ts)
-                            # Only update _last_seen_ts after successful dispatch
-                            self._last_seen_ts = max(self._last_seen_ts, ts)
-                            found_messages = True
-                        except _StopLoop:
-                            # Re-raise to exit the loop
-                            raise
-                        except Exception:
-                            # Don't update timestamp if dispatch failed
-                            # This ensures we'll retry the message next time
-                            pass
-
-                        # If not batch processing, break after first message
-                        if not self._batch_processing:
-                            break
-
-                    # Successfully completed, break out of retry loop
-                    break
-
-                except OperationalError as e:
-                    operational_error_count += 1
-                    if operational_error_count >= max_operational_retries:
-                        logger.error(
-                            f"Failed after {max_operational_retries} operational errors: {e}"
-                        )
-                        raise
-                    # Exponential backoff with jitter
-                    jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
-                    wait_time = 0.05 * (2**operational_error_count) + jitter
-                    logger.debug(
-                        f"OperationalError during peek (retry {operational_error_count}/{max_operational_retries}): {e}. "
-                        f"Retrying in {wait_time:.3f} seconds..."
-                    )
-                    if not interruptible_sleep(wait_time, self._stop_event):
-                        # Sleep was interrupted, raise to exit
-                        raise _StopLoop from None
+            found_messages = self._drain_peek_mode(db)
         else:
-            # Consuming mode
-            operational_error_count = 0
-            max_operational_retries = 5
+            found_messages = self._drain_consume_mode(db)
 
-            while operational_error_count < max_operational_retries:
-                try:
-                    # If batch processing is disabled, process exactly one message per drain call
-                    if not self._batch_processing:
-                        # Read and process exactly one message
-                        for body, ts in db.stream_read_with_timestamps(
-                            self._queue,
-                            all_messages=False,  # Only get one message
-                            peek=False,
-                            commit_interval=1,
-                        ):
-                            try:
-                                self._dispatch(body, ts)
-                                found_messages = True
-                            except _StopLoop:
-                                raise
-
-                            # Always break after first message when not batch processing
-                            break
-                    else:
-                        # Batch processing enabled - process all available messages
-                        while True:
-                            # Check stop before each batch iteration
-                            self._check_stop()
-
-                            messages_found_this_iteration = False
-
-                            for body, ts in db.stream_read_with_timestamps(
-                                self._queue,
-                                all_messages=True,  # Process all messages
-                                peek=False,
-                                commit_interval=1,
-                            ):
-                                try:
-                                    self._dispatch(body, ts)
-                                    found_messages = True
-                                    messages_found_this_iteration = True
-                                except _StopLoop:
-                                    raise
-
-                            # No more messages found, exit the loop
-                            if not messages_found_this_iteration:
-                                break
-
-                    # Successfully completed, break out of retry loop
-                    break
-
-                except OperationalError as e:
-                    operational_error_count += 1
-                    if operational_error_count >= max_operational_retries:
-                        logger.error(
-                            f"Failed after {max_operational_retries} operational errors: {e}"
-                        )
-                        raise
-                    # Exponential backoff with jitter
-                    jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
-                    wait_time = 0.05 * (2**operational_error_count) + jitter
-                    logger.debug(
-                        f"OperationalError during consume (retry {operational_error_count}/{max_operational_retries}): {e}. "
-                        f"Retrying in {wait_time:.3f} seconds..."
-                    )
-                    if not interruptible_sleep(wait_time, self._stop_event):
-                        # Sleep was interrupted, raise to exit
-                        raise _StopLoop from None
-                except _StopLoop:
-                    # Re-raise to exit the watcher
-                    raise
-
-        # Notify strategy that we found messages (helps with polling backoff)
+        # Notify strategy if we found messages
         if found_messages:
             self._strategy.notify_activity()
+
+    def _drain_peek_mode(self, db: BrokerDB) -> bool:
+        """Process messages in peek mode (doesn't remove from queue)."""
+        return bool(
+            self._process_with_retry(lambda: self._process_peek_messages(db), "peek")
+        )
+
+    def _drain_consume_mode(self, db: BrokerDB) -> bool:
+        """Process messages in consume mode (removes from queue)."""
+        if not self._batch_processing:
+            return self._process_single_message(db)
+        return self._process_batch_messages(db)
+
+    def _process_peek_messages(self, db: BrokerDB) -> bool:
+        """Process messages without removing them from queue."""
+        found_messages = False
+
+        for body, ts in db.stream_read_with_timestamps(
+            self._queue,
+            all_messages=self._batch_processing,
+            peek=True,
+            commit_interval=1,
+            since_timestamp=self._last_seen_ts,
+        ):
+            if self._try_dispatch_message(body, ts):
+                # Only update timestamp after successful dispatch
+                self._last_seen_ts = max(self._last_seen_ts, ts)
+                found_messages = True
+
+            # Stop after first message if not batch processing
+            if not self._batch_processing:
+                break
+
+        return found_messages
+
+    def _process_single_message(self, db: BrokerDB) -> bool:
+        """Process exactly one message in consume mode."""
+        return bool(
+            self._process_with_retry(
+                lambda: self._consume_one_message(db),
+                "consume",
+            )
+        )
+
+    def _consume_one_message(self, db: BrokerDB) -> bool:
+        """Consume and process a single message."""
+        for body, ts in db.stream_read_with_timestamps(
+            self._queue,
+            all_messages=False,
+            peek=False,
+            commit_interval=1,
+        ):
+            self._try_dispatch_message(body, ts)
+            return True  # Found and processed one message
+
+        return False  # No messages found
+
+    def _process_batch_messages(self, db: BrokerDB) -> bool:
+        """Process all available messages in batch mode."""
+        return bool(
+            self._process_with_retry(
+                lambda: self._consume_all_messages(db),
+                "batch consume",
+            )
+        )
+
+    def _consume_all_messages(self, db: BrokerDB) -> bool:
+        """Consume and process all available messages."""
+        found_any = False
+
+        while True:
+            self._check_stop()
+            found_this_iteration = False
+
+            for body, ts in db.stream_read_with_timestamps(
+                self._queue,
+                all_messages=True,
+                peek=False,
+                commit_interval=1,
+            ):
+                self._try_dispatch_message(body, ts)
+                found_any = True
+                found_this_iteration = True
+
+            # No more messages, exit loop
+            if not found_this_iteration:
+                break
+
+        return found_any
+
+    def _try_dispatch_message(self, body: str, timestamp: int) -> bool:
+        """Try to dispatch a message, return True if successful."""
+        try:
+            self._dispatch(body, timestamp)
+            return True
+        except _StopLoop:
+            raise  # Re-raise stop signal
+        except Exception:
+            # Don't update timestamp if dispatch failed in peek mode
+            # This ensures we'll retry the message next time
+            return False
 
     def _dispatch(self, message: str, timestamp: int) -> None:
         """Dispatch a message to the handler with error handling and size validation."""
         # Validate message size (10MB limit)
         message_size = len(message.encode("utf-8"))
-        if message_size > 10 * 1024 * 1024:  # 10MB
-            error_msg = f"Message size ({message_size} bytes) exceeds 10MB limit"
-            logger.error(error_msg)
-            if self._error_handler:
-                try:
-                    result = self._error_handler(
-                        ValueError(error_msg), message[:1000] + "...", timestamp
-                    )
-                    if result is False:
-                        self._stop_event.set()
-                        raise _StopLoop from None
-                except Exception as e:
-                    logger.error(f"Error handler failed: {e}")
+        if message_size > MAX_MESSAGE_SIZE:
+            error_msg = f"Message size ({message_size} bytes) exceeds {MAX_MESSAGE_SIZE // (1024 * 1024)}MB limit"
+            if _config["BROKER_LOGGING_ENABLED"]:
+                logger.error(error_msg)
+            # Use parent's error handler
+            self._handle_handler_error(
+                ValueError(error_msg),
+                message[:1000] + "...",
+                timestamp,
+                self._error_handler,
+            )
             return
 
         try:
             self._handler(message, timestamp)
         except Exception as e:
-            # Call error handler if provided
-            if self._error_handler is not None:
-                stop_requested = False
-                try:
-                    result = self._error_handler(e, message, timestamp)
-                    if result is False:
-                        # Error handler says stop
-                        stop_requested = True
-                    # True or None means continue
-                except Exception as eh_error:
-                    # Error handler itself failed
-                    logger.error(
-                        f"Error handler failed: {eh_error}\nOriginal error: {e}"
-                    )
-
-                # Raise _StopLoop outside the try block to avoid catching it
-                if stop_requested:
-                    # Set stop event to ensure the watcher stops completely
-                    self._stop_event.set()
-                    raise _StopLoop from None
-            else:
-                # Default behavior: log error and continue
-                logger.error(f"Handler error: {e}")
+            # Use parent's error handler
+            self._handle_handler_error(e, message, timestamp, self._error_handler)
 
 
-class QueueMoveWatcher(QueueWatcher):
-    """
-    Watches a source queue and atomically moves messages to a destination queue.
+class QueueMoveWatcher(BaseWatcher):
+    """Watches a source queue and atomically moves messages to a destination queue.
 
     The move happens atomically BEFORE the handler is called, ensuring that
     messages are safely moved even if the handler fails. The handler receives
@@ -1028,12 +1218,11 @@ class QueueMoveWatcher(QueueWatcher):
         *,
         initial_checks: int = 100,
         max_interval: float = 0.1,
-        error_handler: Optional[Callable[[Exception, str, int], Optional[bool]]] = None,
-        stop_event: Optional[threading.Event] = None,
-        max_messages: Optional[int] = None,
-    ):
-        """
-        Initialize a QueueMoveWatcher.
+        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
+        stop_event: threading.Event | None = None,
+        max_messages: int | None = None,
+    ) -> None:
+        """Initialize a QueueMoveWatcher.
 
         Args:
             broker: SimpleBroker instance
@@ -1048,10 +1237,14 @@ class QueueMoveWatcher(QueueWatcher):
 
         Raises:
             ValueError: If source_queue == dest_queue
-        """
 
+        """
         if source_queue == dest_queue:
-            raise ValueError("Cannot move messages to the same queue")
+            msg = "Cannot move messages to the same queue"
+            raise ValueError(msg)
+
+        # Initialize parent class
+        super().__init__(broker, stop_event)
 
         # Store move-specific attributes
         self._source_queue = source_queue
@@ -1059,30 +1252,17 @@ class QueueMoveWatcher(QueueWatcher):
         self._move_count = 0
         self._max_messages = max_messages
 
-        # Wrap the user's handler to handle Message tuples
-        def wrapped_handler(body: str, ts: int) -> None:
-            # This is never called - we override _drain_queue
-            pass
+        # Store handlers
+        self._handler = handler
+        self._error_handler = error_handler
 
-        # Initialize parent with peek=True (we handle consumption ourselves)
-        super().__init__(
-            broker,
-            source_queue,  # Watch the source queue
-            wrapped_handler,
-            peek=True,  # Force peek mode
+        # Create polling strategy directly
+        self._strategy = PollingStrategy(
+            stop_event=self._stop_event,
             initial_checks=initial_checks,
             max_interval=max_interval,
-            error_handler=None,  # We'll handle errors ourselves
-            batch_processing=False,  # Always process one at a time for moves
+            burst_sleep=_config["SIMPLEBROKER_BURST_SLEEP"],
         )
-
-        # Store the original handler and error_handler
-        self._move_handler = handler
-        self._move_error_handler = error_handler
-
-        # Override stop event if provided
-        if stop_event is not None:
-            self._stop_event = stop_event
 
     @property
     def move_count(self) -> int:
@@ -1109,6 +1289,7 @@ class QueueMoveWatcher(QueueWatcher):
 
         Returns:
             The thread running the watcher.
+
         """
         return self.run_in_thread()
 
@@ -1127,109 +1308,92 @@ class QueueMoveWatcher(QueueWatcher):
         """
         self.run_forever()
 
-    def _drain_queue(self) -> None:
-        """Move ALL messages from source to destination queue."""
-        found_messages = False
-        db_retry_count = 0
-        max_db_retries = 3
+    def run_forever(self) -> None:
+        """Run the move watcher continuously in the current thread."""
+        # Start the polling strategy
+        if hasattr(self._strategy, "start"):
+            self._strategy.start(self._get_db())
 
-        while db_retry_count < max_db_retries:
-            try:
-                # Get thread-local database connection
-                db = self._get_db()
-                break
-            except Exception as e:
-                db_retry_count += 1
-                if db_retry_count >= max_db_retries:
-                    logger.error(
-                        f"Failed to get database connection after {max_db_retries} retries: {e}"
-                    )
-                    raise
-                wait_time = 2**db_retry_count  # Exponential backoff
-                logger.debug(
-                    f"Database connection error (retry {db_retry_count}/{max_db_retries}): {e}. "
-                    f"Retrying in {wait_time} seconds..."
-                )
-                if not interruptible_sleep(wait_time, self._stop_event):
-                    # Sleep was interrupted, exit
-                    return
-
-        # Process messages one at a time until source queue is empty
-        operational_error_count = 0
-        max_operational_retries = 5
-
-        while True:
-            # Check for stop signal before each move for responsiveness
-            self._check_stop()
-
-            try:
-                # Use db.move() to atomically move oldest unclaimed message
-                result = db.move(
-                    self._source_queue, self._dest_queue, require_unclaimed=True
-                )
-
-                if result is None:
-                    # No more unclaimed messages to move
+        # Main polling loop
+        try:
+            while not self._stop_event.is_set():
+                self._strategy.wait_for_activity()
+                if self._stop_event.is_set():
                     break
 
-                # Reset error count on successful operation
-                operational_error_count = 0
-                found_messages = True
-                self._move_count += 1
-
-                # Create Message object with actual ID from move result
-                moved_msg = Message(
-                    result["id"], result["body"], result["ts"], self._dest_queue
-                )
-
-                # Call handler with moved message (body, timestamp)
                 try:
-                    self._move_handler(moved_msg.body, moved_msg.timestamp)
-                except Exception as e:
-                    # Handler error doesn't affect move (already done)
-                    if self._move_error_handler:
-                        try:
-                            error_result = self._move_error_handler(
-                                e, moved_msg.body, moved_msg.timestamp
-                            )
-                            if error_result is False:
-                                self._stop_event.set()
-                                raise _StopLoop from None
-                        except Exception as eh_error:
-                            logger.error(f"Error handler failed: {eh_error}")
-                    else:
-                        logger.error(f"Handler error: {e}")
+                    self._drain_queue()
+                except _StopLoop:
+                    break
+        except KeyboardInterrupt:
+            # Handle Ctrl+C gracefully
+            logger.info("Received interrupt signal, stopping...")
+            self.stop(join=False)
 
-                # Check if we've reached max messages
-                if self._max_messages and self._move_count >= self._max_messages:
-                    logger.info(f"Reached max_messages limit ({self._max_messages})")
-                    self._stop_event.set()
-                    raise _StopLoop
+    def run_in_thread(self) -> threading.Thread:
+        """Start the move watcher in a new background thread."""
+        thread = threading.Thread(target=self.run_forever, daemon=True)
+        thread.start()
+        # Store reference for the finalizer
+        self._thread = weakref.ref(thread)
+        return thread
 
-            except _StopLoop:
-                raise
-            except OperationalError as e:
-                operational_error_count += 1
-                if operational_error_count >= max_operational_retries:
-                    logger.error(
-                        f"Failed after {max_operational_retries} operational errors: {e}"
-                    )
-                    raise
-                # Exponential backoff with jitter
-                jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
-                wait_time = 0.05 * (2**operational_error_count) + jitter
-                logger.debug(
-                    f"OperationalError during move (retry {operational_error_count}/{max_operational_retries}): {e}. "
-                    f"Retrying in {wait_time:.3f} seconds..."
-                )
-                if not interruptible_sleep(wait_time, self._stop_event):
-                    # Sleep was interrupted, exit
-                    return
-                continue  # Retry the loop
-            except Exception as e:
-                logger.error(f"Unexpected error during move: {e}")
-                raise
+    def _drain_queue(self) -> None:
+        """Move ALL messages from source to destination queue."""
+        # Get database connection with retry
+        db = self._get_db_with_retry()
 
-        # Notify strategy that we found messages
+        # Process messages with retry
+        found_messages = self._process_with_retry(
+            lambda: self._move_all_messages(db),
+            "move",
+        )
+
+        # Notify strategy if we found messages
         if found_messages:
             self._strategy.notify_activity()
+
+    def _move_all_messages(self, db: BrokerDB) -> bool:
+        """Move all available messages atomically."""
+        found_any = False
+
+        while True:
+            self._check_stop()
+
+            # Atomic move operation
+            result = db.move(
+                self._source_queue,
+                self._dest_queue,
+                require_unclaimed=True,
+            )
+
+            if result is None:
+                break  # No more messages
+
+            found_any = True
+            self._move_count += 1
+
+            # Notify handler about the move
+            self._notify_handler_safe(result)
+
+            # Check max messages limit
+            if self._max_messages and self._move_count >= self._max_messages:
+                if _config["BROKER_LOGGING_ENABLED"]:
+                    logger.info(f"Reached max_messages limit ({self._max_messages})")
+                self._stop_event.set()
+                raise _StopLoop
+
+        return found_any
+
+    def _notify_handler_safe(self, move_result: dict) -> None:
+        """Safely notify handler about moved message."""
+        try:
+            self._handler(move_result["body"], move_result["ts"])
+        except Exception as e:
+            # Move already completed, just handle notification error
+            self._handle_handler_error(
+                e,
+                move_result["body"],
+                move_result["ts"],
+                self._error_handler,
+            )

@@ -765,20 +765,20 @@ class TestPollingStrategy:
             try:
                 # First 5 checks should have zero delay
                 for i in range(5):
-                    assert strategy._get_delay() == 0
+                    assert strategy._calculate_base_delay() == 0
                     strategy._check_count = i + 1
 
                 # After initial checks, delay should gradually increase
                 strategy._check_count = 5
-                delay1 = strategy._get_delay()
+                delay1 = strategy._calculate_base_delay()
                 assert delay1 == 0  # First check after burst still 0
 
                 strategy._check_count = 6
-                delay2 = strategy._get_delay()
+                delay2 = strategy._calculate_base_delay()
                 assert 0 < delay2 < 0.1  # Should start increasing
 
                 strategy._check_count = 105
-                delay3 = strategy._get_delay()
+                delay3 = strategy._calculate_base_delay()
                 assert delay3 == 0.1  # Should reach max
 
                 # Activity should reset counter
@@ -793,9 +793,14 @@ class TestErrorScenarios(WatcherTestBase):
     """Test various error scenarios."""
 
     def test_handler_exception_no_error_handler(
-        self, broker_db, temp_db, capsys, caplog
+        self, broker_db, temp_db, capsys, caplog, monkeypatch
     ):
         """Test default behavior when handler fails and no error_handler."""
+        # Enable logging for this test since it's testing logging behavior
+        from simplebroker.watcher import _config
+
+        monkeypatch.setitem(_config, "BROKER_LOGGING_ENABLED", True)
+
         broker_db.write("test_queue", "bad_message")
 
         def failing_handler(msg: str, ts: int):
@@ -817,8 +822,15 @@ class TestErrorScenarios(WatcherTestBase):
         # Should have logged the error
         assert "Handler failed" in caplog.text or "Handler error" in caplog.text
 
-    def test_error_handler_exception(self, broker_db, temp_db, capsys, caplog):
+    def test_error_handler_exception(
+        self, broker_db, temp_db, capsys, caplog, monkeypatch
+    ):
         """Test when error_handler itself raises exception."""
+        # Enable logging for this test since it's testing logging behavior
+        from simplebroker.watcher import _config
+
+        monkeypatch.setitem(_config, "BROKER_LOGGING_ENABLED", True)
+
         broker_db.write("test_queue", "message")
 
         def handler(msg: str, ts: int):
@@ -983,7 +995,9 @@ def test_context_manager_usage(temp_db):
         # The thread should be started automatically
         assert hasattr(watcher, "_thread")
         assert watcher._thread is not None
-        assert watcher._thread.is_alive()
+        thread = watcher._thread()  # Get strong reference from weak ref
+        assert thread is not None
+        assert thread.is_alive()
 
         # Wait for messages to be processed
         start_time = time.time()
@@ -991,7 +1005,8 @@ def test_context_manager_usage(temp_db):
             time.sleep(0.05)
 
     # After exiting context, thread should be stopped
-    assert not watcher._thread.is_alive()
+    thread = watcher._thread() if watcher._thread else None
+    assert thread is None or not thread.is_alive()
 
     # Verify all messages were processed
     assert len(messages_received) == 3
@@ -1013,10 +1028,14 @@ def test_context_manager_with_exception(temp_db):
     # Test that cleanup happens even with exception
     try:
         with QueueWatcher(temp_db, "error_queue", handler) as watcher:
-            assert watcher._thread.is_alive()
-            raise ValueError("Test exception")
+            thread = watcher._thread()  # Get strong reference from weak ref
+            assert thread is not None
+            assert thread.is_alive()
+            msg = "Test exception"
+            raise ValueError(msg)
     except ValueError:
         pass  # Expected
 
     # Thread should still be stopped after exception
-    assert not watcher._thread.is_alive()
+    thread = watcher._thread() if watcher._thread else None
+    assert thread is None or not thread.is_alive()

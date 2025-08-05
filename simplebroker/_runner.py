@@ -14,8 +14,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Iterable, Literal, Protocol, Set, Tuple, Union, cast
 
+from ._constants import load_config
 from ._exceptions import DataError, IntegrityError, OperationalError
 from .helpers import _execute_with_retry
+
+# Load configuration once at module level
+_config = load_config()
 
 
 class SetupPhase(Enum):
@@ -192,12 +196,12 @@ class SQLiteRunner:
     def _apply_connection_settings(self, conn: sqlite3.Connection) -> None:
         """Apply per-connection settings that don't require exclusive locks."""
         # Always set busy timeout for each connection
-        busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
+        busy_timeout = _config["BROKER_BUSY_TIMEOUT"]
         conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
 
         # Set WAL autocheckpoint for each connection
         # Default to 1000 pages (≈1MB) if not specified
-        wal_autocheckpoint = int(os.environ.get("BROKER_WAL_AUTOCHECKPOINT", "1000"))
+        wal_autocheckpoint = _config["BROKER_WAL_AUTOCHECKPOINT"]
         if wal_autocheckpoint < 0:
             warnings.warn(
                 f"Invalid BROKER_WAL_AUTOCHECKPOINT '{wal_autocheckpoint}', "
@@ -273,11 +277,11 @@ class SQLiteRunner:
         """Apply optimization settings to a connection."""
         # Cache size (default 10MB)
         # Negative values mean KiB (kibibytes), so we multiply by 1024
-        cache_mb = int(os.environ.get("BROKER_CACHE_MB", "10"))
+        cache_mb = _config["BROKER_CACHE_MB"]
         conn.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
 
         # Synchronous mode (default FULL)
-        sync_mode = os.environ.get("BROKER_SYNC_MODE", "FULL").upper()
+        sync_mode = _config["BROKER_SYNC_MODE"]
         if sync_mode not in ("OFF", "NORMAL", "FULL", "EXTRA"):
             warnings.warn(
                 f"Invalid BROKER_SYNC_MODE '{sync_mode}', defaulting to FULL",

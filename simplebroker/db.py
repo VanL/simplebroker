@@ -19,6 +19,14 @@ from typing import (
     TypeVar,
 )
 
+from ._constants import (
+    LOGICAL_COUNTER_BITS,
+    MAX_MESSAGE_SIZE,
+    MAX_QUEUE_NAME_LENGTH,
+    SCHEMA_VERSION,
+    SIMPLEBROKER_MAGIC,
+    load_config,
+)
 from ._exceptions import (
     IntegrityError,
     OperationalError,
@@ -100,16 +108,11 @@ from .helpers import _execute_with_retry
 # Type variable for generic return types
 T = TypeVar("T")
 
-# Module constants
-MAX_QUEUE_NAME_LENGTH = 512
-QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
-MAX_MESSAGE_SIZE = int(
-    os.environ.get("BROKER_MAX_MESSAGE_SIZE", str(10 * 1024 * 1024))
-)  # Default 10MB
+# Load configuration once at module level
+_config = load_config()
 
-# Database magic string and schema version
-SIMPLEBROKER_MAGIC = "simplebroker-v1"
-SCHEMA_VERSION = 1
+# Module constants
+QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
 
 
 # Cache for queue name validation
@@ -141,11 +144,7 @@ def _validate_queue_name_cached(queue: str) -> Optional[str]:
 
 
 # Hybrid timestamp constants
-# 44 bits for physical time (milliseconds since epoch, good until year 2527)
-# 20 bits for logical counter (supports 1,048,576 events per millisecond)
-PHYSICAL_TIME_BITS = 44
-LOGICAL_COUNTER_BITS = 20
-MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1  # 1,048,575
+MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1
 
 # Read commit interval for --all operations
 # Controls how many messages are deleted and committed at once
@@ -164,8 +163,8 @@ MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1  # 1,048,575
 #   Interval=50:   ~286,000 messages/second (at-least-once, lower concurrency)
 #   Interval=100:  ~335,000 messages/second (at-least-once, lowest concurrency)
 #
-# Can be overridden with BROKER_READ_COMMIT_INTERVAL environment variable
-READ_COMMIT_INTERVAL = int(os.environ.get("BROKER_READ_COMMIT_INTERVAL", "1"))
+# Use configuration value loaded at module level
+READ_COMMIT_INTERVAL = _config["BROKER_READ_COMMIT_INTERVAL"]
 
 
 class BrokerCore:
@@ -194,6 +193,8 @@ class BrokerCore:
         self._lock = threading.Lock()
 
         # Store the process ID to detect fork()
+        import os
+
         self._pid = os.getpid()
 
         # SQL runner for all database operations
@@ -201,9 +202,7 @@ class BrokerCore:
 
         # Write counter for vacuum scheduling
         self._write_count = 0
-        self._vacuum_interval = int(
-            os.environ.get("BROKER_AUTO_VACUUM_INTERVAL", "100")
-        )
+        self._vacuum_interval = _config["BROKER_AUTO_VACUUM_INTERVAL"]
 
         # Setup database (must be done before creating TimestampGenerator)
         self._setup_database()
@@ -521,7 +520,7 @@ class BrokerCore:
         # Use warnings for now, can be replaced with proper logging
         if conflict_type == "transient":
             # Debug level - might be normal under extreme concurrency
-            if os.environ.get("BROKER_DEBUG"):
+            if _config["BROKER_DEBUG"]:
                 warnings.warn(
                     f"Timestamp conflict detected (attempt {attempt + 1}), retrying...",
                     RuntimeWarning,
@@ -556,7 +555,7 @@ class BrokerCore:
 
         # Increment write counter and check vacuum need
         # Only check if auto vacuum is enabled
-        if int(os.environ.get("BROKER_AUTO_VACUUM", "1")) == 1:
+        if _config["BROKER_AUTO_VACUUM"] == 1:
             self._write_count += 1
             if self._write_count >= self._vacuum_interval:
                 self._write_count = 0  # Reset counter
@@ -1056,7 +1055,7 @@ class BrokerCore:
                 return False
 
             # Trigger if >=10% claimed OR >10k claimed messages
-            threshold_pct = float(os.environ.get("BROKER_VACUUM_THRESHOLD", "10")) / 100
+            threshold_pct = _config["BROKER_VACUUM_THRESHOLD"]
             return bool(
                 (claimed_count >= total_count * threshold_pct)
                 or (claimed_count > 10000)
@@ -1076,7 +1075,7 @@ class BrokerCore:
 
         # Check for stale lock file (older than 5 minutes)
         stale_lock_timeout = int(
-            os.environ.get("BROKER_VACUUM_LOCK_TIMEOUT", "300")
+            _config["BROKER_VACUUM_LOCK_TIMEOUT"]
         )  # 5 minutes default
         if vacuum_lock_path.exists():
             try:
@@ -1404,7 +1403,7 @@ class BrokerCore:
 
     def _do_vacuum_without_lock(self) -> None:
         """Perform the actual vacuum operation without file locking."""
-        batch_size = int(os.environ.get("BROKER_VACUUM_BATCH_SIZE", "1000"))
+        batch_size = _config["BROKER_VACUUM_BATCH_SIZE"]
 
         # Use separate transaction per batch
         while True:

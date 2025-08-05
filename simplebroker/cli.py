@@ -8,11 +8,8 @@ from typing import List, NoReturn
 
 from . import __version__ as VERSION
 from . import commands
-from ._timestamp import TIMESTAMP_EXACT_NUM_DIGITS
+from ._constants import DEFAULT_DB_NAME, PROG_NAME, TIMESTAMP_EXACT_NUM_DIGITS
 from .db import BrokerDB
-
-PROG_NAME = "simplebroker"
-DEFAULT_DB_NAME = ".broker.db"
 
 # Cache the parser for better startup performance
 _PARSER_CACHE = None

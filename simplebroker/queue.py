@@ -8,10 +8,14 @@ import logging
 import weakref
 from typing import Any, List, Optional, Union
 
+from ._constants import DEFAULT_DB_NAME, load_config
 from ._runner import SQLiteRunner, SQLRunner
 from .db import BrokerCore, BrokerDB
 
 logger = logging.getLogger(__name__)
+
+# Load configuration once at module level
+_config = load_config()
 
 
 class Queue:
@@ -24,7 +28,7 @@ class Queue:
 
     Args:
         name: The name of the queue
-        db_path: Path to the SQLite database (default: ".broker.db")
+        db_path: Path to the SQLite database (uses DEFAULT_DB_NAME)
         persistent: If True, maintain a persistent connection.
                    If False (default), use ephemeral connections.
         runner: Optional custom SQLRunner implementation for extensions
@@ -47,7 +51,7 @@ class Queue:
         self,
         name: str,
         *,
-        db_path: str = ".broker.db",
+        db_path: str = DEFAULT_DB_NAME,
         persistent: bool = False,
         runner: Optional[SQLRunner] = None,
     ):
@@ -55,7 +59,7 @@ class Queue:
 
         Args:
             name: The name of the queue
-            db_path: Path to the SQLite database (default: ".broker.db")
+            db_path: Path to the SQLite database (uses DEFAULT_DB_NAME)
             persistent: If True, maintain a persistent connection.
                        If False (default), use ephemeral connections.
             runner: Optional custom SQLRunner implementation for extensions

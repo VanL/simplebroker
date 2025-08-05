@@ -5,16 +5,10 @@ import sys
 import warnings
 from typing import Dict, Optional, Union
 
+from ._constants import EXIT_QUEUE_EMPTY, EXIT_SUCCESS, MAX_MESSAGE_SIZE
 from ._exceptions import TimestampError
 from ._timestamp import TimestampGenerator
 from .db import READ_COMMIT_INTERVAL, BrokerDB
-
-# Exit codes
-EXIT_SUCCESS = 0
-EXIT_QUEUE_EMPTY = 2
-
-# Security limits
-MAX_MESSAGE_SIZE = 10 * 1024 * 1024  # 10MB limit
 
 
 def parse_exact_message_id(message_id_str: str) -> Optional[int]:

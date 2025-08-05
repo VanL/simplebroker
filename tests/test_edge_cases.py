@@ -1,24 +1,27 @@
-"""
-Tests for edge cases identified during code review.
+"""Tests for edge cases identified during code review.
 
 These tests cover specific edge cases and race conditions that might occur
 in production environments.
 """
+
+from __future__ import annotations
 
 import multiprocessing
 import os
 import sqlite3
 import time
 import unittest.mock
-from pathlib import Path
-from typing import List
+from typing import TYPE_CHECKING
 
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
 
+if TYPE_CHECKING:
+    from pathlib import Path
 
-def test_clock_regression_during_claim(workdir: Path):
+
+def test_clock_regression_during_claim(workdir: Path) -> None:
     """Test behavior when system clock goes backward during read operations."""
     db_path = workdir / "test.db"
 
@@ -36,12 +39,11 @@ def test_clock_regression_during_claim(workdir: Path):
         return current_time - 10.0
 
     # Read messages with regressed clock
-    with unittest.mock.patch("time.time", mock_time):
-        with BrokerDB(str(db_path)) as db:
-            # This should still work correctly
-            messages = list(db.stream_read("test_queue", peek=False, all_messages=True))
-            assert len(messages) == 5
-            assert messages == [f"message{i}" for i in range(5)]
+    with unittest.mock.patch("time.time", mock_time), BrokerDB(str(db_path)) as db:
+        # This should still work correctly
+        messages = list(db.stream_read("test_queue", peek=False, all_messages=True))
+        assert len(messages) == 5
+        assert messages == [f"message{i}" for i in range(5)]
 
     # Verify messages were claimed despite clock regression
     conn = sqlite3.connect(str(db_path))
@@ -51,7 +53,7 @@ def test_clock_regression_during_claim(workdir: Path):
     conn.close()
 
 
-def test_vacuum_lock_cleanup_after_crash(workdir: Path):
+def test_vacuum_lock_cleanup_after_crash(workdir: Path) -> None:
     """Test that stale vacuum lock files are handled gracefully."""
     db_path = workdir / "test.db"
     lock_path = db_path.with_suffix(".vacuum.lock")  # test.vacuum.lock
@@ -93,8 +95,14 @@ def test_vacuum_lock_cleanup_after_crash(workdir: Path):
     assert not lock_path.exists()
 
 
-def test_vacuum_lock_timeout_environment_variable(workdir: Path):
-    """Test that BROKER_VACUUM_LOCK_TIMEOUT environment variable works."""
+def test_vacuum_lock_timeout_environment_variable(workdir: Path) -> None:
+    """Test that BROKER_VACUUM_LOCK_TIMEOUT configuration works."""
+    # Import _config from the db module
+    from simplebroker.db import _config
+
+    # Save original timeout value
+    original_timeout = _config["BROKER_VACUUM_LOCK_TIMEOUT"]
+
     db_path = workdir / "test.db"
     lock_path = db_path.with_suffix(".vacuum.lock")  # test.vacuum.lock
 
@@ -122,8 +130,8 @@ def test_vacuum_lock_timeout_environment_variable(workdir: Path):
     # Lock should still exist
     assert lock_path.exists()
 
-    # Now set timeout to 30 seconds
-    os.environ["BROKER_VACUUM_LOCK_TIMEOUT"] = "30"
+    # Now set timeout to 30 seconds by updating _config directly
+    _config["BROKER_VACUUM_LOCK_TIMEOUT"] = 30
     try:
         with unittest.mock.patch("simplebroker.db.warnings.warn") as mock_warn:
             with BrokerDB(str(db_path)) as db:
@@ -133,13 +141,14 @@ def test_vacuum_lock_timeout_environment_variable(workdir: Path):
                 warning_msg = str(mock_warn.call_args[0][0])
                 assert "stale vacuum lock" in warning_msg.lower()
     finally:
-        del os.environ["BROKER_VACUUM_LOCK_TIMEOUT"]
+        # Restore original timeout value
+        _config["BROKER_VACUUM_LOCK_TIMEOUT"] = original_timeout
 
     # Lock should be removed now
     assert not lock_path.exists()
 
 
-def _schema_migration_worker(db_path: str, worker_id: int, results: List):
+def _schema_migration_worker(db_path: str, worker_id: int, results: list) -> None:
     """Worker process for concurrent schema migration test."""
     try:
         # Each worker tries to open database and trigger migration
@@ -154,7 +163,7 @@ def _schema_migration_worker(db_path: str, worker_id: int, results: List):
         results.append((worker_id, "error", str(e)))
 
 
-def test_concurrent_schema_migration(workdir: Path):
+def test_concurrent_schema_migration(workdir: Path) -> None:
     """Test multiple processes trying to migrate schema simultaneously."""
     db_path = workdir / "test.db"
 
@@ -197,7 +206,8 @@ def test_concurrent_schema_migration(workdir: Path):
 
         for i in range(4):
             p = multiprocessing.Process(
-                target=_schema_migration_worker, args=(str(db_path), i, results)
+                target=_schema_migration_worker,
+                args=(str(db_path), i, results),
             )
             processes.append(p)
             p.start()
@@ -226,7 +236,7 @@ def test_concurrent_schema_migration(workdir: Path):
 
     # Check partial index exists
     cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE '%unclaimed%'"
+        "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE '%unclaimed%'",
     )
     indexes = cursor.fetchall()
     assert len(indexes) == 1
@@ -234,7 +244,7 @@ def test_concurrent_schema_migration(workdir: Path):
     conn.close()
 
 
-def test_vacuum_with_concurrent_reads(workdir: Path):
+def test_vacuum_with_concurrent_reads(workdir: Path) -> None:
     """Test vacuum operation while other processes are reading."""
     db_path = workdir / "test.db"
 
@@ -254,7 +264,7 @@ def test_vacuum_with_concurrent_reads(workdir: Path):
     stop_event = threading.Event()
     reader_errors = []
 
-    def continuous_reader():
+    def continuous_reader() -> None:
         """Continuously read messages until stopped."""
         try:
             with BrokerDB(str(db_path)) as db:
@@ -262,7 +272,7 @@ def test_vacuum_with_concurrent_reads(workdir: Path):
                     try:
                         # Peek at messages (non-destructive)
                         list(
-                            db.stream_read("test_queue", peek=True, all_messages=False)
+                            db.stream_read("test_queue", peek=True, all_messages=False),
                         )
                         time.sleep(0.01)  # Small delay
                     except Exception as e:
@@ -274,7 +284,7 @@ def test_vacuum_with_concurrent_reads(workdir: Path):
     reader_thread = threading.Thread(target=continuous_reader)
     reader_started = threading.Event()
 
-    def continuous_reader_with_signal():
+    def continuous_reader_with_signal() -> None:
         reader_started.set()  # Signal that reader has started
         continuous_reader()
 
@@ -284,7 +294,8 @@ def test_vacuum_with_concurrent_reads(workdir: Path):
     try:
         # Wait for reader to actually start (with timeout)
         if not reader_started.wait(timeout=2.0):
-            raise TimeoutError("Reader thread did not start within timeout")
+            msg = "Reader thread did not start within timeout"
+            raise TimeoutError(msg)
 
         # Run vacuum while reader is active
         with BrokerDB(str(db_path)) as db:
@@ -305,7 +316,7 @@ def test_vacuum_with_concurrent_reads(workdir: Path):
         reader_thread.join(timeout=2)
 
 
-def test_timestamp_overflow_protection(workdir: Path):
+def test_timestamp_overflow_protection(workdir: Path) -> None:
     """Test that user-provided timestamps are validated for overflow."""
     db_path = workdir / "test.db"
 
@@ -322,14 +333,22 @@ def test_timestamp_overflow_protection(workdir: Path):
     # Test via CLI with --since flag
     # This should fail gracefully
     rc, out, err = run_cli(
-        "read", "test_queue", "--all", f"--since={overflow_ms}ms", cwd=workdir
+        "read",
+        "test_queue",
+        "--all",
+        f"--since={overflow_ms}ms",
+        cwd=workdir,
     )
     assert rc == 1  # Should fail
     assert "too far in future" in err.lower()
 
     # Test with maximum safe value (should work)
     rc, out, err = run_cli(
-        "read", "test_queue", "--all", f"--since={max_safe_ms}ms", cwd=workdir
+        "read",
+        "test_queue",
+        "--all",
+        f"--since={max_safe_ms}ms",
+        cwd=workdir,
     )
     # Should succeed - queue exists but no messages match filter
     # Note: rc could be 0 (no messages match filter) or 2 (queue empty after filter)

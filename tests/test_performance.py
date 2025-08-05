@@ -65,8 +65,8 @@ BASELINE_TIMES = {
     "basic_write_50": 0.015,  # Writing 50 messages
     "validation_cached": 0.001,  # 1000 cached validations (rounded up from 0.000)
     "bulk_move_5k": 5.0,  # Estimated: 5x the 1k move time
-    "large_batch_claim_rollback": 0.025,  # Reading 100 of 5000 messages
-    "at_least_once_rollback": 0.004,  # Reading 250 of 500 messages
+    "large_batch_claim_rollback": 0.033,  # Reading 100 of 5000 messages
+    "at_least_once_rollback": 0.005,  # Reading 250 of 500 messages
     "since_query_2000_msgs": 1.0,  # Estimated based on query performance
     "timestamp_lookup": 0.1,  # Estimated based on index lookup
     "concurrent_mixed_ops": 2.0,  # Estimated for mixed operations

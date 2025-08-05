@@ -11,42 +11,24 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Optional, Tuple
 
+from ._constants import (
+    LOGICAL_COUNTER_BITS,
+    LOGICAL_COUNTER_MASK,
+    MAX_ITERATIONS,
+    MAX_LOGICAL_COUNTER,
+    MS_PER_US,
+    NS_PER_US,
+    SQLITE_MAX_INT64,
+    TIMESTAMP_EXACT_NUM_DIGITS,
+    UNIX_NATIVE_BOUNDARY,
+    US_PER_SECOND,
+    WAIT_FOR_NEXT_INCREMENT,
+)
 from ._exceptions import IntegrityError, OperationalError, TimestampError
 from .helpers import _execute_with_retry
 
 if TYPE_CHECKING:
     from ._runner import SQLRunner
-
-# Timestamp constants
-TIMESTAMP_EXACT_NUM_DIGITS = 19  # Exact number of digits for message ID timestamps
-
-# Hybrid timestamp bit allocation
-PHYSICAL_TIME_BITS = 52  # Bits for microseconds since epoch (until ~2113)
-LOGICAL_COUNTER_BITS = 12  # Bits for monotonic counter
-LOGICAL_COUNTER_MASK = (
-    1 << LOGICAL_COUNTER_BITS
-) - 1  # Mask for extracting logical counter
-MAX_LOGICAL_COUNTER = 1 << LOGICAL_COUNTER_BITS  # Maximum value for logical counter
-
-# Timestamp boundaries and limits
-UNIX_NATIVE_BOUNDARY = (
-    1 << 44
-)  # Boundary to distinguish Unix vs native timestamps (~year 2527)
-SQLITE_MAX_INT64 = 2**63  # Maximum value for SQLite's signed 64-bit integer
-
-# Time conversion constants
-MS_PER_SECOND = 1000  # Milliseconds per second
-US_PER_SECOND = 1_000_000  # Microseconds per second
-MS_PER_US = 1000  # Microseconds per millisecond
-NS_PER_US = 1000  # Nanoseconds per microsecond
-NS_PER_SECOND = 1_000_000_000  # Nanoseconds per second
-WAIT_FOR_NEXT_INCREMENT = (
-    0.0001  # Sleep duration in seconds when waiting for the clock to advance
-)
-
-MAX_ITERATIONS = (
-    10000  # Number of times we will loop before concluding the clock is broken
-)
 
 
 class TimestampGenerator:
