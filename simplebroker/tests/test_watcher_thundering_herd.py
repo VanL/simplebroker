@@ -115,82 +115,92 @@ def test_thundering_herd_mitigation() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        # Create 50 watchers on different queues
-        watchers = []
-        metrics: dict[str, WatcherMetrics] = {}
-        call_counts: dict[str, int] = {}
+        try:
+            # Create 50 watchers on different queues
+            watchers = []
+            metrics: dict[str, WatcherMetrics] = {}
+            call_counts: dict[str, int] = {}
 
-        for i in range(50):
-            queue = f"queue_{i}"
-            call_counts[queue] = 0
-            metrics[queue] = WatcherMetrics(queue)
+            for i in range(50):
+                queue = f"queue_{i}"
+                call_counts[queue] = 0
+                metrics[queue] = WatcherMetrics(queue)
 
-            def make_handler(q):
-                def handler(msg, ts) -> None:
-                    call_counts[q] += 1
+                def make_handler(q):
+                    def handler(msg, ts) -> None:
+                        call_counts[q] += 1
 
-                return handler
+                    return handler
 
-            w = InstrumentedQueueWatcher(
-                db_path,
-                queue,
-                make_handler(queue),
-                metrics=metrics[queue],
-            )
-            watchers.append(w)
-            w.run_in_thread()
+                w = InstrumentedQueueWatcher(
+                    db_path,
+                    queue,
+                    make_handler(queue),
+                    metrics=metrics[queue],
+                )
+                watchers.append(w)
+                w.run_in_thread()
 
-        # Let watchers initialize
-        time.sleep(0.2)
+            # Let watchers initialize
+            time.sleep(0.2)
 
-        # Write to only queue_0
-        broker.write("queue_0", "test message")
+            # Write to only queue_0
+            broker.write("queue_0", "test message")
 
-        # Wait for message to be processed
-        assert wait_for_condition(
-            lambda: call_counts["queue_0"] == 1,
-            timeout=2.0,
-            message="Waiting for queue_0 to process message",
-        )
-
-        # Verify only queue_0 handler was called
-        assert call_counts["queue_0"] == 1
-        assert all(count == 0 for q, count in call_counts.items() if q != "queue_0")
-
-        # Verify metrics show efficiency
-        active_metrics = metrics["queue_0"]
-        assert active_metrics.messages_processed == 1
-        # Note: Efficiency will be low without the feature implemented
-        # This test documents the current behavior
-
-        # Check idle watchers had minimal activity
-        mismatched_queues = []
-        for i in range(1, 50):
-            idle_metrics = metrics[f"queue_{i}"]
-            # With pre-check, idle watchers should have high efficiency
-            # (few wakes, mostly empty)
-            assert idle_metrics.messages_processed == 0
-            if idle_metrics.wake_ups > 0:
-                if idle_metrics.empty_wakes != idle_metrics.wake_ups:
-                    mismatched_queues.append(
-                        (f"queue_{i}", idle_metrics.wake_ups, idle_metrics.empty_wakes),
-                    )
-
-        if mismatched_queues:
-            for _queue, _wake_ups, _empty_wakes in mismatched_queues:
-                pass
-            # Check if they all have diff of 1
-            [wake_ups - empty_wakes for _, wake_ups, empty_wakes in mismatched_queues]
-            assert len(mismatched_queues) == 0, (
-                f"Found {len(mismatched_queues)} queues with mismatched counts"
+            # Wait for message to be processed
+            assert wait_for_condition(
+                lambda: call_counts["queue_0"] == 1,
+                timeout=2.0,
+                message="Waiting for queue_0 to process message",
             )
 
-        # Cleanup
-        for w in watchers:
-            w._stop_event.set()
-            time.sleep(0.05)  # Brief wait
-        for w in watchers:
-            w.stop()
+            # Verify only queue_0 handler was called
+            assert call_counts["queue_0"] == 1
+            assert all(count == 0 for q, count in call_counts.items() if q != "queue_0")
+
+            # Verify metrics show efficiency
+            active_metrics = metrics["queue_0"]
+            assert active_metrics.messages_processed == 1
+            # Note: Efficiency will be low without the feature implemented
+            # This test documents the current behavior
+
+            # Check idle watchers had minimal activity
+            mismatched_queues = []
+            for i in range(1, 50):
+                idle_metrics = metrics[f"queue_{i}"]
+                # With pre-check, idle watchers should have high efficiency
+                # (few wakes, mostly empty)
+                assert idle_metrics.messages_processed == 0
+                if idle_metrics.wake_ups > 0:
+                    if idle_metrics.empty_wakes != idle_metrics.wake_ups:
+                        mismatched_queues.append(
+                            (
+                                f"queue_{i}",
+                                idle_metrics.wake_ups,
+                                idle_metrics.empty_wakes,
+                            ),
+                        )
+
+            if mismatched_queues:
+                for _queue, _wake_ups, _empty_wakes in mismatched_queues:
+                    pass
+                # Check if they all have diff of 1
+                [
+                    wake_ups - empty_wakes
+                    for _, wake_ups, empty_wakes in mismatched_queues
+                ]
+                assert len(mismatched_queues) == 0, (
+                    f"Found {len(mismatched_queues)} queues with mismatched counts"
+                )
+
+            # Cleanup
+            for w in watchers:
+                w._stop_event.set()
+                time.sleep(0.05)  # Brief wait
+            for w in watchers:
+                w.stop()
+        finally:
+            broker.close()
 
 
 def test_thundering_herd_with_multiple_active_queues() -> None:
@@ -199,62 +209,65 @@ def test_thundering_herd_with_multiple_active_queues() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        # Create 20 watchers
-        watchers = []
-        metrics: dict[str, WatcherMetrics] = {}
-        call_counts: dict[str, int] = {}
+        try:
+            # Create 20 watchers
+            watchers = []
+            metrics: dict[str, WatcherMetrics] = {}
+            call_counts: dict[str, int] = {}
 
-        for i in range(20):
-            queue = f"queue_{i}"
-            call_counts[queue] = 0
-            metrics[queue] = WatcherMetrics(queue)
+            for i in range(20):
+                queue = f"queue_{i}"
+                call_counts[queue] = 0
+                metrics[queue] = WatcherMetrics(queue)
 
-            def make_handler(q):
-                def handler(msg, ts) -> None:
-                    call_counts[q] += 1
+                def make_handler(q):
+                    def handler(msg, ts) -> None:
+                        call_counts[q] += 1
 
-                return handler
+                    return handler
 
-            w = InstrumentedQueueWatcher(
-                db_path,
-                queue,
-                make_handler(queue),
-                metrics=metrics[queue],
-            )
-            watchers.append(w)
-            w.run_in_thread()
+                w = InstrumentedQueueWatcher(
+                    db_path,
+                    queue,
+                    make_handler(queue),
+                    metrics=metrics[queue],
+                )
+                watchers.append(w)
+                w.run_in_thread()
 
-        time.sleep(0.2)
+            time.sleep(0.2)
 
-        # Write to 5 queues
-        active_queues = ["queue_0", "queue_5", "queue_10", "queue_15", "queue_19"]
-        for queue in active_queues:
-            for i in range(10):
-                broker.write(queue, f"message_{i}")
+            # Write to 5 queues
+            active_queues = ["queue_0", "queue_5", "queue_10", "queue_15", "queue_19"]
+            for queue in active_queues:
+                for i in range(10):
+                    broker.write(queue, f"message_{i}")
 
-        # Wait for all active queues to process their messages
-        for queue in active_queues:
-            assert wait_for_condition(
-                lambda q=queue: call_counts[q] == 10,
-                timeout=5.0,
-                message=f"Waiting for {queue} to process 10 messages",
-            )
+            # Wait for all active queues to process their messages
+            for queue in active_queues:
+                assert wait_for_condition(
+                    lambda q=queue: call_counts[q] == 10,
+                    timeout=5.0,
+                    message=f"Waiting for {queue} to process 10 messages",
+                )
 
-        # Verify active queues processed messages
-        for queue in active_queues:
-            assert call_counts[queue] == 10
-            assert metrics[queue].messages_processed == 10
+            # Verify active queues processed messages
+            for queue in active_queues:
+                assert call_counts[queue] == 10
+                assert metrics[queue].messages_processed == 10
 
-        # Verify idle queues stayed idle
-        for i in range(20):
-            queue = f"queue_{i}"
-            if queue not in active_queues:
-                assert call_counts[queue] == 0
-                assert metrics[queue].messages_processed == 0
+            # Verify idle queues stayed idle
+            for i in range(20):
+                queue = f"queue_{i}"
+                if queue not in active_queues:
+                    assert call_counts[queue] == 0
+                    assert metrics[queue].messages_processed == 0
 
-        # Cleanup
-        for w in watchers:
-            w.stop()
+            # Cleanup
+            for w in watchers:
+                w.stop()
+        finally:
+            broker.close()
 
 
 def test_pre_check_correctness() -> None:
@@ -263,24 +276,27 @@ def test_pre_check_correctness() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        # Create watcher
-        handler_calls = []
+        try:
+            # Create watcher
+            handler_calls = []
 
-        def handler(msg, ts) -> None:
-            handler_calls.append((msg, ts))
+            def handler(msg, ts) -> None:
+                handler_calls.append((msg, ts))
 
-        watcher = InstrumentedQueueWatcher(db_path, "test_queue", handler)
-        db = broker
+            watcher = InstrumentedQueueWatcher(db_path, "test_queue", handler)
+            db = broker
 
-        # Should report no messages when queue is empty
-        assert watcher._has_pending_messages(db) is False
+            # Should report no messages when queue is empty
+            assert watcher._has_pending_messages(db) is False
 
-        # Add messages to queue
-        for i in range(10):
-            broker.write("test_queue", f"message_{i}")
+            # Add messages to queue
+            for i in range(10):
+                broker.write("test_queue", f"message_{i}")
 
-        # Should now report messages present
-        assert watcher._has_pending_messages(db) is True
+            # Should now report messages present
+            assert watcher._has_pending_messages(db) is True
+        finally:
+            broker.close()
 
 
 def test_pre_check_with_timestamp_filtering() -> None:
@@ -289,92 +305,102 @@ def test_pre_check_with_timestamp_filtering() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        # Add messages at different times
-        timestamps = []
-        for i in range(5):
-            broker.write("test_queue", f"message_{i}")
-            # Get the timestamp from the database
-            rows = list(
-                broker._runner.run(
-                    "SELECT ts FROM messages WHERE queue = ? ORDER BY ts DESC LIMIT 1",
-                    ("test_queue",),
-                    fetch=True,
-                ),
+        try:
+            # Add messages at different times
+            timestamps = []
+            for i in range(5):
+                broker.write("test_queue", f"message_{i}")
+                # Get the timestamp from the database
+                rows = list(
+                    broker._runner.run(
+                        "SELECT ts FROM messages WHERE queue = ? ORDER BY ts DESC LIMIT 1",
+                        ("test_queue",),
+                        fetch=True,
+                    ),
+                )
+                timestamps.append(rows[0][0])
+                time.sleep(0.01)  # Ensure different timestamps
+
+            handler_calls = []
+
+            def handler(msg, ts) -> None:
+                handler_calls.append((msg, ts))
+
+            # Create watcher with last_seen_ts
+            watcher = InstrumentedQueueWatcher(
+                db_path, "test_queue", handler, peek=True
             )
-            timestamps.append(rows[0][0])
-            time.sleep(0.01)  # Ensure different timestamps
+            watcher._last_seen_ts = timestamps[2]  # Should only see messages 3 and 4
 
-        handler_calls = []
+            db = broker
 
-        def handler(msg, ts) -> None:
-            handler_calls.append((msg, ts))
+            # Pre-check should find messages
+            assert watcher._has_pending_messages(db) is True
 
-        # Create watcher with last_seen_ts
-        watcher = InstrumentedQueueWatcher(db_path, "test_queue", handler, peek=True)
-        watcher._last_seen_ts = timestamps[2]  # Should only see messages 3 and 4
+            # Process messages
+            thread = watcher.run_in_thread()
 
-        db = broker
+            # Wait for messages to be processed
+            assert wait_for_count(
+                lambda: len(handler_calls), expected_count=2, timeout=2.0
+            )
 
-        # Pre-check should find messages
-        assert watcher._has_pending_messages(db) is True
+            watcher.stop()
+            thread.join(timeout=1.0)
 
-        # Process messages
-        thread = watcher.run_in_thread()
-
-        # Wait for messages to be processed
-        assert wait_for_count(lambda: len(handler_calls), expected_count=2, timeout=2.0)
-
-        watcher.stop()
-        thread.join(timeout=1.0)
-
-        # Should only have processed messages after timestamp
-        assert len(handler_calls) == 2
-        assert handler_calls[0][0] == "message_3"
-        assert handler_calls[1][0] == "message_4"
+            # Should only have processed messages after timestamp
+            assert len(handler_calls) == 2
+            assert handler_calls[0][0] == "message_3"
+            assert handler_calls[1][0] == "message_4"
+        finally:
+            broker.close()
 
 
 def test_disable_pre_check_via_env() -> None:
     """Test disabling pre-check via environment variable."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        BrokerDB(db_path)
+        broker = BrokerDB(db_path)
 
-        handler_calls = []
+        try:
+            handler_calls = []
 
-        def handler(msg, ts) -> None:
-            handler_calls.append((msg, ts))
+            def handler(msg, ts) -> None:
+                handler_calls.append((msg, ts))
 
-        # Import load_config to get the default config
-        from simplebroker._constants import load_config
+            # Import load_config to get the default config
+            from simplebroker._constants import load_config
 
-        # Get the default config
-        default_config = load_config()
+            # Get the default config
+            default_config = load_config()
 
-        # Test with skip_idle_check = True by patching the config
-        config_with_skip = default_config.copy()
-        config_with_skip["BROKER_SKIP_IDLE_CHECK"] = True
+            # Test with skip_idle_check = True by patching the config
+            config_with_skip = default_config.copy()
+            config_with_skip["BROKER_SKIP_IDLE_CHECK"] = True
 
-        with patch("simplebroker.watcher._config", config_with_skip):
-            watcher = InstrumentedQueueWatcher(db_path, "empty_queue", handler)
+            with patch("simplebroker.watcher._config", config_with_skip):
+                watcher = InstrumentedQueueWatcher(db_path, "empty_queue", handler)
 
-            # Pre-check should be disabled
-            assert watcher._skip_idle_check is True
+                # Pre-check should be disabled
+                assert watcher._skip_idle_check is True
 
-            # When skip_idle_check is True, pre-check should be skipped in main loop
+                # When skip_idle_check is True, pre-check should be skipped in main loop
 
-            # Watcher should still try to drain even with no messages
-            watcher._drain_queue()
-            assert watcher.metrics.drain_calls == 1
+                # Watcher should still try to drain even with no messages
+                watcher._drain_queue()
+                assert watcher.metrics.drain_calls == 1
 
-        # Test with skip_idle_check = False (default)
-        config_no_skip = default_config.copy()
-        config_no_skip["BROKER_SKIP_IDLE_CHECK"] = False
+            # Test with skip_idle_check = False (default)
+            config_no_skip = default_config.copy()
+            config_no_skip["BROKER_SKIP_IDLE_CHECK"] = False
 
-        with patch("simplebroker.watcher._config", config_no_skip):
-            watcher2 = InstrumentedQueueWatcher(db_path, "empty_queue2", handler)
+            with patch("simplebroker.watcher._config", config_no_skip):
+                watcher2 = InstrumentedQueueWatcher(db_path, "empty_queue2", handler)
 
-            # Pre-check should be enabled
-            assert watcher2._skip_idle_check is False
+                # Pre-check should be enabled
+                assert watcher2._skip_idle_check is False
+        finally:
+            broker.close()
 
 
 def test_concurrent_pre_check_safety() -> None:
@@ -383,43 +409,46 @@ def test_concurrent_pre_check_safety() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        processed_messages = []
-        lock = threading.Lock()
+        try:
+            processed_messages = []
+            lock = threading.Lock()
 
-        def handler(msg, ts) -> None:
-            with lock:
-                processed_messages.append(msg)
+            def handler(msg, ts) -> None:
+                with lock:
+                    processed_messages.append(msg)
 
-        # Create multiple watchers on same queue
-        watchers = []
-        for _ in range(5):
-            w = InstrumentedQueueWatcher(db_path, "shared_queue", handler)
-            watchers.append(w)
-            w.run_in_thread()
+            # Create multiple watchers on same queue
+            watchers = []
+            for _ in range(5):
+                w = InstrumentedQueueWatcher(db_path, "shared_queue", handler)
+                watchers.append(w)
+                w.run_in_thread()
 
-        time.sleep(0.2)
+            time.sleep(0.2)
 
-        # Rapidly add messages
-        expected_messages = []
-        for i in range(50):
-            msg = f"message_{i}"
-            expected_messages.append(msg)
-            broker.write("shared_queue", msg)
-            time.sleep(0.001)  # Small delay to spread writes
+            # Rapidly add messages
+            expected_messages = []
+            for i in range(50):
+                msg = f"message_{i}"
+                expected_messages.append(msg)
+                broker.write("shared_queue", msg)
+                time.sleep(0.001)  # Small delay to spread writes
 
-        # Wait for all messages to be processed
-        assert wait_for_count(
-            lambda: len(processed_messages),
-            expected_count=50,
-            timeout=5.0,
-        )
+            # Wait for all messages to be processed
+            assert wait_for_count(
+                lambda: len(processed_messages),
+                expected_count=50,
+                timeout=5.0,
+            )
 
-        # All messages should be processed exactly once
-        assert sorted(processed_messages) == sorted(expected_messages)
+            # All messages should be processed exactly once
+            assert sorted(processed_messages) == sorted(expected_messages)
 
-        # Cleanup
-        for w in watchers:
-            w.stop()
+            # Cleanup
+            for w in watchers:
+                w.stop()
+        finally:
+            broker.close()
 
 
 def test_metrics_collection() -> None:
@@ -428,40 +457,43 @@ def test_metrics_collection() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        metrics = WatcherMetrics("test_queue")
+        try:
+            metrics = WatcherMetrics("test_queue")
 
-        def handler(msg, ts) -> None:
-            pass
+            def handler(msg, ts) -> None:
+                pass
 
-        watcher = InstrumentedQueueWatcher(
-            db_path,
-            "test_queue",
-            handler,
-            metrics=metrics,
-        )
+            watcher = InstrumentedQueueWatcher(
+                db_path,
+                "test_queue",
+                handler,
+                metrics=metrics,
+            )
 
-        # Process some messages
-        for i in range(5):
-            broker.write("test_queue", f"message_{i}")
+            # Process some messages
+            for i in range(5):
+                broker.write("test_queue", f"message_{i}")
 
-        thread = watcher.run_in_thread()
+            thread = watcher.run_in_thread()
 
-        # Wait for messages to be processed
-        assert wait_for_count(
-            lambda: metrics.messages_processed,
-            expected_count=5,
-            timeout=2.0,
-        )
+            # Wait for messages to be processed
+            assert wait_for_count(
+                lambda: metrics.messages_processed,
+                expected_count=5,
+                timeout=2.0,
+            )
 
-        watcher.stop()
-        thread.join(timeout=1.0)
+            watcher.stop()
+            thread.join(timeout=1.0)
 
-        # Check metrics
-        assert metrics.messages_processed == 5
-        assert metrics.wake_ups > 0
-        # Note: Efficiency assertion removed as it depends on implementation
-        assert metrics.pre_check_calls > 0
-        assert metrics.drain_calls > 0
+            # Check metrics
+            assert metrics.messages_processed == 5
+            assert metrics.wake_ups > 0
+            # Note: Efficiency assertion removed as it depends on implementation
+            assert metrics.pre_check_calls > 0
+            assert metrics.drain_calls > 0
+        finally:
+            broker.close()
 
 
 if __name__ == "__main__":

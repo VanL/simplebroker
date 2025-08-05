@@ -174,49 +174,52 @@ def test_metrics_collection_basic() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        metrics = MetricsCollector()
-        processed = []
+        try:
+            metrics = MetricsCollector()
+            processed = []
 
-        def handler(msg, ts) -> None:
-            processed.append(msg)
-            time.sleep(0.01)  # Simulate processing time
+            def handler(msg, ts) -> None:
+                processed.append(msg)
+                time.sleep(0.01)  # Simulate processing time
 
-        watcher = MonitoredQueueWatcher(
-            db_path,
-            "test_queue",
-            handler,
-            metrics_collector=metrics,
-        )
+            watcher = MonitoredQueueWatcher(
+                db_path,
+                "test_queue",
+                handler,
+                metrics_collector=metrics,
+            )
 
-        # Process some messages
-        for i in range(10):
-            broker.write("test_queue", f"message_{i}")
+            # Process some messages
+            for i in range(10):
+                broker.write("test_queue", f"message_{i}")
 
-        thread = watcher.run_in_thread()
+            thread = watcher.run_in_thread()
 
-        # Wait for all messages to be processed
-        assert wait_for_count(
-            lambda: metrics.get_stats()["messages_processed"],
-            expected_count=10,
-            timeout=2.0,
-        )
+            # Wait for all messages to be processed
+            assert wait_for_count(
+                lambda: metrics.get_stats()["messages_processed"],
+                expected_count=10,
+                timeout=2.0,
+            )
 
-        watcher.stop()
-        thread.join(timeout=1.0)
+            watcher.stop()
+            thread.join(timeout=1.0)
 
-        # Check metrics
-        stats = metrics.get_stats()
+            # Check metrics
+            stats = metrics.get_stats()
 
-        assert stats["messages_processed"] == 10
-        assert stats["total_wake_ups"] > 0
-        # Note: Not asserting on efficiency as it depends on implementation
-        assert stats["throughput_per_sec"] > 0
+            assert stats["messages_processed"] == 10
+            assert stats["total_wake_ups"] > 0
+            # Note: Not asserting on efficiency as it depends on implementation
+            assert stats["throughput_per_sec"] > 0
 
-        # Check timing metrics
-        assert "pre_check_time_us_avg" in stats
-        assert stats["pre_check_time_us_avg"] < 1000  # < 1ms
-        assert "handler_time_ms_avg" in stats
-        assert stats["handler_time_ms_avg"] > 5  # Should reflect sleep
+            # Check timing metrics
+            assert "pre_check_time_us_avg" in stats
+            assert stats["pre_check_time_us_avg"] < 1000  # < 1ms
+            assert "handler_time_ms_avg" in stats
+            assert stats["handler_time_ms_avg"] > 5  # Should reflect sleep
+        finally:
+            broker.close()
 
 
 def test_metrics_efficiency_tracking() -> None:
@@ -225,57 +228,60 @@ def test_metrics_efficiency_tracking() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        # Test scenario 1: All empty wakes
-        metrics1 = MetricsCollector()
+        try:
+            # Test scenario 1: All empty wakes
+            metrics1 = MetricsCollector()
 
-        def handler(msg, ts) -> None:
-            pass
+            def handler(msg, ts) -> None:
+                pass
 
-        watcher1 = MonitoredQueueWatcher(
-            db_path,
-            "empty_queue",
-            handler,
-            metrics_collector=metrics1,
-            max_interval=0.01,
-        )
+            watcher1 = MonitoredQueueWatcher(
+                db_path,
+                "empty_queue",
+                handler,
+                metrics_collector=metrics1,
+                max_interval=0.01,
+            )
 
-        thread1 = watcher1.run_in_thread()
-        time.sleep(0.5)  # Let it poll empty queue
-        watcher1.stop()
-        thread1.join(timeout=1.0)
+            thread1 = watcher1.run_in_thread()
+            time.sleep(0.5)  # Let it poll empty queue
+            watcher1.stop()
+            thread1.join(timeout=1.0)
 
-        metrics1.get_stats()
-        # Note: Not asserting on efficiency as it depends on implementation
+            metrics1.get_stats()
+            # Note: Not asserting on efficiency as it depends on implementation
 
-        # Test scenario 2: Active queue
-        metrics2 = MetricsCollector()
-        watcher2 = MonitoredQueueWatcher(
-            db_path,
-            "active_queue",
-            handler,
-            metrics_collector=metrics2,
-            max_interval=0.01,
-        )
+            # Test scenario 2: Active queue
+            metrics2 = MetricsCollector()
+            watcher2 = MonitoredQueueWatcher(
+                db_path,
+                "active_queue",
+                handler,
+                metrics_collector=metrics2,
+                max_interval=0.01,
+            )
 
-        # Add messages continuously
-        thread2 = watcher2.run_in_thread()
-        for i in range(20):
-            broker.write("active_queue", f"message_{i}")
-            time.sleep(0.02)
+            # Add messages continuously
+            thread2 = watcher2.run_in_thread()
+            for i in range(20):
+                broker.write("active_queue", f"message_{i}")
+                time.sleep(0.02)
 
-        # Wait for messages to be processed
-        assert wait_for_count(
-            lambda: metrics2.get_stats()["messages_processed"],
-            expected_count=20,
-            timeout=2.0,
-        )
+            # Wait for messages to be processed
+            assert wait_for_count(
+                lambda: metrics2.get_stats()["messages_processed"],
+                expected_count=20,
+                timeout=2.0,
+            )
 
-        watcher2.stop()
-        thread2.join(timeout=1.0)
+            watcher2.stop()
+            thread2.join(timeout=1.0)
 
-        stats2 = metrics2.get_stats()
-        assert stats2["messages_processed"] == 20
-        # Note: Not asserting on efficiency as it depends on implementation
+            stats2 = metrics2.get_stats()
+            assert stats2["messages_processed"] == 20
+            # Note: Not asserting on efficiency as it depends on implementation
+        finally:
+            broker.close()
 
 
 def test_metrics_logging() -> None:
@@ -323,6 +329,7 @@ def test_metrics_logging() -> None:
 
         finally:
             os.environ.pop("BROKER_WATCHER_LOG_INTERVAL", None)
+            broker.close()
 
 
 def test_metrics_aggregation() -> None:
@@ -331,46 +338,49 @@ def test_metrics_aggregation() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        # Global metrics collector
-        global_metrics = MetricsCollector()
+        try:
+            # Global metrics collector
+            global_metrics = MetricsCollector()
 
-        # Create multiple watchers sharing metrics
-        num_watchers = 5
-        watchers = []
+            # Create multiple watchers sharing metrics
+            num_watchers = 5
+            watchers = []
 
-        def handler(msg, ts) -> None:
-            time.sleep(0.001)
+            def handler(msg, ts) -> None:
+                time.sleep(0.001)
 
-        for i in range(num_watchers):
-            watcher = MonitoredQueueWatcher(
-                db_path,
-                f"queue_{i}",
-                handler,
-                metrics_collector=global_metrics,
-            )
-            watchers.append(watcher)
-            watcher.run_in_thread()
+            for i in range(num_watchers):
+                watcher = MonitoredQueueWatcher(
+                    db_path,
+                    f"queue_{i}",
+                    handler,
+                    metrics_collector=global_metrics,
+                )
+                watchers.append(watcher)
+                watcher.run_in_thread()
 
-        # Let watchers run without messages to generate empty wake-ups
-        time.sleep(0.2)
+            # Let watchers run without messages to generate empty wake-ups
+            time.sleep(0.2)
 
-        # Generate activity
-        for i in range(num_watchers):
-            for j in range(10):
-                broker.write(f"queue_{i}", f"q{i}_msg_{j}")
+            # Generate activity
+            for i in range(num_watchers):
+                for j in range(10):
+                    broker.write(f"queue_{i}", f"q{i}_msg_{j}")
 
-        time.sleep(1.0)
+            time.sleep(1.0)
 
-        # Stop all watchers
-        for w in watchers:
-            w.stop()
+            # Stop all watchers
+            for w in watchers:
+                w.stop()
 
-        # Check aggregated metrics
-        stats = global_metrics.get_stats()
+            # Check aggregated metrics
+            stats = global_metrics.get_stats()
 
-        assert stats["messages_processed"] == num_watchers * 10
-        assert stats["total_wake_ups"] > stats["messages_processed"]
-        assert stats["efficiency"] > 0.5
+            assert stats["messages_processed"] == num_watchers * 10
+            assert stats["total_wake_ups"] > stats["messages_processed"]
+            assert stats["efficiency"] > 0.5
+        finally:
+            broker.close()
 
 
 def test_metrics_export_format() -> None:

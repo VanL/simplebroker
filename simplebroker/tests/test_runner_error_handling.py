@@ -22,14 +22,16 @@ class TestSQLiteRunnerErrorHandling:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             runner = SQLiteRunner(db_path)
-
-            # Create a locked database using the helper
-            with DatabaseErrorInjector.database_locked(db_path):
-                # Try to write from another connection - will get real lock error
-                with pytest.raises(OperationalError, match="database is locked"):
-                    # Use a short timeout to trigger the error quickly
-                    runner._timeout = 0.01
-                    list(runner.run("CREATE TABLE test (id INTEGER)", fetch=False))
+            try:
+                # Create a locked database using the helper
+                with DatabaseErrorInjector.database_locked(db_path):
+                    # Try to write from another connection - will get real lock error
+                    with pytest.raises(OperationalError, match="database is locked"):
+                        # Use a short timeout to trigger the error quickly
+                        runner._timeout = 0.01
+                        list(runner.run("CREATE TABLE test (id INTEGER)", fetch=False))
+            finally:
+                runner.close()
 
     def test_run_integrity_error_real(self):
         """Test that real sqlite3.IntegrityError is converted to IntegrityError."""
@@ -40,56 +42,63 @@ class TestSQLiteRunnerErrorHandling:
             DatabaseErrorInjector.create_constraint_violation(db_path)
 
             runner = SQLiteRunner(db_path)
-
-            # Try to violate PRIMARY KEY constraint - will get real integrity error
-            with pytest.raises(IntegrityError, match="UNIQUE constraint failed"):
-                list(
-                    runner.run(
-                        "INSERT INTO test_table (id, value) VALUES (1, 'duplicate')",
-                        fetch=False,
+            try:
+                # Try to violate PRIMARY KEY constraint - will get real integrity error
+                with pytest.raises(IntegrityError, match="UNIQUE constraint failed"):
+                    list(
+                        runner.run(
+                            "INSERT INTO test_table (id, value) VALUES (1, 'duplicate')",
+                            fetch=False,
+                        )
                     )
-                )
+            finally:
+                runner.close()
 
     def test_run_data_error_real(self):
         """Test that real sqlite3.DataError is converted to DataError."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             runner = SQLiteRunner(db_path)
-
-            # Create a table with strict typing
-            list(
-                runner.run(
-                    """
-                CREATE TABLE strict_table (
-                    id INTEGER PRIMARY KEY,
-                    int_col INTEGER NOT NULL CHECK(typeof(int_col) = 'integer')
-                )
-            """,
-                    fetch=False,
-                )
-            )
-
-            # Try to insert wrong data type - will get real data error
-            # SQLite is permissive, so we need to use CHECK constraint
-            with pytest.raises(IntegrityError, match="CHECK constraint failed"):
+            try:
+                # Create a table with strict typing
                 list(
                     runner.run(
-                        "INSERT INTO strict_table (int_col) VALUES ('not_an_int')",
+                        """
+                    CREATE TABLE strict_table (
+                        id INTEGER PRIMARY KEY,
+                        int_col INTEGER NOT NULL CHECK(typeof(int_col) = 'integer')
+                    )
+                """,
                         fetch=False,
                     )
                 )
+
+                # Try to insert wrong data type - will get real data error
+                # SQLite is permissive, so we need to use CHECK constraint
+                with pytest.raises(IntegrityError, match="CHECK constraint failed"):
+                    list(
+                        runner.run(
+                            "INSERT INTO strict_table (int_col) VALUES ('not_an_int')",
+                            fetch=False,
+                        )
+                    )
+            finally:
+                runner.close()
 
     def test_begin_immediate_errors_real(self):
         """Test real error handling in begin_immediate."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             runner = SQLiteRunner(db_path)
-            runner._timeout = 0.01  # Short timeout
+            try:
+                runner._timeout = 0.01  # Short timeout
 
-            # Test real OperationalError with database lock
-            with DatabaseErrorInjector.database_locked(db_path):
-                with pytest.raises(OperationalError, match="database is locked"):
-                    runner.begin_immediate()
+                # Test real OperationalError with database lock
+                with DatabaseErrorInjector.database_locked(db_path):
+                    with pytest.raises(OperationalError, match="database is locked"):
+                        runner.begin_immediate()
+            finally:
+                runner.close()
 
     def test_commit_errors_real(self):
         """Test real error handling in commit."""
@@ -109,60 +118,66 @@ class TestSQLiteRunnerErrorHandling:
             conn.close()
 
             runner = SQLiteRunner(db_path)
-
-            # Start transaction and try to violate constraint
-            runner.begin_immediate()
             try:
-                # This won't fail yet (deferred constraint checking)
-                list(
-                    runner.run(
-                        "INSERT INTO test_commit VALUES (2, 'unique_value')",
-                        fetch=False,
+                # Start transaction and try to violate constraint
+                runner.begin_immediate()
+                try:
+                    # This won't fail yet (deferred constraint checking)
+                    list(
+                        runner.run(
+                            "INSERT INTO test_commit VALUES (2, 'unique_value')",
+                            fetch=False,
+                        )
                     )
-                )
-            except IntegrityError:
-                # If it fails immediately, that's also valid
-                pass
+                except IntegrityError:
+                    # If it fails immediately, that's also valid
+                    pass
 
-            # For disk full simulation, we keep the mock approach as it's hard to trigger
-            # a real disk full error in tests
-            with patch.object(runner, "_get_connection") as mock_conn:
-                mock_conn.return_value.commit.side_effect = sqlite3.OperationalError(
-                    "disk full"
-                )
-                with pytest.raises(OperationalError, match="disk full"):
-                    runner.commit()
+                # For disk full simulation, we keep the mock approach as it's hard to trigger
+                # a real disk full error in tests
+                with patch.object(runner, "_get_connection") as mock_conn:
+                    mock_conn.return_value.commit.side_effect = (
+                        sqlite3.OperationalError("disk full")
+                    )
+                    with pytest.raises(OperationalError, match="disk full"):
+                        runner.commit()
+            finally:
+                runner.close()
 
     def test_rollback_releases_locks(self):
         """Test that rollback properly releases database locks."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             runner = SQLiteRunner(db_path)
+            try:
+                # Start a transaction that locks the database
+                runner.begin_immediate()
+                list(runner.run("CREATE TABLE rollback_test (id INTEGER)", fetch=False))
 
-            # Start a transaction that locks the database
-            runner.begin_immediate()
-            list(runner.run("CREATE TABLE rollback_test (id INTEGER)", fetch=False))
+                # Verify another connection would be blocked
+                other_conn = sqlite3.connect(db_path, timeout=0.01)
+                with pytest.raises(
+                    sqlite3.OperationalError, match="database is locked"
+                ):
+                    other_conn.execute("CREATE TABLE other_table (id INTEGER)")
 
-            # Verify another connection would be blocked
-            other_conn = sqlite3.connect(db_path, timeout=0.01)
-            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                # Now rollback should release the lock
+                runner.rollback()
+
+                # Other connection should now succeed
                 other_conn.execute("CREATE TABLE other_table (id INTEGER)")
+                other_conn.close()
 
-            # Now rollback should release the lock
-            runner.rollback()
-
-            # Other connection should now succeed
-            other_conn.execute("CREATE TABLE other_table (id INTEGER)")
-            other_conn.close()
-
-            # Verify our transaction was rolled back (table should not exist)
-            result = list(
-                runner.run(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='rollback_test'",
-                    fetch=True,
+                # Verify our transaction was rolled back (table should not exist)
+                result = list(
+                    runner.run(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='rollback_test'",
+                        fetch=True,
+                    )
                 )
-            )
-            assert len(result) == 0  # Table should not exist after rollback
+                assert len(result) == 0  # Table should not exist after rollback
+            finally:
+                runner.close()
 
     def test_close_error_handling(self):
         """Test that close ignores errors during cleanup."""
@@ -280,13 +295,18 @@ class TestSQLiteRunnerErrorHandling:
             # Create a locked database using the helper
             with DatabaseErrorInjector.database_locked(db_path):
                 runner = SQLiteRunner(db_path)
-                runner._timeout = 0.001  # 1ms timeout - will definitely fail
+                try:
+                    runner._timeout = 0.001  # 1ms timeout - will definitely fail
 
-                # This MUST timeout because exclusive lock is held
-                with pytest.raises(OperationalError, match="database is locked"):
-                    list(
-                        runner.run("CREATE TABLE should_fail (id INTEGER)", fetch=False)
-                    )
+                    # This MUST timeout because exclusive lock is held
+                    with pytest.raises(OperationalError, match="database is locked"):
+                        list(
+                            runner.run(
+                                "CREATE TABLE should_fail (id INTEGER)", fetch=False
+                            )
+                        )
+                finally:
+                    runner.close()
 
 
 class TestSQLiteRunnerForkSafety:

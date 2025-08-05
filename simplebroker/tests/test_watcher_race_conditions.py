@@ -76,50 +76,52 @@ def test_pre_check_race_no_message_loss() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        try:
+            # Shared state for tracking
+            processed_messages = []
+            lock = threading.Lock()
 
-        # Shared state for tracking
-        processed_messages = []
-        lock = threading.Lock()
+            def handler(msg, ts) -> None:
+                with lock:
+                    processed_messages.append((msg, ts))
 
-        def handler(msg, ts) -> None:
-            with lock:
-                processed_messages.append((msg, ts))
+            # Create multiple watchers on the same queue
+            num_watchers = 5
+            watchers = []
+            for _ in range(num_watchers):
+                w = ConcurrencyTestWatcher(db_path, "shared_queue", handler)
+                watchers.append(w)
+                w.run_in_thread()
 
-        # Create multiple watchers on the same queue
-        num_watchers = 5
-        watchers = []
-        for _ in range(num_watchers):
-            w = ConcurrencyTestWatcher(db_path, "shared_queue", handler)
-            watchers.append(w)
-            w.run_in_thread()
+            time.sleep(0.2)
 
-        time.sleep(0.2)
+            # Rapidly add messages while watchers are running
+            expected_messages = []
+            for i in range(100):
+                msg = f"message_{i}"
+                expected_messages.append(msg)
+                broker.write("shared_queue", msg)
+                if i % 10 == 0:
+                    time.sleep(0.01)  # Small breaks to vary timing
 
-        # Rapidly add messages while watchers are running
-        expected_messages = []
-        for i in range(100):
-            msg = f"message_{i}"
-            expected_messages.append(msg)
-            broker.write("shared_queue", msg)
-            if i % 10 == 0:
-                time.sleep(0.01)  # Small breaks to vary timing
+            # Wait for all messages to be processed
+            time.sleep(2.0)
 
-        # Wait for all messages to be processed
-        time.sleep(2.0)
+            # Stop all watchers
+            for w in watchers:
+                w.stop()
 
-        # Stop all watchers
-        for w in watchers:
-            w.stop()
+            # Verify all messages were processed exactly once
+            processed_bodies = [msg for msg, ts in processed_messages]
+            assert sorted(processed_bodies) == sorted(expected_messages)
+            assert len(processed_bodies) == len(expected_messages)
 
-        # Verify all messages were processed exactly once
-        processed_bodies = [msg for msg, ts in processed_messages]
-        assert sorted(processed_bodies) == sorted(expected_messages)
-        assert len(processed_bodies) == len(expected_messages)
-
-        # Check for duplicates
-        msg_counts = Counter(processed_bodies)
-        for msg, count in msg_counts.items():
-            assert count == 1, f"Message {msg} processed {count} times"
+            # Check for duplicates
+            msg_counts = Counter(processed_bodies)
+            for msg, count in msg_counts.items():
+                assert count == 1, f"Message {msg} processed {count} times"
+        finally:
+            broker.close()
 
 
 def test_concurrent_writers_readers() -> None:
@@ -128,46 +130,51 @@ def test_concurrent_writers_readers() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        processed = []
-        processed_lock = threading.Lock()
+        try:
+            processed = []
+            processed_lock = threading.Lock()
 
-        def handler(msg, ts) -> None:
-            with processed_lock:
-                processed.append(msg)
+            def handler(msg, ts) -> None:
+                with processed_lock:
+                    processed.append(msg)
 
-        # Create watcher
-        watcher = ConcurrencyTestWatcher(db_path, "test_queue", handler)
-        watcher.run_in_thread()
+            # Create watcher
+            watcher = ConcurrencyTestWatcher(db_path, "test_queue", handler)
+            watcher.run_in_thread()
 
-        # Function to write messages
-        def writer_task(writer_id, count) -> None:
-            for i in range(count):
-                broker.write("test_queue", f"writer_{writer_id}_msg_{i}")
-                time.sleep(0.001)  # Small delay between writes
+            # Function to write messages
+            def writer_task(writer_id, count) -> None:
+                for i in range(count):
+                    broker.write("test_queue", f"writer_{writer_id}_msg_{i}")
+                    time.sleep(0.001)  # Small delay between writes
 
-        # Launch concurrent writers
-        num_writers = 5
-        messages_per_writer = 20
+            # Launch concurrent writers
+            num_writers = 5
+            messages_per_writer = 20
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_writers) as executor:
-            futures = []
-            for i in range(num_writers):
-                future = executor.submit(writer_task, i, messages_per_writer)
-                futures.append(future)
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=num_writers
+            ) as executor:
+                futures = []
+                for i in range(num_writers):
+                    future = executor.submit(writer_task, i, messages_per_writer)
+                    futures.append(future)
 
-            # Wait for all writers to complete
-            concurrent.futures.wait(futures)
+                # Wait for all writers to complete
+                concurrent.futures.wait(futures)
 
-        # Wait for processing
-        time.sleep(1.0)
-        watcher.stop()
+            # Wait for processing
+            time.sleep(1.0)
+            watcher.stop()
 
-        # Verify all messages were processed
-        expected_total = num_writers * messages_per_writer
-        assert len(processed) == expected_total
+            # Verify all messages were processed
+            expected_total = num_writers * messages_per_writer
+            assert len(processed) == expected_total
 
-        # Verify no duplicates
-        assert len(set(processed)) == expected_total
+            # Verify no duplicates
+            assert len(set(processed)) == expected_total
+        finally:
+            broker.close()
 
 
 def test_pre_check_drain_race() -> None:
@@ -176,48 +183,56 @@ def test_pre_check_drain_race() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        processed = []
+        try:
+            processed = []
 
-        def handler(msg, ts) -> None:
-            processed.append(msg)
+            def handler(msg, ts) -> None:
+                processed.append(msg)
 
-        # Create watcher with delay to increase race window
-        watcher = ConcurrencyTestWatcher(db_path, "test_queue", handler)
-        watcher._pre_check_delay = 0.01  # 10ms delay after pre-check
-        watcher.run_in_thread()
+            # Create watcher with delay to increase race window
+            watcher = ConcurrencyTestWatcher(db_path, "test_queue", handler)
+            watcher._pre_check_delay = 0.01  # 10ms delay after pre-check
+            watcher.run_in_thread()
 
-        # Function to consume messages from another connection
-        def consume_messages():
-            # Use a separate broker instance
-            other_broker = BrokerDB(db_path)
-            consumed = []
-            for msg in other_broker.stream_read("test_queue", all_messages=True):
-                consumed.append(msg)
-            return consumed
+            # Function to consume messages from another connection
+            def consume_messages():
+                # Use a separate broker instance
+                other_broker = BrokerDB(db_path)
+                try:
+                    consumed = []
+                    for msg in other_broker.stream_read(
+                        "test_queue", all_messages=True
+                    ):
+                        consumed.append(msg)
+                    return consumed
+                finally:
+                    other_broker.close()
 
-        # Add messages
-        for i in range(50):
-            broker.write("test_queue", f"message_{i}")
+            # Add messages
+            for i in range(50):
+                broker.write("test_queue", f"message_{i}")
 
-        # Start consuming from another thread during watcher operation
-        consume_future = concurrent.futures.ThreadPoolExecutor().submit(
-            consume_messages,
-        )
+            # Start consuming from another thread during watcher operation
+            consume_future = concurrent.futures.ThreadPoolExecutor().submit(
+                consume_messages,
+            )
 
-        # Let watcher run
-        time.sleep(1.0)
-        watcher.stop()
+            # Let watcher run
+            time.sleep(1.0)
+            watcher.stop()
 
-        # Get messages consumed by other thread
-        other_consumed = consume_future.result()
+            # Get messages consumed by other thread
+            other_consumed = consume_future.result()
 
-        # Total messages processed should equal messages written
-        total_processed = len(processed) + len(other_consumed)
-        assert total_processed == 50
+            # Total messages processed should equal messages written
+            total_processed = len(processed) + len(other_consumed)
+            assert total_processed == 50
 
-        # Verify no message was processed twice
-        all_messages = processed + other_consumed
-        assert len(set(all_messages)) == total_processed
+            # Verify no message was processed twice
+            all_messages = processed + other_consumed
+            assert len(set(all_messages)) == total_processed
+        finally:
+            broker.close()
 
 
 def test_multiple_queues_concurrent_activity() -> None:
@@ -226,67 +241,72 @@ def test_multiple_queues_concurrent_activity() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        num_queues = 10
-        messages_per_queue = 50
+        try:
+            num_queues = 10
+            messages_per_queue = 50
 
-        # Track processed messages per queue
-        processed_by_queue: dict[str, list[str]] = {}
-        queue_locks: dict[str, threading.Lock] = {}
+            # Track processed messages per queue
+            processed_by_queue: dict[str, list[str]] = {}
+            queue_locks: dict[str, threading.Lock] = {}
 
-        for i in range(num_queues):
-            queue = f"queue_{i}"
-            processed_by_queue[queue] = []
-            queue_locks[queue] = threading.Lock()
-
-        # Create watchers
-        watchers = []
-        for i in range(num_queues):
-            queue = f"queue_{i}"
-
-            def make_handler(q):
-                def handler(msg, ts) -> None:
-                    with queue_locks[q]:
-                        processed_by_queue[q].append(msg)
-
-                return handler
-
-            w = ConcurrencyTestWatcher(db_path, queue, make_handler(queue))
-            watchers.append(w)
-            w.run_in_thread()
-
-        # Concurrent writer function
-        def write_to_queue(queue_name, start_idx) -> None:
-            for i in range(messages_per_queue):
-                broker.write(queue_name, f"{queue_name}_msg_{start_idx + i}")
-                if i % 10 == 0:
-                    time.sleep(0.001)
-
-        # Launch concurrent writes to all queues
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_queues) as executor:
-            futures = []
             for i in range(num_queues):
                 queue = f"queue_{i}"
-                future = executor.submit(write_to_queue, queue, i * 1000)
-                futures.append(future)
+                processed_by_queue[queue] = []
+                queue_locks[queue] = threading.Lock()
 
-            concurrent.futures.wait(futures)
+            # Create watchers
+            watchers = []
+            for i in range(num_queues):
+                queue = f"queue_{i}"
 
-        # Wait for processing
-        time.sleep(2.0)
+                def make_handler(q):
+                    def handler(msg, ts) -> None:
+                        with queue_locks[q]:
+                            processed_by_queue[q].append(msg)
 
-        # Stop all watchers
-        for w in watchers:
-            w.stop()
+                    return handler
 
-        # Verify each queue processed its messages
-        for i in range(num_queues):
-            queue = f"queue_{i}"
-            messages = processed_by_queue[queue]
-            assert len(messages) == messages_per_queue
+                w = ConcurrencyTestWatcher(db_path, queue, make_handler(queue))
+                watchers.append(w)
+                w.run_in_thread()
 
-            # Verify correct messages for this queue
-            for msg in messages:
-                assert msg.startswith(f"{queue}_msg_")
+            # Concurrent writer function
+            def write_to_queue(queue_name, start_idx) -> None:
+                for i in range(messages_per_queue):
+                    broker.write(queue_name, f"{queue_name}_msg_{start_idx + i}")
+                    if i % 10 == 0:
+                        time.sleep(0.001)
+
+            # Launch concurrent writes to all queues
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=num_queues
+            ) as executor:
+                futures = []
+                for i in range(num_queues):
+                    queue = f"queue_{i}"
+                    future = executor.submit(write_to_queue, queue, i * 1000)
+                    futures.append(future)
+
+                concurrent.futures.wait(futures)
+
+            # Wait for processing
+            time.sleep(2.0)
+
+            # Stop all watchers
+            for w in watchers:
+                w.stop()
+
+            # Verify each queue processed its messages
+            for i in range(num_queues):
+                queue = f"queue_{i}"
+                messages = processed_by_queue[queue]
+                assert len(messages) == messages_per_queue
+
+                # Verify correct messages for this queue
+                for msg in messages:
+                    assert msg.startswith(f"{queue}_msg_")
+        finally:
+            broker.close()
 
 
 def test_watcher_stop_during_pre_check() -> None:
@@ -295,31 +315,34 @@ def test_watcher_stop_during_pre_check() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        processed = []
+        try:
+            processed = []
 
-        def handler(msg, ts) -> None:
-            processed.append(msg)
+            def handler(msg, ts) -> None:
+                processed.append(msg)
 
-        # Create watcher with long pre-check delay
-        watcher = ConcurrencyTestWatcher(db_path, "test_queue", handler)
-        watcher._pre_check_delay = 0.5  # 500ms delay
+            # Create watcher with long pre-check delay
+            watcher = ConcurrencyTestWatcher(db_path, "test_queue", handler)
+            watcher._pre_check_delay = 0.5  # 500ms delay
 
-        # Add messages
-        for i in range(10):
-            broker.write("test_queue", f"message_{i}")
+            # Add messages
+            for i in range(10):
+                broker.write("test_queue", f"message_{i}")
 
-        # Start watcher
-        thread = watcher.run_in_thread()
+            # Start watcher
+            thread = watcher.run_in_thread()
 
-        # Wait a bit then stop during pre-check
-        time.sleep(0.1)
-        start_stop = time.time()
-        watcher.stop(timeout=1.0)
-        stop_duration = time.time() - start_stop
+            # Wait a bit then stop during pre-check
+            time.sleep(0.1)
+            start_stop = time.time()
+            watcher.stop(timeout=1.0)
+            stop_duration = time.time() - start_stop
 
-        # Should stop quickly despite pre-check delay
-        assert stop_duration < 1.5
-        assert not thread.is_alive()
+            # Should stop quickly despite pre-check delay
+            assert stop_duration < 1.5
+            assert not thread.is_alive()
+        finally:
+            broker.close()
 
 
 def test_pre_check_with_peek_mode() -> None:
@@ -328,42 +351,47 @@ def test_pre_check_with_peek_mode() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        peek_count = 0
-        peek_lock = threading.Lock()
+        try:
+            peek_count = 0
+            peek_lock = threading.Lock()
 
-        def handler(msg, ts) -> None:
-            nonlocal peek_count
+            def handler(msg, ts) -> None:
+                nonlocal peek_count
+                with peek_lock:
+                    peek_count += 1
+
+            # Create peek watcher
+            watcher = ConcurrencyTestWatcher(
+                db_path,
+                "test_queue",
+                handler,
+                peek=True,
+                max_interval=0.01,  # Fast polling
+            )
+            watcher.run_in_thread()
+
+            # Add a message
+            broker.write("test_queue", "test_message")
+
+            # Let it run for a bit
+            time.sleep(0.5)
+
+            # In peek mode with timestamp tracking, we should see exactly one peek
+            # The watcher updates its timestamp after successful dispatch to avoid
+            # reprocessing the same message
             with peek_lock:
-                peek_count += 1
+                assert (
+                    peek_count == 1
+                )  # Should peek exactly once due to timestamp tracking
 
-        # Create peek watcher
-        watcher = ConcurrencyTestWatcher(
-            db_path,
-            "test_queue",
-            handler,
-            peek=True,
-            max_interval=0.01,  # Fast polling
-        )
-        watcher.run_in_thread()
+            # Message should still be in queue
+            messages = list(broker.read("test_queue", all_messages=True))
+            assert len(messages) == 1
+            assert messages[0] == "test_message"
 
-        # Add a message
-        broker.write("test_queue", "test_message")
-
-        # Let it run for a bit
-        time.sleep(0.5)
-
-        # In peek mode with timestamp tracking, we should see exactly one peek
-        # The watcher updates its timestamp after successful dispatch to avoid
-        # reprocessing the same message
-        with peek_lock:
-            assert peek_count == 1  # Should peek exactly once due to timestamp tracking
-
-        # Message should still be in queue
-        messages = list(broker.read("test_queue", all_messages=True))
-        assert len(messages) == 1
-        assert messages[0] == "test_message"
-
-        watcher.stop()
+            watcher.stop()
+        finally:
+            broker.close()
 
 
 def test_concurrent_pre_checks() -> None:
@@ -372,50 +400,53 @@ def test_concurrent_pre_checks() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        # Track pre-check timing
-        pre_check_times: list[float] = []
-        times_lock = threading.Lock()
+        try:
+            # Track pre-check timing
+            pre_check_times: list[float] = []
+            times_lock = threading.Lock()
 
-        class TimingWatcher(ConcurrencyTestWatcher):
-            def _has_pending_messages(self, db):
-                start = time.perf_counter()
-                result = super()._has_pending_messages(db)
-                elapsed = time.perf_counter() - start
-                with times_lock:
-                    pre_check_times.append(elapsed)
-                return result
+            class TimingWatcher(ConcurrencyTestWatcher):
+                def _has_pending_messages(self, db):
+                    start = time.perf_counter()
+                    result = super()._has_pending_messages(db)
+                    elapsed = time.perf_counter() - start
+                    with times_lock:
+                        pre_check_times.append(elapsed)
+                    return result
 
-        # Create many watchers
-        num_watchers = 20
-        watchers = []
+            # Create many watchers
+            num_watchers = 20
+            watchers = []
 
-        def handler(msg, ts) -> None:
-            pass
+            def handler(msg, ts) -> None:
+                pass
 
-        for i in range(num_watchers):
-            w = TimingWatcher(db_path, f"queue_{i}", handler)
-            watchers.append(w)
-            w.run_in_thread()
+            for i in range(num_watchers):
+                w = TimingWatcher(db_path, f"queue_{i}", handler)
+                watchers.append(w)
+                w.run_in_thread()
 
-        # Trigger concurrent pre-checks by writing to one queue
-        broker.write("queue_0", "trigger")
+            # Trigger concurrent pre-checks by writing to one queue
+            broker.write("queue_0", "trigger")
 
-        # Wait for pre-checks
-        time.sleep(0.5)
+            # Wait for pre-checks
+            time.sleep(0.5)
 
-        # Stop watchers
-        for w in watchers:
-            w.stop()
+            # Stop watchers
+            for w in watchers:
+                w.stop()
 
-        # Analyze pre-check times
-        with times_lock:
-            if pre_check_times:
-                avg_time = sum(pre_check_times) / len(pre_check_times)
-                max_time = max(pre_check_times)
+            # Analyze pre-check times
+            with times_lock:
+                if pre_check_times:
+                    avg_time = sum(pre_check_times) / len(pre_check_times)
+                    max_time = max(pre_check_times)
 
-                # Even with many concurrent pre-checks, they should be fast
-                assert avg_time < 0.002  # < 2ms average
-                assert max_time < 0.05  # < 50ms max
+                    # Even with many concurrent pre-checks, they should be fast
+                    assert avg_time < 0.002  # < 2ms average
+                    assert max_time < 0.05  # < 50ms max
+        finally:
+            broker.close()
 
 
 def test_pre_check_database_contention() -> None:
@@ -424,58 +455,61 @@ def test_pre_check_database_contention() -> None:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
 
-        processed_counts = {}
+        try:
+            processed_counts = {}
 
-        # Create watchers
-        num_watchers = 10
-        watchers = []
+            # Create watchers
+            num_watchers = 10
+            watchers = []
 
-        for i in range(num_watchers):
-            queue = f"queue_{i}"
-            processed_counts[queue] = 0
+            for i in range(num_watchers):
+                queue = f"queue_{i}"
+                processed_counts[queue] = 0
 
-            def make_handler(q):
-                def handler(msg, ts) -> None:
-                    processed_counts[q] += 1
+                def make_handler(q):
+                    def handler(msg, ts) -> None:
+                        processed_counts[q] += 1
 
-                return handler
+                    return handler
 
-            w = ConcurrencyTestWatcher(db_path, queue, make_handler(queue))
-            watchers.append(w)
-            w.run_in_thread()
+                w = ConcurrencyTestWatcher(db_path, queue, make_handler(queue))
+                watchers.append(w)
+                w.run_in_thread()
 
-        # Function to create write contention
-        def create_contention() -> None:
-            for _ in range(100):
-                # Write to random queues
-                import random
+            # Function to create write contention
+            def create_contention() -> None:
+                for _ in range(100):
+                    # Write to random queues
+                    import random
 
-                queue_idx = random.randint(0, num_watchers - 1)
-                broker.write(f"queue_{queue_idx}", "contention_message")
-                time.sleep(0.001)
+                    queue_idx = random.randint(0, num_watchers - 1)
+                    broker.write(f"queue_{queue_idx}", "contention_message")
+                    time.sleep(0.001)
 
-        # Run contention in background
-        contention_thread = threading.Thread(target=create_contention)
-        contention_thread.start()
+            # Run contention in background
+            contention_thread = threading.Thread(target=create_contention)
+            contention_thread.start()
 
-        # Let it run
-        contention_thread.join()
-        time.sleep(1.0)
+            # Let it run
+            contention_thread.join()
+            time.sleep(1.0)
 
-        # Stop watchers
-        for w in watchers:
-            w.stop()
+            # Stop watchers
+            for w in watchers:
+                w.stop()
 
-        # Verify all watchers still functioned under contention
-        total_processed = sum(processed_counts.values())
-        assert total_processed == 100  # All messages should be processed
+            # Verify all watchers still functioned under contention
+            total_processed = sum(processed_counts.values())
+            assert total_processed == 100  # All messages should be processed
 
-        # Check pre-check efficiency
-        total_pre_checks = sum(w.pre_check_count for w in watchers)
-        total_drains = sum(w.drain_count for w in watchers)
+            # Check pre-check efficiency
+            total_pre_checks = sum(w.pre_check_count for w in watchers)
+            total_drains = sum(w.drain_count for w in watchers)
 
-        # Pre-checks should prevent most empty drains
-        assert total_pre_checks > total_drains
+            # Pre-checks should prevent most empty drains
+            assert total_pre_checks > total_drains
+        finally:
+            broker.close()
 
 
 if __name__ == "__main__":

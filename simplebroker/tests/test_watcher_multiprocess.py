@@ -194,78 +194,81 @@ def test_multiprocess_single_queue() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
         broker = BrokerDB(db_path)
+        try:
+            # Create multiprocessing queues for communication
+            result_queue = multiprocessing.Queue()
+            control_queues = []
 
-        # Create multiprocessing queues for communication
-        result_queue = multiprocessing.Queue()
-        control_queues = []
+            # Start multiple watcher processes
+            num_processes = 4
+            processes = []
 
-        # Start multiple watcher processes
-        num_processes = 4
-        processes = []
+            for i in range(num_processes):
+                control_queue = multiprocessing.Queue()
+                control_queues.append(control_queue)
 
-        for i in range(num_processes):
-            control_queue = multiprocessing.Queue()
-            control_queues.append(control_queue)
+                p = multiprocessing.Process(
+                    target=watcher_process,
+                    args=(db_path, "shared_queue", result_queue, control_queue, i),
+                )
+                p.start()
+                processes.append(p)
 
-            p = multiprocessing.Process(
-                target=watcher_process,
-                args=(db_path, "shared_queue", result_queue, control_queue, i),
-            )
-            p.start()
-            processes.append(p)
+            # Wait for all processes to be ready
+            ready_count = 0
+            while ready_count < num_processes:
+                msg_type, proc_id, data = result_queue.get(timeout=5.0)
+                if msg_type == "ready":
+                    ready_count += 1
 
-        # Wait for all processes to be ready
-        ready_count = 0
-        while ready_count < num_processes:
-            msg_type, proc_id, data = result_queue.get(timeout=5.0)
-            if msg_type == "ready":
-                ready_count += 1
+            # Write messages
+            num_messages = 100
+            for i in range(num_messages):
+                broker.write("shared_queue", f"message_{i}")
 
-        # Write messages
-        num_messages = 100
-        for i in range(num_messages):
-            broker.write("shared_queue", f"message_{i}")
+            # Collect processed messages
+            processed_messages = []
+            timeout_start = time.time()
 
-        # Collect processed messages
-        processed_messages = []
-        timeout_start = time.time()
+            while (
+                len(processed_messages) < num_messages
+                and time.time() - timeout_start < 10
+            ):
+                try:
+                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    if msg_type == "message":
+                        processed_messages.append((proc_id, data))
+                except queue.Empty:
+                    continue
 
-        while (
-            len(processed_messages) < num_messages and time.time() - timeout_start < 10
-        ):
-            try:
-                msg_type, proc_id, data = result_queue.get(timeout=0.1)
-                if msg_type == "message":
-                    processed_messages.append((proc_id, data))
-            except queue.Empty:
-                continue
+            # Stop all processes
+            for control_queue in control_queues:
+                control_queue.put("stop")
 
-        # Stop all processes
-        for control_queue in control_queues:
-            control_queue.put("stop")
+            # Wait for processes to finish
+            for p in processes:
+                p.join(timeout=5.0)
+                if p.is_alive():
+                    p.terminate()
+                    p.join()
 
-        # Wait for processes to finish
-        for p in processes:
-            p.join(timeout=5.0)
-            if p.is_alive():
-                p.terminate()
-                p.join()
+            # Verify all messages were processed
+            message_bodies = [msg for _, msg in processed_messages]
+            assert len(message_bodies) == num_messages
+            # Order is not guaranteed with multiple consumers, just verify all messages present
+            assert set(message_bodies) == {f"message_{i}" for i in range(num_messages)}
 
-        # Verify all messages were processed
-        message_bodies = [msg for _, msg in processed_messages]
-        assert len(message_bodies) == num_messages
-        # Order is not guaranteed with multiple consumers, just verify all messages present
-        assert set(message_bodies) == {f"message_{i}" for i in range(num_messages)}
+            # Check distribution across processes
+            process_counts = {}
+            for proc_id, _ in processed_messages:
+                process_counts[proc_id] = process_counts.get(proc_id, 0) + 1
 
-        # Check distribution across processes
-        process_counts = {}
-        for proc_id, _ in processed_messages:
-            process_counts[proc_id] = process_counts.get(proc_id, 0) + 1
-
-        # At least one process should have processed messages
-        # Note: With competitive consumption, there's no guarantee all processes get work
-        assert len(process_counts) >= 1
-        assert sum(process_counts.values()) == num_messages
+            # At least one process should have processed messages
+            # Note: With competitive consumption, there's no guarantee all processes get work
+            assert len(process_counts) >= 1
+            assert sum(process_counts.values()) == num_messages
+        finally:
+            broker.close()
 
 
 def test_multiprocess_separate_queues() -> None:
@@ -274,66 +277,69 @@ def test_multiprocess_separate_queues() -> None:
         db_path = str(Path(tmpdir) / "test.db")
         broker = BrokerDB(db_path)
 
-        num_processes = 5
-        messages_per_queue = 20
+        try:
+            num_processes = 5
+            messages_per_queue = 20
 
-        # Create communication queues
-        result_queue = multiprocessing.Queue()
-        control_queues = []
-        processes = []
+            # Create communication queues
+            result_queue = multiprocessing.Queue()
+            control_queues = []
+            processes = []
 
-        # Start processes, each watching its own queue
-        for i in range(num_processes):
-            control_queue = multiprocessing.Queue()
-            control_queues.append(control_queue)
+            # Start processes, each watching its own queue
+            for i in range(num_processes):
+                control_queue = multiprocessing.Queue()
+                control_queues.append(control_queue)
 
-            p = multiprocessing.Process(
-                target=watcher_process,
-                args=(db_path, f"queue_{i}", result_queue, control_queue, i),
-            )
-            p.start()
-            processes.append(p)
+                p = multiprocessing.Process(
+                    target=watcher_process,
+                    args=(db_path, f"queue_{i}", result_queue, control_queue, i),
+                )
+                p.start()
+                processes.append(p)
 
-        # Wait for ready
-        ready_count = 0
-        while ready_count < num_processes:
-            msg_type, proc_id, data = result_queue.get(timeout=5.0)
-            if msg_type == "ready":
-                ready_count += 1
+            # Wait for ready
+            ready_count = 0
+            while ready_count < num_processes:
+                msg_type, proc_id, data = result_queue.get(timeout=5.0)
+                if msg_type == "ready":
+                    ready_count += 1
 
-        # Write messages to each queue
-        for i in range(num_processes):
-            for j in range(messages_per_queue):
-                broker.write(f"queue_{i}", f"queue_{i}_msg_{j}")
+            # Write messages to each queue
+            for i in range(num_processes):
+                for j in range(messages_per_queue):
+                    broker.write(f"queue_{i}", f"queue_{i}_msg_{j}")
 
-        # Collect results
-        process_message_counts = dict.fromkeys(range(num_processes), 0)
-        timeout_start = time.time()
-        expected_total = num_processes * messages_per_queue
-        total_collected = 0
+            # Collect results
+            process_message_counts = dict.fromkeys(range(num_processes), 0)
+            timeout_start = time.time()
+            expected_total = num_processes * messages_per_queue
+            total_collected = 0
 
-        while total_collected < expected_total and time.time() - timeout_start < 10:
-            try:
-                msg_type, proc_id, data = result_queue.get(timeout=0.1)
-                if msg_type == "message":
-                    process_message_counts[proc_id] += 1
-                    total_collected += 1
-            except queue.Empty:
-                continue
+            while total_collected < expected_total and time.time() - timeout_start < 10:
+                try:
+                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    if msg_type == "message":
+                        process_message_counts[proc_id] += 1
+                        total_collected += 1
+                except queue.Empty:
+                    continue
 
-        # Stop processes
-        for control_queue in control_queues:
-            control_queue.put("stop")
+            # Stop processes
+            for control_queue in control_queues:
+                control_queue.put("stop")
 
-        for p in processes:
-            p.join(timeout=5.0)
-            if p.is_alive():
-                p.terminate()
-                p.join()
+            for p in processes:
+                p.join(timeout=5.0)
+                if p.is_alive():
+                    p.terminate()
+                    p.join()
 
-        # Each process should have processed exactly its queue's messages
-        for i in range(num_processes):
-            assert process_message_counts[i] == messages_per_queue
+            # Each process should have processed exactly its queue's messages
+            for i in range(num_processes):
+                assert process_message_counts[i] == messages_per_queue
+        finally:
+            broker.close()
 
 
 def test_multiprocess_thundering_herd() -> None:
@@ -522,67 +528,70 @@ def test_multiprocess_database_locking() -> None:
         db_path = str(Path(tmpdir) / "test.db")
         broker = BrokerDB(db_path)
 
-        # Start multiple processes on same queue to create contention
-        num_processes = 5
-        result_queue = multiprocessing.Queue()
-        control_queues = []
-        processes = []
+        try:
+            # Start multiple processes on same queue to create contention
+            num_processes = 5
+            result_queue = multiprocessing.Queue()
+            control_queues = []
+            processes = []
 
-        for i in range(num_processes):
-            control_queue = multiprocessing.Queue()
-            control_queues.append(control_queue)
+            for i in range(num_processes):
+                control_queue = multiprocessing.Queue()
+                control_queues.append(control_queue)
 
-            p = multiprocessing.Process(
-                target=lock_test_process,
-                args=(db_path, "shared_queue", result_queue, control_queue, i),
-            )
-            p.start()
-            processes.append(p)
+                p = multiprocessing.Process(
+                    target=lock_test_process,
+                    args=(db_path, "shared_queue", result_queue, control_queue, i),
+                )
+                p.start()
+                processes.append(p)
 
-        # Wait for ready
-        ready_count = 0
-        while ready_count < num_processes:
-            msg_type, proc_id, data = result_queue.get(timeout=5.0)
-            if msg_type == "ready":
-                ready_count += 1
+            # Wait for ready
+            ready_count = 0
+            while ready_count < num_processes:
+                msg_type, proc_id, data = result_queue.get(timeout=5.0)
+                if msg_type == "ready":
+                    ready_count += 1
 
-        # Create high write load
-        for i in range(100):
-            broker.write("shared_queue", f"message_{i}")
-            time.sleep(0.01)
+            # Create high write load
+            for i in range(100):
+                broker.write("shared_queue", f"message_{i}")
+                time.sleep(0.01)
 
-        # Let them run
-        time.sleep(2.0)
+            # Let them run
+            time.sleep(2.0)
 
-        # Stop all
-        for control_queue in control_queues:
-            control_queue.put("stop")
+            # Stop all
+            for control_queue in control_queues:
+                control_queue.put("stop")
 
-        # Collect lock stats
-        lock_stats = []
-        for _ in range(num_processes):
-            try:
-                msg_type, proc_id, data = result_queue.get(timeout=2.0)
-                if msg_type == "lock_stats":
-                    lock_stats.append(data)
-            except queue.Empty:
-                pass
+            # Collect lock stats
+            lock_stats = []
+            for _ in range(num_processes):
+                try:
+                    msg_type, proc_id, data = result_queue.get(timeout=2.0)
+                    if msg_type == "lock_stats":
+                        lock_stats.append(data)
+                except queue.Empty:
+                    pass
 
-        # Clean up processes
-        for p in processes:
-            p.join(timeout=5.0)
-            if p.is_alive():
-                p.terminate()
-                p.join()
+            # Clean up processes
+            for p in processes:
+                p.join(timeout=5.0)
+                if p.is_alive():
+                    p.terminate()
+                    p.join()
 
-        # With pre-check optimization, lock contention should be minimal
-        if lock_stats:
-            total_attempts = sum(s["attempts"] for s in lock_stats)
-            total_failures = sum(s["failures"] for s in lock_stats)
-            overall_failure_rate = total_failures / max(1, total_attempts)
+            # With pre-check optimization, lock contention should be minimal
+            if lock_stats:
+                total_attempts = sum(s["attempts"] for s in lock_stats)
+                total_failures = sum(s["failures"] for s in lock_stats)
+                overall_failure_rate = total_failures / max(1, total_attempts)
 
-            # Failure rate should be low with proper implementation
-            assert overall_failure_rate < 0.3  # Less than 30% lock failures
+                # Failure rate should be low with proper implementation
+                assert overall_failure_rate < 0.3  # Less than 30% lock failures
+        finally:
+            broker.close()
 
 
 if __name__ == "__main__":
