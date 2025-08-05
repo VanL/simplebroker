@@ -4,8 +4,8 @@ import signal
 import sys
 import time
 
-from tests.conftest import managed_subprocess
-from tests.helpers.timestamp_validation import validate_timestamp
+from .conftest import managed_subprocess
+from .helpers.timestamp_validation import validate_timestamp
 
 
 def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages=None):
@@ -71,7 +71,7 @@ class TestWatchCommand:
     def test_watch_basic(self, workdir):
         """Test basic watch functionality."""
         # Write a message
-        from tests.conftest import run_cli
+        from .conftest import run_cli
 
         rc, out, err = run_cli("write", "watchtest", "hello", cwd=workdir)
         assert rc == 0
@@ -85,7 +85,7 @@ class TestWatchCommand:
 
     def test_watch_sigint_handling(self, workdir):
         """Test that watch command handles SIGINT gracefully."""
-        from tests.conftest import run_cli
+        from .conftest import run_cli
 
         # Write initial message
         rc, out, err = run_cli("write", "siginttest", "message1", cwd=workdir)
@@ -127,7 +127,7 @@ class TestWatchCommand:
 
     def test_watch_peek_mode(self, workdir):
         """Test watch in peek mode doesn't consume messages."""
-        from tests.conftest import run_cli
+        from .conftest import run_cli
 
         # Write a message
         rc, out, err = run_cli("write", "peektest", "peekmsg", cwd=workdir)
@@ -156,7 +156,7 @@ class TestWatchCommand:
     def test_watch_json_output(self, workdir):
         """Test watch with JSON output format."""
 
-        from tests.conftest import run_cli
+        from .conftest import run_cli
 
         # Write a message
         rc, out, err = run_cli("write", "jsontest", "test message", cwd=workdir)
@@ -182,7 +182,7 @@ class TestWatchCommand:
 
     def test_watch_json_includes_timestamps(self, workdir):
         """Test that watch --json includes timestamps by default."""
-        from tests.conftest import run_cli
+        from .conftest import run_cli
 
         # Write a message to the queue
         rc, out, err = run_cli("write", "timestamptest", "initial message", cwd=workdir)
@@ -237,7 +237,7 @@ class TestWatchCommand:
 
     def test_watch_continuous_messages(self, workdir):
         """Test watch continues to process new messages."""
-        from tests.conftest import run_cli
+        from .conftest import run_cli
 
         # Start watch first (empty queue)
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "continuous"]

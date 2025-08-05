@@ -209,7 +209,7 @@ class TestQueueWatcher(WatcherTestBase):
 
     def test_graceful_shutdown_sigint(self, temp_db, tmp_path):
         """Test graceful shutdown via SIGINT using subprocess."""
-        from tests.conftest import managed_subprocess
+        from .conftest import managed_subprocess
 
         # This test uses a subprocess to properly test SIGINT handling
         # without interfering with the test runner
@@ -291,7 +291,7 @@ class TestQueueWatcher(WatcherTestBase):
         # Use a subprocess to test signal handler installation properly
         import textwrap
 
-        from tests.conftest import run_subprocess
+        from .conftest import run_subprocess
 
         # Create a test script that verifies signal handler installation
         test_script = tmp_path / "test_signal_install.py"

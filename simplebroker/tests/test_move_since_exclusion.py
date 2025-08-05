@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tests.conftest import managed_subprocess
+from .conftest import managed_subprocess
 
 
 def test_move_since_mutual_exclusion(tmp_path: Path) -> None:

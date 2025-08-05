@@ -17,13 +17,13 @@ from typing import Optional, Tuple
 import pytest
 
 # Import cleanup fixtures
-from tests.helpers.cleanup import cleanup_at_exit, cleanup_watchers
+from .helpers.cleanup import cleanup_at_exit, cleanup_watchers
 
 # Import subprocess utilities
-from tests.helpers.subprocess import ManagedProcess, managed_subprocess, run_subprocess
+from .helpers.subprocess import ManagedProcess, managed_subprocess, run_subprocess
 
 # Import watcher patching
-from tests.helpers.watcher_patch import patch_watchers
+from .helpers.watcher_patch import patch_watchers
 
 
 # --------------------------------------------------------------------------- #

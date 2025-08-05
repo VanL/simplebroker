@@ -99,7 +99,7 @@ def test_cleanup_finalizer_with_exception():
         queue._runner.close = Mock(side_effect=Exception("Test exception"))
 
         # Patch the logger to verify warning is logged
-        with patch("simplebroker.queue.logger") as mock_logger:
+        with patch("simplebroker.sbqueue.logger") as mock_logger:
             # Call the finalizer function directly
             queue._finalizer()
 
@@ -122,7 +122,7 @@ def test_cleanup_finalizer_with_none_runner():
         str(Path(tmpdir) / "test.db")
 
         # Patch the logger to verify no warning is logged
-        with patch("simplebroker.queue.logger") as mock_logger:
+        with patch("simplebroker.sbqueue.logger") as mock_logger:
             # Create the cleanup function directly
             def cleanup(runner):
                 try:

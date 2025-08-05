@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from tests.conftest import run_cli
+from .conftest import run_cli
 
 
 def test_absolute_path_in_f_flag(workdir: Path):
