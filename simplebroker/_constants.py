@@ -21,7 +21,7 @@ Usage:
 """
 
 import os
-from typing import Any, Final
+from typing import Any, Dict, Final
 
 # ==============================================================================
 # VERSION INFORMATION
@@ -148,7 +148,7 @@ class ConnectionPhase:
     """Performance settings (cache size, synchronous mode, etc.)."""
 
 
-def load_config() -> dict[str, Any]:
+def load_config() -> Dict[str, Any]:
     """Load configuration from environment variables.
 
     This function reads all SimpleBroker environment variables and returns

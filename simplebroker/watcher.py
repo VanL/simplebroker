@@ -65,24 +65,14 @@ import contextlib
 import logging
 import random
 import signal
-import sys
 import threading
 import time
 import weakref
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Callable, List, NamedTuple, cast
 
-if sys.version_info >= (3, 11):
-    from typing import Self
-else:
-    try:
-        from typing_extensions import Self
-    except ImportError:
-        # Fallback for when typing_extensions is not available
-        from typing import TypeVar
-
-        Self = TypeVar("Self", bound="QueueWatcher")
-
+# For Python 3.8 compatibility, we avoid using Self type
+# and use string forward references instead
 from ._constants import MAX_MESSAGE_SIZE, MAX_TOTAL_RETRY_TIME, load_config
 from ._exceptions import OperationalError
 from .db import BrokerDB
@@ -425,7 +415,7 @@ class BaseWatcher(ABC):
         msg = "Subclasses must implement run_in_thread"
         raise NotImplementedError(msg)
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> BaseWatcher:
         """Enter context manager - start watcher in background thread."""
         self.run_in_thread()
         return self
@@ -467,7 +457,7 @@ class SignalHandlerContext:
         self.handler = handler
         self.original_handler: Callable[[int, Any], None] | int | None = None
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> SignalHandlerContext:
         self.original_handler = signal.signal(self.signum, self.handler)
         return self
 
@@ -778,7 +768,7 @@ class QueueWatcher(BaseWatcher):
 
         self._finalizer = weakref.finalize(self, _auto_cleanup, weakref.ref(self))
 
-    def __enter__(self) -> Self:
+    def __enter__(self) -> QueueWatcher:
         """Enter the context manager and start the watcher in a background thread.
 
         This method is called when entering a `with` statement. It automatically
@@ -1002,7 +992,7 @@ class QueueWatcher(BaseWatcher):
 
         def check_func() -> bool:
             sql = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0"
-            params: list[Any] = [self._queue]
+            params: List[Any] = [self._queue]
 
             if self._last_seen_ts:
                 sql += " AND ts > ?"

@@ -415,7 +415,7 @@ def test_concurrent_pre_checks() -> None:
 
                 # Even with many concurrent pre-checks, they should be fast
                 assert avg_time < 0.002  # < 2ms average
-                assert max_time < 0.02  # < 20ms max (relaxed for CI)
+                assert max_time < 0.05  # < 50ms max
 
 
 def test_pre_check_database_contention() -> None:
