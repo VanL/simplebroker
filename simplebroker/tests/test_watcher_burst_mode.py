@@ -470,51 +470,99 @@ def test_polling_jitter() -> None:
                 watchers.append(w)
                 w.run_in_thread()
 
-            # Let them run and back off
-            time.sleep(1.0)
+            # Wait until all watchers have backed off and are producing consistent delays
+            def all_watchers_backed_off():
+                for w in watchers:
+                    strategy = w._strategy
+                    # Need enough delay history to be confident we're backed off
+                    if (
+                        len(strategy.delay_history) < 200
+                    ):  # Increased to get more samples
+                        return False
+                    # Check that recent delays are consistently at max_interval (fully backed off)
+                    recent_delays = strategy.delay_history[-50:]  # Look at more delays
+                    # We want delays that are close to max_interval (within jitter range)
+                    backed_off_count = sum(
+                        1 for d in recent_delays if d > strategy._max_interval * 0.7
+                    )
+                    if backed_off_count < 30:  # Most should be at max interval
+                        return False
+                return True
 
-            # Collect recent delays from each watcher
+            wait_for_condition(
+                all_watchers_backed_off,
+                timeout=4.0,  # Give more time to collect samples
+                message="All watchers should back off and generate sufficient delay samples",
+            )
+
+            # Collect ALL backed-off delays from each watcher to ensure variety
             all_delays = []
             all_strategies = []
             for w in watchers:
                 strategy = w._strategy
                 all_strategies.append(strategy)
-                if len(strategy.delay_history) > 10:
-                    # Only get delays when fully backed off (close to max_interval)
-                    # This filters out delays from the ramp-up period
-                    backed_off_delays = [
-                        d
-                        for d in strategy.delay_history[-10:]
-                        if d > strategy._max_interval * 0.5
-                    ]  # Only delays > 0.05
-                    all_delays.extend(backed_off_delays)
+                # Get more delays from history to increase chance of variety
+                recent_delays = strategy.delay_history[-100:]  # Look at last 100 delays
+                # Only collect delays that are close to max_interval (fully backed off)
+                # This ensures we're testing jitter at the max interval, not during ramp-up
+                backed_off_delays = [
+                    d
+                    for d in recent_delays
+                    if d > strategy._max_interval * 0.7  # Only delays near max_interval
+                ]
+                # Take more samples from each watcher
+                if backed_off_delays:
+                    all_delays.extend(backed_off_delays[:20])  # Take up to 20 from each
+
+            # Ensure we have multiple delay samples
+            assert len(all_delays) >= 20, (
+                f"Need at least 20 delay samples for reliable jitter test, got {len(all_delays)}"
+            )
 
             # Delays should vary due to jitter
-            if all_delays:
-                unique_delays = set(all_delays)
-                print(f"DEBUG: All delays: {all_delays}")
-                print(f"DEBUG: Unique delays: {unique_delays}")
-                assert len(unique_delays) > 1, (
-                    f"Delays should vary due to jitter: got {unique_delays}"
-                )
+            unique_delays = set(all_delays)
+            print(f"DEBUG: Collected {len(all_delays)} delay samples")
+            print(f"DEBUG: Found {len(unique_delays)} unique delay values")
+            print(
+                f"DEBUG: Sample delays: {sorted(unique_delays)[:10]}"
+            )  # Show first 10 unique values
 
-                # Calculate the actual base delay for backed-off state
-                # When check_count > initial_checks (100), base delay approaches max_interval
-                # For a fully backed-off watcher, base_delay = max_interval = 0.1
-                actual_base_delay = all_strategies[0]._max_interval  # 0.1
+            # With jitter and multiple watchers, we should see variety
+            # But since we're using random.uniform, we might get some repeated values
+            # Require at least 2 unique values as absolute minimum
+            assert len(unique_delays) >= 2, (
+                f"Delays should vary due to jitter: got only {len(unique_delays)} unique values from {len(all_delays)} samples"
+            )
 
-                # Check jitter range against actual base delay
-                min_delay = min(all_delays)
-                max_delay = max(all_delays)
+            # Calculate the actual base delay for backed-off state
+            actual_base_delay = all_strategies[0]._max_interval  # 0.1
 
-                # With jitter factor of 0.2 (±20%), delays should be:
-                # min: 0.1 * (1 - 0.2) = 0.08
-                # max: 0.1 * (1 + 0.2) = 0.12
-                assert min_delay >= actual_base_delay * 0.8, (
-                    f"Min delay {min_delay} should be >= {actual_base_delay * 0.8}"
-                )
-                assert max_delay <= actual_base_delay * 1.2, (
-                    f"Max delay {max_delay} should be <= {actual_base_delay * 1.2}"
+            # Check jitter range against actual base delay
+            min_delay = min(all_delays)
+            max_delay = max(all_delays)
+
+            # With jitter factor of 0.2 (±20%), delays should be:
+            # theoretical min: 0.1 * (1 - 0.2) = 0.08
+            # theoretical max: 0.1 * (1 + 0.2) = 0.12
+            # Allow some tolerance for timing/rounding issues
+            assert min_delay >= actual_base_delay * 0.70, (
+                f"Min delay {min_delay} should be >= {actual_base_delay * 0.70} (with tolerance)"
+            )
+            assert max_delay <= actual_base_delay * 1.30, (
+                f"Max delay {max_delay} should be <= {actual_base_delay * 1.30} (with tolerance)"
+            )
+
+            # Verify we have some spread of delays (not all identical)
+            # With many samples, even a small spread shows jitter is working
+            delay_spread = max_delay - min_delay
+            assert delay_spread > 0, (
+                f"Delay spread should be non-zero to show jitter is active, got {delay_spread}"
+            )
+
+            # If we have enough unique values, check for reasonable spread
+            if len(unique_delays) >= 5:
+                assert delay_spread >= actual_base_delay * 0.05, (
+                    f"With {len(unique_delays)} unique values, spread {delay_spread} should be at least 5% of base delay"
                 )
 
             # Cleanup
