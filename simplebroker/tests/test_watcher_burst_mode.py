@@ -564,16 +564,24 @@ def test_polling_jitter() -> None:
                     f"With {len(unique_delays)} unique values, spread {delay_spread} should be at least 5% of base delay"
                 )
 
-            # Close broker
-            broker.close()
-
     finally:
-        # Always clean up watchers
+        # Always clean up watchers FIRST before closing broker
         for w in watchers:
             try:
                 w.stop()
             except Exception:
                 pass  # Ignore errors during cleanup
+
+        # On Windows, add a small delay to ensure threads fully terminate
+        # and file handles are released before closing the database
+        import sys
+
+        if sys.platform == "win32":
+            time.sleep(0.2)
+
+        # Now safe to close the broker
+        if "broker" in locals():
+            broker.close()
 
         # Restore original config value
         _config["BROKER_JITTER_FACTOR"] = original_jitter
