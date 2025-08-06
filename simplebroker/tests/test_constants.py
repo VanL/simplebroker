@@ -53,15 +53,20 @@ class TestConstants:
         assert isinstance(__version__, str)
 
         # Check consistency with pyproject.toml
+        import re
         from pathlib import Path
 
-        import tomllib
-
         pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
-        with open(pyproject_path, "rb") as f:
-            pyproject = tomllib.load(f)
+        with open(pyproject_path, encoding="utf-8") as f:
+            content = f.read()
 
-        pyproject_version = pyproject["project"]["version"]
+        # Find version in pyproject.toml using regex
+        # Look for version = "x.y.z" pattern
+        match = re.search(r'^version\s*=\s*"([^"]+)"', content, re.MULTILINE)
+        if not match:
+            raise ValueError("Could not find version in pyproject.toml")
+
+        pyproject_version = match.group(1)
         assert __version__ == pyproject_version, (
             f"Version mismatch: __version__={__version__} but "
             f"pyproject.toml has version={pyproject_version}"
