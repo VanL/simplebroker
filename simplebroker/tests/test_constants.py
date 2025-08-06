@@ -49,9 +49,22 @@ class TestConstants:
     """Test that all constants are defined with expected values."""
 
     def test_version(self) -> None:
-        """Test version constant."""
+        """Test version constant is consistent with pyproject.toml."""
         assert isinstance(__version__, str)
-        assert __version__ == "2.0.1"
+        
+        # Check consistency with pyproject.toml
+        import tomllib
+        from pathlib import Path
+        
+        pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
+        with open(pyproject_path, "rb") as f:
+            pyproject = tomllib.load(f)
+        
+        pyproject_version = pyproject["project"]["version"]
+        assert __version__ == pyproject_version, (
+            f"Version mismatch: __version__={__version__} but "
+            f"pyproject.toml has version={pyproject_version}"
+        )
 
     def test_program_constants(self) -> None:
         """Test program identification constants."""
