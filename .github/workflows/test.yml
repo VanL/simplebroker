@@ -84,7 +84,7 @@ jobs:
 
     - name: Type check with mypy
       run: |
-        mypy simplebroker
+        mypy simplebroker --config-file pyproject.toml
 
   coverage:
     runs-on: ubuntu-latest
