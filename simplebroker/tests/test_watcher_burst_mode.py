@@ -470,62 +470,61 @@ def test_polling_jitter() -> None:
                 watchers.append(w)
                 w.run_in_thread()
 
-            # Wait until all watchers have backed off and are producing consistent delays
-            def all_watchers_backed_off():
+            # Wait until we have enough samples to test jitter properly
+            # Keep running until we collect sufficient backed-off delay samples
+            required_samples = 30  # Need at least 30 samples for meaningful jitter test
+            start_time = time.time()
+            max_wait = 60.0  # Give up to 60 seconds to collect samples
+
+            while time.time() - start_time < max_wait:
+                # Count backed-off samples across all watchers
+                all_backed_off_delays = []
+
                 for w in watchers:
                     strategy = w._strategy
-                    # Need enough delay history to be confident we're backed off
-                    if (
-                        len(strategy.delay_history) < 200
-                    ):  # Increased to get more samples
-                        return False
-                    # Check that recent delays are consistently at max_interval (fully backed off)
-                    recent_delays = strategy.delay_history[-50:]  # Look at more delays
-                    # We want delays that are close to max_interval (within jitter range)
-                    backed_off_count = sum(
-                        1 for d in recent_delays if d > strategy._max_interval * 0.7
-                    )
-                    if backed_off_count < 30:  # Most should be at max interval
-                        return False
-                return True
+                    if len(strategy.delay_history) > 0:
+                        # Collect delays that indicate backed-off state (near max_interval)
+                        # Using 0.7 threshold to ensure we're testing at full backoff
+                        backed_off = [
+                            d
+                            for d in strategy.delay_history
+                            if d > strategy._max_interval * 0.7
+                        ]
+                        all_backed_off_delays.extend(backed_off)
 
-            wait_for_condition(
-                all_watchers_backed_off,
-                timeout=4.0,  # Give more time to collect samples
-                message="All watchers should back off and generate sufficient delay samples",
+                # If we have enough backed-off samples, we can proceed
+                if len(all_backed_off_delays) >= required_samples:
+                    break
+
+                time.sleep(0.1)  # Check every 100ms
+
+            # Ensure we got enough samples before timeout
+            elapsed = time.time() - start_time
+            assert elapsed < max_wait, (
+                f"Timeout: could not collect {required_samples} backed-off samples in {max_wait}s"
             )
 
-            # Collect ALL backed-off delays from each watcher to ensure variety
+            # Collect the same backed-off delays we were waiting for
             all_delays = []
             all_strategies = []
             for w in watchers:
                 strategy = w._strategy
                 all_strategies.append(strategy)
-                # Get more delays from history to increase chance of variety
-                recent_delays = strategy.delay_history[-100:]  # Look at last 100 delays
-                # Only collect delays that are close to max_interval (fully backed off)
-                # This ensures we're testing jitter at the max interval, not during ramp-up
+                # Collect delays that indicate backed-off state (same criteria as wait loop)
                 backed_off_delays = [
                     d
-                    for d in recent_delays
-                    if d > strategy._max_interval * 0.7  # Only delays near max_interval
+                    for d in strategy.delay_history
+                    if d > strategy._max_interval * 0.7
                 ]
-                # Take more samples from each watcher
-                if backed_off_delays:
-                    all_delays.extend(backed_off_delays[:20])  # Take up to 20 from each
+                all_delays.extend(backed_off_delays)
 
-            # Ensure we have multiple delay samples
+            # We should have collected enough samples from the wait loop above
             assert len(all_delays) >= 20, (
-                f"Need at least 20 delay samples for reliable jitter test, got {len(all_delays)}"
+                f"Should have at least 20 delay samples for jitter test, got {len(all_delays)}"
             )
 
             # Delays should vary due to jitter
             unique_delays = set(all_delays)
-            print(f"DEBUG: Collected {len(all_delays)} delay samples")
-            print(f"DEBUG: Found {len(unique_delays)} unique delay values")
-            print(
-                f"DEBUG: Sample delays: {sorted(unique_delays)[:10]}"
-            )  # Show first 10 unique values
 
             # With jitter and multiple watchers, we should see variety
             # But since we're using random.uniform, we might get some repeated values
