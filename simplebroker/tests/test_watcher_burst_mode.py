@@ -457,8 +457,8 @@ def test_polling_jitter() -> None:
     _config["BROKER_JITTER_FACTOR"] = 0.2
 
     watchers = []
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
             db_path = Path(tmpdir) / "test.db"
             broker = BrokerDB(db_path)
 
@@ -565,29 +565,29 @@ def test_polling_jitter() -> None:
                     f"With {len(unique_delays)} unique values, spread {delay_spread} should be at least 5% of base delay"
                 )
 
-        # Cleanup watchers
-        for w in watchers:
-            try:
-                w.stop()
-                if sys.platform == "win32":
-                    time.sleep(0.5)  # Allow threads to terminate
-            except Exception:
-                pass  # Ignore errors during cleanup
-    finally:
-        # Restore original config value
-        _config["BROKER_JITTER_FACTOR"] = original_jitter
+            # Cleanup watchers
+            for w in watchers:
+                try:
+                    w.stop()
+                    if sys.platform == "win32":
+                        time.sleep(0.5)  # Allow threads to terminate
+                except Exception:
+                    pass  # Ignore errors during cleanup
+        finally:
+            # Restore original config value
+            _config["BROKER_JITTER_FACTOR"] = original_jitter
 
-        # Delete the watchers list to clean up references
-        for w in watchers:
-            del w
-        # On Windows, add a small delay to ensure threads fully terminate
-        # and file handles are released before closing the database
+            # Delete the watchers list to clean up references
+            for w in watchers:
+                del w
+            # On Windows, add a small delay to ensure threads fully terminate
+            # and file handles are released before closing the database
 
-        if sys.platform == "win32":
-            time.sleep(1)
+            if sys.platform == "win32":
+                time.sleep(1)
 
-        # Now safe to close the broker
-        broker.close()
+            # Now safe to close the broker
+            broker.close()
 
 
 def test_burst_mode_with_peek_mode(no_jitter) -> None:
