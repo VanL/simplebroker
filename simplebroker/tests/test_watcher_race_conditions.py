@@ -76,6 +76,7 @@ def test_pre_check_race_no_message_loss() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watchers = []
         try:
             # Shared state for tracking
             processed_messages = []
@@ -87,7 +88,6 @@ def test_pre_check_race_no_message_loss() -> None:
 
             # Create multiple watchers on the same queue
             num_watchers = 5
-            watchers = []
             for _ in range(num_watchers):
                 w = ConcurrencyTestWatcher(db_path, "shared_queue", handler)
                 watchers.append(w)
@@ -107,10 +107,6 @@ def test_pre_check_race_no_message_loss() -> None:
             # Wait for all messages to be processed
             time.sleep(2.0)
 
-            # Stop all watchers
-            for w in watchers:
-                w.stop()
-
             # Verify all messages were processed exactly once
             processed_bodies = [msg for msg, ts in processed_messages]
             assert sorted(processed_bodies) == sorted(expected_messages)
@@ -121,6 +117,9 @@ def test_pre_check_race_no_message_loss() -> None:
             for msg, count in msg_counts.items():
                 assert count == 1, f"Message {msg} processed {count} times"
         finally:
+            # Stop all watchers before closing broker
+            for w in watchers:
+                w.stop()
             broker.close()
 
 
@@ -129,6 +128,7 @@ def test_concurrent_writers_readers() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
 
         try:
             processed = []
@@ -138,8 +138,13 @@ def test_concurrent_writers_readers() -> None:
                 with processed_lock:
                     processed.append(msg)
 
-            # Create watcher
-            watcher = ConcurrencyTestWatcher(db_path, "test_queue", handler)
+            # Create watcher with faster polling for test reliability
+            watcher = ConcurrencyTestWatcher(
+                db_path,
+                "test_queue",
+                handler,
+                max_interval=0.01,  # Faster polling for tests
+            )
             watcher.run_in_thread()
 
             # Function to write messages
@@ -163,17 +168,28 @@ def test_concurrent_writers_readers() -> None:
                 # Wait for all writers to complete
                 concurrent.futures.wait(futures)
 
-            # Wait for processing
-            time.sleep(1.0)
-            watcher.stop()
+            # Wait for processing with timeout and checking
+            expected_total = num_writers * messages_per_writer
+            max_wait = 5.0  # Give more time on slower systems like Windows CI
+            start_time = time.time()
+
+            while time.time() - start_time < max_wait:
+                with processed_lock:
+                    if len(processed) >= expected_total:
+                        break
+                time.sleep(0.1)
 
             # Verify all messages were processed
-            expected_total = num_writers * messages_per_writer
-            assert len(processed) == expected_total
+            assert len(processed) == expected_total, (
+                f"Only processed {len(processed)} messages out of {expected_total}"
+            )
 
             # Verify no duplicates
             assert len(set(processed)) == expected_total
         finally:
+            # Ensure watcher is stopped before closing broker
+            if watcher is not None:
+                watcher.stop()
             broker.close()
 
 
@@ -182,6 +198,7 @@ def test_pre_check_drain_race() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
 
         try:
             processed = []
@@ -219,7 +236,6 @@ def test_pre_check_drain_race() -> None:
 
             # Let watcher run
             time.sleep(1.0)
-            watcher.stop()
 
             # Get messages consumed by other thread
             other_consumed = consume_future.result()
@@ -232,6 +248,9 @@ def test_pre_check_drain_race() -> None:
             all_messages = processed + other_consumed
             assert len(set(all_messages)) == total_processed
         finally:
+            # Ensure watcher is stopped before closing broker
+            if watcher is not None:
+                watcher.stop()
             broker.close()
 
 
@@ -240,6 +259,7 @@ def test_multiple_queues_concurrent_activity() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watchers = []
 
         try:
             num_queues = 10
@@ -255,7 +275,6 @@ def test_multiple_queues_concurrent_activity() -> None:
                 queue_locks[queue] = threading.Lock()
 
             # Create watchers
-            watchers = []
             for i in range(num_queues):
                 queue = f"queue_{i}"
 
@@ -304,10 +323,6 @@ def test_multiple_queues_concurrent_activity() -> None:
                     break
                 time.sleep(0.1)
 
-            # Stop all watchers
-            for w in watchers:
-                w.stop()
-
             # Verify each queue processed its messages
             for i in range(num_queues):
                 queue = f"queue_{i}"
@@ -320,6 +335,9 @@ def test_multiple_queues_concurrent_activity() -> None:
                 for msg in messages:
                     assert msg.startswith(f"{queue}_msg_")
         finally:
+            # Stop all watchers before closing broker
+            for w in watchers:
+                w.stop()
             broker.close()
 
 
@@ -328,6 +346,7 @@ def test_watcher_stop_during_pre_check() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
 
         try:
             processed = []
@@ -356,6 +375,13 @@ def test_watcher_stop_during_pre_check() -> None:
             assert stop_duration < 1.5
             assert not thread.is_alive()
         finally:
+            # Watcher already stopped in test, but ensure it's stopped
+            if (
+                watcher is not None
+                and hasattr(watcher, "_stop_event")
+                and not watcher._stop_event.is_set()
+            ):
+                watcher.stop()
             broker.close()
 
 
@@ -364,6 +390,7 @@ def test_pre_check_with_peek_mode() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
 
         try:
             peek_count = 0
@@ -402,9 +429,10 @@ def test_pre_check_with_peek_mode() -> None:
             messages = list(broker.read("test_queue", all_messages=True))
             assert len(messages) == 1
             assert messages[0] == "test_message"
-
-            watcher.stop()
         finally:
+            # Ensure watcher is stopped before closing broker
+            if watcher is not None:
+                watcher.stop()
             broker.close()
 
 
@@ -413,6 +441,7 @@ def test_concurrent_pre_checks() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watchers = []
 
         try:
             # Track pre-check timing
@@ -430,7 +459,6 @@ def test_concurrent_pre_checks() -> None:
 
             # Create many watchers
             num_watchers = 20
-            watchers = []
 
             def handler(msg, ts) -> None:
                 pass
@@ -446,10 +474,6 @@ def test_concurrent_pre_checks() -> None:
             # Wait for pre-checks
             time.sleep(0.5)
 
-            # Stop watchers
-            for w in watchers:
-                w.stop()
-
             # Analyze pre-check times
             with times_lock:
                 if pre_check_times:
@@ -460,6 +484,9 @@ def test_concurrent_pre_checks() -> None:
                     assert avg_time < 0.002  # < 2ms average
                     assert max_time < 0.05  # < 50ms max
         finally:
+            # Stop all watchers before closing broker
+            for w in watchers:
+                w.stop()
             broker.close()
 
 
@@ -468,13 +495,13 @@ def test_pre_check_database_contention() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watchers = []
 
         try:
             processed_counts = {}
 
             # Create watchers
             num_watchers = 10
-            watchers = []
 
             for i in range(num_watchers):
                 queue = f"queue_{i}"
@@ -508,10 +535,6 @@ def test_pre_check_database_contention() -> None:
             contention_thread.join()
             time.sleep(1.0)
 
-            # Stop watchers
-            for w in watchers:
-                w.stop()
-
             # Verify all watchers still functioned under contention
             total_processed = sum(processed_counts.values())
             assert total_processed == 100  # All messages should be processed
@@ -523,6 +546,9 @@ def test_pre_check_database_contention() -> None:
             # Pre-checks should prevent most empty drains
             assert total_pre_checks > total_drains
         finally:
+            # Stop all watchers before closing broker
+            for w in watchers:
+                w.stop()
             broker.close()
 
 

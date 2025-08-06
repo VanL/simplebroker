@@ -455,16 +455,16 @@ def test_polling_jitter() -> None:
     original_jitter = _config["BROKER_JITTER_FACTOR"]
     _config["BROKER_JITTER_FACTOR"] = 0.2
 
+    watchers = []
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
-            BrokerDB(db_path)
+            broker = BrokerDB(db_path)
 
             def handler(msg, ts) -> None:
                 pass
 
             # Create multiple watchers
-            watchers = []
             for i in range(5):
                 w = InstrumentedQueueWatcher(db_path, f"queue_{i}", handler)
                 watchers.append(w)
@@ -564,11 +564,17 @@ def test_polling_jitter() -> None:
                     f"With {len(unique_delays)} unique values, spread {delay_spread} should be at least 5% of base delay"
                 )
 
-            # Cleanup
-            for w in watchers:
-                w.stop()
+            # Close broker
+            broker.close()
 
     finally:
+        # Always clean up watchers
+        for w in watchers:
+            try:
+                w.stop()
+            except Exception:
+                pass  # Ignore errors during cleanup
+
         # Restore original config value
         _config["BROKER_JITTER_FACTOR"] = original_jitter
 
