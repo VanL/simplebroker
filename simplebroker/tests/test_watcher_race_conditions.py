@@ -289,8 +289,20 @@ def test_multiple_queues_concurrent_activity() -> None:
 
                 concurrent.futures.wait(futures)
 
-            # Wait for processing
-            time.sleep(2.0)
+            # Wait for processing - give more time on slower systems
+            max_wait = 10.0  # Maximum wait time
+            start_time = time.time()
+            all_done = False
+
+            while time.time() - start_time < max_wait:
+                # Check if all queues have processed their messages
+                all_done = all(
+                    len(processed_by_queue[f"queue_{i}"]) == messages_per_queue
+                    for i in range(num_queues)
+                )
+                if all_done:
+                    break
+                time.sleep(0.1)
 
             # Stop all watchers
             for w in watchers:
@@ -300,7 +312,9 @@ def test_multiple_queues_concurrent_activity() -> None:
             for i in range(num_queues):
                 queue = f"queue_{i}"
                 messages = processed_by_queue[queue]
-                assert len(messages) == messages_per_queue
+                assert len(messages) == messages_per_queue, (
+                    f"Queue {queue} only processed {len(messages)} messages, expected {messages_per_queue}"
+                )
 
                 # Verify correct messages for this queue
                 for msg in messages:

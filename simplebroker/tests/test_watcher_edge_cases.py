@@ -642,6 +642,10 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
                 # Verify handler was called
                 assert len(handler_called) == 1
                 assert handler_called[0][0] == "test message"
+
+                # Ensure watcher is stopped
+                if hasattr(watcher, "stop"):
+                    watcher.stop()
             finally:
                 db.close()
 

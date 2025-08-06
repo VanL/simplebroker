@@ -526,10 +526,12 @@ class PollingStrategy:
         base_delay = self._calculate_base_delay()
 
         if base_delay > 0:
-            # Add 10-20% jitter to prevent synchronized polling
+            # Add +/-15% jitter to prevent synchronized polling
             jitter_factor = _config["BROKER_JITTER_FACTOR"]
-            jitter = random.uniform(-jitter_factor, jitter_factor) * base_delay
-            return max(0, base_delay + jitter)
+            jittered_delay = (
+                random.uniform(-jitter_factor, jitter_factor) + 1
+            ) * base_delay
+            return max(0, jittered_delay)
 
         return base_delay
 

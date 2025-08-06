@@ -484,7 +484,11 @@ class TestEdgeCases(WatcherTestBase):
         with BrokerDB(temp_db) as db:
             db.write("empty", "finally!")
 
-        time.sleep(0.1)
+        # Wait longer on slower systems
+        for _ in range(10):  # Up to 1 second total
+            if called.is_set():
+                break
+            time.sleep(0.1)
 
         # Now should be called
         assert called.is_set()

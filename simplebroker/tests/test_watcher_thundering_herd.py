@@ -378,6 +378,9 @@ def test_disable_pre_check_via_env() -> None:
             config_with_skip = default_config.copy()
             config_with_skip["BROKER_SKIP_IDLE_CHECK"] = True
 
+            watcher = None
+            watcher2 = None
+
             with patch("simplebroker.watcher._config", config_with_skip):
                 watcher = InstrumentedQueueWatcher(db_path, "empty_queue", handler)
 
@@ -399,6 +402,18 @@ def test_disable_pre_check_via_env() -> None:
 
                 # Pre-check should be enabled
                 assert watcher2._skip_idle_check is False
+
+            # Ensure watchers are stopped if they were started
+            if watcher and hasattr(watcher, "stop"):
+                try:
+                    watcher.stop()
+                except Exception:
+                    pass
+            if watcher2 and hasattr(watcher2, "stop"):
+                try:
+                    watcher2.stop()
+                except Exception:
+                    pass
         finally:
             broker.close()
 

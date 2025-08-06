@@ -252,15 +252,15 @@ class TestSQLiteRunnerErrorHandling:
             # Create a read-only database (the helper already creates a 'test' table)
             DatabaseErrorInjector.create_readonly_database(db_path)
 
+            runner = SQLiteRunner(db_path)
             try:
-                runner = SQLiteRunner(db_path)
-
                 # Try to INSERT into read-only database (more reliable than CREATE)
                 with pytest.raises(
                     OperationalError, match="readonly|read-only|attempt to write"
                 ):
                     list(runner.run("INSERT INTO test (id) VALUES (999)", fetch=False))
             finally:
+                runner.close()
                 # Restore write permissions for cleanup
                 DatabaseErrorInjector.restore_writable(db_path)
 
@@ -273,19 +273,22 @@ class TestSQLiteRunnerErrorHandling:
             DatabaseErrorInjector.create_corrupted_database(db_path)
 
             runner = SQLiteRunner(db_path)
-
-            # Try to query corrupted database - may raise various errors
             try:
-                result = list(runner.run("PRAGMA integrity_check", fetch=True))
-                # If it doesn't raise, check that it detected corruption
-                if result and result[0][0] != "ok":
-                    # Corruption was detected
-                    assert (
-                        "corrupt" in str(result[0][0]).lower() or result[0][0] != "ok"
-                    )
-            except (OperationalError, sqlite3.DatabaseError):
-                # Corrupted database raised an error, which is expected
-                pass
+                # Try to query corrupted database - may raise various errors
+                try:
+                    result = list(runner.run("PRAGMA integrity_check", fetch=True))
+                    # If it doesn't raise, check that it detected corruption
+                    if result and result[0][0] != "ok":
+                        # Corruption was detected
+                        assert (
+                            "corrupt" in str(result[0][0]).lower()
+                            or result[0][0] != "ok"
+                        )
+                except (OperationalError, sqlite3.DatabaseError):
+                    # Corrupted database raised an error, which is expected
+                    pass
+            finally:
+                runner.close()
 
     def test_database_lock_timeout(self):
         """Test that SQLiteRunner respects timeout under lock contention."""

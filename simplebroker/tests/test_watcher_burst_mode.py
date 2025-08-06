@@ -492,7 +492,11 @@ def test_polling_jitter() -> None:
             # Delays should vary due to jitter
             if all_delays:
                 unique_delays = set(all_delays)
-                assert len(unique_delays) > 1, "Delays should vary due to jitter"
+                print(f"DEBUG: All delays: {all_delays}")
+                print(f"DEBUG: Unique delays: {unique_delays}")
+                assert len(unique_delays) > 1, (
+                    f"Delays should vary due to jitter: got {unique_delays}"
+                )
 
                 # Calculate the actual base delay for backed-off state
                 # When check_count > initial_checks (100), base delay approaches max_interval
