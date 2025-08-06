@@ -59,7 +59,7 @@ include = [
     "LICENSE",
 ]
 exclude = [
-    "tests/",
+    "simplebroker/tests/",
     "agent_history/",
     ".*",
     "*.db",
@@ -67,7 +67,7 @@ exclude = [
 
 [tool.pytest.ini_options]
 minversion = "7.0"
-testpaths = ["tests"]
+testpaths = ["simplebroker/tests"]
 addopts = "-ra -q --strict-markers -m 'not slow' -n auto --dist loadgroup"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
@@ -86,7 +86,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = "tests.*"
+module = "simplebroker.tests.*"
 ignore_errors = true
 
 [[tool.mypy.overrides]]
