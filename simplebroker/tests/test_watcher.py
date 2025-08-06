@@ -54,8 +54,8 @@ class MessageCollector:
         Returns:
             True if the expected count was reached, False if timeout
         """
-        start_time = time.time()
-        while time.time() - start_time < timeout:
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < timeout:
             with self.lock:
                 if len(self.messages) >= count:
                     return True
@@ -199,10 +199,10 @@ class TestQueueWatcher(WatcherTestBase):
             time.sleep(0.1)  # Let it start
 
             # Test graceful stop timing
-            start_time = time.time()
+            start_time = time.monotonic()
             watcher.stop()
             thread.join(timeout=2.0)
-            stop_time = time.time() - start_time
+            stop_time = time.monotonic() - start_time
 
             assert not thread.is_alive()
             assert stop_time < 2.0, f"Stop took {stop_time:.2f}s"
@@ -1000,8 +1000,8 @@ def test_context_manager_usage(temp_db):
         assert thread.is_alive()
 
         # Wait for messages to be processed
-        start_time = time.time()
-        while len(messages_received) < 3 and time.time() - start_time < 2.0:
+        start_time = time.monotonic()
+        while len(messages_received) < 3 and time.monotonic() - start_time < 2.0:
             time.sleep(0.05)
 
     # After exiting context, thread should be stopped

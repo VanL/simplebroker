@@ -125,10 +125,10 @@ def test_timestamp_performance_basic(workdir):
     db = BrokerDB(str(db_path))
 
     # Time BASIC_WRITE_COUNT writes
-    start = time.time()
+    start = time.monotonic()
     for i in range(BASIC_WRITE_COUNT):
         db.write("perf_test", f"Message {i}")
-    elapsed = time.time() - start
+    elapsed = time.monotonic() - start
 
     # Should complete within timeout
     timeout = get_timeout("basic_write_50")
@@ -200,9 +200,9 @@ def test_bulk_move_performance_5k_messages(workdir):
         run_cli("write", "perf_source", f"perfmsg{i:04d}", cwd=workdir)
 
     # Bulk move all messages
-    start_move = time.time()
+    start_move = time.monotonic()
     rc, out, _ = run_cli("move", "perf_source", "perf_dest", "--all", cwd=workdir)
-    move_time = time.time() - start_move
+    move_time = time.monotonic() - start_move
 
     assert rc == 0
     lines = out.strip().split("\n")
@@ -249,7 +249,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
 
     # First test with commit_interval=1 (exactly-once)
     messages_read = []
-    start_time = time.time()
+    start_time = time.monotonic()
 
     with BrokerDB(str(db_path)) as db:
         # Read only first LARGE_BATCH_READ_LIMIT messages then stop (simulating crash/interrupt)
@@ -266,7 +266,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
                 break
         # Generator not fully consumed - rollback should happen
 
-    elapsed = time.time() - start_time
+    elapsed = time.monotonic() - start_time
     timeout = get_timeout("large_batch_claim_rollback")
     assert elapsed < timeout, (
         f"Reading {LARGE_BATCH_READ_LIMIT} messages took too long: {elapsed:.2f}s (timeout: {timeout}s)"
@@ -287,7 +287,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
             db.write("test_queue2", f"batch{i:03d}")
 
     messages_read = []
-    start_time = time.time()
+    start_time = time.monotonic()
 
     with BrokerDB(str(db_path)) as db:
         # Read messages but simulate crash after reading some
@@ -304,7 +304,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
                 break
         # Generator not fully consumed - partial rollback should happen
 
-    elapsed = time.time() - start_time
+    elapsed = time.monotonic() - start_time
     timeout = get_timeout("at_least_once_rollback")
     assert elapsed < timeout, (
         f"Reading {SMALL_BATCH_COUNT} messages took too long: {elapsed:.2f}s (timeout: {timeout}s)"
@@ -359,11 +359,11 @@ def test_since_large_queue_performance(workdir):
 
     for since_ts, expected_count in test_points:
         # Time the query
-        start = time.time()
+        start = time.monotonic()
         rc, out, _ = run_cli(
             "peek", queue_name, "--all", "--since", str(since_ts), cwd=workdir
         )
-        elapsed = time.time() - start
+        elapsed = time.monotonic() - start
 
         assert rc == 0
         if expected_count > 0:
@@ -404,15 +404,15 @@ def test_timestamp_lookup_performance(workdir: Path):
     middle_ts = lines[num_messages // 2].split("\t")[0]
 
     # Time timestamp-based read
-    start = time.time()
+    start = time.monotonic()
     rc, out, err = run_cli("read", "perf_queue", "-m", middle_ts, cwd=workdir)
-    ts_read_time = time.time() - start
+    ts_read_time = time.monotonic() - start
     assert rc == 0
 
     # Time normal FIFO read
-    start = time.time()
+    start = time.monotonic()
     rc, out, err = run_cli("read", "perf_queue", cwd=workdir)
-    fifo_read_time = time.time() - start
+    fifo_read_time = time.monotonic() - start
     assert rc == 0
 
     # Timestamp read should be comparable to FIFO read (within 2x)
@@ -436,7 +436,7 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
 
     # Perform mixed operations concurrently
     operations = []
-    start = time.time()
+    start = time.monotonic()
 
     # Mix of different operations
     for i in range(20):
@@ -459,7 +459,7 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
                 run_cli("peek", "test_queue", "-m", timestamps[i % 10], cwd=workdir)
             )
 
-    elapsed = time.time() - start
+    elapsed = time.monotonic() - start
 
     # Should complete reasonably quickly (under 2 seconds for this workload)
     assert elapsed < get_timeout("concurrent_mixed_ops")
@@ -502,7 +502,7 @@ def test_move_performance_with_large_batches(workdir: Path):
             db.write("perf_source", f"msg{i:04d}")
 
     # Time moving all messages
-    start_time = time.time()
+    start_time = time.monotonic()
     moved_count = 0
 
     with BrokerDB(str(db_path)) as db:
@@ -512,7 +512,7 @@ def test_move_performance_with_large_batches(workdir: Path):
                 break
             moved_count += 1
 
-    move_time = time.time() - start_time
+    move_time = time.monotonic() - start_time
 
     assert moved_count == message_count
 
@@ -548,10 +548,10 @@ def test_performance_improvement_with_claims(workdir: Path):
             db.write("perf_queue", f"msg{i:04d}")
 
     # Time reading all messages
-    start_time = time.time()
+    start_time = time.monotonic()
     with BrokerDB(str(db_path)) as db:
         messages = list(db.stream_read("perf_queue", peek=False, all_messages=True))
-    read_time = time.time() - start_time
+    read_time = time.monotonic() - start_time
 
     assert len(messages) == message_count
 
@@ -601,10 +601,10 @@ def test_vacuum_batch_size_limits(workdir: Path):
     assert cursor.fetchone()[0] == message_count
 
     # Run vacuum - should handle large batch efficiently
-    start_time = time.time()
+    start_time = time.monotonic()
     with BrokerDB(str(db_path)) as db:
         db.vacuum()
-    vacuum_time = time.time() - start_time
+    vacuum_time = time.monotonic() - start_time
 
     # Verify all claimed messages removed
     cursor.execute("SELECT COUNT(*) FROM messages")
@@ -629,13 +629,13 @@ def test_write_performance_not_regressed(workdir: Path):
 
     # Measure write performance
     message_count = 1000
-    start_time = time.time()
+    start_time = time.monotonic()
 
     with BrokerDB(str(db_path)) as db:
         for i in range(message_count):
             db.write("write_perf_queue", f"msg{i:04d}")
 
-    write_time = time.time() - start_time
+    write_time = time.monotonic() - start_time
 
     # Writing should still be fast
     # Windows needs more time due to filesystem differences
@@ -685,7 +685,7 @@ def test_large_volume_move(broker, tmp_path):
         nonlocal moved_count
         moved_count += 1
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
     watcher = QueueMoveWatcher(
         broker=broker,
@@ -711,7 +711,7 @@ def test_large_volume_move(broker, tmp_path):
                 f"QueueMoveWatcher did not stop within timeout. Moved {watcher.move_count}/{num_messages} messages"
             )
 
-    elapsed = time.time() - start_time
+    elapsed = time.monotonic() - start_time
 
     # Verify all moved
     assert watcher.move_count == num_messages

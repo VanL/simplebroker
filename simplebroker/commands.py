@@ -458,7 +458,7 @@ def cmd_vacuum(db: BrokerDB) -> int:
     """Vacuum claimed messages from the database."""
     import time
 
-    start_time = time.time()
+    start_time = time.monotonic()
 
     # Count claimed messages before vacuum
     with db._lock:
@@ -473,7 +473,7 @@ def cmd_vacuum(db: BrokerDB) -> int:
     db.vacuum()
 
     # Calculate elapsed time
-    elapsed = time.time() - start_time
+    elapsed = time.monotonic() - start_time
     print(f"Vacuumed {claimed_count} claimed messages in {elapsed:.1f}s")
 
     return EXIT_SUCCESS

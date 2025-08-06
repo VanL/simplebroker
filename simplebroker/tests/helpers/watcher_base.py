@@ -171,7 +171,7 @@ class WatcherTestBase:
             watcher: The watcher to stop
             max_stop_time: Maximum acceptable stop time
         """
-        start_time = time.time()
+        start_time = time.monotonic()()
         watcher.stop()
 
         # If watcher was running in thread, wait for it

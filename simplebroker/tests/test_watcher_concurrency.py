@@ -27,7 +27,7 @@ class ConcurrentCollector:
 
     def handler(self, msg: str, ts: int) -> None:
         """Collect messages with timing info."""
-        start_time = time.time()
+        start_time = time.monotonic()
         with self.lock:
             self.messages.append((msg, ts))
             self.processing_times[msg] = start_time
@@ -431,8 +431,8 @@ class TestMixedMode(WatcherTestBase):
                 assert not t.is_alive(), "Writer thread didn't complete"
 
             # Wait for the watcher to process all messages
-            start_time = time.time()
-            while time.time() - start_time < 5.0:  # 5 second timeout
+            start_time = time.monotonic()
+            while time.monotonic() - start_time < 5.0:  # 5 second timeout
                 with lock:
                     if len(read_messages) >= 60:
                         break

@@ -52,12 +52,12 @@ class WatcherTracker:
                     logger.warning(f"Error stopping watcher: {e}")
 
             # Wait for threads to stop
-            start_time = time.time()
+            start_time = time.monotonic()
             for watcher in live_watchers:
                 if hasattr(watcher, "_strategy") and hasattr(
                     watcher._strategy, "_stop_event"
                 ):
-                    remaining = timeout - (time.time() - start_time)
+                    remaining = timeout - (time.monotonic() - start_time)
                     if remaining > 0:
                         watcher._strategy._stop_event.wait(timeout=remaining)
 

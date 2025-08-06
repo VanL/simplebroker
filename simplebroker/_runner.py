@@ -457,10 +457,10 @@ class SQLiteRunner:
         timeout: float,
     ) -> Any | None:
         """Acquire file lock with platform-specific method and timeout."""
-        start_time = time.time()
+        start_time = time.monotonic()
         lock_file = None
 
-        while time.time() - start_time < timeout:
+        while time.monotonic() - start_time < timeout:
             lock_file = self._try_acquire_lock(lock_path)
             if lock_file is not None:
                 return lock_file

@@ -425,7 +425,7 @@ class BaseWatcher(ABC):
         Raises:
             TimeoutError: If maximum retry time exceeded
         """
-        elapsed = time.time() - start_time
+        elapsed = time.monotonic() - start_time
         if elapsed > MAX_TOTAL_RETRY_TIME:
             msg = (
                 f"Watcher retry timeout exceeded ({MAX_TOTAL_RETRY_TIME}s). "
@@ -501,7 +501,7 @@ class BaseWatcher(ABC):
             max_retries: Maximum number of retry attempts
         """
         retry_count = 0
-        start_time = time.time()
+        start_time = time.monotonic()
 
         while retry_count < max_retries:
             # Check absolute timeout

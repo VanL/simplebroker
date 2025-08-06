@@ -120,13 +120,13 @@ class ManagedProcess:
         self, pattern: str, timeout: float = 5.0, stream: str = "stdout"
     ) -> bool:
         """Wait for pattern to appear in output stream."""
-        start_time = time.time()
+        start_time = time.monotonic()
         reader = self._stdout_reader if stream == "stdout" else self._stderr_reader
 
         if not reader:
             return False
 
-        while time.time() - start_time < timeout:
+        while time.monotonic() - start_time < timeout:
             output = reader.get_output()
             if pattern in output:
                 return True

@@ -22,10 +22,10 @@ def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages
     """
     import json
 
-    start = time.time()
+    start = time.monotonic()
     json_objects = []
 
-    while time.time() - start < timeout:
+    while time.monotonic() - start < timeout:
         # Get current stdout
         output = proc.stdout
         lines = output.strip().split("\n") if output else []

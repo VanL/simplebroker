@@ -161,8 +161,8 @@ def lock_test_process(
         result_queue.put(("ready", process_id, None))
 
         # Run for a fixed time
-        start_time = time.time()
-        while time.time() - start_time < 2.0:
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < 2.0:
             try:
                 command = control_queue.get(timeout=0.1)
                 if command == "stop":
@@ -228,11 +228,11 @@ def test_multiprocess_single_queue() -> None:
 
             # Collect processed messages
             processed_messages = []
-            timeout_start = time.time()
+            timeout_start = time.monotonic()
 
             while (
                 len(processed_messages) < num_messages
-                and time.time() - timeout_start < 10
+                and time.monotonic() - timeout_start < 10
             ):
                 try:
                     msg_type, proc_id, data = result_queue.get(timeout=0.1)
@@ -312,11 +312,14 @@ def test_multiprocess_separate_queues() -> None:
 
             # Collect results
             process_message_counts = dict.fromkeys(range(num_processes), 0)
-            timeout_start = time.time()
+            timeout_start = time.monotonic()
             expected_total = num_processes * messages_per_queue
             total_collected = 0
 
-            while total_collected < expected_total and time.time() - timeout_start < 10:
+            while (
+                total_collected < expected_total
+                and time.monotonic() - timeout_start < 10
+            ):
                 try:
                     msg_type, proc_id, data = result_queue.get(timeout=0.1)
                     if msg_type == "message":
@@ -397,12 +400,12 @@ def test_multiprocess_thundering_herd() -> None:
             # Collect stats with robust error handling
             stats = {}
             errors = []
-            timeout_start = time.time()
+            timeout_start = time.monotonic()
 
             # Wait for all processes to send their stats
             while (
                 len(stats) + len(errors) < num_processes
-                and time.time() - timeout_start < 10
+                and time.monotonic() - timeout_start < 10
             ):
                 try:
                     msg_type, proc_id, data = result_queue.get(timeout=0.5)
@@ -489,10 +492,12 @@ def test_multiprocess_graceful_shutdown() -> None:
         # Collect shutdown stats with robust error handling
         shutdown_stats = {}
         errors = []
-        timeout_start = time.time()
+        timeout_start = time.monotonic()
         messages_received = 0
 
-        while messages_received < num_processes and time.time() - timeout_start < 10:
+        while (
+            messages_received < num_processes and time.monotonic() - timeout_start < 10
+        ):
             try:
                 msg_type, proc_id, data = result_queue.get(timeout=1.0)
                 messages_received += 1

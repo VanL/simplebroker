@@ -38,7 +38,7 @@ class MetricsCollector:
             "throughput": [],
         }
         self.lock = threading.Lock()
-        self._start_time = time.time()
+        self._start_time = time.monotonic()
 
     def record_wake_up(self, queue: str, empty: bool = False) -> None:
         with self.lock:
@@ -62,7 +62,7 @@ class MetricsCollector:
     def get_stats(self) -> dict:
         """Calculate aggregate statistics."""
         with self.lock:
-            elapsed = time.time() - self._start_time
+            elapsed = time.monotonic() - self._start_time
             total_wakes = len(self.metrics["wake_ups"])
             empty_wakes = len(self.metrics["empty_wakes"])
             messages = len(self.metrics["messages_processed"])
@@ -481,7 +481,7 @@ def test_metrics_reset_capability() -> None:
             with self.lock:
                 for key in self.metrics:
                     self.metrics[key].clear()
-                self._start_time = time.time()
+                self._start_time = time.monotonic()
 
     metrics = ResettableMetricsCollector()
 

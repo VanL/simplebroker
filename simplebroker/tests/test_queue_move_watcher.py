@@ -339,9 +339,9 @@ class TestQueueMoveWatcher(WatcherTestBase):
 
         # Give the watcher more time to process all messages
         # Poll until all messages are moved or timeout
-        start_time = time.time()
+        start_time = time.monotonic()
         expected_count = 10 - len(write_errors)
-        while time.time() - start_time < 2.0:
+        while time.monotonic() - start_time < 2.0:
             with moved_lock:
                 if moved_count >= expected_count:
                     break

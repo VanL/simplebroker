@@ -474,10 +474,10 @@ def test_polling_jitter() -> None:
             # Wait until we have enough samples to test jitter properly
             # Keep running until we collect sufficient backed-off delay samples
             required_samples = 30  # Need at least 30 samples for meaningful jitter test
-            start_time = time.time()
+            start_time = time.monotonic()
             max_wait = 60.0  # Give up to 60 seconds to collect samples
 
-            while time.time() - start_time < max_wait:
+            while time.monotonic() - start_time < max_wait:
                 # Count backed-off samples across all watchers
                 all_backed_off_delays = []
 
@@ -500,7 +500,7 @@ def test_polling_jitter() -> None:
                 time.sleep(0.1)  # Check every 100ms
 
             # Ensure we got enough samples before timeout
-            elapsed = time.time() - start_time
+            elapsed = time.monotonic() - start_time
             assert elapsed < max_wait, (
                 f"Timeout: could not collect {required_samples} backed-off samples in {max_wait}s"
             )

@@ -171,9 +171,9 @@ def test_concurrent_writers_readers() -> None:
             # Wait for processing with timeout and checking
             expected_total = num_writers * messages_per_writer
             max_wait = 5.0  # Give more time on slower systems like Windows CI
-            start_time = time.time()
+            start_time = time.monotonic()
 
-            while time.time() - start_time < max_wait:
+            while time.monotonic() - start_time < max_wait:
                 with processed_lock:
                     if len(processed) >= expected_total:
                         break
@@ -310,10 +310,10 @@ def test_multiple_queues_concurrent_activity() -> None:
 
             # Wait for processing - give more time on slower systems
             max_wait = 10.0  # Maximum wait time
-            start_time = time.time()
+            start_time = time.monotonic()
             all_done = False
 
-            while time.time() - start_time < max_wait:
+            while time.monotonic() - start_time < max_wait:
                 # Check if all queues have processed their messages
                 all_done = all(
                     len(processed_by_queue[f"queue_{i}"]) == messages_per_queue
@@ -367,9 +367,9 @@ def test_watcher_stop_during_pre_check() -> None:
 
             # Wait a bit then stop during pre-check
             time.sleep(0.1)
-            start_stop = time.time()
+            start_stop = time.monotonic()
             watcher.stop(timeout=1.0)
-            stop_duration = time.time() - start_stop
+            stop_duration = time.monotonic() - start_stop
 
             # Should stop quickly despite pre-check delay
             assert stop_duration < 1.5

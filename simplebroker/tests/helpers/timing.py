@@ -27,8 +27,8 @@ def wait_for_condition(
         True if condition was met, False if timeout occurred
 
     """
-    start_time = time.time()
-    while time.time() - start_time < timeout:
+    start_time = time.monotonic()
+    while time.monotonic() - start_time < timeout:
         if condition_fn():
             return True
         time.sleep(interval)

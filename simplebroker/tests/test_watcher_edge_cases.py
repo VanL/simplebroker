@@ -434,8 +434,8 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 "queue",
                 lambda m, t: None,
             ) as watcher:
-                # Mock time.time() to simulate time passing faster
-                original_time = time.time
+                # Mock time.monotonic() to simulate time passing faster
+                original_time = time.monotonic
                 start_real_time = original_time()
 
                 def mock_time():
@@ -452,8 +452,8 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
                 watcher._drain_queue = failing_drain
 
-                # Patch time.time to make timeout trigger quickly
-                with patch("simplebroker.watcher.time.time", mock_time):
+                # Patch time.monotonic to make timeout trigger quickly
+                with patch("simplebroker.watcher.time.monotonic", mock_time):
                     # Should raise TimeoutError after simulated 300s (3s real time)
                     with pytest.raises(TimeoutError) as exc_info:
                         watcher.run_forever()
@@ -503,7 +503,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
                 def slow_handler(msg, ts) -> None:
                     nonlocal process_start
-                    process_start = time.time()
+                    process_start = time.monotonic()
                     handler_started.set()  # Signal that handler has started
                     # Simulate slow processing with interruptible sleep
                     interruptible_sleep(1.0, watcher._stop_event)
@@ -523,10 +523,10 @@ class TestWatcherEdgeCases(WatcherTestBase):
                         pytest.fail("Handler did not start processing within timeout")
 
                     # Stop should interrupt the sleep
-                    start_stop = time.time()
+                    start_stop = time.monotonic()
                     watcher.stop()
                     thread.join(timeout=0.5)  # Should complete quickly
-                    stop_time = time.time() - start_stop
+                    stop_time = time.monotonic() - start_stop
 
                     assert stop_time < 0.5, (
                         f"Stop took {stop_time:.2f}s, should be < 0.5s"
