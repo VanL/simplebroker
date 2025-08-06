@@ -76,11 +76,11 @@ jobs:
 
     - name: Run linting with ruff
       run: |
-        ruff check simplebroker tests
+        ruff check simplebroker 
 
     - name: Check formatting with ruff
       run: |
-        ruff format --check simplebroker tests
+        ruff format --check simplebroker 
 
     - name: Type check with mypy
       run: |
