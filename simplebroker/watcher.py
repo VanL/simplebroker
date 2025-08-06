@@ -69,7 +69,7 @@ import threading
 import time
 import weakref
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, List, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, Callable, List, NamedTuple, Optional, cast
 
 # For Python 3.8 compatibility, we avoid using Self type
 # and use string forward references instead
@@ -151,6 +151,9 @@ class BaseWatcher(ABC):
 
         # Thread-safe lock for stop synchronization
         self._stop_lock = threading.Lock()
+
+        # Set up automatic cleanup finalizer
+        self._setup_finalizer()
 
     def _get_db(self) -> BrokerDB:
         """Get thread-local database connection.
@@ -397,23 +400,196 @@ class BaseWatcher(ABC):
     def _drain_queue(self) -> None:
         """Process messages - must be implemented by subclasses."""
 
+    def _setup_signal_handler(self) -> Optional[SignalHandlerContext]:
+        """Set up signal handler for SIGINT if in main thread.
+
+        Returns:
+            SignalHandlerContext if handler was set up, None otherwise
+        """
+        if threading.current_thread() is threading.main_thread():
+            signal_context = SignalHandlerContext(
+                signal.SIGINT,
+                self._sigint_handler,
+            )
+            signal_context.__enter__()
+            return signal_context
+        return None
+
+    def _check_retry_timeout(self, start_time: float, retry_count: int) -> None:
+        """Check if retry timeout has been exceeded.
+
+        Args:
+            start_time: Time when retries started
+            retry_count: Current retry attempt number
+
+        Raises:
+            TimeoutError: If maximum retry time exceeded
+        """
+        elapsed = time.time() - start_time
+        if elapsed > MAX_TOTAL_RETRY_TIME:
+            msg = (
+                f"Watcher retry timeout exceeded ({MAX_TOTAL_RETRY_TIME}s). "
+                f"Retries: {retry_count}, Time elapsed: {elapsed:.1f}s"
+            )
+            raise TimeoutError(msg)
+
+    def _process_messages(self) -> None:
+        """Process messages from the queue.
+
+        This is the main message processing loop that:
+        1. Waits for activity (if strategy exists)
+        2. Checks for pending messages (if applicable)
+        3. Drains the queue
+
+        Subclasses can override this for custom processing logic.
+        """
+        # Default implementation for base watchers
+        # QueueWatcher will override this with its specific logic
+        while True:
+            # Check stop before processing
+            self._check_stop()
+
+            # Drain the queue
+            self._drain_queue()
+
+    def _handle_retry(
+        self,
+        e: Exception,
+        retry_count: int,
+        max_retries: int,
+    ) -> bool:
+        """Handle retry logic when an error occurs.
+
+        Args:
+            e: The exception that occurred
+            retry_count: Current retry attempt number
+            max_retries: Maximum number of retries allowed
+
+        Returns:
+            True if should continue retrying, False otherwise
+
+        Raises:
+            Exception: Re-raises the exception if max retries exceeded
+        """
+        if retry_count >= max_retries:
+            logger.exception(
+                f"Watcher failed after {max_retries} retries. Last error: {e}",
+            )
+            raise
+
+        wait_time = 2**retry_count  # Exponential backoff
+        logger.debug(
+            f"Watcher error (retry {retry_count}/{max_retries}): {e}. "
+            f"Retrying in {wait_time} seconds...",
+        )
+
+        if not interruptible_sleep(wait_time, self._stop_event):
+            # Sleep was interrupted, exit retry loop
+            logger.info("Watcher retry interrupted by stop signal")
+            return False
+
+        # Clean up before retry
+        with contextlib.suppress(Exception):
+            self._cleanup_thread_local()
+
+        return True
+
+    def _run_with_retries(self, max_retries: int = 3) -> None:
+        """Run the watcher with retry logic.
+
+        Args:
+            max_retries: Maximum number of retry attempts
+        """
+        retry_count = 0
+        start_time = time.time()
+
+        while retry_count < max_retries:
+            # Check absolute timeout
+            self._check_retry_timeout(start_time, retry_count)
+
+            try:
+                # Initialize strategy with thread-local database (if it exists)
+                if hasattr(self, "_strategy") and hasattr(self._strategy, "start"):
+                    self._strategy.start(self._get_db())
+
+                # Initial drain of existing messages
+                self._drain_queue()
+
+                # Main processing loop
+                self._process_messages()
+
+                # If we get here, we exited normally
+                break
+
+            except _StopLoop:
+                # Normal shutdown
+                break
+            except Exception as e:
+                retry_count += 1
+                if not self._handle_retry(e, retry_count, max_retries):
+                    break
+
+    def _sigint_handler(self, signum: int, frame: Any) -> None:
+        """Convert SIGINT to graceful shutdown.
+
+        Can be overridden by subclasses for custom handling.
+        """
+        # Default implementation - just stop
+        logger.info("Received SIGINT, stopping watcher...")
+        self.stop(join=False)
+
+    def _safe_call_handler(
+        self,
+        message: str,
+        timestamp: int,
+        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
+    ) -> None:
+        """Safely call the handler with error handling.
+
+        Args:
+            message: Message body to pass to handler
+            timestamp: Timestamp to pass to handler
+            error_handler: Optional error handler for exceptions
+        """
+        try:
+            if hasattr(self, "_handler"):
+                self._handler(message, timestamp)
+        except Exception as e:
+            self._handle_handler_error(e, message, timestamp, error_handler)
+
     def run_forever(self) -> None:
         """Run the watcher continuously until stopped.
 
         This method blocks until stop() is called or SIGINT is received.
         """
-        msg = "Subclasses must implement run_forever"
-        raise NotImplementedError(msg)
+        signal_context = None
+
+        try:
+            # Set up signal handler if in main thread
+            signal_context = self._setup_signal_handler()
+
+            # Run the main loop with retries
+            self._run_with_retries()
+
+        finally:
+            # Clean up thread-local connections
+            self._cleanup_thread_local()
+
+            # Restore original signal handler
+            if signal_context is not None:
+                signal_context.__exit__(None, None, None)
 
     def run_in_thread(self) -> threading.Thread:
         """Start the watcher in a new background thread.
 
         Returns:
             The thread running the watcher
-
         """
-        msg = "Subclasses must implement run_in_thread"
-        raise NotImplementedError(msg)
+        thread = threading.Thread(target=self.run_forever, daemon=True)
+        thread.start()
+        # Store weak reference for the finalizer
+        self._thread = weakref.ref(thread)
+        return thread
 
     def __enter__(self) -> BaseWatcher:
         """Enter context manager - start watcher in background thread."""
@@ -427,7 +603,62 @@ class BaseWatcher(ABC):
         exc_tb: Any,
     ) -> None:
         """Exit context manager - stop and clean up."""
-        self.stop()
+        try:
+            self.stop()
+        except Exception as e:
+            if _config["BROKER_LOGGING_ENABLED"]:
+                logger.warning(f"Error during stop in __exit__: {e}")
+
+    def _setup_finalizer(self) -> None:
+        """Set up automatic cleanup finalizer.
+
+        This provides a safety net for resource cleanup if the watcher
+        is garbage collected without proper shutdown. This is especially
+        important on Windows where open file handles prevent TemporaryDirectory
+        from removing .db files.
+
+        WARNING: This is a safety net, NOT a replacement for proper cleanup!
+        --------------------------------------------------------------------
+        The finalizer runs during garbage collection, which is:
+        - Non-deterministic (might not run immediately)
+        - Not guaranteed (might not run at all in some cases)
+        - Too late (resources held longer than necessary)
+
+        Always use context managers or call stop() explicitly!
+        """
+
+        def _auto_cleanup(wref: weakref.ReferenceType[BaseWatcher]) -> None:
+            """Automatic cleanup function called by finalizer.
+
+            If user code forgets to call stop() / join the thread, the watcher
+            object will eventually be garbage-collected. This finalizer ensures
+            the background thread is stopped and joined and that the thread-local
+            BrokerDB is closed, so every SQLite connection is released before
+            the temp directory is removed.
+            """
+            obj = wref()
+            if obj is None:  # already GC'ed
+                return
+
+            # Try to stop the watcher
+            with contextlib.suppress(Exception):
+                obj.stop()
+
+            # Try to join the thread if it exists
+            thr = getattr(obj, "_thread", None)
+            if thr is not None:
+                thread = thr() if isinstance(thr, weakref.ref) else thr
+                if isinstance(thread, threading.Thread) and thread.is_alive():
+                    try:
+                        thread.join(timeout=1.0)  # don't hang indefinitely
+                    except Exception:
+                        pass
+
+            # Ensure the per-thread BrokerDB is closed
+            with contextlib.suppress(Exception):
+                obj._cleanup_thread_local()
+
+        self._finalizer = weakref.finalize(self, _auto_cleanup, weakref.ref(self))
 
     def __del__(self) -> None:
         """Destructor warns if watcher wasn't properly stopped."""
@@ -735,259 +966,52 @@ class QueueWatcher(BaseWatcher):
 
         # Automatic cleanup finalizer (important on Windows where open file
         # handles prevent TemporaryDirectory from removing .db files)
-        # If user code forgets to call stop() / join the thread, the watcher
-        # object will eventually be garbage-collected when the test function
-        # returns. The finalizer below makes sure the background thread is
-        # stopped and joined and that the thread-local BrokerDB is closed,
-        # so every SQLite connection is released before the temp directory
-        # is removed.
-        #
-        # WARNING: This is a safety net, NOT a replacement for proper cleanup!
-        # --------------------------------------------------------------------
-        # The finalizer runs during garbage collection, which is:
-        # - Non-deterministic (might not run immediately)
-        # - Not guaranteed (might not run at all in some cases)
-        # - Too late (resources held longer than necessary)
-        #
-        # Always use context managers or call stop() explicitly!
-        def _auto_cleanup(wref: weakref.ReferenceType[QueueWatcher]) -> None:
-            obj = wref()
-            if obj is None:  # already GC'ed
-                return
-            with contextlib.suppress(Exception):
-                obj.stop()
+        # Finalizer setup is handled by BaseWatcher.__init__()
+        # The base class sets up automatic cleanup to ensure:
+        # - Background threads are stopped
+        # - Thread-local database connections are closed
+        # - Resources are released before garbage collection
 
-            thr = getattr(obj, "_thread", None)  # set by run_in_thread()
-            if isinstance(thr, threading.Thread) and thr.is_alive():
-                try:
-                    thr.join(timeout=1.0)  # don't hang indefinitely
-                except Exception:
-                    pass
+    # __enter__ and __exit__ are inherited from BaseWatcher
 
-            # ensure the per-thread BrokerDB is closed
-            with contextlib.suppress(Exception):
-                obj._cleanup_thread_local()
+    def _process_messages(self) -> None:
+        """Override of base class method with QueueWatcher-specific logic.
 
-        self._finalizer = weakref.finalize(self, _auto_cleanup, weakref.ref(self))
-
-    def __enter__(self) -> QueueWatcher:
-        """Enter the context manager and start the watcher in a background thread.
-
-        This method is called when entering a `with` statement. It automatically
-        starts the watcher in a background thread, making it easy to ensure
-        proper cleanup:
-
-        Example:
-            with QueueWatcher("my.db", "tasks", handler) as watcher:
-                # Watcher thread is now running
-                time.sleep(60)  # Process messages for 60 seconds
-            # Thread is automatically stopped and joined when exiting the block
-
-        Returns:
-        -------
-        QueueWatcher
-            Returns self for use in with statements.
-
+        This is the main message processing loop that:
+        1. Waits for activity
+        2. Checks for pending messages
+        3. Drains the queue
         """
-        thread = self.run_in_thread()
-        self._thread = weakref.ref(thread)
-        return self
+        while True:
+            # Wait until something might have happened
+            self._strategy.wait_for_activity()
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: Any,
-    ) -> None:
-        """Exit the context manager.
+            # Check stop before processing
+            self._check_stop()
 
-        Ensures proper cleanup of resources including stopping the watcher
-        and closing any thread-local database connections. This method is
-        called automatically when exiting a `with` block, even if an
-        exception occurs.
+            # Two-phase detection: check if we actually have messages
+            if not getattr(self, "_skip_idle_check", False):
+                if not self._has_pending_messages(
+                    self._get_db_with_retry(),
+                ):
+                    # No messages for this queue, skip drain
+                    continue
 
-        IMPORTANT: This method ensures that:
-        1. The background thread is stopped (stop event is set)
-        2. The thread is joined (waits for it to actually terminate)
-        3. Database connections are closed
-        4. The finalizer is detached (cleanup is complete)
+            # Always try to drain the queue first; this guarantees
+            # that a stop request does not prevent us from
+            # finishing already-visible work, so connections can
+            # be closed and no messages get lost.
+            self._drain_queue()
 
-        This prevents resource leaks and file locking issues, especially
-        on Windows where SQLite connections can prevent file deletion.
-
-        Parameters
-        ----------
-        exc_type : type | None
-            The exception type if an exception occurred.
-        exc_val : Exception | None
-            The exception instance if an exception occurred.
-        exc_tb : TracebackType | None
-            The traceback if an exception occurred.
-
-        """
-        try:
-            # stop() now handles thread joining, cleanup, and finalizer detaching
-            self.stop()
-        except Exception as e:
-            if _config["BROKER_LOGGING_ENABLED"]:
-                logger.warning(f"Error during stop in __exit__: {e}")
-
-    def run_forever(self) -> None:
-        """Start watching the queue. This method blocks until stop() is called
-        or a SIGINT (Ctrl-C) is received.
-        """
-        signal_context = None
-
-        try:
-            # Only install signal handler if we're in the main thread
-            if threading.current_thread() is threading.main_thread():
-                signal_context = SignalHandlerContext(
-                    signal.SIGINT,
-                    self._sigint_handler,
-                )
-                signal_context.__enter__()
-
-            retry_count = 0
-            max_retries = 3
-            start_time = time.time()
-
-            while retry_count < max_retries:
-                # Check absolute timeout
-                if time.time() - start_time > MAX_TOTAL_RETRY_TIME:
-                    msg = (
-                        f"Watcher retry timeout exceeded ({MAX_TOTAL_RETRY_TIME}s). "
-                        f"Retries: {retry_count}, Time elapsed: {time.time() - start_time:.1f}s"
-                    )
-                    raise TimeoutError(
-                        msg,
-                    )
-
-                try:
-                    # Initialize strategy with thread-local database
-                    self._strategy.start(self._get_db())
-
-                    # Initial drain of existing messages
-                    self._drain_queue()
-
-                    # Main loop
-                    while True:
-                        # Wait until something might have happened
-                        self._strategy.wait_for_activity()
-
-                        # Check stop before processing
-                        self._check_stop()
-
-                        # Two-phase detection: check if we actually have messages
-                        if not getattr(self, "_skip_idle_check", False):
-                            if not self._has_pending_messages(
-                                self._get_db_with_retry(),
-                            ):
-                                # No messages for this queue, skip drain
-                                continue
-
-                        # Always try to drain the queue first; this guarantees
-                        # that a stop request does not prevent us from
-                        # finishing already-visible work, so connections can
-                        # be closed and no messages get lost.
-                        self._drain_queue()
-
-                    # If we get here, we exited normally
-                    break
-
-                except _StopLoop:
-                    # Normal shutdown
-                    break
-                except Exception as e:
-                    retry_count += 1
-                    if retry_count >= max_retries:
-                        logger.exception(
-                            f"Watcher failed after {max_retries} retries. Last error: {e}",
-                        )
-                        raise
-                    wait_time = 2**retry_count  # Exponential backoff
-                    logger.debug(
-                        f"Watcher error (retry {retry_count}/{max_retries}): {e}. "
-                        f"Retrying in {wait_time} seconds...",
-                    )
-                    if not interruptible_sleep(wait_time, self._stop_event):
-                        # Sleep was interrupted, exit retry loop
-                        logger.info("Watcher retry interrupted by stop signal")
-                        break
-                    # Clean up before retry
-                    with contextlib.suppress(Exception):
-                        self._cleanup_thread_local()
-
-        finally:
-            # Clean up thread-local connections
-            self._cleanup_thread_local()
-
-            # Restore original signal handler
-            if signal_context is not None:
-                signal_context.__exit__(None, None, None)
-
-    def run_in_thread(self) -> threading.Thread:
-        """Start the watcher in a new background thread.
-
-        IMPORTANT: You MUST call stop() when done!
-        -----------------------------------------
-        This method starts a background thread that will continue running
-        until explicitly stopped. The thread is marked as daemon=True as
-        a safety measure, but you should NOT rely on this for cleanup.
-
-        Proper usage patterns:
-
-        1. With context manager (RECOMMENDED):
-            with QueueWatcher(db, queue, handler) as watcher:
-                # Thread is started automatically
-                # ... do work ...
-            # Thread is stopped automatically
-
-        2. Manual management:
-            watcher = QueueWatcher(db, queue, handler)
-            thread = watcher.run_in_thread()
-            try:
-                # ... do work ...
-            finally:
-                watcher.stop()  # CRITICAL: Always call stop()!
-
-        3. Don't do this (resource leak):
-            watcher = QueueWatcher(db, queue, handler)
-            watcher.run_in_thread()  # Thread starts
-            # Program exits without calling stop() - BAD!
-
-        Why daemon=True is not enough:
-        - Daemon threads are killed abruptly when the program exits
-        - Database connections may not be closed properly
-        - File locks may persist (especially on Windows)
-        - No guarantee of processing the final message
-
-        Returns
-        -------
-        threading.Thread
-            The thread running the watcher. The thread is configured as
-            `daemon=True` to prevent hanging test runners or applications
-            that forget to call stop(). For production use, always call
-            stop() and join() the thread for clean shutdown.
-
-        """
-        # Daemon thread so that an accidentally-left watcher cannot block
-        # interpreter shutdown (e.g. during test runs).
-        thread = threading.Thread(target=self.run_forever, daemon=True)
-        thread.start()
-        # Store weak reference for the finalizer
-        self._thread = weakref.ref(thread)
-        return thread
+    # run_in_thread is inherited from BaseWatcher
 
     def _sigint_handler(self, signum: int, frame: Any) -> None:
-        """Convert SIGINT to graceful shutdown."""
+        """Override of base class method with QueueWatcher-specific handling."""
         # When handling SIGINT in run_forever(), we're in the main thread
         # and there's no separate thread to join, so set join=False
         self.stop(join=False)
 
-    def __del__(self) -> None:
-        """Safety net to stop watcher if garbage collected while running."""
-        with contextlib.suppress(Exception):
-            self.stop()
+    # __del__ is inherited from BaseWatcher
 
     def _has_pending_messages(self, db: BrokerDB) -> bool:
         """Fast check if queue has unclaimed messages with retry on operational errors."""
@@ -1159,11 +1183,8 @@ class QueueWatcher(BaseWatcher):
             )
             return
 
-        try:
-            self._handler(message, timestamp)
-        except Exception as e:
-            # Use parent's error handler
-            self._handle_handler_error(e, message, timestamp, self._error_handler)
+        # Use base class safe handler method
+        self._safe_call_handler(message, timestamp, self._error_handler)
 
 
 class QueueMoveWatcher(BaseWatcher):
@@ -1300,35 +1321,22 @@ class QueueMoveWatcher(BaseWatcher):
         """
         self.run_forever()
 
-    def run_forever(self) -> None:
-        """Run the move watcher continuously in the current thread."""
-        # Start the polling strategy
-        if hasattr(self._strategy, "start"):
-            self._strategy.start(self._get_db())
+    def _process_messages(self) -> None:
+        """Override of base class method with QueueMoveWatcher-specific logic.
 
-        # Main polling loop
-        try:
-            while not self._stop_event.is_set():
-                self._strategy.wait_for_activity()
-                if self._stop_event.is_set():
-                    break
+        Simplified processing loop for move operations.
+        """
+        while not self._stop_event.is_set():
+            self._strategy.wait_for_activity()
+            if self._stop_event.is_set():
+                break
 
-                try:
-                    self._drain_queue()
-                except _StopLoop:
-                    break
-        except KeyboardInterrupt:
-            # Handle Ctrl+C gracefully
-            logger.info("Received interrupt signal, stopping...")
-            self.stop(join=False)
+            try:
+                self._drain_queue()
+            except _StopLoop:
+                break
 
-    def run_in_thread(self) -> threading.Thread:
-        """Start the move watcher in a new background thread."""
-        thread = threading.Thread(target=self.run_forever, daemon=True)
-        thread.start()
-        # Store reference for the finalizer
-        self._thread = weakref.ref(thread)
-        return thread
+    # run_forever and run_in_thread are inherited from BaseWatcher
 
     def _drain_queue(self) -> None:
         """Move ALL messages from source to destination queue."""
@@ -1379,13 +1387,9 @@ class QueueMoveWatcher(BaseWatcher):
 
     def _notify_handler_safe(self, move_result: dict) -> None:
         """Safely notify handler about moved message."""
-        try:
-            self._handler(move_result["body"], move_result["ts"])
-        except Exception as e:
-            # Move already completed, just handle notification error
-            self._handle_handler_error(
-                e,
-                move_result["body"],
-                move_result["ts"],
-                self._error_handler,
-            )
+        # Use base class safe handler method
+        self._safe_call_handler(
+            move_result["body"],
+            move_result["ts"],
+            self._error_handler,
+        )

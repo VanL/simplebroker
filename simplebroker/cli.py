@@ -4,7 +4,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import List, NoReturn
+from typing import List, NoReturn, Optional
 
 from . import __version__ as VERSION
 from . import commands
@@ -239,91 +239,112 @@ def rearrange_args(argv: List[str]) -> List[str]:
     if not argv:
         return argv
 
-    # Define global option flags
-    global_options = {
-        "-d",
-        "--dir",
-        "-f",
-        "--file",
-        "-q",
-        "--quiet",
-        "--version",
-        "--cleanup",
-        "--vacuum",
-    }
+    processor = ArgumentProcessor()
+    return processor.process(argv)
 
-    # Options that require values
-    options_with_values = {"-d", "--dir", "-f", "--file"}
 
-    # Find subcommands
-    subcommands = {
-        "write",
-        "read",
-        "peek",
-        "list",
-        "delete",
-        "move",
-        "broadcast",
-        "watch",
-    }
+class ArgumentProcessor:
+    """Helper class to process and rearrange command line arguments."""
 
-    global_args = []
-    command_args = []
-    found_command = False
-    i = 0
+    def __init__(self) -> None:
+        # Define global option flags
+        self.global_options = {
+            "-d",
+            "--dir",
+            "-f",
+            "--file",
+            "-q",
+            "--quiet",
+            "--version",
+            "--cleanup",
+            "--vacuum",
+        }
 
-    # Track whether we're expecting a value for a global option
-    expecting_value_for = None
+        # Options that require values
+        self.options_with_values = {"-d", "--dir", "-f", "--file"}
 
-    while i < len(argv):
-        arg = argv[i]
+        # Find subcommands
+        self.subcommands = {
+            "write",
+            "read",
+            "peek",
+            "list",
+            "delete",
+            "move",
+            "broadcast",
+            "watch",
+        }
 
-        # If we're expecting a value for a previous global option
-        if expecting_value_for:
-            # Check if this looks like another flag (starts with -)
-            if arg.startswith("-"):
-                # This is likely another flag, not a value
-                raise ArgumentParserError(
-                    f"option {expecting_value_for} requires an argument"
-                )
-            global_args.append(arg)
-            expecting_value_for = None
-        # Check if this is a global option with equals form (e.g., --dir=/tmp)
-        elif "=" in arg and arg.split("=")[0] in global_options:
-            # Handle --option=value format
-            option_name = arg.split("=")[0]
-            if option_name in options_with_values:
-                # Check if value is provided after =
-                if "=" == arg[-1]:
-                    # Ends with = but no value
-                    raise ArgumentParserError(
-                        f"option {option_name} requires an argument"
-                    )
-            global_args.append(arg)
-        # Check if this is a global option
-        elif arg in global_options:
-            # This is a global option
-            global_args.append(arg)
-            # Check if this option takes a value
-            if arg in options_with_values:
-                # Mark that we're expecting a value next
-                expecting_value_for = arg
-        elif arg in subcommands and not found_command:
-            # This is the subcommand
-            found_command = True
-            command_args.append(arg)
+        self.global_args: List[str] = []
+        self.command_args: List[str] = []
+        self.found_command = False
+        self.expecting_value_for: Optional[str] = None
+
+    def process(self, argv: List[str]) -> List[str]:
+        """Process and rearrange arguments."""
+        i = 0
+        while i < len(argv):
+            self._process_argument(argv[i])
+            i += 1
+
+        # Check if we're still expecting a value at the end
+        if self.expecting_value_for:
+            raise ArgumentParserError(
+                f"option {self.expecting_value_for} requires an argument"
+            )
+
+        # Combine: global options first, then command and its arguments
+        return self.global_args + self.command_args
+
+    def _process_argument(self, arg: str) -> None:
+        """Process a single argument."""
+        if self.expecting_value_for:
+            self._handle_expected_value(arg)
+        elif self._is_option_with_equals(arg):
+            self._handle_option_with_equals(arg)
+        elif arg in self.global_options:
+            self._handle_global_option(arg)
+        elif arg in self.subcommands and not self.found_command:
+            self._handle_subcommand(arg)
         else:
-            # This belongs to the command or is a positional argument
-            command_args.append(arg)
+            self.command_args.append(arg)
 
-        i += 1
+    def _handle_expected_value(self, arg: str) -> None:
+        """Handle an argument when we're expecting a value for a previous option."""
+        if arg.startswith("-"):
+            # This is likely another flag, not a value
+            raise ArgumentParserError(
+                f"option {self.expecting_value_for} requires an argument"
+            )
+        self.global_args.append(arg)
+        self.expecting_value_for = None
 
-    # Check if we're still expecting a value at the end
-    if expecting_value_for:
-        raise ArgumentParserError(f"option {expecting_value_for} requires an argument")
+    def _is_option_with_equals(self, arg: str) -> bool:
+        """Check if argument is a global option with equals form."""
+        return "=" in arg and arg.split("=")[0] in self.global_options
 
-    # Combine: global options first, then command and its arguments
-    return global_args + command_args
+    def _handle_option_with_equals(self, arg: str) -> None:
+        """Handle --option=value format."""
+        option_name = arg.split("=")[0]
+        if option_name in self.options_with_values:
+            # Check if value is provided after =
+            if arg.endswith("="):
+                # Ends with = but no value
+                raise ArgumentParserError(f"option {option_name} requires an argument")
+        self.global_args.append(arg)
+
+    def _handle_global_option(self, arg: str) -> None:
+        """Handle a global option."""
+        self.global_args.append(arg)
+        # Check if this option takes a value
+        if arg in self.options_with_values:
+            # Mark that we're expecting a value next
+            self.expecting_value_for = arg
+
+    def _handle_subcommand(self, arg: str) -> None:
+        """Handle a subcommand."""
+        self.found_command = True
+        self.command_args.append(arg)
 
 
 def main() -> int:
