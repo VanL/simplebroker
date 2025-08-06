@@ -6,6 +6,7 @@ Tests the intelligent burst mode management that only resets on actual activity.
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -569,19 +570,22 @@ def test_polling_jitter() -> None:
         for w in watchers:
             try:
                 w.stop()
+                if sys.platform == "win32":
+                    time.sleep(0.5)  # Allow threads to terminate
             except Exception:
                 pass  # Ignore errors during cleanup
 
         # On Windows, add a small delay to ensure threads fully terminate
         # and file handles are released before closing the database
-        import sys
 
         if sys.platform == "win32":
-            time.sleep(0.2)
+            time.sleep(1)
 
         # Now safe to close the broker
         if "broker" in locals():
             broker.close()
+            if sys.platform == "win32":
+                time.sleep(1)
 
         # Restore original config value
         _config["BROKER_JITTER_FACTOR"] = original_jitter

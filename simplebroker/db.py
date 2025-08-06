@@ -608,6 +608,178 @@ class BrokerCore:
             return messages
         return list(self.stream_read(queue, peek=peek, all_messages=all_messages))
 
+    def _build_where_clause(
+        self,
+        queue: str,
+        exact_timestamp: Optional[int] = None,
+        since_timestamp: Optional[int] = None,
+    ) -> Tuple[List[str], List[Any]]:
+        """Build WHERE clause and parameters for message queries.
+
+        Args:
+            queue: Queue name to filter on
+            exact_timestamp: If provided, filter for exact timestamp match
+            since_timestamp: If provided, filter for messages after this timestamp
+
+        Returns:
+            Tuple of (where_conditions list, params list)
+        """
+        if exact_timestamp is not None:
+            # Optimize for unique index on ts column
+            where_conditions = ["ts = ?", "queue = ?", "claimed = 0"]
+            params = [exact_timestamp, queue]
+        else:
+            # Normal ordering for queue-based queries
+            where_conditions = ["queue = ?", "claimed = 0"]
+            params = [queue]
+
+            if since_timestamp is not None:
+                where_conditions.append("ts > ?")
+                params.append(since_timestamp)
+
+        return where_conditions, params
+
+    def _handle_peek_operation(
+        self,
+        where_conditions: List[str],
+        params: List[Any],
+        all_messages: bool,
+    ) -> Iterator[Tuple[str, int]]:
+        """Handle peek operations without claiming messages.
+
+        Args:
+            where_conditions: SQL WHERE conditions
+            params: Query parameters
+            all_messages: Whether to read all messages or just one
+
+        Yields:
+            Tuples of (message_body, timestamp)
+        """
+        offset = 0
+        batch_size = 100 if all_messages else 1
+
+        while True:
+            # Acquire lock, fetch batch, release lock
+            with self._lock:
+                query = build_peek_query(where_conditions)
+                batch_messages = self._runner.run(
+                    query, tuple(params + [batch_size, offset]), fetch=True
+                )
+
+            # Yield results without holding lock
+            if not batch_messages:
+                break
+
+            for row in batch_messages:
+                yield row[0], row[1]  # body, timestamp
+
+            # For single message peek, we're done after first batch
+            if not all_messages:
+                break
+
+            offset += batch_size
+
+    def _process_exactly_once_batch(
+        self,
+        where_conditions: List[str],
+        params: List[Any],
+    ) -> Optional[Tuple[str, int]]:
+        """Process a single message with exactly-once delivery semantics.
+
+        Commits BEFORE yielding to ensure message is never duplicated.
+
+        Args:
+            where_conditions: SQL WHERE conditions
+            params: Query parameters
+
+        Returns:
+            Tuple of (message_body, timestamp) if message found, None otherwise
+        """
+        with self._lock:
+            # Use retry logic for BEGIN IMMEDIATE
+            try:
+                _execute_with_retry(self._runner.begin_immediate)
+            except Exception:
+                return None
+
+            try:
+                query = build_claim_single_query(where_conditions)
+                rows = self._runner.run(query, tuple(params), fetch=True)
+
+                # Fetch the message
+                rows_list = list(rows) if rows else []
+                message = rows_list[0] if rows_list else None
+
+                if not message:
+                    self._runner.rollback()
+                    return None
+
+                # Commit IMMEDIATELY before returning
+                # This ensures exactly-once delivery semantics
+                self._runner.commit()
+                return message[0], message[1]  # body, timestamp
+            except Exception:
+                # On any error, rollback to preserve messages
+                self._runner.rollback()
+                raise
+
+    def _process_at_least_once_batch(
+        self,
+        where_conditions: List[str],
+        params: List[Any],
+        commit_interval: int,
+    ) -> Iterator[Tuple[str, int]]:
+        """Process messages with at-least-once delivery semantics.
+
+        Claims batch, yields messages, then commits.
+
+        Args:
+            where_conditions: SQL WHERE conditions
+            params: Query parameters
+            commit_interval: Number of messages per batch
+
+        Yields:
+            Tuples of (message_body, timestamp)
+        """
+        # First, claim the batch
+        with self._lock:
+            # Use retry logic for BEGIN IMMEDIATE
+            try:
+                _execute_with_retry(self._runner.begin_immediate)
+            except Exception:
+                return
+
+            try:
+                query = build_claim_batch_query(where_conditions)
+                batch_messages = self._runner.run(
+                    query, tuple(params + [commit_interval]), fetch=True
+                )
+
+                if not batch_messages:
+                    self._runner.rollback()
+                    return
+
+                # DO NOT commit yet - keep transaction open
+            except Exception:
+                # On any error, rollback to preserve messages
+                self._runner.rollback()
+                raise
+
+        # Yield messages while transaction is still open but lock is released
+        # This allows consumer to process messages before commit
+        for row in batch_messages:
+            yield row[0], row[1]  # body, timestamp
+
+        # After successfully yielding all messages, commit the transaction
+        # This provides at-least-once delivery semantics
+        with self._lock:
+            try:
+                self._runner.commit()
+            except Exception:
+                # If commit fails, messages will be re-delivered
+                self._runner.rollback()
+                raise
+
     def stream_read_with_timestamps(
         self,
         queue: str,
@@ -647,175 +819,47 @@ class BrokerCore:
         self._check_fork_safety()
         self._validate_queue_name(queue)
 
-        # Build WHERE clause dynamically for better maintainability
-        # When exact_timestamp is provided, put ts first to use the unique index efficiently
-        params: List[Any]
-        if exact_timestamp is not None:
-            # Optimize for unique index on ts column
-            where_conditions = ["ts = ?", "queue = ?", "claimed = 0"]
-            params = [exact_timestamp, queue]
-        else:
-            # Normal ordering for queue-based queries
-            where_conditions = ["queue = ?", "claimed = 0"]
-            params = [queue]
-
-            if since_timestamp is not None:
-                where_conditions.append("ts > ?")
-                params.append(since_timestamp)
+        # Build WHERE clause and parameters
+        where_conditions, params = self._build_where_clause(
+            queue, exact_timestamp, since_timestamp
+        )
 
         if peek:
-            # For peek mode, fetch in batches to avoid holding lock while yielding
-            offset = 0
-            batch_size = 100 if all_messages else 1  # Reasonable batch size
-
-            while True:
-                # Acquire lock, fetch batch, release lock
-                with self._lock:
-                    query = build_peek_query(where_conditions)
-                    batch_messages = self._runner.run(
-                        query, tuple(params + [batch_size, offset]), fetch=True
-                    )
-
-                # Yield results without holding lock
-                if not batch_messages:
-                    break
-
-                for row in batch_messages:
-                    yield row[0], row[1]  # body, timestamp
-
-                # For single message peek, we're done after first batch
-                if not all_messages:
-                    break
-
-                offset += batch_size
+            # Handle peek operations
+            yield from self._handle_peek_operation(
+                where_conditions, params, all_messages
+            )
         else:
-            # For DELETE operations, we need proper transaction handling
+            # Handle delete operations with proper transaction handling
             if all_messages:
-                # Process in batches with different semantics based on commit_interval
+                # Process multiple messages
                 while True:
-                    batch_messages = []
-
                     if commit_interval == 1:
-                        # Exactly-once delivery: commit BEFORE yielding each message
-                        # Acquire lock only for the claim operation
-                        with self._lock:
-                            # Use retry logic for BEGIN IMMEDIATE
-                            try:
-                                _execute_with_retry(self._runner.begin_immediate)
-                            except Exception:
-                                # If we can't even begin transaction, we're done
-                                break
-
-                            try:
-                                query = build_claim_single_query(where_conditions)
-                                rows = self._runner.run(
-                                    query, tuple(params), fetch=True
-                                )
-
-                                # Fetch the message
-                                rows_list = list(rows) if rows else []
-                                message = rows_list[0] if rows_list else None
-
-                                if not message:
-                                    self._runner.rollback()
-                                    break
-
-                                # Commit IMMEDIATELY before yielding
-                                # This ensures exactly-once delivery semantics
-                                self._runner.commit()
-
-                                # Store message to yield after lock release
-                                batch_messages = [message]
-                            except Exception:
-                                # On any error, rollback to preserve messages
-                                self._runner.rollback()
-                                raise
-
-                        # Lock is now released, yield message without holding it
-                        # Message is already safely claimed in the database
-                        for row in batch_messages:
-                            yield row[0], row[1]  # body, timestamp
-                    else:
-                        # At-least-once delivery: commit AFTER yielding the batch
-                        # First, claim the batch
-                        with self._lock:
-                            # Use retry logic for BEGIN IMMEDIATE
-                            try:
-                                _execute_with_retry(self._runner.begin_immediate)
-                            except Exception:
-                                # If we can't even begin transaction, we're done
-                                break
-
-                            try:
-                                query = build_claim_batch_query(where_conditions)
-                                batch_messages = self._runner.run(
-                                    query, tuple(params + [commit_interval]), fetch=True
-                                )
-
-                                if not batch_messages:
-                                    self._runner.rollback()
-                                    break
-
-                                # DO NOT commit yet - keep transaction open
-                            except Exception:
-                                # On any error, rollback to preserve messages
-                                self._runner.rollback()
-                                raise
-
-                        # Yield messages while transaction is still open but lock is released
-                        # This allows consumer to process messages before commit
-                        for row in batch_messages:
-                            yield row[0], row[1]  # body, timestamp
-
-                        # After successfully yielding all messages, commit the transaction
-                        # This provides at-least-once delivery semantics
-                        with self._lock:
-                            try:
-                                self._runner.commit()
-                            except Exception:
-                                # If commit fails, messages will be re-delivered
-                                self._runner.rollback()
-                                raise
-
-                    # If no messages were found, we're done
-                    if not batch_messages:
-                        break
-            else:
-                # For single message, use same transaction pattern for consistency
-                message = None
-
-                # Acquire lock only for the claim operation
-                with self._lock:
-                    # Use retry logic for BEGIN IMMEDIATE
-                    try:
-                        _execute_with_retry(self._runner.begin_immediate)
-                    except Exception:
-                        # If we can't begin transaction, nothing to yield
-                        return
-
-                    try:
-                        query = build_claim_single_query(where_conditions)
-                        rows = self._runner.run(query, tuple(params), fetch=True)
-
-                        # Fetch the message
-                        rows_list = list(rows) if rows else []
-                        message = rows_list[0] if rows_list else None
-
-                        if message:
-                            # Commit IMMEDIATELY to mark message as claimed
-                            # This ensures exactly-once delivery semantics
-                            self._runner.commit()
+                        # Exactly-once delivery: commit BEFORE yielding
+                        result = self._process_exactly_once_batch(
+                            where_conditions, params
+                        )
+                        if result:
+                            yield result
                         else:
-                            self._runner.rollback()
-                    except Exception:
-                        # On any error, rollback to preserve message
-                        self._runner.rollback()
-                        raise
+                            break
+                    else:
+                        # At-least-once delivery: commit AFTER yielding batch
+                        batch_yielded = False
+                        for message in self._process_at_least_once_batch(
+                            where_conditions, params, commit_interval
+                        ):
+                            batch_yielded = True
+                            yield message
 
-                # Lock is now released, yield message without holding it
-                # Message is already safely claimed in the database
-                if message:
-                    yield message[0], message[1]  # body, timestamp
+                        # If no messages were yielded, we're done
+                        if not batch_yielded:
+                            break
+            else:
+                # Process single message with exactly-once semantics
+                result = self._process_exactly_once_batch(where_conditions, params)
+                if result:
+                    yield result
 
     def stream_read(
         self,

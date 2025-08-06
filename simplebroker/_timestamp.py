@@ -236,26 +236,63 @@ class TimestampGenerator:
 
         # If exact mode, enforce strict 19-digit validation
         if exact:
-            if (
-                len(timestamp_str) != TIMESTAMP_EXACT_NUM_DIGITS
-                or not timestamp_str.isdigit()
-            ):
-                raise TimestampError(
-                    "Invalid timestamp: exact mode requires exactly 19 digits"
-                )
-            # Convert to int and validate range
-            timestamp = int(timestamp_str)
-            if timestamp >= SQLITE_MAX_INT64:
-                raise TimestampError("Invalid timestamp: exceeds maximum value")
-            return timestamp
+            return TimestampGenerator._validate_exact_timestamp(timestamp_str)
 
         # Reject scientific notation early for consistency
         if "e" in timestamp_str.lower():
             raise TimestampError("Invalid timestamp: scientific notation not supported")
 
         # Check for explicit unit suffixes
+        ts = TimestampGenerator._parse_with_unit_suffix(timestamp_str)
+        if ts is not None:
+            return ts
+
+        # Try formats in order of precedence
+        # 1. ISO format (unambiguous)
+        ts = TimestampGenerator._parse_iso8601(timestamp_str)
+        if ts is not None:
+            return ts
+
+        # 2. Native or Unix numeric format
+        ts = TimestampGenerator._parse_native_or_unix(timestamp_str)
+        if ts is not None:
+            return ts
+
+        # 3. Unix float format (e.g., from time.time())
+        try:
+            ts = TimestampGenerator._parse_numeric_timestamp(timestamp_str)
+            if ts is not None:
+                return ts
+        except ValueError as e:
+            if "Invalid timestamp" in str(e):
+                raise
+            # Fall through to final error
+            pass
+
+        raise TimestampError(f"Invalid timestamp: {timestamp_str}")
+
+    @staticmethod
+    def _validate_exact_timestamp(timestamp_str: str) -> int:
+        """Validate timestamp in exact mode (strict 19-digit validation)."""
+        if (
+            len(timestamp_str) != TIMESTAMP_EXACT_NUM_DIGITS
+            or not timestamp_str.isdigit()
+        ):
+            raise TimestampError(
+                "Invalid timestamp: exact mode requires exactly 19 digits"
+            )
+        # Convert to int and validate range
+        timestamp = int(timestamp_str)
+        if timestamp >= SQLITE_MAX_INT64:
+            raise TimestampError("Invalid timestamp: exceeds maximum value")
+        return timestamp
+
+    @staticmethod
+    def _parse_with_unit_suffix(timestamp_str: str) -> Optional[int]:
+        """Parse timestamp with explicit unit suffixes (s, ms, ns)."""
         original_str = timestamp_str
         unit = None  # Default to None if no suffix found
+
         if timestamp_str.endswith("ns"):
             unit = "ns"
             timestamp_str = timestamp_str[:-2]
@@ -268,41 +305,36 @@ class TimestampGenerator:
                 unit = "s"
                 timestamp_str = timestamp_str[:-1]
 
-        # If explicit unit provided, parse accordingly
-        if unit:
-            try:
-                val = (
-                    float(timestamp_str) if "." in timestamp_str else int(timestamp_str)
-                )
-                if val < 0:
-                    raise TimestampError("Invalid timestamp: cannot be negative")
+        if not unit:
+            return None
 
-                if unit == "s":
-                    # Unix seconds
-                    us_since_epoch = int(val * US_PER_SECOND)
-                elif unit == "ms":
-                    # Unix milliseconds
-                    us_since_epoch = int(val * MS_PER_US)
-                elif unit == "ns":
-                    # Unix nanoseconds
-                    us_since_epoch = int(val / NS_PER_US)
+        try:
+            val = float(timestamp_str) if "." in timestamp_str else int(timestamp_str)
+            if val < 0:
+                raise TimestampError("Invalid timestamp: cannot be negative")
 
-                hybrid_ts = us_since_epoch << LOGICAL_COUNTER_BITS
-                if hybrid_ts >= SQLITE_MAX_INT64:
-                    raise TimestampError("Invalid timestamp: too far in future")
-                return hybrid_ts
-            except (ValueError, OverflowError) as e:
-                if "Invalid timestamp" in str(e):
-                    raise
-                raise TimestampError(f"Invalid timestamp: {original_str}") from None
+            if unit == "s":
+                # Unix seconds
+                us_since_epoch = int(val * US_PER_SECOND)
+            elif unit == "ms":
+                # Unix milliseconds
+                us_since_epoch = int(val * MS_PER_US)
+            elif unit == "ns":
+                # Unix nanoseconds
+                us_since_epoch = int(val / NS_PER_US)
 
-        # Try formats in order of precedence
-        # 1. ISO format (unambiguous)
-        ts = TimestampGenerator._parse_iso8601(timestamp_str)
-        if ts is not None:
-            return ts
+            hybrid_ts = us_since_epoch << LOGICAL_COUNTER_BITS
+            if hybrid_ts >= SQLITE_MAX_INT64:
+                raise TimestampError("Invalid timestamp: too far in future")
+            return hybrid_ts
+        except (ValueError, OverflowError) as e:
+            if "Invalid timestamp" in str(e):
+                raise
+            raise TimestampError(f"Invalid timestamp: {original_str}") from None
 
-        # 2. Native or Unix numeric format
+    @staticmethod
+    def _parse_native_or_unix(timestamp_str: str) -> Optional[int]:
+        """Parse as native timestamp or Unix timestamp based on heuristic."""
         try:
             # Try integer first
             val = int(timestamp_str)
@@ -330,20 +362,7 @@ class TimestampGenerator:
             if "Invalid timestamp" in str(e):
                 raise
             # Not an integer, continue
-            pass
-
-        # 3. Unix float format (e.g., from time.time())
-        try:
-            ts = TimestampGenerator._parse_numeric_timestamp(timestamp_str)
-            if ts is not None:
-                return ts
-        except ValueError as e:
-            if "Invalid timestamp" in str(e):
-                raise
-            # Fall through to final error
-            pass
-
-        raise TimestampError(f"Invalid timestamp: {timestamp_str}")
+            return None
 
     @staticmethod
     def _parse_iso8601(timestamp_str: str) -> Optional[int]:
