@@ -565,8 +565,7 @@ def test_polling_jitter() -> None:
                     f"With {len(unique_delays)} unique values, spread {delay_spread} should be at least 5% of base delay"
                 )
 
-    finally:
-        # Always clean up watchers FIRST before closing broker
+        # Cleanup watchers
         for w in watchers:
             try:
                 w.stop()
@@ -574,7 +573,13 @@ def test_polling_jitter() -> None:
                     time.sleep(0.5)  # Allow threads to terminate
             except Exception:
                 pass  # Ignore errors during cleanup
+    finally:
+        # Restore original config value
+        _config["BROKER_JITTER_FACTOR"] = original_jitter
 
+        # Delete the watchers list to clean up references
+        for w in watchers:
+            del w
         # On Windows, add a small delay to ensure threads fully terminate
         # and file handles are released before closing the database
 
@@ -582,13 +587,7 @@ def test_polling_jitter() -> None:
             time.sleep(1)
 
         # Now safe to close the broker
-        if "broker" in locals():
-            broker.close()
-            if sys.platform == "win32":
-                time.sleep(1)
-
-        # Restore original config value
-        _config["BROKER_JITTER_FACTOR"] = original_jitter
+        broker.close()
 
 
 def test_burst_mode_with_peek_mode(no_jitter) -> None:
