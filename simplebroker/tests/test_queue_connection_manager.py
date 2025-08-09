@@ -233,15 +233,13 @@ class TestQueueConnectionManager:
 
                     # But all should share the same underlying DBConnection object
                     assert queue.conn is not None, "Should have persistent DBConnection"
+                connections = None  # Clear to release references
             finally:
                 # Clean up threads first with longer timeout
                 for t in threads:
                     if t.is_alive():
                         t.join(timeout=2.0)
-
-                # Close the queue to release resources
-                if queue:
-                    queue.close()
+                threads = None  # Clear to release references
 
                 # Force garbage collection to clean up any remaining references
                 gc.collect()
