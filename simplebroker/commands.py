@@ -175,8 +175,8 @@ def cmd_write(db_path: str, queue_name: str, message: str) -> int:
         Exit code
     """
     content = _get_message_content(message)
-    queue = Queue(queue_name, db_path=db_path)
-    queue.write(content)
+    with Queue(queue_name, db_path=db_path) as queue:
+        queue.write(content)
     return EXIT_SUCCESS
 
 
@@ -221,58 +221,14 @@ def cmd_read(
             return EXIT_QUEUE_EMPTY
 
     # Create queue instance
-    queue = Queue(queue_name, db_path=db_path)
-
-    # Handle different read patterns
-    if exact_timestamp is not None:
-        # Read specific message by ID
-        result = queue.read_one(
-            exact_timestamp=exact_timestamp,
-            with_timestamps=(json_output or show_timestamps),
-        )
-        if result is None:
-            return EXIT_QUEUE_EMPTY
-
-        if json_output or show_timestamps:
-            message, timestamp = result  # type: ignore[misc]
-            _output_message(message, timestamp, json_output, show_timestamps, False)
-        else:
-            print(result)
-        return EXIT_SUCCESS
-
-    elif all_messages:
-        # Read all messages using generator
-        message_count = 0
-        warned_newlines = False
-
-        for result in queue.read_generator(
-            with_timestamps=True, since_timestamp=since_timestamp
-        ):
-            message, timestamp = result  # type: ignore[misc]
-            warned_newlines = _output_message(
-                message, timestamp, json_output, show_timestamps, warned_newlines
+    with Queue(queue_name, db_path=db_path) as queue:
+        # Handle different read patterns
+        if exact_timestamp is not None:
+            # Read specific message by ID
+            result = queue.read_one(
+                exact_timestamp=exact_timestamp,
+                with_timestamps=(json_output or show_timestamps),
             )
-            message_count += 1
-
-        return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
-
-    else:
-        # Read single message
-        if since_timestamp:
-            # Use generator for since_timestamp support
-            gen = queue.read_generator(
-                with_timestamps=True, since_timestamp=since_timestamp
-            )
-            try:
-                result = next(gen)
-                message, timestamp = result  # type: ignore[misc]
-                _output_message(message, timestamp, json_output, show_timestamps, False)
-                return EXIT_SUCCESS
-            except StopIteration:
-                return EXIT_QUEUE_EMPTY
-        else:
-            # Simple single message read
-            result = queue.read_one(with_timestamps=(json_output or show_timestamps))
             if result is None:
                 return EXIT_QUEUE_EMPTY
 
@@ -282,6 +238,55 @@ def cmd_read(
             else:
                 print(result)
             return EXIT_SUCCESS
+
+        elif all_messages:
+            # Read all messages using generator
+            message_count = 0
+            warned_newlines = False
+
+            for result in queue.read_generator(
+                with_timestamps=True, since_timestamp=since_timestamp
+            ):
+                message, timestamp = result  # type: ignore[misc]
+                warned_newlines = _output_message(
+                    message, timestamp, json_output, show_timestamps, warned_newlines
+                )
+                message_count += 1
+
+            return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
+
+        else:
+            # Read single message
+            if since_timestamp:
+                # Use generator for since_timestamp support
+                gen = queue.read_generator(
+                    with_timestamps=True, since_timestamp=since_timestamp
+                )
+                try:
+                    result = next(gen)
+                    message, timestamp = result  # type: ignore[misc]
+                    _output_message(
+                        message, timestamp, json_output, show_timestamps, False
+                    )
+                    return EXIT_SUCCESS
+                except StopIteration:
+                    return EXIT_QUEUE_EMPTY
+            else:
+                # Simple single message read
+                result = queue.read_one(
+                    with_timestamps=(json_output or show_timestamps)
+                )
+                if result is None:
+                    return EXIT_QUEUE_EMPTY
+
+                if json_output or show_timestamps:
+                    message, timestamp = result  # type: ignore[misc]
+                    _output_message(
+                        message, timestamp, json_output, show_timestamps, False
+                    )
+                else:
+                    print(result)
+                return EXIT_SUCCESS
 
 
 def cmd_peek(
@@ -325,58 +330,14 @@ def cmd_peek(
             return EXIT_QUEUE_EMPTY
 
     # Create queue instance
-    queue = Queue(queue_name, db_path=db_path)
-
-    # Handle different peek patterns
-    if exact_timestamp is not None:
-        # Peek at specific message by ID
-        result = queue.peek_one(
-            exact_timestamp=exact_timestamp,
-            with_timestamps=(json_output or show_timestamps),
-        )
-        if result is None:
-            return EXIT_QUEUE_EMPTY
-
-        if json_output or show_timestamps:
-            message, timestamp = result  # type: ignore[misc]
-            _output_message(message, timestamp, json_output, show_timestamps, False)
-        else:
-            print(result)
-        return EXIT_SUCCESS
-
-    elif all_messages:
-        # Peek at all messages using generator
-        message_count = 0
-        warned_newlines = False
-
-        for result in queue.peek_generator(
-            with_timestamps=True, since_timestamp=since_timestamp
-        ):
-            message, timestamp = result  # type: ignore[misc]
-            warned_newlines = _output_message(
-                message, timestamp, json_output, show_timestamps, warned_newlines
+    with Queue(queue_name, db_path=db_path) as queue:
+        # Handle different peek patterns
+        if exact_timestamp is not None:
+            # Peek at specific message by ID
+            result = queue.peek_one(
+                exact_timestamp=exact_timestamp,
+                with_timestamps=(json_output or show_timestamps),
             )
-            message_count += 1
-
-        return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
-
-    else:
-        # Peek at single message
-        if since_timestamp:
-            # Use generator for since_timestamp support
-            gen = queue.peek_generator(
-                with_timestamps=True, since_timestamp=since_timestamp
-            )
-            try:
-                result = next(gen)
-                message, timestamp = result  # type: ignore[misc]
-                _output_message(message, timestamp, json_output, show_timestamps, False)
-                return EXIT_SUCCESS
-            except StopIteration:
-                return EXIT_QUEUE_EMPTY
-        else:
-            # Simple single message peek
-            result = queue.peek_one(with_timestamps=(json_output or show_timestamps))
             if result is None:
                 return EXIT_QUEUE_EMPTY
 
@@ -386,6 +347,55 @@ def cmd_peek(
             else:
                 print(result)
             return EXIT_SUCCESS
+
+        elif all_messages:
+            # Peek at all messages using generator
+            message_count = 0
+            warned_newlines = False
+
+            for result in queue.peek_generator(
+                with_timestamps=True, since_timestamp=since_timestamp
+            ):
+                message, timestamp = result  # type: ignore[misc]
+                warned_newlines = _output_message(
+                    message, timestamp, json_output, show_timestamps, warned_newlines
+                )
+                message_count += 1
+
+            return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
+
+        else:
+            # Peek at single message
+            if since_timestamp:
+                # Use generator for since_timestamp support
+                gen = queue.peek_generator(
+                    with_timestamps=True, since_timestamp=since_timestamp
+                )
+                try:
+                    result = next(gen)
+                    message, timestamp = result  # type: ignore[misc]
+                    _output_message(
+                        message, timestamp, json_output, show_timestamps, False
+                    )
+                    return EXIT_SUCCESS
+                except StopIteration:
+                    return EXIT_QUEUE_EMPTY
+            else:
+                # Simple single message peek
+                result = queue.peek_one(
+                    with_timestamps=(json_output or show_timestamps)
+                )
+                if result is None:
+                    return EXIT_QUEUE_EMPTY
+
+                if json_output or show_timestamps:
+                    message, timestamp = result  # type: ignore[misc]
+                    _output_message(
+                        message, timestamp, json_output, show_timestamps, False
+                    )
+                else:
+                    print(result)
+                return EXIT_SUCCESS
 
 
 def cmd_list(db_path: str, show_stats: bool = False) -> int:
@@ -456,8 +466,8 @@ def cmd_delete(
             return EXIT_QUEUE_EMPTY
 
         # Use Queue API to delete specific message
-        queue = Queue(queue_name, db_path=db_path)
-        deleted = queue.delete(message_id=exact_timestamp)
+        with Queue(queue_name, db_path=db_path) as queue:
+            deleted = queue.delete(message_id=exact_timestamp)
 
         # Return 0 for success (message deleted) or 2 for not found
         return EXIT_SUCCESS if deleted else EXIT_QUEUE_EMPTY
@@ -522,74 +532,79 @@ def cmd_move(
             return EXIT_QUEUE_EMPTY
 
     # Create source queue instance
-    queue = Queue(source_queue, db_path=db_path)
-
-    # Handle different move patterns
-    if exact_timestamp is not None:
-        # Move specific message by ID
-        result = queue.move_one(
-            dest_queue,
-            exact_timestamp=exact_timestamp,
-            require_unclaimed=False,  # Allow moving claimed messages by ID
-            with_timestamps=True,
-        )
-        if result is None:
-            return EXIT_QUEUE_EMPTY
-
-        message, timestamp = result  # type: ignore[misc]
-        _output_message(message, timestamp, json_output, show_timestamps, False)
-        return EXIT_SUCCESS
-
-    elif all_messages:
-        # Move all messages using atomic batch operation
-        # Use a large limit to move all available messages in one transaction
-        try:
-            results = queue.move_many(
+    with Queue(source_queue, db_path=db_path) as queue:
+        # Handle different move patterns
+        if exact_timestamp is not None:
+            # Move specific message by ID
+            result = queue.move_one(
                 dest_queue,
-                limit=1000000,  # Large limit to capture all messages
+                exact_timestamp=exact_timestamp,
+                require_unclaimed=False,  # Allow moving claimed messages by ID
                 with_timestamps=True,
-                delivery_guarantee="exactly_once",
-                since_timestamp=since_timestamp,
             )
-
-            # Output each moved message
-            warned_newlines = False
-            for result in results:
-                message, timestamp = result  # type: ignore[misc]
-                warned_newlines = _output_message(
-                    message, timestamp, json_output, show_timestamps, warned_newlines
-                )
-
-            return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
-
-        except Exception as e:
-            print(f"simplebroker: error: {e}", file=sys.stderr)
-            sys.stderr.flush()
-            return 1
-
-    else:
-        # Move single message
-        if since_timestamp:
-            # Use generator for since_timestamp support
-            gen = queue.move_generator(
-                dest_queue, with_timestamps=True, since_timestamp=since_timestamp
-            )
-            try:
-                result = next(gen)
-                message, timestamp = result  # type: ignore[misc]
-                _output_message(message, timestamp, json_output, show_timestamps, False)
-                return EXIT_SUCCESS
-            except StopIteration:
-                return EXIT_QUEUE_EMPTY
-        else:
-            # Simple single message move
-            result = queue.move_one(dest_queue, with_timestamps=True)
             if result is None:
                 return EXIT_QUEUE_EMPTY
 
             message, timestamp = result  # type: ignore[misc]
             _output_message(message, timestamp, json_output, show_timestamps, False)
             return EXIT_SUCCESS
+
+        elif all_messages:
+            # Move all messages using atomic batch operation
+            # Use a large limit to move all available messages in one transaction
+            try:
+                results = queue.move_many(
+                    dest_queue,
+                    limit=1000000,  # Large limit to capture all messages
+                    with_timestamps=True,
+                    delivery_guarantee="exactly_once",
+                    since_timestamp=since_timestamp,
+                )
+
+                # Output each moved message
+                warned_newlines = False
+                for result in results:
+                    message, timestamp = result  # type: ignore[misc]
+                    warned_newlines = _output_message(
+                        message,
+                        timestamp,
+                        json_output,
+                        show_timestamps,
+                        warned_newlines,
+                    )
+
+                return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
+
+            except Exception as e:
+                print(f"simplebroker: error: {e}", file=sys.stderr)
+                sys.stderr.flush()
+                return 1
+
+        else:
+            # Move single message
+            if since_timestamp:
+                # Use generator for since_timestamp support
+                gen = queue.move_generator(
+                    dest_queue, with_timestamps=True, since_timestamp=since_timestamp
+                )
+                try:
+                    result = next(gen)
+                    message, timestamp = result  # type: ignore[misc]
+                    _output_message(
+                        message, timestamp, json_output, show_timestamps, False
+                    )
+                    return EXIT_SUCCESS
+                except StopIteration:
+                    return EXIT_QUEUE_EMPTY
+            else:
+                # Simple single message move
+                result = queue.move_one(dest_queue, with_timestamps=True)
+                if result is None:
+                    return EXIT_QUEUE_EMPTY
+
+                message, timestamp = result  # type: ignore[misc]
+                _output_message(message, timestamp, json_output, show_timestamps, False)
+                return EXIT_SUCCESS
 
 
 def cmd_broadcast(db_path: str, message: str) -> int:
@@ -738,6 +753,11 @@ def cmd_watch(
     except Exception as e:
         print(f"simplebroker: error: {e}", file=sys.stderr)
         return 1
+    finally:
+        # Ensure any final output is flushed
+        sys.stdout.flush()
+        sys.stderr.flush()
+        watcher.stop()  # Ensure watcher is stopped cleanly
 
     return EXIT_SUCCESS
 

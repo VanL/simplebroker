@@ -24,29 +24,30 @@ class TestQueueConnectionManager:
             queue = None
             try:
                 # Create a persistent queue
-                queue = Queue("test", db_path=db_path, persistent=True)
+                with Queue("test", db_path=db_path, persistent=True) as queue:
+                    queue = Queue("test", db_path=db_path, persistent=True)
 
-                # Get connections multiple times in the same thread
-                connections = []
-                for _ in range(3):
-                    with queue.get_connection() as conn:
-                        connections.append(conn)
+                    # Get connections multiple times in the same thread
+                    connections = []
+                    for _ in range(3):
+                        with queue.get_connection() as conn:
+                            connections.append(conn)
 
-                # All connections should be BrokerDB instances
-                assert all(isinstance(c, BrokerDB) for c in connections), (
-                    "Should return BrokerDB instances"
-                )
+                    # All connections should be BrokerDB instances
+                    assert all(isinstance(c, BrokerDB) for c in connections), (
+                        "Should return BrokerDB instances"
+                    )
 
-                # In the same thread, we should get the same cached thread-local instance
-                assert connections[0] is connections[1], (
-                    "Same thread should return the same cached connection"
-                )
-                assert connections[1] is connections[2], (
-                    "Same thread should return the same cached connection"
-                )
+                    # In the same thread, we should get the same cached thread-local instance
+                    assert connections[0] is connections[1], (
+                        "Same thread should return the same cached connection"
+                    )
+                    assert connections[1] is connections[2], (
+                        "Same thread should return the same cached connection"
+                    )
 
-                # The underlying DBConnection should be persistent
-                assert queue.conn is not None, "Persistent mode should have a conn"
+                    # The underlying DBConnection should be persistent
+                    assert queue.conn is not None, "Persistent mode should have a conn"
             finally:
                 if queue:
                     queue.close()
@@ -57,8 +58,7 @@ class TestQueueConnectionManager:
             db_path = str(Path(tmpdir) / "test.db")
 
             # Create an ephemeral queue
-            queue = Queue("test", db_path=db_path, persistent=False)
-            try:
+            with Queue("test", db_path=db_path, persistent=False) as queue:
                 # Track connection lifecycle
                 connection_ids = []
 
@@ -78,10 +78,6 @@ class TestQueueConnectionManager:
 
                 # Queue should not have a persistent connection
                 assert queue.conn is None, "Ephemeral mode should not have a conn"
-            finally:
-                # Ephemeral queues don't need explicit close, but good practice
-                if hasattr(queue, "close"):
-                    queue.close()
 
     def test_ephemeral_connection_lifetime(self):
         """Test that ephemeral connections are properly closed after use."""
@@ -144,8 +140,7 @@ class TestQueueConnectionManager:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
 
-            queue = Queue("test", db_path=db_path, persistent=False)
-            try:
+            with Queue("test", db_path=db_path, persistent=False) as queue:
                 connection_ids = []
                 lock = threading.Lock()
 
@@ -176,9 +171,6 @@ class TestQueueConnectionManager:
                 assert len(set(connection_ids)) == 5, (
                     "Each thread should get a different connection in ephemeral mode"
                 )
-            finally:
-                if hasattr(queue, "close"):
-                    queue.close()
 
     def test_thread_safety_persistent_mode(self):
         """Test that persistent mode uses thread-local connections for safety."""
@@ -187,66 +179,67 @@ class TestQueueConnectionManager:
             queue = None
             threads = []
             try:
-                queue = Queue("test", db_path=db_path, persistent=True)
+                with Queue("test", db_path=db_path, persistent=True) as queue:
+                    # First, verify same thread gets cached connection
+                    with queue.get_connection() as first_conn:
+                        with queue.get_connection() as second_conn:
+                            assert first_conn is second_conn, (
+                                "Sequential calls in same thread should return same connection"
+                            )
 
-                # First, verify same thread gets cached connection
-                with queue.get_connection() as first_conn:
-                    with queue.get_connection() as second_conn:
-                        assert first_conn is second_conn, (
-                            "Sequential calls in same thread should return same connection"
+                    connections = []
+                    connection_ids = []
+                    lock = threading.Lock()
+                    barrier = threading.Barrier(5)  # Synchronize thread starts
+
+                    def get_connection():
+                        try:
+                            barrier.wait()  # Wait for all threads to be ready
+                            # Get connection twice to verify thread-local caching
+                            with queue.get_connection() as conn1:
+                                with queue.get_connection() as conn2:
+                                    with lock:
+                                        connections.append((conn1, conn2))
+                                        connection_ids.append((id(conn1), id(conn2)))
+                                        # Within same thread, should be cached
+                                        assert conn1 is conn2, (
+                                            "Same thread should get cached connection"
+                                        )
+                        except Exception:
+                            # Ignore exceptions in worker threads to prevent hanging
+                            pass
+
+                    # Create multiple threads
+                    threads = [
+                        threading.Thread(target=get_connection) for _ in range(5)
+                    ]
+
+                    # Start all threads
+                    for t in threads:
+                        t.start()
+
+                    # Wait for all to complete
+                    for t in threads:
+                        t.join(timeout=5.0)  # Timeout to prevent hanging
+
+                    # Verify we got 5 pairs of connections (if all threads succeeded)
+                    if len(connections) == 5:
+                        # In persistent mode, each thread gets its own connection (no sharing)
+                        # This follows the principle "don't share across threads"
+                        unique_ids = {id_pair[0] for id_pair in connection_ids}
+                        assert len(unique_ids) == 5, (
+                            "Each thread should have its own connection (no sharing across threads)"
                         )
 
-                connections = []
-                connection_ids = []
-                lock = threading.Lock()
-                barrier = threading.Barrier(5)  # Synchronize thread starts
-
-                def get_connection():
-                    try:
-                        barrier.wait()  # Wait for all threads to be ready
-                        # Get connection twice to verify thread-local caching
-                        with queue.get_connection() as conn1:
-                            with queue.get_connection() as conn2:
-                                with lock:
-                                    connections.append((conn1, conn2))
-                                    connection_ids.append((id(conn1), id(conn2)))
-                                    # Within same thread, should be cached
-                                    assert conn1 is conn2, (
-                                        "Same thread should get cached connection"
-                                    )
-                    except Exception:
-                        # Ignore exceptions in worker threads to prevent hanging
-                        pass
-
-                # Create multiple threads
-                threads = [threading.Thread(target=get_connection) for _ in range(5)]
-
-                # Start all threads
-                for t in threads:
-                    t.start()
-
-                # Wait for all to complete
-                for t in threads:
-                    t.join(timeout=5.0)  # Timeout to prevent hanging
-
-                # Verify we got 5 pairs of connections (if all threads succeeded)
-                if len(connections) == 5:
-                    # In persistent mode, each thread gets its own connection (no sharing)
-                    # This follows the principle "don't share across threads"
-                    unique_ids = {id_pair[0] for id_pair in connection_ids}
-                    assert len(unique_ids) == 5, (
-                        "Each thread should have its own connection (no sharing across threads)"
-                    )
-
-                # But all should share the same underlying DBConnection object
-                assert queue.conn is not None, "Should have persistent DBConnection"
+                    # But all should share the same underlying DBConnection object
+                    assert queue.conn is not None, "Should have persistent DBConnection"
             finally:
                 # Clean up threads first with longer timeout
                 for t in threads:
                     if t.is_alive():
                         t.join(timeout=2.0)
 
-                # Close queue - this will now clean up all registered connections
+                # Close the queue to release resources
                 if queue:
                     queue.close()
 
@@ -296,8 +289,7 @@ class TestQueueConnectionManager:
             db_path = str(Path(tmpdir) / "test.db")
 
             # Test that exceptions in the context manager are propagated
-            queue = Queue("test", db_path=db_path, persistent=False)
-            try:
+            with Queue("test", db_path=db_path, persistent=False) as queue:
                 with pytest.raises(ValueError):
                     with queue.get_connection() as conn:
                         # Simulate an error during operation
@@ -311,9 +303,6 @@ class TestQueueConnectionManager:
                 with queue.get_connection() as conn:
                     messages = list(conn.peek_generator("test", with_timestamps=False))
                     assert messages == ["message"]
-            finally:
-                if hasattr(queue, "close"):
-                    queue.close()
 
     def test_mixed_mode_operations(self):
         """Test that persistent and ephemeral queues can coexist."""
