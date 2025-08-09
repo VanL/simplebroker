@@ -7,6 +7,7 @@ its core philosophy and performance characteristics.
 
 from __future__ import annotations
 
+import itertools
 import os
 import sqlite3
 import threading
@@ -132,7 +133,10 @@ class SQLRunner(Protocol):
 class SQLiteRunner:
     """Default synchronous SQLite implementation with thread-local connections."""
 
+    _instance_counter = itertools.count()  # Unique instance ID for debugging
+
     def __init__(self, db_path: str) -> None:
+        self.instance_id = next(self._instance_counter)
         self._db_path = db_path
         self._thread_local = threading.local()
         # Store PID to detect fork

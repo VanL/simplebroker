@@ -347,7 +347,7 @@ class TestQueueConnectionManager:
             original_setup = SQLiteRunner.setup
 
             def tracked_setup(self, phase):
-                setup_calls.append((id(self), phase))
+                setup_calls.append((self.instance_id, phase))
                 return original_setup(self, phase)
 
             # Test persistent mode first
