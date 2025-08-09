@@ -127,6 +127,18 @@ MAX_ITERATIONS: Final[int] = 100_000
 """Maximum iterations waiting for time to advance before concluding clock is broken."""
 
 # ==============================================================================
+# BATCH SIZE SETTINGS
+# ==============================================================================
+
+PEEK_BATCH_SIZE: Final[int] = 1000
+"""Default batch size for peek operations.
+
+Peek operations are non-transactional, so larger batches improve performance
+without holding database locks. This is separate from GENERATOR_BATCH_SIZE
+which is used for transactional claim/move operations.
+"""
+
+# ==============================================================================
 # WATCHER SETTINGS
 # ==============================================================================
 
@@ -190,7 +202,7 @@ def load_config() -> Dict[str, Any]:
 
             BROKER_GENERATOR_BATCH_SIZE (int): Batch size for generator methods.
                 Default: 100
-                Controls how many messages are fetched at once by peek/claim/move generators.
+                Controls how many messages are fetched at once by claim/move generators.
                 Higher values reduce query overhead but use more memory.
 
         Vacuum Settings:

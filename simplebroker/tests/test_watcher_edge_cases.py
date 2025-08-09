@@ -320,35 +320,47 @@ class TestWatcherEdgeCases(WatcherTestBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
             watcher = QueueWatcher(str(db_path), "queue", lambda m, t: None)
+            try:
+                # Create a connection by accessing the queue's connection
+                with watcher._queue_obj.get_connection() as db:
+                    assert db is not None
 
-            # Create a connection by accessing the queue's connection
-            with watcher._queue_obj.get_connection() as db:
-                assert db is not None
+                # Mock the cleanup method to fail
+                original_cleanup = watcher._queue_obj.cleanup_connections
+                mock_cleanup = Mock(side_effect=Exception("Cleanup failed"))
+                watcher._queue_obj.cleanup_connections = mock_cleanup
 
-            # Mock the cleanup method to fail
-            original_cleanup = watcher._queue_obj.cleanup_connections
-            mock_cleanup = Mock(side_effect=Exception("Cleanup failed"))
-            watcher._queue_obj.cleanup_connections = mock_cleanup
+                # Mock the config to enable logging just for this call
+                from simplebroker.watcher import _config
 
-            # Mock the config to enable logging just for this call
-            from simplebroker.watcher import _config
+                with patch(
+                    "simplebroker.watcher._config",
+                    {**_config, "BROKER_LOGGING_ENABLED": True},
+                ), patch(
+                    "simplebroker.sbqueue._config",
+                    {"BROKER_LOGGING_ENABLED": True},
+                ):
+                    # Should not raise when suppressed (as it is in real usage)
+                    with contextlib.suppress(Exception):
+                        watcher._cleanup_thread_local()
 
-            with patch(
-                "simplebroker.watcher._config",
-                {**_config, "BROKER_LOGGING_ENABLED": True},
-            ), patch(
-                "simplebroker.sbqueue._config",
-                {"BROKER_LOGGING_ENABLED": True},
-            ):
-                # Should not raise when suppressed (as it is in real usage)
-                with contextlib.suppress(Exception):
-                    watcher._cleanup_thread_local()
+                    # Verify cleanup method was called
+                    mock_cleanup.assert_called_once()
 
-                # Verify cleanup method was called
-                mock_cleanup.assert_called_once()
-
-            # Restore original cleanup method
-            watcher._queue_obj.cleanup_connections = original_cleanup
+                # Restore original cleanup method
+                watcher._queue_obj.cleanup_connections = original_cleanup
+            finally:
+                # Ensure proper cleanup of watcher resources before tempdir cleanup
+                try:
+                    # Stop the watcher to ensure all threads are cleaned up
+                    if hasattr(watcher, "stop"):
+                        watcher.stop()
+                    # Close the queue's underlying connections
+                    if hasattr(watcher._queue_obj, "close"):
+                        watcher._queue_obj.close()
+                except Exception:
+                    # Ignore cleanup errors to prevent masking the actual test
+                    pass
 
     def test_context_manager_error_handling(self) -> None:
         """Test context manager handles errors during exit."""

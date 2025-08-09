@@ -182,63 +182,64 @@ class TestQueueConnectionManager:
             db_path = str(Path(tmpdir) / "test.db")
 
             queue = Queue("test", db_path=db_path, persistent=True)
-
-            # First, verify same thread gets cached connection
-            with queue.get_connection() as first_conn:
-                with queue.get_connection() as second_conn:
-                    assert first_conn is second_conn, (
-                        "Sequential calls in same thread should return same connection"
-                    )
-
-            connections = []
-            connection_ids = []
-            lock = threading.Lock()
-            barrier = threading.Barrier(5)  # Synchronize thread starts
-
-            def get_connection():
-                barrier.wait()  # Wait for all threads to be ready
-                # Get connection twice to verify thread-local caching
-                with queue.get_connection() as conn1:
-                    with queue.get_connection() as conn2:
-                        with lock:
-                            connections.append((conn1, conn2))
-                            connection_ids.append((id(conn1), id(conn2)))
-                            # Within same thread, should be cached
-                            assert conn1 is conn2, (
-                                "Same thread should get cached connection"
-                            )
-
-            # Create multiple threads
-            threads = [threading.Thread(target=get_connection) for _ in range(5)]
-
             try:
-                # Start all threads
-                for t in threads:
-                    t.start()
+                # First, verify same thread gets cached connection
+                with queue.get_connection() as first_conn:
+                    with queue.get_connection() as second_conn:
+                        assert first_conn is second_conn, (
+                            "Sequential calls in same thread should return same connection"
+                        )
 
-                # Wait for all to complete
-                for t in threads:
-                    t.join()
+                connections = []
+                connection_ids = []
+                lock = threading.Lock()
+                barrier = threading.Barrier(5)  # Synchronize thread starts
+
+                def get_connection():
+                    barrier.wait()  # Wait for all threads to be ready
+                    # Get connection twice to verify thread-local caching
+                    with queue.get_connection() as conn1:
+                        with queue.get_connection() as conn2:
+                            with lock:
+                                connections.append((conn1, conn2))
+                                connection_ids.append((id(conn1), id(conn2)))
+                                # Within same thread, should be cached
+                                assert conn1 is conn2, (
+                                    "Same thread should get cached connection"
+                                )
+
+                # Create multiple threads
+                threads = [threading.Thread(target=get_connection) for _ in range(5)]
+
+                try:
+                    # Start all threads
+                    for t in threads:
+                        t.start()
+
+                    # Wait for all to complete
+                    for t in threads:
+                        t.join()
+                finally:
+                    # Ensure all threads are cleaned up
+                    for t in threads:
+                        if t.is_alive():
+                            t.join(timeout=1.0)
+
+                # Verify we got 5 pairs of connections
+                assert len(connections) == 5, "Should have 5 connection pairs"
+
+                # In persistent mode, each thread gets its own connection (no sharing)
+                # This follows the principle "don't share across threads"
+                unique_ids = {id_pair[0] for id_pair in connection_ids}
+                assert len(unique_ids) == 5, (
+                    "Each thread should have its own connection (no sharing across threads)"
+                )
+
+                # But all should share the same underlying DBConnection object
+                assert queue.conn is not None, "Should have persistent DBConnection"
             finally:
-                # Ensure all threads are cleaned up
-                for t in threads:
-                    if t.is_alive():
-                        t.join(timeout=1.0)
-
-            # Verify we got 5 pairs of connections
-            assert len(connections) == 5, "Should have 5 connection pairs"
-
-            # In persistent mode, each thread gets its own connection (no sharing)
-            # This follows the principle "don't share across threads"
-            unique_ids = {id_pair[0] for id_pair in connection_ids}
-            assert len(unique_ids) == 5, (
-                "Each thread should have its own connection (no sharing across threads)"
-            )
-
-            # But all should share the same underlying DBConnection object
-            assert queue.conn is not None, "Should have persistent DBConnection"
-
-            queue.close()
+                # Ensure queue is properly closed before tempdir cleanup
+                queue.close()
 
     def test_connection_type_consistency(self):
         """Test that both modes return BrokerDB for consistency."""

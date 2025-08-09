@@ -93,16 +93,6 @@ INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)
 """
 
 # ============================================================================
-# MESSAGE OPERATIONS - SELECT (PEEK/READ)
-# ============================================================================
-
-
-# ============================================================================
-# MESSAGE OPERATIONS - UPDATE (CLAIM/MOVE)
-# ============================================================================
-
-
-# ============================================================================
 # UNIFIED RETRIEVE OPERATIONS
 # These queries support both single and batch operations via the LIMIT parameter
 # ============================================================================
@@ -346,6 +336,7 @@ def build_move_by_id_query(where_conditions: List[str]) -> str:
         SET queue = ?, claimed = 0
         WHERE {where_clause}
         RETURNING id, body, ts
+        ORDER BY id
         """
 
 

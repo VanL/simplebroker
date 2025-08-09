@@ -74,6 +74,12 @@ def run_cli(
     """
     cmd = [sys.executable, "-m", "simplebroker.cli", *map(str, args)]
 
+    # Ensure UTF-8 encoding on Windows
+    import os
+
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+
     completed = subprocess.run(
         cmd,
         cwd=cwd,
@@ -82,6 +88,8 @@ def run_cli(
         capture_output=True,
         timeout=timeout,
         encoding="utf-8",  # Ensure UTF-8 encoding on all platforms
+        errors="replace",  # Replace invalid characters instead of failing
+        env=env,  # Pass environment with UTF-8 encoding
     )
 
     return (

@@ -26,6 +26,7 @@ from ._constants import (
     LOGICAL_COUNTER_BITS,
     MAX_MESSAGE_SIZE,
     MAX_QUEUE_NAME_LENGTH,
+    PEEK_BATCH_SIZE,
     SCHEMA_VERSION,
     SIMPLEBROKER_MAGIC,
     load_config,
@@ -1102,7 +1103,7 @@ class BrokerCore:
     def peek_many(
         self,
         queue: str,
-        limit: int,
+        limit: int = PEEK_BATCH_SIZE,
         *,
         with_timestamps: bool = True,
         since_timestamp: Optional[int] = None,
@@ -1113,7 +1114,7 @@ class BrokerCore:
 
         Args:
             queue: Name of the queue
-            limit: Maximum number of messages to peek at
+            limit: Maximum number of messages to peek at (default: 1000)
             with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
             since_timestamp: If provided, only peek at messages after this timestamp
 
@@ -1163,9 +1164,7 @@ class BrokerCore:
             ValueError: If queue name is invalid
             RuntimeError: If called from a forked process
         """
-        effective_batch_size = (
-            batch_size if batch_size is not None else GENERATOR_BATCH_SIZE
-        )
+        effective_batch_size = batch_size if batch_size is not None else PEEK_BATCH_SIZE
         offset = 0
         while True:
             # Peek with proper offset-based pagination
@@ -1310,6 +1309,7 @@ class BrokerCore:
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
         batch_size: Optional[int] = None,
         since_timestamp: Optional[int] = None,
+        exact_timestamp: Optional[int] = None,
     ) -> Iterator[Union[Tuple[str, int], str]]:
         """Generator that moves messages from source queue to target queue.
 
@@ -1322,6 +1322,7 @@ class BrokerCore:
                 - at_least_once: Process in batches (faster, may redeliver)
             batch_size: Batch size for at_least_once mode (uses configured default if None)
             since_timestamp: If provided, only move messages after this timestamp
+            exact_timestamp: If provided, move only message with this timestamp
 
         Yields:
             (message_body, timestamp) tuples if with_timestamps=True,
@@ -1364,6 +1365,7 @@ class BrokerCore:
                     target_queue=target_queue,
                     limit=effective_batch_size,
                     since_timestamp=since_timestamp,
+                    exact_timestamp=exact_timestamp,
                     commit_before_yield=False,  # Commit after yielding
                 )
                 if not results:

@@ -541,20 +541,31 @@ def cmd_move(
         return EXIT_SUCCESS
 
     elif all_messages:
-        # Move all messages using generator
-        message_count = 0
-        warned_newlines = False
-
-        for result in queue.move_generator(
-            dest_queue, with_timestamps=True, since_timestamp=since_timestamp
-        ):
-            message, timestamp = result  # type: ignore[misc]
-            warned_newlines = _output_message(
-                message, timestamp, json_output, show_timestamps, warned_newlines
+        # Move all messages using atomic batch operation
+        # Use a large limit to move all available messages in one transaction
+        try:
+            results = queue.move_many(
+                dest_queue,
+                limit=1000000,  # Large limit to capture all messages
+                with_timestamps=True,
+                delivery_guarantee="exactly_once",
+                since_timestamp=since_timestamp,
             )
-            message_count += 1
 
-        return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
+            # Output each moved message
+            warned_newlines = False
+            for result in results:
+                message, timestamp = result  # type: ignore[misc]
+                warned_newlines = _output_message(
+                    message, timestamp, json_output, show_timestamps, warned_newlines
+                )
+
+            return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
+
+        except Exception as e:
+            print(f"simplebroker: error: {e}", file=sys.stderr)
+            sys.stderr.flush()
+            return 1
 
     else:
         # Move single message

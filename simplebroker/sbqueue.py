@@ -9,7 +9,7 @@ import weakref
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
-from ._constants import DEFAULT_DB_NAME, load_config
+from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config
 from ._runner import SQLRunner
 from .db import BrokerCore, BrokerDB, DBConnection
 
@@ -362,7 +362,7 @@ class Queue:
 
     def peek_many(
         self,
-        limit: int,
+        limit: int = PEEK_BATCH_SIZE,
         *,
         with_timestamps: bool = False,
         since_timestamp: Optional[int] = None,
@@ -370,7 +370,7 @@ class Queue:
         """Peek at multiple messages without removing them from the queue.
 
         Args:
-            limit: Maximum number of messages to peek at
+            limit: Maximum number of messages to peek at (default: 1000)
             with_timestamps: If True, return list of (message, timestamp) tuples
             since_timestamp: Only peek at messages newer than this timestamp
 
@@ -604,6 +604,7 @@ class Queue:
         with_timestamps: bool = False,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
         since_timestamp: Optional[int] = None,
+        exact_timestamp: Optional[int] = None,
     ) -> Iterator[Union[str, Tuple[str, int]]]:
         """Generator that moves messages from this queue to another.
 
@@ -614,6 +615,7 @@ class Queue:
                 - exactly_once: Process one message at a time (safer, slower)
                 - at_least_once: Process in batches (faster, may redeliver)
             since_timestamp: Only move messages newer than this timestamp
+            exact_timestamp: Only move message with this exact timestamp
 
         Yields:
             Messages or (message, timestamp) tuples if with_timestamps=True
@@ -634,6 +636,7 @@ class Queue:
                 with_timestamps=with_timestamps,
                 delivery_guarantee=delivery_guarantee,
                 since_timestamp=since_timestamp,
+                exact_timestamp=exact_timestamp,
             )
 
     def delete(self, *, message_id: Optional[int] = None) -> bool:
