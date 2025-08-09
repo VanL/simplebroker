@@ -19,7 +19,7 @@ def ensure_windows_cleanup():
 
 
 def test_ensure_core_lazy_initialization():
-    """Test that _ensure_core lazily initializes the connection."""
+    """Test that DBConnection lazily initializes the core."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
 
@@ -27,26 +27,16 @@ def test_ensure_core_lazy_initialization():
             # Create a persistent queue
             queue = Queue("test", db_path=db_path, persistent=True)
 
-            # Initially, core should be initialized (from __init__ since runner exists)
-            assert queue._core is not None
-            assert (
-                queue._runner is not None
-            )  # Runner is created in __init__ for persistent mode
+            # Initially, connection should exist but core might be lazy
+            assert queue.conn is not None
 
-            # Close the queue to reset state
-            queue.close()
-
-            # Now both should be None
-            assert queue._core is None
-            assert queue._runner is None
-
-            # Call _ensure_core to trigger lazy initialization
-            core = queue._ensure_core()
-
-            # Now both should be initialized
+            # Get core to ensure initialization
+            core = queue.conn.get_core()
             assert core is not None
-            assert queue._core is core
-            assert queue._runner is not None
+
+            # Second call should return same core
+            core2 = queue.conn.get_core()
+            assert core is core2
 
             # Clean up
             queue.close()
@@ -60,22 +50,26 @@ def test_cleanup_finalizer_function():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
 
-        # Create a persistent queue without custom runner to trigger _install_finalizer
+        # Create a persistent queue to trigger _install_finalizer
         queue = Queue("test", db_path=db_path, persistent=True)
 
         try:
             # Verify finalizer was installed
             assert hasattr(queue, "_finalizer")
 
-            # Mock the runner's close method to verify it gets called
-            original_close = queue._runner.close
-            queue._runner.close = Mock(side_effect=original_close)
+            # Initialize the connection
+            core = queue.conn.get_core()
+            assert core is not None
+
+            # Mock the cleanup method on the connection
+            original_cleanup = queue.conn.cleanup
+            queue.conn.cleanup = Mock(side_effect=original_cleanup)
 
             # Call the finalizer function directly (simulating object destruction)
             queue._finalizer()
 
-            # Verify the runner was closed
-            queue._runner.close.assert_called_once()
+            # Verify cleanup was called
+            queue.conn.cleanup.assert_called_once()
         finally:
             # Force garbage collection for Windows
             ensure_windows_cleanup()
@@ -89,17 +83,13 @@ def test_cleanup_finalizer_with_exception():
         # Create a persistent queue
         queue = Queue("test", db_path=db_path, persistent=True)
 
-        # Save the original runner for cleanup
-        original_runner_close = queue._runner.close
+        # Mock the connection cleanup to raise an exception
+        queue.conn.cleanup = Mock(side_effect=Exception("Test exception"))
 
-        # Ensure the queue is initialized
-        queue._ensure_core()
-
-        # Mock the runner's close method to raise an exception
-        queue._runner.close = Mock(side_effect=Exception("Test exception"))
-
-        # Patch the logger to verify warning is logged
-        with patch("simplebroker.sbqueue.logger") as mock_logger:
+        # Patch the logger and config to verify warning is logged
+        with patch("simplebroker.sbqueue.logger") as mock_logger, patch(
+            "simplebroker.sbqueue._config", {"BROKER_LOGGING_ENABLED": True}
+        ):
             # Call the finalizer function directly
             queue._finalizer()
 
@@ -110,9 +100,6 @@ def test_cleanup_finalizer_with_exception():
             )
             assert "Test exception" in str(mock_logger.warning.call_args)
 
-        # Clean up - use the original close method
-        queue._runner.close = original_runner_close
-        queue.close()
         ensure_windows_cleanup()
 
 
@@ -139,7 +126,7 @@ def test_cleanup_finalizer_with_none_runner():
 
 
 def test_queue_persistent_with_custom_runner_no_finalizer():
-    """Test that custom runner doesn't install finalizer."""
+    """Test that custom runner still installs finalizer."""
     from simplebroker._runner import SQLiteRunner
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -154,8 +141,8 @@ def test_queue_persistent_with_custom_runner_no_finalizer():
                 "test", db_path=db_path, persistent=True, runner=custom_runner
             )
 
-            # Verify no finalizer was installed (only installed when persistent=True and runner=None)
-            assert not hasattr(queue, "_finalizer")
+            # Verify finalizer was installed (now always installed for safety)
+            assert hasattr(queue, "_finalizer")
 
             # Clean up
             queue.close()

@@ -114,10 +114,10 @@ def test_thundering_herd_mitigation() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watchers = []
 
         try:
             # Create 50 watchers on different queues
-            watchers = []
             metrics: dict[str, WatcherMetrics] = {}
             call_counts: dict[str, int] = {}
 
@@ -193,13 +193,13 @@ def test_thundering_herd_mitigation() -> None:
                     f"Found {len(mismatched_queues)} queues with mismatched counts"
                 )
 
-            # Cleanup
-            for w in watchers:
-                w._stop_event.set()
-                time.sleep(0.05)  # Brief wait
-            for w in watchers:
-                w.stop()
         finally:
+            # Proper cleanup - stop() handles thread joining automatically
+            for w in watchers:
+                try:
+                    w.stop()
+                except Exception:
+                    pass  # Continue cleanup even if individual stop fails
             broker.close()
 
 
@@ -208,10 +208,10 @@ def test_thundering_herd_with_multiple_active_queues() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watchers = []
 
         try:
             # Create 20 watchers
-            watchers = []
             metrics: dict[str, WatcherMetrics] = {}
             call_counts: dict[str, int] = {}
 
@@ -263,10 +263,13 @@ def test_thundering_herd_with_multiple_active_queues() -> None:
                     assert call_counts[queue] == 0
                     assert metrics[queue].messages_processed == 0
 
-            # Cleanup
-            for w in watchers:
-                w.stop()
         finally:
+            # Proper cleanup - stop() handles thread joining automatically
+            for w in watchers:
+                try:
+                    w.stop()
+                except Exception:
+                    pass  # Continue cleanup even if individual stop fails
             broker.close()
 
 
@@ -275,6 +278,7 @@ def test_pre_check_correctness() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
 
         try:
             # Create watcher
@@ -296,6 +300,11 @@ def test_pre_check_correctness() -> None:
             # Should now report messages present
             assert watcher._has_pending_messages(db) is True
         finally:
+            if watcher is not None:
+                try:
+                    watcher.stop()
+                except Exception:
+                    pass
             broker.close()
 
 
@@ -304,6 +313,7 @@ def test_pre_check_with_timestamp_filtering() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
 
         try:
             # Add messages at different times
@@ -338,21 +348,25 @@ def test_pre_check_with_timestamp_filtering() -> None:
             assert watcher._has_pending_messages(db) is True
 
             # Process messages
-            thread = watcher.run_in_thread()
+            watcher.run_in_thread()
 
             # Wait for messages to be processed
             assert wait_for_count(
                 lambda: len(handler_calls), expected_count=2, timeout=2.0
             )
 
-            watcher.stop()
-            thread.join(timeout=1.0)
+            watcher.stop()  # stop() handles thread joining automatically
 
             # Should only have processed messages after timestamp
             assert len(handler_calls) == 2
             assert handler_calls[0][0] == "message_3"
             assert handler_calls[1][0] == "message_4"
         finally:
+            if watcher is not None:
+                try:
+                    watcher.stop()
+                except Exception:
+                    pass
             broker.close()
 
 
@@ -404,12 +418,12 @@ def test_disable_pre_check_via_env() -> None:
                 assert watcher2._skip_idle_check is False
 
             # Ensure watchers are stopped if they were started
-            if watcher and hasattr(watcher, "stop"):
+            if watcher is not None:
                 try:
                     watcher.stop()
                 except Exception:
                     pass
-            if watcher2 and hasattr(watcher2, "stop"):
+            if watcher2 is not None:
                 try:
                     watcher2.stop()
                 except Exception:
@@ -423,6 +437,7 @@ def test_concurrent_pre_check_safety() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watchers = []
 
         try:
             processed_messages = []
@@ -433,7 +448,6 @@ def test_concurrent_pre_check_safety() -> None:
                     processed_messages.append(msg)
 
             # Create multiple watchers on same queue
-            watchers = []
             for _ in range(5):
                 w = InstrumentedQueueWatcher(db_path, "shared_queue", handler)
                 watchers.append(w)
@@ -459,10 +473,13 @@ def test_concurrent_pre_check_safety() -> None:
             # All messages should be processed exactly once
             assert sorted(processed_messages) == sorted(expected_messages)
 
-            # Cleanup
-            for w in watchers:
-                w.stop()
         finally:
+            # Proper cleanup - stop() handles thread joining automatically
+            for w in watchers:
+                try:
+                    w.stop()
+                except Exception:
+                    pass  # Continue cleanup even if individual stop fails
             broker.close()
 
 
@@ -471,6 +488,7 @@ def test_metrics_collection() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
 
         try:
             metrics = WatcherMetrics("test_queue")
@@ -489,7 +507,7 @@ def test_metrics_collection() -> None:
             for i in range(5):
                 broker.write("test_queue", f"message_{i}")
 
-            thread = watcher.run_in_thread()
+            watcher.run_in_thread()
 
             # Wait for messages to be processed
             assert wait_for_count(
@@ -498,8 +516,7 @@ def test_metrics_collection() -> None:
                 timeout=2.0,
             )
 
-            watcher.stop()
-            thread.join(timeout=1.0)
+            watcher.stop()  # stop() handles thread joining automatically
 
             # Check metrics
             assert metrics.messages_processed == 5
@@ -508,6 +525,11 @@ def test_metrics_collection() -> None:
             assert metrics.pre_check_calls > 0
             assert metrics.drain_calls > 0
         finally:
+            if watcher is not None:
+                try:
+                    watcher.stop()
+                except Exception:
+                    pass
             broker.close()
 
 

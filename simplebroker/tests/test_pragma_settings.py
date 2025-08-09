@@ -175,7 +175,7 @@ def test_write_with_normal_sync_works(tmp_path, monkeypatch) -> None:
 
     # Read them back to verify
     with BrokerDB(str(db_path)) as db:
-        messages = db.read("test_queue", all_messages=True)
+        messages = db.peek_many("test_queue", limit=10, with_timestamps=False)
         assert len(messages) == 10
         for i, msg in enumerate(messages):
             assert msg == f"message {i}"

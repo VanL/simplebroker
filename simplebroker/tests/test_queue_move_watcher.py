@@ -12,6 +12,7 @@ from simplebroker.db import BrokerDB
 pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueMoveWatcher
 
+from .helpers.cleanup import register_watcher
 from .helpers.watcher_base import WatcherTestBase
 
 
@@ -93,6 +94,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             dest_queue="dest_queue",
             handler=collector.handler,
         )
+        register_watcher(watcher)
 
         # Run move with timeout safety
         self.run_watcher_with_timeout(watcher, timeout=2.0)
@@ -110,12 +112,14 @@ class TestQueueMoveWatcher(WatcherTestBase):
         ]
 
         # Verify messages are now in destination queue
-        to_messages = list(broker.read("dest_queue", all_messages=True))
+        to_messages = list(broker.peek_generator("dest_queue", with_timestamps=False))
         assert len(to_messages) == 3
         assert to_messages == ["message1", "message2", "message3"]
 
         # Verify source queue is empty
-        from_messages = list(broker.read("source_queue", all_messages=True))
+        from_messages = list(
+            broker.peek_generator("source_queue", with_timestamps=False)
+        )
         assert len(from_messages) == 0
 
     def test_handler_execution_verification(self, broker, temp_db):
@@ -141,6 +145,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             dest_queue="dest",
             handler=tracking_handler,
         )
+        register_watcher(watcher)
 
         # Run watcher with timeout safety
         self.run_watcher_with_timeout(watcher, timeout=2.0)
@@ -168,6 +173,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             handler=collector.conditional_error_handler,
             error_handler=collector.capture_error_handler,
         )
+        register_watcher(watcher)
 
         # Run watcher with timeout safety
         self.run_watcher_with_timeout(watcher, timeout=2.0)
@@ -176,7 +182,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert watcher.move_count == 3
 
         # Verify messages are in destination queue
-        dest_messages = list(broker.read("dest", all_messages=True))
+        dest_messages = list(broker.peek_generator("dest", with_timestamps=False))
         assert len(dest_messages) == 3
         assert dest_messages == ["message1", "fail_message", "message3"]
 
@@ -210,6 +216,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             dest_queue="dest",
             handler=capture_id_handler,
         )
+        register_watcher(watcher)
 
         # Run watcher with timeout safety
         self.run_watcher_with_timeout(watcher, timeout=2.0)
@@ -241,12 +248,13 @@ class TestQueueMoveWatcher(WatcherTestBase):
             dest_queue="dest",
             handler=lambda body, ts: None,
         )
+        register_watcher(watcher)
 
         # Run watcher with timeout safety
         self.run_watcher_with_timeout(watcher, timeout=2.0)
 
         # Read all messages from destination in order
-        dest_messages = list(broker.read("dest", all_messages=True))
+        dest_messages = list(broker.peek_generator("dest", with_timestamps=False))
 
         # Messages should be in global ID order (interleaved)
         # Expected order: dest1, dest2, src1, src2, dest3, src3
@@ -263,21 +271,23 @@ class TestQueueMoveWatcher(WatcherTestBase):
             handler=collector.handler,
             max_interval=0.05,  # Faster polling for test
         )
+        register_watcher(watcher)
 
         # Start watcher on empty queue
         thread = watcher.run_in_thread()
-        time.sleep(0.1)  # Let it poll a few times
+        try:
+            time.sleep(0.1)  # Let it poll a few times
 
-        # Add message while watcher is running
-        broker.write("empty_source", "delayed_message")
+            # Add message while watcher is running
+            broker.write("empty_source", "delayed_message")
 
-        time.sleep(0.15)  # Wait for move
-
-        # Stop with timeout safety
-        watcher.stop()
-        thread.join(timeout=2.0)
-        if thread.is_alive():
-            pytest.fail("Watcher thread did not stop within timeout")
+            time.sleep(0.15)  # Wait for move
+        finally:
+            # Stop with timeout safety
+            watcher.stop()
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                pytest.fail("Watcher thread did not stop within timeout")
 
         # Verify message was moved
         assert watcher.move_count == 1
@@ -286,7 +296,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert handler_calls[0][0] == "delayed_message"  # body is first element
 
         # Verify message is in destination
-        dest_messages = list(broker.read("dest", all_messages=True))
+        dest_messages = list(broker.peek_generator("dest", with_timestamps=False))
         assert dest_messages == ["delayed_message"]
 
     def test_concurrent_operations(self, broker, temp_db):
@@ -310,48 +320,53 @@ class TestQueueMoveWatcher(WatcherTestBase):
             dest_queue="dest",
             handler=counting_handler,
         )
+        register_watcher(watcher)
 
         # Start move
         thread = watcher.run_in_thread()
-
-        # Wait a bit to ensure watcher is running
-        # This is acceptable as we're not testing timing, just concurrent safety
-        time.sleep(0.05)
-
-        # Add more messages while moving
-        write_errors = []
-
-        def write_with_error_capture():
-            for i in range(5):
-                try:
-                    broker.write("source", f"concurrent_{i}")
-                    time.sleep(0.01)
-                except Exception as e:
-                    write_errors.append((i, str(e)))
-            all_writes_done.set()
-
-        writer_thread = threading.Thread(target=write_with_error_capture)
-        writer_thread.start()
-
-        # Wait for all writes to complete
-        all_writes_done.wait(timeout=2.0)
-        writer_thread.join(timeout=1.0)
-
-        # Give the watcher more time to process all messages
-        # Poll until all messages are moved or timeout
-        start_time = time.monotonic()
-        expected_count = 10 - len(write_errors)
-        while time.monotonic() - start_time < 2.0:
-            with moved_lock:
-                if moved_count >= expected_count:
-                    break
+        writer_thread = None
+        try:
+            # Wait a bit to ensure watcher is running
+            # This is acceptable as we're not testing timing, just concurrent safety
             time.sleep(0.05)
 
-        # Stop with timeout safety
-        watcher.stop()
-        thread.join(timeout=2.0)
-        if thread.is_alive():
-            pytest.fail("Watcher thread did not stop within timeout")
+            # Add more messages while moving
+            write_errors = []
+
+            def write_with_error_capture():
+                for i in range(5):
+                    try:
+                        broker.write("source", f"concurrent_{i}")
+                        time.sleep(0.01)
+                    except Exception as e:
+                        write_errors.append((i, str(e)))
+                all_writes_done.set()
+
+            writer_thread = threading.Thread(target=write_with_error_capture)
+            writer_thread.start()
+
+            # Wait for all writes to complete
+            all_writes_done.wait(timeout=2.0)
+            writer_thread.join(timeout=1.0)
+
+            # Give the watcher more time to process all messages
+            # Poll until all messages are moved or timeout
+            start_time = time.monotonic()
+            expected_count = 10 - len(write_errors)
+            while time.monotonic() - start_time < 2.0:
+                with moved_lock:
+                    if moved_count >= expected_count:
+                        break
+                time.sleep(0.05)
+
+        finally:
+            # Stop with timeout safety
+            watcher.stop()
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                pytest.fail("Watcher thread did not stop within timeout")
+            if writer_thread and writer_thread.is_alive():
+                writer_thread.join(timeout=1.0)
 
         # Check for write errors
         if write_errors:
@@ -364,13 +379,13 @@ class TestQueueMoveWatcher(WatcherTestBase):
             )
 
         # Verify all messages in destination
-        dest_messages = list(broker.read("dest", all_messages=True))
+        dest_messages = list(broker.peek_generator("dest", with_timestamps=False))
         assert len(dest_messages) == expected_count, (
             f"Expected {expected_count} messages in dest, got {len(dest_messages)}"
         )
 
         # Source should be empty
-        source_messages = list(broker.read("source", all_messages=True))
+        source_messages = list(broker.peek_generator("source", with_timestamps=False))
         assert len(source_messages) == 0
 
     def test_transaction_safety(self, broker, temp_db):
@@ -393,26 +408,29 @@ class TestQueueMoveWatcher(WatcherTestBase):
             dest_queue="dest",
             handler=slow_handler,
         )
+        register_watcher(watcher)
 
         thread = watcher.run_in_thread()
+        try:
+            # Wait for move to complete (handler called)
+            move_completed.wait(timeout=1.0)
 
-        # Wait for move to complete (handler called)
-        move_completed.wait(timeout=1.0)
+            # At this point, message should be in dest, not in source
+            # even though handler is still running
+            source_messages = list(
+                broker.peek_generator("source", with_timestamps=False)
+            )
+            dest_messages = list(broker.peek_generator("dest", with_timestamps=False))
 
-        # At this point, message should be in dest, not in source
-        # even though handler is still running
-        source_messages = list(broker.read("source", all_messages=True))
-        dest_messages = list(broker.read("dest", all_messages=True))
-
-        assert len(source_messages) == 0
-        assert len(dest_messages) == 1
-        assert dest_messages[0] == "atomic_test"
-
-        # Stop with timeout safety
-        watcher.stop()
-        thread.join(timeout=2.0)
-        if thread.is_alive():
-            pytest.fail("Watcher thread did not stop within timeout")
+            assert len(source_messages) == 0
+            assert len(dest_messages) == 1
+            assert dest_messages[0] == "atomic_test"
+        finally:
+            # Stop with timeout safety
+            watcher.stop()
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                pytest.fail("Watcher thread did not stop within timeout")
 
     def test_same_queue_validation(self, broker, temp_db):
         """Test that source_queue and dest_queue must be different."""
@@ -442,6 +460,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             handler=track_handler,
             max_messages=5,
         )
+        register_watcher(watcher)
 
         # Run synchronously to ensure it stops at limit
         watcher.run()
@@ -452,7 +471,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert moved == ["msg_0", "msg_1", "msg_2", "msg_3", "msg_4"]
 
         # 5 messages should remain in source
-        source_messages = list(broker.read("source", all_messages=True))
+        source_messages = list(broker.peek_generator("source", with_timestamps=False))
         assert len(source_messages) == 5
         assert source_messages == ["msg_5", "msg_6", "msg_7", "msg_8", "msg_9"]
 
@@ -471,15 +490,18 @@ class TestQueueMoveWatcher(WatcherTestBase):
             handler=lambda body, ts: None,
             stop_event=stop_event,
         )
+        register_watcher(watcher)
 
         thread = watcher.run_in_thread()
-        time.sleep(0.1)  # Let some moves happen
+        try:
+            time.sleep(0.1)  # Let some moves happen
 
-        # Signal stop
-        stop_event.set()
-        thread.join(timeout=2.0)
-        if thread.is_alive():
-            pytest.fail("Watcher thread did not stop within timeout")
+            # Signal stop
+            stop_event.set()
+        finally:
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                pytest.fail("Watcher thread did not stop within timeout")
 
         # Should have stopped (may have moved some but not necessarily all)
         assert not thread.is_alive()
@@ -494,6 +516,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             dest_queue="dest_queue",
             handler=lambda body, ts: None,
         )
+        register_watcher(watcher)
 
         assert watcher.source_queue == "source_queue"
         assert watcher.dest_queue == "dest_queue"
@@ -533,6 +556,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             dest_queue="dest",
             handler=capture_handler,
         )
+        register_watcher(watcher)
 
         # Run watcher with timeout safety
         self.run_watcher_with_timeout(watcher, timeout=2.0)
@@ -566,6 +590,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             handler=failing_handler,
             error_handler=error_handler,
         )
+        register_watcher(watcher)
 
         # Run watcher with timeout safety
         self.run_watcher_with_timeout(watcher, timeout=2.0)
@@ -578,5 +603,5 @@ class TestQueueMoveWatcher(WatcherTestBase):
 
         # Message should still be moved
         assert watcher.move_count == 1
-        dest_messages = list(broker.read("dest", all_messages=True))
+        dest_messages = list(broker.peek_generator("dest", with_timestamps=False))
         assert dest_messages == ["error_message"]

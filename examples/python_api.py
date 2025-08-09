@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
 """
-Advanced Python API examples for SimpleBroker.
+Python API examples for SimpleBroker - RECOMMENDED STARTING POINT.
 
-This file demonstrates various patterns for using SimpleBroker's Python API,
-including error handling, custom watchers, and integration patterns.
+This file demonstrates the standard public API for SimpleBroker using the
+Queue and QueueWatcher classes. These are the primary interfaces that most
+users should use.
+
+Key classes:
+- Queue: Primary interface for single-queue operations (write, read, peek, etc.)
+- QueueWatcher: For watching queues and processing messages as they arrive
+
+This example shows:
+- Basic queue operations
+- Error handling patterns
+- Custom watchers and processors
+- Integration patterns
 """
 
 import json
@@ -38,7 +49,8 @@ def basic_usage() -> None:
         print(f"Peek: {q.peek()}")  # "Task 1"
 
         # Read all remaining messages
-        messages = q.read_all()
+        result = q.read(all_messages=True)
+        messages = list(result) if result else []
         print(f"Read all: {messages}")  # ["Task 1", "Task 2"]
 
 
@@ -60,7 +72,8 @@ def timestamp_usage() -> None:
         print(f"Read first message: {msg}")
 
         # Read all remaining messages
-        remaining = q.read_all()
+        result = q.read(all_messages=True)
+        remaining = list(result) if result else []
         print(f"Remaining messages: {remaining}")
 
 
@@ -129,10 +142,12 @@ def error_handling_pattern() -> None:
         q.write(json.dumps({"task": "send_email", "to": "user@example.com"}))
 
         # Process all messages
-        messages = q.read_all()
+        result = q.read(all_messages=True)
+        messages = list(result) if result else []
         for i, msg in enumerate(messages):
             # Using index as a simple identifier
-            process_with_retry(msg, i)
+            if isinstance(msg, str):
+                process_with_retry(msg, i)
 
 
 def custom_watcher_example() -> None:
@@ -207,8 +222,8 @@ def custom_watcher_example() -> None:
 
     # QueueWatcher can accept a database path
     watcher = QueueWatcher(
-        db=".broker.db",
-        queue="stream",  # Queue name as string
+        ".broker.db",
+        "stream",  # Queue name as string
         handler=processor.process,
         error_handler=processor.handle_error,
         peek=False,  # Consume messages
@@ -258,7 +273,8 @@ def checkpoint_processing() -> None:
 
         with Queue("batch_tasks") as q:
             # Get all messages (checkpoint filtering would need to be done at DB level)
-            messages = q.read_all()
+            result = q.read(all_messages=True)
+            messages = list(result) if result else []
 
             if not messages:
                 logger.info("No new messages to process")

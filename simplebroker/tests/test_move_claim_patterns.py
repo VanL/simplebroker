@@ -12,12 +12,14 @@ This tests the patterns that make sense for move operations:
 import concurrent.futures as cf
 import sqlite3
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 from simplebroker.db import BrokerDB
 
 
-def _concurrent_move_worker(args: Tuple[int, str, str, str]) -> List[dict]:
+def _concurrent_move_worker(
+    args: Tuple[int, str, str, str],
+) -> List[Union[str, Tuple[str, int]]]:
     """Worker function for concurrent move tests."""
     worker_id, db_path, source_queue, dest_queue = args
     moved = []
@@ -25,7 +27,7 @@ def _concurrent_move_worker(args: Tuple[int, str, str, str]) -> List[dict]:
     with BrokerDB(db_path) as db:
         # Each worker tries to move 5 messages
         for _ in range(5):
-            result = db.move(source_queue, dest_queue)
+            result = db.move_one(source_queue, dest_queue, with_timestamps=False)
             if result:
                 moved.append(result)
             else:
@@ -61,7 +63,7 @@ def test_concurrent_moves_no_duplicate_move(workdir: Path):
 
     # Verify no duplicates
     assert len(all_moved) == 20
-    moved_bodies = [msg["body"] for msg in all_moved]
+    moved_bodies = [msg if isinstance(msg, str) else msg[0] for msg in all_moved]
     assert len(set(moved_bodies)) == 20  # All unique
 
     # Verify all messages were moved
@@ -70,12 +72,12 @@ def test_concurrent_moves_no_duplicate_move(workdir: Path):
 
     # Verify source queue is empty
     with BrokerDB(str(db_path)) as db:
-        remaining = db.read("source_queue", peek=True, all_messages=True)
+        remaining = list(db.peek_generator("source_queue", with_timestamps=False))
         assert len(remaining) == 0
 
     # Verify dest queue has all messages
     with BrokerDB(str(db_path)) as db:
-        dest_messages = db.read("dest_queue", peek=True, all_messages=True)
+        dest_messages = list(db.peek_generator("dest_queue", with_timestamps=False))
         assert len(dest_messages) == 20
 
 
@@ -90,9 +92,9 @@ def test_move_updates_claimed_status(workdir: Path):
 
     # Move first message
     with BrokerDB(str(db_path)) as db:
-        result = db.move("source", "dest")
+        result = db.move_one("source", "dest", with_timestamps=False)
         assert result is not None
-        assert result["body"] == "message0"
+        assert result == "message0"
 
     # Check database state
     conn = sqlite3.connect(str(db_path))
@@ -130,7 +132,7 @@ def test_move_with_vacuum_interaction(workdir: Path):
     # Move half the messages
     with BrokerDB(str(db_path)) as db:
         for _ in range(5):
-            result = db.move("vacuum_source", "vacuum_dest")
+            result = db.move_one("vacuum_source", "vacuum_dest", with_timestamps=False)
             assert result is not None
 
     # Check state before vacuum
@@ -155,7 +157,7 @@ def test_move_with_vacuum_interaction(workdir: Path):
     with BrokerDB(str(db_path)) as db:
         # Read 2 messages from source to claim them
         for _ in range(2):
-            db.read("vacuum_source")
+            db.claim_one("vacuum_source", with_timestamps=False)
 
     # Run vacuum
     with BrokerDB(str(db_path)) as db:
@@ -207,9 +209,9 @@ def test_move_schema_verification(workdir: Path):
 
     # Test move uses the index correctly
     with BrokerDB(str(db_path)) as db:
-        result = db.move("schema_test", "schema_dest")
+        result = db.move_one("schema_test", "schema_dest", with_timestamps=False)
         assert result is not None
-        assert result["body"] == "test_message"
+        assert result == "test_message"
 
     conn.close()
 
@@ -223,29 +225,20 @@ def test_move_with_mixed_claimed_unclaimed(workdir: Path):
         for i in range(10):
             db.write("mixed_source", f"message{i}")
 
-    # Read (claim) messages 0, 2, 4
+    # Read (claim) messages 0, 1, 2, 3, 4
     with BrokerDB(str(db_path)) as db:
-        # Read first message
-        msg = db.read("mixed_source")
-        assert msg == ["message0"]
-
-        # Read and skip to claim specific messages
-        msg = db.read("mixed_source")
-        assert msg == ["message1"]
-        msg = db.read("mixed_source")
-        assert msg == ["message2"]
-        msg = db.read("mixed_source")
-        assert msg == ["message3"]
-        msg = db.read("mixed_source")
-        assert msg == ["message4"]
+        # Read first 5 messages to claim them
+        for i in range(5):
+            msg = db.claim_one("mixed_source", with_timestamps=False)
+            assert msg == f"message{i}"
 
     # Now move - should only get unclaimed messages in order
     moved = []
     with BrokerDB(str(db_path)) as db:
         for _ in range(5):
-            result = db.move("mixed_source", "mixed_dest")
+            result = db.move_one("mixed_source", "mixed_dest", with_timestamps=False)
             if result:
-                moved.append(result["body"])
+                moved.append(result)
 
     # Should have moved the 5 unclaimed messages
     assert len(moved) == 5
@@ -253,7 +246,7 @@ def test_move_with_mixed_claimed_unclaimed(workdir: Path):
 
     # Verify no more messages to move
     with BrokerDB(str(db_path)) as db:
-        result = db.move("mixed_source", "mixed_dest")
+        result = db.move_one("mixed_source", "mixed_dest", with_timestamps=False)
         assert result is None
 
 
@@ -276,7 +269,7 @@ def test_move_atomicity(workdir: Path):
 
     # Perform move
     with BrokerDB(str(db_path)) as db:
-        result = db.move("atomic_source", "atomic_dest")
+        result = db.move_one("atomic_source", "atomic_dest", with_timestamps=False)
         assert result is not None
 
     # Verify atomicity - exactly one message moved
@@ -312,17 +305,17 @@ def test_move_preserves_message_ordering(workdir: Path):
     moved = []
     with BrokerDB(str(db_path)) as db:
         while True:
-            result = db.move("order_source", "order_dest")
+            result = db.move_one("order_source", "order_dest", with_timestamps=False)
             if result is None:
                 break
-            moved.append(result["body"])
+            moved.append(result)
 
     # Verify order is preserved
     assert moved == messages
 
     # Read from destination to verify order is maintained
     with BrokerDB(str(db_path)) as db:
-        dest_messages = db.read("order_dest", peek=True, all_messages=True)
+        dest_messages = list(db.peek_generator("order_dest", with_timestamps=False))
         assert dest_messages == messages
 
 
@@ -332,15 +325,17 @@ def test_move_empty_to_empty_queue(workdir: Path):
 
     with BrokerDB(str(db_path)) as db:
         # Move from non-existent queue
-        result = db.move("does_not_exist", "also_does_not_exist")
+        result = db.move_one(
+            "does_not_exist", "also_does_not_exist", with_timestamps=False
+        )
         assert result is None
 
         # Create empty source queue
         db.write("empty_source", "temp")
-        db.read("empty_source")  # Claim the message
+        db.claim_one("empty_source", with_timestamps=False)  # Claim the message
 
         # Move from empty queue
-        result = db.move("empty_source", "empty_dest")
+        result = db.move_one("empty_source", "empty_dest", with_timestamps=False)
         assert result is None
 
 
@@ -359,17 +354,17 @@ def test_multiple_sequential_moves(workdir: Path):
     with BrokerDB(str(db_path)) as db:
         for i in range(10):
             source = "source1" if i % 2 == 0 else "source2"
-            result = db.move(source, "combined_dest")
+            result = db.move_one(source, "combined_dest", with_timestamps=False)
             if result:
-                moved.append(result["body"])
+                moved.append(result)
 
     assert len(moved) == 10
 
     # Verify both sources are empty
     with BrokerDB(str(db_path)) as db:
-        assert db.read("source1", peek=True, all_messages=True) == []
-        assert db.read("source2", peek=True, all_messages=True) == []
+        assert list(db.peek_generator("source1", with_timestamps=False)) == []
+        assert list(db.peek_generator("source2", with_timestamps=False)) == []
 
         # Verify destination has all messages
-        dest_messages = db.read("combined_dest", peek=True, all_messages=True)
+        dest_messages = list(db.peek_generator("combined_dest", with_timestamps=False))
         assert len(dest_messages) == 10

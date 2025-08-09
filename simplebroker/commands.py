@@ -1,14 +1,18 @@
-"""Command implementations for SimpleBroker CLI."""
+"""Command implementations for SimpleBroker CLI using Queue API."""
 
 import json
 import sys
+import time
 import warnings
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 
 from ._constants import EXIT_QUEUE_EMPTY, EXIT_SUCCESS, MAX_MESSAGE_SIZE
 from ._exceptions import TimestampError
+from ._sql import COUNT_CLAIMED_MESSAGES, GET_OVERALL_STATS
 from ._timestamp import TimestampGenerator
-from .db import READ_COMMIT_INTERVAL, BrokerDB
+from .db import DBConnection
+from .sbqueue import Queue
+from .watcher import QueueMoveWatcher, QueueWatcher
 
 
 def parse_exact_message_id(message_id_str: str) -> Optional[int]:
@@ -45,9 +49,8 @@ def _validate_timestamp(timestamp_str: str) -> int:
         timestamp_str: String representation of timestamp. Accepts:
             - Native 64-bit hybrid timestamp (e.g., "1837025672140161024")
             - ISO 8601 date/datetime (e.g., "2024-01-15", "2024-01-15T14:30:00")
-            - Unix timestamp in seconds, milliseconds, or nanoseconds (e.g., "1705329000")
-            - Explicit units: "1705329000s" (seconds), "1705329000000ms" (milliseconds),
-              "1705329000000000000ns" (nanoseconds), "1837025672140161024" (hybrid)
+            - Unix timestamp in seconds, milliseconds, or nanoseconds
+            - Explicit units: "1705329000s", "1705329000000ms", etc.
 
     Returns:
         Parsed timestamp as 64-bit hybrid integer
@@ -103,134 +106,103 @@ def _get_message_content(message: str) -> str:
         message: Message string or "-" to read from stdin
 
     Returns:
-        The validated message content
+        The message content
 
     Raises:
-        ValueError: If message exceeds MAX_MESSAGE_SIZE
+        ValueError: If message exceeds size limit
     """
     if message == "-":
-        # Read from stdin with streaming size enforcement
-        content = _read_from_stdin()
-    else:
-        content = message
+        return _read_from_stdin()
 
-    # Validate size for non-stdin messages
-    if message != "-" and len(content.encode("utf-8")) > MAX_MESSAGE_SIZE:
+    # Check message size
+    message_bytes = len(message.encode("utf-8"))
+    if message_bytes > MAX_MESSAGE_SIZE:
         raise ValueError(f"Message exceeds maximum size of {MAX_MESSAGE_SIZE} bytes")
 
-    return content
+    return message
 
 
-def cmd_write(db: BrokerDB, queue: str, message: str) -> int:
-    """Write message to queue."""
-    content = _get_message_content(message)
-    db.write(queue, content)
-    return EXIT_SUCCESS
-
-
-def _read_messages(
-    db: BrokerDB,
-    queue: str,
-    peek: bool,
-    all_messages: bool = False,
-    json_output: bool = False,
-    show_timestamps: bool = False,
-    since_timestamp: Optional[int] = None,
-    exact_timestamp: Optional[int] = None,
-) -> int:
-    """Common implementation for read and peek commands.
+def _output_message(
+    message: str,
+    timestamp: int,
+    json_output: bool,
+    show_timestamps: bool,
+    warned_newlines: bool,
+) -> bool:
+    """Output a message with optional timestamp.
 
     Args:
-        db: Database instance
-        queue: Queue name
-        peek: If True, don't delete messages (peek mode)
-        all_messages: If True, read all messages
-        json_output: If True, output in line-delimited JSON format (ndjson)
-        show_timestamps: If True, include timestamps in the output
-        since_timestamp: If provided, only return messages with ts > since_timestamp
-        exact_timestamp: If provided, only return message with this exact timestamp
+        message: Message body
+        timestamp: Message timestamp
+        json_output: If True, output as JSON
+        show_timestamps: If True, include timestamp in output
+        warned_newlines: If True, newline warning has already been shown
+
+    Returns:
+        True if newline warning was shown (for tracking)
+    """
+    if json_output:
+        # JSON output includes timestamp by default
+        output = {"message": message, "timestamp": timestamp}
+        print(json.dumps(output, ensure_ascii=False))
+    elif show_timestamps:
+        # Include timestamp in plain output
+        print(f"{timestamp}\t{message}")
+    else:
+        # Plain output
+        if not warned_newlines and "\n" in message:
+            warnings.warn(
+                "Message contains newline characters which may break shell pipelines. "
+                "Consider using --json for safe handling of special characters.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            warned_newlines = True
+        print(message)
+
+    return warned_newlines
+
+
+def cmd_write(db_path: str, queue_name: str, message: str) -> int:
+    """Write message to queue using Queue API.
+
+    Args:
+        db_path: Path to database file
+        queue_name: Name of the queue
+        message: Message content or "-" for stdin
 
     Returns:
         Exit code
     """
-    message_count = 0
-    warned_newlines = False
-
-    # For delete operations, use commit interval to balance performance and safety
-    # Single message reads always commit immediately (commit interval = 1)
-    # Bulk reads use READ_COMMIT_INTERVAL (default=1 for exactly-once delivery)
-    # Users can set BROKER_READ_COMMIT_INTERVAL env var for performance tuning
-    commit_interval = READ_COMMIT_INTERVAL if all_messages and not peek else 1
-
-    # Always use stream_read_with_timestamps, as it handles all cases efficiently
-    # The since_timestamp filter and timestamp retrieval are handled at the DB layer
-    stream = db.stream_read_with_timestamps(
-        queue,
-        peek=peek,
-        all_messages=all_messages,
-        commit_interval=commit_interval,
-        since_timestamp=since_timestamp,
-        exact_timestamp=exact_timestamp,
-    )
-
-    for _i, (message, timestamp) in enumerate(stream):
-        message_count += 1
-
-        if json_output:
-            # Output as line-delimited JSON (ndjson) - one JSON object per line
-            data: Dict[str, Union[str, int]] = {"message": message}
-            if timestamp is not None:  # Always include timestamp in JSON
-                data["timestamp"] = timestamp
-            print(json.dumps(data))
-        else:
-            # For regular output, prepend timestamp if requested
-            if show_timestamps and timestamp is not None:
-                print(f"{timestamp}\t{message}")
-            else:
-                # Warn if message contains newlines (shell safety)
-                if not warned_newlines and "\n" in message:
-                    warnings.warn(
-                        "Message contains newline characters which may break shell pipelines. "
-                        "Consider using --json for safe handling of special characters.",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-                    warned_newlines = True
-
-                print(message)
-
-    if message_count == 0:
-        # When using --since, we need to distinguish between:
-        # 1. Queue doesn't exist or is empty -> return 2
-        # 2. Queue has messages but none match filter -> return 0
-        if since_timestamp is not None:
-            # Check if queue has any messages at all
-            queue_exists = False
-            for _ in db.stream_read_with_timestamps(
-                queue, peek=True, all_messages=False
-            ):
-                queue_exists = True
-                break
-
-            if queue_exists:
-                # Queue has messages, but none matched the filter
-                return EXIT_SUCCESS
-
-        return EXIT_QUEUE_EMPTY
-
+    content = _get_message_content(message)
+    queue = Queue(queue_name, db_path=db_path)
+    queue.write(content)
     return EXIT_SUCCESS
 
 
 def cmd_read(
-    db: BrokerDB,
-    queue: str,
+    db_path: str,
+    queue_name: str,
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
     since_str: Optional[str] = None,
     message_id_str: Optional[str] = None,
 ) -> int:
-    """Read and remove message(s) from queue."""
+    """Read and remove message(s) from queue using Queue API.
+
+    Args:
+        db_path: Path to database file
+        queue_name: Name of the queue
+        all_messages: If True, read all messages
+        json_output: If True, output as JSON
+        show_timestamps: If True, include timestamps
+        since_str: Timestamp string for filtering
+        message_id_str: Specific message ID to read
+
+    Returns:
+        Exit code
+    """
     # Validate timestamp if provided
     since_timestamp = None
     if since_str is not None:
@@ -238,39 +210,103 @@ def cmd_read(
             since_timestamp = _validate_timestamp(since_str)
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
-            sys.stderr.flush()  # Ensure error is visible before exit
-            return 1  # General error
+            sys.stderr.flush()
+            return 1
 
     # Validate exact timestamp if provided
     exact_timestamp = None
     if message_id_str is not None:
         exact_timestamp = parse_exact_message_id(message_id_str)
         if exact_timestamp is None:
-            # Silent failure per specification - return 2 for all invalid cases
             return EXIT_QUEUE_EMPTY
 
-    return _read_messages(
-        db,
-        queue,
-        peek=False,
-        all_messages=all_messages,
-        json_output=json_output,
-        show_timestamps=show_timestamps,
-        since_timestamp=since_timestamp,
-        exact_timestamp=exact_timestamp,
-    )
+    # Create queue instance
+    queue = Queue(queue_name, db_path=db_path)
+
+    # Handle different read patterns
+    if exact_timestamp is not None:
+        # Read specific message by ID
+        result = queue.read_one(
+            exact_timestamp=exact_timestamp,
+            with_timestamps=(json_output or show_timestamps),
+        )
+        if result is None:
+            return EXIT_QUEUE_EMPTY
+
+        if json_output or show_timestamps:
+            message, timestamp = result  # type: ignore[misc]
+            _output_message(message, timestamp, json_output, show_timestamps, False)
+        else:
+            print(result)
+        return EXIT_SUCCESS
+
+    elif all_messages:
+        # Read all messages using generator
+        message_count = 0
+        warned_newlines = False
+
+        for result in queue.read_generator(
+            with_timestamps=True, since_timestamp=since_timestamp
+        ):
+            message, timestamp = result  # type: ignore[misc]
+            warned_newlines = _output_message(
+                message, timestamp, json_output, show_timestamps, warned_newlines
+            )
+            message_count += 1
+
+        return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
+
+    else:
+        # Read single message
+        if since_timestamp:
+            # Use generator for since_timestamp support
+            gen = queue.read_generator(
+                with_timestamps=True, since_timestamp=since_timestamp
+            )
+            try:
+                result = next(gen)
+                message, timestamp = result  # type: ignore[misc]
+                _output_message(message, timestamp, json_output, show_timestamps, False)
+                return EXIT_SUCCESS
+            except StopIteration:
+                return EXIT_QUEUE_EMPTY
+        else:
+            # Simple single message read
+            result = queue.read_one(with_timestamps=(json_output or show_timestamps))
+            if result is None:
+                return EXIT_QUEUE_EMPTY
+
+            if json_output or show_timestamps:
+                message, timestamp = result  # type: ignore[misc]
+                _output_message(message, timestamp, json_output, show_timestamps, False)
+            else:
+                print(result)
+            return EXIT_SUCCESS
 
 
 def cmd_peek(
-    db: BrokerDB,
-    queue: str,
+    db_path: str,
+    queue_name: str,
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
     since_str: Optional[str] = None,
     message_id_str: Optional[str] = None,
 ) -> int:
-    """Read without removing message(s)."""
+    """Peek at message(s) without removing them using Queue API.
+
+    Args:
+        db_path: Path to database file
+        queue_name: Name of the queue
+        all_messages: If True, peek at all messages
+        json_output: If True, output as JSON
+        show_timestamps: If True, include timestamps
+        since_str: Timestamp string for filtering
+        message_id_str: Specific message ID to peek at
+
+    Returns:
+        Exit code
+    """
     # Validate timestamp if provided
     since_timestamp = None
     if since_str is not None:
@@ -278,93 +314,164 @@ def cmd_peek(
             since_timestamp = _validate_timestamp(since_str)
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
-            sys.stderr.flush()  # Ensure error is visible before exit
-            return 1  # General error
+            sys.stderr.flush()
+            return 1
 
     # Validate exact timestamp if provided
     exact_timestamp = None
     if message_id_str is not None:
         exact_timestamp = parse_exact_message_id(message_id_str)
         if exact_timestamp is None:
-            # Silent failure per specification - return 2 for all invalid cases
             return EXIT_QUEUE_EMPTY
 
-    return _read_messages(
-        db,
-        queue,
-        peek=True,
-        all_messages=all_messages,
-        json_output=json_output,
-        show_timestamps=show_timestamps,
-        since_timestamp=since_timestamp,
-        exact_timestamp=exact_timestamp,
-    )
+    # Create queue instance
+    queue = Queue(queue_name, db_path=db_path)
 
+    # Handle different peek patterns
+    if exact_timestamp is not None:
+        # Peek at specific message by ID
+        result = queue.peek_one(
+            exact_timestamp=exact_timestamp,
+            with_timestamps=(json_output or show_timestamps),
+        )
+        if result is None:
+            return EXIT_QUEUE_EMPTY
 
-def cmd_list(db: BrokerDB, show_stats: bool = False) -> int:
-    """List all queues with counts."""
-    # Get full queue stats including claimed messages
-    queue_stats = db.get_queue_stats()
-
-    # Filter to only show queues with unclaimed messages when not showing stats
-    if not show_stats:
-        queue_stats = [(q, u, t) for q, u, t in queue_stats if u > 0]
-
-    # Show each queue with unclaimed count (and total if different)
-    for queue_name, unclaimed, total in queue_stats:
-        if show_stats and unclaimed != total:
-            print(
-                f"{queue_name}: {unclaimed} ({total} total, {total - unclaimed} claimed)"
-            )
+        if json_output or show_timestamps:
+            message, timestamp = result  # type: ignore[misc]
+            _output_message(message, timestamp, json_output, show_timestamps, False)
         else:
-            print(f"{queue_name}: {unclaimed}")
+            print(result)
+        return EXIT_SUCCESS
 
-    # Only show overall claimed message stats if --stats flag is used
-    if show_stats:
-        with db._lock:
-            cursor = db._conn.execute("""
-                SELECT
-                    COUNT(*) as claimed,
-                    (SELECT COUNT(*) FROM messages) as total
-                FROM messages WHERE claimed = 1
-            """)
-            stats = cursor.fetchone()
-            claimed_count = stats[0]
-            total_count = stats[1]
+    elif all_messages:
+        # Peek at all messages using generator
+        message_count = 0
+        warned_newlines = False
 
-        if total_count > 0 and claimed_count > 0:
-            claimed_pct = (claimed_count / total_count) * 100
-            print(f"\nTotal claimed messages: {claimed_count} ({claimed_pct:.1f}%)")
+        for result in queue.peek_generator(
+            with_timestamps=True, since_timestamp=since_timestamp
+        ):
+            message, timestamp = result  # type: ignore[misc]
+            warned_newlines = _output_message(
+                message, timestamp, json_output, show_timestamps, warned_newlines
+            )
+            message_count += 1
+
+        return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
+
+    else:
+        # Peek at single message
+        if since_timestamp:
+            # Use generator for since_timestamp support
+            gen = queue.peek_generator(
+                with_timestamps=True, since_timestamp=since_timestamp
+            )
+            try:
+                result = next(gen)
+                message, timestamp = result  # type: ignore[misc]
+                _output_message(message, timestamp, json_output, show_timestamps, False)
+                return EXIT_SUCCESS
+            except StopIteration:
+                return EXIT_QUEUE_EMPTY
+        else:
+            # Simple single message peek
+            result = queue.peek_one(with_timestamps=(json_output or show_timestamps))
+            if result is None:
+                return EXIT_QUEUE_EMPTY
+
+            if json_output or show_timestamps:
+                message, timestamp = result  # type: ignore[misc]
+                _output_message(message, timestamp, json_output, show_timestamps, False)
+            else:
+                print(result)
+            return EXIT_SUCCESS
+
+
+def cmd_list(db_path: str, show_stats: bool = False) -> int:
+    """List all queues with counts.
+
+    Args:
+        db_path: Path to database file
+        show_stats: If True, show detailed statistics
+
+    Returns:
+        Exit code
+    """
+    # For list command, we need cross-queue operations
+    # Use DBConnection as a context manager
+    with DBConnection(db_path) as conn:
+        db = conn.get_connection()
+
+        # Get full queue stats including claimed messages
+        queue_stats = db.get_queue_stats()
+
+        # Filter to only show queues with unclaimed messages when not showing stats
+        if not show_stats:
+            queue_stats = [(q, u, t) for q, u, t in queue_stats if u > 0]
+
+        # Show each queue with unclaimed count (and total if different)
+        for queue_name, unclaimed, total in queue_stats:
+            if show_stats and unclaimed != total:
+                print(
+                    f"{queue_name}: {unclaimed} ({total} total, {total - unclaimed} claimed)"
+                )
+            else:
+                print(f"{queue_name}: {unclaimed}")
+
+        # Only show overall claimed message stats if --stats flag is used
+        if show_stats:
+            # Get overall stats
+            with db._lock:
+                cursor = db._conn.execute(GET_OVERALL_STATS)
+                row = cursor.fetchone()
+                total_claimed = row[0] or 0
+                total_messages = row[1] or 0
+
+            if total_claimed > 0:
+                print(f"\nTotal claimed messages: {total_claimed}/{total_messages}")
 
     return EXIT_SUCCESS
 
 
 def cmd_delete(
-    db: BrokerDB, queue: Optional[str] = None, message_id_str: Optional[str] = None
+    db_path: str, queue_name: Optional[str] = None, message_id_str: Optional[str] = None
 ) -> int:
-    """Remove messages from queue(s)."""
+    """Remove messages from queue(s).
+
+    Args:
+        db_path: Path to database file
+        queue_name: Name of queue to delete (None for all)
+        message_id_str: Specific message ID to delete
+
+    Returns:
+        Exit code
+    """
     # Handle delete by timestamp
-    if message_id_str is not None and queue is not None:
+    if message_id_str is not None and queue_name is not None:
         # Validate exact timestamp
         exact_timestamp = parse_exact_message_id(message_id_str)
         if exact_timestamp is None:
             # Silent failure per specification - return 2 for all invalid cases
             return EXIT_QUEUE_EMPTY
 
-        # Use read with exact_timestamp and discard the output
-        messages = db.read(
-            queue, peek=False, all_messages=False, exact_timestamp=exact_timestamp
-        )
-        # Return 0 for success (message deleted) or 2 for not found
-        return EXIT_SUCCESS if messages else EXIT_QUEUE_EMPTY
+        # Use Queue API to delete specific message
+        queue = Queue(queue_name, db_path=db_path)
+        deleted = queue.delete(message_id=exact_timestamp)
 
-    # Normal delete behavior
-    db.delete(queue)
+        # Return 0 for success (message deleted) or 2 for not found
+        return EXIT_SUCCESS if deleted else EXIT_QUEUE_EMPTY
+
+    # For full queue or all queues deletion, use DBConnection
+    with DBConnection(db_path) as conn:
+        db = conn.get_connection()
+        db.delete(queue_name)
+
     return EXIT_SUCCESS
 
 
 def cmd_move(
-    db: BrokerDB,
+    db_path: str,
     source_queue: str,
     dest_queue: str,
     all_messages: bool = False,
@@ -373,7 +480,21 @@ def cmd_move(
     message_id_str: Optional[str] = None,
     since_str: Optional[str] = None,
 ) -> int:
-    """Move message(s) between queues."""
+    """Move message(s) between queues using Queue API.
+
+    Args:
+        db_path: Path to database file
+        source_queue: Source queue name
+        dest_queue: Destination queue name
+        all_messages: If True, move all messages
+        json_output: If True, output as JSON
+        show_timestamps: If True, include timestamps
+        message_id_str: Specific message ID to move
+        since_str: Timestamp string for filtering
+
+    Returns:
+        Exit code
+    """
     # Check for same source and destination
     if source_queue == dest_queue:
         print(
@@ -381,7 +502,7 @@ def cmd_move(
             file=sys.stderr,
         )
         sys.stderr.flush()
-        return 1  # General error
+        return 1
 
     # Validate timestamp if provided
     since_timestamp = None
@@ -391,97 +512,130 @@ def cmd_move(
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
             sys.stderr.flush()
-            return 1  # General error
+            return 1
 
     # Validate exact timestamp if provided
     exact_timestamp = None
     if message_id_str is not None:
         exact_timestamp = parse_exact_message_id(message_id_str)
         if exact_timestamp is None:
-            # Silent failure per specification - return 2 for all invalid cases
             return EXIT_QUEUE_EMPTY
 
-    try:
-        # Move messages using the new DB method
-        moved_messages = db.move_messages(
-            source_queue,
+    # Create source queue instance
+    queue = Queue(source_queue, db_path=db_path)
+
+    # Handle different move patterns
+    if exact_timestamp is not None:
+        # Move specific message by ID
+        result = queue.move_one(
             dest_queue,
-            all_messages=all_messages,
-            message_id=exact_timestamp,
-            since_timestamp=since_timestamp,
+            exact_timestamp=exact_timestamp,
+            require_unclaimed=False,  # Allow moving claimed messages by ID
+            with_timestamps=True,
         )
-
-        # Handle no messages moved
-        if not moved_messages:
-            # Distinguish between empty queue and no matches
-            if since_timestamp is not None:
-                # Check if queue has any messages at all
-                if db.queue_exists_and_has_messages(source_queue):
-                    # Queue has messages but none matched the filter
-                    return EXIT_SUCCESS
+        if result is None:
             return EXIT_QUEUE_EMPTY
 
-        # Output moved messages
-        for body, timestamp in moved_messages:
-            if json_output:
-                data = {"message": body, "timestamp": timestamp}
-                print(json.dumps(data))
-            elif show_timestamps:
-                print(f"{timestamp}\t{body}")
-            else:
-                print(body)
-
+        message, timestamp = result  # type: ignore[misc]
+        _output_message(message, timestamp, json_output, show_timestamps, False)
         return EXIT_SUCCESS
 
-    except ValueError as e:
-        # This handles "Source and destination queues cannot be the same" from DB layer
-        # but we already check this above, so this is just a safety net
-        print(f"simplebroker: error: {e}", file=sys.stderr)
-        sys.stderr.flush()
-        return 1
-    except Exception as e:
-        # Handle any other database errors
-        print(f"simplebroker: error: {e}", file=sys.stderr)
-        sys.stderr.flush()
-        return 1
+    elif all_messages:
+        # Move all messages using generator
+        message_count = 0
+        warned_newlines = False
+
+        for result in queue.move_generator(
+            dest_queue, with_timestamps=True, since_timestamp=since_timestamp
+        ):
+            message, timestamp = result  # type: ignore[misc]
+            warned_newlines = _output_message(
+                message, timestamp, json_output, show_timestamps, warned_newlines
+            )
+            message_count += 1
+
+        return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
+
+    else:
+        # Move single message
+        if since_timestamp:
+            # Use generator for since_timestamp support
+            gen = queue.move_generator(
+                dest_queue, with_timestamps=True, since_timestamp=since_timestamp
+            )
+            try:
+                result = next(gen)
+                message, timestamp = result  # type: ignore[misc]
+                _output_message(message, timestamp, json_output, show_timestamps, False)
+                return EXIT_SUCCESS
+            except StopIteration:
+                return EXIT_QUEUE_EMPTY
+        else:
+            # Simple single message move
+            result = queue.move_one(dest_queue, with_timestamps=True)
+            if result is None:
+                return EXIT_QUEUE_EMPTY
+
+            message, timestamp = result  # type: ignore[misc]
+            _output_message(message, timestamp, json_output, show_timestamps, False)
+            return EXIT_SUCCESS
 
 
-def cmd_broadcast(db: BrokerDB, message: str) -> int:
-    """Send message to all queues."""
+def cmd_broadcast(db_path: str, message: str) -> int:
+    """Send message to all queues.
+
+    Args:
+        db_path: Path to database file
+        message: Message content or "-" for stdin
+
+    Returns:
+        Exit code
+    """
     content = _get_message_content(message)
-    # Use optimized broadcast method that does single INSERT...SELECT
-    db.broadcast(content)
+
+    # Broadcast is a cross-queue operation, use DBConnection
+    with DBConnection(db_path) as conn:
+        db = conn.get_connection()
+        db.broadcast(content)
+
     return EXIT_SUCCESS
 
 
-def cmd_vacuum(db: BrokerDB) -> int:
-    """Vacuum claimed messages from the database."""
-    import time
+def cmd_vacuum(db_path: str) -> int:
+    """Vacuum claimed messages from the database.
 
-    start_time = time.monotonic()
+    Args:
+        db_path: Path to database file
 
-    # Count claimed messages before vacuum
-    with db._lock:
-        cursor = db._conn.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-        claimed_count = cursor.fetchone()[0]
+    Returns:
+        Exit code
+    """
+    with DBConnection(db_path) as conn:
+        db = conn.get_connection()
+        start_time = time.monotonic()
 
-    if claimed_count == 0:
-        print("No claimed messages to vacuum")
-        return EXIT_SUCCESS
+        # Count claimed messages before vacuum
+        with db._lock:
+            cursor = db._conn.execute(COUNT_CLAIMED_MESSAGES)
+            claimed_count = cursor.fetchone()[0]
 
-    # Run vacuum
-    db.vacuum()
+        if claimed_count == 0:
+            print("No claimed messages to vacuum")
+            return EXIT_SUCCESS
 
-    # Calculate elapsed time
-    elapsed = time.monotonic() - start_time
-    print(f"Vacuumed {claimed_count} claimed messages in {elapsed:.1f}s")
+        # Run vacuum
+        db.vacuum()
+
+        # Calculate elapsed time
+        elapsed = time.monotonic() - start_time
+        print(f"Vacuumed {claimed_count} claimed messages in {elapsed:.1f}s")
 
     return EXIT_SUCCESS
 
 
 def cmd_watch(
-    db: BrokerDB,
-    queue: str,
+    db_path: str,
+    queue_name: str,
     peek: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
@@ -489,10 +643,21 @@ def cmd_watch(
     quiet: bool = False,
     move_to: Optional[str] = None,
 ) -> int:
-    """Watch queue for new messages in real-time."""
-    import sys
+    """Watch queue for new messages in real-time.
 
-    from .watcher import QueueMoveWatcher, QueueWatcher
+    Args:
+        db_path: Path to database file
+        queue_name: Name of queue to watch
+        peek: If True, don't consume messages
+        json_output: If True, output as JSON
+        show_timestamps: If True, include timestamps
+        since_str: Timestamp string for filtering
+        quiet: If True, suppress startup message
+        move_to: Destination queue for move mode
+
+    Returns:
+        Exit code
+    """
 
     # Check for incompatible options
     if move_to and since_str:
@@ -511,78 +676,71 @@ def cmd_watch(
             since_timestamp = _validate_timestamp(since_str)
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
-            sys.stderr.flush()  # Ensure error is visible before exit
-            return 1  # General error
+            sys.stderr.flush()
+            return 1
 
-    # Print informational message unless quiet mode
+    # Print startup message (unless quiet)
     if not quiet:
+        mode = "peek" if peek else "consume"
         if move_to:
-            print(
-                f"Watching queue '{queue}' and moving to '{move_to}'... Press Ctrl-C to exit",
-                file=sys.stderr,
-            )
-        else:
-            mode = "monitoring" if peek else "consuming"
-            print(
-                f"Watching queue '{queue}' ({mode} mode)... Press Ctrl-C to exit",
-                file=sys.stderr,
-            )
+            mode = f"move to {move_to}"
+        print(f"Watching queue '{queue_name}' ({mode} mode)...", file=sys.stderr)
+        sys.stderr.flush()
 
-    # Declare watcher type to avoid mypy error
-    watcher: Union[QueueWatcher, QueueMoveWatcher]
+    warned_newlines = False
 
-    if move_to:
-        # Use QueueMoveWatcher for moves
-        def move_handler(body: str, ts: int) -> None:
-            """Print moved message according to formatting options."""
-            if json_output:
-                data: Dict[str, Union[str, int]] = {
-                    "message": body,
-                    "source_queue": queue,  # Original source queue
-                    "dest_queue": move_to,  # Destination queue
-                    "timestamp": ts,  # Always include timestamp in JSON
-                }
-                print(json.dumps(data), flush=True)
-            elif show_timestamps:
-                print(f"{ts}\t{body}", flush=True)
-            else:
-                print(body, flush=True)
-
-        # Create and run move watcher
-        watcher = QueueMoveWatcher(
-            db,
-            queue,
-            move_to,
-            move_handler,
+    def handle_message(message: str, timestamp: int) -> None:
+        """Message handler for watcher."""
+        nonlocal warned_newlines
+        warned_newlines = _output_message(
+            message, timestamp, json_output, show_timestamps, warned_newlines
         )
-    else:
-        # Use regular QueueWatcher
-        def handler(msg: str, ts: float) -> None:
-            """Print message according to formatting options."""
-            if json_output:
-                data: Dict[str, Union[str, float]] = {"message": msg}
-                data["timestamp"] = int(ts)  # Always include timestamp in JSON
-                print(json.dumps(data), flush=True)
-            elif show_timestamps:
-                print(f"{int(ts)}\t{msg}", flush=True)
-            else:
-                print(msg, flush=True)
-
-        # Create and run watcher with since_timestamp for efficient filtering
-        watcher = QueueWatcher(
-            db,
-            queue,
-            handler,
-            peek=peek,
-            since_timestamp=since_timestamp,
-        )
+        sys.stdout.flush()  # Ensure immediate output for real-time watching
 
     try:
+        # Create appropriate watcher
+        watcher: Union[QueueWatcher, QueueMoveWatcher]
+        if move_to:
+            # Use QueueMoveWatcher for move operations
+            watcher = QueueMoveWatcher(
+                db_path,
+                source_queue=queue_name,
+                dest_queue=move_to,
+                handler=handle_message,
+            )
+        else:
+            # Use regular QueueWatcher for consume/peek (using legacy style)
+            watcher = QueueWatcher(
+                db_path,
+                queue_name,
+                handle_message,
+                peek=peek,
+                since_timestamp=since_timestamp,
+            )
+
+        # Start watching (blocks until interrupted)
         watcher.run_forever()
+
     except KeyboardInterrupt:
-        # Graceful exit on Ctrl-C
-        if not quiet:
-            print("\nStopping...", file=sys.stderr)
+        # Clean exit on Ctrl-C
         return EXIT_SUCCESS
+    except Exception as e:
+        print(f"simplebroker: error: {e}", file=sys.stderr)
+        return 1
 
     return EXIT_SUCCESS
+
+
+# Export all command functions
+__all__ = [
+    "cmd_write",
+    "cmd_read",
+    "cmd_peek",
+    "cmd_list",
+    "cmd_delete",
+    "cmd_move",
+    "cmd_broadcast",
+    "cmd_vacuum",
+    "cmd_watch",
+    "parse_exact_message_id",
+]

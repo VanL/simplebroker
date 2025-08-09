@@ -209,7 +209,7 @@ class TestTimestampFormats:
             tomorrow.strftime("%Y-%m-%d"),
             cwd=workdir,
         )
-        assert rc == 0  # Should succeed but move no messages
+        assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
         assert out == ""
 
     def test_since_mixed_timestamp_formats(self, workdir):
@@ -279,8 +279,8 @@ class TestErrorCases:
         rc, out, _ = run_cli("move", "source", "dest", "-m", fake_ts, cwd=workdir)
         assert rc == 2
 
-    def test_already_claimed_message_returns_exit_code_2(self, workdir):
-        """Test that moving already claimed message returns exit code 2."""
+    def test_already_claimed_message_can_be_moved_by_id(self, workdir):
+        """Test that moving already claimed message by ID is allowed."""
         # Write a message
         run_cli("write", "source", "msg1", cwd=workdir)
 
@@ -295,9 +295,10 @@ class TestErrorCases:
         assert rc == 0
         assert out == "msg1"
 
-        # Try to move the claimed message
+        # Try to move the claimed message by ID - this is now allowed
         rc, out, _ = run_cli("move", "source", "dest", "-m", str(msg_ts), cwd=workdir)
-        assert rc == 2
+        assert rc == 0  # Moving by ID allows claimed messages
+        assert out == "msg1"
 
     def test_invalid_timestamp_format_returns_exit_code_2(self, workdir):
         """Test that invalid timestamp format returns exit code 2."""
@@ -331,8 +332,8 @@ class TestErrorCases:
             or "Source and destination queues cannot be the same" in out
         )
 
-    def test_since_no_matches_returns_exit_code_0(self, workdir):
-        """Test that --since with no matches returns exit code 0 (not 2)."""
+    def test_since_no_matches_returns_exit_code_2(self, workdir):
+        """Test that --since with no matches returns exit code 2."""
         # Write old messages
         run_cli("write", "source", "old1", cwd=workdir)
         run_cli("write", "source", "old2", cwd=workdir)
@@ -345,14 +346,14 @@ class TestErrorCases:
         rc, out, _ = run_cli(
             "move", "source", "dest", "--since", str(future_ts), cwd=workdir
         )
-        assert rc == 0
+        assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match
         assert out == ""
 
         # Move with --all --since future timestamp
         rc, out, _ = run_cli(
             "move", "source", "dest", "--all", "--since", str(future_ts), cwd=workdir
         )
-        assert rc == 0
+        assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match
         assert out == ""
 
     def test_since_exact_boundary(self, workdir):
@@ -367,7 +368,7 @@ class TestErrorCases:
         rc, out, _ = run_cli(
             "move", "boundary_queue", "dest", "--since", str(ts), cwd=workdir
         )
-        assert rc == 0  # Should succeed but move no messages
+        assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match (strict > comparison)
         assert out == ""
 
         # Move with --since one less than timestamp -> expect message

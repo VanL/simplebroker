@@ -33,7 +33,7 @@ class ConcurrencyTestWatcher(QueueWatcher):
         self.dispatch_count = 0
         self._lock = threading.Lock()
 
-    def _has_pending_messages(self, db: BrokerDB) -> bool:
+    def _has_pending_messages(self, db: BrokerDB | None = None) -> bool:
         """Add instrumentation to pre-check."""
         with self._lock:
             self.pre_check_count += 1
@@ -41,9 +41,8 @@ class ConcurrencyTestWatcher(QueueWatcher):
         if self._pre_check_delay > 0:
             time.sleep(self._pre_check_delay)
 
-        sql = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 LIMIT 1)"
-        rows = list(db._runner.run(sql, (self._queue,), fetch=True))
-        return bool(rows[0][0]) if rows else False
+        # Use the parent's implementation which uses Queue API
+        return super()._has_pending_messages(db)
 
     def _drain_queue(self) -> None:
         """Add instrumentation and optional pre-check."""
@@ -53,11 +52,7 @@ class ConcurrencyTestWatcher(QueueWatcher):
         if self._drain_delay > 0:
             time.sleep(self._drain_delay)
 
-        if self._pre_check_enabled:
-            db = self._get_db()
-            if not self._has_pending_messages(db):
-                return
-
+        # Let parent handle the actual draining
         super()._drain_queue()
 
     def _dispatch(self, message: str, timestamp: int) -> None:
@@ -217,8 +212,9 @@ def test_pre_check_drain_race() -> None:
                 other_broker = BrokerDB(db_path)
                 try:
                     consumed = []
-                    for msg in other_broker.stream_read(
-                        "test_queue", all_messages=True
+                    # Use claim_generator to consume all messages
+                    for msg in other_broker.claim_generator(
+                        "test_queue", with_timestamps=False
                     ):
                         consumed.append(msg)
                     return consumed
@@ -230,23 +226,22 @@ def test_pre_check_drain_race() -> None:
                 broker.write("test_queue", f"message_{i}")
 
             # Start consuming from another thread during watcher operation
-            consume_future = concurrent.futures.ThreadPoolExecutor().submit(
-                consume_messages,
-            )
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                consume_future = executor.submit(consume_messages)
 
-            # Let watcher run
-            time.sleep(1.0)
+                # Let watcher run
+                time.sleep(1.0)
 
-            # Get messages consumed by other thread
-            other_consumed = consume_future.result()
+                # Get messages consumed by other thread
+                other_consumed = consume_future.result()
 
-            # Total messages processed should equal messages written
-            total_processed = len(processed) + len(other_consumed)
-            assert total_processed == 50
+                # Total messages processed should equal messages written
+                total_processed = len(processed) + len(other_consumed)
+                assert total_processed == 50
 
-            # Verify no message was processed twice
-            all_messages = processed + other_consumed
-            assert len(set(all_messages)) == total_processed
+                # Verify no message was processed twice
+                all_messages = processed + other_consumed
+                assert len(set(all_messages)) == total_processed
         finally:
             # Ensure watcher is stopped before closing broker
             if watcher is not None:
@@ -425,8 +420,9 @@ def test_pre_check_with_peek_mode() -> None:
                     peek_count == 1
                 )  # Should peek exactly once due to timestamp tracking
 
-            # Message should still be in queue
-            messages = list(broker.read("test_queue", all_messages=True))
+            # Message should still be in queue (use non-destructive peek)
+            with BrokerDB(db_path) as db:
+                messages = list(db.peek_generator("test_queue", with_timestamps=False))
             assert len(messages) == 1
             assert messages[0] == "test_message"
         finally:

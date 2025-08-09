@@ -72,3 +72,5 @@ agent_history/
 .broker.db
 .broker.db-shm
 .broker.db-wal
+weft/
+.aider*

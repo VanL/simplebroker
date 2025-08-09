@@ -8,6 +8,9 @@ import pytest
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
+# Import cleanup helper
+from .helpers.cleanup import register_watcher
+
 
 class TestWatcherCleanup:
     """Test watcher cleanup functionality."""
@@ -20,6 +23,7 @@ class TestWatcherCleanup:
         # Create and start a watcher
         db = BrokerDB(temp_db)
         watcher = QueueWatcher(db, "test_queue", lambda m, t: None)
+        register_watcher(watcher)  # Register for automatic cleanup
         thread = watcher.run_in_thread()
 
         # Verify thread is running
@@ -41,6 +45,7 @@ class TestWatcherCleanup:
 
         for i in range(3):
             watcher = QueueWatcher(db, f"queue_{i}", lambda m, t: None)
+            register_watcher(watcher)  # Register for automatic cleanup
             thread = watcher.run_in_thread()
             watchers.append(watcher)
             threads.append(thread)
@@ -63,19 +68,26 @@ class TestWatcherCleanup:
             time.sleep(0.5)  # Simulate slow processing
 
         watcher = QueueWatcher(db, "test_queue", slow_handler)
+        register_watcher(watcher)  # Register for automatic cleanup
         thread = watcher.run_in_thread()
 
-        # Let it start processing
-        time.sleep(0.1)
+        try:
+            # Let it start processing
+            time.sleep(0.1)
 
-        # Stop should be quick even with slow handler
-        start_time = time.monotonic()
-        watcher.stop()
-        thread.join(timeout=2.0)
-        stop_time = time.monotonic() - start_time
+            # Stop should be quick even with slow handler
+            start_time = time.monotonic()
+            watcher.stop()
+            thread.join(timeout=2.0)
+            stop_time = time.monotonic() - start_time
 
-        assert not thread.is_alive()
-        assert stop_time < 2.0
+            assert not thread.is_alive()
+            assert stop_time < 2.0
+        finally:
+            # Ensure cleanup even if test fails
+            if thread.is_alive():
+                watcher.stop()
+                thread.join(timeout=1.0)
 
 
 @pytest.fixture

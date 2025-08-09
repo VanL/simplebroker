@@ -1,6 +1,7 @@
 """Database module for SimpleBroker - handles all SQLite operations."""
 
 import gc
+import logging
 import os
 import re
 import threading
@@ -17,6 +18,8 @@ from typing import (
     Optional,
     Tuple,
     TypeVar,
+    Union,
+    cast,
 )
 
 from ._constants import (
@@ -34,6 +37,12 @@ from ._exceptions import (
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner
 from ._sql import (
     CHECK_CLAIMED_COLUMN as SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED,
+)
+from ._sql import (
+    CHECK_PENDING_MESSAGES as SQL_CHECK_PENDING_MESSAGES,
+)
+from ._sql import (
+    CHECK_PENDING_MESSAGES_SINCE as SQL_CHECK_PENDING_MESSAGES_SINCE,
 )
 from ._sql import (
     CHECK_QUEUE_EXISTS as SQL_SELECT_EXISTS_MESSAGES_BY_QUEUE,
@@ -70,10 +79,10 @@ from ._sql import (
 )
 from ._sql import (
     DROP_OLD_INDEXES,
-    build_claim_batch_query,
-    build_claim_single_query,
-    build_move_by_id_query,
-    build_peek_query,
+    build_retrieve_query,
+)
+from ._sql import (
+    GET_DATA_VERSION as SQL_GET_DATA_VERSION,
 )
 from ._sql import (
     GET_DISTINCT_QUEUES as SQL_SELECT_DISTINCT_QUEUES,
@@ -103,13 +112,15 @@ from ._sql import (
     UPDATE_LAST_TS as SQL_UPDATE_META_LAST_TS,
 )
 from ._timestamp import TimestampGenerator
-from .helpers import _execute_with_retry
+from .helpers import _execute_with_retry, interruptible_sleep
 
 # Type variable for generic return types
 T = TypeVar("T")
 
 # Load configuration once at module level
 _config = load_config()
+
+logger = logging.getLogger(__name__)
 
 # Module constants
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
@@ -163,8 +174,140 @@ MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1
 #   Interval=50:   ~286,000 messages/second (at-least-once, lower concurrency)
 #   Interval=100:  ~335,000 messages/second (at-least-once, lowest concurrency)
 #
-# Use configuration value loaded at module level
+# Use configuration values loaded at module level
 READ_COMMIT_INTERVAL = _config["BROKER_READ_COMMIT_INTERVAL"]
+GENERATOR_BATCH_SIZE = _config["BROKER_GENERATOR_BATCH_SIZE"]
+
+
+class DBConnection:
+    """Robust database connection manager with retry logic and thread-local storage.
+
+    This class encapsulates all the connection management complexity, providing
+    a consistent interface for both persistent and ephemeral connections.
+    It uses the same robust path for all modes - the only difference is when
+    resources are released.
+    """
+
+    def __init__(self, db_path: str, runner: Optional[SQLRunner] = None):
+        """Initialize the connection manager.
+
+        Args:
+            db_path: Path to the SQLite database
+            runner: Optional custom SQLRunner implementation
+        """
+        self.db_path = db_path
+        self._external_runner = runner is not None
+        self._runner = runner
+        self._core = None
+        self._thread_local = threading.local()
+        self._stop_event = threading.Event()
+
+        # If we have an external runner, create core immediately
+        if self._runner:
+            self._core = BrokerCore(self._runner)
+
+    def get_connection(self) -> "BrokerDB":
+        """Get a robust database connection with retry logic.
+
+        Returns thread-local connection that is cached and reused.
+        Includes exponential backoff retry on connection failures.
+
+        Returns:
+            BrokerDB instance
+
+        Raises:
+            RuntimeError: If connection cannot be established after retries
+        """
+        # Check thread-local storage first
+        if hasattr(self._thread_local, "db"):
+            return cast("BrokerDB", self._thread_local.db)
+
+        # Create new connection with retry logic
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # For persistent connections in single-threaded use:
+                # Create one BrokerDB per thread, but cache it within the thread
+                # This avoids reconnection overhead within a thread
+                self._thread_local.db = BrokerDB(self.db_path)
+
+                return cast("BrokerDB", self._thread_local.db)
+            except Exception as e:
+                if attempt >= max_retries - 1:
+                    if _config["BROKER_LOGGING_ENABLED"]:
+                        logger.exception(
+                            f"Failed to get database connection after {max_retries} retries: {e}"
+                        )
+                    raise RuntimeError(f"Failed to get database connection: {e}") from e
+
+                wait_time = 2 ** (attempt + 1)  # Exponential backoff
+                if _config["BROKER_LOGGING_ENABLED"]:
+                    logger.debug(
+                        f"Database connection error (retry {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time} seconds..."
+                    )
+
+                if not interruptible_sleep(wait_time, self._stop_event):
+                    raise RuntimeError("Connection interrupted") from None
+
+        raise RuntimeError("Failed to establish database connection")
+
+    def get_core(self) -> "BrokerCore":
+        """Get or create the BrokerCore instance.
+
+        This provides direct access to the core for persistent connections.
+
+        Returns:
+            BrokerCore instance
+        """
+        if self._core is None:
+            if self._runner is None:
+                self._runner = SQLiteRunner(self.db_path)
+            self._core = BrokerCore(self._runner)
+        return self._core
+
+    def cleanup(self) -> None:
+        """Clean up all connections and resources.
+
+        Closes thread-local connections and releases resources.
+        Safe to call multiple times.
+        """
+        # Clean up thread-local connection
+        if hasattr(self._thread_local, "db"):
+            try:
+                self._thread_local.db.close()
+            except Exception as e:
+                if _config["BROKER_LOGGING_ENABLED"]:
+                    logger.warning(f"Error closing thread-local database: {e}")
+            finally:
+                delattr(self._thread_local, "db")
+
+        # Clean up runner/core if we own it
+        if not self._external_runner:
+            if self._runner:
+                try:
+                    self._runner.close()
+                except Exception as e:
+                    if _config["BROKER_LOGGING_ENABLED"]:
+                        logger.warning(f"Error closing runner: {e}")
+                finally:
+                    self._runner = None
+                    self._core = None
+
+    def __enter__(self) -> "DBConnection":
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit context manager and cleanup."""
+        self.cleanup()
+
+    def __del__(self) -> None:
+        """Destructor ensures cleanup."""
+        try:
+            self.cleanup()
+        except Exception:
+            pass  # Ignore errors in destructor
 
 
 class BrokerCore:
@@ -396,7 +539,7 @@ class BrokerCore:
         if error:
             raise ValueError(error)
 
-    def _generate_timestamp(self) -> int:
+    def generate_timestamp(self) -> int:
         """Generate a timestamp using the TimestampGenerator.
 
         This is a compatibility method that delegates to the timestamp generator.
@@ -546,7 +689,7 @@ class BrokerCore:
         """Execute write within retry context. Separates retry logic from transaction logic."""
         # Generate timestamp outside transaction for better concurrency
         # The timestamp generator has its own internal transaction for atomicity
-        timestamp = self._generate_timestamp()
+        timestamp = self.generate_timestamp()
 
         # Use existing _execute_with_retry for database lock handling
         _execute_with_retry(
@@ -576,43 +719,12 @@ class BrokerCore:
                 self._runner.rollback()
                 raise
 
-    def read(
-        self,
-        queue: str,
-        peek: bool = False,
-        all_messages: bool = False,
-        exact_timestamp: Optional[int] = None,
-    ) -> List[str]:
-        """Read message(s) from a queue.
-
-        Args:
-            queue: Name of the queue
-            peek: If True, don't delete messages after reading
-            all_messages: If True, read all messages (otherwise just one)
-            exact_timestamp: If provided, read only the message with this exact timestamp
-
-        Returns:
-            List of message bodies
-
-        Raises:
-            ValueError: If queue name is invalid
-        """
-        # Delegate to stream_read() and collect results
-        if exact_timestamp is not None:
-            # For exact timestamp, use stream_read_with_timestamps and extract bodies
-            messages = []
-            for body, _ in self.stream_read_with_timestamps(
-                queue, peek=peek, all_messages=False, exact_timestamp=exact_timestamp
-            ):
-                messages.append(body)
-            return messages
-        return list(self.stream_read(queue, peek=peek, all_messages=all_messages))
-
     def _build_where_clause(
         self,
         queue: str,
         exact_timestamp: Optional[int] = None,
         since_timestamp: Optional[int] = None,
+        require_unclaimed: bool = True,
     ) -> Tuple[List[str], List[Any]]:
         """Build WHERE clause and parameters for message queries.
 
@@ -620,18 +732,23 @@ class BrokerCore:
             queue: Queue name to filter on
             exact_timestamp: If provided, filter for exact timestamp match
             since_timestamp: If provided, filter for messages after this timestamp
+            require_unclaimed: If True (default), only consider unclaimed messages
 
         Returns:
             Tuple of (where_conditions list, params list)
         """
         if exact_timestamp is not None:
             # Optimize for unique index on ts column
-            where_conditions = ["ts = ?", "queue = ?", "claimed = 0"]
+            where_conditions = ["ts = ?", "queue = ?"]
             params = [exact_timestamp, queue]
+            if require_unclaimed:
+                where_conditions.append("claimed = 0")
         else:
             # Normal ordering for queue-based queries
-            where_conditions = ["queue = ?", "claimed = 0"]
+            where_conditions = ["queue = ?"]
             params = [queue]
+            if require_unclaimed:
+                where_conditions.append("claimed = 0")
 
             if since_timestamp is not None:
                 where_conditions.append("ts > ?")
@@ -639,271 +756,624 @@ class BrokerCore:
 
         return where_conditions, params
 
-    def _handle_peek_operation(
+    def _execute_peek_operation(
         self,
-        where_conditions: List[str],
+        query: str,
         params: List[Any],
-        all_messages: bool,
-    ) -> Iterator[Tuple[str, int]]:
-        """Handle peek operations without claiming messages.
+        limit: int,
+        offset: int = 0,
+        target_queue: Optional[str] = None,
+    ) -> List[Tuple[str, int]]:
+        """Execute a peek operation without transaction.
 
         Args:
-            where_conditions: SQL WHERE conditions
+            query: SQL query to execute
             params: Query parameters
-            all_messages: Whether to read all messages or just one
-
-        Yields:
-            Tuples of (message_body, timestamp)
-        """
-        offset = 0
-        batch_size = 100 if all_messages else 1
-
-        while True:
-            # Acquire lock, fetch batch, release lock
-            with self._lock:
-                query = build_peek_query(where_conditions)
-                batch_messages = self._runner.run(
-                    query, tuple(params + [batch_size, offset]), fetch=True
-                )
-
-            # Yield results without holding lock
-            if not batch_messages:
-                break
-
-            for row in batch_messages:
-                yield row[0], row[1]  # body, timestamp
-
-            # For single message peek, we're done after first batch
-            if not all_messages:
-                break
-
-            offset += batch_size
-
-    def _process_exactly_once_batch(
-        self,
-        where_conditions: List[str],
-        params: List[Any],
-    ) -> Optional[Tuple[str, int]]:
-        """Process a single message with exactly-once delivery semantics.
-
-        Commits BEFORE yielding to ensure message is never duplicated.
-
-        Args:
-            where_conditions: SQL WHERE conditions
-            params: Query parameters
+            limit: Maximum number of messages
+            offset: Number of messages to skip (for pagination)
+            target_queue: Target queue for move operations
 
         Returns:
-            Tuple of (message_body, timestamp) if message found, None otherwise
+            List of (message_body, timestamp) tuples
         """
         with self._lock:
-            # Use retry logic for BEGIN IMMEDIATE
-            try:
-                _execute_with_retry(self._runner.begin_immediate)
-            except Exception:
-                return None
+            if target_queue:
+                # Move operation needs target queue as first parameter
+                query_params = tuple([target_queue] + params + [limit, offset])
+            else:
+                query_params = tuple(params + [limit, offset])
 
-            try:
-                query = build_claim_single_query(where_conditions)
-                rows = self._runner.run(query, tuple(params), fetch=True)
+            results = self._runner.run(query, query_params, fetch=True)
+            return list(results) if results else []
 
-                # Fetch the message
-                rows_list = list(rows) if rows else []
-                message = rows_list[0] if rows_list else None
-
-                if not message:
-                    self._runner.rollback()
-                    return None
-
-                # Commit IMMEDIATELY before returning
-                # This ensures exactly-once delivery semantics
-                self._runner.commit()
-                return message[0], message[1]  # body, timestamp
-            except Exception:
-                # On any error, rollback to preserve messages
-                self._runner.rollback()
-                raise
-
-    def _process_at_least_once_batch(
+    def _execute_transactional_operation(
         self,
-        where_conditions: List[str],
+        query: str,
         params: List[Any],
-        commit_interval: int,
-    ) -> Iterator[Tuple[str, int]]:
-        """Process messages with at-least-once delivery semantics.
-
-        Claims batch, yields messages, then commits.
+        limit: int,
+        target_queue: Optional[str],
+        commit_before_yield: bool,
+    ) -> List[Tuple[str, int]]:
+        """Execute a claim or move operation with transaction.
 
         Args:
-            where_conditions: SQL WHERE conditions
+            query: SQL query to execute
             params: Query parameters
-            commit_interval: Number of messages per batch
+            limit: Maximum number of messages
+            target_queue: Target queue for move operations
+            commit_before_yield: If True, commit before returning (exactly-once)
 
-        Yields:
-            Tuples of (message_body, timestamp)
+        Returns:
+            List of (message_body, timestamp) tuples
         """
-        # First, claim the batch
         with self._lock:
-            # Use retry logic for BEGIN IMMEDIATE
             try:
                 _execute_with_retry(self._runner.begin_immediate)
             except Exception:
-                return
+                return []
 
             try:
-                query = build_claim_batch_query(where_conditions)
-                batch_messages = self._runner.run(
-                    query, tuple(params + [commit_interval]), fetch=True
-                )
+                if target_queue:
+                    # Move needs target queue as first parameter
+                    query_params = tuple([target_queue] + params + [limit])
+                else:
+                    query_params = tuple(params + [limit])
 
-                if not batch_messages:
+                results = self._runner.run(query, query_params, fetch=True)
+                results_list = list(results) if results else []
+
+                if results_list and commit_before_yield:
+                    # Commit BEFORE returning for exactly-once semantics
+                    self._runner.commit()
+                elif not results_list:
+                    # No results, rollback
                     self._runner.rollback()
-                    return
 
-                # DO NOT commit yet - keep transaction open
+                return results_list
+
             except Exception:
-                # On any error, rollback to preserve messages
                 self._runner.rollback()
                 raise
+            finally:
+                # Commit if not already done (at-least-once semantics)
+                if (
+                    "results_list" in locals()
+                    and results_list
+                    and not commit_before_yield
+                ):
+                    try:
+                        self._runner.commit()
+                    except Exception:
+                        pass  # Already rolled back
 
-        # Yield messages while transaction is still open but lock is released
-        # This allows consumer to process messages before commit
-        for row in batch_messages:
-            yield row[0], row[1]  # body, timestamp
-
-        # After successfully yielding all messages, commit the transaction
-        # This provides at-least-once delivery semantics
-        with self._lock:
-            try:
-                self._runner.commit()
-            except Exception:
-                # If commit fails, messages will be re-delivered
-                self._runner.rollback()
-                raise
-
-    def stream_read_with_timestamps(
+    def _retrieve(
         self,
         queue: str,
+        operation: Literal["peek", "claim", "move"],
         *,
-        all_messages: bool = False,
-        commit_interval: int = READ_COMMIT_INTERVAL,
-        peek: bool = False,
-        since_timestamp: Optional[int] = None,
+        target_queue: Optional[str] = None,
+        limit: int = 1,
+        offset: int = 0,
         exact_timestamp: Optional[int] = None,
-    ) -> Iterator[Tuple[str, int]]:
-        """Stream messages with timestamps from a queue.
+        since_timestamp: Optional[int] = None,
+        commit_before_yield: bool = True,
+        require_unclaimed: bool = True,
+    ) -> List[Tuple[str, int]]:
+        """Unified retrieval with operation-specific behavior.
+
+        Core principle: What's returned is what's committed (for claim/move).
 
         Args:
-            queue: Queue name to read from
-            all_messages: If True, read all messages; if False, read one
-            commit_interval: Number of messages to read per transaction batch
-            peek: If True, don't delete messages (peek operation)
-            since_timestamp: If provided, only return messages with ts > since_timestamp
-            exact_timestamp: If provided, only return message with this exact timestamp
+            queue: Source queue name
+            operation: Type of operation - "peek", "claim", or "move"
+            target_queue: Destination queue (required for move)
+            limit: Maximum number of messages to retrieve
+            exact_timestamp: Retrieve specific message by timestamp
+            since_timestamp: Only retrieve messages after this timestamp
+            commit_before_yield: If True, commit before returning (exactly-once)
+            require_unclaimed: If True (default), only consider unclaimed messages
 
-        Yields:
-            Tuples of (message_body, timestamp)
-
-        Note:
-            For delete operations:
-            - When commit_interval=1 (exactly-once delivery):
-              * Messages are claimed and committed BEFORE being yielded
-              * If consumer crashes after commit, message is lost (never duplicated)
-            - When commit_interval>1 (at-least-once delivery):
-              * Messages are claimed, yielded, then committed as a batch
-              * If consumer crashes mid-batch, uncommitted messages can be re-delivered
+        Returns:
+            List of (message_body, timestamp) tuples
 
         Raises:
-            ValueError: If queue name is invalid
+            ValueError: If queue name is invalid or move lacks target_queue
             RuntimeError: If called from a forked process
         """
+
         self._check_fork_safety()
         self._validate_queue_name(queue)
 
-        # Build WHERE clause and parameters
+        if operation == "move" and not target_queue:
+            raise ValueError("target_queue is required for move operation")
+
+        if target_queue:
+            self._validate_queue_name(target_queue)
+
+        # Build WHERE clause
         where_conditions, params = self._build_where_clause(
-            queue, exact_timestamp, since_timestamp
+            queue, exact_timestamp, since_timestamp, require_unclaimed
         )
 
-        if peek:
-            # Handle peek operations
-            yield from self._handle_peek_operation(
-                where_conditions, params, all_messages
+        # Build query using safe builder
+        query = build_retrieve_query(operation, where_conditions)
+
+        # Execute based on operation type
+        if operation == "peek":
+            return self._execute_peek_operation(
+                query, params, limit, offset, target_queue
             )
         else:
-            # Handle delete operations with proper transaction handling
-            if all_messages:
-                # Process multiple messages
-                while True:
-                    if commit_interval == 1:
-                        # Exactly-once delivery: commit BEFORE yielding
-                        result = self._process_exactly_once_batch(
-                            where_conditions, params
-                        )
-                        if result:
-                            yield result
-                        else:
-                            break
-                    else:
-                        # At-least-once delivery: commit AFTER yielding batch
-                        batch_yielded = False
-                        for message in self._process_at_least_once_batch(
-                            where_conditions, params, commit_interval
-                        ):
-                            batch_yielded = True
-                            yield message
+            # claim or move operations need transaction
+            return self._execute_transactional_operation(
+                query, params, limit, target_queue, commit_before_yield
+            )
 
-                        # If no messages were yielded, we're done
-                        if not batch_yielded:
-                            break
-            else:
-                # Process single message with exactly-once semantics
-                result = self._process_exactly_once_batch(where_conditions, params)
-                if result:
-                    yield result
-
-    def stream_read(
+    def claim_one(
         self,
         queue: str,
-        peek: bool = False,
-        all_messages: bool = False,
-        commit_interval: int = READ_COMMIT_INTERVAL,
-        since_timestamp: Optional[int] = None,
-    ) -> Iterator[str]:
-        """Stream message(s) from a queue without loading all into memory.
+        *,
+        exact_timestamp: Optional[int] = None,
+        with_timestamps: bool = True,
+    ) -> Optional[Union[Tuple[str, int], str]]:
+        """Claim and return exactly one message from a queue.
+
+        Uses exactly-once delivery semantics: message is committed before return.
 
         Args:
             queue: Name of the queue
-            peek: If True, don't delete messages after reading
-            all_messages: If True, read all messages (otherwise just one)
-            commit_interval: Commit after this many messages (only for delete operations)
-                - 1 = exactly-once delivery (default)
-                - >1 = at-least-once delivery (better performance, lower concurrency)
+            exact_timestamp: If provided, claim only message with this timestamp
+            with_timestamps: If True, return (body, timestamp) tuple; if False, return just body
 
-        Yields:
-            Message bodies one at a time
+        Returns:
+            (message_body, timestamp) tuple if with_timestamps=True and message found,
+            or message body if with_timestamps=False and message found,
+            or None if queue is empty
 
         Raises:
             ValueError: If queue name is invalid
             RuntimeError: If called from a forked process
-
-        Note:
-            For delete operations:
-            - When commit_interval=1 (exactly-once delivery):
-              * Messages are claimed and committed BEFORE being yielded
-              * If consumer crashes after commit, message is lost (never duplicated)
-            - When commit_interval>1 (at-least-once delivery):
-              * Messages are claimed, yielded, then committed as a batch
-              * If consumer crashes mid-batch, uncommitted messages can be re-delivered
         """
-        # Delegate to stream_read_with_timestamps and yield only message bodies
-        for message, _timestamp in self.stream_read_with_timestamps(
+        results = self._retrieve(
             queue,
-            peek=peek,
-            all_messages=all_messages,
-            commit_interval=commit_interval,
+            operation="claim",
+            limit=1,
+            exact_timestamp=exact_timestamp,
+            commit_before_yield=True,
+        )
+        if not results:
+            return None
+        if with_timestamps:
+            return results[0]
+        else:
+            return results[0][0]
+
+    def claim_many(
+        self,
+        queue: str,
+        limit: int,
+        *,
+        with_timestamps: bool = True,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        since_timestamp: Optional[int] = None,
+    ) -> Union[List[Tuple[str, int]], List[str]]:
+        """Claim and return multiple messages from a queue.
+
+        Args:
+            queue: Name of the queue
+            limit: Maximum number of messages to claim
+            with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
+            delivery_guarantee: Delivery semantics (default: exactly_once)
+                - exactly_once: Commit before returning (safer, slower)
+                - at_least_once: Return then commit (faster, may redeliver)
+            since_timestamp: If provided, only claim messages after this timestamp
+
+        Returns:
+            List of (message_body, timestamp) tuples if with_timestamps=True,
+            or list of message bodies if with_timestamps=False
+
+        Raises:
+            ValueError: If queue name is invalid or limit < 1
+            RuntimeError: If called from a forked process
+        """
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        commit_before = delivery_guarantee == "exactly_once"
+
+        results = self._retrieve(
+            queue,
+            operation="claim",
+            limit=limit,
             since_timestamp=since_timestamp,
-        ):
-            yield message
+            commit_before_yield=commit_before,
+        )
+
+        if with_timestamps:
+            return results
+        else:
+            return [body for body, _ in results]
+
+    def claim_generator(
+        self,
+        queue: str,
+        *,
+        with_timestamps: bool = True,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        batch_size: Optional[int] = None,
+        since_timestamp: Optional[int] = None,
+        exact_timestamp: Optional[int] = None,
+    ) -> Iterator[Union[Tuple[str, int], str]]:
+        """Generator that claims messages from a queue.
+
+        Args:
+            queue: Name of the queue
+            with_timestamps: If True, yield (body, timestamp) tuples; if False, yield just bodies
+            delivery_guarantee: Delivery semantics (default: exactly_once)
+                - exactly_once: Process one message at a time (safer, slower)
+                - at_least_once: Process in batches (faster, may redeliver)
+            since_timestamp: If provided, only claim messages after this timestamp
+            exact_timestamp: If provided, only claim message with this exact timestamp
+
+        Yields:
+            (message_body, timestamp) tuples if with_timestamps=True,
+            or message bodies if with_timestamps=False
+
+        Raises:
+            ValueError: If queue name is invalid
+            RuntimeError: If called from a forked process
+        """
+        if delivery_guarantee == "exactly_once":
+            # Safe mode: process one message at a time
+            while True:
+                result = self._retrieve(
+                    queue,
+                    operation="claim",
+                    limit=1,
+                    since_timestamp=since_timestamp,
+                    exact_timestamp=exact_timestamp,
+                    commit_before_yield=True,
+                )
+                if not result:
+                    break
+
+                if with_timestamps:
+                    yield result[0]
+                else:
+                    yield result[0][0]
+        else:
+            # at_least_once: batch processing for performance
+            effective_batch_size = (
+                batch_size if batch_size is not None else GENERATOR_BATCH_SIZE
+            )
+            while True:
+                results = self._retrieve(
+                    queue,
+                    operation="claim",
+                    limit=effective_batch_size,
+                    since_timestamp=since_timestamp,
+                    exact_timestamp=exact_timestamp,
+                    commit_before_yield=False,  # Commit after yielding
+                )
+                if not results:
+                    break
+
+                for body, timestamp in results:
+                    if with_timestamps:
+                        yield (body, timestamp)
+                    else:
+                        yield body
+
+    def peek_one(
+        self,
+        queue: str,
+        *,
+        exact_timestamp: Optional[int] = None,
+        with_timestamps: bool = True,
+    ) -> Optional[Union[Tuple[str, int], str]]:
+        """Peek at exactly one message from a queue without claiming it.
+
+        Non-destructive read operation.
+
+        Args:
+            queue: Name of the queue
+            exact_timestamp: If provided, peek only at message with this timestamp
+            with_timestamps: If True, return (body, timestamp) tuple; if False, return just body
+
+        Returns:
+            (message_body, timestamp) tuple if with_timestamps=True and message found,
+            or message body if with_timestamps=False and message found,
+            or None if queue is empty
+
+        Raises:
+            ValueError: If queue name is invalid
+            RuntimeError: If called from a forked process
+        """
+        results = self._retrieve(
+            queue, operation="peek", limit=1, exact_timestamp=exact_timestamp
+        )
+        if not results:
+            return None
+        if with_timestamps:
+            return results[0]
+        else:
+            return results[0][0]
+
+    def peek_many(
+        self,
+        queue: str,
+        limit: int,
+        *,
+        with_timestamps: bool = True,
+        since_timestamp: Optional[int] = None,
+    ) -> Union[List[Tuple[str, int]], List[str]]:
+        """Peek at multiple messages from a queue without claiming them.
+
+        Non-destructive batch read operation.
+
+        Args:
+            queue: Name of the queue
+            limit: Maximum number of messages to peek at
+            with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
+            since_timestamp: If provided, only peek at messages after this timestamp
+
+        Returns:
+            List of (message_body, timestamp) tuples if with_timestamps=True,
+            or list of message bodies if with_timestamps=False
+
+        Raises:
+            ValueError: If queue name is invalid or limit < 1
+            RuntimeError: If called from a forked process
+        """
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        results = self._retrieve(
+            queue, operation="peek", limit=limit, since_timestamp=since_timestamp
+        )
+
+        if with_timestamps:
+            return results
+        else:
+            return [body for body, _ in results]
+
+    def peek_generator(
+        self,
+        queue: str,
+        *,
+        with_timestamps: bool = True,
+        batch_size: Optional[int] = None,
+        since_timestamp: Optional[int] = None,
+        exact_timestamp: Optional[int] = None,
+    ) -> Iterator[Union[Tuple[str, int], str]]:
+        """Generator that peeks at messages in a queue without claiming them.
+
+        Args:
+            queue: Name of the queue
+            with_timestamps: If True, yield (body, timestamp) tuples; if False, yield just bodies
+            batch_size: Batch size for pagination (uses configured default if None)
+            since_timestamp: If provided, only peek at messages after this timestamp
+            exact_timestamp: If provided, only peek at message with this exact timestamp
+
+        Yields:
+            (message_body, timestamp) tuples if with_timestamps=True,
+            or message bodies if with_timestamps=False
+
+        Raises:
+            ValueError: If queue name is invalid
+            RuntimeError: If called from a forked process
+        """
+        effective_batch_size = (
+            batch_size if batch_size is not None else GENERATOR_BATCH_SIZE
+        )
+        offset = 0
+        while True:
+            # Peek with proper offset-based pagination
+            results = self._retrieve(
+                queue,
+                operation="peek",
+                limit=effective_batch_size,
+                offset=offset,
+                since_timestamp=since_timestamp,
+                exact_timestamp=exact_timestamp,
+            )
+
+            # If no results, we're done
+            if not results:
+                break
+
+            # Yield all results from this batch
+            for body, timestamp in results:
+                if with_timestamps:
+                    yield (body, timestamp)
+                else:
+                    yield body
+
+            # Move to next batch
+            offset += len(results)
+
+            # If we got less than the effective batch size, we're done (no more messages)
+            if len(results) < effective_batch_size:
+                break
+
+    def move_one(
+        self,
+        source_queue: str,
+        target_queue: str,
+        *,
+        exact_timestamp: Optional[int] = None,
+        require_unclaimed: bool = True,
+        with_timestamps: bool = True,
+    ) -> Optional[Union[Tuple[str, int], str]]:
+        """Move exactly one message from source queue to target queue.
+
+        Atomic operation with exactly-once semantics.
+
+        Args:
+            source_queue: Queue to move from
+            target_queue: Queue to move to
+            exact_timestamp: If provided, move only message with this timestamp
+            require_unclaimed: If True (default), only move unclaimed messages.
+                             If False, move any message (including claimed).
+            with_timestamps: If True, return (body, timestamp) tuple; if False, return just body
+
+        Returns:
+            (message_body, timestamp) tuple if with_timestamps=True and message moved,
+            or message body if with_timestamps=False and message moved,
+            or None if source queue is empty or message not found
+
+        Raises:
+            ValueError: If queue names are invalid or same
+            RuntimeError: If called from a forked process
+        """
+        if source_queue == target_queue:
+            raise ValueError("Source and target queues cannot be the same")
+
+        results = self._retrieve(
+            source_queue,
+            operation="move",
+            target_queue=target_queue,
+            limit=1,
+            exact_timestamp=exact_timestamp,
+            commit_before_yield=True,
+            require_unclaimed=require_unclaimed,
+        )
+        if not results:
+            return None
+        if with_timestamps:
+            return results[0]
+        else:
+            return results[0][0]
+
+    def move_many(
+        self,
+        source_queue: str,
+        target_queue: str,
+        limit: int,
+        *,
+        with_timestamps: bool = True,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        since_timestamp: Optional[int] = None,
+        require_unclaimed: bool = True,
+    ) -> Union[List[Tuple[str, int]], List[str]]:
+        """Move multiple messages from source queue to target queue.
+
+        Atomic batch move operation with configurable delivery semantics.
+
+        Args:
+            source_queue: Queue to move from
+            target_queue: Queue to move to
+            limit: Maximum number of messages to move
+            with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
+            delivery_guarantee: Delivery semantics (default: exactly_once)
+                - exactly_once: Commit before returning (safer, slower)
+                - at_least_once: Return then commit (faster, may redeliver)
+            since_timestamp: If provided, only move messages after this timestamp
+            require_unclaimed: If True (default), only move unclaimed messages
+
+        Returns:
+            List of (message_body, timestamp) tuples if with_timestamps=True,
+            or list of message bodies if with_timestamps=False
+
+        Raises:
+            ValueError: If queue names are invalid, same, or limit < 1
+            RuntimeError: If called from a forked process
+        """
+        if source_queue == target_queue:
+            raise ValueError("Source and target queues cannot be the same")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        commit_before = delivery_guarantee == "exactly_once"
+
+        results = self._retrieve(
+            source_queue,
+            operation="move",
+            target_queue=target_queue,
+            limit=limit,
+            since_timestamp=since_timestamp,
+            commit_before_yield=commit_before,
+            require_unclaimed=require_unclaimed,
+        )
+
+        if with_timestamps:
+            return results
+        else:
+            return [body for body, _ in results]
+
+    def move_generator(
+        self,
+        source_queue: str,
+        target_queue: str,
+        *,
+        with_timestamps: bool = True,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        batch_size: Optional[int] = None,
+        since_timestamp: Optional[int] = None,
+    ) -> Iterator[Union[Tuple[str, int], str]]:
+        """Generator that moves messages from source queue to target queue.
+
+        Args:
+            source_queue: Queue to move from
+            target_queue: Queue to move to
+            with_timestamps: If True, yield (body, timestamp) tuples; if False, yield just bodies
+            delivery_guarantee: Delivery semantics (default: exactly_once)
+                - exactly_once: Process one message at a time (safer, slower)
+                - at_least_once: Process in batches (faster, may redeliver)
+            batch_size: Batch size for at_least_once mode (uses configured default if None)
+            since_timestamp: If provided, only move messages after this timestamp
+
+        Yields:
+            (message_body, timestamp) tuples if with_timestamps=True,
+            or message bodies if with_timestamps=False
+
+        Raises:
+            ValueError: If queue names are invalid or same
+            RuntimeError: If called from a forked process
+        """
+        if source_queue == target_queue:
+            raise ValueError("Source and target queues cannot be the same")
+
+        if delivery_guarantee == "exactly_once":
+            # Safe mode: process one message at a time
+            while True:
+                result = self._retrieve(
+                    source_queue,
+                    operation="move",
+                    target_queue=target_queue,
+                    limit=1,
+                    since_timestamp=since_timestamp,
+                    commit_before_yield=True,
+                )
+                if not result:
+                    break
+
+                if with_timestamps:
+                    yield result[0]
+                else:
+                    yield result[0][0]
+        else:
+            # at_least_once: batch processing for performance
+            effective_batch_size = (
+                batch_size if batch_size is not None else GENERATOR_BATCH_SIZE
+            )
+            while True:
+                results = self._retrieve(
+                    source_queue,
+                    operation="move",
+                    target_queue=target_queue,
+                    limit=effective_batch_size,
+                    since_timestamp=since_timestamp,
+                    commit_before_yield=False,  # Commit after yielding
+                )
+                if not results:
+                    break
+
+                for body, timestamp in results:
+                    if with_timestamps:
+                        yield (body, timestamp)
+                    else:
+                        yield body
 
     def _resync_timestamp_generator(self) -> None:
         """Resynchronize the timestamp generator with the actual maximum timestamp in messages.
@@ -1065,7 +1535,7 @@ class BrokerCore:
                     # This reduces transaction time and improves concurrency
                     queue_timestamps = []
                     for queue in queues:
-                        timestamp = self._generate_timestamp()
+                        timestamp = self.generate_timestamp()
                         queue_timestamps.append((queue, timestamp))
 
                     # Insert message to each queue with pre-generated timestamp
@@ -1165,258 +1635,6 @@ class BrokerCore:
             if lock_acquired:
                 vacuum_lock_path.unlink(missing_ok=True)
 
-    def move(
-        self,
-        source_queue: str,
-        dest_queue: str,
-        *,
-        message_id: Optional[int] = None,
-        require_unclaimed: bool = True,
-    ) -> Optional[Dict[str, Any]]:
-        """Move message(s) from one queue to another atomically.
-
-        Args:
-            source_queue: Name of the queue to move from
-            dest_queue: Name of the queue to move to
-            message_id: Optional ID of specific message to move.
-                       If None, moves the oldest unclaimed message.
-            require_unclaimed: If True (default), only move unclaimed messages.
-                             If False, move any message (including claimed).
-
-        Returns:
-            Dictionary with 'id', 'body' and 'ts' keys if a message was moved,
-            None if no matching messages found
-
-        Raises:
-            ValueError: If queue names are invalid
-            RuntimeError: If called from a forked process
-        """
-        self._check_fork_safety()
-        self._validate_queue_name(source_queue)
-        self._validate_queue_name(dest_queue)
-
-        def _do_move() -> Optional[Dict[str, Any]]:
-            with self._lock:
-                # Use retry logic for BEGIN IMMEDIATE
-                try:
-                    _execute_with_retry(self._runner.begin_immediate)
-                except Exception:
-                    # If we can't begin transaction, return None
-                    return None
-
-                try:
-                    if message_id is not None:
-                        # Move specific message by ID
-                        # Build WHERE clause based on require_unclaimed
-                        where_conditions = ["id = ?", "queue = ?"]
-                        params = [message_id, source_queue]
-
-                        if require_unclaimed:
-                            where_conditions.append("claimed = 0")
-
-                        rows = self._runner.run(
-                            build_move_by_id_query(where_conditions),
-                            (dest_queue, *params),
-                            fetch=True,
-                        )
-                    else:
-                        # Move oldest message (existing behavior)
-                        # Always require unclaimed for bulk move
-
-                        rows = self._runner.run(
-                            """
-                            UPDATE messages
-                            SET queue = ?, claimed = 0
-                            WHERE id IN (
-                                SELECT id FROM messages
-                                WHERE queue = ? AND claimed = 0
-                                ORDER BY id
-                                LIMIT 1
-                            )
-                            RETURNING id, body, ts
-                            """,
-                            (dest_queue, source_queue),
-                            fetch=True,
-                        )
-
-                    # Fetch the moved message
-                    rows_list = list(rows) if rows else []
-                    message = rows_list[0] if rows_list else None
-
-                    if message:
-                        # Commit the transaction
-                        self._runner.commit()
-                        # Return as dict with id, body, and ts
-                        return {"id": message[0], "body": message[1], "ts": message[2]}
-                    else:
-                        # No message to move
-                        self._runner.rollback()
-                        return None
-                except Exception:
-                    # On any error, rollback to preserve message
-                    self._runner.rollback()
-                    raise
-
-        # Execute with retry logic
-        return _execute_with_retry(_do_move)
-
-    def move_messages(
-        self,
-        source_queue: str,
-        dest_queue: str,
-        *,
-        all_messages: bool = False,
-        message_id: Optional[int] = None,
-        since_timestamp: Optional[int] = None,
-    ) -> List[Tuple[str, int]]:
-        """Move messages between queues, returning list of (body, timestamp) tuples.
-
-        Args:
-            source_queue: Name of the queue to move from
-            dest_queue: Name of the queue to move to
-            all_messages: If True, move all matching messages
-            message_id: If provided, move only the message with this timestamp
-            since_timestamp: If provided, only move messages with timestamp > this value
-
-        Returns:
-            List of (body, timestamp) tuples for moved messages
-
-        Raises:
-            ValueError: If queue names are invalid or source equals destination
-            RuntimeError: If called from a forked process
-        """
-        self._check_fork_safety()
-        self._validate_queue_name(source_queue)
-        self._validate_queue_name(dest_queue)
-
-        if source_queue == dest_queue:
-            raise ValueError("Source and destination queues cannot be the same")
-
-        def _do_move_messages() -> List[Tuple[str, int]]:
-            with self._lock:
-                # Use retry logic for BEGIN IMMEDIATE
-                try:
-                    _execute_with_retry(self._runner.begin_immediate)
-                except Exception:
-                    # If we can't begin transaction, return empty list
-                    return []
-
-                try:
-                    # Build the appropriate SQL based on parameters
-                    if message_id is not None:
-                        # Move specific message by timestamp
-                        rows = self._runner.run(
-                            """
-                            UPDATE messages
-                            SET queue = ?, claimed = 0
-                            WHERE ts = ? AND queue = ? AND claimed = 0
-                            RETURNING body, ts
-                            """,
-                            (dest_queue, message_id, source_queue),
-                            fetch=True,
-                        )
-                    elif all_messages:
-                        if since_timestamp is not None:
-                            # Move all messages newer than timestamp
-                            rows = self._runner.run(
-                                """
-                                WITH to_move AS (
-                                    SELECT id FROM messages
-                                    WHERE queue = ? AND claimed = 0 AND ts > ?
-                                    ORDER BY id
-                                )
-                                UPDATE messages
-                                SET queue = ?, claimed = 0
-                                WHERE id IN (SELECT id FROM to_move)
-                                RETURNING body, ts, id
-                                """,
-                                (source_queue, since_timestamp, dest_queue),
-                                fetch=True,
-                            )
-                        else:
-                            # Move all unclaimed messages
-                            rows = self._runner.run(
-                                """
-                                WITH to_move AS (
-                                    SELECT id FROM messages
-                                    WHERE queue = ? AND claimed = 0
-                                    ORDER BY id
-                                )
-                                UPDATE messages
-                                SET queue = ?, claimed = 0
-                                WHERE id IN (SELECT id FROM to_move)
-                                RETURNING body, ts, id
-                                """,
-                                (source_queue, dest_queue),
-                                fetch=True,
-                            )
-                    else:
-                        # Move single oldest message (with optional since filter)
-                        if since_timestamp is not None:
-                            rows = self._runner.run(
-                                """
-                                UPDATE messages
-                                SET queue = ?, claimed = 0
-                                WHERE id IN (
-                                    SELECT id FROM messages
-                                    WHERE queue = ? AND claimed = 0 AND ts > ?
-                                    ORDER BY id
-                                    LIMIT 1
-                                )
-                                RETURNING body, ts
-                                """,
-                                (dest_queue, source_queue, since_timestamp),
-                                fetch=True,
-                            )
-                        else:
-                            rows = self._runner.run(
-                                """
-                                UPDATE messages
-                                SET queue = ?, claimed = 0
-                                WHERE id IN (
-                                    SELECT id FROM messages
-                                    WHERE queue = ? AND claimed = 0
-                                    ORDER BY id
-                                    LIMIT 1
-                                )
-                                RETURNING body, ts
-                                """,
-                                (dest_queue, source_queue),
-                                fetch=True,
-                            )
-
-                    # For bulk moves, we need to sort by id to maintain FIFO order
-                    # SQLite doesn't support ORDER BY in RETURNING clause
-
-                    if all_messages and rows:
-                        # Sort by id (third column) for bulk moves to ensure FIFO order
-                        rows_list = list(rows)
-                        if rows_list and len(rows_list[0]) > 2:  # Has id column
-                            rows = sorted(rows_list, key=lambda x: x[2])
-                        else:
-                            rows = rows_list
-
-                    messages = []
-                    for row in rows:
-                        messages.append((row[0], row[1]))  # (body, timestamp)
-
-                    if messages:
-                        # Commit the transaction
-                        self._runner.commit()
-                    else:
-                        # No messages to move
-                        self._runner.rollback()
-
-                    return messages
-
-                except Exception:
-                    # On any error, rollback to preserve messages
-                    self._runner.rollback()
-                    raise
-
-        # Execute with retry logic
-        return _execute_with_retry(_do_move_messages)
-
     def queue_exists_and_has_messages(self, queue: str) -> bool:
         """Check if a queue exists and has messages.
 
@@ -1444,6 +1662,65 @@ class BrokerCore:
 
         # Execute with retry logic
         return _execute_with_retry(_do_check)
+
+    def has_pending_messages(
+        self, queue: str, since_timestamp: Optional[int] = None
+    ) -> bool:
+        """Check if there are any unclaimed messages in the specified queue.
+
+        Args:
+            queue: Name of the queue to check
+            since_timestamp: Optional timestamp to check for messages after (exclusive)
+
+        Returns:
+            True if there are unclaimed messages, False otherwise
+
+        Raises:
+            RuntimeError: If called from a forked process
+            ValueError: If queue name is invalid
+            OperationalError: If database operation fails
+        """
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+
+        def _do_check() -> bool:
+            """Inner function to execute the check with retry logic."""
+            with self._lock:
+                params: Tuple[Any, ...]
+                if since_timestamp is not None:
+                    # Check for unclaimed messages after the specified timestamp
+                    query = SQL_CHECK_PENDING_MESSAGES_SINCE
+                    params = (queue, since_timestamp)
+                else:
+                    # Check for any unclaimed messages
+                    query = SQL_CHECK_PENDING_MESSAGES
+                    params = (queue,)
+
+                rows = list(self._runner.run(query, params, fetch=True))
+                return bool(rows[0][0]) if rows else False
+
+        # Execute with retry logic
+        return _execute_with_retry(_do_check)
+
+    def get_data_version(self) -> Optional[int]:
+        """Get the data version from SQLite PRAGMA.
+
+        Returns:
+            Integer version number if successful, None on error or for non-SQLite backends
+
+        Notes:
+            This is SQLite-specific and returns None for other database backends.
+            The data version changes whenever the database file is modified.
+        """
+        with self._lock:
+            try:
+                rows = list(self._runner.run(SQL_GET_DATA_VERSION, fetch=True))
+                if rows and rows[0]:
+                    return int(rows[0][0])
+                return None
+            except Exception:
+                # Return None for non-SQLite backends or any errors
+                return None
 
     def _do_vacuum_without_lock(self) -> None:
         """Perform the actual vacuum operation without file locking."""

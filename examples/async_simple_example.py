@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
-"""Simple example showing how to use the async pooled broker implementation.
+"""ADVANCED EXAMPLE: Demonstration of the custom async pooled broker implementation.
 
-This example demonstrates common use cases for the async SimpleBroker:
-- Basic queue operations
+NOTE: This example uses the ADVANCED async_pooled_broker.py implementation which
+accesses SimpleBroker's internal APIs. Most users should use the standard Queue API
+or the simpler async_wrapper.py for async operations.
+
+For standard usage, see:
+- python_api.py for the standard synchronous API
+- async_wrapper.py for a simpler async wrapper around the standard API
+
+This example demonstrates common use cases for the custom async SimpleBroker:
+- Basic queue operations with custom async implementation
 - Worker pattern with async/await
 - Error handling
 - Graceful shutdown
 
 Requirements:
     pip install aiosqlite aiosqlitepool
+
+WARNING: This uses a custom implementation that may not track the main SimpleBroker API.
+Consider using async_wrapper.py for production use.
 """
 
 import asyncio
@@ -16,7 +27,9 @@ import random
 import signal
 import sys
 
-# Import the async implementation
+# ADVANCED: Import the custom async implementation
+# Note: This uses the advanced async_pooled_broker example.
+# For standard usage, consider using the simpler async_wrapper.py instead.
 from async_pooled_broker import AsyncBrokerCore, AsyncQueue, async_broker
 
 

@@ -135,7 +135,7 @@ class TestSQLiteRunnerErrorHandling:
 
                 # For disk full simulation, we keep the mock approach as it's hard to trigger
                 # a real disk full error in tests
-                with patch.object(runner, "_get_connection") as mock_conn:
+                with patch.object(runner, "get_connection") as mock_conn:
                     mock_conn.return_value.commit.side_effect = (
                         sqlite3.OperationalError("disk full")
                     )
@@ -185,7 +185,7 @@ class TestSQLiteRunnerErrorHandling:
             runner = SQLiteRunner(str(Path(tmpdir) / "test.db"))
 
             # Create a connection
-            _ = runner._get_connection()
+            _ = runner.get_connection()
 
             # Mock the connection to raise an error on close
             mock_conn = Mock()
@@ -324,14 +324,14 @@ class TestSQLiteRunnerForkSafety:
             runner = SQLiteRunner(str(Path(tmpdir) / "test.db"))
 
             # Get initial connection
-            runner._get_connection()
+            runner.get_connection()
             initial_pid = runner._pid
 
             # Simulate fork by changing PID
             runner._pid = initial_pid - 1  # Different PID
 
             # Get connection again - should reinitialize
-            runner._get_connection()
+            runner.get_connection()
 
             # Verify reinitialization
             assert runner._pid == os.getpid()

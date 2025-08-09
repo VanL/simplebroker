@@ -4,13 +4,17 @@ Minimal async wrapper for SimpleBroker using only stdlib.
 
 This example shows how to integrate SimpleBroker with asyncio applications
 without any external dependencies. The wrapper runs SimpleBroker's synchronous
-watcher in a thread pool and provides async methods for queue operations.
+API in a thread pool and provides async methods for queue operations.
+
+This demonstrates the RECOMMENDED approach for async usage - wrapping the
+standard Queue API rather than reimplementing with internal APIs.
 
 Key concepts:
 - Thread pool executor for sync operations
 - Async context manager for lifecycle
 - asyncio.Event for coordination
 - Type hints for better IDE support
+- Uses the standard Queue and QueueWatcher public API
 """
 
 import asyncio
@@ -20,8 +24,11 @@ import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Optional, ParamSpec, TypeVar, cast
 
-from simplebroker import QueueWatcher
-from simplebroker.db import BrokerDB
+# Use the public API - Queue and QueueWatcher
+from simplebroker import Queue, QueueWatcher
+
+# For cross-queue operations requiring direct database access (advanced use)
+# Removed DBConnection import - use BrokerDB directly
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -58,12 +65,12 @@ class AsyncBroker:
         """
         self.db_path = Path(db_path)
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        self._db: Optional[BrokerDB] = None
+        self._queues: dict[str, Queue] = {}  # Cache Queue instances by name
         self._watchers: list[tuple[QueueWatcher, asyncio.Event]] = []
 
     async def __aenter__(self) -> "AsyncBroker":
         """Async context manager entry."""
-        self._db = BrokerDB(str(self.db_path))
+        # Queue instances will be created on-demand for each queue name
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -75,52 +82,51 @@ class AsyncBroker:
         # Wait for watchers to finish
         await asyncio.sleep(0.1)  # Give watchers time to stop
 
-        # Close database
-        if self._db:
-            self._db.close()
+        # Queue instances handle their own cleanup
 
         # Shutdown executor
         self._executor.shutdown(wait=True)
 
+    def _get_queue(self, queue_name: str) -> Queue:
+        """Get or create a Queue instance for the given queue name."""
+        if queue_name not in self._queues:
+            self._queues[queue_name] = Queue(queue_name, db_path=str(self.db_path))
+        return self._queues[queue_name]
+
     @run_in_executor
     def push(self, queue: str, message: str) -> None:
         """Push a message to a queue (runs in thread pool)."""
-        if not self._db:
-            raise RuntimeError("Broker not initialized")
-        self._db.write(queue, message)
+        q = self._get_queue(queue)
+        q.write(message)
 
     @run_in_executor
     def pop(self, queue: str) -> Optional[str]:
         """Pop a message from a queue (runs in thread pool)."""
-        if not self._db:
-            raise RuntimeError("Broker not initialized")
-        # Note: read() removes the message from the queue
-        # Read one message (non-peek mode removes it)
-        for msg in self._db.read(queue, peek=False):
-            return msg
-        return None
+        q = self._get_queue(queue)
+        # read() removes and returns the oldest message
+        result = q.read()
+        return result if isinstance(result, str) else None
 
     @run_in_executor
     def peek(self, queue: str) -> Optional[str]:
         """Peek at the next message without removing it."""
-        if not self._db:
-            raise RuntimeError("Broker not initialized")
-        # Read one message in peek mode
-        for msg in self._db.read(queue, peek=True):
-            return msg
-        return None
+        q = self._get_queue(queue)
+        # peek() returns the oldest message without removing it
+        result = q.peek()
+        return result if isinstance(result, str) else None
 
     @run_in_executor
     def size(self, queue: str) -> int:
         """Get the size of a queue."""
-        if not self._db:
-            raise RuntimeError("Broker not initialized")
-        # Get count from list_queues
-        queues = self._db.list_queues()
-        for q_name, count in queues:
-            if q_name == queue:
-                return count
-        return 0  # Queue doesn't exist
+        # Use database directly to get queue size
+        from simplebroker.db import BrokerDB
+
+        with BrokerDB(str(self.db_path)) as db:
+            stats = db.get_queue_stats()
+            for queue_name, unclaimed, _total in stats:
+                if queue_name == queue:
+                    return unclaimed
+        return 0
 
     async def watch_queue(
         self, queue: str, handler: Callable[[str, int], None], peek: bool = False
@@ -136,8 +142,6 @@ class AsyncBroker:
         Returns:
             asyncio.Event that will be set when the watcher stops
         """
-        if not self._db:
-            raise RuntimeError("Broker not initialized")
 
         # Create a stop event for coordination
         stop_event = asyncio.Event()
@@ -175,8 +179,6 @@ class AsyncBroker:
         Yields:
             Tuple of (message, timestamp) for each message
         """
-        if not self._db:
-            raise RuntimeError("Broker not initialized")
 
         while True:
             # Fetch a batch of messages in thread pool
@@ -195,14 +197,23 @@ class AsyncBroker:
     def _fetch_batch(self, queue: str, batch_size: int) -> list[tuple[str, int]]:
         """Fetch a batch of messages (runs in thread pool)."""
         messages = []
-        # Use stream_read_with_timestamps for better performance
-        if self._db:
-            for msg, ts in self._db.stream_read_with_timestamps(
-                queue, all_messages=False, peek=False, commit_interval=1
-            ):
-                messages.append((msg, ts))
-                if len(messages) >= batch_size:
-                    break
+        q = self._get_queue(queue)
+
+        # Read messages one by one up to batch_size
+        # Note: The Queue API doesn't expose timestamps directly in the public API
+        # For this example, we'll just return the message with a placeholder timestamp
+        for _ in range(batch_size):
+            result = q.read(with_timestamps=True)
+            if result is None:
+                break
+            if isinstance(result, tuple):
+                messages.append(result)
+            elif isinstance(result, str):
+                # Fallback if no timestamp available
+                import time
+
+                messages.append((result, int(time.time() * 1000000)))
+
         return messages
 
 
@@ -253,6 +264,27 @@ async def example_watcher(broker: AsyncBroker) -> None:
     # Wait for watcher to stop
     await stop_event.wait()
     logger.info(f"Processed {len(processed)} notifications")
+
+
+async def example_cross_queue_operation(db_path: Path) -> None:
+    """Example showing cross-queue operations using BrokerDB (advanced).
+
+    For operations that need to work across multiple queues atomically,
+    you can use the BrokerDB context manager. This is an advanced
+    pattern for when the simple Queue API isn't sufficient.
+    """
+    from simplebroker.db import BrokerDB
+
+    # Create a BrokerDB instance for advanced operations
+    broker_db = BrokerDB(str(db_path))
+
+    # Use BrokerDB directly for cross-queue operations
+    with broker_db:
+        # Example: Get queue statistics
+        stats = broker_db.get_queue_stats()
+        logger.info(f"Queue stats: {stats}")
+
+    broker_db.close()
 
 
 async def main() -> None:

@@ -125,13 +125,15 @@ class TestTimestampEdgeCases:
         gen = TimestampGenerator(mock_runner)
         gen._initialize()
 
-        # Mock time to return a value that would exceed 2^63 when shifted
+        # Mock time to return a value that would exceed 2^63 (SQLITE_MAX_INT64)
+        # when encoded as hybrid timestamp
         with patch("simplebroker._timestamp.time") as mock_time:
-            # 2^43 milliseconds would overflow when shifted by 20
-            # time_ns() returns nanoseconds, so multiply by 1e9
-            mock_time.time_ns.return_value = int((1 << 43) * 1_000_000)
+            # Use a value that after clearing bottom 12 bits will exceed 2^63
+            # 2^63 = 9223372036854775808
+            # Set time_ns to a value that when masked will exceed this
+            mock_time.time_ns.return_value = 9223372036854779904  # Just above 2^63
 
-            with pytest.raises(TimestampError, match="too far in future"):
+            with pytest.raises(TimestampError, match="Timestamp too far in future"):
                 gen.generate()
 
     def test_timestamp_generator_update_conflict(self):
@@ -232,3 +234,82 @@ class TestTimestampEdgeCases:
         assert gen._pid == os.getpid()
         assert gen._initialized is True
         assert gen._counter == 0
+
+    def test_timestamp_magnitude_preservation(self):
+        """Test that timestamps preserve the magnitude of time.time_ns()."""
+
+        mock_runner = Mock()
+
+        # Mock time.time_ns to return a known value
+        test_ns = 1754685000000000000  # This should start with '1'
+
+        # Mock the store operation to succeed
+        mock_runner.run.side_effect = [
+            [],  # Initial read returns no timestamp
+            [(test_ns,)],  # Store operation returns the stored value
+        ]
+
+        gen = TimestampGenerator(mock_runner)
+
+        with patch("simplebroker._timestamp.time") as mock_time:
+            mock_time.time_ns.return_value = test_ns
+
+            # Generate timestamp
+            ts = gen.generate()
+
+            # Convert to string to check leading digits
+            ts_str = str(ts)
+            test_ns_str = str(test_ns)
+
+            # The timestamp should have the same leading digit as time.time_ns()
+            assert ts_str[0] == test_ns_str[0], (
+                f"First digit mismatch: {ts_str[0]} != {test_ns_str[0]}"
+            )
+            assert ts_str[0] == "1", (
+                f"Expected first digit to be '1', got '{ts_str[0]}'"
+            )
+
+            # Decode the timestamp
+            decoded_ns, counter = gen._decode_hybrid_timestamp(ts)
+
+            # The decoded base should be close to the original time
+            # (within the granularity of the counter bits)
+            LOGICAL_COUNTER_MASK = (1 << 12) - 1
+            time_mask = ~LOGICAL_COUNTER_MASK
+            expected_base = test_ns & time_mask
+
+            assert decoded_ns == expected_base, (
+                f"Decoded base {decoded_ns} != expected {expected_base}"
+            )
+
+            # The magnitude should be preserved
+            assert str(decoded_ns)[0] == "1", "Decoded timestamp should start with '1'"
+
+    def test_timestamp_encoding_decoding_roundtrip(self):
+        """Test that encoding and decoding are inverses of each other."""
+        mock_runner = Mock()
+        gen = TimestampGenerator(mock_runner)
+
+        # Test various timestamp values
+        test_cases = [
+            (1754685000000000000, 0),  # Current time-ish, no counter
+            (1754685000000000000, 100),  # With counter
+            (1754685000000000000, 4095),  # Max counter (2^12 - 1)
+            (1000000000000000000, 0),  # Older timestamp
+            (2000000000000000000, 2047),  # Future timestamp, mid counter
+        ]
+
+        for physical_ns, counter in test_cases:
+            # Encode
+            encoded = gen._encode_hybrid_timestamp(physical_ns, counter)
+
+            # Decode
+            decoded_ns, decoded_counter = gen._decode_hybrid_timestamp(encoded)
+
+            # Check that we get back what we put in (with base alignment)
+            LOGICAL_COUNTER_MASK = (1 << 12) - 1
+            time_mask = ~LOGICAL_COUNTER_MASK
+            expected_ns = physical_ns & time_mask
+
+            assert decoded_ns == expected_ns, f"Time mismatch for {physical_ns}"
+            assert decoded_counter == counter, f"Counter mismatch for counter {counter}"

@@ -17,7 +17,10 @@ def test_chmod_windows_compatibility(tmp_path):
             warnings.simplefilter("always")
             # Should not crash, just warn
             db = BrokerDB(str(db_path))
-            db.close()
+            try:
+                pass  # Database created successfully despite chmod failure
+            finally:
+                db.close()
 
             # Verify warning was issued
             assert len(w) == 1
@@ -39,7 +42,10 @@ def test_path_resolve_edge_case(tmp_path):
             warnings.simplefilter("always")
             # Should fall back to expanduser without crashing
             db = BrokerDB(str(test_file))
-            db.close()
+            try:
+                pass  # Database created successfully despite path resolution failure
+            finally:
+                db.close()
 
             # Verify warning was issued
             assert len(w) == 1
@@ -53,7 +59,10 @@ def test_chmod_called_on_new_database(tmp_path):
 
     with unittest.mock.patch("os.chmod") as mock_chmod:
         db = BrokerDB(str(db_path))
-        db.close()
+        try:
+            pass  # Database created successfully
+        finally:
+            db.close()
 
         # Verify chmod was called with correct permissions
         # Now also called for marker files, so check database file specifically
@@ -70,12 +79,18 @@ def test_chmod_not_called_on_existing_database(tmp_path):
 
     # Create the database first
     db = BrokerDB(str(db_path))
-    db.close()
+    try:
+        pass  # Database created successfully
+    finally:
+        db.close()
 
     # Now open it again
     with unittest.mock.patch("os.chmod") as mock_chmod:
         db = BrokerDB(str(db_path))
-        db.close()
+        try:
+            pass  # Database opened successfully
+        finally:
+            db.close()
 
         # Verify chmod was NOT called on the database file itself
         # (it may be called on lock files, which is expected)
@@ -94,8 +109,8 @@ def test_normal_operation_still_works(tmp_path):
     with BrokerDB(str(db_path)) as db:
         # Test basic operations
         db.write("test-queue", "Hello, World!")
-        messages = db.read("test-queue")
-        assert messages == ["Hello, World!"]
+        message = db.claim_one("test-queue", with_timestamps=False)
+        assert message == "Hello, World!"
 
         # Test queue listing
         db.write("queue1", "msg1")

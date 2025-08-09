@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Example extension showing how to create a custom SQLRunner."""
+"""ADVANCED EXAMPLE: Creating a custom SQLRunner extension.
+
+This demonstrates how to extend SimpleBroker's functionality by creating
+a custom SQLRunner. This is an advanced pattern for users who need to:
+- Add custom logging or monitoring
+- Implement custom transaction handling
+- Add database-level middleware
+
+For standard usage, see python_api.py which demonstrates the Queue API.
+
+Note: The extension API (SQLRunner) is designed for advanced users who need
+to customize database operations. Most users should use the standard Queue API.
+"""
 
 from typing import Any, Iterable, List, Tuple
 

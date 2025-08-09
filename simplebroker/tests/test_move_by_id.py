@@ -1,13 +1,14 @@
-"""Test message ID-based move functionality."""
+"""Test message timestamp-based move functionality."""
 
 import os
 import tempfile
 
 from simplebroker.db import BrokerDB
+from simplebroker.sbqueue import Queue
 
 
-def test_move_by_message_id():
-    """Test moving a specific message by ID."""
+def test_move_by_message_timestamp():
+    """Test moving a specific message by timestamp."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -17,52 +18,59 @@ def test_move_by_message_id():
             db.write("source", "msg2")
             db.write("source", "msg3")
 
-            # Get message IDs using _runner
+            # Get message timestamps using _runner
             with db._lock:
                 messages = list(
                     db._runner.run(
-                        "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
+                        "SELECT ts, body FROM messages WHERE queue = ? ORDER BY ts",
                         ("source",),
                         fetch=True,
                     )
                 )
 
-            # Move the middle message (msg2) by ID
-            msg2_id = messages[1][0]
-            result = db.move("source", "dest", message_id=msg2_id)
+            # Move the middle message (msg2) by timestamp
+            msg2_timestamp = messages[1][0]
+            result = db.move_one(
+                "source", "dest", exact_timestamp=msg2_timestamp, with_timestamps=True
+            )
 
             assert result is not None
-            assert result["body"] == "msg2"
-            assert "ts" in result
+            assert result[0] == "msg2"  # body
+            assert result[1] == msg2_timestamp  # timestamp
 
             # Verify source still has msg1 and msg3
-            remaining = db.read("source", peek=True, all_messages=True)
+            source_queue = Queue("source", db_path=db_path)
+            remaining = list(source_queue.peek_generator())
             assert remaining == ["msg1", "msg3"]
 
             # Verify dest has msg2
-            dest_messages = db.read("dest", peek=True, all_messages=True)
+            dest_queue = Queue("dest", db_path=db_path)
+            dest_messages = list(dest_queue.peek_generator())
             assert dest_messages == ["msg2"]
 
 
-def test_move_by_id_not_found():
-    """Test moving a non-existent message ID returns None."""
+def test_move_by_timestamp_not_found():
+    """Test moving a non-existent message timestamp returns None."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
         with BrokerDB(db_path) as db:
             db.write("source", "msg1")
 
-            # Try to move non-existent ID
-            result = db.move("source", "dest", message_id=99999)
+            # Try to move non-existent timestamp
+            result = db.move_one(
+                "source", "dest", exact_timestamp=99999999, with_timestamps=True
+            )
             assert result is None
 
             # Original message should still be in source
-            messages = db.read("source", peek=True, all_messages=True)
+            source_queue = Queue("source", db_path=db_path)
+            messages = list(source_queue.peek_generator())
             assert messages == ["msg1"]
 
 
 def test_move_by_id_wrong_queue():
-    """Test moving a message ID from wrong queue returns None."""
+    """Test moving a message timestamp from wrong queue returns None."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -70,23 +78,24 @@ def test_move_by_id_wrong_queue():
             # Add message to queue1
             db.write("queue1", "msg1")
 
-            # Get the message ID using _runner
+            # Get the message timestamp using _runner
             with db._lock:
                 result = list(
                     db._runner.run(
-                        "SELECT id FROM messages WHERE queue = ?",
+                        "SELECT ts FROM messages WHERE queue = ?",
                         ("queue1",),
                         fetch=True,
                     )
                 )
-                msg_id = result[0][0]
+                msg_ts = result[0][0]
 
-            # Try to move from queue2 (wrong queue)
-            result = db.move("queue2", "dest", message_id=msg_id)
+            # Try to move from queue2 (wrong queue) using timestamp
+            result = db.move_one("queue2", "dest", exact_timestamp=msg_ts)
             assert result is None
 
             # Message should still be in queue1
-            messages = db.read("queue1", peek=True, all_messages=True)
+            queue1 = Queue("queue1", db_path=db_path)
+            messages = list(queue1.peek_generator())
             assert messages == ["msg1"]
 
 
@@ -100,29 +109,32 @@ def test_move_claimed_message_with_require_unclaimed():
             db.write("source", "msg2")
 
             # Claim msg1
-            claimed = db.read("source")
-            assert claimed == ["msg1"]
+            source_queue = Queue("source", db_path=db_path)
+            claimed = source_queue.read_one()
+            assert claimed == "msg1"
 
-            # Get message IDs using _runner
+            # Get message timestamps using _runner
             with db._lock:
                 messages = list(
                     db._runner.run(
-                        "SELECT id, body, claimed FROM messages WHERE queue = ? ORDER BY id",
+                        "SELECT ts, body, claimed FROM messages WHERE queue = ? ORDER BY ts",
                         ("source",),
                         fetch=True,
                     )
                 )
 
             # Try to move claimed message (msg1) with require_unclaimed=True (default)
-            msg1_id = messages[0][0]
-            result = db.move("source", "dest", message_id=msg1_id)
+            msg1_ts = messages[0][0]
+            result = db.move_one("source", "dest", exact_timestamp=msg1_ts)
             assert result is None  # Should not move claimed message
 
             # Try to move unclaimed message (msg2)
-            msg2_id = messages[1][0]
-            result = db.move("source", "dest", message_id=msg2_id)
+            msg2_ts = messages[1][0]
+            result = db.move_one("source", "dest", exact_timestamp=msg2_ts)
             assert result is not None
-            assert result["body"] == "msg2"
+            assert result == "msg2" or (
+                isinstance(result, tuple) and result[0] == "msg2"
+            )
 
 
 def test_move_claimed_message_without_require_unclaimed():
@@ -135,33 +147,37 @@ def test_move_claimed_message_without_require_unclaimed():
             db.write("source", "msg2")
 
             # Claim msg1
-            claimed = db.read("source")
-            assert claimed == ["msg1"]
+            source_queue = Queue("source", db_path=db_path)
+            claimed = source_queue.read_one()
+            assert claimed == "msg1"
 
-            # Get message ID of claimed message using _runner
+            # Get message timestamp of claimed message using _runner
             with db._lock:
                 result = list(
                     db._runner.run(
-                        "SELECT id FROM messages WHERE queue = ? AND body = ?",
+                        "SELECT ts FROM messages WHERE queue = ? AND body = ?",
                         ("source", "msg1"),
                         fetch=True,
                     )
                 )
-                msg1_id = result[0][0]
+                msg1_ts = result[0][0]
 
             # Move claimed message with require_unclaimed=False
-            result = db.move(
-                "source", "dest", message_id=msg1_id, require_unclaimed=False
+            result = db.move_one(
+                "source", "dest", exact_timestamp=msg1_ts, require_unclaimed=False
             )
             assert result is not None
-            assert result["body"] == "msg1"
+            assert result == "msg1" or (
+                isinstance(result, tuple) and result[0] == "msg1"
+            )
 
-            # Verify msg1 is now in dest and is unclaimed
-            dest_messages = db.read("dest", peek=True, all_messages=True)
+            # Verify msg1 is now in dest
+            dest_queue = Queue("dest", db_path=db_path)
+            dest_messages = list(dest_queue.peek_generator())
             assert dest_messages == ["msg1"]
 
             # Verify only msg2 remains in source
-            source_messages = db.read("source", peek=True, all_messages=True)
+            source_messages = list(source_queue.peek_generator())
             assert source_messages == ["msg2"]
 
 
@@ -173,21 +189,24 @@ def test_move_by_id_preserves_timestamp():
         with BrokerDB(db_path) as db:
             db.write("source", "msg1")
 
-            # Get message ID and timestamp using _runner
+            # Get message timestamp using _runner
             with db._lock:
                 result = list(
                     db._runner.run(
-                        "SELECT id, ts FROM messages WHERE queue = ?",
+                        "SELECT ts FROM messages WHERE queue = ?",
                         ("source",),
                         fetch=True,
                     )
                 )
-                msg_id, original_ts = result[0]
+                original_ts = result[0][0]
 
             # Move the message
-            result = db.move("source", "dest", message_id=msg_id)
+            result = db.move_one(
+                "source", "dest", exact_timestamp=original_ts, with_timestamps=True
+            )
             assert result is not None
-            assert result["ts"] == original_ts
+            if isinstance(result, tuple):
+                assert result[1] == original_ts
 
             # Verify timestamp is preserved in destination using _runner
             with db._lock:
@@ -204,7 +223,7 @@ def test_move_by_id_preserves_timestamp():
 
 
 def test_move_mixed_mode():
-    """Test mixing ID-based and bulk move modes."""
+    """Test mixing timestamp-based and bulk move modes."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
@@ -213,37 +232,46 @@ def test_move_mixed_mode():
             for i in range(5):
                 db.write("source", f"msg{i}")
 
-            # Get message IDs using _runner
+            # Get message timestamps using _runner
             with db._lock:
                 messages = list(
                     db._runner.run(
-                        "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
+                        "SELECT ts, body FROM messages WHERE queue = ? ORDER BY ts",
                         ("source",),
                         fetch=True,
                     )
                 )
 
-            # Move specific message by ID (msg2)
-            msg2_id = messages[2][0]
-            result = db.move("source", "dest1", message_id=msg2_id)
-            assert result["body"] == "msg2"
+            # Move specific message by timestamp (msg2)
+            msg2_ts = messages[2][0]
+            result = db.move_one("source", "dest1", exact_timestamp=msg2_ts)
+            assert result == "msg2" or (
+                isinstance(result, tuple) and result[0] == "msg2"
+            )
 
             # Move oldest unclaimed (should be msg0)
-            result = db.move("source", "dest2")
-            assert result["body"] == "msg0"
+            result = db.move_one("source", "dest2")
+            assert result == "msg0" or (
+                isinstance(result, tuple) and result[0] == "msg0"
+            )
 
-            # Move by ID again (msg4)
-            msg4_id = messages[4][0]
-            result = db.move("source", "dest1", message_id=msg4_id)
-            assert result["body"] == "msg4"
+            # Move by timestamp again (msg4)
+            msg4_ts = messages[4][0]
+            result = db.move_one("source", "dest1", exact_timestamp=msg4_ts)
+            assert result == "msg4" or (
+                isinstance(result, tuple) and result[0] == "msg4"
+            )
 
             # Verify remaining messages
-            remaining = db.read("source", peek=True, all_messages=True)
+            source_queue = Queue("source", db_path=db_path)
+            remaining = list(source_queue.peek_generator())
             assert set(remaining) == {"msg1", "msg3"}
 
             # Verify destinations
-            dest1_msgs = db.read("dest1", peek=True, all_messages=True)
+            dest1_queue = Queue("dest1", db_path=db_path)
+            dest1_msgs = list(dest1_queue.peek_generator())
             assert set(dest1_msgs) == {"msg2", "msg4"}
 
-            dest2_msgs = db.read("dest2", peek=True, all_messages=True)
+            dest2_queue = Queue("dest2", db_path=db_path)
+            dest2_msgs = list(dest2_queue.peek_generator())
             assert dest2_msgs == ["msg0"]

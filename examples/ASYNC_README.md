@@ -1,6 +1,12 @@
-# Async SimpleBroker with Connection Pooling
+# ADVANCED: Async SimpleBroker with Connection Pooling
 
-This directory contains a high-performance async implementation of SimpleBroker using `aiosqlite` and `aiosqlitepool`.
+**NOTE: This documentation covers the ADVANCED async_pooled_broker.py example which uses
+internal SimpleBroker APIs to build a custom async implementation. Most users should use:**
+- **async_wrapper.py** - Simpler async wrapper around the standard Queue API (RECOMMENDED)
+- **python_api.py** - Standard synchronous API examples
+
+This directory contains a high-performance custom async implementation of SimpleBroker using `aiosqlite` and `aiosqlitepool`.
+This is an advanced example for users who need custom database-level extensions beyond what the standard API provides.
 
 ## Features
 
@@ -198,15 +204,28 @@ python async_pooled_broker.py
 
 ## Integration with Existing Code
 
-The async implementation can coexist with the sync version:
+### Recommended Approach: Use async_wrapper.py
+
+For most users, the simpler async_wrapper.py provides async functionality while using the standard API:
 
 ```python
-# Sync code
+# Standard sync code
 from simplebroker import Queue
 with Queue("tasks") as q:
     q.write("sync message")
 
-# Async code reading same database
+# Async wrapper (RECOMMENDED)
+from async_wrapper import AsyncBroker
+async with AsyncBroker("broker.db") as broker:
+    msg = await broker.pop("tasks")  # Gets "sync message"
+```
+
+### Advanced Approach: Custom async implementation
+
+The custom async_pooled_broker implementation can also coexist with the sync version:
+
+```python
+# Custom async code (ADVANCED - uses internal APIs)
 from async_pooled_broker import AsyncQueue, async_broker
 async with async_broker("broker.db") as broker:
     queue = AsyncQueue("tasks", broker)
@@ -214,3 +233,6 @@ async with async_broker("broker.db") as broker:
 ```
 
 Both implementations use the same database schema and are fully compatible.
+
+**WARNING**: The async_pooled_broker uses internal APIs that may change between versions.
+Use async_wrapper.py for production code unless you need custom extensions.

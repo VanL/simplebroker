@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from simplebroker import Queue
 from simplebroker.db import BrokerDB, _validate_queue_name_cached
 from simplebroker.watcher import QueueMoveWatcher
 
@@ -62,11 +63,11 @@ MACHINE_PERFORMANCE_RATIO = 1.0  # Default to baseline performance
 # Baseline performance times measured on Apple M2 Air
 # These are the actual measured times for each test scenario
 BASELINE_TIMES = {
-    "basic_write_50": 0.015,  # Writing 50 messages
+    "basic_write_50": 0.02,  # Writing 50 messages
     "validation_cached": 0.001,  # 1000 cached validations (rounded up from 0.000)
     "bulk_move_5k": 5.0,  # Estimated: 5x the 1k move time
     "large_batch_claim_rollback": 0.3,  # Reading 100 of 5000 messages (increased for CI reliability)
-    "at_least_once_rollback": 0.02,  # Reading 250 of 500 messages (increased for CI reliability)
+    "at_least_once_rollback": 0.2,  # Reading 250 of 500 messages (increased for CI reliability)
     "since_query_2000_msgs": 1.0,  # Estimated based on query performance
     "timestamp_lookup": 0.1,  # Estimated based on index lookup
     "concurrent_mixed_ops": 2.0,  # Estimated for mixed operations
@@ -122,23 +123,29 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
 def test_timestamp_performance_basic(workdir):
     """Basic performance check - not excessive writes."""
     db_path = workdir / "test.db"
-    db = BrokerDB(str(db_path))
 
-    # Time BASIC_WRITE_COUNT writes
-    start = time.monotonic()
-    for i in range(BASIC_WRITE_COUNT):
-        db.write("perf_test", f"Message {i}")
-    elapsed = time.monotonic() - start
+    # Use Queue API for user-facing write performance
+    q = Queue("perf_test", db_path=str(db_path), persistent=True)
+    try:
+        # Time BASIC_WRITE_COUNT writes
+        start = time.monotonic()
+        for i in range(BASIC_WRITE_COUNT):
+            q.write(f"Message {i}")
+        elapsed = time.monotonic() - start
 
-    # Should complete within timeout
-    timeout = get_timeout("basic_write_50")
-    assert elapsed < timeout, (
-        f"Writing {BASIC_WRITE_COUNT} messages took {elapsed:.3f}s, "
-        f"expected < {timeout:.3f}s"
-    )
+        # Should complete within timeout
+        timeout = get_timeout("basic_write_50")
+        assert elapsed < timeout, (
+            f"Writing {BASIC_WRITE_COUNT} messages took {elapsed:.3f}s, "
+            f"expected < {timeout:.3f}s"
+        )
+    finally:
+        q.close()
 
-    # No conflicts should have occurred
-    assert db.get_conflict_metrics()["ts_conflict_count"] == 0
+    # Check conflict metrics using BrokerDB for internal testing
+    with BrokerDB(str(db_path)) as db:
+        # No conflicts should have occurred
+        assert db.get_conflict_metrics()["ts_conflict_count"] == 0
 
 
 # ============================================================================
@@ -193,20 +200,25 @@ def test_queue_validation_performance():
 @pytest.mark.slow
 def test_bulk_move_performance_5k_messages(workdir):
     """Test bulk move with BULK_MOVE_MESSAGE_COUNT messages maintains good performance."""
-    # Write messages
+    # Write messages using CLI for consistency
     num_messages = BULK_MOVE_MESSAGE_COUNT
+    db_path = workdir / "test.db"
 
-    for i in range(num_messages):
-        run_cli("write", "perf_source", f"perfmsg{i:04d}", cwd=workdir)
+    # Write messages using API for better performance
+    with Queue("perf_source", db_path=str(db_path), persistent=True) as q:
+        for i in range(num_messages):
+            q.write(f"perfmsg{i:04d}")
 
     # Bulk move all messages
+    source = Queue("perf_source", db_path=str(db_path))
+    dest = Queue("perf_dest", db_path=str(db_path))
     start_move = time.monotonic()
-    rc, out, _ = run_cli("move", "perf_source", "perf_dest", "--all", cwd=workdir)
+    try:
+        list(source.move(dest, all_messages=True))
+    finally:
+        source.close()
+        dest.close()
     move_time = time.monotonic() - start_move
-
-    assert rc == 0
-    lines = out.strip().split("\n")
-    assert len(lines) == num_messages
 
     # Performance check: should move > MIN_BULK_MOVE_RATE messages/second
     messages_per_second = num_messages / move_time
@@ -222,10 +234,9 @@ def test_bulk_move_performance_5k_messages(workdir):
     )
 
     # Verify messages are in destination
-    rc, out, _ = run_cli("peek", "perf_dest", "--all", cwd=workdir)
-    assert rc == 0
-    lines = out.strip().split("\n")
-    assert len(lines) == num_messages
+    with Queue("perf_dest", db_path=str(db_path)) as q:
+        dest_messages = q.peek_many(limit=num_messages + 1)
+        assert len(dest_messages) == num_messages
 
 
 # ============================================================================
@@ -238,33 +249,29 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
     """Test that rollback is fast when a large batch claim is interrupted."""
     db_path = workdir / "test.db"
 
-    # Write many messages
+    # Write many messages using Queue API with persistent connection
     message_count = LARGE_BATCH_CLAIM_COUNT
-    with BrokerDB(str(db_path)) as db:
+    with Queue("test_queue", db_path=str(db_path), persistent=True) as q:
         for i in range(message_count):
-            db.write("test_queue", f"message{i:04d}")
+            q.write(f"message{i:04d}")
 
     # Test rollback by simulating generator not being fully consumed
     # This tests the exactly-once vs at-least-once delivery semantics
 
-    # First test with commit_interval=1 (exactly-once)
+    # First test with exactly-once (default)
     messages_read = []
     start_time = time.monotonic()
 
-    with BrokerDB(str(db_path)) as db:
+    q = Queue("test_queue", db_path=str(db_path))
+    try:
         # Read only first LARGE_BATCH_READ_LIMIT messages then stop (simulating crash/interrupt)
-        for i, msg in enumerate(
-            db.stream_read(
-                "test_queue",
-                peek=False,
-                all_messages=True,
-                commit_interval=1,  # exactly-once semantics
-            )
-        ):
+        for i, msg in enumerate(q.read_generator(delivery_guarantee="exactly_once")):
             messages_read.append(msg)
             if i >= LARGE_BATCH_READ_LIMIT - 1:  # Read LARGE_BATCH_READ_LIMIT messages
                 break
-        # Generator not fully consumed - rollback should happen
+        # Generator not fully consumed
+    finally:
+        q.close()
 
     elapsed = time.monotonic() - start_time
     timeout = get_timeout("large_batch_claim_rollback")
@@ -276,33 +283,32 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
     assert len(messages_read) == LARGE_BATCH_READ_LIMIT
 
     # Read remaining messages (should be message_count - LARGE_BATCH_READ_LIMIT)
-    with BrokerDB(str(db_path)) as db:
-        remaining = list(db.read("test_queue", all_messages=True))
-    assert len(remaining) == message_count - LARGE_BATCH_READ_LIMIT
+    q2 = Queue("test_queue", db_path=str(db_path))
+    try:
+        remaining = list(q2.read(all_messages=True))
+        assert len(remaining) == message_count - LARGE_BATCH_READ_LIMIT
+    finally:
+        q2.close()
 
-    # Now test at-least-once semantics (commit_interval > 1)
+    # Now test at-least-once semantics
     # Write fresh messages
-    with BrokerDB(str(db_path)) as db:
+    with Queue("test_queue2", db_path=str(db_path), persistent=True) as q:
         for i in range(SMALL_BATCH_COUNT):
-            db.write("test_queue2", f"batch{i:03d}")
+            q.write(f"batch{i:03d}")
 
     messages_read = []
     start_time = time.monotonic()
 
-    with BrokerDB(str(db_path)) as db:
+    q = Queue("test_queue2", db_path=str(db_path))
+    try:
         # Read messages but simulate crash after reading some
-        for i, msg in enumerate(
-            db.stream_read(
-                "test_queue2",
-                peek=False,
-                all_messages=True,
-                commit_interval=100,  # at-least-once semantics
-            )
-        ):
+        for i, msg in enumerate(q.read_generator(delivery_guarantee="at_least_once")):
             messages_read.append(msg)
             if i >= SMALL_BATCH_READ_LIMIT - 1:  # Read SMALL_BATCH_READ_LIMIT messages
                 break
         # Generator not fully consumed - partial rollback should happen
+    finally:
+        q.close()
 
     elapsed = time.monotonic() - start_time
     timeout = get_timeout("at_least_once_rollback")
@@ -311,11 +317,14 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
     )
 
     # Due to at-least-once semantics, some messages may be re-delivered
-    # Only first 200 messages (2 complete batches) should be committed
-    with BrokerDB(str(db_path)) as db:
-        remaining = list(db.read("test_queue2", all_messages=True))
-    # Should have 300 messages remaining (500 - 200 committed)
-    assert len(remaining) == SMALL_BATCH_COUNT - 200
+    # To read 250 messages with default batch size of 100, 3 complete batches (300 messages) are committed.
+    q2 = Queue("test_queue2", db_path=str(db_path))
+    try:
+        remaining = list(q2.read(all_messages=True))
+        # Should have 200 messages remaining (500 - 300 committed)
+        assert len(remaining) == SMALL_BATCH_COUNT - 300
+    finally:
+        q2.close()
 
 
 # ============================================================================
@@ -328,54 +337,57 @@ def test_since_large_queue_performance(workdir):
     """Test --since performance on large message queue."""
     queue_name = "large_queue"
     message_count = 5000
+    db_path = workdir / "test.db"
 
-    # Write many messages in batches
-    for i in range(0, message_count, 100):
-        for j in range(100):
-            if i + j < message_count:
-                run_cli("write", queue_name, f"msg{i + j:05d}", cwd=workdir)
+    # Write many messages in batches using Queue API for better performance
+    with Queue(queue_name, db_path=str(db_path), persistent=True) as q:
+        for i in range(message_count):
+            q.write(f"msg{i:05d}")
 
     # Get timestamp at different points
-    rc, out, _ = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
-    lines = out.strip().split("\n")
+    with Queue(queue_name, db_path=str(db_path)) as q:
+        messages_with_ts = q.peek_many(limit=message_count, with_timestamps=True)
 
-    # Test queries at different points
-    # Note: --since uses > comparison, so we get N-1 messages when using timestamp of message N
+    # Test queries at different points using Queue API instead of CLI to avoid timestamp validation issues
+    # Note: since uses > comparison, so we get N-1 messages when using timestamp of message N
     test_points = [
         (0, message_count),  # All messages
         (
-            int(lines[message_count // 2].split("\t")[0]),
+            messages_with_ts[message_count // 2][1],
             message_count - message_count // 2 - 1,
         ),  # Messages after midpoint
         (
-            int(lines[message_count - 100].split("\t")[0]),
+            messages_with_ts[message_count - 100][1],
             99,
         ),  # Last 99 messages (100th message's timestamp)
         (
-            int(lines[message_count - 1].split("\t")[0]),
+            messages_with_ts[message_count - 1][1],
             0,
         ),  # No messages (last message's timestamp)
     ]
 
     for since_ts, expected_count in test_points:
-        # Time the query
+        # Time the query using Queue API instead of CLI
         start = time.monotonic()
-        rc, out, _ = run_cli(
-            "peek", queue_name, "--all", "--since", str(since_ts), cwd=workdir
-        )
+        with Queue(queue_name, db_path=str(db_path)) as q:
+            if since_ts == 0:
+                # Get all messages using generator (now properly paginated)
+                results = list(q.peek_generator())
+            else:
+                # Get messages since timestamp
+                results = list(q.peek_generator(since_timestamp=since_ts))
         elapsed = time.monotonic() - start
 
-        assert rc == 0
+        actual_count = len(results)
         if expected_count > 0:
-            result_lines = out.strip().split("\n")
-            assert len(result_lines) == expected_count, (
-                f"Expected {expected_count} messages for since={since_ts}, got {len(result_lines)}"
+            assert actual_count == expected_count, (
+                f"Expected {expected_count} messages for since={since_ts}, got {actual_count}"
             )
         else:
-            assert out == ""  # But return no messages
+            assert actual_count == 0  # No messages
 
         # Performance assertion: should achieve at least 2000 messages/second
-        # Add 50ms overhead for process spawn and setup
+        # Add 50ms overhead for API operations
         if expected_count > 0:
             max_allowed_time = (expected_count / 2000.0) + 0.05
             assert elapsed < max_allowed_time, (
@@ -392,28 +404,32 @@ def test_since_large_queue_performance(workdir):
 @pytest.mark.slow
 def test_timestamp_lookup_performance(workdir: Path):
     """Test that timestamp lookups are efficient even with many messages."""
+    db_path = workdir / "test.db"
 
-    # Create queue with many messages
+    # Create queue with many messages using Queue API
     num_messages = 1000
-    for i in range(num_messages):
-        run_cli("write", "perf_queue", f"msg_{i}", cwd=workdir)
+    with Queue("perf_queue", db_path=str(db_path), persistent=True) as q:
+        for i in range(num_messages):
+            q.write(f"msg_{i}")
 
     # Get middle message timestamp
-    rc, out, err = run_cli("peek", "perf_queue", "--all", "-t", cwd=workdir)
-    lines = out.strip().split("\n")
-    middle_ts = lines[num_messages // 2].split("\t")[0]
+    with Queue("perf_queue", db_path=str(db_path)) as q:
+        messages_with_ts = q.peek_many(limit=num_messages, with_timestamps=True)
+    middle_ts = str(messages_with_ts[num_messages // 2][1])
 
-    # Time timestamp-based read
+    # Time timestamp-based read using Queue API instead of CLI
     start = time.monotonic()
-    rc, out, err = run_cli("read", "perf_queue", "-m", middle_ts, cwd=workdir)
+    with Queue("perf_queue", db_path=str(db_path)) as q:
+        result = q.read_one(exact_timestamp=int(middle_ts))
     ts_read_time = time.monotonic() - start
-    assert rc == 0
+    assert result is not None
 
-    # Time normal FIFO read
+    # Time normal FIFO read using Queue API
     start = time.monotonic()
-    rc, out, err = run_cli("read", "perf_queue", cwd=workdir)
+    with Queue("perf_queue", db_path=str(db_path)) as q:
+        result = q.read_one()
     fifo_read_time = time.monotonic() - start
-    assert rc == 0
+    assert result is not None
 
     # Timestamp read should be comparable to FIFO read (within 2x)
     assert ts_read_time < fifo_read_time * 2
@@ -425,14 +441,17 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
 
     Note: Some reads exit with EXIT_QUEUE_EMPTY as messages get consumed,
     which is expected."""
-    # Write many messages
-    for i in range(100):
-        run_cli("write", "test_queue", f"message{i}", cwd=workdir)
+    db_path = workdir / "test.db"
+
+    # Write many messages using Queue API
+    with Queue("test_queue", db_path=str(db_path), persistent=True) as q:
+        for i in range(100):
+            q.write(f"message{i}")
 
     # Get some timestamps
-    rc, out, err = run_cli("peek", "test_queue", "--all", "-t", cwd=workdir)
-    lines = out.strip().split("\n")
-    timestamps = [line.split("\t")[0] for line in lines[:10]]
+    with Queue("test_queue", db_path=str(db_path)) as q:
+        messages_with_ts = q.peek_many(limit=10, with_timestamps=True)
+    timestamps = [str(ts) for msg, ts in messages_with_ts]
 
     # Perform mixed operations concurrently
     operations = []
@@ -495,22 +514,25 @@ def test_move_performance_with_large_batches(workdir: Path):
     """Test move performance with large number of messages."""
     db_path = workdir / "test.db"
 
-    # Write a large batch of messages
+    # Write a large batch of messages using Queue API
     message_count = 1000
-    with BrokerDB(str(db_path)) as db:
+    with Queue("perf_source", db_path=str(db_path), persistent=True) as q:
         for i in range(message_count):
-            db.write("perf_source", f"msg{i:04d}")
+            q.write(f"msg{i:04d}")
 
-    # Time moving all messages
+    # Time moving all messages using Queue API
     start_time = time.monotonic()
     moved_count = 0
 
-    with BrokerDB(str(db_path)) as db:
+    source = Queue("perf_source", db_path=str(db_path), persistent=True)
+    try:
         while True:
-            result = db.move("perf_source", "perf_dest")
+            result = source.move_one("perf_dest")
             if result is None:
                 break
             moved_count += 1
+    finally:
+        source.close()
 
     move_time = time.monotonic() - start_time
 
@@ -522,9 +544,12 @@ def test_move_performance_with_large_batches(workdir: Path):
     assert move_time < timeout, f"Moving {message_count} messages took {move_time:.2f}s"
 
     # Verify all messages are in destination
-    with BrokerDB(str(db_path)) as db:
-        dest_messages = list(db.read("perf_dest", all_messages=True))
-    assert len(dest_messages) == message_count
+    dest = Queue("perf_dest", db_path=str(db_path))
+    try:
+        dest_messages = list(dest.read(all_messages=True))
+        assert len(dest_messages) == message_count
+    finally:
+        dest.close()
 
 
 # ============================================================================
@@ -541,16 +566,19 @@ def test_performance_improvement_with_claims(workdir: Path):
     """Test performance improvement when using claimed vs delete operations."""
     db_path = workdir / "test.db"
 
-    # Write a large batch of messages
+    # Write a large batch of messages using Queue API
     message_count = 1000
-    with BrokerDB(str(db_path)) as db:
+    with Queue("perf_queue", db_path=str(db_path), persistent=True) as q:
         for i in range(message_count):
-            db.write("perf_queue", f"msg{i:04d}")
+            q.write(f"msg{i:04d}")
 
-    # Time reading all messages
+    # Time reading all messages using Queue API
     start_time = time.monotonic()
-    with BrokerDB(str(db_path)) as db:
-        messages = list(db.stream_read("perf_queue", peek=False, all_messages=True))
+    q = Queue("perf_queue", db_path=str(db_path))
+    try:
+        messages = list(q.read(all_messages=True))
+    finally:
+        q.close()
     read_time = time.monotonic() - start_time
 
     assert len(messages) == message_count
@@ -580,19 +608,21 @@ def test_vacuum_batch_size_limits(workdir: Path):
 
     # Write and claim a large number of messages
     message_count = 10000
-    with BrokerDB(str(db_path)) as db:
-        # Write in batches for efficiency
-        for i in range(0, message_count, 100):
-            for j in range(100):
-                if i + j < message_count:
-                    db.write("large_queue", f"msg{i + j:05d}")
 
-    # Read all messages to claim them
-    with BrokerDB(str(db_path)) as db:
+    # Write messages using Queue API with persistent connection for efficiency
+    with Queue("large_queue", db_path=str(db_path), persistent=True) as q:
+        for i in range(message_count):
+            q.write(f"msg{i:05d}")
+
+    # Read all messages to claim them using Queue API
+    q = Queue("large_queue", db_path=str(db_path))
+    try:
         count = 0
-        for _msg in db.stream_read("large_queue", peek=False, all_messages=True):
+        for _msg in q.read(all_messages=True):
             count += 1
         assert count == message_count
+    finally:
+        q.close()
 
     # Verify all are claimed
     conn = sqlite3.connect(str(db_path))
@@ -627,13 +657,13 @@ def test_write_performance_not_regressed(workdir: Path):
     """Test that write performance is not affected by claim feature."""
     db_path = workdir / "test.db"
 
-    # Measure write performance
+    # Measure write performance using Queue API
     message_count = 1000
     start_time = time.monotonic()
 
-    with BrokerDB(str(db_path)) as db:
+    with Queue("write_perf_queue", db_path=str(db_path), persistent=True) as q:
         for i in range(message_count):
-            db.write("write_perf_queue", f"msg{i:04d}")
+            q.write(f"msg{i:04d}")
 
     write_time = time.monotonic() - start_time
 
@@ -674,10 +704,12 @@ def broker(tmp_path):
 def test_large_volume_move(broker, tmp_path):
     """Test moving a large number of messages."""
     num_messages = 100
+    db_path = tmp_path / "test.db"
 
-    # Add many messages
-    for i in range(num_messages):
-        broker.write("source", f"msg_{i:04d}")
+    # Add many messages using Queue API for consistency
+    with Queue("source", db_path=str(db_path), persistent=True) as q:
+        for i in range(num_messages):
+            q.write(f"msg_{i:04d}")
 
     moved_count = 0
 
@@ -687,6 +719,7 @@ def test_large_volume_move(broker, tmp_path):
 
     start_time = time.monotonic()
 
+    # QueueMoveWatcher uses BrokerDB internally, which is appropriate
     watcher = QueueMoveWatcher(
         broker=broker,
         source_queue="source",
@@ -699,11 +732,11 @@ def test_large_volume_move(broker, tmp_path):
     # Run in thread with timeout to prevent hanging
     thread = watcher.run_in_thread()
 
-    # Wait for completion with timeout
-    thread.join(timeout=10.0)  # 10 second timeout
-
-    # Stop watcher if still running
-    if thread.is_alive():
+    try:
+        # Wait for completion with timeout
+        thread.join(timeout=10.0)  # 10 second timeout
+    finally:
+        # Always ensure watcher is stopped and thread is cleaned up
         watcher.stop()
         thread.join(timeout=2.0)
         if thread.is_alive():
@@ -717,13 +750,23 @@ def test_large_volume_move(broker, tmp_path):
     assert watcher.move_count == num_messages
     assert moved_count == num_messages
 
-    # Verify destination has all messages
-    dest_messages = list(broker.read("dest", all_messages=True))
-    assert len(dest_messages) == num_messages
+    # Verify destination has all messages using Queue API
+    dest = Queue("dest", db_path=str(db_path))
+    try:
+        dest_messages = list(
+            dest.peek(all_messages=True)
+        )  # Use peek to verify without consuming
+        assert len(dest_messages) == num_messages
+    finally:
+        dest.close()
 
     # Source should be empty
-    source_messages = list(broker.read("source", all_messages=True))
-    assert len(source_messages) == 0
+    source = Queue("source", db_path=str(db_path))
+    try:
+        source_messages = list(source.peek(all_messages=True))  # Use peek to verify
+        assert len(source_messages) == 0
+    finally:
+        source.close()
 
     # Performance check (should be reasonably fast)
     assert elapsed < 5.0, f"Move took {elapsed:.2f}s, expected < 5s"

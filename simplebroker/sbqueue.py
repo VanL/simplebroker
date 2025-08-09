@@ -6,11 +6,12 @@ queues without managing the underlying database connection.
 
 import logging
 import weakref
-from typing import Any, List, Optional, Union
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 from ._constants import DEFAULT_DB_NAME, load_config
-from ._runner import SQLiteRunner, SQLRunner
-from .db import BrokerCore, BrokerDB
+from ._runner import SQLRunner
+from .db import BrokerCore, BrokerDB, DBConnection
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class Queue:
         ...         queue.write(f"task_{i}")
     """
 
+    # Type annotations for instance attributes
+    conn: Optional[DBConnection]
+
     def __init__(
         self,
         name: str,
@@ -67,13 +71,36 @@ class Queue:
         self.name = name
         self._db_path = db_path
         self._persistent = persistent
-        self._runner = (
-            runner if runner else (None if not persistent else SQLiteRunner(db_path))
-        )
-        self._core = BrokerCore(self._runner) if self._runner else None
 
-        if persistent and not runner:
-            self._install_finalizer()
+        # Create DBConnection for robust connection management
+        if persistent:
+            # For persistent mode, create and keep the connection
+            self.conn = DBConnection(self._db_path, runner)
+        else:
+            # For ephemeral mode, we'll create connections as needed
+            self.conn = None
+            self._runner = runner  # Save for ephemeral connections
+
+        # Install finalizer for cleanup
+        self._install_finalizer()
+
+    @contextmanager
+    def get_connection(self) -> Iterator[Union[BrokerCore, BrokerDB]]:
+        """Get connection for operations - handles both persistent and ephemeral modes.
+
+        This context manager consolidates the connection logic. It yields either the
+        shared (persistent) BrokerDB instance or creates and yields a new one on the fly.
+
+        Yields:
+            BrokerDB: Connection object for database operations
+        """
+        if self._persistent:
+            assert self.conn is not None  # Type guard for mypy
+            yield self.conn.get_connection()
+        # Ephemeral mode - create a new connection for each operation
+        else:
+            with DBConnection(self._db_path, self._runner) as conn:
+                yield conn.get_connection()
 
     def write(self, message: str) -> None:
         """Write a message to this queue.
@@ -86,121 +113,313 @@ class Queue:
             MessageError: If the message is invalid
             OperationalError: If the database is locked/busy
         """
-        if self._persistent:
-            self._ensure_core().write(self.name, message)
-        else:
-            with BrokerDB(self._db_path) as db:
-                db.write(self.name, message)
+        with self.get_connection() as connection:
+            connection.write(self.name, message)
 
-    def read(self) -> Optional[str]:
-        """Read and remove the next message from the queue.
+    def read(
+        self,
+        *,
+        all_messages: bool = False,
+        with_timestamps: bool = False,
+        since_timestamp: Optional[int] = None,
+        message_id: Optional[int] = None,
+    ) -> Optional[Union[str, Tuple[str, int], Iterator[Union[str, Tuple[str, int]]]]]:
+        """Read and remove message(s) from the queue (CLI-mirroring method).
 
-        Returns:
-            The next message in the queue, or None if the queue is empty
-
-        Raises:
-            QueueNameError: If the queue name is invalid
-            OperationalError: If the database is locked/busy
-        """
-        if self._persistent:
-            # Use generator internally for efficiency, return single value
-            for message in self._ensure_core().stream_read(
-                self.name, all_messages=False
-            ):
-                return message
-            return None
-        else:
-            with BrokerDB(self._db_path) as db:
-                for message in db.stream_read(self.name, all_messages=False):
-                    return message
-                return None
-
-    def read_all(self) -> List[str]:
-        """Read and remove all messages from the queue.
-
-        Returns:
-            A list of all messages in the queue (empty list if queue is empty)
-
-        Raises:
-            QueueNameError: If the queue name is invalid
-            OperationalError: If the database is locked/busy
-        """
-        if self._persistent:
-            return list(self._ensure_core().stream_read(self.name, all_messages=True))
-        else:
-            with BrokerDB(self._db_path) as db:
-                return list(db.stream_read(self.name, all_messages=True))
-
-    def peek(self) -> Optional[str]:
-        """View the next message without removing it from the queue.
-
-        Returns:
-            The next message in the queue, or None if the queue is empty
-
-        Raises:
-            QueueNameError: If the queue name is invalid
-            OperationalError: If the database is locked/busy
-        """
-        if self._persistent:
-            for message in self._ensure_core().stream_read(
-                self.name, peek=True, all_messages=False
-            ):
-                return message
-            return None
-        else:
-            with BrokerDB(self._db_path) as db:
-                for message in db.stream_read(self.name, peek=True, all_messages=False):
-                    return message
-                return None
-
-    def delete(self, *, message_id: Optional[int] = None) -> bool:
-        """Delete messages from this queue.
+        This is the high-level method that mirrors CLI behavior. For more precise
+        control, use the granular methods: read_one(), read_many(), read_generator().
 
         Args:
-            message_id: If provided, delete only the message with this specific ID.
-                       If None, delete all messages in the queue.
+            all_messages: If True, read all messages as a generator
+            with_timestamps: If True, include timestamps in results
+            since_timestamp: Only read messages newer than this timestamp
+            message_id: Read specific message by ID (cannot be used with other filters)
 
         Returns:
-            True if any messages were deleted, False otherwise.
-            When message_id is provided, returns True only if that specific message was found and deleted.
+            Depends on parameters:
+            - Single message (str or tuple) if all_messages=False
+            - Generator if all_messages=True
+            - None if no messages match criteria
+
+        Raises:
+            ValueError: If conflicting parameters are provided
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        if message_id is not None and (all_messages or since_timestamp):
+            raise ValueError(
+                "message_id cannot be used with all_messages or since_timestamp"
+            )
+
+        if message_id is not None:
+            # Read specific message by ID
+            return self.read_one(
+                exact_timestamp=message_id, with_timestamps=with_timestamps
+            )
+        elif all_messages:
+            # Return generator for all messages
+            return self.read_generator(
+                with_timestamps=with_timestamps, since_timestamp=since_timestamp
+            )
+        else:
+            # Read single message
+            if since_timestamp:
+                # Need to use generator with limit 1 for since_timestamp support
+                gen = self.read_generator(
+                    with_timestamps=with_timestamps, since_timestamp=since_timestamp
+                )
+                try:
+                    return next(gen)
+                except StopIteration:
+                    return None
+            else:
+                return self.read_one(with_timestamps=with_timestamps)
+
+    # ========== Granular Read API (maps to internal claim methods) ==========
+
+    def read_one(
+        self, *, exact_timestamp: Optional[int] = None, with_timestamps: bool = False
+    ) -> Optional[Union[str, Tuple[str, int]]]:
+        """Read and remove exactly one message from the queue.
+
+        This method provides exactly-once delivery semantics: the message is
+        committed before being returned.
+
+        Args:
+            exact_timestamp: If provided, read only message with this timestamp
+            with_timestamps: If True, return (message, timestamp) tuple
+
+        Returns:
+            Message string or (message, timestamp) tuple if with_timestamps=True,
+            None if queue is empty or message not found
 
         Raises:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
-        if self._persistent:
-            if message_id is not None:
-                # Delete specific message by ID - use read with exact_timestamp
-                messages = list(
-                    self._ensure_core().read(
-                        self.name,
-                        peek=False,
-                        all_messages=False,
-                        exact_timestamp=message_id,
-                    )
-                )
-                return len(messages) > 0
-            else:
-                # Delete all messages in the queue
-                self._ensure_core().delete(self.name)
-                return True
+        with self.get_connection() as connection:
+            return connection.claim_one(
+                self.name,
+                exact_timestamp=exact_timestamp,
+                with_timestamps=with_timestamps,
+            )
+
+    def read_many(
+        self,
+        limit: int,
+        *,
+        with_timestamps: bool = False,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        since_timestamp: Optional[int] = None,
+    ) -> Union[List[str], List[Tuple[str, int]]]:
+        """Read and remove multiple messages from the queue.
+
+        Args:
+            limit: Maximum number of messages to read
+            with_timestamps: If True, return list of (message, timestamp) tuples
+            delivery_guarantee: Delivery semantics
+                - exactly_once: Commit before returning (safer, slower)
+                - at_least_once: Return then commit (faster, may redeliver)
+            since_timestamp: Only read messages newer than this timestamp
+
+        Returns:
+            List of messages or list of (message, timestamp) tuples if with_timestamps=True
+
+        Raises:
+            ValueError: If limit < 1
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        with self.get_connection() as connection:
+            return connection.claim_many(
+                self.name,
+                limit,
+                with_timestamps=with_timestamps,
+                delivery_guarantee=delivery_guarantee,
+                since_timestamp=since_timestamp,
+            )
+
+    def read_generator(
+        self,
+        *,
+        with_timestamps: bool = False,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        since_timestamp: Optional[int] = None,
+        exact_timestamp: Optional[int] = None,
+    ) -> Iterator[Union[str, Tuple[str, int]]]:
+        """Generator that reads and removes messages from the queue.
+
+        This is memory-efficient for processing large queues.
+
+        Args:
+            with_timestamps: If True, yield (message, timestamp) tuples
+            delivery_guarantee: Delivery semantics
+                - exactly_once: Process one message at a time (safer, slower)
+                - at_least_once: Process in batches (faster, may redeliver)
+            since_timestamp: Only read messages newer than this timestamp
+            exact_timestamp: Only read message with this exact timestamp
+
+        Yields:
+            Messages or (message, timestamp) tuples if with_timestamps=True
+
+        Raises:
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        with self.get_connection() as connection:
+            yield from connection.claim_generator(
+                self.name,
+                with_timestamps=with_timestamps,
+                delivery_guarantee=delivery_guarantee,
+                since_timestamp=since_timestamp,
+                exact_timestamp=exact_timestamp,
+            )
+
+    def peek(
+        self,
+        *,
+        all_messages: bool = False,
+        with_timestamps: bool = False,
+        since_timestamp: Optional[int] = None,
+        message_id: Optional[int] = None,
+    ) -> Optional[Union[str, Tuple[str, int], Iterator[Union[str, Tuple[str, int]]]]]:
+        """View message(s) without removing them from the queue (CLI-mirroring method).
+
+        This is the high-level method that mirrors CLI behavior. For more precise
+        control, use the granular methods: peek_one(), peek_many(), peek_generator().
+
+        Args:
+            all_messages: If True, peek at all messages as a generator
+            with_timestamps: If True, include timestamps in results
+            since_timestamp: Only peek at messages newer than this timestamp
+            message_id: Peek at specific message by ID (cannot be used with other filters)
+
+        Returns:
+            Depends on parameters:
+            - Single message (str or tuple) if all_messages=False
+            - Generator if all_messages=True
+            - None if no messages match criteria
+
+        Raises:
+            ValueError: If conflicting parameters are provided
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        if message_id is not None and (all_messages or since_timestamp):
+            raise ValueError(
+                "message_id cannot be used with all_messages or since_timestamp"
+            )
+
+        if message_id is not None:
+            # Peek at specific message by ID
+            return self.peek_one(
+                exact_timestamp=message_id, with_timestamps=with_timestamps
+            )
+        elif all_messages:
+            # Return generator for all messages
+            return self.peek_generator(
+                with_timestamps=with_timestamps, since_timestamp=since_timestamp
+            )
         else:
-            with BrokerDB(self._db_path) as db:
-                if message_id is not None:
-                    # Delete specific message by ID - use read with exact_timestamp
-                    messages = list(
-                        db.read(
-                            self.name,
-                            peek=False,
-                            all_messages=False,
-                            exact_timestamp=message_id,
-                        )
-                    )
-                    return len(messages) > 0
-                else:
-                    # Delete all messages in the queue
-                    db.delete(self.name)
-                    return True
+            # Peek at single message
+            if since_timestamp:
+                # Need to use generator with limit 1 for since_timestamp support
+                gen = self.peek_generator(
+                    with_timestamps=with_timestamps, since_timestamp=since_timestamp
+                )
+                try:
+                    return next(gen)
+                except StopIteration:
+                    return None
+            else:
+                return self.peek_one(with_timestamps=with_timestamps)
+
+    # ========== Granular Peek API ==========
+
+    def peek_one(
+        self, *, exact_timestamp: Optional[int] = None, with_timestamps: bool = False
+    ) -> Optional[Union[str, Tuple[str, int]]]:
+        """Peek at exactly one message without removing it from the queue.
+
+        Args:
+            exact_timestamp: If provided, peek only at message with this timestamp
+            with_timestamps: If True, return (message, timestamp) tuple
+
+        Returns:
+            Message string or (message, timestamp) tuple if with_timestamps=True,
+            None if queue is empty or message not found
+
+        Raises:
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        with self.get_connection() as connection:
+            return connection.peek_one(
+                self.name,
+                exact_timestamp=exact_timestamp,
+                with_timestamps=with_timestamps,
+            )
+
+    def peek_many(
+        self,
+        limit: int,
+        *,
+        with_timestamps: bool = False,
+        since_timestamp: Optional[int] = None,
+    ) -> Union[List[str], List[Tuple[str, int]]]:
+        """Peek at multiple messages without removing them from the queue.
+
+        Args:
+            limit: Maximum number of messages to peek at
+            with_timestamps: If True, return list of (message, timestamp) tuples
+            since_timestamp: Only peek at messages newer than this timestamp
+
+        Returns:
+            List of messages or list of (message, timestamp) tuples if with_timestamps=True
+
+        Raises:
+            ValueError: If limit < 1
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        with self.get_connection() as connection:
+            return connection.peek_many(
+                self.name,
+                limit,
+                with_timestamps=with_timestamps,
+                since_timestamp=since_timestamp,
+            )
+
+    def peek_generator(
+        self,
+        *,
+        with_timestamps: bool = False,
+        since_timestamp: Optional[int] = None,
+        exact_timestamp: Optional[int] = None,
+    ) -> Iterator[Union[str, Tuple[str, int]]]:
+        """Generator that peeks at messages without removing them from the queue.
+
+        This is memory-efficient for viewing large queues.
+
+        Args:
+            with_timestamps: If True, yield (message, timestamp) tuples
+            since_timestamp: Only peek at messages newer than this timestamp
+            exact_timestamp: Only peek at message with this exact timestamp
+
+        Yields:
+            Messages or (message, timestamp) tuples if with_timestamps=True
+
+        Raises:
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        with self.get_connection() as connection:
+            yield from connection.peek_generator(
+                self.name,
+                with_timestamps=with_timestamps,
+                since_timestamp=since_timestamp,
+                exact_timestamp=exact_timestamp,
+            )
 
     def move(
         self,
@@ -209,8 +428,13 @@ class Queue:
         message_id: Optional[int] = None,
         since_timestamp: Optional[int] = None,
         all_messages: bool = False,
-    ) -> int:
-        """Move messages from this queue to another.
+    ) -> Union[
+        Optional[Dict[str, Any]], List[Dict[str, Any]], Iterator[Dict[str, Any]]
+    ]:
+        """Move messages from this queue to another (CLI-mirroring method).
+
+        This is the high-level method that mirrors CLI behavior. For more precise
+        control, use the granular methods: move_one(), move_many(), move_generator().
 
         Args:
             destination: Target queue (name or Queue instance).
@@ -219,7 +443,11 @@ class Queue:
             all_messages: If True, move all messages. Cannot be used with message_id.
 
         Returns:
-            Number of messages moved.
+            Depends on parameters:
+            - Single dict with 'message' and 'timestamp' if moving one message
+            - List of dicts if moving many messages with limit
+            - Generator of dicts if all_messages=True
+            - None if no messages to move
 
         Raises:
             ValueError: If source and destination are the same, or if conflicting options are used.
@@ -239,50 +467,203 @@ class Queue:
                 "message_id cannot be used with all_messages or since_timestamp"
             )
 
-        if self._persistent:
-            if message_id is not None:
-                # Move specific message - don't require unclaimed for user-specified messages
-                result = self._ensure_core().move(
-                    self.name, dest_name, message_id=message_id, require_unclaimed=False
-                )
-                return 1 if result else 0
-            else:
-                # Move multiple messages
-                # When since_timestamp is provided without all_messages=True, we still want to move all
-                # messages newer than the timestamp, not just one
-                effective_all_messages = all_messages or (since_timestamp is not None)
-                results = self._ensure_core().move_messages(
-                    self.name,
-                    dest_name,
-                    all_messages=effective_all_messages,
-                    since_timestamp=since_timestamp,
-                )
-                return len(results)
+        if message_id is not None:
+            # Move specific message by ID
+            result = self.move_one(
+                dest_name,
+                exact_timestamp=message_id,
+                require_unclaimed=False,  # Allow moving claimed messages by ID
+                with_timestamps=True,
+            )
+            if result:
+                return {"message": result[0], "timestamp": result[1]}
+            return None
+        elif all_messages:
+            # Return generator for all messages
+            def dict_generator() -> Iterator[Dict[str, Any]]:
+                for result in self.move_generator(
+                    dest_name, with_timestamps=True, since_timestamp=since_timestamp
+                ):
+                    msg, ts = result  # type: ignore[misc]
+                    yield {"message": msg, "timestamp": ts}
+
+            return dict_generator()
         else:
-            with BrokerDB(self._db_path) as db:
-                if message_id is not None:
-                    # Move specific message - don't require unclaimed for user-specified messages
-                    result = db.move(
-                        self.name,
-                        dest_name,
-                        message_id=message_id,
-                        require_unclaimed=False,
-                    )
-                    return 1 if result else 0
-                else:
-                    # Move multiple messages
-                    # When since_timestamp is provided without all_messages=True, we still want to move all
-                    # messages newer than the timestamp, not just one
-                    effective_all_messages = all_messages or (
-                        since_timestamp is not None
-                    )
-                    results = db.move_messages(
-                        self.name,
-                        dest_name,
-                        all_messages=effective_all_messages,
-                        since_timestamp=since_timestamp,
-                    )
-                    return len(results)
+            # Move single message
+            if since_timestamp:
+                # Use generator with single iteration for since_timestamp support
+                gen = self.move_generator(
+                    dest_name, with_timestamps=True, since_timestamp=since_timestamp
+                )
+                try:
+                    result = next(gen)
+                    msg, ts = result  # type: ignore[misc]
+                    return {"message": msg, "timestamp": ts}
+                except StopIteration:
+                    return None
+            else:
+                result = self.move_one(dest_name, with_timestamps=True)
+                if result:
+                    return {"message": result[0], "timestamp": result[1]}
+                return None
+
+    # ========== Granular Move API ==========
+
+    def move_one(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        exact_timestamp: Optional[int] = None,
+        require_unclaimed: bool = True,
+        with_timestamps: bool = False,
+    ) -> Optional[Union[str, Tuple[str, int]]]:
+        """Move exactly one message from this queue to another.
+
+        Atomic operation with exactly-once semantics.
+
+        Args:
+            destination: Target queue (name or Queue instance)
+            exact_timestamp: If provided, move only message with this timestamp
+            require_unclaimed: If True (default), only move unclaimed messages.
+                             If False, move any message (including claimed).
+            with_timestamps: If True, return (message, timestamp) tuple
+
+        Returns:
+            Message string or (message, timestamp) tuple if with_timestamps=True,
+            None if no messages to move or message not found
+
+        Raises:
+            ValueError: If source and destination are the same
+            QueueNameError: If queue names are invalid
+            OperationalError: If the database is locked/busy
+        """
+        dest_name = destination.name if isinstance(destination, Queue) else destination
+        if self.name == dest_name:
+            raise ValueError("Source and destination queues cannot be the same")
+
+        with self.get_connection() as connection:
+            return connection.move_one(
+                self.name,
+                dest_name,
+                exact_timestamp=exact_timestamp,
+                require_unclaimed=require_unclaimed,
+                with_timestamps=with_timestamps,
+            )
+
+    def move_many(
+        self,
+        destination: Union[str, "Queue"],
+        limit: int,
+        *,
+        with_timestamps: bool = False,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        since_timestamp: Optional[int] = None,
+        require_unclaimed: bool = True,
+    ) -> Union[List[str], List[Tuple[str, int]]]:
+        """Move multiple messages from this queue to another.
+
+        Atomic batch move operation with configurable delivery semantics.
+
+        Args:
+            destination: Target queue (name or Queue instance)
+            limit: Maximum number of messages to move
+            with_timestamps: If True, return list of (message, timestamp) tuples
+            delivery_guarantee: Delivery semantics
+                - exactly_once: Commit before returning (safer, slower)
+                - at_least_once: Return then commit (faster, may redeliver)
+            since_timestamp: Only move messages newer than this timestamp
+            require_unclaimed: If True (default), only move unclaimed messages
+
+        Returns:
+            List of messages or list of (message, timestamp) tuples if with_timestamps=True
+
+        Raises:
+            ValueError: If source and destination are the same or limit < 1
+            QueueNameError: If queue names are invalid
+            OperationalError: If the database is locked/busy
+        """
+        dest_name = destination.name if isinstance(destination, Queue) else destination
+        if self.name == dest_name:
+            raise ValueError("Source and destination queues cannot be the same")
+
+        with self.get_connection() as connection:
+            return connection.move_many(
+                self.name,
+                dest_name,
+                limit,
+                with_timestamps=with_timestamps,
+                delivery_guarantee=delivery_guarantee,
+                since_timestamp=since_timestamp,
+                require_unclaimed=require_unclaimed,
+            )
+
+    def move_generator(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        with_timestamps: bool = False,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        since_timestamp: Optional[int] = None,
+    ) -> Iterator[Union[str, Tuple[str, int]]]:
+        """Generator that moves messages from this queue to another.
+
+        Args:
+            destination: Target queue (name or Queue instance)
+            with_timestamps: If True, yield (message, timestamp) tuples
+            delivery_guarantee: Delivery semantics
+                - exactly_once: Process one message at a time (safer, slower)
+                - at_least_once: Process in batches (faster, may redeliver)
+            since_timestamp: Only move messages newer than this timestamp
+
+        Yields:
+            Messages or (message, timestamp) tuples if with_timestamps=True
+
+        Raises:
+            ValueError: If source and destination are the same
+            QueueNameError: If queue names are invalid
+            OperationalError: If the database is locked/busy
+        """
+        dest_name = destination.name if isinstance(destination, Queue) else destination
+        if self.name == dest_name:
+            raise ValueError("Source and destination queues cannot be the same")
+
+        with self.get_connection() as connection:
+            yield from connection.move_generator(
+                self.name,
+                dest_name,
+                with_timestamps=with_timestamps,
+                delivery_guarantee=delivery_guarantee,
+                since_timestamp=since_timestamp,
+            )
+
+    def delete(self, *, message_id: Optional[int] = None) -> bool:
+        """Delete messages from this queue.
+
+        Args:
+            message_id: If provided, delete only the message with this specific ID.
+                       If None, delete all messages in the queue.
+
+        Returns:
+            True if any messages were deleted, False otherwise.
+            When message_id is provided, returns True only if that specific message was found and deleted.
+
+        Raises:
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        with self.get_connection() as connection:
+            if message_id is not None:
+                # Delete specific message by ID - use claim_one with exact_timestamp
+                message = connection.claim_one(
+                    self.name,
+                    exact_timestamp=message_id,
+                    with_timestamps=False,
+                )
+                return message is not None
+            else:
+                # Delete all messages in the queue
+                connection.delete(self.name)
+                return True
 
     def __enter__(self) -> "Queue":
         """Enter the context manager."""
@@ -292,37 +673,122 @@ class Queue:
         """Exit the context manager and close the runner."""
         self.close()
 
+    def has_pending(self, since_timestamp: Optional[int] = None) -> bool:
+        """Check if this queue has pending (unclaimed) messages.
+
+        Args:
+            since_timestamp: If provided, only check for messages newer than this timestamp.
+
+        Returns:
+            True if there are unclaimed messages, False otherwise.
+
+        Raises:
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        with self.get_connection() as connection:
+            return connection.has_pending_messages(self.name, since_timestamp)
+
+    def get_data_version(self) -> Optional[int]:
+        """Get the database data version for change detection.
+
+        Returns:
+            Integer version if available, None for non-SQLite backends or errors.
+
+        Notes:
+            This is SQLite-specific and used for efficient polling to detect
+            when the database has been modified by other processes.
+        """
+        with self.get_connection() as connection:
+            return connection.get_data_version()
+
+    def stream_messages(
+        self,
+        *,
+        peek: bool = False,
+        all_messages: bool = True,
+        since_timestamp: Optional[int] = None,
+        batch_processing: bool = False,
+        commit_interval: int = 1,
+    ) -> Iterator[Tuple[str, int]]:
+        """Stream messages with timestamps from the queue.
+
+        This is an iterator that yields messages as they are retrieved from the database.
+        It's more memory-efficient than read_all for large queues.
+
+        Args:
+            peek: If True, don't remove messages from queue
+            all_messages: If True, retrieve all available messages. If False, retrieve one.
+            since_timestamp: Only retrieve messages newer than this timestamp
+            batch_processing: If True, process in batches for better performance
+            commit_interval: How often to commit when processing multiple messages
+
+        Yields:
+            Tuples of (message_body, timestamp)
+
+        Raises:
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        with self.get_connection() as connection:
+            if peek:
+                # Type assertion since we know with_timestamps=True yields Tuple[str, int]
+                for result in connection.peek_generator(
+                    self.name,
+                    with_timestamps=True,
+                    since_timestamp=since_timestamp,
+                ):
+                    yield result  # type: ignore[misc]
+            else:
+                # Map commit_interval to delivery_guarantee
+                delivery_guarantee: Literal["exactly_once", "at_least_once"] = (
+                    "exactly_once" if commit_interval == 1 else "at_least_once"
+                )
+                # Type assertion since we know with_timestamps=True yields Tuple[str, int]
+                for result in connection.claim_generator(
+                    self.name,
+                    with_timestamps=True,
+                    delivery_guarantee=delivery_guarantee,
+                    since_timestamp=since_timestamp,
+                ):
+                    yield result  # type: ignore[misc]
+
+    def cleanup_connections(self) -> None:
+        """Clean up all database connections.
+
+        Delegates to DBConnection for proper cleanup.
+        """
+        if self.conn:
+            self.conn.cleanup()
+        if hasattr(self, "_watcher_conn"):
+            self._watcher_conn.cleanup()
+            delattr(self, "_watcher_conn")
+
     def close(self) -> None:
         """Close the queue and release resources.
 
         This is called automatically when using the queue as a context manager.
         In ephemeral mode, this is a no-op as connections are closed after each operation.
         """
-        if self._persistent and self._runner:
+        if self.conn:
             if hasattr(self, "_finalizer"):
                 self._finalizer.detach()
-            self._runner.close()
-            self._runner = None
-            self._core = None
+            self.conn.cleanup()
 
     # ========== Persistent Mode Helpers ==========
 
-    def _ensure_core(self) -> BrokerCore:
-        """Lazily initialize persistent connection."""
-        if self._core is None:
-            self._runner = SQLiteRunner(self._db_path)
-            self._core = BrokerCore(self._runner)
-        return self._core
-
     def _install_finalizer(self) -> None:
-        """Install weakref finalizer for safety in persistent mode."""
+        """Install weakref finalizer for cleanup."""
 
-        def cleanup(runner: SQLRunner) -> None:
+        def cleanup(conn: Optional[DBConnection], watcher_conn_attr: str) -> None:
+            """Cleanup function called by finalizer."""
             try:
-                if runner:
-                    runner.close()
+                if conn:
+                    conn.cleanup()
+                # Note: watcher_conn cleanup happens in cleanup_connections
             except Exception as e:
-                logger.warning(f"Error during Queue finalizer cleanup: {e}")
+                if _config.get("BROKER_LOGGING_ENABLED", True):
+                    logger.warning(f"Error during Queue finalizer cleanup: {e}")
 
-        if self._runner is not None:
-            self._finalizer = weakref.finalize(self, cleanup, self._runner)
+        # Install finalizer with reference to connection
+        self._finalizer = weakref.finalize(self, cleanup, self.conn, "_watcher_conn")

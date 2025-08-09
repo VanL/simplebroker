@@ -1,6 +1,20 @@
-# SimpleBroker Extension Implementation Examples
+# ADVANCED: SimpleBroker Extension Implementation Examples
 
-This document provides complete, working examples of SimpleBroker extensions demonstrating the extensibility features defined in the v3 specification.
+**NOTE: This document contains ADVANCED examples for users who need to create custom
+extensions beyond what the standard API provides. Most users should use:**
+
+- **Queue and QueueWatcher classes** - The standard public API (see python_api.py)
+- **async_wrapper.py** - For async/await functionality
+- **DBConnection** - For cross-queue operations requiring database access
+
+Only use these extension examples if you need to:
+- Create custom database backends
+- Implement custom transaction handling
+- Add middleware at the SQL level
+- Build specialized runners for unique requirements
+
+This document provides complete, working examples of SimpleBroker extensions demonstrating
+the extensibility features for advanced users who need to extend beyond the standard API.
 
 ## Table of Contents
 
@@ -15,8 +29,12 @@ This document provides complete, working examples of SimpleBroker extensions dem
 
 A simple example showing the minimal implementation required for a custom runner.
 
+**For standard usage, use the Queue class directly instead of creating custom runners.**
+
 ```python
 # custom_runner.py
+# ADVANCED: Custom SQLRunner implementation
+# For standard usage, use: from simplebroker import Queue
 import sqlite3
 import logging
 from typing import Tuple, Any, Iterable
@@ -74,6 +92,8 @@ if __name__ == "__main__":
     
     logging.basicConfig(level=logging.DEBUG)
     
+    # ADVANCED: Using a custom runner
+    # For standard usage, just use: Queue("tasks")
     runner = LoggingRunner("logged.db")
     with Queue("tasks", runner=runner) as q:
         q.write("Hello, logged world!")
@@ -501,7 +521,7 @@ class PooledRunner(SQLRunner):
         return conn
     
     @contextlib.contextmanager
-    def _get_connection(self):
+    def get_connection(self):
         """Get a connection from the pool or current transaction."""
         # If we're in a transaction, use the same connection
         if hasattr(self._local, 'conn') and self._local.conn:
@@ -517,7 +537,7 @@ class PooledRunner(SQLRunner):
     
     def run(self, sql: str, params: Tuple[Any, ...] = (), 
             *, fetch: bool = False) -> Iterable[Tuple[Any, ...]]:
-        with self._get_connection() as conn:
+        with self.get_connection() as conn:
             cursor = conn.execute(sql, params)
             return cursor.fetchall() if fetch else []
     
@@ -943,7 +963,7 @@ class AsyncBrokerCore:
         if row:
             self._last_ts = row[0]
     
-    async def _generate_timestamp(self) -> int:
+    async def generate_timestamp(self) -> int:
         """Generate hybrid timestamp with async safety."""
         async with self._timestamp_lock:
             now_ms = int(time.time() * 1000)
@@ -980,7 +1000,7 @@ class AsyncBrokerCore:
         async with self._lock:
             await self._conn.execute("BEGIN IMMEDIATE")
             try:
-                timestamp = await self._generate_timestamp()
+                timestamp = await self.generate_timestamp()
                 await self._conn.execute(
                     "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
                     (queue, message, timestamp)
@@ -1254,7 +1274,7 @@ if __name__ == "__main__":
 
 ## Summary
 
-These examples demonstrate:
+These ADVANCED examples demonstrate:
 
 1. **Basic Custom Runner**: Shows the minimal implementation required
 2. **Daemon Mode**: Background thread processing with auto-stop
@@ -1273,3 +1293,26 @@ Key points across all implementations:
 - Examples are complete and runnable
 
 These implementations serve as templates that users can adapt for their specific needs while maintaining compatibility with SimpleBroker's core philosophy.
+
+## When to Use These Extensions vs Standard API
+
+**Use the Standard API (Queue, QueueWatcher) when:**
+- You need basic queue operations (write, read, peek, delete, move)
+- You're building typical producer/consumer applications
+- You want simple async support (use async_wrapper.py)
+- You need to watch queues for new messages
+- You're working with a single SQLite database
+
+**Use Custom Extensions (these examples) when:**
+- You need a different storage backend (not SQLite)
+- You require custom transaction semantics
+- You want to add middleware (logging, metrics, etc.)
+- You need specialized performance optimizations
+- You're building a framework on top of SimpleBroker
+
+**For Database-Level Operations:**
+- Use `Queue` class for single-queue operations
+- Use `DBConnection` context manager for safe cross-queue operations
+- Only use `BrokerDB` directly for advanced custom extensions
+
+Remember: The standard API covers 95% of use cases. Only create custom extensions when you have specific requirements that the standard API cannot meet.

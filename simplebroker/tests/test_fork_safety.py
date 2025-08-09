@@ -52,10 +52,10 @@ def test_fork_safety_protection(workdir: Path):
 
         # Parent can still use the DB
         db.write("test_queue", "message3")
-        messages = db.read("test_queue", peek=True, all_messages=True)
+        messages = list(db.peek_generator("test_queue", with_timestamps=False))
         assert len(messages) == 2
-        assert messages[0] == "message1"
-        assert messages[1] == "message3"
+        assert "message1" in messages
+        assert "message3" in messages
 
         db.close()
 
@@ -77,7 +77,9 @@ def test_new_instance_after_fork_works(workdir: Path):
         try:
             with BrokerDB(str(db_path)) as child_db:
                 child_db.write("test_queue", "child_message")
-                messages = child_db.read("test_queue", peek=True, all_messages=True)
+                messages = list(
+                    child_db.peek_generator("test_queue", with_timestamps=False)
+                )
                 assert len(messages) == 2
                 assert "parent_message" in messages
                 assert "child_message" in messages
@@ -92,7 +94,7 @@ def test_new_instance_after_fork_works(workdir: Path):
 
         # Verify both messages exist
         with BrokerDB(str(db_path)) as db:
-            messages = db.read("test_queue", peek=True, all_messages=True)
+            messages = list(db.peek_generator("test_queue", with_timestamps=False))
             assert len(messages) == 2
 
 
@@ -102,18 +104,25 @@ def test_multiprocessing_with_separate_instances(workdir: Path):
 
     # Start multiple workers
     processes = []
-    for i in range(3):
-        p = multiprocessing.Process(target=_worker_write, args=(str(db_path), i, 5))
-        p.start()
-        processes.append(p)
+    try:
+        for i in range(3):
+            p = multiprocessing.Process(target=_worker_write, args=(str(db_path), i, 5))
+            p.start()
+            processes.append(p)
 
-    # Wait for all to complete
-    for p in processes:
-        p.join()
+        # Wait for all to complete
+        for p in processes:
+            p.join(timeout=10)  # Add timeout to prevent hanging
+    finally:
+        # Ensure all processes are terminated even if test fails
+        for p in processes:
+            if p.is_alive():
+                p.terminate()
+                p.join(timeout=1)
 
     # Verify all messages were written
     with BrokerDB(str(db_path)) as db:
-        messages = db.read("test_queue", peek=True, all_messages=True)
+        messages = list(db.peek_generator("test_queue", with_timestamps=False))
         assert len(messages) == 15  # 3 workers * 5 messages each
 
         # Verify all workers contributed

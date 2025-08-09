@@ -126,13 +126,13 @@ def test_queue_names_in_other_commands(workdir):
         with BrokerDB(db_path) as db:
             # Test that read/peek operations also validate queue names
             with pytest.raises(ValueError, match="Invalid queue name"):
-                list(db.stream_read_with_timestamps("-"))
+                db.peek_one("-")
 
             with pytest.raises(ValueError, match="Invalid queue name"):
-                list(db.stream_read_with_timestamps("--"))
+                db.peek_one("--")
 
             with pytest.raises(ValueError, match="Invalid queue name"):
-                list(db.stream_read_with_timestamps("-invalid"))
+                db.peek_one("-invalid")
 
             with pytest.raises(ValueError, match="Invalid queue name"):
                 db.delete("-")

@@ -78,21 +78,29 @@ class TestCLIEdgeCases:
         """Test that general exceptions respect quiet mode."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("sys.argv", ["simplebroker", "-d", tmpdir, "-q", "list"]):
-                # Patch the entire BrokerDB class to raise on instantiation
+                # Patch the cmd_list function to raise an exception
                 with patch(
-                    "simplebroker.cli.BrokerDB",
+                    "simplebroker.commands.cmd_list",
                     side_effect=Exception("Database error"),
                 ):
-                    result = main()
-                    assert result == 1
+                    # In quiet mode, exception message should not be printed
+                    from io import StringIO
+
+                    captured_output = StringIO()
+                    with patch("sys.stderr", captured_output):
+                        result = main()
+                        assert result == 1
+                        # In quiet mode, error should not be printed
+                        output = captured_output.getvalue()
+                        assert "Database error" not in output
 
     def test_keyboard_interrupt_handling(self):
         """Test graceful handling of Ctrl-C."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("sys.argv", ["simplebroker", "-d", tmpdir, "list"]):
-                # Patch the entire BrokerDB class to raise KeyboardInterrupt
+                # Patch the cmd_list function to raise KeyboardInterrupt
                 with patch(
-                    "simplebroker.cli.BrokerDB", side_effect=KeyboardInterrupt()
+                    "simplebroker.commands.cmd_list", side_effect=KeyboardInterrupt()
                 ):
                     # Capture print output
                     from io import StringIO
@@ -102,7 +110,8 @@ class TestCLIEdgeCases:
                         result = main()
                         assert result == 0  # Ctrl-C returns 0
                         output = captured_output.getvalue()
-                        assert "interrupted" in output
+                        # Check for the interrupted message
+                        assert "interrupted" in output.lower()
 
     def test_invalid_message_id_formats(self):
         """Test various invalid message ID formats return correct exit code."""

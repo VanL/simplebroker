@@ -41,7 +41,7 @@ def test_clock_regression_during_claim(workdir: Path) -> None:
     # Read messages with regressed clock
     with unittest.mock.patch("time.time", mock_time), BrokerDB(str(db_path)) as db:
         # This should still work correctly
-        messages = list(db.stream_read("test_queue", peek=False, all_messages=True))
+        messages = db.claim_many("test_queue", limit=100, with_timestamps=False)
         assert len(messages) == 5
         assert messages == [f"message{i}" for i in range(5)]
 
@@ -63,7 +63,7 @@ def test_vacuum_lock_cleanup_after_crash(workdir: Path) -> None:
         for i in range(10):
             db.write("test_queue", f"message{i}")
         # Read all to claim them
-        list(db.stream_read("test_queue", peek=False, all_messages=True))
+        db.claim_many("test_queue", limit=100)
 
     # Create a stale lock file (6 minutes old)
     with open(lock_path, "w") as f:
@@ -110,7 +110,7 @@ def test_vacuum_lock_timeout_environment_variable(workdir: Path) -> None:
     with BrokerDB(str(db_path)) as db:
         for i in range(5):
             db.write("test_queue", f"message{i}")
-        list(db.stream_read("test_queue", peek=False, all_messages=True))
+        db.claim_many("test_queue", limit=100)
 
     # Create a lock file that's 31 seconds old
     with open(lock_path, "w") as f:
@@ -156,7 +156,7 @@ def _schema_migration_worker(db_path: str, worker_id: int, results: list) -> Non
         # Write a message to ensure schema is used
         db.write(f"queue_{worker_id}", f"message_{worker_id}")
         # Read to verify migration worked
-        messages = list(db.stream_read(f"queue_{worker_id}", peek=True))
+        messages = db.peek_many(f"queue_{worker_id}", limit=100)
         db.close()
         results.append((worker_id, "success", len(messages)))
     except Exception as e:
@@ -256,7 +256,7 @@ def test_vacuum_with_concurrent_reads(workdir: Path) -> None:
     # Read half to claim them
     with BrokerDB(str(db_path)) as db:
         for _ in range(50):
-            list(db.stream_read("test_queue", peek=False, all_messages=False))
+            db.claim_one("test_queue")
 
     # Instead of multiprocessing, use threading for simpler test
     import threading
@@ -271,9 +271,7 @@ def test_vacuum_with_concurrent_reads(workdir: Path) -> None:
                 while not stop_event.is_set():
                     try:
                         # Peek at messages (non-destructive)
-                        list(
-                            db.stream_read("test_queue", peek=True, all_messages=False),
-                        )
+                        db.peek_one("test_queue")
                         time.sleep(0.01)  # Small delay
                     except Exception as e:
                         reader_errors.append(e)

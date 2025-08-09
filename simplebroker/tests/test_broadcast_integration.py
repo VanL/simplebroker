@@ -19,20 +19,21 @@ def test_broadcast_with_since_filtering(workdir):
     for q in queues:
         run_cli("write", q, f"initial_{q}", cwd=workdir)
 
-    # Get checkpoint timestamp before broadcast
-    # Small delay to ensure broadcast has a later timestamp
-    time.sleep(0.01)
-    current_time_us = int(time.time() * 1_000_000)
-    checkpoint = current_time_us << 12  # Convert to hybrid timestamp format
+    # Get timestamp of last initial message to use as checkpoint
+    rc, out, _ = run_cli(
+        "peek", queues[-1], "--all", "--timestamps", "--json", cwd=workdir
+    )
+    initial_msg = json.loads(out.strip())
+    checkpoint = initial_msg["timestamp"]
 
-    # Broadcast a message
+    # Broadcast a message after the checkpoint
     time.sleep(0.01)
     run_cli("broadcast", "broadcast_msg", cwd=workdir)
 
     # Check each queue for messages after checkpoint
     for q in queues:
         rc, out, _ = run_cli(
-            "peek", q, "--all", "--since", str(checkpoint), cwd=workdir
+            "peek", q, "--all", "--since", str(checkpoint + 1), cwd=workdir
         )
         assert rc == 0
         assert out.strip() == "broadcast_msg"

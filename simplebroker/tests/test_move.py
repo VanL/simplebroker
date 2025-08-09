@@ -5,7 +5,7 @@ import tempfile
 
 import pytest
 
-from simplebroker.db import BrokerDB
+from simplebroker import Queue
 
 
 def test_move_basic():
@@ -13,25 +13,26 @@ def test_move_basic():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Setup: Add messages to source queue
-            db.write("source", "msg1")
-            db.write("source", "msg2")
-            db.write("source", "msg3")
+        # Setup: Add messages to source queue
+        source = Queue("source", db_path=db_path)
+        source.write("msg1")
+        source.write("msg2")
+        source.write("msg3")
 
-            # Move first message
-            result = db.move("source", "dest")
-            assert result is not None
-            assert result["body"] == "msg1"
-            assert "ts" in result
+        # Move first message (request with timestamps to get tuple)
+        result = source.move_one("dest", with_timestamps=True)
+        assert result is not None
+        assert result[0] == "msg1"  # Check message body
+        assert isinstance(result[1], int)  # Check timestamp is present
 
-            # Verify source has 2 messages left
-            messages = db.read("source", peek=True, all_messages=True)
-            assert messages == ["msg2", "msg3"]
+        # Verify source has 2 messages left
+        messages = source.peek_many(limit=10, with_timestamps=False)
+        assert messages == ["msg2", "msg3"]
 
-            # Verify dest has the moved message
-            messages = db.read("dest", peek=True, all_messages=True)
-            assert messages == ["msg1"]
+        # Verify dest has the moved message
+        dest = Queue("dest", db_path=db_path)
+        messages = dest.peek_many(limit=10, with_timestamps=False)
+        assert messages == ["msg1"]
 
 
 def test_move_empty_queue():
@@ -39,10 +40,10 @@ def test_move_empty_queue():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Move from non-existent/empty queue
-            result = db.move("empty", "dest")
-            assert result is None
+        # Move from non-existent/empty queue
+        empty_queue = Queue("empty", db_path=db_path)
+        result = empty_queue.move_one("dest")
+        assert result is None
 
 
 def test_move_preserves_order():
@@ -50,24 +51,24 @@ def test_move_preserves_order():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Add messages in order
-            for i in range(5):
-                db.write("source", f"msg{i}")
+        source = Queue("source", db_path=db_path)
+        # Add messages in order
+        for i in range(5):
+            source.write(f"msg{i}")
 
-            # Move messages one by one
-            moved = []
-            for _ in range(5):
-                result = db.move("source", "dest")
-                assert result is not None
-                moved.append(result["body"])
+        # Move messages one by one (with_timestamps=False for simplicity)
+        moved = []
+        for _ in range(5):
+            result = source.move_one("dest", with_timestamps=False)
+            assert result is not None
+            moved.append(result)
 
-            # Verify FIFO order was preserved
-            assert moved == ["msg0", "msg1", "msg2", "msg3", "msg4"]
+        # Verify FIFO order was preserved
+        assert moved == ["msg0", "msg1", "msg2", "msg3", "msg4"]
 
-            # Source should be empty
-            result = db.move("source", "dest")
-            assert result is None
+        # Source should be empty
+        result = source.move_one("dest", with_timestamps=False)
+        assert result is None
 
 
 def test_move_only_unclaimed():
@@ -75,24 +76,24 @@ def test_move_only_unclaimed():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Add messages
-            db.write("source", "msg1")
-            db.write("source", "msg2")
-            db.write("source", "msg3")
+        source = Queue("source", db_path=db_path)
+        # Add messages
+        source.write("msg1")
+        source.write("msg2")
+        source.write("msg3")
 
-            # Claim first message
-            claimed = db.read("source")
-            assert claimed == ["msg1"]
+        # Read (claim) first message
+        claimed = source.read_one(with_timestamps=False)
+        assert claimed == "msg1"
 
-            # Move should get the first unclaimed message
-            result = db.move("source", "dest")
-            assert result is not None
-            assert result["body"] == "msg2"
+        # Move should get the first unclaimed message
+        result = source.move_one("dest", with_timestamps=False)
+        assert result is not None
+        assert result == "msg2"
 
-            # Verify remaining messages
-            messages = db.read("source", peek=True, all_messages=True)
-            assert messages == ["msg3"]  # msg1 is claimed, msg2 was moved
+        # Verify remaining messages in source (should be msg3, msg1 was claimed)
+        messages = source.peek_many(limit=10, with_timestamps=False)
+        assert messages == ["msg3"]
 
 
 def test_move_invalid_queue_names():
@@ -100,33 +101,31 @@ def test_move_invalid_queue_names():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Invalid source queue
-            with pytest.raises(ValueError, match="Invalid queue name"):
-                db.move(".invalid", "dest")
+        # Invalid source queue
+        invalid_source = Queue(".invalid", db_path=db_path)
+        with pytest.raises(ValueError, match="Invalid queue name"):
+            invalid_source.move_one("dest")
 
-            # Invalid destination queue
-            with pytest.raises(ValueError, match="Invalid queue name"):
-                db.move("source", "-invalid")
+        # Invalid destination queue
+        source = Queue("source", db_path=db_path)
+        with pytest.raises(ValueError, match="Invalid queue name"):
+            source.move_one("-invalid")
 
 
 def test_move_same_queue():
-    """Test move to same queue (should work but be a no-op effectively)."""
+    """Test move to same queue raises ValueError."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            db.write("queue", "msg1")
-            db.write("queue", "msg2")
+        queue = Queue("queue", db_path=db_path)
+        queue.write("msg1")
+        queue.write("msg2")
 
-            # Move to same queue
-            result = db.move("queue", "queue")
-            assert result is not None
-            assert result["body"] == "msg1"
-
-            # Messages should still be in the queue
-            messages = db.read("queue", peek=True, all_messages=True)
-            assert messages == ["msg1", "msg2"]
+        # Move to same queue should raise ValueError
+        with pytest.raises(
+            ValueError, match="Source and destination queues cannot be the same"
+        ):
+            queue.move_one("queue")
 
 
 def test_move_atomic():
@@ -134,28 +133,30 @@ def test_move_atomic():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Add message to source
-            db.write("source", "important_message")
+        source = Queue("source", db_path=db_path)
+        # Add message to source
+        source.write("important_message")
 
-            # Concurrent move attempts should be safe
-            # (In a real concurrent test, only one would succeed)
-            result1 = db.move("source", "dest1")
-            result2 = db.move("source", "dest2")
+        # Concurrent move attempts should be safe
+        # (In a real concurrent test, only one would succeed)
+        result1 = source.move_one("dest1", with_timestamps=False)
+        result2 = source.move_one("dest2", with_timestamps=False)
 
-            # Only one move should succeed
-            assert (result1 is None) != (result2 is None)  # XOR
+        # Only one move should succeed
+        assert (result1 is None) != (result2 is None)  # XOR
 
-            # Message should be in exactly one destination
-            dest1_msgs = db.read("dest1", peek=True, all_messages=True)
-            dest2_msgs = db.read("dest2", peek=True, all_messages=True)
+        # Message should be in exactly one destination
+        dest1 = Queue("dest1", db_path=db_path)
+        dest2 = Queue("dest2", db_path=db_path)
+        dest1_msgs = dest1.peek_many(limit=10, with_timestamps=False)
+        dest2_msgs = dest2.peek_many(limit=10, with_timestamps=False)
 
-            if result1:
-                assert dest1_msgs == ["important_message"]
-                assert dest2_msgs == []
-            else:
-                assert dest1_msgs == []
-                assert dest2_msgs == ["important_message"]
+        if result1:
+            assert dest1_msgs == ["important_message"]
+            assert dest2_msgs == []
+        else:
+            assert dest1_msgs == []
+            assert dest2_msgs == ["important_message"]
 
 
 def test_move_with_existing_dest_messages():
@@ -163,23 +164,24 @@ def test_move_with_existing_dest_messages():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Setup destination with existing messages
-            db.write("dest", "existing1")
-            db.write("dest", "existing2")
+        # Setup destination with existing messages
+        dest = Queue("dest", db_path=db_path)
+        dest.write("existing1")
+        dest.write("existing2")
 
-            # Add source messages
-            db.write("source", "new1")
-            db.write("source", "new2")
+        # Add source messages
+        source = Queue("source", db_path=db_path)
+        source.write("new1")
+        source.write("new2")
 
-            # Move a message
-            result = db.move("source", "dest")
-            assert result is not None
-            assert result["body"] == "new1"
+        # Move a message (with_timestamps=False for simplicity)
+        result = source.move_one("dest", with_timestamps=False)
+        assert result is not None
+        assert result == "new1"
 
-            # Dest should have all messages in order
-            messages = db.read("dest", peek=True, all_messages=True)
-            assert len(messages) == 3
-            assert "existing1" in messages
-            assert "existing2" in messages
-            assert "new1" in messages
+        # Dest should have all messages in order
+        messages = dest.peek_many(limit=10, with_timestamps=False)
+        assert len(messages) == 3
+        assert "existing1" in messages
+        assert "existing2" in messages
+        assert "new1" in messages

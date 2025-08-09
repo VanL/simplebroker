@@ -99,23 +99,21 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Run in background thread - should create its own connection
         thread = watcher.run_in_thread()
+        try:
+            # Wait for both messages to be processed
+            if not collector.wait_for_messages(2, timeout=2.0):
+                pytest.fail(
+                    f"Timeout waiting for messages. Got {len(collector.get_messages())} messages"
+                )
 
-        # Wait for both messages to be processed
-        if not collector.wait_for_messages(2, timeout=2.0):
+            # Should have processed messages correctly
+            messages = collector.get_messages()
+            assert len(messages) == 2
+            assert messages[0][0] == "msg1"
+            assert messages[1][0] == "msg2"
+        finally:
             watcher.stop()
             thread.join(timeout=2.0)
-            pytest.fail(
-                f"Timeout waiting for messages. Got {len(collector.get_messages())} messages"
-            )
-
-        watcher.stop()
-        thread.join(timeout=2.0)
-
-        # Should have processed messages correctly
-        messages = collector.get_messages()
-        assert len(messages) == 2
-        assert messages[0][0] == "msg1"
-        assert messages[1][0] == "msg2"
 
     def test_basic_consuming_mode(self, broker_db, temp_db):
         """Test basic message consumption (peek=False)."""
@@ -137,13 +135,13 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Run watcher in background
         thread = watcher.run_in_thread()
-
-        # Wait for processing (fast polling will pick up messages quickly)
-        time.sleep(0.2)
-
-        # Stop the watcher
-        watcher.stop()
-        thread.join(timeout=2.0)
+        try:
+            # Wait for processing (fast polling will pick up messages quickly)
+            time.sleep(0.2)
+        finally:
+            # Stop the watcher
+            watcher.stop()
+            thread.join(timeout=2.0)
 
         # Check that messages were consumed
         messages = collector.get_messages()
@@ -153,7 +151,9 @@ class TestQueueWatcher(WatcherTestBase):
         assert messages[2][0] == "message3"
 
         # Verify messages were actually consumed
-        remaining = list(broker_db.read("test_queue", all_messages=True))
+        # Use new peek API to inspect remaining messages without consuming
+        with BrokerDB(temp_db) as db:
+            remaining = list(db.peek_generator("test_queue", with_timestamps=False))
         assert len(remaining) == 0
 
     def test_peek_mode(self, broker_db, temp_db):
@@ -173,17 +173,19 @@ class TestQueueWatcher(WatcherTestBase):
         )
 
         thread = watcher.run_in_thread()
-        time.sleep(0.2)
-
-        watcher.stop()
-        thread.join(timeout=2.0)
+        try:
+            time.sleep(0.2)
+        finally:
+            watcher.stop()
+            thread.join(timeout=2.0)
 
         # Messages should have been seen
         messages = collector.get_messages()
         assert len(messages) == 2
 
-        # But NOT consumed
-        remaining = list(broker_db.read("test_queue", all_messages=True))
+        # But NOT consumed (use new peek API)
+        with BrokerDB(temp_db) as db:
+            remaining = list(db.peek_generator("test_queue", with_timestamps=False))
         assert len(remaining) == 2
         assert remaining[0] == "peek1"
         assert remaining[1] == "peek2"
@@ -372,10 +374,11 @@ class TestQueueWatcher(WatcherTestBase):
             )
 
             thread = watcher.run_in_thread()
-            time.sleep(0.2)
-
-            watcher.stop()
-            thread.join(timeout=2.0)
+            try:
+                time.sleep(0.2)
+            finally:
+                watcher.stop()
+                thread.join(timeout=2.0)
 
         # First message should have errored, second should succeed
         assert exception_count == 1
@@ -409,9 +412,10 @@ class TestQueueWatcher(WatcherTestBase):
 
             # Should have stopped after first error
             assert processed == []
-            # Second message should still be in queue
-            remaining = list(broker_db.read("test_queue", all_messages=True))
-            assert remaining == ["good_message"]
+            # Second message should still be in queue (use new peek API)
+            with BrokerDB(temp_db) as db:
+                remaining = list(db.peek_generator("test_queue", with_timestamps=False))
+                assert remaining == ["good_message"]
 
     def test_multiple_workers_exactly_once(self, temp_db):
         """Test multiple workers ensure exactly-once delivery."""
@@ -425,25 +429,32 @@ class TestQueueWatcher(WatcherTestBase):
         collectors = [MessageCollector() for _ in range(3)]
         workers = []
 
-        for _i, collector in enumerate(collectors):
-            # Use database path for thread-safe operation
-            watcher = QueueWatcher(
-                temp_db,
-                "work_queue",
-                collector.handler,
-                peek=False,
-            )
-            thread = watcher.run_in_thread()
-            workers.append((watcher, thread))
+        try:
+            for _i, collector in enumerate(collectors):
+                # Use database path for thread-safe operation
+                watcher = QueueWatcher(
+                    temp_db,
+                    "work_queue",
+                    collector.handler,
+                    peek=False,
+                )
+                thread = watcher.run_in_thread()
+                workers.append((watcher, thread))
 
-        # Let workers process messages
-        time.sleep(0.7)
-
-        # Stop all workers
-        for watcher, _thread in workers:
-            watcher.stop()
-        for _watcher, thread in workers:
-            thread.join(timeout=2.0)
+            # Let workers process messages
+            time.sleep(0.7)
+        finally:
+            # Stop all workers
+            for watcher, _thread in workers:
+                try:
+                    watcher.stop()
+                except Exception:
+                    pass  # Ignore errors during cleanup
+            for _watcher, thread in workers:
+                try:
+                    thread.join(timeout=2.0)
+                except Exception:
+                    pass  # Ignore errors during cleanup
 
         # Collect all processed messages
         all_messages = []
@@ -457,7 +468,7 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Queue should be empty
         with BrokerDB(temp_db) as db:
-            remaining = list(db.read("work_queue", all_messages=True))
+            remaining = list(db.peek_generator("work_queue", with_timestamps=False))
             assert len(remaining) == 0
 
     def test_mixed_peek_and_read_watchers(self, temp_db):
@@ -468,42 +479,49 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Start peek watcher
         peek_db = BrokerDB(temp_db)
-        peek_watcher = QueueWatcher(
-            peek_db,
-            "mixed_queue",
-            peek_collector.handler,
-            peek=True,
-        )
-        peek_thread = peek_watcher.run_in_thread()
-
-        # Start read watcher
         read_db = BrokerDB(temp_db)
-        read_watcher = QueueWatcher(
-            read_db,
-            "mixed_queue",
-            read_collector.handler,
-            peek=False,
-        )
-        read_thread = read_watcher.run_in_thread()
+        try:
+            peek_watcher = QueueWatcher(
+                peek_db,
+                "mixed_queue",
+                peek_collector.handler,
+                peek=True,
+            )
+            peek_thread = peek_watcher.run_in_thread()
 
-        time.sleep(0.1)
+            # Start read watcher
+            read_watcher = QueueWatcher(
+                read_db,
+                "mixed_queue",
+                read_collector.handler,
+                peek=False,
+            )
+            read_thread = read_watcher.run_in_thread()
 
-        # Write messages after watchers are running
-        with BrokerDB(temp_db) as writer_db:
-            writer_db.write("mixed_queue", "msg1")
-            writer_db.write("mixed_queue", "msg2")
-            writer_db.write("mixed_queue", "msg3")
+            time.sleep(0.1)
 
-        # Let watchers process
-        time.sleep(0.4)
+            # Write messages after watchers are running
+            with BrokerDB(temp_db) as writer_db:
+                writer_db.write("mixed_queue", "msg1")
+                writer_db.write("mixed_queue", "msg2")
+                writer_db.write("mixed_queue", "msg3")
 
-        # Stop watchers
-        peek_watcher.stop()
-        read_watcher.stop()
-        peek_thread.join(timeout=2.0)
-        read_thread.join(timeout=2.0)
-        peek_db.close()
-        read_db.close()
+            # Let watchers process
+            time.sleep(0.4)
+        finally:
+            # Stop watchers
+            try:
+                peek_watcher.stop()
+                peek_thread.join(timeout=2.0)
+            except Exception:
+                pass  # Ignore errors during cleanup
+            try:
+                read_watcher.stop()
+                read_thread.join(timeout=2.0)
+            except Exception:
+                pass  # Ignore errors during cleanup
+            peek_db.close()
+            read_db.close()
 
         # Check results
         peek_messages = [msg for msg, _ in peek_collector.get_messages()]
@@ -530,14 +548,14 @@ class TestQueueWatcher(WatcherTestBase):
         def run_watcher():
             nonlocal watcher_ref
             db = BrokerDB(temp_db)
-            watcher = QueueWatcher(
-                db,
-                "test_queue",
-                lambda m, t: None,
-            )
-            watcher_ref = watcher
-            watcher_created.set()  # Signal that watcher is created
             try:
+                watcher = QueueWatcher(
+                    db,
+                    "test_queue",
+                    lambda m, t: None,
+                )
+                watcher_ref = watcher
+                watcher_created.set()  # Signal that watcher is created
                 watcher.run_forever()
                 run_completed.set()
             finally:
@@ -545,19 +563,20 @@ class TestQueueWatcher(WatcherTestBase):
 
         thread = threading.Thread(target=run_watcher)
         thread.start()
+        try:
+            # Wait for watcher to be created with timeout
+            if not watcher_created.wait(timeout=2.0):
+                pytest.fail("Watcher was not created within timeout")
 
-        # Wait for watcher to be created with timeout
-        if not watcher_created.wait(timeout=2.0):
-            thread.join(timeout=1.0)
-            pytest.fail("Watcher was not created within timeout")
+            assert thread.is_alive()
+            assert not run_completed.is_set()
 
-        assert thread.is_alive()
-        assert not run_completed.is_set()
+            # Stop it properly
+            assert watcher_ref is not None
+            watcher_ref.stop()
+        finally:
+            thread.join(timeout=2.0)
 
-        # Stop it properly
-        assert watcher_ref is not None
-        watcher_ref.stop()
-        thread.join(timeout=2.0)
         assert run_completed.is_set()
 
     def test_polling_lifecycle(self, temp_db):
@@ -573,15 +592,14 @@ class TestQueueWatcher(WatcherTestBase):
             strategy = watcher._strategy
 
             thread = watcher.run_in_thread()
-            time.sleep(0.1)
+            try:
+                time.sleep(0.1)
 
-            # Should be initialized
-            assert strategy._db is not None
-            # Check count will be > 0 since polling has been running
-            assert strategy._check_count > 0
-
-            watcher.stop()
-            thread.join(timeout=2.0)
+                # Check count will be > 0 since polling has been running
+                assert strategy._check_count > 0
+            finally:
+                watcher.stop()
+                thread.join(timeout=2.0)
 
             # Should be stopped
             assert strategy._stop_event.is_set()
@@ -601,9 +619,11 @@ class TestQueueWatcher(WatcherTestBase):
             peek=True,
         )
         thread = initial_watcher.run_in_thread()
-        time.sleep(0.1)
-        initial_watcher.stop()
-        thread.join(timeout=2.0)
+        try:
+            time.sleep(0.1)
+        finally:
+            initial_watcher.stop()
+            thread.join(timeout=2.0)
 
         # Get timestamp of msg2
         initial_messages = initial_collector.get_messages()
@@ -628,11 +648,12 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Start watcher and let it process messages
         thread = watcher.run_in_thread()
-        time.sleep(0.1)  # Give it time to process
-
-        # Stop watcher
-        watcher.stop()
-        thread.join(timeout=2.0)
+        try:
+            time.sleep(0.1)  # Give it time to process
+        finally:
+            # Stop watcher
+            watcher.stop()
+            thread.join(timeout=2.0)
 
         # Should only have msg3
         messages = collector.get_messages()
@@ -655,17 +676,15 @@ class TestQueueWatcher(WatcherTestBase):
             peek=True,
         )
         thread = initial_watcher.run_in_thread()
-
-        # Wait for all 50 messages to be collected
-        if not initial_collector.wait_for_messages(50, timeout=5.0):
+        try:
+            # Wait for all 50 messages to be collected
+            if not initial_collector.wait_for_messages(50, timeout=5.0):
+                pytest.fail(
+                    f"Timeout waiting for messages. Got {len(initial_collector.get_messages())} messages"
+                )
+        finally:
             initial_watcher.stop()
             thread.join(timeout=2.0)
-            pytest.fail(
-                f"Timeout waiting for messages. Got {len(initial_collector.get_messages())} messages"
-            )
-
-        initial_watcher.stop()
-        thread.join(timeout=2.0)
 
         # Get timestamp after 50th message
         initial_messages = initial_collector.get_messages()
@@ -690,18 +709,16 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Start watcher and let it process messages
         thread = watcher.run_in_thread()
-
-        # Wait for all 50 new messages to be collected
-        if not collector.wait_for_messages(50, timeout=5.0):
+        try:
+            # Wait for all 50 new messages to be collected
+            if not collector.wait_for_messages(50, timeout=5.0):
+                pytest.fail(
+                    f"Timeout waiting for messages. Got {len(collector.get_messages())} messages"
+                )
+        finally:
+            # Stop watcher
             watcher.stop()
             thread.join(timeout=2.0)
-            pytest.fail(
-                f"Timeout waiting for messages. Got {len(collector.get_messages())} messages"
-            )
-
-        # Stop watcher
-        watcher.stop()
-        thread.join(timeout=2.0)
 
         # Should have exactly 50 messages (050-099)
         messages = collector.get_messages()
@@ -728,19 +745,19 @@ class TestPollingStrategy:
 
             # Start watcher
             thread = watcher.run_in_thread()
+            try:
+                # Give watcher time to start
+                time.sleep(0.1)
 
-            # Give watcher time to start
-            time.sleep(0.1)
+                # Write message - should be detected via data_version change
+                db.write("version_test", "test_message")
 
-            # Write message - should be detected via data_version change
-            db.write("version_test", "test_message")
-
-            # Wait for processing
-            time.sleep(0.2)
-
-            # Stop watcher
-            watcher.stop()
-            thread.join(timeout=2.0)
+                # Wait for processing
+                time.sleep(0.2)
+            finally:
+                # Stop watcher
+                watcher.stop()
+                thread.join(timeout=2.0)
 
             # Should have received the message
             assert len(messages_received) == 1
@@ -814,10 +831,11 @@ class TestErrorScenarios(WatcherTestBase):
             )
 
             thread = watcher.run_in_thread()
-            time.sleep(0.2)
-
-            watcher.stop()
-            thread.join(timeout=2.0)
+            try:
+                time.sleep(0.2)
+            finally:
+                watcher.stop()
+                thread.join(timeout=2.0)
 
         # Should have logged the error
         assert "Handler failed" in caplog.text or "Handler error" in caplog.text
@@ -848,10 +866,11 @@ class TestErrorScenarios(WatcherTestBase):
             )
 
             thread = watcher.run_in_thread()
-            time.sleep(0.2)
-
-            watcher.stop()
-            thread.join(timeout=2.0)
+            try:
+                time.sleep(0.2)
+            finally:
+                watcher.stop()
+                thread.join(timeout=2.0)
 
         # Both errors should be logged
         assert "Handler error" in caplog.text
@@ -922,11 +941,12 @@ class TestErrorScenarios(WatcherTestBase):
             # Check processed messages - should only have message1
             assert processed_messages == ["message1"]
 
-            # Check remaining messages in queue
-            remaining = list(broker_db.read("test_queue", all_messages=True))
-            # Only message3 should be in the queue (message2 was consumed before handler failed)
-            assert len(remaining) == 1
-            assert remaining[0] == "message3"
+            # Check remaining messages in queue (use new peek API)
+            with BrokerDB(temp_db) as db:
+                remaining = list(db.peek_generator("test_queue", with_timestamps=False))
+                # Only message3 should be in the queue (message2 was consumed before handler failed)
+                assert len(remaining) == 1
+                assert remaining[0] == "message3"
 
     def test_signal_handler_restoration(self, temp_db):
         """Test that original signal handlers are restored after the watcher stops."""
@@ -1013,10 +1033,9 @@ def test_context_manager_usage(temp_db):
     assert [msg for msg, _ in messages_received] == ["message1", "message2", "message3"]
 
     # Verify queue is empty (consumed mode)
-    broker_db = BrokerDB(temp_db)
-    remaining = list(broker_db.read("context_queue", all_messages=True))
-    assert len(remaining) == 0
-    broker_db.close()
+    with BrokerDB(temp_db) as db:
+        remaining = list(db.peek_generator("context_queue", with_timestamps=False))
+        assert len(remaining) == 0
 
 
 def test_context_manager_with_exception(temp_db):

@@ -39,17 +39,15 @@ def watcher_process(
                 super().__init__(*args, **kwargs)
                 self._enable_pre_check = enable_pre_check
 
-            def _has_pending_messages(self, db):
+            def _has_pending_messages(self, db=None):
                 if not self._enable_pre_check:
                     return True
-                sql = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 LIMIT 1)"
-                rows = list(db._runner.run(sql, (self._queue,), fetch=True))
-                return bool(rows[0][0]) if rows else False
+                # Use the parent class implementation which handles DB properly
+                return super()._has_pending_messages()
 
             def _drain_queue(self) -> None:
                 if self._enable_pre_check:
-                    db = self._get_db()
-                    if not self._has_pending_messages(db):
+                    if not self._has_pending_messages():
                         return
                 super()._drain_queue()
 
@@ -194,14 +192,15 @@ def test_multiprocess_single_queue() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
         broker = BrokerDB(db_path)
-        try:
-            # Create multiprocessing queues for communication
-            result_queue = multiprocessing.Queue()
-            control_queues = []
 
+        # Create multiprocessing queues for communication
+        result_queue = multiprocessing.Queue()
+        control_queues = []
+        processes = []
+
+        try:
             # Start multiple watcher processes
             num_processes = 4
-            processes = []
 
             for i in range(num_processes):
                 control_queue = multiprocessing.Queue()
@@ -241,17 +240,6 @@ def test_multiprocess_single_queue() -> None:
                 except queue.Empty:
                     continue
 
-            # Stop all processes
-            for control_queue in control_queues:
-                control_queue.put("stop")
-
-            # Wait for processes to finish
-            for p in processes:
-                p.join(timeout=5.0)
-                if p.is_alive():
-                    p.terminate()
-                    p.join()
-
             # Verify all messages were processed
             message_bodies = [msg for _, msg in processed_messages]
             assert len(message_bodies) == num_messages
@@ -268,6 +256,23 @@ def test_multiprocess_single_queue() -> None:
             assert len(process_counts) >= 1
             assert sum(process_counts.values()) == num_messages
         finally:
+            # Stop all processes
+            for control_queue in control_queues:
+                try:
+                    control_queue.put("stop")
+                except Exception:
+                    pass  # Queue may be closed already
+
+            # Wait for processes to finish and ensure cleanup
+            for p in processes:
+                try:
+                    p.join(timeout=5.0)
+                    if p.is_alive():
+                        p.terminate()
+                        p.join()
+                except Exception:
+                    pass  # Process may already be terminated
+
             broker.close()
 
 
@@ -277,15 +282,15 @@ def test_multiprocess_separate_queues() -> None:
         db_path = str(Path(tmpdir) / "test.db")
         broker = BrokerDB(db_path)
 
+        num_processes = 5
+        messages_per_queue = 20
+
+        # Create communication queues
+        result_queue = multiprocessing.Queue()
+        control_queues = []
+        processes = []
+
         try:
-            num_processes = 5
-            messages_per_queue = 20
-
-            # Create communication queues
-            result_queue = multiprocessing.Queue()
-            control_queues = []
-            processes = []
-
             # Start processes, each watching its own queue
             for i in range(num_processes):
                 control_queue = multiprocessing.Queue()
@@ -328,20 +333,27 @@ def test_multiprocess_separate_queues() -> None:
                 except queue.Empty:
                     continue
 
-            # Stop processes
-            for control_queue in control_queues:
-                control_queue.put("stop")
-
-            for p in processes:
-                p.join(timeout=5.0)
-                if p.is_alive():
-                    p.terminate()
-                    p.join()
-
             # Each process should have processed exactly its queue's messages
             for i in range(num_processes):
                 assert process_message_counts[i] == messages_per_queue
         finally:
+            # Stop processes
+            for control_queue in control_queues:
+                try:
+                    control_queue.put("stop")
+                except Exception:
+                    pass  # Queue may be closed already
+
+            # Wait for processes to finish and ensure cleanup
+            for p in processes:
+                try:
+                    p.join(timeout=5.0)
+                    if p.is_alive():
+                        p.terminate()
+                        p.join()
+                except Exception:
+                    pass  # Process may already be terminated
+
             broker.close()
 
 
@@ -364,87 +376,91 @@ def test_multiprocess_thundering_herd() -> None:
             control_queues = []
             processes = []
 
-            # Start processes watching different queues
-            for i in range(num_processes):
-                control_queue = multiprocessing.Queue()
-                control_queues.append(control_queue)
+            try:
+                # Start processes watching different queues
+                for i in range(num_processes):
+                    control_queue = multiprocessing.Queue()
+                    control_queues.append(control_queue)
 
-                p = multiprocessing.Process(
-                    target=watcher_process,
-                    args=(
-                        db_path,
-                        f"queue_{i}",
-                        result_queue,
-                        control_queue,
-                        i,
-                        enable_pre_check,
-                    ),
-                )
-                p.start()
-                processes.append(p)
-
-            # Wait for ready
-            ready_count = 0
-            while ready_count < num_processes:
-                msg_type, proc_id, data = result_queue.get(timeout=5.0)
-                if msg_type == "ready":
-                    ready_count += 1
-
-            # Wait a bit for processing
-            time.sleep(1.0)
-
-            # Stop processes
-            for control_queue in control_queues:
-                control_queue.put("stop")
-
-            # Collect stats with robust error handling
-            stats = {}
-            errors = []
-            timeout_start = time.monotonic()
-
-            # Wait for all processes to send their stats
-            while (
-                len(stats) + len(errors) < num_processes
-                and time.monotonic() - timeout_start < 10
-            ):
-                try:
-                    msg_type, proc_id, data = result_queue.get(timeout=0.5)
-                    if msg_type == "stats":
-                        stats[proc_id] = data
-                    elif msg_type == "error":
-                        errors.append((proc_id, data))
-                    # Also check for "message" type which indicates processing
-                    elif msg_type == "message":
-                        # Process 0 processed the message, ignore this
-                        pass
-                except queue.Empty:
-                    continue
-
-            # Wait for processes to finish
-            for p in processes:
-                p.join(timeout=5.0)
-                if p.is_alive():
-                    p.terminate()
-                    p.join()
-
-            # Check for errors
-            if errors:
-                raise AssertionError(f"Process errors occurred: {errors}")
-
-            # Only process 0 should have processed the message
-            for i in range(num_processes):
-                if i == 0:
-                    assert i in stats, (
-                        f"Missing stats for process {i} (which should have processed the message)"
+                    p = multiprocessing.Process(
+                        target=watcher_process,
+                        args=(
+                            db_path,
+                            f"queue_{i}",
+                            result_queue,
+                            control_queue,
+                            i,
+                            enable_pre_check,
+                        ),
                     )
-                    assert stats[i]["processed"] == 1, (
-                        f"Process 0 should have processed 1 message, got {stats[i]['processed']}"
-                    )
-                # Other processes should not have processed anything
-                elif i in stats:
-                    assert stats[i]["processed"] == 0, (
-                        f"Process {i} should not have processed any messages"
-                    )
+                    p.start()
+                    processes.append(p)
+
+                # Wait for ready
+                ready_count = 0
+                while ready_count < num_processes:
+                    msg_type, proc_id, data = result_queue.get(timeout=5.0)
+                    if msg_type == "ready":
+                        ready_count += 1
+
+                # Wait a bit for processing
+                time.sleep(1.0)
+
+                # Stop processes
+                for control_queue in control_queues:
+                    control_queue.put("stop")
+
+                # Collect stats with robust error handling
+                stats = {}
+                errors = []
+                timeout_start = time.monotonic()
+
+                # Wait for all processes to send their stats
+                while (
+                    len(stats) + len(errors) < num_processes
+                    and time.monotonic() - timeout_start < 10
+                ):
+                    try:
+                        msg_type, proc_id, data = result_queue.get(timeout=0.5)
+                        if msg_type == "stats":
+                            stats[proc_id] = data
+                        elif msg_type == "error":
+                            errors.append((proc_id, data))
+                        # Also check for "message" type which indicates processing
+                        elif msg_type == "message":
+                            # Process 0 processed the message, ignore this
+                            pass
+                    except queue.Empty:
+                        continue
+
+                # Check for errors
+                if errors:
+                    raise AssertionError(f"Process errors occurred: {errors}")
+
+                # Only process 0 should have processed the message
+                for i in range(num_processes):
+                    if i == 0:
+                        assert i in stats, (
+                            f"Missing stats for process {i} (which should have processed the message)"
+                        )
+                        assert stats[i]["processed"] == 1, (
+                            f"Process 0 should have processed 1 message, got {stats[i]['processed']}"
+                        )
+                    # Other processes should not have processed anything
+                    elif i in stats:
+                        assert stats[i]["processed"] == 0, (
+                            f"Process {i} should not have processed any messages"
+                        )
+            finally:
+                # Wait for processes to finish and ensure cleanup
+                for p in processes:
+                    try:
+                        p.join(timeout=5.0)
+                        if p.is_alive():
+                            p.terminate()
+                            p.join()
+                    except Exception:
+                        pass  # Process may already be terminated
 
 
 def test_multiprocess_graceful_shutdown() -> None:
@@ -464,67 +480,74 @@ def test_multiprocess_graceful_shutdown() -> None:
         control_queues = []
         processes = []
 
-        for i in range(num_processes):
-            control_queue = multiprocessing.Queue()
-            control_queues.append(control_queue)
+        try:
+            for i in range(num_processes):
+                control_queue = multiprocessing.Queue()
+                control_queues.append(control_queue)
 
-            p = multiprocessing.Process(
-                target=shutdown_test_process,
-                args=(db_path, f"queue_{i}", result_queue, control_queue, i),
-            )
-            p.start()
-            processes.append(p)
+                p = multiprocessing.Process(
+                    target=shutdown_test_process,
+                    args=(db_path, f"queue_{i}", result_queue, control_queue, i),
+                )
+                p.start()
+                processes.append(p)
 
-        # Wait for ready
-        ready_count = 0
-        while ready_count < num_processes:
-            msg_type, proc_id, data = result_queue.get(timeout=5.0)
-            if msg_type == "ready":
-                ready_count += 1
+            # Wait for ready
+            ready_count = 0
+            while ready_count < num_processes:
+                msg_type, proc_id, data = result_queue.get(timeout=5.0)
+                if msg_type == "ready":
+                    ready_count += 1
 
-        # Let them process some messages
-        time.sleep(0.5)
+            # Let them process some messages
+            time.sleep(0.5)
 
-        # Send stop signals
-        for control_queue in control_queues:
-            control_queue.put("stop")
+            # Send stop signals
+            for control_queue in control_queues:
+                control_queue.put("stop")
 
-        # Collect shutdown stats with robust error handling
-        shutdown_stats = {}
-        errors = []
-        timeout_start = time.monotonic()
-        messages_received = 0
+            # Collect shutdown stats with robust error handling
+            shutdown_stats = {}
+            errors = []
+            timeout_start = time.monotonic()
+            messages_received = 0
 
-        while (
-            messages_received < num_processes and time.monotonic() - timeout_start < 10
-        ):
-            try:
-                msg_type, proc_id, data = result_queue.get(timeout=1.0)
-                messages_received += 1
+            while (
+                messages_received < num_processes
+                and time.monotonic() - timeout_start < 10
+            ):
+                try:
+                    msg_type, proc_id, data = result_queue.get(timeout=1.0)
+                    messages_received += 1
 
-                if msg_type == "shutdown_stats":
-                    shutdown_stats[proc_id] = data
-                elif msg_type == "error":
-                    errors.append((proc_id, data))
-            except queue.Empty:
-                continue
+                    if msg_type == "shutdown_stats":
+                        shutdown_stats[proc_id] = data
+                    elif msg_type == "error":
+                        errors.append((proc_id, data))
+                except queue.Empty:
+                    continue
 
-        # Wait for processes
-        for p in processes:
-            p.join(timeout=5.0)
-            assert not p.is_alive()
+            # Check for errors before assertions
+            if errors:
+                raise AssertionError(f"Process errors occurred: {errors}")
 
-        # Check for errors before assertions
-        if errors:
-            raise AssertionError(f"Process errors occurred: {errors}")
-
-        # Verify clean shutdown
-        for i in range(num_processes):
-            assert i in shutdown_stats, f"Missing shutdown stats for process {i}"
-            stats = shutdown_stats[i]
-            assert stats["before_stop"] > 0  # Processed some messages
-            assert stats["after_stop"] == 0  # No processing after stop
-            assert not stats["thread_alive"]  # Thread stopped cleanly
+            # Verify clean shutdown
+            for i in range(num_processes):
+                assert i in shutdown_stats, f"Missing shutdown stats for process {i}"
+                stats = shutdown_stats[i]
+                assert stats["before_stop"] > 0  # Processed some messages
+                assert stats["after_stop"] == 0  # No processing after stop
+                assert not stats["thread_alive"]  # Thread stopped cleanly
+        finally:
+            # Ensure all processes are cleaned up
+            for p in processes:
+                try:
+                    p.join(timeout=5.0)
+                    if p.is_alive():
+                        p.terminate()
+                        p.join()
+                except Exception:
+                    pass  # Process may already be terminated
 
 
 def test_multiprocess_database_locking() -> None:
@@ -533,13 +556,13 @@ def test_multiprocess_database_locking() -> None:
         db_path = str(Path(tmpdir) / "test.db")
         broker = BrokerDB(db_path)
 
-        try:
-            # Start multiple processes on same queue to create contention
-            num_processes = 5
-            result_queue = multiprocessing.Queue()
-            control_queues = []
-            processes = []
+        # Start multiple processes on same queue to create contention
+        num_processes = 5
+        result_queue = multiprocessing.Queue()
+        control_queues = []
+        processes = []
 
+        try:
             for i in range(num_processes):
                 control_queue = multiprocessing.Queue()
                 control_queues.append(control_queue)
@@ -566,10 +589,6 @@ def test_multiprocess_database_locking() -> None:
             # Let them run
             time.sleep(2.0)
 
-            # Stop all
-            for control_queue in control_queues:
-                control_queue.put("stop")
-
             # Collect lock stats
             lock_stats = []
             for _ in range(num_processes):
@@ -580,13 +599,6 @@ def test_multiprocess_database_locking() -> None:
                 except queue.Empty:
                     pass
 
-            # Clean up processes
-            for p in processes:
-                p.join(timeout=5.0)
-                if p.is_alive():
-                    p.terminate()
-                    p.join()
-
             # With pre-check optimization, lock contention should be minimal
             if lock_stats:
                 total_attempts = sum(s["attempts"] for s in lock_stats)
@@ -596,6 +608,23 @@ def test_multiprocess_database_locking() -> None:
                 # Failure rate should be low with proper implementation
                 assert overall_failure_rate < 0.3  # Less than 30% lock failures
         finally:
+            # Stop all processes
+            for control_queue in control_queues:
+                try:
+                    control_queue.put("stop")
+                except Exception:
+                    pass  # Queue may be closed already
+
+            # Clean up processes
+            for p in processes:
+                try:
+                    p.join(timeout=5.0)
+                    if p.is_alive():
+                        p.terminate()
+                        p.join()
+                except Exception:
+                    pass  # Process may already be terminated
+
             broker.close()
 
 

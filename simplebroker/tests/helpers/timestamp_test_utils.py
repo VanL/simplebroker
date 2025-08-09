@@ -64,7 +64,7 @@ class DatabaseCorruptor:
     def inject_future_message(self, queue: str, future_offset: int = 10000) -> None:
         """Insert a message with a timestamp in the future."""
         with self.db._lock:
-            current_ts = self.db._generate_timestamp()
+            current_ts = self.db.generate_timestamp()
             future_ts = current_ts + future_offset
             self.db._runner.run(
                 "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
@@ -96,7 +96,7 @@ class ConflictSimulator:
 
     def __init__(self, db: BrokerDB):
         self.db = db
-        self.original_generate = db._generate_timestamp
+        self.original_generate = db.generate_timestamp
         self.interceptor: Optional[Callable] = None
 
     def simulate_race_condition(self) -> None:
@@ -126,11 +126,11 @@ class ConflictSimulator:
 
     def __enter__(self) -> "ConflictSimulator":
         if self.interceptor:
-            self.db._generate_timestamp = self.interceptor  # type: ignore[method-assign]
+            self.db.generate_timestamp = self.interceptor  # type: ignore[method-assign]
         return self
 
     def __exit__(self, *args: object) -> None:
-        self.db._generate_timestamp = self.original_generate  # type: ignore[method-assign]
+        self.db.generate_timestamp = self.original_generate  # type: ignore[method-assign]
 
 
 def verify_timestamp_monotonicity(db: BrokerDB, queue: str) -> List[int]:

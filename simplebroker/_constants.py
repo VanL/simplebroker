@@ -188,6 +188,11 @@ def load_config() -> Dict[str, Any]:
                 Default: 1 (exactly-once delivery)
                 Higher values improve performance but risk redelivery on failure.
 
+            BROKER_GENERATOR_BATCH_SIZE (int): Batch size for generator methods.
+                Default: 100
+                Controls how many messages are fetched at once by peek/claim/move generators.
+                Higher values reduce query overhead but use more memory.
+
         Vacuum Settings:
             BROKER_AUTO_VACUUM (int): Enable automatic vacuum of claimed messages.
                 Default: 1 (enabled)
@@ -257,6 +262,9 @@ def load_config() -> Dict[str, Any]:
         ),
         "BROKER_READ_COMMIT_INTERVAL": int(
             os.environ.get("BROKER_READ_COMMIT_INTERVAL", "1"),
+        ),
+        "BROKER_GENERATOR_BATCH_SIZE": int(
+            os.environ.get("BROKER_GENERATOR_BATCH_SIZE", "100"),
         ),
         # Vacuum settings
         "BROKER_AUTO_VACUUM": int(os.environ.get("BROKER_AUTO_VACUUM", "1")),

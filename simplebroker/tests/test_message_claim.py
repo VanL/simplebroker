@@ -34,9 +34,8 @@ def test_messages_marked_as_claimed_not_deleted(workdir: Path):
 
     # Read one message
     with BrokerDB(str(db_path)) as db:
-        messages = list(db.stream_read("test_queue", peek=False, all_messages=False))
-        assert len(messages) == 1
-        assert messages[0] == "message1"
+        message = db.claim_one("test_queue", with_timestamps=False)
+        assert message == "message1"
 
     # Verify message is claimed, not deleted
     conn = sqlite3.connect(str(db_path))
@@ -72,20 +71,20 @@ def test_claimed_messages_not_returned_by_subsequent_reads(workdir: Path):
 
     # Read first two messages
     with BrokerDB(str(db_path)) as db:
-        msg1 = list(db.stream_read("test_queue", peek=False, all_messages=False))[0]
-        msg2 = list(db.stream_read("test_queue", peek=False, all_messages=False))[0]
+        msg1 = db.claim_one("test_queue", with_timestamps=False)
+        msg2 = db.claim_one("test_queue", with_timestamps=False)
         assert msg1 == "message0"
         assert msg2 == "message1"
 
     # Read remaining messages with --all
     with BrokerDB(str(db_path)) as db:
-        remaining = list(db.stream_read("test_queue", peek=False, all_messages=True))
+        remaining = db.claim_many("test_queue", limit=1000, with_timestamps=False)
         assert len(remaining) == 3
         assert remaining == ["message2", "message3", "message4"]
 
     # Verify no more messages available
     with BrokerDB(str(db_path)) as db:
-        last_check = list(db.stream_read("test_queue", peek=False, all_messages=True))
+        last_check = db.claim_many("test_queue", limit=1000, with_timestamps=False)
         assert len(last_check) == 0
 
 
@@ -100,7 +99,7 @@ def test_vacuum_removes_claimed_messages(workdir: Path):
 
     # Read all messages to claim them
     with BrokerDB(str(db_path)) as db:
-        messages = list(db.stream_read("test_queue", peek=False, all_messages=True))
+        messages = db.claim_many("test_queue", limit=1000, with_timestamps=False)
         assert len(messages) == 10
 
     # Check claimed messages exist
@@ -139,7 +138,7 @@ def test_automatic_vacuum_trigger(workdir: Path):
     # Read 10 messages (10% threshold)
     with BrokerDB(str(db_path)) as db:
         for _ in range(10):
-            list(db.stream_read("test_queue", peek=False, all_messages=False))
+            db.claim_one("test_queue", with_timestamps=False)
 
     # Check claimed count before potential auto-vacuum
     conn = sqlite3.connect(str(db_path))
@@ -172,9 +171,9 @@ def _concurrent_reader_worker(args: Tuple[int, str, str]) -> List[str]:
     with BrokerDB(db_path) as db:
         # Each worker tries to read 5 messages
         for _ in range(5):
-            msgs = list(db.stream_read(queue_name, peek=False, all_messages=False))
-            if msgs:
-                messages.extend(msgs)
+            msg = db.claim_one(queue_name, with_timestamps=False)
+            if msg:
+                messages.append(msg)
             else:
                 break  # Queue empty
 
@@ -243,7 +242,7 @@ def test_schema_migration_adds_claimed_column(workdir: Path):
     # Open with BrokerDB - should trigger migration
     with BrokerDB(str(db_path)) as db:
         # Try to read - should work with migrated schema
-        messages = list(db.stream_read("old_queue", peek=False, all_messages=True))
+        messages = db.claim_many("old_queue", limit=1000, with_timestamps=False)
         assert len(messages) == 1
         assert messages[0] == "old_message"
 
@@ -335,7 +334,7 @@ def test_peek_does_not_claim(workdir: Path):
 
     # Peek all messages
     with BrokerDB(str(db_path)) as db:
-        peeked = list(db.stream_read("peek_queue", peek=True, all_messages=True))
+        peeked = db.peek_many("peek_queue", limit=1000, with_timestamps=False)
         assert len(peeked) == 3
 
     # Verify no messages are claimed
@@ -347,7 +346,7 @@ def test_peek_does_not_claim(workdir: Path):
 
     # All messages should still be available for reading
     with BrokerDB(str(db_path)) as db:
-        messages = list(db.stream_read("peek_queue", peek=False, all_messages=True))
+        messages = db.claim_many("peek_queue", limit=1000, with_timestamps=False)
         assert len(messages) == 3
 
     # Now all should be claimed
@@ -380,10 +379,10 @@ def test_vacuum_with_mixed_queues(workdir: Path):
     with BrokerDB(str(db_path)) as db:
         # Read 2 from queue1
         for _ in range(2):
-            list(db.stream_read("queue1", peek=False, all_messages=False))
+            db.claim_one("queue1", with_timestamps=False)
 
         # Read all from queue2
-        list(db.stream_read("queue2", peek=False, all_messages=True))
+        db.claim_many("queue2", limit=1000, with_timestamps=False)
 
     # Check state before vacuum
     conn = sqlite3.connect(str(db_path))
@@ -440,7 +439,7 @@ def test_vacuum_lock_prevents_concurrent_vacuum(workdir: Path):
     with BrokerDB(str(db_path)) as db:
         for i in range(10):
             db.write("test_queue", f"message{i}")
-        list(db.stream_read("test_queue", peek=False, all_messages=True))
+        db.claim_many("test_queue", limit=1000, with_timestamps=False)
 
     # Simulate concurrent vacuum attempts
     def vacuum_worker(db_path: str) -> bool:
@@ -506,11 +505,11 @@ def test_all_flag_with_mixed_claimed_unclaimed(workdir: Path):
     # Read (claim) first 3 messages
     with BrokerDB(str(db_path)) as db:
         for _ in range(3):
-            list(db.stream_read("mixed_queue", peek=False, all_messages=False))
+            db.claim_one("mixed_queue", with_timestamps=False)
 
     # Read with --all should get only unclaimed messages
     with BrokerDB(str(db_path)) as db:
-        messages = list(db.stream_read("mixed_queue", peek=False, all_messages=True))
+        messages = db.claim_many("mixed_queue", limit=1000, with_timestamps=False)
         assert len(messages) == 7
         assert messages == [f"message{i}" for i in range(3, 10)]
 

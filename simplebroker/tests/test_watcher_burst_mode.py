@@ -82,28 +82,34 @@ class InstrumentedQueueWatcher(QueueWatcher):
         self._has_pending_messages_enabled = True
         self._found_messages_last_drain = False
 
-    def _has_pending_messages(self, db: BrokerDB) -> bool:
+    def _has_pending_messages(self, db: BrokerDB | None = None) -> bool:
         """Fast check if queue has unclaimed messages."""
         if not self._has_pending_messages_enabled:
             return True
 
-        sql = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 LIMIT 1)"
-        rows = list(db._runner.run(sql, (self._queue,), fetch=True))
-        return bool(rows[0][0]) if rows else False
+        # Use the Queue object's has_pending method
+        if hasattr(self, "_queue_obj") and self._queue_obj:
+            return self._queue_obj.has_pending()
+
+        # Fallback to parent implementation
+        return super()._has_pending_messages(db)
 
     def _drain_queue(self) -> None:
         """Override to implement smart burst reset."""
-        # Check if we should drain
+        # Initialize message count if not present
+        if not hasattr(self, "_message_count"):
+            self._message_count = 0
+
+        # Check if we should drain using Queue's has_pending method
         if self._has_pending_messages_enabled:
-            db = self._get_db()
-            if not self._has_pending_messages(db):
+            if hasattr(self, "_queue_obj") and not self._queue_obj.has_pending():
                 self._found_messages_last_drain = False
                 return
 
         # Track if we found messages before calling parent
-        initial_count = getattr(self, "_message_count", 0)
+        initial_count = self._message_count
         super()._drain_queue()
-        final_count = getattr(self, "_message_count", 0)
+        final_count = self._message_count
 
         self._found_messages_last_drain = final_count > initial_count
 
@@ -124,6 +130,7 @@ def test_burst_mode_resets_on_activity(no_jitter) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
         try:
             processed_messages = []
 
@@ -186,8 +193,9 @@ def test_burst_mode_resets_on_activity(no_jitter) -> None:
                 f"Message should be processed quickly, took {process_latency:.3f}s"
             )
 
-            watcher.stop()
         finally:
+            if watcher is not None:
+                watcher.stop()
             broker.close()
 
 
@@ -196,6 +204,8 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        active_watcher = None
+        idle_watcher = None
         try:
             processed_counts = {"active": 0, "idle": 0}
 
@@ -269,9 +279,11 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter) -> None:
                 idle_zero_count = sum(1 for d in idle_new_delays if d == 0)
                 assert idle_zero_count == 0, "Idle watcher should not have zero delays"
 
-            active_watcher.stop()
-            idle_watcher.stop()
         finally:
+            if active_watcher is not None:
+                active_watcher.stop()
+            if idle_watcher is not None:
+                idle_watcher.stop()
             broker.close()
 
 
@@ -316,6 +328,7 @@ def test_burst_mode_with_batch_processing(no_jitter) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
         try:
             processed = []
 
@@ -344,8 +357,9 @@ def test_burst_mode_with_batch_processing(no_jitter) -> None:
             # Verify we processed messages efficiently
             assert watcher._message_count == 10
 
-            watcher.stop()
         finally:
+            if watcher is not None:
+                watcher.stop()
             broker.close()
 
 
@@ -354,6 +368,7 @@ def test_burst_mode_with_errors_single_message(no_jitter) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
         try:
             call_count = 0
             error_count = 0
@@ -393,8 +408,9 @@ def test_burst_mode_with_errors_single_message(no_jitter) -> None:
             assert error_count == 2  # Errors on 1st and 3rd messages
             assert len(successful_messages) == 2  # 2nd and 4th messages succeeded
 
-            watcher.stop()
         finally:
+            if watcher is not None:
+                watcher.stop()
             broker.close()
 
 
@@ -403,6 +419,7 @@ def test_burst_mode_with_errors_batch_processing(no_jitter) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
         try:
             call_count = 0
             error_count = 0
@@ -442,8 +459,9 @@ def test_burst_mode_with_errors_batch_processing(no_jitter) -> None:
             assert error_count == 2  # Errors on 1st and 3rd messages
             assert len(successful_messages) == 2  # 2nd and 4th messages succeeded
 
-            watcher.stop()
         finally:
+            if watcher is not None:
+                watcher.stop()
             broker.close()
 
 
@@ -595,6 +613,7 @@ def test_burst_mode_with_peek_mode(no_jitter) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
         try:
             peeked_messages = []
 
@@ -653,12 +672,13 @@ def test_burst_mode_with_peek_mode(no_jitter) -> None:
             )
 
             # Verify messages are still in queue (peek doesn't remove them)
-            # Use all_messages=True to get all messages, not just one
-            messages = list(broker.read("test_queue", peek=True, all_messages=True))
+            # Use peek_many to get all messages, which doesn't remove them
+            messages = list(broker.peek_many("test_queue", limit=10))
             assert len(messages) == 4, "All messages should still be in queue"
 
-            watcher.stop()
         finally:
+            if watcher is not None:
+                watcher.stop()
             broker.close()
 
 
@@ -667,6 +687,7 @@ def test_burst_mode_state_transitions(no_jitter) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         broker = BrokerDB(db_path)
+        watcher = None
         try:
             processed_messages = []
 
@@ -753,8 +774,9 @@ def test_burst_mode_state_transitions(no_jitter) -> None:
                 "Should mostly stay in burst mode with continuous activity"
             )
 
-            watcher.stop()
         finally:
+            if watcher is not None:
+                watcher.stop()
             broker.close()
 
 

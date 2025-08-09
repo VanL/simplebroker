@@ -343,6 +343,7 @@ class TestLoadConfig:
             # Message processing
             "BROKER_MAX_MESSAGE_SIZE",
             "BROKER_READ_COMMIT_INTERVAL",
+            "BROKER_GENERATOR_BATCH_SIZE",
             # Vacuum settings
             "BROKER_AUTO_VACUUM",
             "BROKER_AUTO_VACUUM_INTERVAL",

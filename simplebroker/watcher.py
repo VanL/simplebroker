@@ -10,13 +10,17 @@ properly cleaned up to avoid resource leaks, especially on Windows where
 file locking is strict. Always use one of these patterns:
 
 1. Context Manager (RECOMMENDED - automatic cleanup):
-    with QueueWatcher("my.db", "tasks", handler) as watcher:
+    from simplebroker import Queue
+    queue = Queue("tasks", persistent=True)
+    with QueueWatcher(queue, handler) as watcher:
         # Thread starts automatically in __enter__
         time.sleep(60)  # Do work
     # Thread is stopped and joined automatically in __exit__
 
 2. Manual Management (ensure stop() is called):
-    watcher = QueueWatcher("my.db", "tasks", handler)
+    from simplebroker import Queue
+    queue = Queue("tasks", persistent=True)
+    watcher = QueueWatcher(queue, handler)
     thread = watcher.run_in_thread()
     try:
         # Do work
@@ -25,7 +29,9 @@ file locking is strict. Always use one of these patterns:
 
 3. Signal Handling (for long-running services):
     import signal
-    watcher = QueueWatcher("my.db", "tasks", handler)
+    from simplebroker import Queue
+    queue = Queue("tasks", persistent=True)
+    watcher = QueueWatcher(queue, handler)
 
     def shutdown(signum, frame):
         watcher.stop()  # Ensures clean shutdown
@@ -42,14 +48,15 @@ WARNING: Not calling stop() can cause:
 - Resource exhaustion in long-running applications
 
 Typical usage:
-    from pathlib import Path
+    from simplebroker import Queue
     from simplebroker.watcher import QueueWatcher
 
     def handle(msg: str, ts: int) -> None:
         print(f"got message @ {ts}: {msg}")
 
-    # Recommended: pass database path for thread-safe operation
-    watcher = QueueWatcher(Path("my.db"), "orders", handle)
+    # Create a persistent queue (required for watchers)
+    queue = Queue("orders", persistent=True)
+    watcher = QueueWatcher(queue, handle)
     watcher.run_forever()  # blocking
 
     # Or run in background thread:
@@ -69,7 +76,8 @@ import threading
 import time
 import weakref
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, List, NamedTuple, Optional, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional
 
 # For Python 3.8 compatibility, we avoid using Self type
 # and use string forward references instead
@@ -77,6 +85,7 @@ from ._constants import MAX_MESSAGE_SIZE, MAX_TOTAL_RETRY_TIME, load_config
 from ._exceptions import OperationalError
 from .db import BrokerDB
 from .helpers import interruptible_sleep
+from .sbqueue import Queue
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -155,44 +164,17 @@ class BaseWatcher(ABC):
         # Set up automatic cleanup finalizer
         self._setup_finalizer()
 
-    def _get_db(self) -> BrokerDB:
-        """Get thread-local database connection.
+    def _get_queue_for_data_version(self) -> Optional[Queue]:
+        """Get the Queue object for data version checks.
 
-        Each thread gets its own BrokerDB instance to ensure thread safety.
-        The connection is cached in thread-local storage and reused.
+        Returns the Queue object if available, None otherwise.
+        Subclasses with Queue objects should override this.
         """
-        if not hasattr(self._thread_local, "db"):
-            self._thread_local.db = BrokerDB(str(self._db_arg))
-            self._has_thread_db = True
-        return cast(BrokerDB, self._thread_local.db)
-
-    def _get_db_with_retry(self) -> BrokerDB:
-        """Get database connection with exponential backoff retry."""
-        max_retries = 3
-
-        for attempt in range(max_retries):
-            try:
-                return self._get_db()
-            except Exception as e:
-                if attempt >= max_retries - 1:
-                    if _config["BROKER_LOGGING_ENABLED"]:
-                        logger.exception(
-                            f"Failed to get database connection after {max_retries} retries: {e}",
-                        )
-                    raise
-
-                wait_time = 2 ** (attempt + 1)  # Exponential backoff
-                if _config["BROKER_LOGGING_ENABLED"]:
-                    logger.debug(
-                        f"Database connection error (retry {attempt + 1}/{max_retries}): {e}. "
-                        f"Retrying in {wait_time} seconds...",
-                    )
-
-                if not interruptible_sleep(wait_time, self._stop_event):
-                    raise _StopLoop from None
-
-        # This should never be reached, but mypy needs it
-        raise RuntimeError("Failed to get database connection")
+        if hasattr(self, "_queue_obj"):
+            return self._queue_obj  # type: ignore[no-any-return]
+        elif hasattr(self, "_source_queue_obj"):
+            return self._source_queue_obj  # type: ignore[no-any-return]
+        return None
 
     def _process_with_retry(
         self, process_func: Callable[[], Any], operation_name: str
@@ -368,8 +350,7 @@ class BaseWatcher(ABC):
             should_cleanup = thread is None or not thread.is_alive()
 
         if should_cleanup:
-            with contextlib.suppress(Exception):
-                self._cleanup_thread_local()
+            self._cleanup_thread_local()
 
         # detach finalizer if it exists - resources are already released
         if hasattr(self, "_finalizer"):
@@ -378,19 +359,14 @@ class BaseWatcher(ABC):
     def _cleanup_thread_local(self) -> None:
         """Clean up thread-local database connections.
 
-        Closes any active database connection for the current thread and removes
-        it from thread-local storage. This method is called during shutdown and
-        error recovery to ensure proper resource cleanup.
+        Delegates to Queue's cleanup_connections method for proper cleanup.
+        This method is called during shutdown and error recovery.
         """
-        if hasattr(self._thread_local, "db"):
-            try:
-                self._thread_local.db.close()
-            except Exception as e:
-                if _config["BROKER_LOGGING_ENABLED"]:
-                    logger.warning(f"Error closing thread-local database: {e}")
-            finally:
-                delattr(self._thread_local, "db")
-                self._has_thread_db = False
+        # Delegate to Queue's cleanup method
+        if hasattr(self, "_queue_obj"):
+            self._queue_obj.cleanup_connections()
+        elif hasattr(self, "_source_queue_obj"):
+            self._source_queue_obj.cleanup_connections()
 
     def is_running(self) -> bool:
         """Check if the watcher is currently running."""
@@ -508,9 +484,17 @@ class BaseWatcher(ABC):
             self._check_retry_timeout(start_time, retry_count)
 
             try:
-                # Initialize strategy with thread-local database (if it exists)
+                # Initialize strategy with data version getter
                 if hasattr(self, "_strategy") and hasattr(self._strategy, "start"):
-                    self._strategy.start(self._get_db())
+                    queue = self._get_queue_for_data_version()
+                    if queue:
+                        # Capture queue in closure to avoid B023 warning
+                        self._strategy.start(lambda q=queue: q.get_data_version())
+                    else:
+                        # Fallback: create temporary BrokerDB for data version
+                        db = BrokerDB(str(self._db_arg))
+                        # Capture db in closure to avoid B023 warning
+                        self._strategy.start(lambda d=db: d.get_data_version())
 
                 # Initial drain of existing messages
                 self._drain_queue()
@@ -718,13 +702,13 @@ class PollingStrategy:
         self._check_count = 0
         self._stop_event = stop_event
         self._data_version: int | None = None
-        self._db: BrokerDB | None = None
+        self._data_version_provider: Callable[[], int | None] | None = None
         self._pragma_failures = 0
 
     def wait_for_activity(self) -> None:
         """Wait for activity with optimized polling."""
         # Check data version first for immediate activity detection
-        if self._db and self._check_data_version():
+        if self._data_version_provider and self._check_data_version():
             # Don't reset here - let notify_activity handle it when messages are actually processed
             # Also don't increment check count since we detected activity
             return
@@ -746,9 +730,11 @@ class PollingStrategy:
         """Reset check count on activity."""
         self._check_count = 0
 
-    def start(self, db: BrokerDB) -> None:
+    def start(
+        self, data_version_provider: Callable[[], int | None] | None = None
+    ) -> None:
         """Initialize the strategy."""
-        self._db = db
+        self._data_version_provider = data_version_provider
         self._check_count = 0
         self._data_version = None
 
@@ -778,13 +764,12 @@ class PollingStrategy:
     def _check_data_version(self) -> bool:
         """Check PRAGMA data_version for changes."""
         try:
-            if self._db is None:
+            if self._data_version_provider is None:
                 return False
 
-            rows = list(self._db._runner.run("PRAGMA data_version", fetch=True))
-            if not rows:
+            version = self._data_version_provider()
+            if version is None:
                 return False
-            version = rows[0][0]
 
             if self._data_version is None:
                 self._data_version = version
@@ -844,10 +829,11 @@ class QueueWatcher(BaseWatcher):
 
     def __init__(
         self,
-        db: BrokerDB | str | Path,
-        queue: str,
-        handler: Callable[[str, int], None],
+        queue: Queue | str | Path,  # Can be Queue, queue name, or db path (legacy)
+        handler_or_queue: Callable[[str, int], None] | str | None = None,
+        handler: Optional[Callable[[str, int], None]] = None,
         *,
+        db_path: Optional[str | Path] = None,
         peek: bool = False,
         initial_checks: int = 100,
         max_interval: float = 0.1,
@@ -858,17 +844,28 @@ class QueueWatcher(BaseWatcher):
     ) -> None:
         """Initializes the watcher.
 
+        Supports two calling conventions:
+        1. New style: QueueWatcher(queue, handler, ...)
+           where queue is a Queue object or string queue name
+        2. Legacy style: QueueWatcher(db_path, queue_name, handler, ...)
+           for backwards compatibility
+
         Parameters
         ----------
-        db : Union[BrokerDB, str, Path]
-            Either a BrokerDB instance or a path to the database file.
-            When using run_in_thread(), it's recommended to pass a path to ensure
-            each thread creates its own connection. If a BrokerDB instance is
-            provided, its path will be extracted for thread-safe operation.
-        queue : str
-            Name of the queue to watch.
-        handler : Callable[[str, int], None]
-            Function to be called for each message. Receives (message, timestamp).
+        queue : Union[Queue, str, Path]
+            Either a Queue object, a string queue name, or a database path (legacy).
+            If a string queue name is provided, a Queue object will be created with persistent=True.
+            If a Queue object is provided, persistent mode is recommended for better performance
+            but not required.
+        handler_or_queue : Union[Callable, str, None], optional
+            In new style: the handler function.
+            In legacy style: the queue name (string).
+        handler : Callable[[str, int], None], optional
+            In legacy style: the handler function.
+            In new style: not used (pass handler as second argument).
+        db_path : Optional[Union[str, Path]], optional
+            Path to the SQLite database. Only used when queue is a string queue name.
+            If not provided when queue is a string, uses the default database.
         peek : bool, optional
             If True, monitor messages without consuming them (at-least-once
             notification). If False (default), consume messages with
@@ -905,19 +902,121 @@ class QueueWatcher(BaseWatcher):
             other messages. This is especially important in consuming mode where
             messages are permanently removed before processing.
 
+        Raises
+        ------
+        TypeError
+            If handler or error_handler are not callable.
+
+        Examples
+        --------
+        >>> from simplebroker import Queue
+        >>>
+        >>> # Method 1: Pass a Queue object (recommended for control)
+        >>> queue = Queue("tasks", persistent=True)
+        >>> watcher = QueueWatcher(queue, process_task)
+        >>>
+        >>> # Method 2: Pass a queue name (automatic persistent mode)
+        >>> watcher = QueueWatcher("tasks", process_task)
+        >>>
+        >>> # Method 3: Pass a queue name with custom database path
+        >>> watcher = QueueWatcher("tasks", process_task, db_path="/path/to/db.sqlite")
+        >>>
+        >>> # Method 4: Legacy style (for backwards compatibility)
+        >>> watcher = QueueWatcher("/path/to/db.sqlite", "tasks", process_task)
+        >>>
+        >>> def process_task(message: str, timestamp: int):
+        ...     print(f"Processing: {message} (received at {timestamp})")
+        >>> watcher.run_forever()  # Blocks until stopped
+
         """
-        # Initialize parent class
-        super().__init__(db, stop_event)
+        # Detect which calling convention is being used
+        if handler_or_queue is not None and handler is not None:
+            # Legacy style: QueueWatcher(db_path, queue_name, handler, ...)
+            # queue is actually the db_path, handler_or_queue is the queue name
+            actual_db_path = queue  # First arg is db path in legacy style
+            actual_queue_name = handler_or_queue  # Second arg is queue name
+            actual_handler = handler  # Third arg is handler
 
-        # Keep the original DB for single-threaded compatibility
-        self._provided_db = db if isinstance(db, BrokerDB) else None
+            # Type checking: ensure handler_or_queue is a string in legacy mode
+            if not isinstance(actual_queue_name, str):
+                msg = f"queue name must be a string in legacy mode, got {type(actual_queue_name).__name__}"
+                raise TypeError(msg)
 
-        self._queue = queue
-        # Validate handler is callable
-        if not callable(handler):
-            msg = f"handler must be callable, got {type(handler).__name__}"
-            raise TypeError(msg)
-        self._handler = handler
+            # Type checking: ensure actual_db_path is str, Path, or BrokerDB
+            if not isinstance(actual_db_path, (str, Path, BrokerDB)):
+                msg = f"db_path must be a string, Path, or BrokerDB in legacy mode, got {type(actual_db_path).__name__}"
+                raise TypeError(msg)
+
+            # Type checking: ensure handler is callable
+            if not callable(actual_handler):
+                msg = f"handler must be callable, got {type(actual_handler).__name__}"
+                raise TypeError(msg)
+
+            # Create a Queue object with the legacy parameters
+            from .sbqueue import Queue as QueueClass
+
+            if isinstance(actual_db_path, BrokerDB):
+                # Handle BrokerDB instance for backward compatibility
+                self._queue_obj = QueueClass(
+                    actual_queue_name,
+                    db_path=str(actual_db_path.db_path),
+                    persistent=True,
+                )
+            else:
+                self._queue_obj = QueueClass(
+                    actual_queue_name, db_path=str(actual_db_path), persistent=True
+                )
+            # For backward compatibility, store queue name as _queue
+            self._queue = actual_queue_name
+            self._queue_name = actual_queue_name
+            self._handler = actual_handler
+        else:
+            # New style: QueueWatcher(queue, handler, ...)
+            # Validate handler exists and is callable
+            if handler_or_queue is None:
+                msg = "handler is required in new style calling convention"
+                raise TypeError(msg)
+            if isinstance(handler_or_queue, str):
+                msg = "handler must be callable, got string (possible legacy calling convention?)"
+                raise TypeError(msg)
+            if not callable(handler_or_queue):
+                msg = f"handler must be callable, got {type(handler_or_queue).__name__}"
+                raise TypeError(msg)
+            # At this point, handler_or_queue is guaranteed to be callable
+            self._handler = handler_or_queue
+
+            # Handle queue parameter - either Queue object or string name
+            if isinstance(queue, Queue):
+                self._queue_obj = queue
+                self._queue_name = queue.name
+            else:
+                # Create a Queue object with persistent=True by default for watchers
+                from .sbqueue import Queue as QueueClass
+
+                # Ensure queue is a string for Queue constructor
+                if not isinstance(queue, str):
+                    # If it's a Path, convert to string
+                    queue_name = str(queue)
+                else:
+                    queue_name = queue
+                # Convert db_path to string if it's a Path
+                if db_path is not None:
+                    self._queue_obj = QueueClass(
+                        queue_name, db_path=str(db_path), persistent=True
+                    )
+                else:
+                    # Use default DB path
+                    from ._constants import DEFAULT_DB_NAME
+
+                    self._queue_obj = QueueClass(
+                        queue_name, db_path=DEFAULT_DB_NAME, persistent=True
+                    )
+                self._queue_name = queue_name
+            # For backward compatibility with tests, store queue name as _queue
+            self._queue = self._queue_name
+
+        # Initialize parent class with the queue's db path
+        super().__init__(self._queue_obj._db_path, stop_event)
         self._peek = peek
         # Validate error_handler is callable if provided
         if error_handler is not None and not callable(error_handler):
@@ -991,9 +1090,7 @@ class QueueWatcher(BaseWatcher):
 
             # Two-phase detection: check if we actually have messages
             if not getattr(self, "_skip_idle_check", False):
-                if not self._has_pending_messages(
-                    self._get_db_with_retry(),
-                ):
+                if not self._has_pending_messages(None):
                     # No messages for this queue, skip drain
                     continue
 
@@ -1013,20 +1110,20 @@ class QueueWatcher(BaseWatcher):
 
     # __del__ is inherited from BaseWatcher
 
-    def _has_pending_messages(self, db: BrokerDB) -> bool:
-        """Fast check if queue has unclaimed messages with retry on operational errors."""
+    def _has_pending_messages(self, db: BrokerDB | None = None) -> bool:
+        """Fast check if queue has unclaimed messages.
+
+        Uses the Queue's has_pending method with retry logic for operational error handling.
+
+        Args:
+            db: Optional database connection for backward compatibility.
+                Not used in the current implementation.
+        """
 
         def check_func() -> bool:
-            sql = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0"
-            params: List[Any] = [self._queue]
-
-            if self._last_seen_ts:
-                sql += " AND ts > ?"
-                params.append(self._last_seen_ts)
-
-            sql += " LIMIT 1)"
-            rows = list(db._runner.run(sql, tuple(params), fetch=True))
-            return bool(rows[0][0]) if rows else False
+            return self._queue_obj.has_pending(
+                self._last_seen_ts if self._last_seen_ts > 0 else None
+            )
 
         return bool(self._process_with_retry(check_func, "pending_messages_check"))
 
@@ -1051,42 +1148,38 @@ class QueueWatcher(BaseWatcher):
         by this watcher. They remain available for other consumers or for
         manual removal after successful processing.
         """
-        # Get database connection with retry
-        db = self._get_db_with_retry()
-
-        # Process messages based on mode
+        # Process messages based on mode using Queue API
         found_messages = False
         if self._peek:
-            found_messages = self._drain_peek_mode(db)
+            found_messages = self._drain_peek_mode()
         else:
-            found_messages = self._drain_consume_mode(db)
+            found_messages = self._drain_consume_mode()
 
         # Notify strategy if we found messages
         if found_messages:
             self._strategy.notify_activity()
 
-    def _drain_peek_mode(self, db: BrokerDB) -> bool:
+    def _drain_peek_mode(self) -> bool:
         """Process messages in peek mode (doesn't remove from queue)."""
         return bool(
-            self._process_with_retry(lambda: self._process_peek_messages(db), "peek")
+            self._process_with_retry(lambda: self._process_peek_messages(), "peek")
         )
 
-    def _drain_consume_mode(self, db: BrokerDB) -> bool:
+    def _drain_consume_mode(self) -> bool:
         """Process messages in consume mode (removes from queue)."""
         if not self._batch_processing:
-            return self._process_single_message(db)
-        return self._process_batch_messages(db)
+            return self._process_single_message()
+        return self._process_batch_messages()
 
-    def _process_peek_messages(self, db: BrokerDB) -> bool:
+    def _process_peek_messages(self) -> bool:
         """Process messages without removing them from queue."""
         found_messages = False
 
-        for body, ts in db.stream_read_with_timestamps(
-            self._queue,
-            all_messages=self._batch_processing,
+        for body, ts in self._queue_obj.stream_messages(
             peek=True,
-            commit_interval=1,
+            all_messages=self._batch_processing,
             since_timestamp=self._last_seen_ts,
+            commit_interval=1,
         ):
             if self._try_dispatch_message(body, ts):
                 # Only update timestamp after successful dispatch
@@ -1099,38 +1192,36 @@ class QueueWatcher(BaseWatcher):
 
         return found_messages
 
-    def _process_single_message(self, db: BrokerDB) -> bool:
+    def _process_single_message(self) -> bool:
         """Process exactly one message in consume mode."""
         return bool(
             self._process_with_retry(
-                lambda: self._consume_one_message(db),
+                lambda: self._consume_one_message(),
                 "consume",
             )
         )
 
-    def _consume_one_message(self, db: BrokerDB) -> bool:
+    def _consume_one_message(self) -> bool:
         """Consume and process a single message."""
-        for body, ts in db.stream_read_with_timestamps(
-            self._queue,
-            all_messages=False,
-            peek=False,
-            commit_interval=1,
-        ):
-            self._try_dispatch_message(body, ts)
-            return True  # Found and processed one message
-
+        result = self._queue_obj.read_one(with_timestamps=True)
+        if result:
+            # Type narrowing: with_timestamps=True always returns tuple
+            if isinstance(result, tuple):
+                body, ts = result
+                self._try_dispatch_message(body, ts)
+                return True  # Found and processed one message
         return False  # No messages found
 
-    def _process_batch_messages(self, db: BrokerDB) -> bool:
+    def _process_batch_messages(self) -> bool:
         """Process all available messages in batch mode."""
         return bool(
             self._process_with_retry(
-                lambda: self._consume_all_messages(db),
+                lambda: self._consume_all_messages(),
                 "batch consume",
             )
         )
 
-    def _consume_all_messages(self, db: BrokerDB) -> bool:
+    def _consume_all_messages(self) -> bool:
         """Consume and process all available messages."""
         found_any = False
 
@@ -1138,10 +1229,9 @@ class QueueWatcher(BaseWatcher):
             self._check_stop()
             found_this_iteration = False
 
-            for body, ts in db.stream_read_with_timestamps(
-                self._queue,
-                all_messages=True,
+            for body, ts in self._queue_obj.stream_messages(
                 peek=False,
+                all_messages=True,
                 commit_interval=1,
             ):
                 self._try_dispatch_message(body, ts)
@@ -1269,6 +1359,11 @@ class QueueMoveWatcher(BaseWatcher):
         self._handler = handler
         self._error_handler = error_handler
 
+        # Create Queue object for source queue (ephemeral mode for watchers)
+        self._source_queue_obj = Queue(
+            source_queue, db_path=str(self._db_arg), persistent=False
+        )
+
         # Create polling strategy directly
         self._strategy = PollingStrategy(
             stop_event=self._stop_event,
@@ -1340,12 +1435,9 @@ class QueueMoveWatcher(BaseWatcher):
 
     def _drain_queue(self) -> None:
         """Move ALL messages from source to destination queue."""
-        # Get database connection with retry
-        db = self._get_db_with_retry()
-
         # Process messages with retry
         found_messages = self._process_with_retry(
-            lambda: self._move_all_messages(db),
+            lambda: self._move_all_messages(),
             "move",
         )
 
@@ -1353,27 +1445,27 @@ class QueueMoveWatcher(BaseWatcher):
         if found_messages:
             self._strategy.notify_activity()
 
-    def _move_all_messages(self, db: BrokerDB) -> bool:
+    def _move_all_messages(self) -> bool:
         """Move all available messages atomically."""
         found_any = False
 
         while True:
             self._check_stop()
 
-            # Atomic move operation
-            result = db.move(
-                self._source_queue,
-                self._dest_queue,
-                require_unclaimed=True,
-            )
+            # Use Queue.move() to move single oldest message
+            # Returns dict with 'message' and 'timestamp' or None
+            result = self._source_queue_obj.move(self._dest_queue)
 
-            if result is None:
+            if not result:
                 break  # No more messages
 
             found_any = True
             self._move_count += 1
 
             # Notify handler about the move
+            # Result is a dict containing 'message' and 'timestamp'
+            # Type assertion: move() without args returns dict or None
+            assert isinstance(result, dict)
             self._notify_handler_safe(result)
 
             # Check max messages limit
@@ -1388,8 +1480,26 @@ class QueueMoveWatcher(BaseWatcher):
     def _notify_handler_safe(self, move_result: dict) -> None:
         """Safely notify handler about moved message."""
         # Use base class safe handler method
+        # move_result has 'message' and 'timestamp' keys
         self._safe_call_handler(
-            move_result["body"],
-            move_result["ts"],
+            move_result["message"],
+            move_result["timestamp"],
             self._error_handler,
         )
+
+    def stop(self, *, join: bool = True, timeout: float = 5.0) -> None:
+        """Stop the move watcher and clean up resources.
+
+        This extends the base class stop() to also clean up the Queue object.
+
+        Args:
+            join: If True, wait for thread to finish
+            timeout: Timeout for joining thread
+        """
+        # Clean up Queue object
+        if hasattr(self, "_source_queue_obj"):
+            self._source_queue_obj.cleanup_connections()
+            self._source_queue_obj.close()
+
+        # Call parent stop() for base cleanup
+        super().stop(join=join, timeout=timeout)

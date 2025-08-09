@@ -96,34 +96,27 @@ INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)
 # MESSAGE OPERATIONS - SELECT (PEEK/READ)
 # ============================================================================
 
-# Select messages for peek operation with dynamic WHERE clause
-# Usage: Build WHERE clause dynamically, then use f-string to insert it
-SELECT_MESSAGES_PEEK = """
+
+# ============================================================================
+# MESSAGE OPERATIONS - UPDATE (CLAIM/MOVE)
+# ============================================================================
+
+
+# ============================================================================
+# UNIFIED RETRIEVE OPERATIONS
+# These queries support both single and batch operations via the LIMIT parameter
+# ============================================================================
+
+# Peek operation - non-destructive read
+RETRIEVE_PEEK = """
 SELECT body, ts FROM messages
 WHERE {where_clause}
 ORDER BY id
 LIMIT ? OFFSET ?
 """
 
-# ============================================================================
-# MESSAGE OPERATIONS - UPDATE (CLAIM/MOVE)
-# ============================================================================
-
-# Claim messages for reading (with RETURNING for atomicity)
-# Usage: Build WHERE clause dynamically, then use f-string to insert it
-UPDATE_MESSAGES_CLAIM_SINGLE = """
-UPDATE messages
-SET claimed = 1
-WHERE id IN (
-    SELECT id FROM messages
-    WHERE {where_clause}
-    ORDER BY id
-    LIMIT 1
-)
-RETURNING body, ts
-"""
-
-UPDATE_MESSAGES_CLAIM_BATCH = """
+# Claim operation - mark as claimed and return
+RETRIEVE_CLAIM = """
 UPDATE messages
 SET claimed = 1
 WHERE id IN (
@@ -135,74 +128,30 @@ WHERE id IN (
 RETURNING body, ts
 """
 
-# Move message by ID with optional unclaimed check
-# Usage: Build WHERE clause dynamically based on require_unclaimed
-UPDATE_MESSAGE_MOVE_BY_ID = """
-UPDATE messages
-SET queue = ?, claimed = 0
-WHERE {where_clause}
-RETURNING id, body, ts
-"""
-
-# Move oldest unclaimed message
-UPDATE_MESSAGE_MOVE_OLDEST = """
+# Move operation - change queue
+RETRIEVE_MOVE = """
 UPDATE messages
 SET queue = ?, claimed = 0
 WHERE id IN (
     SELECT id FROM messages
-    WHERE queue = ? AND claimed = 0
+    WHERE {where_clause}
     ORDER BY id
-    LIMIT 1
-)
-RETURNING id, body, ts
-"""
-
-# Move specific message by timestamp
-UPDATE_MESSAGE_MOVE_BY_TS = """
-UPDATE messages
-SET queue = ?, claimed = 0
-WHERE ts = ? AND queue = ? AND claimed = 0
-RETURNING body, ts
-"""
-
-# Move all messages with CTE for ordering
-UPDATE_MESSAGES_MOVE_ALL = """
-WITH to_move AS (
-    SELECT id FROM messages
-    WHERE queue = ? AND claimed = 0
-    ORDER BY id
-)
-UPDATE messages
-SET queue = ?, claimed = 0
-WHERE id IN (SELECT id FROM to_move)
-RETURNING body, ts, id
-"""
-
-# Move all messages newer than timestamp
-UPDATE_MESSAGES_MOVE_SINCE = """
-WITH to_move AS (
-    SELECT id FROM messages
-    WHERE queue = ? AND claimed = 0 AND ts > ?
-    ORDER BY id
-)
-UPDATE messages
-SET queue = ?, claimed = 0
-WHERE id IN (SELECT id FROM to_move)
-RETURNING body, ts, id
-"""
-
-# Move single message newer than timestamp
-UPDATE_MESSAGE_MOVE_SINGLE_SINCE = """
-UPDATE messages
-SET queue = ?, claimed = 0
-WHERE id IN (
-    SELECT id FROM messages
-    WHERE queue = ? AND claimed = 0 AND ts > ?
-    ORDER BY id
-    LIMIT 1
+    LIMIT ?
 )
 RETURNING body, ts
 """
+
+# Check for pending messages
+CHECK_PENDING_MESSAGES = (
+    "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 LIMIT 1)"
+)
+
+# Check for pending messages since a timestamp
+CHECK_PENDING_MESSAGES_SINCE = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 AND ts > ? LIMIT 1)"
+
+# Get data version (SQLite only)
+GET_DATA_VERSION = "PRAGMA data_version"
+
 
 # ============================================================================
 # MESSAGE OPERATIONS - DELETE
@@ -307,6 +256,19 @@ SELECT
 FROM messages
 """
 
+# Count only claimed messages (for pre-vacuum check)
+COUNT_CLAIMED_MESSAGES = """
+SELECT COUNT(*) FROM messages WHERE claimed = 1
+"""
+
+# Get overall stats for list command with --stats
+GET_OVERALL_STATS = """
+SELECT
+    SUM(CASE WHEN claimed = 1 THEN 1 ELSE 0 END),
+    COUNT(*)
+FROM messages
+"""
+
 # ============================================================================
 # PRAGMA STATEMENTS
 # ============================================================================
@@ -385,3 +347,28 @@ def build_move_by_id_query(where_conditions: List[str]) -> str:
         WHERE {where_clause}
         RETURNING id, body, ts
         """
+
+
+def build_retrieve_query(
+    operation: str,
+    where_conditions: List[str],
+) -> str:
+    """Build safe retrieve query for peek, claim, or move operations.
+
+    Args:
+        operation: One of "peek", "claim", or "move"
+        where_conditions: List of SQL WHERE conditions (pre-validated)
+
+    Returns:
+        SQL query string with placeholders
+    """
+    where_clause = " AND ".join(where_conditions)
+
+    if operation == "peek":
+        return RETRIEVE_PEEK.format(where_clause=where_clause)
+    elif operation == "claim":
+        return RETRIEVE_CLAIM.format(where_clause=where_clause)
+    elif operation == "move":
+        return RETRIEVE_MOVE.format(where_clause=where_clause)
+    else:
+        raise ValueError(f"Invalid operation: {operation}")

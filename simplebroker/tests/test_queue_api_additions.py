@@ -63,15 +63,15 @@ def test_queue_move_all():
             src.write("message3")
 
             # Move all to destination
-            moved = src.move("destination", all_messages=True)
-            assert moved == 3
+            moved = list(src.move("destination", all_messages=True))
+            assert len(moved) == 3
 
             # Verify source is empty
             assert src.read() is None
 
         # Verify destination has all messages
         with Queue("destination", db_path=db_path) as dst:
-            messages = dst.read_all()
+            messages = list(dst.read(all_messages=True))
             assert messages == ["message1", "message2", "message3"]
 
 
@@ -88,10 +88,11 @@ def test_queue_move_single_message():
 
             # Try to move non-existent message
             moved = src.move("destination", message_id=99999999999999999)
-            assert moved == 0
+            assert moved is None
 
             # Verify messages still in source
-            assert len(src.read_all()) == 2
+            messages = list(src.read(all_messages=True))
+            assert len(messages) == 2
 
 
 def test_queue_move_since_timestamp():
@@ -105,16 +106,16 @@ def test_queue_move_since_timestamp():
             src.write("message2")
             src.write("message3")
 
-            # Move all messages (since timestamp 0)
-            moved = src.move("destination", since_timestamp=0)
-            assert moved == 3
+            # Move all messages (since timestamp 0) - need to use all_messages=True with since_timestamp
+            moved = list(src.move("destination", since_timestamp=0, all_messages=True))
+            assert len(moved) == 3
 
             # Verify source is empty
             assert src.read() is None
 
         # Verify destination has all messages
         with Queue("destination", db_path=db_path) as dst:
-            messages = dst.read_all()
+            messages = list(dst.read(all_messages=True))
             assert messages == ["message1", "message2", "message3"]
 
 
@@ -150,10 +151,10 @@ def test_queue_move_with_queue_instance():
 
             with Queue("destination", db_path=db_path) as dst:
                 # Move using Queue instance
-                moved = src.move(dst, all_messages=True)
-                assert moved == 2
+                moved = list(src.move(dst, all_messages=True))
+                assert len(moved) == 2
 
                 # Verify messages moved
                 assert src.read() is None
-                messages = dst.read_all()
+                messages = list(dst.read(all_messages=True))
                 assert messages == ["message1", "message2"]

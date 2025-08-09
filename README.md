@@ -613,63 +613,77 @@ with QueueWatcher("my.db", "notifications", handle_message) as watcher:
 
 ### Async Integration Patterns
 
-SimpleBroker is synchronous by design for simplicity, but can be easily integrated with async applications. Here's how to build an async wrapper using only stdlib:
+SimpleBroker is synchronous by design for simplicity, but can be easily integrated with async applications:
 
 ```python
 import asyncio
 import concurrent.futures
-from simplebroker import BrokerDB
+from simplebroker import Queue
 
-class AsyncBroker:
-    """Minimal async wrapper using thread pool executor."""
+class AsyncQueue:
+    """Async wrapper for SimpleBroker Queue using thread pool executor."""
     
-    def __init__(self, db_path: str):
+    def __init__(self, queue_name: str, db_path: str = ".broker.db"):
+        self.queue_name = queue_name
         self.db_path = db_path
-        self._executor = concurrent.futures.ThreadPoolExecutor()
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         
-    async def push(self, queue: str, message: str) -> int:
-        """Push message asynchronously."""
+    async def write(self, message: str) -> None:
+        """Write message asynchronously."""
         loop = asyncio.get_event_loop()
-        with BrokerDB(self.db_path) as db:
-            return await loop.run_in_executor(
-                self._executor, 
-                db.push, 
-                queue, 
-                message
-            )
+        def _write():
+            with Queue(self.queue_name, self.db_path) as q:
+                q.write(message)
+        await loop.run_in_executor(self._executor, _write)
     
-    async def pop(self, queue: str) -> str | None:
-        """Pop message asynchronously."""
+    async def read(self) -> str | None:
+        """Read message asynchronously."""
         loop = asyncio.get_event_loop()
-        with BrokerDB(self.db_path) as db:
-            return await loop.run_in_executor(
-                self._executor,
-                db.pop,
-                queue
-            )
+        def _read():
+            with Queue(self.queue_name, self.db_path) as q:
+                return q.read()
+        return await loop.run_in_executor(self._executor, _read)
 
 # Usage
 async def main():
-    broker = AsyncBroker("async.db")
+    tasks_queue = AsyncQueue("tasks")
     
-    # Push messages concurrently
+    # Write messages concurrently
     await asyncio.gather(
-        broker.push("tasks", "Task 1"),
-        broker.push("tasks", "Task 2"),
-        broker.push("tasks", "Task 3")
+        tasks_queue.write("Task 1"),
+        tasks_queue.write("Task 2"),
+        tasks_queue.write("Task 3")
     )
     
-    # Pop messages
-    while msg := await broker.pop("tasks"):
+    # Read messages
+    while msg := await tasks_queue.read():
         print(f"Got: {msg}")
+```
+
+For advanced use cases requiring direct database access, you can use the `DBConnection` context manager:
+
+```python
+from simplebroker.db import DBConnection
+
+# Safe database connection management for cross-queue operations
+with DBConnection("myapp.db") as conn:
+    db = conn.get_connection()
+    
+    # Perform cross-queue operations
+    queues = db.get_queue_stats()
+    for queue_name, stats in queues.items():
+        print(f"{queue_name}: {stats['pending']} pending")
+    
+    # Broadcast to all queues
+    db.broadcast("System maintenance at 5pm")
 ```
 
 **Key async integration strategies:**
 
-1. **Thread Pool Executor**: Run SimpleBroker's sync methods in threads
-2. **One DB Connection Per Operation**: Create fresh connections for thread safety
-3. **Async Context Managers**: Manage lifecycle and cleanup
-4. **Streaming Generators**: For continuous message consumption
+1. **Use Queue API**: Prefer the high-level Queue class for single-queue operations
+2. **Thread Pool Executor**: Run SimpleBroker's sync methods in threads
+3. **One Queue Per Operation**: Create fresh Queue instances for thread safety
+4. **DBConnection for Advanced Use**: Use DBConnection context manager for cross-queue operations
 
 See [`examples/async_wrapper.py`](examples/async_wrapper.py) for a complete async wrapper implementation including:
 - Async context manager for proper cleanup
@@ -677,29 +691,46 @@ See [`examples/async_wrapper.py`](examples/async_wrapper.py) for a complete asyn
 - Streaming message consumption
 - Concurrent queue operations
 
-### Custom Extensions
+### Advanced: Custom Extensions
 
-SimpleBroker's simple design makes it easy to extend:
+**Note:** This is an advanced example showing how to extend SimpleBroker's internals. Most users should use the standard Queue API.
 
 ```python
-from simplebroker import BrokerDB
+from simplebroker.db import BrokerDB, DBConnection
+from simplebroker import Queue
 
-class PriorityQueue(BrokerDB):
-    """Example: Add priority support to queues."""
+class PriorityQueueSystem:
+    """Example: Priority queue system using multiple standard queues."""
     
-    def push_with_priority(self, queue: str, message: str, priority: int = 0):
-        """Push message with priority (higher = more important)."""
-        # Encode priority in message or use custom table
-        return self.push(f"{queue}:p{priority}", message)
+    def __init__(self, db_path: str = ".broker.db"):
+        self.db_path = db_path
     
-    def pop_highest_priority(self, queue_prefix: str):
-        """Pop from highest priority queue first."""
+    def write_with_priority(self, base_queue: str, message: str, priority: int = 0):
+        """Write message with priority (higher = more important)."""
+        queue_name = f"{base_queue}_p{priority}"
+        with Queue(queue_name, self.db_path) as q:
+            q.write(message)
+    
+    def read_highest_priority(self, base_queue: str) -> str | None:
+        """Read from highest priority queue first."""
         # Check queues in priority order
         for priority in range(9, -1, -1):
-            msg = self.pop(f"{queue_prefix}:p{priority}")
-            if msg:
-                return msg
+            queue_name = f"{base_queue}_p{priority}"
+            with Queue(queue_name, self.db_path) as q:
+                msg = q.read()
+                if msg:
+                    return msg
         return None
+
+# For even more advanced use requiring database subclassing:
+class CustomBroker(BrokerDB):
+    """Example of extending BrokerDB directly (advanced users only)."""
+    
+    def custom_operation(self):
+        # Access internal database methods
+        with self._lock:
+            # Your custom SQL operations here
+            pass
 ```
 
 See [`examples/`](examples/) directory for more patterns including async processing and custom runners.

@@ -69,7 +69,13 @@ def measure_claim_performance() -> float:
         # Measure claim performance
         start = time.perf_counter()
         with BrokerDB(str(db_path)) as db:
-            list(db.stream_read("calibration_queue", peek=False, all_messages=True))
+            # Use claim_generator to consume all messages
+            count = 0
+            for _ in db.claim_generator("calibration_queue"):
+                count += 1
+                if count >= CALIBRATION_CLAIM_COUNT:
+                    break
+            assert count == CALIBRATION_CLAIM_COUNT
         return time.perf_counter() - start
 
 

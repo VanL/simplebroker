@@ -154,9 +154,9 @@ class SQLiteRunner:
     @property
     def _conn(self) -> sqlite3.Connection:
         """Backward compatibility property for accessing connection."""
-        return self._get_connection()
+        return self.get_connection()
 
-    def _get_connection(self) -> sqlite3.Connection:
+    def get_connection(self) -> sqlite3.Connection:
         """Get or create a thread-local connection.
 
         This ensures each thread has its own SQLite connection, avoiding
@@ -334,7 +334,7 @@ class SQLiteRunner:
     ) -> Iterable[tuple[Any, ...]]:
         """Execute SQL and optionally return rows."""
         try:
-            conn = self._get_connection()
+            conn = self.get_connection()
             cursor = conn.execute(sql, params)
             # Only fetch if explicitly requested
             if fetch:
@@ -350,7 +350,7 @@ class SQLiteRunner:
     def begin_immediate(self) -> None:
         """Start an immediate transaction."""
         try:
-            conn = self._get_connection()
+            conn = self.get_connection()
             conn.execute("BEGIN IMMEDIATE")
         except sqlite3.OperationalError as e:
             raise OperationalError(str(e)) from e
@@ -362,7 +362,7 @@ class SQLiteRunner:
     def commit(self) -> None:
         """Commit the current transaction."""
         try:
-            conn = self._get_connection()
+            conn = self.get_connection()
             conn.commit()
         except sqlite3.OperationalError as e:
             raise OperationalError(str(e)) from e
@@ -374,7 +374,7 @@ class SQLiteRunner:
     def rollback(self) -> None:
         """Rollback the current transaction."""
         try:
-            conn = self._get_connection()
+            conn = self.get_connection()
             conn.rollback()
         except sqlite3.OperationalError as e:
             raise OperationalError(str(e)) from e

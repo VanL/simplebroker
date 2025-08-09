@@ -12,16 +12,12 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Optional, Tuple
 
 from ._constants import (
-    LOGICAL_COUNTER_BITS,
     LOGICAL_COUNTER_MASK,
     MAX_ITERATIONS,
     MAX_LOGICAL_COUNTER,
-    MS_PER_US,
-    NS_PER_US,
     SQLITE_MAX_INT64,
     TIMESTAMP_EXACT_NUM_DIGITS,
     UNIX_NATIVE_BOUNDARY,
-    US_PER_SECOND,
     WAIT_FOR_NEXT_INCREMENT,
 )
 from ._exceptions import IntegrityError, OperationalError, TimestampError
@@ -67,17 +63,24 @@ class TimestampGenerator:
 
         self._initialized = True
 
-    def _encode_hybrid_timestamp(self, physical_us: int, logical: int) -> int:
+    def _encode_hybrid_timestamp(self, physical_ns: int, logical: int) -> int:
         """Encode physical time and logical counter into a 64-bit hybrid timestamp.
 
+        The timestamp preserves the magnitude of time.time_ns() by clearing the
+        bottom bits and using them for the logical counter, rather than shifting.
+
         Args:
-            physical_us: Physical time in microseconds since epoch
+            physical_ns: Physical time in nanoseconds since epoch
             logical: Logical counter (0 to MAX_LOGICAL_COUNTER)
 
         Returns:
             64-bit hybrid timestamp
         """
-        return (physical_us << LOGICAL_COUNTER_BITS) | logical
+        # Clear the bottom LOGICAL_COUNTER_BITS bits
+        time_mask = ~LOGICAL_COUNTER_MASK
+        time_base = physical_ns & time_mask
+        # Add the logical counter in the bottom bits
+        return time_base | logical
 
     def _decode_hybrid_timestamp(self, ts: int) -> Tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
@@ -86,11 +89,14 @@ class TimestampGenerator:
             ts: 64-bit hybrid timestamp
 
         Returns:
-            Tuple of (physical_us, logical_counter)
+            Tuple of (physical_ns_base, logical_counter)
         """
-        physical_us = ts >> LOGICAL_COUNTER_BITS
+        # Extract the time base (top bits)
+        time_mask = ~LOGICAL_COUNTER_MASK
+        physical_ns_base = ts & time_mask
+        # Extract the logical counter (bottom bits)
         logical_counter = ts & LOGICAL_COUNTER_MASK
-        return physical_us, logical_counter
+        return physical_ns_base, logical_counter
 
     def generate(self) -> int:
         """
@@ -100,8 +106,8 @@ class TimestampGenerator:
 
         # one local fast-path loop, *no* DB locks are held here
         for _ in range(6):  # hard upper bound
-            physical_us, logical = self._next_components()
-            new_ts = self._encode_hybrid_timestamp(physical_us, logical)
+            physical_ns, logical = self._next_components()
+            new_ts = self._encode_hybrid_timestamp(physical_ns, logical)
 
             # Ensure it fits in SQLite's signed 64-bit integer
             if new_ts >= SQLITE_MAX_INT64:
@@ -141,32 +147,42 @@ class TimestampGenerator:
     # -----------------------------------------------------------------
     def _next_components(self) -> Tuple[int, int]:
         """
-        Called with self._lock already held.
+        Generate next timestamp components using nanoseconds.
         """
         with self._lock:
             if not self._initialized:
                 self._initialize()  # cheap SELECT, autocommit
 
-            now_us = time.time_ns() // NS_PER_US
-            last_phys = self._last_ts >> LOGICAL_COUNTER_BITS
+            now_ns = time.time_ns()
+            # Decode the last timestamp to get its base time
+            last_phys_ns, last_counter = self._decode_hybrid_timestamp(self._last_ts)
 
-            if now_us > last_phys:
+            # Clear bottom bits of current time to get the time base
+            time_mask = ~LOGICAL_COUNTER_MASK
+            now_ns_base = now_ns & time_mask
+
+            if now_ns_base > last_phys_ns:
+                # Time has advanced, reset counter
                 self._counter = 0
             else:
-                self._counter += 1
+                # Same time base, increment counter
+                self._counter = last_counter + 1
                 if self._counter >= MAX_LOGICAL_COUNTER:
-                    # wait for clock to advance
+                    # Counter overflow, wait for clock to advance
                     num_iterations = 0
-                    while now_us <= last_phys and num_iterations < MAX_ITERATIONS:
+                    while (
+                        now_ns_base <= last_phys_ns and num_iterations < MAX_ITERATIONS
+                    ):
                         jitter = random.uniform(
                             WAIT_FOR_NEXT_INCREMENT / 2, WAIT_FOR_NEXT_INCREMENT
                         )
                         time.sleep(jitter)
-                        now_us = time.time_ns() // NS_PER_US
+                        now_ns = time.time_ns()
+                        now_ns_base = now_ns & time_mask
                         num_iterations += 1
                     self._counter = 0
 
-            return now_us, self._counter
+            return now_ns_base, self._counter
 
     # -----------------------------------------------------------------
     # 2. try to store the new value if it is higher
@@ -314,16 +330,18 @@ class TimestampGenerator:
                 raise TimestampError("Invalid timestamp: cannot be negative")
 
             if unit == "s":
-                # Unix seconds
-                us_since_epoch = int(val * US_PER_SECOND)
+                # Unix seconds to nanoseconds
+                ns_since_epoch = int(val * 1_000_000_000)
             elif unit == "ms":
-                # Unix milliseconds
-                us_since_epoch = int(val * MS_PER_US)
+                # Unix milliseconds to nanoseconds
+                ns_since_epoch = int(val * 1_000_000)
             elif unit == "ns":
-                # Unix nanoseconds
-                us_since_epoch = int(val / NS_PER_US)
+                # Already in nanoseconds
+                ns_since_epoch = int(val)
 
-            hybrid_ts = us_since_epoch << LOGICAL_COUNTER_BITS
+            # Clear bottom bits for counter (hybrid timestamp format)
+            time_mask = ~LOGICAL_COUNTER_MASK
+            hybrid_ts = ns_since_epoch & time_mask
             if hybrid_ts >= SQLITE_MAX_INT64:
                 raise TimestampError("Invalid timestamp: too far in future")
             return hybrid_ts
@@ -411,10 +429,11 @@ class TimestampGenerator:
 
             dt = dt.astimezone(timezone.utc)
 
-        # Convert to microseconds since epoch
-        us_since_epoch = int(dt.timestamp() * US_PER_SECOND)
-        # Shift into upper 44 bits (hybrid timestamp format)
-        hybrid_ts = us_since_epoch << LOGICAL_COUNTER_BITS
+        # Convert to nanoseconds since epoch
+        ns_since_epoch = int(dt.timestamp() * 1_000_000_000)
+        # Clear bottom bits for counter (hybrid timestamp format)
+        time_mask = ~LOGICAL_COUNTER_MASK
+        hybrid_ts = ns_since_epoch & time_mask
         # Ensure it fits in SQLite's signed 64-bit integer
         if hybrid_ts >= SQLITE_MAX_INT64:
             raise ValueError("Invalid timestamp: too far in future")
@@ -445,28 +464,29 @@ class TimestampGenerator:
             # Current time (2025) is ~10 digits in seconds, ~13 digits in ms, ~19 digits in ns
 
             if integer_digits > 16:  # Likely nanoseconds
-                # Assume nanoseconds, convert to microseconds
+                # Already in nanoseconds
                 if "." in timestamp_str:
-                    us_since_epoch = int(unix_ts / NS_PER_US)
+                    ns_since_epoch = int(unix_ts)
                 else:
-                    # Use integer division to avoid precision loss
-                    us_since_epoch = int(timestamp_str) // NS_PER_US
+                    ns_since_epoch = int(timestamp_str)
             elif integer_digits > 11:  # Likely milliseconds
-                # Assume milliseconds, convert to microseconds
+                # Convert milliseconds to nanoseconds
                 if "." in timestamp_str:
-                    us_since_epoch = int(unix_ts * MS_PER_US)
+                    ns_since_epoch = int(unix_ts * 1_000_000)
                 else:
-                    us_since_epoch = int(timestamp_str) * MS_PER_US
+                    ns_since_epoch = int(timestamp_str) * 1_000_000
             else:  # Likely seconds
-                # Assume seconds, convert to microseconds
+                # Convert seconds to nanoseconds
                 if "." in timestamp_str:
                     # Preserve fractional seconds
-                    us_since_epoch = int(unix_ts * US_PER_SECOND)
+                    ns_since_epoch = int(unix_ts * 1_000_000_000)
                 else:
                     # Pure integer - multiply without float conversion
-                    us_since_epoch = int(timestamp_str) * US_PER_SECOND
+                    ns_since_epoch = int(timestamp_str) * 1_000_000_000
 
-            hybrid_ts = us_since_epoch << LOGICAL_COUNTER_BITS
+            # Clear bottom bits for counter (hybrid timestamp format)
+            time_mask = ~LOGICAL_COUNTER_MASK
+            hybrid_ts = ns_since_epoch & time_mask
             # Ensure it fits in signed 64-bit integer
             if hybrid_ts >= SQLITE_MAX_INT64:
                 raise ValueError("Invalid timestamp: too far in future")

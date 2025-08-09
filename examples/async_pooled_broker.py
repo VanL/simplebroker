@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""High-performance async SimpleBroker implementation using aiosqlite and aiosqlitepool.
+"""ADVANCED EXAMPLE: High-performance async SimpleBroker implementation using aiosqlite and aiosqlitepool.
+
+NOTE: This is an ADVANCED example showing how to build a custom async extension by accessing
+SimpleBroker's internal APIs. Most users should use the standard Queue API from the main package.
+
+For standard usage, see python_api.py or async_wrapper.py which demonstrate the public API.
 
 This example demonstrates how to build a fully async version of SimpleBroker with:
 - Connection pooling for high concurrency
 - Async-compatible BrokerCore implementation
 - Full feature parity with the synchronous version
 - Production-ready error handling and resilience
+- Direct access to internal SQL and database operations
 
 Requirements:
     pip install aiosqlite aiosqlitepool
 
 Usage:
     See the main() function for examples of how to use the async API.
+
+WARNING: This example uses internal APIs that may change between versions.
+Only use this approach if you need custom extensions beyond what the public API provides.
 """
 
 import asyncio
@@ -31,7 +40,9 @@ except ImportError:
         "Install with: pip install aiosqlite aiosqlitepool"
     ) from None
 
-# Import SimpleBroker internals we need
+# ADVANCED: Import SimpleBroker internals for custom extension
+# Note: These are internal APIs - most users should use the public API instead:
+#   from simplebroker import Queue, QueueWatcher
 from simplebroker._exceptions import DataError, IntegrityError, OperationalError
 from simplebroker._sql import (
     CHECK_CLAIMED_COLUMN as SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED,
@@ -76,6 +87,9 @@ from simplebroker._sql import (
 from simplebroker._sql import (
     LIST_QUEUES_UNCLAIMED as SQL_SELECT_QUEUES_UNCLAIMED,
 )
+
+# ADVANCED: Import database constants for low-level operations
+# For standard usage, these constants are handled internally by the Queue class
 from simplebroker.db import (
     LOGICAL_COUNTER_BITS,
     MAX_LOGICAL_COUNTER,

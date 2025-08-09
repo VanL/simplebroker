@@ -102,38 +102,43 @@ class MonitoredQueueWatcher(QueueWatcher):
         self._last_log_time = time.time()
         self._log_interval = float(os.environ.get("BROKER_WATCHER_LOG_INTERVAL", "60"))
 
-    def _has_pending_messages(self, db: BrokerDB) -> bool:
+    def _has_pending_messages(self, db: BrokerDB | None = None) -> bool:
         """Track pre-check performance."""
         start = time.perf_counter()
 
-        sql = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 LIMIT 1)"
-        rows = list(db._runner.run(sql, (self._queue,), fetch=True))
+        # Use parent's implementation which uses the Queue API
+        result = super()._has_pending_messages(db)
 
         elapsed_us = (time.perf_counter() - start) * 1_000_000
         self.metrics.record_pre_check(self._queue, elapsed_us)
 
-        return bool(rows[0][0]) if rows else False
+        return result
 
     def _drain_queue(self) -> None:
         """Track drain performance and efficiency."""
         start = time.perf_counter()
 
         if self._enable_pre_check:
-            db = self._get_db()
-            if not self._has_pending_messages(db):
+            # Check if there are pending messages using the parent's method
+            if not self._has_pending_messages(None):
                 self.metrics.record_wake_up(self._queue, empty=True)
                 self._maybe_log_stats()
+                elapsed_ms = (time.perf_counter() - start) * 1000
+                self.metrics.record_drain(self._queue, elapsed_ms)
                 return
 
-        self.metrics.record_wake_up(self._queue, empty=False)
+        # Record wake up before processing
+        initial_count = getattr(self, "_total_messages", 0)
 
-        # Store initial message count
-        getattr(self, "_total_messages", 0)
-
+        # Call parent's drain_queue implementation
         super()._drain_queue()
 
-        # Check if messages were processed
-        getattr(self, "_total_messages", 0)
+        # Check if any messages were processed
+        current_count = getattr(self, "_total_messages", 0)
+        if current_count > initial_count:
+            self.metrics.record_wake_up(self._queue, empty=False)
+        else:
+            self.metrics.record_wake_up(self._queue, empty=True)
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         self.metrics.record_drain(self._queue, elapsed_ms)
@@ -308,15 +313,18 @@ def test_metrics_logging() -> None:
                     metrics_collector=metrics,
                 )
 
-                watcher.run_in_thread()
+                thread = watcher.run_in_thread()
 
-                # Generate some activity
-                for i in range(5):
-                    broker.write("test_queue", f"message_{i}")
-                    time.sleep(0.2)
+                try:
+                    # Generate some activity
+                    for i in range(5):
+                        broker.write("test_queue", f"message_{i}")
+                        time.sleep(0.2)
 
-                time.sleep(1.0)  # Should trigger at least one log
-                watcher.stop()
+                    time.sleep(1.0)  # Should trigger at least one log
+                finally:
+                    watcher.stop()
+                    thread.join(timeout=1.0)
 
                 # Check that stats were logged
                 assert mock_log.call_count >= 1
@@ -345,6 +353,7 @@ def test_metrics_aggregation() -> None:
             # Create multiple watchers sharing metrics
             num_watchers = 5
             watchers = []
+            threads = []
 
             def handler(msg, ts) -> None:
                 time.sleep(0.001)
@@ -357,28 +366,32 @@ def test_metrics_aggregation() -> None:
                     metrics_collector=global_metrics,
                 )
                 watchers.append(watcher)
-                watcher.run_in_thread()
+                thread = watcher.run_in_thread()
+                threads.append(thread)
 
-            # Let watchers run without messages to generate empty wake-ups
-            time.sleep(0.2)
+            try:
+                # Let watchers run without messages to generate empty wake-ups
+                time.sleep(0.2)
 
-            # Generate activity
-            for i in range(num_watchers):
-                for j in range(10):
-                    broker.write(f"queue_{i}", f"q{i}_msg_{j}")
+                # Generate activity
+                for i in range(num_watchers):
+                    for j in range(10):
+                        broker.write(f"queue_{i}", f"q{i}_msg_{j}")
 
-            time.sleep(1.0)
+                time.sleep(1.0)
 
-            # Stop all watchers
-            for w in watchers:
-                w.stop()
+                # Check aggregated metrics
+                stats = global_metrics.get_stats()
 
-            # Check aggregated metrics
-            stats = global_metrics.get_stats()
-
-            assert stats["messages_processed"] == num_watchers * 10
-            assert stats["total_wake_ups"] > stats["messages_processed"]
-            assert stats["efficiency"] > 0.5
+                assert stats["messages_processed"] == num_watchers * 10
+                assert stats["total_wake_ups"] > stats["messages_processed"]
+                assert stats["efficiency"] > 0.5
+            finally:
+                # Stop all watchers and join threads
+                for w in watchers:
+                    w.stop()
+                for t in threads:
+                    t.join(timeout=1.0)
         finally:
             broker.close()
 

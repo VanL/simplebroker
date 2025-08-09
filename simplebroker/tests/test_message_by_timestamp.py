@@ -185,7 +185,6 @@ def test_peek_message_by_timestamp(workdir: Path):
     # Get timestamps
     rc, out, err = run_cli("peek", "test_queue", "--all", "-t", cwd=workdir)
     lines = out.strip().split("\n")
-    lines[0].split("\t")[0]
     ts2 = lines[1].split("\t")[0]
 
     # Peek at second message

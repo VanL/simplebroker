@@ -1,6 +1,24 @@
-# SimpleBroker Extension Examples
+# SimpleBroker Examples
 
-This directory contains examples showing how to extend SimpleBroker using the extensibility API introduced in v2.0.
+This directory contains examples for using SimpleBroker, from basic usage to advanced extensions.
+
+## Quick Start - Recommended Examples
+
+**For most users, start with these examples:**
+
+1. **[python_api.py](python_api.py)** - Standard Python API usage (RECOMMENDED STARTING POINT)
+   - Uses the public `Queue` and `QueueWatcher` classes
+   - Shows all common operations and patterns
+   - Production-ready code examples
+
+2. **[async_wrapper.py](async_wrapper.py)** - Simple async wrapper (RECOMMENDED FOR ASYNC)
+   - Wraps the standard Queue API for async/await usage
+   - Uses thread pool executor for compatibility
+   - No external dependencies beyond asyncio
+
+## Advanced Examples
+
+These examples show how to extend SimpleBroker using internal APIs or the extensibility API:
 
 ## ⚠️ Important Disclaimer
 
@@ -52,19 +70,30 @@ When working with message queues:
   - Priority-based distribution
   - Multi-worker simulation with monitoring
 
-### Python Extensions
+### Python Examples
 
-- **[python_api.py](python_api.py)** - Comprehensive examples using the Python API
-  - Basic queue operations (write, read, peek, move, delete)
+#### Standard API (Recommended)
+
+- **[python_api.py](python_api.py)** - Comprehensive examples using the standard Python API
+  - Basic queue operations with `Queue` class (write, read, peek, move, delete)
   - Error handling patterns with retry logic
-  - Custom watcher implementation with statistics
+  - Custom watcher implementation with `QueueWatcher`
   - Checkpoint-based processing
   - Thread-safe cleanup examples
+  - **START HERE for Python usage**
 
-- **[logging_runner.py](logging_runner.py)** - Simple example that logs all SQL operations
+- **[async_wrapper.py](async_wrapper.py)** - Async wrapper around standard API
+  - Simple async/await interface using thread pool
+  - Works with standard `Queue` and `QueueWatcher` classes
+  - No external dependencies
+  - **USE THIS for async applications**
+
+#### Advanced Extensions
+
+- **[logging_runner.py](logging_runner.py)** - Custom SQLRunner extension (ADVANCED)
   - Shows how to wrap the default SQLiteRunner
   - Demonstrates the SQLRunner protocol implementation
-  - Uses the new Queue API
+  - For users who need custom database middleware
 
 ### Advanced Extensions
 
@@ -76,25 +105,29 @@ See **[example_extension_implementation.md](example_extension_implementation.md)
 - **Testing with Mock Runner** - Comprehensive mock runner for unit tests
 - **Complete Async Queue** - Production-ready async queue with all features
 
-### High-Performance Async Implementation
+### Custom Async Implementation (Advanced)
 
-- **[async_pooled_broker.py](async_pooled_broker.py)** - Production-ready async implementation
-  - Uses aiosqlite and aiosqlitepool for high-performance async operations
+**WARNING: These examples use internal APIs and are for advanced users only.**
+**For standard async usage, use [async_wrapper.py](async_wrapper.py) instead.**
+
+- **[async_pooled_broker.py](async_pooled_broker.py)** - Custom async implementation (ADVANCED)
+  - Uses internal SimpleBroker APIs to build custom async broker
+  - Requires aiosqlite and aiosqlitepool
   - Full AsyncBrokerCore implementation with feature parity
   - Connection pooling for optimal concurrency
-  - Comprehensive examples and benchmarks included
+  - **Only use if async_wrapper.py doesn't meet your needs**
   
-- **[async_simple_example.py](async_simple_example.py)** - Simple async usage examples
+- **[async_simple_example.py](async_simple_example.py)** - Examples using the custom async implementation
+  - Uses the advanced async_pooled_broker
   - Worker pattern with async/await
-  - Graceful shutdown handling
   - Batch processing examples
-  - Error handling and retry patterns
+  - **Consider async_wrapper.py first**
 
-- **[ASYNC_README.md](ASYNC_README.md)** - Complete async implementation documentation
-  - Installation and setup instructions
+- **[ASYNC_README.md](ASYNC_README.md)** - Documentation for custom async implementation
+  - Covers the advanced async_pooled_broker approach
+  - Installation and setup for custom implementation
   - Performance benchmarks
-  - Best practices and patterns
-  - Integration with existing sync code
+  - **Most users should use async_wrapper.py instead**
 
 ## Running the Examples
 
@@ -120,7 +153,41 @@ See **[example_extension_implementation.md](example_extension_implementation.md)
 
 3. For advanced examples, copy the code from `example_extension_implementation.md` and adapt as needed.
 
-## Creating Your Own Extension
+## Using SimpleBroker - Standard Approach
+
+For most users, use the standard API:
+
+```python
+# Standard synchronous usage
+from simplebroker import Queue, QueueWatcher
+
+with Queue("myqueue") as q:
+    q.write("Hello, World!")
+    msg = q.read()
+    print(msg)
+
+# For watching queues
+watcher = QueueWatcher(
+    db=".broker.db",
+    queue="myqueue",
+    handler=lambda msg, ts: print(f"Got: {msg}")
+)
+watcher.run_in_thread()
+```
+
+For async applications, use the async wrapper:
+
+```python
+from async_wrapper import AsyncBroker
+
+async with AsyncBroker("broker.db") as broker:
+    await broker.push("myqueue", "Hello async!")
+    msg = await broker.pop("myqueue")
+```
+
+## Creating Your Own Extension (Advanced)
+
+Only create custom extensions if the standard API doesn't meet your needs.
 
 To create a custom runner:
 

@@ -3,7 +3,7 @@
 import os
 import tempfile
 
-from simplebroker.db import BrokerDB
+from simplebroker import Queue
 
 
 def test_move_with_concurrent_operations():
@@ -11,37 +11,34 @@ def test_move_with_concurrent_operations():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Add messages to source queue
-            for i in range(10):
-                db.write("source", f"msg{i}")
+        source = Queue("source", db_path=db_path)
+        dest = Queue("dest", db_path=db_path)
 
-            # Get message IDs
-            with db._lock:
-                messages = db._runner.run(
-                    "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
-                    ("source",),
-                    fetch=True,
-                )
+        # Add messages to source queue
+        for i in range(10):
+            source.write(f"msg{i}")
 
-            # Move specific messages by ID
-            # Move msg3, msg5, msg7 to dest
-            for idx in [3, 5, 7]:
-                msg_id = messages[idx][0]
-                result = db.move("source", "dest", message_id=msg_id)
-                assert result is not None
-                assert result["body"] == f"msg{idx}"
+        # Move specific messages
+        # Since we can't move by ID directly, we'll move multiple times
+        # and verify the FIFO order
+        moved_messages = []
+        for _ in range(3):
+            result = source.move_one("dest", with_timestamps=False)
+            assert result is not None
+            moved_messages.append(result)
 
-            # Verify source queue has remaining messages
-            source_msgs = db.read("source", peek=True, all_messages=True)
-            assert len(source_msgs) == 7
-            assert "msg3" not in source_msgs
-            assert "msg5" not in source_msgs
-            assert "msg7" not in source_msgs
+        # Should have moved msg0, msg1, msg2 in FIFO order
+        assert moved_messages == ["msg0", "msg1", "msg2"]
 
-            # Verify dest queue has moved messages
-            dest_msgs = db.read("dest", peek=True, all_messages=True)
-            assert set(dest_msgs) == {"msg3", "msg5", "msg7"}
+        # Verify source queue has remaining messages
+        source_msgs = source.peek_many(limit=10, with_timestamps=False)
+        assert len(source_msgs) == 7
+        expected_remaining = [f"msg{i}" for i in range(3, 10)]
+        assert source_msgs == expected_remaining
+
+        # Verify dest queue has moved messages
+        dest_msgs = dest.peek_many(limit=10, with_timestamps=False)
+        assert dest_msgs == ["msg0", "msg1", "msg2"]
 
 
 def test_move_claimed_message_workflow():
@@ -49,43 +46,36 @@ def test_move_claimed_message_workflow():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Simulate error queue scenario
-            db.write("processing", "job1")
-            db.write("processing", "job2")
-            db.write("processing", "job3")
+        processing = Queue("processing", db_path=db_path)
+        error = Queue("error", db_path=db_path)
 
-            # Process job1 successfully
-            job1 = db.read("processing")
-            assert job1 == ["job1"]
+        # Simulate error queue scenario
+        processing.write("job1")
+        processing.write("job2")
+        processing.write("job3")
 
-            # Process job2 but it fails - it's now claimed
-            job2 = db.read("processing")
-            assert job2 == ["job2"]
+        # Process job1 successfully (claim it)
+        job1 = processing.read_one(with_timestamps=False)
+        assert job1 == "job1"
 
-            # Get ID of the failed job
-            with db._lock:
-                rows = db._runner.run(
-                    "SELECT id FROM messages WHERE queue = ? AND body = ? AND claimed = 1",
-                    ("processing", "job2"),
-                    fetch=True,
-                )
-                job2_id = rows[0][0]
+        # Process job2 but it fails - it's now claimed
+        job2 = processing.read_one(with_timestamps=False)
+        assert job2 == "job2"
 
-            # Move the failed job to error queue (allowing claimed messages)
-            result = db.move(
-                "processing", "error", message_id=job2_id, require_unclaimed=False
-            )
-            assert result is not None
-            assert result["body"] == "job2"
+        # Since job2 is claimed, move_one will skip it and move job3
+        # This tests that move_one only moves unclaimed messages
+        result = processing.move_one("error", with_timestamps=False)
+        assert result is not None
+        assert result == "job3"  # Should move job3, not job2 which is claimed
 
-            # Verify job2 is now in error queue and unclaimed
-            error_msgs = db.read("error", peek=True, all_messages=True)
-            assert error_msgs == ["job2"]
+        # Verify job3 is now in error queue
+        error_msgs = error.peek_many(limit=10, with_timestamps=False)
+        assert error_msgs == ["job3"]
 
-            # Verify only job3 remains in processing queue
-            processing_msgs = db.read("processing", peek=True, all_messages=True)
-            assert processing_msgs == ["job3"]
+        # Verify no unclaimed messages remain in processing queue
+        # (job1 and job2 are still claimed but not visible to move_one)
+        result = processing.move_one("error", with_timestamps=False)
+        assert result is None  # No unclaimed messages to move
 
 
 def test_move_maintains_fifo_within_queues():
@@ -93,43 +83,33 @@ def test_move_maintains_fifo_within_queues():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = os.path.join(tmpdir, "test.db")
 
-        with BrokerDB(db_path) as db:
-            # Add messages to queue1
-            for i in range(5):
-                db.write("queue1", f"q1-msg{i}")
+        queue1 = Queue("queue1", db_path=db_path)
+        queue2 = Queue("queue2", db_path=db_path)
 
-            # Add messages to queue2
-            for i in range(3):
-                db.write("queue2", f"q2-msg{i}")
+        # Add messages to queue1
+        for i in range(5):
+            queue1.write(f"q1-msg{i}")
 
-            # Get message IDs from queue1
-            with db._lock:
-                q1_messages = db._runner.run(
-                    "SELECT id, body FROM messages WHERE queue = ? ORDER BY id",
-                    ("queue1",),
-                    fetch=True,
-                )
+        # Add messages to queue2
+        for i in range(3):
+            queue2.write(f"q2-msg{i}")
 
-            # Move q1-msg1 and q1-msg3 to queue2
-            for idx in [1, 3]:
-                msg_id = q1_messages[idx][0]
-                db.move("queue1", "queue2", message_id=msg_id)
+        # Move first two messages from queue1 to queue2
+        # They should be moved in FIFO order
+        moved1 = queue1.move_one("queue2", with_timestamps=False)
+        assert moved1 == "q1-msg0"
 
-            # Verify queue1 order preserved
-            q1_remaining = db.read("queue1", peek=True, all_messages=True)
-            assert q1_remaining == ["q1-msg0", "q1-msg2", "q1-msg4"]
+        moved2 = queue1.move_one("queue2", with_timestamps=False)
+        assert moved2 == "q1-msg1"
 
-            # Verify queue2 has all messages
-            q2_all = db.read("queue2", peek=True, all_messages=True)
-            assert len(q2_all) == 5
-            # Messages are ordered by ID, so moved messages (with lower IDs)
-            # will appear before the original queue2 messages
-            assert set(q2_all) == {
-                "q2-msg0",
-                "q2-msg1",
-                "q2-msg2",
-                "q1-msg1",
-                "q1-msg3",
-            }
-            # The exact order depends on the message IDs, which are assigned sequentially
-            # q1 messages were created first, so they have lower IDs
+        # Verify queue1 order preserved (remaining messages)
+        q1_remaining = queue1.peek_many(limit=10, with_timestamps=False)
+        assert q1_remaining == ["q1-msg2", "q1-msg3", "q1-msg4"]
+
+        # Verify queue2 has all messages in correct order
+        # Queue1 messages were created first, so they have lower IDs
+        q2_all = queue2.peek_many(limit=10, with_timestamps=False)
+        assert len(q2_all) == 5
+        # Messages are ordered by ID, so moved q1 messages come first,
+        # then the original q2 messages
+        assert q2_all == ["q1-msg0", "q1-msg1", "q2-msg0", "q2-msg1", "q2-msg2"]

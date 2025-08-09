@@ -36,10 +36,11 @@ def test_shared_brokerdb_thread_safety():
             def reader(thread_id, count):
                 """Read messages from a thread."""
                 for _ in range(count):
-                    msgs = db.read("shared_queue", peek=False, all_messages=False)
-                    if msgs:
+                    # Try to claim one message
+                    msg_result = db.claim_one("shared_queue", with_timestamps=False)
+                    if msg_result:
                         with read_lock:
-                            messages_read.extend(msgs)
+                            messages_read.append(msg_result)
                     # Small random delay to increase contention
                     time.sleep(0.001)
 
@@ -69,8 +70,8 @@ def test_shared_brokerdb_thread_safety():
                 for future in writer_futures + reader_futures:
                     future.result()
 
-            # Read any remaining messages
-            remaining = db.read("shared_queue", peek=False, all_messages=True)
+            # Read any remaining messages using generator
+            remaining = list(db.claim_generator("shared_queue", with_timestamps=False))
             messages_read.extend(remaining)
 
             # Verify data integrity
@@ -97,9 +98,11 @@ def test_concurrent_operations_different_queues():
                     if op == "write":
                         db.write(queue_name, value)
                     elif op == "read":
-                        db.read(queue_name)
+                        # Try to claim one message
+                        db.claim_one(queue_name, with_timestamps=False)
                     elif op == "peek":
-                        db.read(queue_name, peek=True)
+                        # Peek at one message
+                        db.peek_one(queue_name, with_timestamps=False)
                     elif op == "list":
                         db.list_queues()
                     elif op == "delete":
@@ -181,9 +184,9 @@ def test_database_lock_timeout():
             db1.write("test_queue", "msg1")
             db2.write("test_queue", "msg2")
 
-            # Both should see all messages
-            msgs1 = db1.read("test_queue", peek=True, all_messages=True)
-            msgs2 = db2.read("test_queue", peek=True, all_messages=True)
+            # Both should see all messages using peek_many
+            msgs1 = db1.peek_many("test_queue", limit=100, with_timestamps=False)
+            msgs2 = db2.peek_many("test_queue", limit=100, with_timestamps=False)
 
             assert len(msgs1) == 2
             assert len(msgs2) == 2
