@@ -1,7 +1,9 @@
 """Tests for Queue.get_connection context manager behavior."""
 
+import gc
 import tempfile
 import threading
+import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -239,14 +241,20 @@ class TestQueueConnectionManager:
                 # But all should share the same underlying DBConnection object
                 assert queue.conn is not None, "Should have persistent DBConnection"
             finally:
-                # Clean up threads first
+                # Clean up threads first with longer timeout
                 for t in threads:
                     if t.is_alive():
-                        t.join(timeout=1.0)
+                        t.join(timeout=2.0)
 
                 # Close queue - this will now clean up all registered connections
                 if queue:
                     queue.close()
+
+                # Force garbage collection to clean up any remaining references
+                gc.collect()
+
+                # Short sleep for Windows file handle finalization
+                time.sleep(0.2)
 
     def test_connection_type_consistency(self):
         """Test that both modes return BrokerDB for consistency."""
