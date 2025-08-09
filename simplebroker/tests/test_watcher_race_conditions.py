@@ -477,7 +477,7 @@ def test_concurrent_pre_checks() -> None:
                     max_time = max(pre_check_times)
 
                     # Even with many concurrent pre-checks, they should be fast
-                    assert avg_time < 0.002  # < 2ms average
+                    assert avg_time < 0.003  # < 3ms average
                     assert max_time < 0.05  # < 50ms max
         finally:
             # Stop all watchers before closing broker

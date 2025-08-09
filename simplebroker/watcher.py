@@ -720,8 +720,14 @@ class PollingStrategy:
             # Micro-sleep to prevent CPU spinning while maintaining responsiveness
             interruptible_sleep(self._burst_sleep, self._stop_event)
         else:
-            # Wait with timeout
-            self._stop_event.wait(timeout=delay)
+            # Use shorter timeout chunks for faster SIGINT response
+            chunk_timeout = min(delay, 0.05)  # Max 50ms chunks
+            remaining = delay
+            while remaining > 0 and not self._stop_event.is_set():
+                wait_time = min(remaining, chunk_timeout)
+                if self._stop_event.wait(timeout=wait_time):
+                    break
+                remaining -= wait_time
 
         # Only increment if we actually waited (no activity detected)
         self._check_count += 1
