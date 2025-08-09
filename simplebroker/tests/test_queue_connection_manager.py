@@ -244,7 +244,7 @@ class TestQueueConnectionManager:
                     if t.is_alive():
                         t.join(timeout=1.0)
 
-                # Then close queue
+                # Close queue - this will now clean up all registered connections
                 if queue:
                     queue.close()
 

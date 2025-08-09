@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import warnings
+import weakref
 from functools import lru_cache
 from pathlib import Path
 from typing import (
@@ -203,6 +204,10 @@ class DBConnection:
         self._thread_local = threading.local()
         self._stop_event = threading.Event()
 
+        # Connection registry for tracking all created connections
+        self._connection_registry: weakref.WeakSet[Any] = weakref.WeakSet()
+        self._registry_lock = threading.Lock()
+
         # If we have an external runner, create core immediately
         if self._runner:
             self._core = BrokerCore(self._runner)
@@ -230,9 +235,14 @@ class DBConnection:
                 # For persistent connections in single-threaded use:
                 # Create one BrokerDB per thread, but cache it within the thread
                 # This avoids reconnection overhead within a thread
-                self._thread_local.db = BrokerDB(self.db_path)
+                connection = BrokerDB(self.db_path)
 
-                return cast("BrokerDB", self._thread_local.db)
+                # Register the connection for cleanup tracking
+                with self._registry_lock:
+                    self._connection_registry.add(connection)
+
+                self._thread_local.db = connection
+                return connection
             except Exception as e:
                 if attempt >= max_retries - 1:
                     if _config["BROKER_LOGGING_ENABLED"]:
@@ -273,7 +283,7 @@ class DBConnection:
         Closes thread-local connections and releases resources.
         Safe to call multiple times.
         """
-        # Clean up thread-local connection
+        # Clean up thread-local connection in current thread
         if hasattr(self._thread_local, "db"):
             try:
                 self._thread_local.db.close()
@@ -282,6 +292,23 @@ class DBConnection:
                     logger.warning(f"Error closing thread-local database: {e}")
             finally:
                 delattr(self._thread_local, "db")
+
+        # Clean up ALL registered connections (cross-thread cleanup)
+        with self._registry_lock:
+            # Create a list copy to avoid modification during iteration
+            connections_to_close = list(self._connection_registry)
+
+        # Close connections outside the lock to avoid deadlocks
+        for connection in connections_to_close:
+            try:
+                connection.close()
+            except Exception as e:
+                if _config["BROKER_LOGGING_ENABLED"]:
+                    logger.warning(f"Error closing registered connection: {e}")
+
+        # Clear the registry
+        with self._registry_lock:
+            self._connection_registry.clear()
 
         # Clean up runner/core if we own it
         if not self._external_runner:
