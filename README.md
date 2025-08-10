@@ -50,7 +50,7 @@ SimpleBroker is a zero-configuration message queue that runs anywhere Python run
 - **Simple CLI** - Intuitive commands that work with pipes and scripts
 - **Portable** - Each directory gets its own isolated `.broker.db`
 - **Fast** - 1000+ messages/second throughput
-- **Lightweight** - ~1500 lines of code, no external dependencies
+- **Lightweight** - ~2500 lines of code, no external dependencies
 - **Real-time** - Built-in watcher for event-driven workflows
 
 ## Use Cases
