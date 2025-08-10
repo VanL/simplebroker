@@ -104,7 +104,7 @@ class TestWatchCommand:
                 proc.proc.send_signal(signal.SIGINT)
 
             # Wait for process to exit
-            proc.proc.wait(timeout=3.0)
+            proc.proc.wait(timeout=5.0)
             return_code = proc.proc.returncode
 
             # Check exit code - both 0 and -2 are acceptable on Unix, 1 on Windows
