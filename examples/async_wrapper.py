@@ -148,9 +148,9 @@ class AsyncBroker:
 
         # Create watcher
         watcher = QueueWatcher(
-            self.db_path,  # Use path for thread safety
-            queue,
-            handler,
+            queue,  # Queue name comes first
+            handler,  # Handler comes second
+            db=self.db_path,  # Database is a keyword argument
             peek=peek,
         )
 

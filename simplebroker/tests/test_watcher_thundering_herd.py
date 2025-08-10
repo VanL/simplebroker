@@ -133,9 +133,9 @@ def test_thundering_herd_mitigation() -> None:
                     return handler
 
                 w = InstrumentedQueueWatcher(
-                    db_path,
                     queue,
                     make_handler(queue),
+                    db=db_path,
                     metrics=metrics[queue],
                 )
                 watchers.append(w)
@@ -227,9 +227,9 @@ def test_thundering_herd_with_multiple_active_queues() -> None:
                     return handler
 
                 w = InstrumentedQueueWatcher(
-                    db_path,
                     queue,
                     make_handler(queue),
+                    db=db_path,
                     metrics=metrics[queue],
                 )
                 watchers.append(w)
@@ -287,7 +287,7 @@ def test_pre_check_correctness() -> None:
             def handler(msg, ts) -> None:
                 handler_calls.append((msg, ts))
 
-            watcher = InstrumentedQueueWatcher(db_path, "test_queue", handler)
+            watcher = InstrumentedQueueWatcher("test_queue", handler, db=db_path)
             db = broker
 
             # Should report no messages when queue is empty
@@ -338,7 +338,7 @@ def test_pre_check_with_timestamp_filtering() -> None:
 
             # Create watcher with last_seen_ts
             watcher = InstrumentedQueueWatcher(
-                db_path, "test_queue", handler, peek=True
+                "test_queue", handler, db=db_path, peek=True
             )
             watcher._last_seen_ts = timestamps[2]  # Should only see messages 3 and 4
 
@@ -396,7 +396,7 @@ def test_disable_pre_check_via_env() -> None:
             watcher2 = None
 
             with patch("simplebroker.watcher._config", config_with_skip):
-                watcher = InstrumentedQueueWatcher(db_path, "empty_queue", handler)
+                watcher = InstrumentedQueueWatcher("empty_queue", handler, db=db_path)
 
                 # Pre-check should be disabled
                 assert watcher._skip_idle_check is True
@@ -412,7 +412,7 @@ def test_disable_pre_check_via_env() -> None:
             config_no_skip["BROKER_SKIP_IDLE_CHECK"] = False
 
             with patch("simplebroker.watcher._config", config_no_skip):
-                watcher2 = InstrumentedQueueWatcher(db_path, "empty_queue2", handler)
+                watcher2 = InstrumentedQueueWatcher("empty_queue2", handler, db=db_path)
 
                 # Pre-check should be enabled
                 assert watcher2._skip_idle_check is False
@@ -449,7 +449,7 @@ def test_concurrent_pre_check_safety() -> None:
 
             # Create multiple watchers on same queue
             for _ in range(5):
-                w = InstrumentedQueueWatcher(db_path, "shared_queue", handler)
+                w = InstrumentedQueueWatcher("shared_queue", handler, db=db_path)
                 watchers.append(w)
                 w.run_in_thread()
 
@@ -497,9 +497,9 @@ def test_metrics_collection() -> None:
                 pass
 
             watcher = InstrumentedQueueWatcher(
-                db_path,
                 "test_queue",
                 handler,
+                db=db_path,
                 metrics=metrics,
             )
 

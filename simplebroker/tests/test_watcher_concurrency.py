@@ -63,9 +63,9 @@ class TestWorkerPool(WatcherTestBase):
 
                 # Use database path for thread-safe operation
                 watcher = QueueWatcher(
-                    temp_db,
                     "tasks",
                     collector.handler,
+                    db=temp_db,
                     peek=False,
                 )
 
@@ -172,9 +172,9 @@ class TestWorkerPool(WatcherTestBase):
         try:
             for _i in range(3):
                 watcher = QueueWatcher(
-                    temp_db,
                     "jobs",
                     slow_handler,
+                    db=temp_db,
                 )
                 thread = watcher.run_in_thread()
                 workers.append((watcher, thread))
@@ -213,9 +213,9 @@ class TestWorkerPool(WatcherTestBase):
 
                 worker_db = BrokerDB(temp_db)
                 watcher = QueueWatcher(
-                    worker_db,
                     "dynamic_queue",
                     collector.handler,
+                    db=worker_db,
                 )
                 thread = watcher.run_in_thread()
                 workers.append((watcher, thread, worker_db))
@@ -233,9 +233,9 @@ class TestWorkerPool(WatcherTestBase):
 
             late_db = BrokerDB(temp_db)
             late_watcher = QueueWatcher(
-                late_db,
                 "dynamic_queue",
                 late_collector.handler,
+                db=late_db,
             )
             late_thread = late_watcher.run_in_thread()
             workers.append((late_watcher, late_thread, late_db))
@@ -323,9 +323,9 @@ class TestMixedMode(WatcherTestBase):
             # Start peek watcher
             peek_db = BrokerDB(temp_db)
             peek_watcher = QueueWatcher(
-                peek_db,
                 "mixed",
                 peek_handler,
+                db=peek_db,
                 peek=True,
             )
             peek_thread = peek_watcher.run_in_thread()
@@ -333,9 +333,9 @@ class TestMixedMode(WatcherTestBase):
             # Start read watcher
             read_db = BrokerDB(temp_db)
             read_watcher = QueueWatcher(
-                read_db,
                 "mixed",
                 read_handler,
+                db=read_db,
                 peek=False,
             )
             read_thread = read_watcher.run_in_thread()
@@ -418,9 +418,9 @@ class TestMixedMode(WatcherTestBase):
 
                 peek_db = BrokerDB(temp_db)
                 watcher = QueueWatcher(
-                    peek_db,
                     "broadcast",
                     make_handler(messages, lock),
+                    db=peek_db,
                     peek=True,
                 )
                 thread = watcher.run_in_thread()
@@ -562,9 +562,9 @@ class TestEdgeCases(WatcherTestBase):
 
         watcher_db = BrokerDB(temp_db)
         watcher = QueueWatcher(
-            watcher_db,
             "empty",
             handler,
+            db=watcher_db,
         )
 
         thread = watcher.run_in_thread()
@@ -595,9 +595,9 @@ class TestEdgeCases(WatcherTestBase):
         for i in range(5):
             watcher_db = BrokerDB(temp_db)
             watcher = QueueWatcher(
-                watcher_db,
                 f"queue_{i}",
                 lambda m, t: None,
+                db=watcher_db,
             )
 
             thread = watcher.run_in_thread()
@@ -615,9 +615,9 @@ class TestEdgeCases(WatcherTestBase):
         for name in valid_names:
             watcher_db = BrokerDB(temp_db)
             watcher = QueueWatcher(
-                watcher_db,
                 name,
                 lambda m, t: None,
+                db=watcher_db,
             )
             assert watcher is not None
             watcher_db.close()

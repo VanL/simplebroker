@@ -22,7 +22,7 @@ class TestWatcherCleanup:
 
         # Create and start a watcher
         db = BrokerDB(temp_db)
-        watcher = QueueWatcher(db, "test_queue", lambda m, t: None)
+        watcher = QueueWatcher("test_queue", lambda m, t: None, db=db)
         register_watcher(watcher)  # Register for automatic cleanup
         thread = watcher.run_in_thread()
 
@@ -44,7 +44,7 @@ class TestWatcherCleanup:
         threads = []
 
         for i in range(3):
-            watcher = QueueWatcher(db, f"queue_{i}", lambda m, t: None)
+            watcher = QueueWatcher(f"queue_{i}", lambda m, t: None, db=db)
             register_watcher(watcher)  # Register for automatic cleanup
             thread = watcher.run_in_thread()
             watchers.append(watcher)
@@ -67,7 +67,7 @@ class TestWatcherCleanup:
         def slow_handler(msg, ts):
             time.sleep(0.5)  # Simulate slow processing
 
-        watcher = QueueWatcher(db, "test_queue", slow_handler)
+        watcher = QueueWatcher("test_queue", slow_handler, db=db)
         register_watcher(watcher)  # Register for automatic cleanup
         thread = watcher.run_in_thread()
 

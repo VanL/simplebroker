@@ -28,9 +28,9 @@ def main() -> None:
 
     # Create watcher
     watcher = QueueWatcher(
-        db,
         "sigint_test_queue",
         handler,
+        db=db,
     )
 
     # Signal that we're ready and about to start

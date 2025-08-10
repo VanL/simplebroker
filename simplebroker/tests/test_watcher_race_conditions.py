@@ -84,7 +84,7 @@ def test_pre_check_race_no_message_loss() -> None:
             # Create multiple watchers on the same queue
             num_watchers = 5
             for _ in range(num_watchers):
-                w = ConcurrencyTestWatcher(db_path, "shared_queue", handler)
+                w = ConcurrencyTestWatcher("shared_queue", handler, db=db_path)
                 watchers.append(w)
                 w.run_in_thread()
 
@@ -133,12 +133,11 @@ def test_concurrent_writers_readers() -> None:
                 with processed_lock:
                     processed.append(msg)
 
-            # Create watcher with faster polling for test reliability
+            # Create watcher for test reliability
             watcher = ConcurrencyTestWatcher(
-                db_path,
                 "test_queue",
                 handler,
-                max_interval=0.01,  # Faster polling for tests
+                db=db_path,
             )
             watcher.run_in_thread()
 
@@ -202,7 +201,7 @@ def test_pre_check_drain_race() -> None:
                 processed.append(msg)
 
             # Create watcher with delay to increase race window
-            watcher = ConcurrencyTestWatcher(db_path, "test_queue", handler)
+            watcher = ConcurrencyTestWatcher("test_queue", handler, db=db_path)
             watcher._pre_check_delay = 0.01  # 10ms delay after pre-check
             watcher.run_in_thread()
 
@@ -280,7 +279,7 @@ def test_multiple_queues_concurrent_activity() -> None:
 
                     return handler
 
-                w = ConcurrencyTestWatcher(db_path, queue, make_handler(queue))
+                w = ConcurrencyTestWatcher(queue, make_handler(queue), db=db_path)
                 watchers.append(w)
                 w.run_in_thread()
 
@@ -350,7 +349,7 @@ def test_watcher_stop_during_pre_check() -> None:
                 processed.append(msg)
 
             # Create watcher with long pre-check delay
-            watcher = ConcurrencyTestWatcher(db_path, "test_queue", handler)
+            watcher = ConcurrencyTestWatcher("test_queue", handler, db=db_path)
             watcher._pre_check_delay = 0.5  # 500ms delay
 
             # Add messages
@@ -398,11 +397,10 @@ def test_pre_check_with_peek_mode() -> None:
 
             # Create peek watcher
             watcher = ConcurrencyTestWatcher(
-                db_path,
                 "test_queue",
                 handler,
+                db=db_path,
                 peek=True,
-                max_interval=0.01,  # Fast polling
             )
             watcher.run_in_thread()
 
@@ -460,7 +458,7 @@ def test_concurrent_pre_checks() -> None:
                 pass
 
             for i in range(num_watchers):
-                w = TimingWatcher(db_path, f"queue_{i}", handler)
+                w = TimingWatcher(f"queue_{i}", handler, db=db_path)
                 watchers.append(w)
                 w.run_in_thread()
 
@@ -509,7 +507,7 @@ def test_pre_check_database_contention() -> None:
 
                     return handler
 
-                w = ConcurrencyTestWatcher(db_path, queue, make_handler(queue))
+                w = ConcurrencyTestWatcher(queue, make_handler(queue), db=db_path)
                 watchers.append(w)
                 w.run_in_thread()
 

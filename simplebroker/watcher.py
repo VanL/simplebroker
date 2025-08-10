@@ -81,7 +81,12 @@ from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional
 
 # For Python 3.8 compatibility, we avoid using Self type
 # and use string forward references instead
-from ._constants import MAX_MESSAGE_SIZE, MAX_TOTAL_RETRY_TIME, load_config
+from ._constants import (
+    DEFAULT_DB_NAME,
+    MAX_MESSAGE_SIZE,
+    MAX_TOTAL_RETRY_TIME,
+    load_config,
+)
 from ._exceptions import OperationalError
 from .db import BrokerDB
 from .helpers import interruptible_sleep
@@ -126,25 +131,36 @@ class BaseWatcher(ABC):
     message processing behavior.
     """
 
-    _db_arg: str | Path
-
     def __init__(
         self,
-        db: BrokerDB | str | Path,
+        queue: str | Queue,
+        *,
+        db: BrokerDB | str | Path | None = None,
         stop_event: threading.Event | None = None,
     ) -> None:
         """Initialize base watcher.
 
         Args:
-            db: Database instance or path
+            queue: Queue object or queue name
+            db: Database instance or path (uses default if None)
             stop_event: Optional event to signal watcher shutdown
 
         """
-        # Handle different db input types
-        if isinstance(db, BrokerDB):
-            self._db_arg = db.db_path
+        # Handle queue parameter - either Queue object or string name
+        if isinstance(queue, Queue):
+            self._queue_obj = queue
         else:
-            self._db_arg = db
+            # Create Queue object with persistent=True by default for watchers
+            if db is not None:
+                if isinstance(db, BrokerDB):
+                    db_path = str(db.db_path)
+                else:
+                    db_path = str(db)
+            else:
+                # Use default database
+                db_path = DEFAULT_DB_NAME
+
+            self._queue_obj = Queue(str(queue), db_path=db_path, persistent=True)
 
         # Event to signal the watcher to stop
         self._stop_event = stop_event or threading.Event()
@@ -164,17 +180,12 @@ class BaseWatcher(ABC):
         # Set up automatic cleanup finalizer
         self._setup_finalizer()
 
-    def _get_queue_for_data_version(self) -> Optional[Queue]:
+    def _get_queue_for_data_version(self) -> Queue:
         """Get the Queue object for data version checks.
 
-        Returns the Queue object if available, None otherwise.
-        Subclasses with Queue objects should override this.
+        Returns the Queue object (always available in new API).
         """
-        if hasattr(self, "_queue_obj"):
-            return self._queue_obj  # type: ignore[no-any-return]
-        elif hasattr(self, "_source_queue_obj"):
-            return self._source_queue_obj  # type: ignore[no-any-return]
-        return None
+        return self._queue_obj
 
     def _process_with_retry(
         self, process_func: Callable[[], Any], operation_name: str
@@ -363,10 +374,7 @@ class BaseWatcher(ABC):
         This method is called during shutdown and error recovery.
         """
         # Delegate to Queue's cleanup method
-        if hasattr(self, "_queue_obj"):
-            self._queue_obj.cleanup_connections()
-        elif hasattr(self, "_source_queue_obj"):
-            self._source_queue_obj.cleanup_connections()
+        self._queue_obj.cleanup_connections()
 
     def is_running(self) -> bool:
         """Check if the watcher is currently running."""
@@ -487,14 +495,8 @@ class BaseWatcher(ABC):
                 # Initialize strategy with data version getter
                 if hasattr(self, "_strategy") and hasattr(self._strategy, "start"):
                     queue = self._get_queue_for_data_version()
-                    if queue:
-                        # Capture queue in closure to avoid B023 warning
-                        self._strategy.start(lambda q=queue: q.get_data_version())
-                    else:
-                        # Fallback: create temporary BrokerDB for data version
-                        db = BrokerDB(str(self._db_arg))
-                        # Capture db in closure to avoid B023 warning
-                        self._strategy.start(lambda d=db: d.get_data_version())
+                    # Capture queue in closure to avoid B023 warning
+                    self._strategy.start(lambda q=queue: q.get_data_version())
 
                 # Initial drain of existing messages
                 self._drain_queue()
@@ -835,247 +837,78 @@ class QueueWatcher(BaseWatcher):
 
     def __init__(
         self,
-        queue: Queue | str | Path,  # Can be Queue, queue name, or db path (legacy)
-        handler_or_queue: Callable[[str, int], None] | str | None = None,
-        handler: Optional[Callable[[str, int], None]] = None,
+        queue: str | Queue,
+        handler: Callable[[str, int], None],
         *,
-        db_path: Optional[str | Path] = None,
+        db: BrokerDB | str | Path | None = None,
+        stop_event: threading.Event | None = None,
         peek: bool = False,
-        initial_checks: int = 100,
-        max_interval: float = 0.1,
-        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
         since_timestamp: int | None = None,
         batch_processing: bool = False,
-        stop_event: threading.Event | None = None,
+        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
     ) -> None:
-        """Initializes the watcher.
+        """Initialize the QueueWatcher.
 
-        Supports two calling conventions:
-        1. New style: QueueWatcher(queue, handler, ...)
-           where queue is a Queue object or string queue name
-        2. Legacy style: QueueWatcher(db_path, queue_name, handler, ...)
-           for backwards compatibility
+        Args:
+            queue: Queue object or queue name
+            handler: Message handler function receiving (message, timestamp)
+            db: Database instance or path (uses default if None)
+            stop_event: Event to signal shutdown
+            peek: If True, don't consume messages (default False)
+            since_timestamp: Only process messages newer than this timestamp
+            batch_processing: Process all messages at once vs one-by-one
+            error_handler: Handler for exceptions from main handler
 
-        Parameters
-        ----------
-        queue : Union[Queue, str, Path]
-            Either a Queue object, a string queue name, or a database path (legacy).
-            If a string queue name is provided, a Queue object will be created with persistent=True.
-            If a Queue object is provided, persistent mode is recommended for better performance
-            but not required.
-        handler_or_queue : Union[Callable, str, None], optional
-            In new style: the handler function.
-            In legacy style: the queue name (string).
-        handler : Callable[[str, int], None], optional
-            In legacy style: the handler function.
-            In new style: not used (pass handler as second argument).
-        db_path : Optional[Union[str, Path]], optional
-            Path to the SQLite database. Only used when queue is a string queue name.
-            If not provided when queue is a string, uses the default database.
-        peek : bool, optional
-            If True, monitor messages without consuming them (at-least-once
-            notification). If False (default), consume messages with
-            exactly-once semantics.
-
-            ⚠️ IMPORTANT: In consuming mode (peek=False), messages are removed
-            from the queue BEFORE your handler processes them. If your handler
-            fails or crashes, those messages are permanently lost. Use peek=True
-            with manual acknowledgment for critical messages.
-        initial_checks : int, optional
-            Number of checks to perform with zero delay for burst handling.
-            Default is 100.
-        max_interval : float, optional
-            Maximum polling interval in seconds. Default is 0.1 (100ms).
-        error_handler : Callable[[Exception, str, int], Optional[bool]], optional
-            A function called when the main `handler` raises an exception.
-            It receives (exception, message, timestamp).
-            - Return True:  Ignore the exception and continue processing.
-            - Return False: Stop the watcher gracefully.
-            - Return None or don't return: Use the default behavior (log to
-              stderr and continue).
-        since_timestamp : int, optional
-            Only process messages with timestamps greater than this value.
-            In peek mode, the watcher maintains an internal checkpoint that is only
-            advanced after a message is successfully dispatched to the handler. This
-            ensures that if a handler fails, the message will be re-processed on the
-            next poll, providing at-least-once notification semantics.
-            If None, processes all messages.
-        batch_processing : bool, optional
-            If True, process all available messages in a single batch for better
-            performance. If False (default), process messages one at a time for
-            maximum safety. When False, the watcher will process exactly one message
-            per poll cycle in all modes, ensuring that handler failures don't affect
-            other messages. This is especially important in consuming mode where
-            messages are permanently removed before processing.
-
-        Raises
-        ------
-        TypeError
-            If handler or error_handler are not callable.
-
-        Examples
-        --------
-        >>> from simplebroker import Queue
+        Examples:
+        >>> # Using queue name
+        >>> watcher = QueueWatcher("tasks", handler)
         >>>
-        >>> # Method 1: Pass a Queue object (recommended for control)
+        >>> # Using Queue object
         >>> queue = Queue("tasks", persistent=True)
-        >>> watcher = QueueWatcher(queue, process_task)
+        >>> watcher = QueueWatcher(queue, handler)
         >>>
-        >>> # Method 2: Pass a queue name (automatic persistent mode)
-        >>> watcher = QueueWatcher("tasks", process_task)
-        >>>
-        >>> # Method 3: Pass a queue name with custom database path
-        >>> watcher = QueueWatcher("tasks", process_task, db_path="/path/to/db.sqlite")
-        >>>
-        >>> # Method 4: Legacy style (for backwards compatibility)
-        >>> watcher = QueueWatcher("/path/to/db.sqlite", "tasks", process_task)
-        >>>
-        >>> def process_task(message: str, timestamp: int):
-        ...     print(f"Processing: {message} (received at {timestamp})")
-        >>> watcher.run_forever()  # Blocks until stopped
+        >>> # With custom database
+        >>> watcher = QueueWatcher("tasks", handler, db="/path/to/db")
 
         """
-        # Detect which calling convention is being used
-        if handler_or_queue is not None and handler is not None:
-            # Legacy style: QueueWatcher(db_path, queue_name, handler, ...)
-            # queue is actually the db_path, handler_or_queue is the queue name
-            actual_db_path = queue  # First arg is db path in legacy style
-            actual_queue_name = handler_or_queue  # Second arg is queue name
-            actual_handler = handler  # Third arg is handler
+        # Validate handler is callable
+        if not callable(handler):
+            msg = f"handler must be callable, got {type(handler).__name__}"
+            raise TypeError(msg)
 
-            # Type checking: ensure handler_or_queue is a string in legacy mode
-            if not isinstance(actual_queue_name, str):
-                msg = f"queue name must be a string in legacy mode, got {type(actual_queue_name).__name__}"
-                raise TypeError(msg)
+        # Store handler
+        self._handler = handler
 
-            # Type checking: ensure actual_db_path is str, Path, or BrokerDB
-            if not isinstance(actual_db_path, (str, Path, BrokerDB)):
-                msg = f"db_path must be a string, Path, or BrokerDB in legacy mode, got {type(actual_db_path).__name__}"
-                raise TypeError(msg)
+        # Initialize parent class with queue-first pattern
+        super().__init__(queue, db=db, stop_event=stop_event)
 
-            # Type checking: ensure handler is callable
-            if not callable(actual_handler):
-                msg = f"handler must be callable, got {type(actual_handler).__name__}"
-                raise TypeError(msg)
-
-            # Create a Queue object with the legacy parameters
-            from .sbqueue import Queue as QueueClass
-
-            if isinstance(actual_db_path, BrokerDB):
-                # Handle BrokerDB instance for backward compatibility
-                self._queue_obj = QueueClass(
-                    actual_queue_name,
-                    db_path=str(actual_db_path.db_path),
-                    persistent=True,
-                )
-            else:
-                self._queue_obj = QueueClass(
-                    actual_queue_name, db_path=str(actual_db_path), persistent=True
-                )
-            # For backward compatibility, store queue name as _queue
-            self._queue = actual_queue_name
-            self._queue_name = actual_queue_name
-            self._handler = actual_handler
+        # Store queue name for backward compatibility
+        if isinstance(queue, Queue):
+            self._queue_name = queue.name
         else:
-            # New style: QueueWatcher(queue, handler, ...)
-            # Validate handler exists and is callable
-            if handler_or_queue is None:
-                msg = "handler is required in new style calling convention"
-                raise TypeError(msg)
-            if isinstance(handler_or_queue, str):
-                msg = "handler must be callable, got string (possible legacy calling convention?)"
-                raise TypeError(msg)
-            if not callable(handler_or_queue):
-                msg = f"handler must be callable, got {type(handler_or_queue).__name__}"
-                raise TypeError(msg)
-            # At this point, handler_or_queue is guaranteed to be callable
-            self._handler = handler_or_queue
-
-            # Handle queue parameter - either Queue object or string name
-            if isinstance(queue, Queue):
-                self._queue_obj = queue
-                self._queue_name = queue.name
-            else:
-                # Create a Queue object with persistent=True by default for watchers
-                from .sbqueue import Queue as QueueClass
-
-                # Ensure queue is a string for Queue constructor
-                if not isinstance(queue, str):
-                    # If it's a Path, convert to string
-                    queue_name = str(queue)
-                else:
-                    queue_name = queue
-                # Convert db_path to string if it's a Path
-                if db_path is not None:
-                    self._queue_obj = QueueClass(
-                        queue_name, db_path=str(db_path), persistent=True
-                    )
-                else:
-                    # Use default DB path
-                    from ._constants import DEFAULT_DB_NAME
-
-                    self._queue_obj = QueueClass(
-                        queue_name, db_path=DEFAULT_DB_NAME, persistent=True
-                    )
-                self._queue_name = queue_name
-            # For backward compatibility with tests, store queue name as _queue
-            self._queue = self._queue_name
-
-        # Initialize parent class with the queue's db path
-        super().__init__(self._queue_obj._db_path, stop_event)
+            self._queue_name = str(queue)
+        self._queue = self._queue_name  # Backward compatibility
+        # Store watcher configuration
         self._peek = peek
+        self._error_handler = error_handler
+        self._last_seen_ts = since_timestamp if since_timestamp is not None else 0
+        self._batch_processing = batch_processing
+
         # Validate error_handler is callable if provided
         if error_handler is not None and not callable(error_handler):
             msg = f"error_handler must be callable if provided, got {type(error_handler).__name__}"
-            raise TypeError(
-                msg,
-            )
-        self._error_handler = error_handler
-        # Initialize _last_seen_ts with since_timestamp if provided, otherwise 0
-        self._last_seen_ts = since_timestamp if since_timestamp is not None else 0
-        # Store batch processing preference
-        self._batch_processing = batch_processing
+            raise TypeError(msg)
 
         # Two-phase detection configuration
         self._skip_idle_check = _config["BROKER_SKIP_IDLE_CHECK"]
 
-        # Read environment variables with defaults and error handling
-        try:
-            env_initial_checks = _config["SIMPLEBROKER_INITIAL_CHECKS"]
-        except ValueError:
-            if _config["BROKER_LOGGING_ENABLED"]:
-                logger.warning(
-                    f"Invalid SIMPLEBROKER_INITIAL_CHECKS value, using default: {initial_checks}",
-                )
-            env_initial_checks = initial_checks
-
-        # Use max_interval with env var fallback
-        try:
-            env_max_interval = _config["SIMPLEBROKER_MAX_INTERVAL"]
-        except (ValueError, KeyError):
-            if _config["BROKER_LOGGING_ENABLED"]:
-                logger.warning(
-                    f"Invalid SIMPLEBROKER_MAX_INTERVAL value, using default: {max_interval}",
-                )
-            env_max_interval = max_interval
-
-        env_burst_sleep = _config["SIMPLEBROKER_BURST_SLEEP"]
-
-        # Create polling strategy with optimized settings
+        # Create polling strategy with environment settings
         self._strategy = PollingStrategy(
             stop_event=self._stop_event,
-            initial_checks=env_initial_checks,
-            max_interval=env_max_interval,
-            burst_sleep=env_burst_sleep,
+            initial_checks=_config["SIMPLEBROKER_INITIAL_CHECKS"],
+            max_interval=_config["SIMPLEBROKER_MAX_INTERVAL"],
+            burst_sleep=_config["SIMPLEBROKER_BURST_SLEEP"],
         )
-
-        # Automatic cleanup finalizer (important on Windows where open file
-        # handles prevent TemporaryDirectory from removing .db files)
-        # Finalizer setup is handled by BaseWatcher.__init__()
-        # The base class sets up automatic cleanup to ensure:
-        # - Background threads are stopped
-        # - Thread-local database connections are closed
-        # - Resources are released before garbage collection
 
     # __enter__ and __exit__ are inherited from BaseWatcher
 
@@ -1299,13 +1132,13 @@ class QueueMoveWatcher(BaseWatcher):
 
     Example usage:
         # Context manager (recommended)
-        with QueueMoveWatcher(db, "inbox", "processed", handler) as watcher:
+        with QueueMoveWatcher("inbox", "processed", handler) as watcher:
             # Moves messages for 60 seconds
             time.sleep(60)
         # Thread stopped and resources cleaned up automatically
 
         # Manual management
-        watcher = QueueMoveWatcher(db, "inbox", "processed", handler)
+        watcher = QueueMoveWatcher("inbox", "processed", handler)
         thread = watcher.run_in_thread()
         try:
             # Process until max_messages reached or stopped
@@ -1320,43 +1153,44 @@ class QueueMoveWatcher(BaseWatcher):
 
     def __init__(
         self,
-        broker: BrokerDB | str | Path,
-        source_queue: str,
+        source_queue: str | Queue,
         dest_queue: str,
         handler: Callable[[str, int], None],
         *,
-        initial_checks: int = 100,
-        max_interval: float = 0.1,
-        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
+        db: BrokerDB | str | Path | None = None,
         stop_event: threading.Event | None = None,
         max_messages: int | None = None,
+        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
     ) -> None:
         """Initialize a QueueMoveWatcher.
 
         Args:
-            broker: SimpleBroker instance
-            source_queue: Name of source queue to move messages from
-            dest_queue: Name of destination queue to move messages to
+            source_queue: Source queue object or name
+            dest_queue: Name of destination queue
             handler: Function called with (message_body, timestamp) for each moved message
-            initial_checks: Number of checks to perform with zero delay for burst handling
-            max_interval: Maximum polling interval in seconds (not a fixed interval)
-            error_handler: Called when handler raises an exception
+            db: Database instance or path (uses default if None)
             stop_event: Event to signal watcher shutdown
             max_messages: Maximum messages to move before stopping
+            error_handler: Called when handler raises an exception
 
         Raises:
             ValueError: If source_queue == dest_queue
 
         """
-        if source_queue == dest_queue:
+        # Get source queue name for comparison
+        source_name = (
+            source_queue.name if isinstance(source_queue, Queue) else str(source_queue)
+        )
+
+        if source_name == dest_queue:
             msg = "Cannot move messages to the same queue"
             raise ValueError(msg)
 
-        # Initialize parent class
-        super().__init__(broker, stop_event)
+        # Initialize parent class with source queue
+        super().__init__(source_queue, db=db, stop_event=stop_event)
 
         # Store move-specific attributes
-        self._source_queue = source_queue
+        self._source_queue = source_name
         self._dest_queue = dest_queue
         self._move_count = 0
         self._max_messages = max_messages
@@ -1365,16 +1199,14 @@ class QueueMoveWatcher(BaseWatcher):
         self._handler = handler
         self._error_handler = error_handler
 
-        # Create Queue object for source queue (ephemeral mode for watchers)
-        self._source_queue_obj = Queue(
-            source_queue, db_path=str(self._db_arg), persistent=False
-        )
+        # The main queue is our source queue for moves
+        self._source_queue_obj = self._queue_obj
 
         # Create polling strategy directly
         self._strategy = PollingStrategy(
             stop_event=self._stop_event,
-            initial_checks=initial_checks,
-            max_interval=max_interval,
+            initial_checks=_config["SIMPLEBROKER_INITIAL_CHECKS"],
+            max_interval=_config["SIMPLEBROKER_MAX_INTERVAL"],
             burst_sleep=_config["SIMPLEBROKER_BURST_SLEEP"],
         )
 
@@ -1496,16 +1328,9 @@ class QueueMoveWatcher(BaseWatcher):
     def stop(self, *, join: bool = True, timeout: float = 5.0) -> None:
         """Stop the move watcher and clean up resources.
 
-        This extends the base class stop() to also clean up the Queue object.
-
         Args:
             join: If True, wait for thread to finish
             timeout: Timeout for joining thread
         """
-        # Clean up Queue object
-        if hasattr(self, "_source_queue_obj"):
-            self._source_queue_obj.cleanup_connections()
-            self._source_queue_obj.close()
-
-        # Call parent stop() for base cleanup
+        # Parent class handles all cleanup now
         super().stop(join=join, timeout=timeout)

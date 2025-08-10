@@ -89,10 +89,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
 
         # Create move watcher
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source_queue",
-            dest_queue="dest_queue",
-            handler=collector.handler,
+            "source_queue",
+            "dest_queue",
+            collector.handler,
+            db=broker,
         )
         register_watcher(watcher)
 
@@ -140,10 +140,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
             )
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=tracking_handler,
+            "source",
+            "dest",
+            tracking_handler,
+            db=broker,
         )
         register_watcher(watcher)
 
@@ -167,10 +167,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
         collector = MoveCollector()
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=collector.conditional_error_handler,
+            "source",
+            "dest",
+            collector.conditional_error_handler,
+            db=broker,
             error_handler=collector.capture_error_handler,
         )
         register_watcher(watcher)
@@ -211,10 +211,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
             moved_ids.append(body)
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=capture_id_handler,
+            "source",
+            "dest",
+            capture_id_handler,
+            db=broker,
         )
         register_watcher(watcher)
 
@@ -243,10 +243,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
 
         # Move from source to dest
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=lambda body, ts: None,
+            "source",
+            "dest",
+            lambda body, ts: None,
+            db=broker,
         )
         register_watcher(watcher)
 
@@ -265,11 +265,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
         collector = MoveCollector()
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="empty_source",
-            dest_queue="dest",
-            handler=collector.handler,
-            max_interval=0.05,  # Faster polling for test
+            "empty_source",
+            "dest",
+            collector.handler,
+            db=broker,
         )
         register_watcher(watcher)
 
@@ -315,10 +314,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
             broker.write("source", f"initial_{i}")
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=counting_handler,
+            "source",
+            "dest",
+            counting_handler,
+            db=broker,
         )
         register_watcher(watcher)
 
@@ -403,10 +402,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
             time.sleep(0.1)
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=slow_handler,
+            "source",
+            "dest",
+            slow_handler,
+            db=broker,
         )
         register_watcher(watcher)
 
@@ -436,10 +435,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
         """Test that source_queue and dest_queue must be different."""
         with pytest.raises(ValueError, match="Cannot move messages to the same queue"):
             QueueMoveWatcher(
-                broker=broker,
-                source_queue="same_queue",
-                dest_queue="same_queue",
-                handler=lambda body, ts: None,
+                "same_queue",
+                "same_queue",
+                lambda body, ts: None,
+                db=broker,
             )
 
     def test_max_messages_limit(self, broker, temp_db):
@@ -454,10 +453,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
             moved.append(body)
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=track_handler,
+            "source",
+            "dest",
+            track_handler,
+            db=broker,
             max_messages=5,
         )
         register_watcher(watcher)
@@ -484,10 +483,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
             broker.write("source", f"msg_{i}")
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=lambda body, ts: None,
+            "source",
+            "dest",
+            lambda body, ts: None,
+            db=broker,
             stop_event=stop_event,
         )
         register_watcher(watcher)
@@ -511,10 +510,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
     def test_move_properties(self, broker, temp_db):
         """Test QueueMoveWatcher properties."""
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source_queue",
-            dest_queue="dest_queue",
-            handler=lambda body, ts: None,
+            "source_queue",
+            "dest_queue",
+            lambda body, ts: None,
+            db=broker,
         )
         register_watcher(watcher)
 
@@ -551,10 +550,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
             preserved_data["queue"] = "dest"  # We know it's destination
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=capture_handler,
+            "source",
+            "dest",
+            capture_handler,
+            db=broker,
         )
         register_watcher(watcher)
 
@@ -584,10 +583,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
             return None
 
         watcher = QueueMoveWatcher(
-            broker=broker,
-            source_queue="source",
-            dest_queue="dest",
-            handler=failing_handler,
+            "source",
+            "dest",
+            failing_handler,
+            db=broker,
             error_handler=error_handler,
         )
         register_watcher(watcher)

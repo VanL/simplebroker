@@ -220,11 +220,11 @@ def custom_watcher_example() -> None:
     queue.write("This will cause an ERROR")
     queue.write("Good message 2")
 
-    # QueueWatcher can accept a database path
+    # QueueWatcher now uses queue-first API pattern
     watcher = QueueWatcher(
-        ".broker.db",
-        "stream",  # Queue name as string
-        handler=processor.process,
+        "stream",  # Queue name comes first
+        processor.process,  # Handler comes second
+        db=".broker.db",  # Database as keyword argument
         error_handler=processor.handle_error,
         peek=False,  # Consume messages
     )

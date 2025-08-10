@@ -729,17 +729,17 @@ def cmd_watch(
         if move_to:
             # Use QueueMoveWatcher for move operations
             watcher = QueueMoveWatcher(
-                db_path,
-                source_queue=queue_name,
-                dest_queue=move_to,
-                handler=handle_message,
+                queue_name,
+                move_to,
+                handle_message,
+                db=db_path,
             )
         else:
-            # Use regular QueueWatcher for consume/peek (using legacy style)
+            # Use regular QueueWatcher for consume/peek
             watcher = QueueWatcher(
-                db_path,
                 queue_name,
                 handle_message,
+                db=db_path,
                 peek=peek,
                 since_timestamp=since_timestamp,
             )

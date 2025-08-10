@@ -51,7 +51,7 @@ def watcher_process(
                         return
                 super()._drain_queue()
 
-        watcher = ProcessWatcher(db_path, queue_name, handler)
+        watcher = ProcessWatcher(queue_name, handler, db=db_path)
 
         # Signal ready
         result_queue.put(("ready", process_id, None))
@@ -94,7 +94,7 @@ def shutdown_test_process(
             else:
                 processed_before_stop.append(msg)
 
-        watcher = QueueWatcher(db_path, queue_name, handler)
+        watcher = QueueWatcher(queue_name, handler, db=db_path)
         thread = watcher.run_in_thread()
 
         result_queue.put(("ready", process_id, None))
@@ -153,7 +153,7 @@ def lock_test_process(
                         lock_failures += 1
                     raise
 
-        watcher = LockTrackingWatcher(db_path, queue_name, handler)
+        watcher = LockTrackingWatcher(queue_name, handler, db=db_path)
         thread = watcher.run_in_thread()
 
         result_queue.put(("ready", process_id, None))

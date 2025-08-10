@@ -75,7 +75,8 @@ class WatcherTestBase:
         Yields:
             QueueWatcher instance
         """
-        watcher = QueueWatcher(broker, queue, handler, **kwargs)
+        # Adapt to new API: queue_name, handler, then db= keyword (always)
+        watcher = QueueWatcher(queue, handler, db=broker, **kwargs)
         register_watcher(watcher)  # Register for automatic cleanup
         try:
             yield watcher
@@ -112,7 +113,10 @@ class WatcherTestBase:
         Yields:
             QueueMoveWatcher instance
         """
-        watcher = QueueMoveWatcher(broker, source_queue, dest_queue, handler, **kwargs)
+        # Adapt to new API: source_queue, dest_queue, handler, then db= keyword (always)
+        watcher = QueueMoveWatcher(
+            source_queue, dest_queue, handler, db=broker, **kwargs
+        )
         register_watcher(watcher)  # Register for automatic cleanup
         try:
             yield watcher

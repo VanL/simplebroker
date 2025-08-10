@@ -721,11 +721,10 @@ def test_large_volume_move(broker, tmp_path):
 
     # QueueMoveWatcher uses BrokerDB internally, which is appropriate
     watcher = QueueMoveWatcher(
-        broker=broker,
-        source_queue="source",
-        dest_queue="dest",
-        handler=count_handler,
-        max_interval=0.001,  # Fast polling for performance test
+        "source",
+        "dest",
+        count_handler,
+        db=broker,
         max_messages=num_messages,  # Stop after moving all messages
     )
 

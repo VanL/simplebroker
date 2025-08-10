@@ -188,9 +188,9 @@ def test_metrics_collection_basic() -> None:
                 time.sleep(0.01)  # Simulate processing time
 
             watcher = MonitoredQueueWatcher(
-                db_path,
                 "test_queue",
                 handler,
+                db=db_path,
                 metrics_collector=metrics,
             )
 
@@ -241,11 +241,10 @@ def test_metrics_efficiency_tracking() -> None:
                 pass
 
             watcher1 = MonitoredQueueWatcher(
-                db_path,
                 "empty_queue",
                 handler,
+                db=db_path,
                 metrics_collector=metrics1,
-                max_interval=0.01,
             )
 
             thread1 = watcher1.run_in_thread()
@@ -259,11 +258,10 @@ def test_metrics_efficiency_tracking() -> None:
             # Test scenario 2: Active queue
             metrics2 = MetricsCollector()
             watcher2 = MonitoredQueueWatcher(
-                db_path,
                 "active_queue",
                 handler,
+                db=db_path,
                 metrics_collector=metrics2,
-                max_interval=0.01,
             )
 
             # Add messages continuously
@@ -307,9 +305,9 @@ def test_metrics_logging() -> None:
             # Capture log output
             with patch("logging.Logger.info") as mock_log:
                 watcher = MonitoredQueueWatcher(
-                    db_path,
                     "test_queue",
                     handler,
+                    db=db_path,
                     metrics_collector=metrics,
                 )
 
@@ -360,9 +358,9 @@ def test_metrics_aggregation() -> None:
 
             for i in range(num_watchers):
                 watcher = MonitoredQueueWatcher(
-                    db_path,
                     f"queue_{i}",
                     handler,
+                    db=db_path,
                     metrics_collector=global_metrics,
                 )
                 watchers.append(watcher)

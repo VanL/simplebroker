@@ -137,7 +137,7 @@ def test_burst_mode_resets_on_activity(no_jitter) -> None:
             def handler(msg, ts) -> None:
                 processed_messages.append((msg, time.time()))
 
-            watcher = InstrumentedQueueWatcher(db_path, "test_queue", handler)
+            watcher = InstrumentedQueueWatcher("test_queue", handler, db=db_path)
             strategy = watcher._strategy
 
             # Start watcher
@@ -217,14 +217,14 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter) -> None:
 
             # Create two watchers - one active, one idle
             active_watcher = InstrumentedQueueWatcher(
-                db_path,
                 "active_queue",
                 make_handler("active"),
+                db=db_path,
             )
             idle_watcher = InstrumentedQueueWatcher(
-                db_path,
                 "idle_queue",
                 make_handler("idle"),
+                db=db_path,
             )
 
             active_watcher.run_in_thread()
@@ -297,7 +297,7 @@ def test_burst_mode_gradual_backoff(no_jitter) -> None:
             def handler(msg, ts) -> None:
                 pass
 
-            watcher = InstrumentedQueueWatcher(db_path, "test_queue", handler)
+            watcher = InstrumentedQueueWatcher("test_queue", handler, db=db_path)
             strategy = watcher._strategy
 
             # Manually test the delay calculation at different check counts
@@ -336,9 +336,9 @@ def test_burst_mode_with_batch_processing(no_jitter) -> None:
                 processed.append(msg)
 
             watcher = InstrumentedQueueWatcher(
-                db_path,
                 "test_queue",
                 handler,
+                db=db_path,
                 batch_processing=True,
             )
 
@@ -385,9 +385,9 @@ def test_burst_mode_with_errors_single_message(no_jitter) -> None:
 
             # Test with default single-message processing
             watcher = InstrumentedQueueWatcher(
-                db_path,
                 "test_queue",
                 handler,
+                db=db_path,
                 # batch_processing=False is the default
             )
             watcher.run_in_thread()
@@ -436,9 +436,9 @@ def test_burst_mode_with_errors_batch_processing(no_jitter) -> None:
 
             # Test with batch processing enabled
             watcher = InstrumentedQueueWatcher(
-                db_path,
                 "test_queue",
                 handler,
+                db=db_path,
                 batch_processing=True,  # Process all messages in one polling cycle
             )
             watcher.run_in_thread()
@@ -485,7 +485,7 @@ def test_polling_jitter() -> None:
 
             # Create multiple watchers
             for i in range(5):
-                w = InstrumentedQueueWatcher(db_path, f"queue_{i}", handler)
+                w = InstrumentedQueueWatcher(f"queue_{i}", handler, db=db_path)
                 watchers.append(w)
                 w.run_in_thread()
 
@@ -621,7 +621,7 @@ def test_burst_mode_with_peek_mode(no_jitter) -> None:
                 peeked_messages.append((msg, ts))
 
             watcher = InstrumentedQueueWatcher(
-                db_path, "test_queue", handler, peek=True
+                "test_queue", handler, db=db_path, peek=True
             )
             strategy = watcher._strategy
 
@@ -694,7 +694,7 @@ def test_burst_mode_state_transitions(no_jitter) -> None:
             def handler(msg, ts) -> None:
                 processed_messages.append(msg)
 
-            watcher = InstrumentedQueueWatcher(db_path, "test_queue", handler)
+            watcher = InstrumentedQueueWatcher("test_queue", handler, db=db_path)
             strategy = watcher._strategy
 
             watcher.run_in_thread()

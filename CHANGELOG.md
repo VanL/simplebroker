@@ -5,6 +5,72 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2025-08-10
+### Changed
+- **BREAKING**: Watcher API reorganization for improved consistency:
+  - All Watcher classes now use queue-first parameter order: `(queue, handler, *, db=None, stop_event=None)`
+  - `QueueWatcher(queue_name, handler, db=db_path)` instead of `QueueWatcher(db_path, queue_name, handler)`
+  - `QueueMoveWatcher(source_queue, dest_queue, handler, db=db_path)` follows same pattern
+  - Removed complex dual-convention detection logic (175+ lines eliminated)
+  - Simplified BaseWatcher architecture with consistent Queue object delegation
+- Updated all examples and tests to use new API
+- Improved docstring examples throughout watcher.py
+
+### Technical
+- Maintains CLI backward compatibility
+- All watcher functionality preserved with cleaner, more intuitive API
+- Enhanced test coverage for new API patterns
+
+## [2.2.0] - 2025-08-09
+### Added
+- Connection tracking for persistent mode database connections
+- Instance ID support for testing scenarios
+
+### Changed
+- Comprehensive API refactoring and improvements
+- Enhanced Queue API with new methods and better error handling
+- Improved connection management and resource cleanup
+- Better Windows test compatibility and cleanup logic
+- Enhanced signal handling responsiveness
+
+### Technical
+- Major internal restructuring (7,000+ lines changed)
+- New comprehensive test suites for queue operations and SQL internals
+- Improved batch operations and generator methods
+- Better connection pooling and resource management
+
+## [2.1.0] - 2025-08-06
+### Added
+- Constants centralization in `_constants.py`
+- Thundering herd mitigation for watchers to prevent resource contention
+- Comprehensive watcher test suites:
+  - Burst mode handling
+  - Metrics collection and monitoring
+  - Multiprocess coordination
+  - Race condition prevention
+  - Performance optimization
+
+### Changed
+- Improved time handling with `time.monotonic()` for better accuracy
+- Enhanced Windows test compatibility
+- Better CLI command parsing and BaseWatcher refactoring
+- Improved timestamp validation and jitter handling
+
+### Technical
+- Extensive test quality improvements
+- Better test isolation and determinism
+- Enhanced performance calibration system
+
+## [2.0.1] - 2025-07-20
+### Fixed
+- Windows test compatibility and finalization logic
+- Queue resource cleanup for Windows environments
+- Minor formatting and documentation improvements
+
+### Added
+- Code coverage reporting with Codecov integration
+- Additional test coverage and README badges
+
 ## [2.0.0] - 2025-07-19
 ### Added
 - **New Python API** for programmatic queue operations:

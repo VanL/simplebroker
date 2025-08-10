@@ -91,9 +91,9 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Create watcher with BrokerDB instance (backward compatibility)
         watcher = QueueWatcher(
-            broker_db,
             "test_queue",
             collector.handler,
+            db=broker_db,
             peek=False,
         )
 
@@ -127,9 +127,9 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Use database path for thread-safe operation
         watcher = QueueWatcher(
-            temp_db,
             "test_queue",
             collector.handler,
+            db=temp_db,
             peek=False,
         )
 
@@ -166,9 +166,9 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Use database path for thread-safe operation
         watcher = QueueWatcher(
-            temp_db,
             "test_queue",
             collector.handler,
+            db=temp_db,
             peek=True,
         )
 
@@ -314,7 +314,7 @@ class TestQueueWatcher(WatcherTestBase):
 
             db_path = sys.argv[1]
             db = BrokerDB(db_path)
-            watcher = QueueWatcher(db, "test_queue", lambda m, t: None)
+            watcher = QueueWatcher("test_queue", lambda m, t: None, db=db)
 
             # Stop immediately so we don't block
             watcher.stop()
@@ -367,9 +367,9 @@ class TestQueueWatcher(WatcherTestBase):
 
         with BrokerDB(temp_db) as watcher_db:
             watcher = QueueWatcher(
-                watcher_db,
                 "test_queue",
                 faulty_handler,
+                db=watcher_db,
                 error_handler=error_handler,
             )
 
@@ -433,9 +433,9 @@ class TestQueueWatcher(WatcherTestBase):
             for _i, collector in enumerate(collectors):
                 # Use database path for thread-safe operation
                 watcher = QueueWatcher(
-                    temp_db,
                     "work_queue",
                     collector.handler,
+                    db=temp_db,
                     peek=False,
                 )
                 thread = watcher.run_in_thread()
@@ -482,18 +482,18 @@ class TestQueueWatcher(WatcherTestBase):
         read_db = BrokerDB(temp_db)
         try:
             peek_watcher = QueueWatcher(
-                peek_db,
                 "mixed_queue",
                 peek_collector.handler,
+                db=peek_db,
                 peek=True,
             )
             peek_thread = peek_watcher.run_in_thread()
 
             # Start read watcher
             read_watcher = QueueWatcher(
-                read_db,
                 "mixed_queue",
                 read_collector.handler,
+                db=read_db,
                 peek=False,
             )
             read_thread = read_watcher.run_in_thread()
@@ -550,9 +550,9 @@ class TestQueueWatcher(WatcherTestBase):
             db = BrokerDB(temp_db)
             try:
                 watcher = QueueWatcher(
-                    db,
                     "test_queue",
                     lambda m, t: None,
+                    db=db,
                 )
                 watcher_ref = watcher
                 watcher_created.set()  # Signal that watcher is created
@@ -583,9 +583,9 @@ class TestQueueWatcher(WatcherTestBase):
         """Test that polling strategy lifecycle works correctly."""
         with BrokerDB(temp_db) as db:
             watcher = QueueWatcher(
-                db,
                 "test_queue",
                 lambda m, t: None,
+                db=db,
             )
 
             # Access internal strategy for testing
@@ -613,9 +613,9 @@ class TestQueueWatcher(WatcherTestBase):
         # Get current messages to find msg2's timestamp
         initial_collector = MessageCollector()
         initial_watcher = QueueWatcher(
-            temp_db,
             "test_queue",
             initial_collector.handler,
+            db=temp_db,
             peek=True,
         )
         thread = initial_watcher.run_in_thread()
@@ -639,9 +639,9 @@ class TestQueueWatcher(WatcherTestBase):
         # Create watcher with since_timestamp set to ts_msg2
         # Should only see msg3 (messages after ts_msg2)
         watcher = QueueWatcher(
-            temp_db,
             "test_queue",
             collector.handler,
+            db=temp_db,
             peek=True,
             since_timestamp=ts_msg2,
         )
@@ -670,9 +670,9 @@ class TestQueueWatcher(WatcherTestBase):
         # Get timestamp of last message in first batch
         initial_collector = MessageCollector()
         initial_watcher = QueueWatcher(
-            temp_db,
             "test_queue",
             initial_collector.handler,
+            db=temp_db,
             peek=True,
         )
         thread = initial_watcher.run_in_thread()
@@ -700,9 +700,9 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Create watcher with since_timestamp
         watcher = QueueWatcher(
-            temp_db,
             "test_queue",
             collector.handler,
+            db=temp_db,
             peek=True,
             since_timestamp=ts_mid,
         )
@@ -741,7 +741,7 @@ class TestPollingStrategy:
             def handler(msg: str, ts: int):
                 messages_received.append(msg)
 
-            watcher = QueueWatcher(db, "version_test", handler)
+            watcher = QueueWatcher("version_test", handler, db=db)
 
             # Start watcher
             thread = watcher.run_in_thread()
@@ -825,9 +825,9 @@ class TestErrorScenarios(WatcherTestBase):
 
         with BrokerDB(temp_db) as watcher_db:
             watcher = QueueWatcher(
-                watcher_db,
                 "test_queue",
                 failing_handler,
+                db=watcher_db,
             )
 
             thread = watcher.run_in_thread()
@@ -859,9 +859,9 @@ class TestErrorScenarios(WatcherTestBase):
 
         with BrokerDB(temp_db) as watcher_db:
             watcher = QueueWatcher(
-                watcher_db,
                 "test_queue",
                 handler,
+                db=watcher_db,
                 error_handler=bad_error_handler,
             )
 
@@ -885,16 +885,16 @@ class TestErrorScenarios(WatcherTestBase):
         # Using the same connection should work but with warnings
         with BrokerDB(temp_db) as shared_db:
             watcher1 = QueueWatcher(
-                shared_db,
                 "queue1",
                 lambda m, t: None,
+                db=shared_db,
             )
 
             # This would be bad practice but shouldn't crash
             watcher2 = QueueWatcher(
-                shared_db,
                 "queue2",
                 lambda m, t: None,
+                db=shared_db,
             )
 
             # Just verify they were created
@@ -976,9 +976,9 @@ class TestErrorScenarios(WatcherTestBase):
 
         # Create and run watcher
         watcher = QueueWatcher(
-            temp_db,
             "signal_test_queue",
             test_handler,
+            db=temp_db,
             peek=False,
         )
 
@@ -1011,7 +1011,7 @@ def test_context_manager_usage(temp_db):
     broker_db.close()
 
     # Use watcher as a context manager
-    with QueueWatcher(temp_db, "context_queue", handler, peek=False) as watcher:
+    with QueueWatcher("context_queue", handler, db=temp_db, peek=False) as watcher:
         # The thread should be started automatically
         assert hasattr(watcher, "_thread")
         assert watcher._thread is not None
@@ -1046,7 +1046,7 @@ def test_context_manager_with_exception(temp_db):
 
     # Test that cleanup happens even with exception
     try:
-        with QueueWatcher(temp_db, "error_queue", handler) as watcher:
+        with QueueWatcher("error_queue", handler, db=temp_db) as watcher:
             thread = watcher._thread()  # Get strong reference from weak ref
             assert thread is not None
             assert thread.is_alive()

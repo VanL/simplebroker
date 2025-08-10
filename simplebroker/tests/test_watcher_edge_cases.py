@@ -33,7 +33,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             db_path = Path(tmpdir) / "test.db"
 
             with pytest.raises(TypeError, match="handler must be callable"):
-                QueueWatcher(str(db_path), "queue", "not_callable")
+                QueueWatcher("queue", "not_callable", db=str(db_path))
 
     def test_invalid_error_handler_type(self) -> None:
         """Test that non-callable error_handler raises TypeError."""
@@ -45,9 +45,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
             with pytest.raises(TypeError, match="error_handler must be callable"):
                 QueueWatcher(
-                    str(db_path),
                     "queue",
                     handler,
+                    db=str(db_path),
                     error_handler="not_callable",
                 )
 
@@ -59,7 +59,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             db_path = Path(tmpdir) / "test.db"
 
             # Create watcher with normal config
-            watcher = QueueWatcher(str(db_path), "queue", lambda m, t: None)
+            watcher = QueueWatcher("queue", lambda m, t: None, db=str(db_path))
 
             # Verify defaults are used from config
             assert watcher._strategy._initial_checks == 100
@@ -104,9 +104,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
                     return True  # Continue processing
 
                 watcher = QueueWatcher(
-                    db,
                     "queue",
                     handler,
+                    db=db,
                     error_handler=error_handler,
                 )
 
@@ -136,9 +136,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
                     return False  # Request stop
 
                 watcher = QueueWatcher(
-                    db,
                     "queue",
                     handler,
+                    db=db,
                     error_handler=error_handler,
                 )
 
@@ -166,9 +166,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
                     raise RuntimeError(msg)
 
                 watcher = QueueWatcher(
-                    db,
                     "queue",
                     handler,
+                    db=db,
                     error_handler=error_handler,
                 )
 
@@ -319,7 +319,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
         """Test handling of errors during thread-local cleanup."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
-            watcher = QueueWatcher(str(db_path), "queue", lambda m, t: None)
+            watcher = QueueWatcher("queue", lambda m, t: None, db=str(db_path))
             try:
                 # Create a connection by accessing the queue's connection
                 with watcher._queue_obj.get_connection() as db:
@@ -367,7 +367,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            watcher = QueueWatcher(str(db_path), "queue", lambda m, t: None)
+            watcher = QueueWatcher("queue", lambda m, t: None, db=str(db_path))
             thread = None
             try:
                 # Start the watcher manually so we can control cleanup
@@ -436,7 +436,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
         """Test that signal handler is not installed in non-main threads."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
-            watcher = QueueWatcher(str(db_path), "queue", lambda m, t: None)
+            watcher = QueueWatcher("queue", lambda m, t: None, db=str(db_path))
 
             # Run in a thread (not main)
             threading.Event()
@@ -683,7 +683,7 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
                 ValueError,
                 match="Cannot move messages to the same queue",
             ):
-                QueueMoveWatcher(str(db_path), "queue", "queue", lambda m, t: None)
+                QueueMoveWatcher("queue", "queue", lambda m, t: None, db=str(db_path))
 
     def test_move_with_handler_error(self) -> None:
         """Test that handler errors don't affect move (already completed)."""
@@ -704,10 +704,10 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
                     return True  # Continue
 
                 watcher = QueueMoveWatcher(
-                    db,
                     "source",
                     "dest",
                     handler,
+                    db=db,
                     error_handler=error_handler,
                     max_messages=1,
                 )
