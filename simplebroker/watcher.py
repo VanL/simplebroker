@@ -69,6 +69,7 @@ Typical usage:
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import random
 import signal
@@ -95,7 +96,124 @@ from .sbqueue import Queue
 if TYPE_CHECKING:
     from pathlib import Path
 
-__all__ = ["Message", "QueueMoveWatcher", "QueueWatcher"]
+__all__ = [
+    "Message",
+    "QueueMoveWatcher",
+    "QueueWatcher",
+    "simple_print_handler",
+    "json_print_handler",
+    "logger_handler",
+    "default_error_handler",
+]
+
+
+# Default message handlers for common use cases
+def simple_print_handler(msg: str, ts: int) -> None:
+    """Simple handler that prints messages with timestamps.
+
+    This is the most basic handler that outputs each message with its unique
+    timestamp ID. Useful for debugging and simple monitoring scenarios.
+
+    Args:
+        msg: Message content
+        ts: Message timestamp (unique 64-bit hybrid timestamp ID)
+
+    Example:
+        >>> simple_print_handler("Hello World", 1837025672140161024)
+        [1837025672140161024] Hello World
+    """
+    print(f"[{ts}] {msg}")
+
+
+def json_print_handler(msg: str, ts: int) -> None:
+    """Handler that outputs messages in JSON format.
+
+    Outputs each message as a JSON object with 'message' and 'timestamp' fields.
+    This format is safe for processing with tools like jq and handles messages
+    containing newlines or special characters correctly.
+
+    Args:
+        msg: Message content
+        ts: Message timestamp (unique 64-bit hybrid timestamp ID)
+
+    Example:
+        >>> json_print_handler("Hello\\nWorld", 1837025672140161024)
+        {"message": "Hello\\nWorld", "timestamp": 1837025672140161024}
+    """
+    print(json.dumps({"message": msg, "timestamp": ts}, ensure_ascii=False))
+
+
+def logger_handler(msg: str, ts: int) -> None:
+    """Handler that logs messages using Python's logging system.
+
+    Logs each message at INFO level using the 'simplebroker.watcher' logger.
+    This integrates with your application's logging configuration and allows
+    for proper log levels, formatting, and output destinations.
+
+    Args:
+        msg: Message content
+        ts: Message timestamp (unique 64-bit hybrid timestamp ID)
+
+    Example:
+        >>> logger_handler("Processing order", 1837025672140161024)
+        INFO:simplebroker.watcher:Message 1837025672140161024: Processing order
+    """
+    logger.info(f"Message {ts}: {msg}")
+
+
+def default_error_handler(exc: Exception, message: str, timestamp: int) -> bool:
+    """Default error handler that logs errors and continues processing.
+
+    This is a clean, predictable error handler suitable for most applications.
+    It logs errors at ERROR level and allows processing to continue. This handler
+    always logs regardless of SimpleBroker's internal configuration settings,
+    making it suitable for building custom error handlers.
+
+    Args:
+        exc: The exception raised by the message handler
+        message: The message that caused the error
+        timestamp: The message timestamp (unique 64-bit hybrid timestamp ID)
+
+    Returns:
+        True to continue processing (don't stop the watcher)
+
+    Example:
+        >>> # Use directly
+        >>> watcher = QueueWatcher("tasks", handler, error_handler=default_error_handler)
+        >>>
+        >>> # Build custom handler using this as base
+        >>> def custom_error_handler(exc, msg, ts):
+        ...     print(f"Custom handling: {exc}")
+        ...     return default_error_handler(exc, msg, ts)
+    """
+    logger.error(f"Handler error: {exc}")
+    return True
+
+
+def _config_aware_default_error_handler(
+    exc: Exception, message: str, timestamp: int
+) -> bool:
+    """Internal default error handler that respects BROKER_LOGGING_ENABLED.
+
+    Used internally by SimpleBroker to maintain backward compatibility with
+    users who have disabled logging via BROKER_LOGGING_ENABLED=0. For most
+    applications, use default_error_handler directly instead.
+
+    This function delegates to default_error_handler only when logging is enabled,
+    preserving the existing behavior where users can suppress SimpleBroker's
+    internal logging output.
+
+    Args:
+        exc: The exception raised by the message handler
+        message: The message that caused the error
+        timestamp: The message timestamp
+
+    Returns:
+        True to continue processing (don't stop the watcher)
+    """
+    if _config["BROKER_LOGGING_ENABLED"]:
+        return default_error_handler(exc, message, timestamp)
+    return True
 
 
 class Message(NamedTuple):
@@ -244,7 +362,7 @@ class BaseWatcher(ABC):
         e: Exception,
         message: str,
         timestamp: int,
-        error_handler: Callable[[Exception, str, int], bool | None] | None,
+        error_handler: Callable[[Exception, str, int], bool | None],
     ) -> None:
         """Handle errors from message handler.
 
@@ -252,35 +370,31 @@ class BaseWatcher(ABC):
             e: The exception that was raised
             message: The message being processed
             timestamp: The message timestamp
-            error_handler: Optional error handler callback
+            error_handler: Error handler callback
 
         Raises:
             _StopLoop: If error handler returns False
 
         """
-        if error_handler is not None:
-            stop_requested = False
-            try:
-                result = error_handler(e, message, timestamp)
-                if result is False:
-                    # Error handler says stop
-                    stop_requested = True
-                # True or None means continue
-            except Exception as eh_error:
-                # Error handler itself failed
-                if _config["BROKER_LOGGING_ENABLED"]:
-                    logger.exception(
-                        f"Error handler failed: {eh_error}\nOriginal error: {e}",
-                    )
+        stop_requested = False
+        try:
+            result = error_handler(e, message, timestamp)
+            if result is False:
+                # Error handler says stop
+                stop_requested = True
+            # True or None means continue
+        except Exception as eh_error:
+            # Error handler itself failed
+            if _config["BROKER_LOGGING_ENABLED"]:
+                logger.exception(
+                    f"Error handler failed: {eh_error}\nOriginal error: {e}",
+                )
 
-            # Raise _StopLoop outside the try block to avoid catching it
-            if stop_requested:
-                # Set stop event to ensure the watcher stops completely
-                self._stop_event.set()
-                raise _StopLoop from None
-        # Default behavior: log error and continue
-        elif _config["BROKER_LOGGING_ENABLED"]:
-            logger.error(f"Handler error: {e}")
+        # Raise _StopLoop outside the try block to avoid catching it
+        if stop_requested:
+            # Set stop event to ensure the watcher stops completely
+            self._stop_event.set()
+            raise _StopLoop from None
 
     def _check_stop(self) -> None:
         """Check if stop has been requested and raise _StopLoop if so."""
@@ -528,7 +642,7 @@ class BaseWatcher(ABC):
         self,
         message: str,
         timestamp: int,
-        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
+        error_handler: Callable[[Exception, str, int], bool | None],
     ) -> None:
         """Safely call the handler with error handling.
 
@@ -845,7 +959,9 @@ class QueueWatcher(BaseWatcher):
         peek: bool = False,
         since_timestamp: int | None = None,
         batch_processing: bool = False,
-        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
+        error_handler: Callable[
+            [Exception, str, int], bool | None
+        ] = _config_aware_default_error_handler,
     ) -> None:
         """Initialize the QueueWatcher.
 
@@ -894,9 +1010,9 @@ class QueueWatcher(BaseWatcher):
         self._last_seen_ts = since_timestamp if since_timestamp is not None else 0
         self._batch_processing = batch_processing
 
-        # Validate error_handler is callable if provided
-        if error_handler is not None and not callable(error_handler):
-            msg = f"error_handler must be callable if provided, got {type(error_handler).__name__}"
+        # Validate error_handler is callable
+        if not callable(error_handler):
+            msg = f"error_handler must be callable, got {type(error_handler).__name__}"
             raise TypeError(msg)
 
         # Two-phase detection configuration
@@ -1160,7 +1276,9 @@ class QueueMoveWatcher(BaseWatcher):
         db: BrokerDB | str | Path | None = None,
         stop_event: threading.Event | None = None,
         max_messages: int | None = None,
-        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
+        error_handler: Callable[
+            [Exception, str, int], bool | None
+        ] = _config_aware_default_error_handler,
     ) -> None:
         """Initialize a QueueMoveWatcher.
 

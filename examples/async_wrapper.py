@@ -26,6 +26,7 @@ from typing import Any, AsyncGenerator, Callable, Optional, ParamSpec, TypeVar, 
 
 # Use the public API - Queue and QueueWatcher
 from simplebroker import Queue, QueueWatcher
+from simplebroker.watcher import logger_handler
 
 # For cross-queue operations requiring direct database access (advanced use)
 # Removed DBConnection import - use BrokerDB directly
@@ -241,7 +242,8 @@ async def example_watcher(broker: AsyncBroker) -> None:
 
     def handler(msg: str, ts: int) -> None:
         """Handler runs in thread pool."""
-        logger.info(f"Watcher received at {ts}: {msg}")
+        # Use logger_handler for consistent logging plus our custom logic
+        logger_handler(msg, ts)
         processed.append(msg)
 
     # Start watching

@@ -5,6 +5,16 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2025-08-11
+### Added
+- Default message handlers: `simple_print_handler`, `json_print_handler`, `logger_handler`
+- Default error handler: `default_error_handler` with config-aware internal wrapper
+- Example demonstrating all default handlers (`examples/simple_watcher_example.py`)
+
+### Changed
+- Error handlers now use function defaults instead of None checks
+- Simplified error handling code paths and improved type signatures
+
 ## [2.3.0] - 2025-08-10
 ### Changed
 - **BREAKING**: Watcher API reorganization for improved consistency:

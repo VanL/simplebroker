@@ -82,6 +82,11 @@ When working with message queues:
   - Thread-safe cleanup examples
   - **START HERE for Python usage**
 
+- **[simple_watcher_example.py](simple_watcher_example.py)** - Default handlers demonstration
+  - Shows `simple_print_handler`, `json_print_handler`, and `logger_handler`
+  - Examples of building custom handlers using defaults as building blocks
+  - Good introduction to watcher patterns before diving into python_api.py
+
 - **[async_wrapper.py](async_wrapper.py)** - Async wrapper around standard API
   - Simple async/await interface using thread pool
   - Works with standard `Queue` and `QueueWatcher` classes
