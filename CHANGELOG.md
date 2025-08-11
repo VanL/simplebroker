@@ -5,6 +5,13 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [2.3.2] - 2025-08-11
+### Changed
+- Moved common functionality in Watchers to BaseWatcher
+- Exposed PollingStrategy as an optional parameter to Watchers 
+- Added __str__ and __repr__ to Queues for convenience
+
 ## [2.3.1] - 2025-08-11
 ### Added
 - Default message handlers: `simple_print_handler`, `json_print_handler`, `logger_handler`

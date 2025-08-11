@@ -102,12 +102,12 @@ class MonitoredQueueWatcher(QueueWatcher):
         self._last_log_time = time.time()
         self._log_interval = float(os.environ.get("BROKER_WATCHER_LOG_INTERVAL", "60"))
 
-    def _has_pending_messages(self, db: BrokerDB | None = None) -> bool:
+    def _has_pending_messages(self) -> bool:
         """Track pre-check performance."""
         start = time.perf_counter()
 
         # Use parent's implementation which uses the Queue API
-        result = super()._has_pending_messages(db)
+        result = super()._has_pending_messages()
 
         elapsed_us = (time.perf_counter() - start) * 1_000_000
         self.metrics.record_pre_check(self._queue, elapsed_us)
@@ -120,7 +120,7 @@ class MonitoredQueueWatcher(QueueWatcher):
 
         if self._enable_pre_check:
             # Check if there are pending messages using the parent's method
-            if not self._has_pending_messages(None):
+            if not self._has_pending_messages():
                 self.metrics.record_wake_up(self._queue, empty=True)
                 self._maybe_log_stats()
                 elapsed_ms = (time.perf_counter() - start) * 1000

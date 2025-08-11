@@ -255,6 +255,7 @@ class BaseWatcher(ABC):
         *,
         db: BrokerDB | str | Path | None = None,
         stop_event: threading.Event | None = None,
+        polling_strategy: PollingStrategy | None = None,
     ) -> None:
         """Initialize base watcher.
 
@@ -262,6 +263,7 @@ class BaseWatcher(ABC):
             queue: Queue object or queue name
             db: Database instance or path (uses default if None)
             stop_event: Optional event to signal watcher shutdown
+            polling_strategy: Custom polling strategy (uses default if None)
 
         """
         # Handle queue parameter - either Queue object or string name
@@ -295,6 +297,17 @@ class BaseWatcher(ABC):
         # Thread-safe lock for stop synchronization
         self._stop_lock = threading.Lock()
 
+        # Create or use provided polling strategy
+        self._strategy = polling_strategy or self._create_strategy()
+
+        # Initialize handler attributes (will be set by subclasses if not already set)
+        if not hasattr(self, "_handler"):
+            self._handler: Callable[[str, int], None] | None = None
+        if not hasattr(self, "_error_handler"):
+            self._error_handler: Callable[[Exception, str, int], bool | None] | None = (
+                None
+            )
+
         # Set up automatic cleanup finalizer
         self._setup_finalizer()
 
@@ -304,6 +317,42 @@ class BaseWatcher(ABC):
         Returns the Queue object (always available in new API).
         """
         return self._queue_obj
+
+    def _create_strategy(self) -> PollingStrategy:
+        """Create the default polling strategy for this watcher.
+
+        This method provides the default PollingStrategy configuration
+        using environment-based settings. Subclasses can override this
+        method to customize default behavior while preserving the ability
+        to inject custom strategies via the polling_strategy parameter.
+
+        Override Examples:
+            class HighVolumeWatcher(QueueWatcher):
+                def _create_strategy(self) -> PollingStrategy:
+                    # Faster polling for high-volume scenarios
+                    return PollingStrategy(
+                        stop_event=self._stop_event,
+                        initial_checks=1000,
+                        max_interval=0.001,
+                        burst_sleep=0.00001,
+                    )
+
+        Returns:
+            PollingStrategy: Configured with environment settings from:
+                - SIMPLEBROKER_INITIAL_CHECKS (default: 100)
+                - SIMPLEBROKER_MAX_INTERVAL (default: 0.1)
+                - SIMPLEBROKER_BURST_SLEEP (default: 0.0002)
+
+        See Also:
+            PollingStrategy: For parameter details
+            load_config(): For environment variable handling
+        """
+        return PollingStrategy(
+            stop_event=self._stop_event,
+            initial_checks=_config["SIMPLEBROKER_INITIAL_CHECKS"],
+            max_interval=_config["SIMPLEBROKER_MAX_INTERVAL"],
+            burst_sleep=_config["SIMPLEBROKER_BURST_SLEEP"],
+        )
 
     def _process_with_retry(
         self, process_func: Callable[[], Any], operation_name: str
@@ -452,10 +501,9 @@ class BaseWatcher(ABC):
             join = False  # someone else already did the join
         else:
             self._stop_event.set()
-            # Notify strategy if it exists (from subclasses)
-            strategy = getattr(self, "_strategy", None)
-            if strategy and hasattr(strategy, "notify_activity"):
-                strategy.notify_activity()  # Wake up wait_for_activity
+            # Notify strategy to wake up wait_for_activity
+            if hasattr(self._strategy, "notify_activity"):
+                self._strategy.notify_activity()  # Wake up wait_for_activity
 
         if join and self._thread is not None:
             thread = self._thread()  # Get strong reference from weak ref
@@ -532,22 +580,34 @@ class BaseWatcher(ABC):
             raise TimeoutError(msg)
 
     def _process_messages(self) -> None:
-        """Process messages from the queue.
+        """Overridable base class method for message processing.
 
         This is the main message processing loop that:
-        1. Waits for activity (if strategy exists)
-        2. Checks for pending messages (if applicable)
+        1. Waits for activity
+        2. Checks for pending messages (if subclass supports it)
         3. Drains the queue
 
-        Subclasses can override this for custom processing logic.
+        Subclasses can override this method to implement custom logic.
         """
-        # Default implementation for base watchers
-        # QueueWatcher will override this with its specific logic
         while True:
+            # Wait until something might have happened
+            self._strategy.wait_for_activity()
+
             # Check stop before processing
             self._check_stop()
 
-            # Drain the queue
+            # Two-phase detection: check if we actually have messages (if subclass supports it)
+            if not getattr(self, "_skip_idle_check", False) and hasattr(
+                self, "_has_pending_messages"
+            ):
+                if not self._has_pending_messages():  # Remove the None argument
+                    # No messages for this queue, skip drain
+                    continue
+
+            # Always try to drain the queue first; this guarantees
+            # that a stop request does not prevent us from
+            # finishing already-visible work, so connections can
+            # be closed and no messages get lost.
             self._drain_queue()
 
     def _handle_retry(
@@ -607,10 +667,14 @@ class BaseWatcher(ABC):
 
             try:
                 # Initialize strategy with data version getter
-                if hasattr(self, "_strategy") and hasattr(self._strategy, "start"):
+                if hasattr(self._strategy, "start"):
                     queue = self._get_queue_for_data_version()
+
                     # Capture queue in closure to avoid B023 warning
-                    self._strategy.start(lambda q=queue: q.get_data_version())
+                    def data_version_getter(q: Queue = queue) -> int | None:
+                        return q.get_data_version()
+
+                    self._strategy.start(data_version_getter)
 
                 # Initial drain of existing messages
                 self._drain_queue()
@@ -652,10 +716,77 @@ class BaseWatcher(ABC):
             error_handler: Optional error handler for exceptions
         """
         try:
-            if hasattr(self, "_handler"):
+            if hasattr(self, "_handler") and self._handler is not None:
                 self._handler(message, timestamp)
         except Exception as e:
             self._handle_handler_error(e, message, timestamp, error_handler)
+
+    def _try_dispatch_message(self, body: str, timestamp: int) -> bool:
+        """Try to dispatch a message, return True if successful.
+
+        This method provides safe message dispatch with exception handling.
+        It will re-raise _StopLoop exceptions but catch and handle all other
+        exceptions, returning False to indicate dispatch failure.
+
+        Args:
+            body: Message content
+            timestamp: Message timestamp
+
+        Returns:
+            True if message was dispatched successfully, False otherwise
+
+        Raises:
+            _StopLoop: If stop was requested during dispatch
+        """
+        try:
+            self._dispatch(body, timestamp)
+            return True
+        except _StopLoop:
+            raise  # Re-raise stop signal
+        except Exception:
+            # Don't update timestamp if dispatch failed in peek mode
+            # This ensures we'll retry the message next time
+            return False
+
+    def _dispatch(self, message: str, timestamp: int) -> None:
+        """Dispatch a message to the handler with error handling and size validation.
+
+        This method provides standardized message dispatch logic including:
+        - Message size validation (10MB limit)
+        - Safe handler invocation with error handling
+        - Consistent error reporting
+
+        Args:
+            message: The message content to dispatch
+            timestamp: The message timestamp
+
+        Note:
+            This method requires _handler and _error_handler to be set by subclasses.
+            If the message exceeds the size limit, it will be truncated for error reporting
+            but the original oversized message will be discarded.
+        """
+        # Validate message size (10MB limit)
+        message_size = len(message.encode("utf-8"))
+        if message_size > MAX_MESSAGE_SIZE:
+            error_msg = f"Message size ({message_size} bytes) exceeds {MAX_MESSAGE_SIZE // (1024 * 1024)}MB limit"
+            if _config["BROKER_LOGGING_ENABLED"]:
+                logger.error(error_msg)
+            # Use error handler if available
+            if self._error_handler:
+                self._handle_handler_error(
+                    ValueError(error_msg),
+                    message[:1000] + "...",
+                    timestamp,
+                    self._error_handler,
+                )
+            return
+
+        # Dispatch message using safe handler method if error handler is available
+        if self._error_handler:
+            self._safe_call_handler(message, timestamp, self._error_handler)
+        elif self._handler:
+            # Direct call if no error handler (legacy support)
+            self._handler(message, timestamp)
 
     def run_forever(self) -> None:
         """Run the watcher continuously until stopped.
@@ -690,6 +821,34 @@ class BaseWatcher(ABC):
         # Store weak reference for the finalizer
         self._thread = weakref.ref(thread)
         return thread
+
+    def start(self) -> threading.Thread:
+        """Start the watcher in a background thread.
+
+        This is a convenience method that calls run_in_thread().
+
+        IMPORTANT: You MUST call stop() when done!
+        See the warnings in run_in_thread() and stop() for details.
+
+        Returns:
+            The thread running the watcher.
+        """
+        return self.run_in_thread()
+
+    def run(self) -> None:
+        """Run the watcher synchronously until stopped.
+
+        This is a convenience method that calls run_forever().
+
+        This method blocks until:
+        - stop() is called from another thread
+        - SIGINT (Ctrl+C) is received (if in main thread)
+        - An unrecoverable error occurs
+
+        No additional cleanup is needed after this method returns, as it
+        runs synchronously in the current thread.
+        """
+        self.run_forever()
 
     def __enter__(self) -> BaseWatcher:
         """Enter context manager - start watcher in background thread."""
@@ -959,6 +1118,7 @@ class QueueWatcher(BaseWatcher):
         peek: bool = False,
         since_timestamp: int | None = None,
         batch_processing: bool = False,
+        polling_strategy: PollingStrategy | None = None,
         error_handler: Callable[
             [Exception, str, int], bool | None
         ] = _config_aware_default_error_handler,
@@ -973,6 +1133,7 @@ class QueueWatcher(BaseWatcher):
             peek: If True, don't consume messages (default False)
             since_timestamp: Only process messages newer than this timestamp
             batch_processing: Process all messages at once vs one-by-one
+            polling_strategy: Custom polling strategy (uses default if None)
             error_handler: Handler for exceptions from main handler
 
         Examples:
@@ -992,11 +1153,19 @@ class QueueWatcher(BaseWatcher):
             msg = f"handler must be callable, got {type(handler).__name__}"
             raise TypeError(msg)
 
-        # Store handler
+        # Validate error_handler is callable
+        if not callable(error_handler):
+            msg = f"error_handler must be callable, got {type(error_handler).__name__}"
+            raise TypeError(msg)
+
+        # Store handlers before calling super().__init__() to prevent BaseWatcher from overriding
         self._handler = handler
+        self._error_handler = error_handler
 
         # Initialize parent class with queue-first pattern
-        super().__init__(queue, db=db, stop_event=stop_event)
+        super().__init__(
+            queue, db=db, stop_event=stop_event, polling_strategy=polling_strategy
+        )
 
         # Store queue name for backward compatibility
         if isinstance(queue, Queue):
@@ -1006,73 +1175,16 @@ class QueueWatcher(BaseWatcher):
         self._queue = self._queue_name  # Backward compatibility
         # Store watcher configuration
         self._peek = peek
-        self._error_handler = error_handler
         self._last_seen_ts = since_timestamp if since_timestamp is not None else 0
         self._batch_processing = batch_processing
-
-        # Validate error_handler is callable
-        if not callable(error_handler):
-            msg = f"error_handler must be callable, got {type(error_handler).__name__}"
-            raise TypeError(msg)
 
         # Two-phase detection configuration
         self._skip_idle_check = _config["BROKER_SKIP_IDLE_CHECK"]
 
-        # Create polling strategy with environment settings
-        self._strategy = PollingStrategy(
-            stop_event=self._stop_event,
-            initial_checks=_config["SIMPLEBROKER_INITIAL_CHECKS"],
-            max_interval=_config["SIMPLEBROKER_MAX_INTERVAL"],
-            burst_sleep=_config["SIMPLEBROKER_BURST_SLEEP"],
-        )
-
-    # __enter__ and __exit__ are inherited from BaseWatcher
-
-    def _process_messages(self) -> None:
-        """Override of base class method with QueueWatcher-specific logic.
-
-        This is the main message processing loop that:
-        1. Waits for activity
-        2. Checks for pending messages
-        3. Drains the queue
-        """
-        while True:
-            # Wait until something might have happened
-            self._strategy.wait_for_activity()
-
-            # Check stop before processing
-            self._check_stop()
-
-            # Two-phase detection: check if we actually have messages
-            if not getattr(self, "_skip_idle_check", False):
-                if not self._has_pending_messages(None):
-                    # No messages for this queue, skip drain
-                    continue
-
-            # Always try to drain the queue first; this guarantees
-            # that a stop request does not prevent us from
-            # finishing already-visible work, so connections can
-            # be closed and no messages get lost.
-            self._drain_queue()
-
-    # run_in_thread is inherited from BaseWatcher
-
-    def _sigint_handler(self, signum: int, frame: Any) -> None:
-        """Override of base class method with QueueWatcher-specific handling."""
-        # When handling SIGINT in run_forever(), we're in the main thread
-        # and there's no separate thread to join, so set join=False
-        self.stop(join=False)
-
-    # __del__ is inherited from BaseWatcher
-
-    def _has_pending_messages(self, db: BrokerDB | None = None) -> bool:
+    def _has_pending_messages(self) -> bool:
         """Fast check if queue has unclaimed messages.
 
         Uses the Queue's has_pending method with retry logic for operational error handling.
-
-        Args:
-            db: Optional database connection for backward compatibility.
-                Not used in the current implementation.
         """
 
         def check_func() -> bool:
@@ -1199,38 +1311,6 @@ class QueueWatcher(BaseWatcher):
 
         return found_any
 
-    def _try_dispatch_message(self, body: str, timestamp: int) -> bool:
-        """Try to dispatch a message, return True if successful."""
-        try:
-            self._dispatch(body, timestamp)
-            return True
-        except _StopLoop:
-            raise  # Re-raise stop signal
-        except Exception:
-            # Don't update timestamp if dispatch failed in peek mode
-            # This ensures we'll retry the message next time
-            return False
-
-    def _dispatch(self, message: str, timestamp: int) -> None:
-        """Dispatch a message to the handler with error handling and size validation."""
-        # Validate message size (10MB limit)
-        message_size = len(message.encode("utf-8"))
-        if message_size > MAX_MESSAGE_SIZE:
-            error_msg = f"Message size ({message_size} bytes) exceeds {MAX_MESSAGE_SIZE // (1024 * 1024)}MB limit"
-            if _config["BROKER_LOGGING_ENABLED"]:
-                logger.error(error_msg)
-            # Use parent's error handler
-            self._handle_handler_error(
-                ValueError(error_msg),
-                message[:1000] + "...",
-                timestamp,
-                self._error_handler,
-            )
-            return
-
-        # Use base class safe handler method
-        self._safe_call_handler(message, timestamp, self._error_handler)
-
 
 class QueueMoveWatcher(BaseWatcher):
     """Watches a source queue and atomically moves messages to a destination queue.
@@ -1276,6 +1356,7 @@ class QueueMoveWatcher(BaseWatcher):
         db: BrokerDB | str | Path | None = None,
         stop_event: threading.Event | None = None,
         max_messages: int | None = None,
+        polling_strategy: PollingStrategy | None = None,
         error_handler: Callable[
             [Exception, str, int], bool | None
         ] = _config_aware_default_error_handler,
@@ -1289,6 +1370,7 @@ class QueueMoveWatcher(BaseWatcher):
             db: Database instance or path (uses default if None)
             stop_event: Event to signal watcher shutdown
             max_messages: Maximum messages to move before stopping
+            polling_strategy: Custom polling strategy (uses default if None)
             error_handler: Called when handler raises an exception
 
         Raises:
@@ -1305,7 +1387,12 @@ class QueueMoveWatcher(BaseWatcher):
             raise ValueError(msg)
 
         # Initialize parent class with source queue
-        super().__init__(source_queue, db=db, stop_event=stop_event)
+        super().__init__(
+            source_queue,
+            db=db,
+            stop_event=stop_event,
+            polling_strategy=polling_strategy,
+        )
 
         # Store move-specific attributes
         self._source_queue = source_name
@@ -1319,14 +1406,6 @@ class QueueMoveWatcher(BaseWatcher):
 
         # The main queue is our source queue for moves
         self._source_queue_obj = self._queue_obj
-
-        # Create polling strategy directly
-        self._strategy = PollingStrategy(
-            stop_event=self._stop_event,
-            initial_checks=_config["SIMPLEBROKER_INITIAL_CHECKS"],
-            max_interval=_config["SIMPLEBROKER_MAX_INTERVAL"],
-            burst_sleep=_config["SIMPLEBROKER_BURST_SLEEP"],
-        )
 
     @property
     def move_count(self) -> int:
@@ -1342,35 +1421,6 @@ class QueueMoveWatcher(BaseWatcher):
     def dest_queue(self) -> str:
         """Destination queue name."""
         return self._dest_queue
-
-    def start(self) -> threading.Thread:
-        """Start the move watcher in a background thread.
-
-        This is a convenience method that calls run_in_thread().
-
-        IMPORTANT: You MUST call stop() when done!
-        See the warnings in run_in_thread() and stop() for details.
-
-        Returns:
-            The thread running the watcher.
-
-        """
-        return self.run_in_thread()
-
-    def run(self) -> None:
-        """Run the move watcher synchronously until max_messages or stop_event.
-
-        This is a convenience method that calls run_forever().
-
-        This method blocks until:
-        - max_messages have been moved (if specified)
-        - stop() is called from another thread
-        - SIGINT (Ctrl+C) is received (if in main thread)
-
-        No additional cleanup is needed after this method returns, as it
-        runs synchronously in the current thread.
-        """
-        self.run_forever()
 
     def _process_messages(self) -> None:
         """Override of base class method with QueueMoveWatcher-specific logic.
@@ -1422,7 +1472,7 @@ class QueueMoveWatcher(BaseWatcher):
             # Result is a dict containing 'message' and 'timestamp'
             # Type assertion: move() without args returns dict or None
             assert isinstance(result, dict)
-            self._notify_handler_safe(result)
+            self._dispatch(result["message"], result["timestamp"])
 
             # Check max messages limit
             if self._max_messages and self._move_count >= self._max_messages:
@@ -1432,23 +1482,3 @@ class QueueMoveWatcher(BaseWatcher):
                 raise _StopLoop
 
         return found_any
-
-    def _notify_handler_safe(self, move_result: dict) -> None:
-        """Safely notify handler about moved message."""
-        # Use base class safe handler method
-        # move_result has 'message' and 'timestamp' keys
-        self._safe_call_handler(
-            move_result["message"],
-            move_result["timestamp"],
-            self._error_handler,
-        )
-
-    def stop(self, *, join: bool = True, timeout: float = 5.0) -> None:
-        """Stop the move watcher and clean up resources.
-
-        Args:
-            join: If True, wait for thread to finish
-            timeout: Timeout for joining thread
-        """
-        # Parent class handles all cleanup now
-        super().stop(join=join, timeout=timeout)

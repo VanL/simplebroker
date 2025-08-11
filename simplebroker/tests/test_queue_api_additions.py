@@ -158,3 +158,103 @@ def test_queue_move_with_queue_instance():
                 assert src.read() is None
                 messages = list(dst.read(all_messages=True))
                 assert messages == ["message1", "message2"]
+
+
+def test_queue_str_representation():
+    """Test Queue.__str__ method returns queue name."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "test.db")
+
+        # Test with default database
+        queue1 = Queue("tasks")
+        assert str(queue1) == "tasks"
+
+        # Test with custom database path
+        queue2 = Queue("logs", db_path=db_path)
+        assert str(queue2) == "logs"
+
+        # Test with persistent mode
+        queue3 = Queue("cache", persistent=True)
+        assert str(queue3) == "cache"
+
+        # Test natural string usage
+        queue_name = "processing"
+        queue4 = Queue(queue_name)
+        assert f"Processing {queue4}" == f"Processing {queue_name}"
+        assert f"Watching {queue4}..." == f"Watching {queue_name}..."
+
+
+def test_queue_repr_representation():
+    """Test Queue.__repr__ method provides eval-friendly representation."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "test.db")
+
+        # Test minimal case - default db_path, non-persistent
+        queue1 = Queue("tasks")
+        assert repr(queue1) == "Queue('tasks')"
+
+        # Test with custom db_path
+        queue2 = Queue("logs", db_path=db_path)
+        expected = f"Queue('logs', db_path='{db_path}')"
+        assert repr(queue2) == expected
+
+        # Test with persistent=True
+        queue3 = Queue("cache", persistent=True)
+        assert repr(queue3) == "Queue('cache', persistent=True)"
+
+        # Test with both custom db_path and persistent=True
+        queue4 = Queue("data", db_path=db_path, persistent=True)
+        expected = f"Queue('data', db_path='{db_path}', persistent=True)"
+        assert repr(queue4) == expected
+
+        # Test with special characters in name and path
+        special_queue = Queue("test-queue_123", db_path="/tmp/my db.sqlite")
+        expected = "Queue('test-queue_123', db_path='/tmp/my db.sqlite')"
+        assert repr(special_queue) == expected
+
+
+def test_queue_string_representations_in_context():
+    """Test string representations work correctly in real usage contexts."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "test.db")
+
+        with Queue("orders", db_path=db_path, persistent=True) as queue:
+            # Test __str__ in f-strings
+            log_message = f"Processing {queue} queue"
+            assert log_message == "Processing orders queue"
+
+            # Test __repr__ shows full configuration
+            debug_repr = repr(queue)
+            assert "orders" in debug_repr
+            assert db_path in debug_repr
+            assert "persistent=True" in debug_repr
+
+            # Test they produce different outputs for configured queues
+            assert str(queue) != repr(queue)
+            assert str(queue) == "orders"
+            assert repr(queue).startswith("Queue(")
+
+
+def test_queue_string_consistency():
+    """Test string representations are consistent across operations."""
+    queue = Queue("consistency_test")
+
+    # String representation should be consistent
+    str1 = str(queue)
+    str2 = str(queue)
+    assert str1 == str2 == "consistency_test"
+
+    # Repr should be consistent
+    repr1 = repr(queue)
+    repr2 = repr(queue)
+    assert repr1 == repr2 == "Queue('consistency_test')"
+
+    # Should work after queue operations
+    with queue:
+        queue.write("test message")
+        assert str(queue) == "consistency_test"
+        assert repr(queue) == "Queue('consistency_test')"
+
+        queue.read()
+        assert str(queue) == "consistency_test"
+        assert repr(queue) == "Queue('consistency_test')"

@@ -39,7 +39,7 @@ def watcher_process(
                 super().__init__(*args, **kwargs)
                 self._enable_pre_check = enable_pre_check
 
-            def _has_pending_messages(self, db=None):
+            def _has_pending_messages(self):
                 if not self._enable_pre_check:
                     return True
                 # Use the parent class implementation which handles DB properly

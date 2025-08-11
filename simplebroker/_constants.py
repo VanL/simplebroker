@@ -27,7 +27,7 @@ from typing import Any, Dict, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "2.3.1"
+__version__: Final[str] = "2.3.2"
 """Current version of SimpleBroker."""
 
 # ==============================================================================

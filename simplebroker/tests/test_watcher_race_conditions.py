@@ -33,7 +33,7 @@ class ConcurrencyTestWatcher(QueueWatcher):
         self.dispatch_count = 0
         self._lock = threading.Lock()
 
-    def _has_pending_messages(self, db: BrokerDB | None = None) -> bool:
+    def _has_pending_messages(self) -> bool:
         """Add instrumentation to pre-check."""
         with self._lock:
             self.pre_check_count += 1
@@ -42,7 +42,7 @@ class ConcurrencyTestWatcher(QueueWatcher):
             time.sleep(self._pre_check_delay)
 
         # Use the parent's implementation which uses Queue API
-        return super()._has_pending_messages(db)
+        return super()._has_pending_messages()
 
     def _drain_queue(self) -> None:
         """Add instrumentation and optional pre-check."""
@@ -443,9 +443,9 @@ def test_concurrent_pre_checks() -> None:
             times_lock = threading.Lock()
 
             class TimingWatcher(ConcurrencyTestWatcher):
-                def _has_pending_messages(self, db):
+                def _has_pending_messages(self):
                     start = time.perf_counter()
-                    result = super()._has_pending_messages(db)
+                    result = super()._has_pending_messages()
                     elapsed = time.perf_counter() - start
                     with times_lock:
                         pre_check_times.append(elapsed)

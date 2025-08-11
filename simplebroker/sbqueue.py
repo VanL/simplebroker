@@ -34,13 +34,25 @@ class Queue:
                    If False (default), use ephemeral connections.
         runner: Optional custom SQLRunner implementation for extensions
 
-    Example:
+    Examples:
         >>> # Default ephemeral mode - recommended for most users
         >>> queue = Queue("tasks")
         >>> queue.write("Process order #123")
         >>> message = queue.read()
         >>> print(message)
         Process order #123
+
+        >>> # Natural string representation
+        >>> print(f"Processing {queue}")
+        Processing tasks
+        >>> logger.info(f"Watching {queue}...")
+        INFO: Watching tasks...
+
+        >>> # Debugging representation
+        >>> repr(queue)
+        Queue('tasks')
+        >>> Queue("logs", db_path="/custom/path.db", persistent=True)
+        Queue('logs', db_path='/custom/path.db', persistent=True)
 
         >>> # Persistent mode - for performance-critical code
         >>> with Queue("tasks", persistent=True) as queue:
@@ -675,6 +687,40 @@ class Queue:
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Exit the context manager and close the runner."""
         self.close()
+
+    def __str__(self) -> str:
+        """Human-readable string representation.
+
+        Returns just the queue name for natural usage in logs and messages.
+
+        Examples:
+            >>> queue = Queue("tasks")
+            >>> print(f"Processing {queue}")
+            Processing tasks
+            >>> logger.info(f"Watching {queue}")
+            INFO: Watching tasks
+        """
+        return self.name
+
+    def __repr__(self) -> str:
+        """Developer-friendly representation for debugging.
+
+        Returns a string that could recreate the object (when possible).
+
+        Examples:
+            >>> Queue("tasks")
+            Queue('tasks')
+            >>> Queue("logs", db_path="/var/db/app.db")
+            Queue('logs', db_path='/var/db/app.db')
+        """
+        parts = [f"'{self.name}'"]
+
+        if self._db_path != DEFAULT_DB_NAME:
+            parts.append(f"db_path='{self._db_path}'")
+        if self._persistent:
+            parts.append("persistent=True")
+
+        return f"Queue({', '.join(parts)})"
 
     def has_pending(self, since_timestamp: Optional[int] = None) -> bool:
         """Check if this queue has pending (unclaimed) messages.

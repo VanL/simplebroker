@@ -82,7 +82,7 @@ class InstrumentedQueueWatcher(QueueWatcher):
         self._has_pending_messages_enabled = True
         self._found_messages_last_drain = False
 
-    def _has_pending_messages(self, db: BrokerDB | None = None) -> bool:
+    def _has_pending_messages(self) -> bool:
         """Fast check if queue has unclaimed messages."""
         if not self._has_pending_messages_enabled:
             return True
@@ -92,7 +92,7 @@ class InstrumentedQueueWatcher(QueueWatcher):
             return self._queue_obj.has_pending()
 
         # Fallback to parent implementation
-        return super()._has_pending_messages(db)
+        return super()._has_pending_messages()
 
     def _drain_queue(self) -> None:
         """Override to implement smart burst reset."""

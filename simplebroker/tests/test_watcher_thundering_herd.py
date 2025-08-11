@@ -69,13 +69,13 @@ class InstrumentedQueueWatcher(QueueWatcher):
         self.metrics = metrics or WatcherMetrics(self._queue)
         self._in_main_loop = False
 
-    def _has_pending_messages(self, db: BrokerDB) -> bool:
+    def _has_pending_messages(self) -> bool:
         """Override to track pre-check calls and wake-ups."""
         self.metrics.record_pre_check()
 
         # Call the base implementation first
         try:
-            has_messages = super()._has_pending_messages(db)
+            has_messages = super()._has_pending_messages()
         except Exception:
             # If we're in main loop and hit an exception, we recorded a wake_up but not empty_wake
             if self._in_main_loop:
@@ -288,17 +288,16 @@ def test_pre_check_correctness() -> None:
                 handler_calls.append((msg, ts))
 
             watcher = InstrumentedQueueWatcher("test_queue", handler, db=db_path)
-            db = broker
 
             # Should report no messages when queue is empty
-            assert watcher._has_pending_messages(db) is False
+            assert watcher._has_pending_messages() is False
 
             # Add messages to queue
             for i in range(10):
                 broker.write("test_queue", f"message_{i}")
 
             # Should now report messages present
-            assert watcher._has_pending_messages(db) is True
+            assert watcher._has_pending_messages() is True
         finally:
             if watcher is not None:
                 try:
@@ -342,10 +341,8 @@ def test_pre_check_with_timestamp_filtering() -> None:
             )
             watcher._last_seen_ts = timestamps[2]  # Should only see messages 3 and 4
 
-            db = broker
-
             # Pre-check should find messages
-            assert watcher._has_pending_messages(db) is True
+            assert watcher._has_pending_messages() is True
 
             # Process messages
             watcher.run_in_thread()
