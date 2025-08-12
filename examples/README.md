@@ -87,6 +87,20 @@ When working with message queues:
   - Examples of building custom handlers using defaults as building blocks
   - Good introduction to watcher patterns before diving into python_api.py
 
+- **[multi_queue_watcher.py](multi_queue_watcher.py)** - Multi-queue processing with fairness
+  - Complete `MultiQueueWatcher` implementation for monitoring multiple queues
+  - Single-thread, shared-database design for efficiency
+  - Round-robin fairness prevents queue starvation
+  - Per-queue handlers with fallback to default
+  - See **[MULTI_QUEUE_README.md](MULTI_QUEUE_README.md)** for detailed documentation
+
+- **[multi_queue_patterns.py](multi_queue_patterns.py)** - Advanced multi-queue usage patterns
+  - Priority queue simulation
+  - Load balancing across worker queues
+  - Queue-specific error handling strategies
+  - Monitoring and metrics collection
+  - Dynamic queue management patterns
+
 - **[async_wrapper.py](async_wrapper.py)** - Async wrapper around standard API
   - Simple async/await interface using thread pool
   - Works with standard `Queue` and `QueueWatcher` classes
