@@ -399,6 +399,9 @@ class TestLoadConfig:
 
     def test_project_scoping_settings(self) -> None:
         """Test project scoping environment variables."""
+        import os
+        from pathlib import Path
+        
         env_vars = {
             "BROKER_DEFAULT_DB_LOCATION": "/tmp/project",
             "BROKER_DEFAULT_DB_NAME": "custom.db",
@@ -408,7 +411,14 @@ class TestLoadConfig:
         with patch.dict(os.environ, env_vars):
             config = load_config()
 
-            assert config["BROKER_DEFAULT_DB_LOCATION"] == "/tmp/project"
+            # On Unix systems, /tmp/project is absolute and stays unchanged
+            # On Windows, /tmp/project is relative and gets resolved to absolute path
+            if os.path.isabs("/tmp/project"):
+                expected_path = "/tmp/project"
+            else:
+                expected_path = str(Path("/tmp/project").resolve())
+            
+            assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
             assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
             assert config["BROKER_PROJECT_SCOPE"] is True
 
@@ -443,10 +453,14 @@ class TestLoadConfig:
             expected_suffix = os.path.join("relative", "path")
             assert config["BROKER_DEFAULT_DB_LOCATION"].endswith(expected_suffix)
 
-        # Absolute paths should remain unchanged
+        # Absolute paths should remain unchanged (on Unix) or be resolved (on Windows)
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "/absolute/path"}):
             config = load_config()
-            assert config["BROKER_DEFAULT_DB_LOCATION"] == "/absolute/path"
+            if os.path.isabs("/absolute/path"):
+                expected_path = "/absolute/path"
+            else:
+                expected_path = str(Path("/absolute/path").resolve())
+            assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
 
 
 class TestParseBool:

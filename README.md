@@ -620,29 +620,9 @@ with QueueWatcher("my.db", "notifications", handle_message) as watcher:
 # Ensures proper cleanup even if an exception occurs
 ```
 
-### SimpleBroker Scopes
-SimpleBroker is *directory-scoped* by default: Each directory gets its own .broker.db and is independent.
-However, sometimes you want to have everything in a "project" (a directory and its subdirectories) share
-queues, and sometimes you may want to have the queues globally available. There are are environment variables
-that are provided to allow these different types of operations:
+### Database Scoping
 
-**Project Scope**
-- Environment variable: `BROKER_PROJECT_SCOPE` 
-  - Set to "1", "true", "yes", or "on" to enable project scoping (default value: False)
-  When project scope is enabled, SimpleBroker searches upward from current directory for existing database, in 
-  similar fashion to git. If no database is found, errors out with instruction to run `broker init` in the directory
-  where the project root should go.
-
-**Global Scope**
-- Environment variables:
-  - `BROKER_DEFAULT_DB_LOCATION` (corresponds to the -d/--dir command line argument, default is $PWD)
-  Sets SimpleBroker to use the identified location for the .broker.db. This argument is not used when `BROKER_PROJECT_SCOPE` is True.
-
-The scoping rules have strict precedence:
-1. Command-line arguments
-2. Project scope (`BROKER_PROJECT_SCOPE` is set and True)
-3. Environment variable-set defaults (`BROKER_DEFAULT_DB_LOCATION`)
-4. SimpleBroker defaults (the current working directory)
+SimpleBroker is *directory-scoped* by default: Each directory gets its own `.broker.db` and is independent. However, you can configure project-level or global scoping using environment variables. See [Project Scoping](#project-scoping) for comprehensive details.
 
 ### Async Integration Patterns
 
@@ -838,7 +818,13 @@ export BROKER_DEFAULT_DB_NAME=project-queue.db
 
 ## Project Scoping
 
-SimpleBroker supports project-level database scoping, similar to how `git` finds the repository root. This allows multiple scripts and processes within a project to share the same broker database regardless of their current working directory.
+SimpleBroker provides flexible database scoping modes to handle different use cases:
+
+**Directory Scope (Default):** Each directory gets its own independent `.broker.db`  
+**Project Scope:** Git-like upward search for shared project database  
+**Global Scope:** Use a specific location for all broker operations
+
+This allows multiple scripts and processes to share broker databases according to your needs.
 
 ### Basic Project Scoping
 
@@ -867,9 +853,25 @@ broker write tasks "process data"  # Uses /home/user/myproject/.broker.db
 - **Zero configuration**: Just set the environment variable
 - **Git-like behavior**: Intuitive for developers familiar with version control
 
+### Global Scope
+
+Use a specific directory for all broker operations:
+
+```bash
+export BROKER_DEFAULT_DB_LOCATION=/var/lib/myapp
+# Uses: /var/lib/myapp/.broker.db for all operations
+```
+
+**Use cases:**
+- **System-wide queues**: Central message broker for multiple applications
+- **Shared storage**: Use network-mounted directories for distributed access
+- **Privilege separation**: Store databases in controlled system directories
+
+**Note:** `BROKER_DEFAULT_DB_LOCATION` corresponds to the `-d/--dir` command line argument and is ignored when `BROKER_PROJECT_SCOPE=true`.
+
 ### Project Database Names
 
-Control the database filename used in project scoping:
+Control the database filename used in any scoping mode:
 
 ```bash
 export BROKER_DEFAULT_DB_NAME=project-queue.db
@@ -949,10 +951,15 @@ pipeline/
 
 Database path resolution follows strict precedence rules:
 
-1. **Explicit CLI flags** (`-f`, `-d`) - Always win
-2. **Project scoping** (`BROKER_PROJECT_SCOPE=true`) - Searches upward, errors if not found
-3. **Environment defaults** (`BROKER_DEFAULT_DB_*`) - Used when project scoping disabled
+1. **Explicit CLI flags** (`-f`, `-d`) - Always override all other settings
+2. **Project scoping** (`BROKER_PROJECT_SCOPE=true`) - Git-like upward search, errors if not found
+3. **Global scope** (`BROKER_DEFAULT_DB_LOCATION`) - Used when project scoping disabled
 4. **Built-in defaults** - Current directory + `.broker.db`
+
+**Environment variable interactions:**
+- `BROKER_DEFAULT_DB_NAME` applies to all scoping modes
+- `BROKER_DEFAULT_DB_LOCATION` ignored when `BROKER_PROJECT_SCOPE=true`
+- `BROKER_PROJECT_SCOPE=true` takes precedence over global scope settings
 
 **Examples:**
 
