@@ -439,7 +439,9 @@ class TestLoadConfig:
 
             # Should be converted to absolute path
             assert Path(config["BROKER_DEFAULT_DB_LOCATION"]).is_absolute()
-            assert config["BROKER_DEFAULT_DB_LOCATION"].endswith("relative/path")
+            # Use os.path.join to handle platform-specific separators
+            expected_suffix = os.path.join("relative", "path")
+            assert config["BROKER_DEFAULT_DB_LOCATION"].endswith(expected_suffix)
 
         # Absolute paths should remain unchanged
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "/absolute/path"}):

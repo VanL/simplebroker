@@ -84,6 +84,11 @@ class TestFilesystemBoundaryDetection:
     @patch("os.name", "nt")
     def test_filesystem_root_detection_windows(self) -> None:
         """Test detection of Windows drive roots."""
+        import sys
+
+        if sys.platform != "win32":
+            pytest.skip("Windows-specific test")
+
         drive_roots = [Path("C:\\"), Path("D:\\"), Path("Z:\\")]
         for root in drive_roots:
             with patch.object(Path, "resolve", return_value=root):
