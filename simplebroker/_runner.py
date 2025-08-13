@@ -40,7 +40,7 @@ from typing_extensions import Self
 
 from ._constants import ConnectionPhase, load_config
 from ._exceptions import DataError, IntegrityError, OperationalError
-from .helpers import _execute_with_retry
+from .helpers import _execute_with_retry, _is_valid_sqlite_db
 
 # Load config once at module level
 _config = load_config()
@@ -271,6 +271,16 @@ class SQLiteRunner:
         """Setup critical connection settings including WAL mode."""
         # First check SQLite version
         self._check_sqlite_version()
+
+        # Validate that existing database files are actually valid SQLite databases
+        # Only check the SQLite header, not the magic string at this stage
+        # If the file doesn't exist, SQLite will create it during connection
+        db_path = Path(self._db_path)
+        if db_path.exists() and db_path.stat().st_size > 0:
+            if not _is_valid_sqlite_db(db_path, verify_magic=False):
+                raise OperationalError(
+                    f"File at {self._db_path} exists but is not a valid SQLite database"
+                )
 
         def do_setup() -> None:
             # Use a separate connection for WAL setup to avoid holding locks

@@ -4,13 +4,20 @@ import json
 import sys
 import time
 import warnings
+from pathlib import Path
 from typing import Optional, Union
 
-from ._constants import EXIT_QUEUE_EMPTY, EXIT_SUCCESS, MAX_MESSAGE_SIZE
+from ._constants import (
+    EXIT_ERROR,
+    EXIT_QUEUE_EMPTY,
+    EXIT_SUCCESS,
+    MAX_MESSAGE_SIZE,
+)
 from ._exceptions import TimestampError
 from ._sql import COUNT_CLAIMED_MESSAGES, GET_OVERALL_STATS
 from ._timestamp import TimestampGenerator
 from .db import DBConnection
+from .helpers import _is_valid_sqlite_db
 from .sbqueue import Queue
 from .watcher import QueueMoveWatcher, QueueWatcher
 
@@ -211,7 +218,7 @@ def cmd_read(
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
             sys.stderr.flush()
-            return 1
+            return EXIT_ERROR
 
     # Validate exact timestamp if provided
     exact_timestamp = None
@@ -320,7 +327,7 @@ def cmd_peek(
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
             sys.stderr.flush()
-            return 1
+            return EXIT_ERROR
 
     # Validate exact timestamp if provided
     exact_timestamp = None
@@ -512,7 +519,7 @@ def cmd_move(
             file=sys.stderr,
         )
         sys.stderr.flush()
-        return 1
+        return EXIT_ERROR
 
     # Validate timestamp if provided
     since_timestamp = None
@@ -522,7 +529,7 @@ def cmd_move(
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
             sys.stderr.flush()
-            return 1
+            return EXIT_ERROR
 
     # Validate exact timestamp if provided
     exact_timestamp = None
@@ -578,7 +585,7 @@ def cmd_move(
             except Exception as e:
                 print(f"simplebroker: error: {e}", file=sys.stderr)
                 sys.stderr.flush()
-                return 1
+                return EXIT_ERROR
 
         else:
             # Move single message
@@ -693,7 +700,7 @@ def cmd_watch(
             file=sys.stderr,
         )
         sys.stderr.flush()
-        return 1
+        return EXIT_ERROR
 
     # Validate timestamp if provided
     since_timestamp = None
@@ -703,7 +710,7 @@ def cmd_watch(
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
             sys.stderr.flush()
-            return 1
+            return EXIT_ERROR
 
     # Print startup message (unless quiet)
     if not quiet:
@@ -752,7 +759,7 @@ def cmd_watch(
         return EXIT_SUCCESS
     except Exception as e:
         print(f"simplebroker: error: {e}", file=sys.stderr)
-        return 1
+        return EXIT_ERROR
     finally:
         # Ensure any final output is flushed
         sys.stdout.flush()
@@ -760,6 +767,69 @@ def cmd_watch(
         watcher.stop()  # Ensure watcher is stopped cleanly
 
     return EXIT_SUCCESS
+
+
+def cmd_init(db_path: str, quiet: bool) -> int:
+    """Initialize a SimpleBroker database at the specified path.
+
+    Args:
+        db_path: Absolute path where database should be created
+        quiet: If True, suppresses informational output
+
+    Returns:
+        EXIT_SUCCESS (0) on success, 1 on error
+
+    Behavior:
+        - Creates database file and initializes schema if doesn't exist
+        - If database exists and is valid SimpleBroker DB: Reports existence and returns success
+        - If database exists but is not SimpleBroker DB: Error with instructions to remove manually
+
+    Notes:
+        Uses DBConnection context manager which handles:
+        - Directory creation if needed
+        - File permission setting (0o600)
+        - Schema initialization and validation
+        - WAL mode setup and optimization
+
+    Security Note:
+        Never destroys existing data. SimpleBroker init is non-destructive by design.
+    """
+    db_path_obj = Path(db_path)
+
+    # Check if database already exists
+    if db_path_obj.exists():
+        # Check if it's a valid SimpleBroker database
+        if _is_valid_sqlite_db(db_path_obj):
+            if not quiet:
+                print(f"SimpleBroker database already exists: {db_path}")
+            return EXIT_SUCCESS
+        else:
+            print(
+                f"Error: File exists but is not a SimpleBroker database: {db_path}\n"
+                f"Please remove the file manually and run 'broker init' again.",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
+
+    # Initialize database using existing infrastructure
+    try:
+        # Create parent directories if needed
+        db_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+        # Use DBConnection context manager for proper setup
+        with DBConnection(db_path) as conn:
+            # Getting connection triggers database creation and schema setup
+            conn.get_connection()
+            # Additional initialization could be added here if needed
+
+        if not quiet:
+            print(f"Initialized SimpleBroker database: {db_path}")
+
+        return EXIT_SUCCESS
+
+    except Exception as e:
+        print(f"Error initializing database: {e}", file=sys.stderr)
+        return EXIT_ERROR
 
 
 # Export all command functions
@@ -773,5 +843,6 @@ __all__ = [
     "cmd_broadcast",
     "cmd_vacuum",
     "cmd_watch",
+    "cmd_init",
     "parse_exact_message_id",
 ]

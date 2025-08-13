@@ -1,17 +1,36 @@
 """CLI entry point for SimpleBroker."""
 
 import argparse
-import os
 import sys
 from pathlib import Path
-from typing import List, NoReturn, Optional
+from typing import Any, Dict, List, NoReturn, Optional, Tuple
 
 from . import __version__ as VERSION
 from . import commands
-from ._constants import DEFAULT_DB_NAME, PROG_NAME, TIMESTAMP_EXACT_NUM_DIGITS
+from ._constants import (
+    DEFAULT_DB_NAME,
+    EXIT_ERROR,
+    EXIT_SUCCESS,
+    PROG_NAME,
+    TIMESTAMP_EXACT_NUM_DIGITS,
+    load_config,
+)
+from ._exceptions import DatabaseError
+from .helpers import (
+    _find_project_database,
+    _resolve_symlinks_safely,
+    _validate_database_parent_directory,
+    _validate_path_containment,
+    _validate_path_traversal_prevention,
+    _validate_sqlite_database,
+    _validate_working_directory,
+)
 
 # Cache the parser for better startup performance
 _PARSER_CACHE = None
+
+# Get the config
+_config = load_config()
 
 
 class ArgumentParserError(Exception):
@@ -64,7 +83,7 @@ def create_parser() -> argparse.ArgumentParser:
     """Create the main parser with global options and subcommands.
 
     Returns:
-        ArgumentParser configured with global options and subcommands
+        ArgumentParser _configured with global options and subcommands
     """
     parser = CustomArgumentParser(
         prog=PROG_NAME,
@@ -72,15 +91,38 @@ def create_parser() -> argparse.ArgumentParser:
         allow_abbrev=False,  # Prevent ambiguous abbreviations
     )
 
-    # Add global arguments
+    # Add global arguments with environment-aware defaults
+    default_dir = (
+        Path(_config["BROKER_DEFAULT_DB_LOCATION"])
+        if _config["BROKER_DEFAULT_DB_LOCATION"]
+        else Path.cwd()
+    )
+    default_file = _config["BROKER_DEFAULT_DB_NAME"]
+
+    # Custom action to track when -d was explicitly provided
+    class DirectoryAction(argparse.Action):
+        def __call__(
+            self,
+            parser: argparse.ArgumentParser,
+            namespace: argparse.Namespace,
+            values: Any,
+            option_string: Optional[str] = None,
+        ) -> None:
+            setattr(namespace, self.dest, Path(values))
+            namespace._dir_explicitly_provided = True
+
     parser.add_argument(
-        "-d", "--dir", type=Path, default=Path.cwd(), help="working directory"
+        "-d",
+        "--dir",
+        action=DirectoryAction,
+        default=default_dir,
+        help="working directory",
     )
     parser.add_argument(
         "-f",
         "--file",
-        default=DEFAULT_DB_NAME,
-        help=f"database filename or absolute path (default: {DEFAULT_DB_NAME})",
+        default=default_file,
+        help=f"database filename or absolute path (default: {default_file})",
     )
     parser.add_argument(
         "-q", "--quiet", action="store_true", help="suppress diagnostics"
@@ -217,6 +259,15 @@ def create_parser() -> argparse.ArgumentParser:
         help="watch for messages after timestamp",
     )
 
+    # Init command - does not inherit global -d/-f flags
+    # Init creates project root database in current directory only
+    init_parser = subparsers.add_parser(
+        "init", help="initialize a SimpleBroker database in current directory"
+    )
+    init_parser.add_argument(
+        "--force", action="store_true", help="reinitialize if database already exists"
+    )
+
     return parser
 
 
@@ -272,6 +323,7 @@ class ArgumentProcessor:
             "move",
             "broadcast",
             "watch",
+            "init",
         }
 
         self.global_args: List[str] = []
@@ -346,6 +398,78 @@ class ArgumentProcessor:
         self.command_args.append(arg)
 
 
+def _resolve_database_path(
+    args: argparse.Namespace, _config: Dict[str, Any]
+) -> Tuple[Path, bool]:
+    """Resolve final database path using precedence rules and project scoping.
+
+    Args:
+        args: Parsed command line arguments from argparse
+        _config: _configuration dictionary from load_config()
+
+    Returns:
+        Tuple of (resolved_db_path, used_project_scope)
+        where used_project_scope indicates if path came from upward search
+
+    Precedence Order:
+        1. Explicit CLI flags (-f absolute path, or -d/-f combination)
+        2. Project scope search (if BROKER_PROJECT_SCOPE=true)
+        3. Environment variable defaults
+        4. Built-in defaults (cwd + .broker.db)
+
+    Raises:
+        ValueError: If project scope enabled but no database found
+    """
+    # 1. Handle explicit CLI flags (absolute -f or explicit -d/-f)
+    file_path = Path(args.file)
+    if file_path.is_absolute():
+        # Check if user explicitly provided -d flag that conflicts with absolute path
+        dir_explicitly_provided = getattr(args, "_dir_explicitly_provided", False)
+
+        if dir_explicitly_provided:
+            # User explicitly provided -d, validate consistency
+            try:
+                resolved_file_dir = file_path.parent.resolve()
+                resolved_working_dir = args.dir.resolve()
+
+                if resolved_file_dir != resolved_working_dir:
+                    raise ValueError(
+                        f"Inconsistent paths: absolute database path '{file_path}' "
+                        f"conflicts with directory '{args.dir}'"
+                    )
+            except (OSError, RuntimeError):
+                # If we can't resolve paths, allow it to proceed and fail later if needed
+                pass
+
+        return file_path, False
+
+    # 2. Project scope search
+    # Determine working dir and filename with env defaults
+    working_dir = args.dir
+    db_filename = args.file
+    if args.file == DEFAULT_DB_NAME and _config["BROKER_DEFAULT_DB_NAME"]:
+        db_filename = _config["BROKER_DEFAULT_DB_NAME"]
+
+    if _config["BROKER_PROJECT_SCOPE"] and args.command != "init":
+        # Use resolved working directory, not Path.cwd(), to account for -d flag
+        search_start_dir = working_dir
+        found_path = _find_project_database(db_filename, search_start_dir)
+        if found_path:
+            return found_path, True
+        else:
+            # Project scoping enabled but no database found - error condition
+            raise ValueError(
+                f"BROKER_PROJECT_SCOPE is enabled but no project database '{db_filename}' "
+                f"was found in '{search_start_dir}' or any parent directory. "
+                f"Run 'broker init' in the project root directory to create one."
+            )
+
+    # 3. Fallback to environment defaults / built-in defaults
+    if _config["BROKER_DEFAULT_DB_LOCATION"]:
+        working_dir = Path(_config["BROKER_DEFAULT_DB_LOCATION"])
+    return working_dir / db_filename, False
+
+
 def main() -> int:
     """Main CLI entry point.
 
@@ -358,11 +482,13 @@ def main() -> int:
         _PARSER_CACHE = create_parser()
     parser = _PARSER_CACHE
 
+    global _config
+
     # Parse arguments, rearranging to put global options first
     try:
         if len(sys.argv) == 1:
             parser.print_help()
-            return 0
+            return EXIT_SUCCESS
 
         # Rearrange arguments to put global options before subcommand
         rearranged_args = rearrange_args(sys.argv[1:])
@@ -371,49 +497,46 @@ def main() -> int:
         args = parser.parse_args(rearranged_args)
     except ArgumentParserError as e:
         print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
-        return 1
+        return EXIT_ERROR
     except SystemExit as e:  # e.code: Union[int, str, None]
         # Handle argparse's default exit behavior
         # Help exits with 0, errors exit with 2
         if e.code is None:
-            return 1
+            return EXIT_ERROR
         try:
             return int(e.code)
         except (ValueError, TypeError):
             # If code can't be converted to int, return error code 1
-            return 1
+            return EXIT_ERROR
 
     # Handle --version flag
     if args.version:
         print(f"{PROG_NAME} {VERSION}")
-        return 0
+        return EXIT_SUCCESS
 
-    # Handle absolute paths in -f flag
-    file_path = Path(args.file)
-    absolute_path_provided = file_path.is_absolute()
+    # Resolve database path using new precedence system
+    try:
+        db_path, used_project_scope = _resolve_database_path(args, _config)
+    except ValueError as e:
+        print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
 
-    if absolute_path_provided:
-        # Extract directory and filename from absolute path
-        extracted_dir = file_path.parent
-        extracted_file = file_path.name
+    # Set flag for modified path validation - track if USER provided absolute path
+    user_provided_absolute_path = Path(args.file).is_absolute()
+    absolute_path_provided = user_provided_absolute_path or used_project_scope
 
-        # Check if user also specified -d with a different directory
-        if args.dir != Path.cwd() and args.dir != extracted_dir:
-            print(
-                f"{PROG_NAME}: error: Inconsistent paths - "
-                f"absolute path '{args.file}' conflicts with directory '{args.dir}'",
-                file=sys.stderr,
-            )
-            return 1
-
-        # Update args to use extracted components
-        args.dir = extracted_dir
-        args.file = extracted_file
+    # Handle init command with special path resolution
+    if args.command == "init":
+        # Init creates project root database in current directory only
+        # Only respects BROKER_DEFAULT_DB_NAME, ignores BROKER_DEFAULT_DB_LOCATION
+        # Never uses project scoping (would be circular - searching for what we're creating)
+        init_filename = _config["BROKER_DEFAULT_DB_NAME"]
+        init_db_path = Path.cwd() / init_filename
+        return commands.cmd_init(str(init_db_path), args.quiet)
 
     # Handle cleanup flag
     if args.cleanup:
         try:
-            db_path = args.dir / args.file
             # Check if file existed before deletion for messaging purposes
             file_existed = db_path.exists()
 
@@ -431,106 +554,57 @@ def main() -> int:
                     f"{PROG_NAME}: error: Permission denied: {db_path}",
                     file=sys.stderr,
                 )
-                return 1
-            return 0
+                return EXIT_ERROR
+            return EXIT_SUCCESS
         except Exception as e:
             print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
-            return 1
+            return EXIT_ERROR
 
     # Handle vacuum flag
     if args.vacuum:
         try:
-            db_path = args.dir / args.file
             if not db_path.exists():
                 if not args.quiet:
                     print(f"Database not found: {db_path}")
-                return 0
+                return EXIT_SUCCESS
 
             return commands.cmd_vacuum(str(db_path))
         except Exception as e:
             print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
-            return 1
+            return EXIT_ERROR
 
     # Show help if no command given
     if not args.command:
         parser.print_help()
-        return 0
+        return EXIT_SUCCESS
 
     # Validate and construct database path
     try:
         working_dir = args.dir
-        if not working_dir.exists():
-            raise ValueError(f"Directory not found: {working_dir}")
-        if not working_dir.is_dir():
-            # Provide more helpful error message for common mistake
-            if working_dir.is_file():
-                raise ValueError(f"Path is a file, not a directory: {working_dir}")
-            else:
-                raise ValueError(f"Not a directory: {working_dir}")
+        _validate_working_directory(working_dir)
 
-        db_path = working_dir / args.file
+        # For project scoped paths that aren't absolute, we already have the resolved path
+        if not absolute_path_provided and not used_project_scope:
+            # Traditional path construction for non-absolute, non-project-scoped paths
+            db_path = working_dir / args.file
 
         # Prevent path traversal attacks - ensure db_path stays within working_dir
-        from pathlib import PurePath
 
         # Check for path traversal attempts
-        file_path_pure = PurePath(args.file)
-
-        # Check for parent directory references
-        for part in file_path_pure.parts:
-            if part == "..":
-                raise ValueError(
-                    f"Database filename must not contain parent directory references: {args.file}"
-                )
+        if not used_project_scope:
+            _validate_path_traversal_prevention(args.file)
 
         # Resolve symlinks BEFORE validation and use resolved path throughout
         # This prevents symlink-based path traversal attacks
         try:
-            # Always resolve the database path to handle symlinks
-            resolved_db_path = db_path.resolve()
-            resolved_working_dir = working_dir.resolve()
+            resolved_db_path = _resolve_symlinks_safely(db_path)
+            resolved_working_dir = _resolve_symlinks_safely(working_dir)
 
-            # On Windows, resolve() might not fully resolve symlink chains
-            # Keep resolving until we reach a non-symlink or hit an error
-            max_symlink_depth = 40  # Prevent infinite loops
-            depth = 0
-            while resolved_db_path.is_symlink() and depth < max_symlink_depth:
-                try:
-                    # Read the symlink target and resolve it
-                    if hasattr(resolved_db_path, "readlink"):
-                        # Python 3.9+
-                        target = resolved_db_path.readlink()
-                    else:
-                        # Python 3.8 and older
-                        target = Path(os.readlink(str(resolved_db_path)))
-
-                    if target.is_absolute():
-                        resolved_db_path = target.resolve()
-                    else:
-                        # Relative symlink - resolve relative to parent
-                        resolved_db_path = (resolved_db_path.parent / target).resolve()
-                    depth += 1
-                except (OSError, RuntimeError):
-                    # If we can't read/resolve the symlink, use what we have
-                    break
-
-            # For non-absolute paths, ensure the resolved path is within working directory
+            # Enhanced path validation with project scope exception
             if not absolute_path_provided:
-                # Check if the database path is within the working directory
-                # Use is_relative_to() if available (Python 3.9+), otherwise use relative_to()
-                if hasattr(resolved_db_path, "is_relative_to"):
-                    if not resolved_db_path.is_relative_to(resolved_working_dir):
-                        raise ValueError(
-                            "Database file must be within the working directory"
-                        )
-                else:
-                    # Fallback for older Python versions - try relative_to and catch exception
-                    try:
-                        resolved_db_path.relative_to(resolved_working_dir)
-                    except ValueError:
-                        raise ValueError(
-                            "Database file must be within the working directory"
-                        ) from None
+                _validate_path_containment(
+                    resolved_db_path, resolved_working_dir, used_project_scope
+                )
 
             # Use the resolved path from now on to prevent symlink attacks
             db_path = resolved_db_path
@@ -542,38 +616,30 @@ def main() -> int:
                 try:
                     resolved_working_dir = working_dir.resolve()
                     # Manually construct the resolved path
-                    db_path = resolved_working_dir / args.file
+                    if not used_project_scope:
+                        db_path = resolved_working_dir / args.file
                 except (RuntimeError, OSError):
                     # If we can't resolve even the working directory, keep original
                     pass
 
-        # 1) Check if parent directory exists
-        if not db_path.parent.exists():
-            raise ValueError(f"Parent directory not found: {db_path.parent}")
+        # Validate parent directory and file permissions
+        _validate_database_parent_directory(db_path)
 
-        # 2) Check if parent directory is accessible (executable/writable)
-        if not os.access(db_path.parent, os.X_OK):
-            raise ValueError(f"Parent directory is not accessible: {db_path.parent}")
+        # Validate database file if it exists (only for read operations)
+        # For write operations, allow overwriting invalid files
+        if db_path.exists() and args.command in (
+            "read",
+            "peek",
+            "move",
+            "list",
+            "stats",
+            "vacuum",
+        ):
+            _validate_sqlite_database(db_path, verify_magic=False)
 
-        if not os.access(db_path.parent, os.W_OK):
-            raise ValueError(f"Parent directory is not writable: {db_path.parent}")
-
-        # 3) Check if file exists and permissions
-        if db_path.exists():
-            # Check if it's a regular file
-            if not db_path.is_file():
-                raise ValueError(f"Path exists but is not a regular file: {db_path}")
-
-            # Check if file is readable/writable
-            if not os.access(db_path, os.R_OK):
-                raise ValueError(f"Database file is not readable: {db_path}")
-
-            if not os.access(db_path, os.W_OK):
-                raise ValueError(f"Database file is not writable: {db_path}")
-
-    except ValueError as e:
+    except (ValueError, DatabaseError) as e:
         print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
-        return 1
+        return EXIT_ERROR
 
     # Execute command
     try:
@@ -699,19 +765,19 @@ def main() -> int:
                 move_to,
             )
 
-        return 0
+        return EXIT_SUCCESS
 
-    except ValueError as e:
+    except (ValueError, DatabaseError) as e:
         print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
-        return 1
+        return EXIT_ERROR
     except KeyboardInterrupt:
         # Handle Ctrl-C gracefully
         print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
-        return 0
+        return EXIT_SUCCESS
     except Exception as e:
         if not args.quiet:
             print(f"{PROG_NAME}: {e}", file=sys.stderr)
-        return 1
+        return EXIT_ERROR
 
 
 if __name__ == "__main__":

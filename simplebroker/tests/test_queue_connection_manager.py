@@ -69,7 +69,7 @@ class TestQueueConnectionManager:
                         assert isinstance(conn, BrokerDB), (
                             "Ephemeral mode should return BrokerDB instances"
                         )
-                        connection_ids.append(id(conn))
+                        connection_ids.append(conn._runner.instance_id)
 
                 # All connections should be different instances
                 assert len(set(connection_ids)) == 3, (

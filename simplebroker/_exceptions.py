@@ -51,6 +51,15 @@ class DataError(BrokerError, sqlite3.DataError):
     pass
 
 
+class DatabaseError(BrokerError, sqlite3.DatabaseError, OSError):
+    """Database-related error.
+
+    This is a generic error for database access-related issues.
+    """
+
+    pass
+
+
 class TimestampError(BrokerError):
     """Timestamp validation or generation error.
 

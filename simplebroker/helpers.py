@@ -1,10 +1,14 @@
 """Helper functions and classes for SimpleBroker."""
 
+import os
+import sqlite3
 import threading
 import time
-from typing import Callable, Optional, TypeVar
+from pathlib import Path
+from typing import Callable, Optional, TypeVar, Union
 
-from ._exceptions import OperationalError, StopException
+from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH, SIMPLEBROKER_MAGIC
+from ._exceptions import DatabaseError, OperationalError, StopException
 
 T = TypeVar("T")
 
@@ -110,3 +114,333 @@ def _execute_with_retry(
 
     # This should never be reached, but satisfies mypy
     raise AssertionError("Unreachable code")
+
+
+def _is_filesystem_root(path: Path) -> bool:
+    """Check if path represents a filesystem root.
+
+    Args:
+        path: Path to check if it is a root directory
+
+    Returns:
+        True if path is a root directory, False otherwise
+
+    Security Note:
+        Stops at filesystem root to prevent infinite loops.
+    """
+    p = Path(path).resolve()
+    return p.parent == p
+
+
+def is_ancestor(
+    possible_ancestor: Union[str, Path], possible_descendant: Union[str, Path]
+) -> bool:
+    """Check if possible_ancestor is an ancestor of possible_descendant."""
+    path_ancestor = Path(possible_ancestor).resolve()
+    path_descendant = Path(possible_descendant).resolve()
+
+    try:
+        path_descendant.relative_to(path_ancestor)
+        return True
+    except ValueError:
+        return False
+
+
+def _validate_sqlite_database(file_path: Path, verify_magic: bool = True) -> None:
+    """Validate that a file is a valid SQLite database and raise detailed errors.
+
+    Args:
+        file_path: Path to the file to validate
+        verify_magic: Whether to verify SimpleBroker magic string
+
+    Raises:
+        DatabaseError: If the file is not a valid SQLite database with specific reason
+    """
+    # Verify arg types
+    if not isinstance(file_path, Path):
+        file_path = Path(file_path)
+
+    # Verify file existence and that it's a file
+    if not file_path.exists():
+        raise DatabaseError(f"Database file does not exist: {file_path}")
+
+    if not file_path.is_file():
+        raise DatabaseError(f"Path exists but is not a regular file: {file_path}")
+
+    # Check permissions
+    if not os.access(file_path.parent, os.R_OK | os.W_OK):
+        raise DatabaseError(f"Parent directory is not accessible: {file_path.parent}")
+
+    if not os.access(file_path, os.R_OK | os.W_OK):
+        raise DatabaseError(f"Database file is not readable/writable: {file_path}")
+
+    # First check the header (fast)
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(16)
+            if header != b"SQLite format 3\x00":
+                raise DatabaseError(
+                    f"File is not a valid SQLite database (invalid header): {file_path}"
+                )
+    except OSError as e:
+        raise DatabaseError(f"Cannot read database file: {file_path} ({e})") from e
+
+    # Check database integrity
+    try:
+        conn = sqlite3.connect(f"file:{file_path}?mode=ro", uri=True)
+        cursor = conn.cursor()
+        # PRAGMA integrity_check is more thorough but slower
+        # PRAGMA schema_version is faster and sufficient for most cases
+        cursor.execute("PRAGMA schema_version")
+        cursor.fetchone()
+
+        if verify_magic:
+            cursor.execute("SELECT value FROM meta WHERE key = 'magic'")
+            magic_row = cursor.fetchone()
+            if magic_row is None:
+                raise DatabaseError(
+                    f"Database is missing SimpleBroker metadata: {file_path}"
+                )
+            if magic_row[0] != SIMPLEBROKER_MAGIC:
+                raise DatabaseError(
+                    f"Database has incorrect magic string (not a SimpleBroker database): {file_path}"
+                )
+
+    except sqlite3.DatabaseError as e:
+        raise DatabaseError(
+            f"Database corruption or invalid format: {file_path} ({e})"
+        ) from e
+    except sqlite3.Error as e:
+        raise DatabaseError(
+            f"SQLite error while validating database: {file_path} ({e})"
+        ) from e
+    except OSError as e:
+        raise DatabaseError(
+            f"OS error while accessing database: {file_path} ({e})"
+        ) from e
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass  # Ignore close errors
+
+
+def _is_valid_sqlite_db(file_path: Path, verify_magic: bool = True) -> bool:
+    """Check if a file is a valid SQLite database.
+
+    Args:
+        file_path: Path to the file to check
+        verify_magic: Whether to verify SimpleBroker magic string
+
+    Returns:
+        True if the file is a valid SQLite database, False otherwise
+    """
+    try:
+        _validate_sqlite_database(file_path, verify_magic)
+        return True
+    except DatabaseError:
+        return False
+
+
+def _find_project_database(
+    search_filename: str,
+    starting_dir: Path,
+    max_depth: int = MAX_PROJECT_TRAVERSAL_DEPTH,
+) -> Optional[Path]:
+    """Search upward through directory hierarchy for SimpleBroker project database.
+
+    Args:
+        search_filename: Database filename to search for (e.g., ".broker.db")
+        starting_dir: Directory to start search from (typically cwd)
+        max_depth: Maximum levels to traverse (security limit)
+
+    Returns:
+        Absolute path to found database, or None if not found
+
+    Security Features:
+        - Respects max_depth to prevent infinite loops
+        - Validates database authenticity via magic string
+        - Stops at filesystem boundaries (root, home, etc.)
+        - Uses existing path resolution for symlink safety
+
+    Raises:
+        ValueError: If starting_dir doesn't exist or max_depth exceeded
+    """
+    if not starting_dir.exists():
+        raise ValueError(f"Starting directory does not exist: {starting_dir}")
+
+    current_dir = starting_dir.resolve()  # Use existing symlink resolution
+    depth = 0
+
+    while depth < max_depth:
+        # Check for filesystem root directory
+        if _is_filesystem_root(current_dir):
+            break
+
+        candidate_path = current_dir / search_filename
+        if _is_valid_sqlite_db(candidate_path):
+            return candidate_path.resolve()
+        else:
+            # If the candidate path is not a valid SQLite DB, continue search
+            current_dir = current_dir.parent
+            depth += 1
+            continue
+    return None
+
+
+def _is_ancestor_of_working_directory(db_path: Path, working_dir: Path) -> bool:
+    """Verify that db_path is in the ancestor chain of working_dir.
+
+    Args:
+        db_path: Resolved database path from project scoping
+        working_dir: Current working directory
+
+    Returns:
+        True if db_path.parent is an ancestor of working_dir
+
+    Security Note:
+        Prevents project scoping from accessing sibling directories
+        or unrelated paths outside the legitimate parent chain.
+    """
+    return is_ancestor(db_path.parent, working_dir)
+
+
+def _validate_working_directory(working_dir: Path) -> None:
+    """Validate that working directory exists and is accessible.
+
+    Args:
+        working_dir: Directory path to validate
+
+    Raises:
+        ValueError: If directory validation fails
+    """
+    if not working_dir.exists():
+        raise ValueError(f"Directory not found: {working_dir}")
+    if not working_dir.is_dir():
+        # Provide more helpful error message for common mistake
+        if working_dir.is_file():
+            raise ValueError(f"Path is a file, not a directory: {working_dir}")
+        else:
+            raise ValueError(f"Not a directory: {working_dir}")
+
+
+def _validate_database_parent_directory(db_path: Path) -> None:
+    """Validate that database parent directory exists and has proper permissions.
+
+    Args:
+        db_path: Database file path to validate parent directory of
+
+    Raises:
+        ValueError: If parent directory validation fails
+    """
+    # Check if parent directory exists
+    if not db_path.parent.exists():
+        raise ValueError(f"Parent directory not found: {db_path.parent}")
+
+    # Check if parent directory is accessible (executable/writable)
+    if not os.access(db_path.parent, os.X_OK):
+        raise ValueError(f"Parent directory is not accessible: {db_path.parent}")
+
+    if not os.access(db_path.parent, os.W_OK):
+        raise ValueError(f"Parent directory is not writable: {db_path.parent}")
+
+
+def _resolve_symlinks_safely(path: Path, max_depth: int = 40) -> Path:
+    """Safely resolve symlinks with protection against infinite loops.
+
+    Args:
+        path: Path to resolve
+        max_depth: Maximum symlink resolution depth to prevent infinite loops
+
+    Returns:
+        Resolved path with all symlinks followed
+
+    Raises:
+        RuntimeError: If symlink resolution fails
+    """
+    try:
+        resolved_path = path.resolve()
+
+        # On Windows, resolve() might not fully resolve symlink chains
+        # Keep resolving until we reach a non-symlink or hit an error
+        depth = 0
+        while resolved_path.is_symlink() and depth < max_depth:
+            try:
+                # Read the symlink target and resolve it
+                if hasattr(resolved_path, "readlink"):
+                    # Python 3.9+
+                    target = resolved_path.readlink()
+                else:
+                    # Python 3.8 and older
+                    target = Path(os.readlink(str(resolved_path)))
+
+                if target.is_absolute():
+                    resolved_path = target.resolve()
+                else:
+                    # Relative symlink - resolve relative to parent
+                    resolved_path = (resolved_path.parent / target).resolve()
+                depth += 1
+            except (OSError, RuntimeError):
+                # If we can't read/resolve the symlink, use what we have
+                break
+
+        return resolved_path
+    except (RuntimeError, OSError) as e:
+        raise RuntimeError(f"Failed to resolve symlinks for {path}: {e}") from e
+
+
+def _validate_path_containment(
+    db_path: Path, working_dir: Path, used_project_scope: bool
+) -> None:
+    """Validate that database path is properly contained within allowed boundaries.
+
+    Args:
+        db_path: Resolved database path to validate
+        working_dir: Resolved working directory
+        used_project_scope: Whether project scoping was used
+
+    Raises:
+        ValueError: If path containment validation fails
+    """
+    # Check if the database path is within the working directory
+    # Exception: Allow parent paths when using legitimate project scoping
+    containment_check = True
+    if hasattr(db_path, "is_relative_to"):
+        containment_check = not db_path.is_relative_to(working_dir)
+    else:
+        # Fallback for older Python versions - try relative_to and catch exception
+        try:
+            db_path.relative_to(working_dir)
+            containment_check = False
+        except ValueError:
+            containment_check = True
+
+    if containment_check and not used_project_scope:
+        raise ValueError("Database file must be within the working directory")
+    elif used_project_scope:
+        # Additional validation for project-scoped paths
+        if not _is_ancestor_of_working_directory(db_path, working_dir):
+            raise ValueError(
+                "Project-scoped database path must be in parent directory chain"
+            )
+
+
+def _validate_path_traversal_prevention(filename: str) -> None:
+    """Validate that filename doesn't contain path traversal attempts.
+
+    Args:
+        filename: Database filename to validate
+
+    Raises:
+        ValueError: If path traversal attempt is detected
+    """
+    from pathlib import PurePath
+
+    file_path_pure = PurePath(filename)
+
+    # Check for parent directory references
+    for part in file_path_pure.parts:
+        if part == "..":
+            raise ValueError(
+                f"Database filename must not contain parent directory references: {filename}"
+            )

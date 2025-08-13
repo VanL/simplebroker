@@ -21,6 +21,7 @@ Usage:
 """
 
 import os
+from pathlib import Path
 from typing import Any, Dict, Final
 
 # ==============================================================================
@@ -56,6 +57,9 @@ SCHEMA_VERSION: Final[int] = 1
 
 EXIT_SUCCESS: Final[int] = 0
 """Exit code for successful operations."""
+
+EXIT_ERROR: Final[int] = 1
+"""Exit code for errors in processing."""
 
 EXIT_QUEUE_EMPTY: Final[int] = 2
 """Exit code when queue is empty or no messages match criteria."""
@@ -160,6 +164,42 @@ class ConnectionPhase:
     """Performance settings (cache size, synchronous mode, etc.)."""
 
 
+# ==============================================================================
+# PROJECT SCOPING CONSTANTS
+# ==============================================================================
+
+MAX_PROJECT_TRAVERSAL_DEPTH: Final[int] = 100
+"""Maximum directory levels to traverse when searching for project databases.
+
+This limit prevents infinite loops and performance issues in pathological
+directory structures. Set to match reasonable project depth expectations.
+"""
+
+
+def _parse_bool(value: str) -> bool:
+    """Parse environment variable string to boolean.
+
+    Args:
+        value: String value from environment variable
+
+    Returns:
+        True for "1", "true", "yes", "on" (case-insensitive), False otherwise
+
+    Examples:
+        >>> _parse_bool("1")
+        True
+        >>> _parse_bool("TRUE")
+        True
+        >>> _parse_bool("false")
+        False
+        >>> _parse_bool("")
+        False
+    """
+    if not value:
+        return False
+    return value.lower().strip() in ("1", "true", "yes", "on")
+
+
 def load_config() -> Dict[str, Any]:
     """Load configuration from environment variables.
 
@@ -259,6 +299,22 @@ def load_config() -> Dict[str, Any]:
                 When enabled, logs will be written using Python's logging module.
                 Configure logging levels and handlers in your application as needed.
 
+        Project Scoping:
+            BROKER_DEFAULT_DB_LOCATION (str): Default directory for database files.
+                Default: "" (current working directory)
+                Overrides current working directory default.
+                Can be absolute or relative path.
+
+            BROKER_DEFAULT_DB_NAME (str): Default database filename.
+                Default: ".broker.db"
+                Used for both project scoping search and fallback creation.
+
+            BROKER_PROJECT_SCOPE (bool): Enable git-like upward database search.
+                Default: False
+                Set to "1", "true", "yes", or "on" to enable.
+                When enabled, searches upward through directory hierarchy
+                to find existing databases before creating new ones.
+
     """
     config = {
         # SQLite performance settings
@@ -309,10 +365,24 @@ def load_config() -> Dict[str, Any]:
         "BROKER_DEBUG": bool(os.environ.get("BROKER_DEBUG")),
         # Logging
         "BROKER_LOGGING_ENABLED": os.environ.get("BROKER_LOGGING_ENABLED", "0") == "1",
+        # Project scoping configuration
+        "BROKER_DEFAULT_DB_LOCATION": os.environ.get("BROKER_DEFAULT_DB_LOCATION", ""),
+        "BROKER_DEFAULT_DB_NAME": os.environ.get(
+            "BROKER_DEFAULT_DB_NAME", DEFAULT_DB_NAME
+        ),
+        "BROKER_PROJECT_SCOPE": _parse_bool(
+            os.environ.get("BROKER_PROJECT_SCOPE", "0")
+        ),
     }
 
     # Validate SYNC_MODE
     if config["BROKER_SYNC_MODE"] not in ("FULL", "NORMAL", "OFF"):
         config["BROKER_SYNC_MODE"] = "FULL"
+
+    # Validate project scoping configuration
+    db_location = config["BROKER_DEFAULT_DB_LOCATION"]
+    if isinstance(db_location, str) and db_location and not os.path.isabs(db_location):
+        # Convert relative paths to absolute for consistency
+        config["BROKER_DEFAULT_DB_LOCATION"] = str(Path(db_location).resolve())
 
     return config

@@ -17,6 +17,8 @@ from simplebroker._constants import (
     MAX_LOGICAL_COUNTER,
     # Message constraints
     MAX_MESSAGE_SIZE,
+    # Project scoping constants
+    MAX_PROJECT_TRAVERSAL_DEPTH,
     MAX_QUEUE_NAME_LENGTH,
     # Watcher
     MAX_TOTAL_RETRY_TIME,
@@ -40,7 +42,8 @@ from simplebroker._constants import (
     ConnectionPhase,
     # Version
     __version__,
-    # Function
+    _parse_bool,
+    # Functions
     load_config,
 )
 
@@ -146,6 +149,12 @@ class TestConstants:
         assert ConnectionPhase.CONNECTION == "connection"
         assert ConnectionPhase.OPTIMIZATION == "optimization"
 
+    def test_project_scoping_constants(self) -> None:
+        """Test project scoping constants."""
+        assert MAX_PROJECT_TRAVERSAL_DEPTH == 100
+        assert isinstance(MAX_PROJECT_TRAVERSAL_DEPTH, int)
+        assert MAX_PROJECT_TRAVERSAL_DEPTH > 0
+
 
 class TestLoadConfig:
     """Test the load_config function with various environment configurations."""
@@ -184,6 +193,11 @@ class TestLoadConfig:
 
             # Logging
             assert config["BROKER_LOGGING_ENABLED"] is False
+
+            # Project scoping (new)
+            assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
+            assert config["BROKER_DEFAULT_DB_NAME"] == DEFAULT_DB_NAME
+            assert config["BROKER_PROJECT_SCOPE"] is False
 
     def test_custom_sqlite_settings(self) -> None:
         """Test SQLite-related environment variables."""
@@ -360,6 +374,10 @@ class TestLoadConfig:
             "BROKER_DEBUG",
             # Logging
             "BROKER_LOGGING_ENABLED",
+            # Project scoping
+            "BROKER_DEFAULT_DB_LOCATION",
+            "BROKER_DEFAULT_DB_NAME",
+            "BROKER_PROJECT_SCOPE",
         }
 
         assert set(config.keys()) == expected_keys
@@ -378,3 +396,80 @@ class TestLoadConfig:
         # Should have original value, not modified one
         assert config2["BROKER_BUSY_TIMEOUT"] == original_timeout
         assert config2["BROKER_BUSY_TIMEOUT"] != 99999
+
+    def test_project_scoping_settings(self) -> None:
+        """Test project scoping environment variables."""
+        env_vars = {
+            "BROKER_DEFAULT_DB_LOCATION": "/tmp/project",
+            "BROKER_DEFAULT_DB_NAME": "custom.db",
+            "BROKER_PROJECT_SCOPE": "1",
+        }
+
+        with patch.dict(os.environ, env_vars):
+            config = load_config()
+
+            assert config["BROKER_DEFAULT_DB_LOCATION"] == "/tmp/project"
+            assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
+            assert config["BROKER_PROJECT_SCOPE"] is True
+
+    def test_project_scope_boolean_parsing(self) -> None:
+        """Test BROKER_PROJECT_SCOPE boolean parsing."""
+        # Test true values
+        for value in ["1", "true", "TRUE", "True", "yes", "YES", "on", "ON"]:
+            with patch.dict(os.environ, {"BROKER_PROJECT_SCOPE": value}):
+                config = load_config()
+                assert config["BROKER_PROJECT_SCOPE"] is True, (
+                    f"Failed for value: {value}"
+                )
+
+        # Test false values
+        for value in ["0", "false", "FALSE", "no", "NO", "off", "OFF", "", "invalid"]:
+            with patch.dict(os.environ, {"BROKER_PROJECT_SCOPE": value}):
+                config = load_config()
+                assert config["BROKER_PROJECT_SCOPE"] is False, (
+                    f"Failed for value: {value}"
+                )
+
+    def test_relative_db_location_resolution(self) -> None:
+        """Test that relative BROKER_DEFAULT_DB_LOCATION is converted to absolute."""
+        from pathlib import Path
+
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "relative/path"}):
+            config = load_config()
+
+            # Should be converted to absolute path
+            assert Path(config["BROKER_DEFAULT_DB_LOCATION"]).is_absolute()
+            assert config["BROKER_DEFAULT_DB_LOCATION"].endswith("relative/path")
+
+        # Absolute paths should remain unchanged
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "/absolute/path"}):
+            config = load_config()
+            assert config["BROKER_DEFAULT_DB_LOCATION"] == "/absolute/path"
+
+
+class TestParseBool:
+    """Test the _parse_bool helper function."""
+
+    def test_true_values(self) -> None:
+        """Test _parse_bool recognizes true values correctly."""
+        true_values = ["1", "true", "TRUE", "True", "yes", "YES", "on", "ON"]
+        for value in true_values:
+            assert _parse_bool(value) is True, f"Failed for value: {value}"
+
+    def test_false_values(self) -> None:
+        """Test _parse_bool recognizes false values correctly."""
+        false_values = ["0", "false", "FALSE", "no", "off", "OFF", "", "invalid"]
+        for value in false_values:
+            assert _parse_bool(value) is False, f"Failed for value: {value}"
+
+    def test_whitespace_handling(self) -> None:
+        """Test _parse_bool handles whitespace correctly."""
+        assert _parse_bool(" 1 ") is True
+        assert _parse_bool(" true ") is True
+        assert _parse_bool("\ttrue\n") is True
+        assert _parse_bool("  ") is False
+
+    def test_empty_and_none_values(self) -> None:
+        """Test _parse_bool handles empty and None-like values."""
+        assert _parse_bool("") is False
+        assert _parse_bool(" ") is False
