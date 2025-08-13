@@ -38,6 +38,14 @@ SimpleBroker is a zero-configuration message queue that runs anywhere Python run
 - [Real-time Queue Watching](#real-time-queue-watching)
 - [Python API](#python-api)
 - [Performance & Tuning](#performance--tuning)
+- [Project Scoping](#project-scoping)
+  - [Basic Project Scoping](#basic-project-scoping)
+  - [Project Database Names](#project-database-names)
+  - [Error Behavior](#error-behavior-when-no-project-database-found)
+  - [Project Initialization](#project-initialization)
+  - [Precedence Rules](#precedence-rules)
+  - [Security Notes](#security-notes)
+  - [Common Use Cases](#common-use-cases)
 - [Architecture & Technical Details](#architecture--technical-details)
 - [Development & Contributing](#development--contributing)
 - [License](#license)
@@ -147,6 +155,7 @@ $ broker --cleanup
 | `delete --all` | Delete all queues (marks for removal; use `--vacuum` to reclaim space) |
 | `broadcast <message\|->` | Send message to all existing queues |
 | `watch <queue> [options]` | Watch queue for new messages |
+| `init [--force]` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
 
 ### Command Options
 
@@ -611,6 +620,30 @@ with QueueWatcher("my.db", "notifications", handle_message) as watcher:
 # Ensures proper cleanup even if an exception occurs
 ```
 
+### SimpleBroker Scopes
+SimpleBroker is *directory-scoped* by default: Each directory gets its own .broker.db and is independent.
+However, sometimes you want to have everything in a "project" (a directory and its subdirectories) share
+queues, and sometimes you may want to have the queues globally available. There are are environment variables
+that are provided to allow these different types of operations:
+
+**Project Scope**
+- Environment variable: `BROKER_PROJECT_SCOPE` 
+  - Set to "1", "true", "yes", or "on" to enable project scoping (default value: False)
+  When project scope is enabled, SimpleBroker searches upward from current directory for existing database, in 
+  similar fashion to git. If no database is found, errors out with instruction to run `broker init` in the directory
+  where the project root should go.
+
+**Global Scope**
+- Environment variables:
+  - `BROKER_DEFAULT_DB_LOCATION` (corresponds to the -d/--dir command line argument, default is $PWD)
+  Sets SimpleBroker to use the identified location for the .broker.db. This argument is not used when `BROKER_PROJECT_SCOPE` is True.
+
+The scoping rules have strict precedence:
+1. Command-line arguments
+2. Project scope (`BROKER_PROJECT_SCOPE` is set and True)
+3. Environment variable-set defaults (`BROKER_DEFAULT_DB_LOCATION`)
+4. SimpleBroker defaults (the current working directory)
+
 ### Async Integration Patterns
 
 SimpleBroker is synchronous by design for simplicity, but can be easily integrated with async applications:
@@ -777,6 +810,11 @@ See [`examples/`](examples/) directory for more patterns including async process
 - `SIMPLEBROKER_INITIAL_CHECKS` - Number of checks with zero delay (default: 100)
 - `SIMPLEBROKER_MAX_INTERVAL` - Maximum polling interval in seconds (default: 0.1)
 
+**Database Naming:**
+- `BROKER_DEFAULT_DB_NAME` - name of the broker database file (default: .broker.db)
+- Corresponds to the -f/--file command line argument
+- Applies to all scopes 
+
 Example configurations:
 ```bash
 # High-throughput configuration
@@ -791,8 +829,311 @@ export BROKER_CACHE_MB=50
 # Power-saving configuration
 export SIMPLEBROKER_INITIAL_CHECKS=50
 export SIMPLEBROKER_MAX_INTERVAL=0.5
+
+# Project scoping configuration
+export BROKER_PROJECT_SCOPE=true
+export BROKER_DEFAULT_DB_NAME=project-queue.db
 ```
 </details>
+
+## Project Scoping
+
+SimpleBroker supports project-level database scoping, similar to how `git` finds the repository root. This allows multiple scripts and processes within a project to share the same broker database regardless of their current working directory.
+
+### Basic Project Scoping
+
+Enable project scoping by setting the environment variable:
+
+```bash
+export BROKER_PROJECT_SCOPE=true
+```
+
+With project scoping enabled, SimpleBroker searches upward from the current directory to find an existing `.broker.db` file. If found, it uses that database instead of creating a new one in the current directory.
+
+```bash
+# Project structure:
+# /home/user/myproject/.broker.db  ← Project database
+# /home/user/myproject/scripts/
+# /home/user/myproject/scripts/worker.py
+
+cd /home/user/myproject/scripts
+export BROKER_PROJECT_SCOPE=true
+broker write tasks "process data"  # Uses /home/user/myproject/.broker.db
+```
+
+**Benefits:**
+- **Shared state**: All project scripts use the same message queue
+- **Location independence**: Works from any subdirectory
+- **Zero configuration**: Just set the environment variable
+- **Git-like behavior**: Intuitive for developers familiar with version control
+
+### Project Database Names
+
+Control the database filename used in project scoping:
+
+```bash
+export BROKER_DEFAULT_DB_NAME=project-queue.db
+export BROKER_PROJECT_SCOPE=true
+```
+
+Now project scoping searches for `project-queue.db` instead of `.broker.db`.
+
+**Use cases:**
+- **Multiple projects**: Use different names to avoid conflicts
+- **Descriptive names**: `analytics.db`, `build-queue.db`, etc.
+- **Environment separation**: `dev-queue.db` vs `prod-queue.db`
+
+**Note:** If no project database is found during the upward search, SimpleBroker will error out and ask you to run `broker init` to create one.
+
+### Error Behavior When No Project Database Found
+
+When project scoping is enabled but no project database is found, SimpleBroker will error out with a clear message:
+
+```bash
+export BROKER_PROJECT_SCOPE=true
+cd /tmp/isolated_directory
+broker write tasks "test message"
+# Error: No SimpleBroker database found in project scope.
+# Run 'broker init' to create a project database.
+```
+
+**This is intentional behavior** - SimpleBroker requires explicit initialization to avoid accidentally creating databases in unexpected locations.
+
+### Project Initialization
+
+Use `broker init` to create a project database in the current directory:
+
+```bash
+cd /home/user/myproject
+broker init
+# Creates /home/user/myproject/.broker.db
+```
+
+**With custom database name:**
+```bash
+export BROKER_DEFAULT_DB_NAME=project-queue.db
+cd /home/user/myproject
+broker init
+# Creates /home/user/myproject/project-queue.db
+
+# Force reinitialize existing database
+broker init --force
+```
+
+**Important:** `broker init` always creates the database in the current working directory and does not accept `-d` or `-f` flags. It only respects `BROKER_DEFAULT_DB_NAME` for custom filenames.
+
+**Directory structure examples:**
+```bash
+# Web application
+webapp/
+├── .broker.db          ← Project queue (created by: broker init)
+├── frontend/
+│   └── build.py        ← Uses ../broker.db 
+├── backend/
+│   └── worker.py       ← Uses ../broker.db
+└── scripts/
+    └── deploy.sh       ← Uses ../broker.db
+
+# Data pipeline
+pipeline/
+├── queues.db           ← Custom name (BROKER_DEFAULT_DB_NAME=queues.db)
+├── extract/
+│   └── scraper.py      ← Uses ../queues.db
+├── transform/
+│   └── processor.py    ← Uses ../queues.db
+└── load/
+    └── uploader.py     ← Uses ../queues.db
+```
+
+### Precedence Rules
+
+Database path resolution follows strict precedence rules:
+
+1. **Explicit CLI flags** (`-f`, `-d`) - Always win
+2. **Project scoping** (`BROKER_PROJECT_SCOPE=true`) - Searches upward, errors if not found
+3. **Environment defaults** (`BROKER_DEFAULT_DB_*`) - Used when project scoping disabled
+4. **Built-in defaults** - Current directory + `.broker.db`
+
+**Examples:**
+
+```bash
+export BROKER_PROJECT_SCOPE=true
+export BROKER_DEFAULT_DB_NAME=project.db
+
+# 1. Explicit absolute path (highest precedence)
+broker -f /explicit/path/queue.db write test "msg"
+# Uses: /explicit/path/queue.db
+
+# 2. Explicit directory + filename
+broker -d /explicit/dir -f custom.db write test "msg"  
+# Uses: /explicit/dir/custom.db
+
+# 3. Project scoping finds existing database
+# (assuming /home/user/myproject/project.db exists)
+cd /home/user/myproject/subdir
+broker write test "msg"
+# Uses: /home/user/myproject/project.db
+
+# 4. Project scoping enabled but no database found (errors out)
+cd /tmp/isolated
+broker write test "msg"
+# Error: No SimpleBroker database found. Run 'broker init' to create one.
+
+# 5. Built-in defaults (no project scoping)
+unset BROKER_PROJECT_SCOPE BROKER_DEFAULT_DB_NAME
+broker write test "msg"
+# Uses: /tmp/isolated/.broker.db
+```
+
+**Decision flowchart:**
+```
+CLI flags (-f absolute path)?
+├─ YES → Use absolute path
+└─ NO → CLI flags (-d + -f)?
+   ├─ YES → Use directory + filename
+   └─ NO → BROKER_PROJECT_SCOPE=true?
+      ├─ NO → Use env defaults or built-in defaults
+      └─ YES → Search upward for database
+         ├─ FOUND → Use project database
+         └─ NOT FOUND → Error with message to run 'broker init'
+```
+
+### Security Notes
+
+Project scoping includes several security measures to prevent unauthorized access:
+
+**Boundary detection:**
+- Stops at filesystem root (`/` on Unix, `C:\` on Windows)
+- Respects filesystem mount boundaries
+- Maximum 100 directory levels to prevent infinite loops
+
+**Database validation:**
+- Only uses files with SimpleBroker magic string
+- Validates database schema and structure
+- Rejects corrupted or foreign databases
+
+**Permission checking:**
+- Respects file system access controls
+- Skips directories with permission issues
+- Validates read/write access before using database
+
+**Traversal limits:**
+- Maximum 100 directory levels to prevent infinite loops
+- Prevents symlink loop exploitation
+- Uses existing path resolution security
+
+**Warnings:**
+
+⚠️ **Project scoping allows accessing databases in parent directories.** Only enable in trusted environments where this behavior is desired.
+
+⚠️ **Database sharing:** Multiple processes will share the same database when project scoping is enabled. Ensure your application handles concurrent access appropriately.
+
+⚠️ **No automatic fallback:** When project scoping is enabled but no database is found, SimpleBroker will error out rather than creating a database automatically. You must run `broker init` to create a project database.
+
+**Best practices:**
+```bash
+# Safe: Enable only in controlled environments
+if [[ "$PWD" == /home/user/myproject/* ]]; then
+    export BROKER_PROJECT_SCOPE=true
+fi
+
+# Safe: Use explicit paths for sensitive operations
+broker -f /secure/path/queue.db write secrets "sensitive data"
+
+# Safe: Validate environment before enabling
+if [[ -r "/home/user/myproject/.broker.db" ]]; then
+    export BROKER_PROJECT_SCOPE=true
+fi
+```
+
+### Common Use Cases
+
+**Build systems:**
+```bash
+# Root project queue for build coordination
+cd /project && broker init
+export BROKER_PROJECT_SCOPE=true
+
+# Frontend build (any subdirectory)
+cd /project/frontend
+broker write build-tasks "compile assets"
+
+# Backend build (different subdirectory)  
+cd /project/backend
+broker read build-tasks  # Gets "compile assets"
+```
+
+**Data pipelines:**
+```bash
+# Pipeline coordination
+export BROKER_PROJECT_SCOPE=true
+export BROKER_DEFAULT_DB_NAME=pipeline.db
+cd /data-pipeline && broker init
+
+# Extract phase
+cd /data-pipeline/extractors
+broker write raw-data "/path/to/file1.csv"
+
+# Transform phase  
+cd /data-pipeline/transformers
+broker read raw-data  # Gets "/path/to/file1.csv"
+broker write clean-data "/path/to/processed1.json"
+
+# Load phase
+cd /data-pipeline/loaders  
+broker read clean-data  # Gets "/path/to/processed1.json"
+```
+
+**Development workflows:**
+```bash
+# Development environment setup
+cd ~/myproject
+export BROKER_PROJECT_SCOPE=true
+export BROKER_DEFAULT_DB_NAME=dev-queue.db
+broker init
+
+# Testing from any location
+cd ~/myproject/tests
+broker write test-data "integration-test-1"
+
+# Application reads from any location
+cd ~/myproject/src
+broker read test-data  # Gets "integration-test-1"
+```
+
+**CI/CD integration:**
+```bash
+# Build script (in any project subdirectory)
+#!/bin/bash
+export BROKER_PROJECT_SCOPE=true
+export BROKER_DEFAULT_DB_NAME=ci-queue.db
+
+# Ensure project queue exists
+if ! broker list >/dev/null 2>&1; then
+    broker init
+fi
+
+# Add build tasks
+broker write builds "compile-frontend"
+broker write builds "run-tests" 
+broker write builds "build-docker"
+broker write builds "deploy-staging"
+```
+
+**Multi-service coordination:**
+```bash
+# Service discovery queue
+export BROKER_PROJECT_SCOPE=true
+export BROKER_DEFAULT_DB_NAME=services.db
+
+# Service A registers itself
+cd /app/service-a
+broker write registry "service-a:healthy:port:8080"
+
+# Service B discovers Service A
+cd /app/service-b  
+broker peek registry  # Sees "service-a:healthy:port:8080"
+```
 
 ## Architecture & Technical Details
 

@@ -59,7 +59,7 @@ class TestConstants:
         import re
         from pathlib import Path
 
-        pyproject_path = Path(__file__).parent.parent.parent / "pyproject.toml"
+        pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
         with open(pyproject_path, encoding="utf-8") as f:
             content = f.read()
 

@@ -304,7 +304,7 @@ class TestQueueWatcher(WatcherTestBase):
             from pathlib import Path
 
             # Add parent to path
-            sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+            sys.path.insert(0, str(Path(__file__).parent.parent))
 
             from simplebroker.db import BrokerDB
             from simplebroker.watcher import QueueWatcher
