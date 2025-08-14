@@ -411,13 +411,22 @@ def load_config() -> Dict[str, Any]:
     if isinstance(db_name, str) and db_name:
         from pathlib import PurePath
 
-        # Check if it's an absolute path
+        # First validate for security (dangerous characters)
+        try:
+            from .helpers import _validate_safe_path_components
+
+            _validate_safe_path_components(db_name, "BROKER_DEFAULT_DB_NAME")
+        except ValueError as e:
+            raise ValueError(f"BROKER_DEFAULT_DB_NAME validation failed: {e}") from e
+
+        # Check if it's an absolute path (must come first)
         if os.path.isabs(db_name):
             raise ValueError(
                 f"BROKER_DEFAULT_DB_NAME must be a relative path, not absolute: {db_name}. "
                 f"Use BROKER_DEFAULT_DB_LOCATION to specify the directory instead."
             )
 
+        # Then check for nested directories
         parts = list(PurePath(db_name).parts)
         if len(parts) > 2:
             raise ValueError(

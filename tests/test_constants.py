@@ -47,6 +47,8 @@ from simplebroker._constants import (
     load_config,
 )
 
+from .test_helpers import create_dangerous_path
+
 
 class TestConstants:
     """Test that all constants are defined with expected values."""
@@ -400,27 +402,25 @@ class TestLoadConfig:
     def test_project_scoping_settings(self) -> None:
         """Test project scoping environment variables."""
         import os
+        import tempfile
         from pathlib import Path
 
-        env_vars = {
-            "BROKER_DEFAULT_DB_LOCATION": "/tmp/project",
-            "BROKER_DEFAULT_DB_NAME": "custom.db",
-            "BROKER_PROJECT_SCOPE": "1",
-        }
+        # Create a platform-appropriate absolute path
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_path = str(Path(temp_dir) / "project")
 
-        with patch.dict(os.environ, env_vars):
-            config = load_config()
+            env_vars = {
+                "BROKER_DEFAULT_DB_LOCATION": test_path,
+                "BROKER_DEFAULT_DB_NAME": "custom.db",
+                "BROKER_PROJECT_SCOPE": "1",
+            }
 
-            # On Unix systems, /tmp/project is absolute and stays unchanged
-            # On Windows, /tmp/project is relative and gets resolved to absolute path
-            if os.path.isabs("/tmp/project"):
-                expected_path = "/tmp/project"
-            else:
-                expected_path = str(Path("/tmp/project").resolve())
+            with patch.dict(os.environ, env_vars):
+                config = load_config()
 
-            assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
-            assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
-            assert config["BROKER_PROJECT_SCOPE"] is True
+                assert config["BROKER_DEFAULT_DB_LOCATION"] == test_path
+                assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
+                assert config["BROKER_PROJECT_SCOPE"] is True
 
     def test_project_scope_boolean_parsing(self) -> None:
         """Test BROKER_PROJECT_SCOPE boolean parsing."""
@@ -461,15 +461,19 @@ class TestLoadConfig:
                 assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
 
         # Absolute paths should remain unchanged
-        absolute_path = os.path.join(os.sep + "absolute", "path")
-        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": absolute_path}):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                config = load_config()
+        import tempfile
+        from pathlib import Path
 
-                # Should not issue a warning for absolute paths
-                assert len(w) == 0
-                assert config["BROKER_DEFAULT_DB_LOCATION"] == absolute_path
+        with tempfile.TemporaryDirectory() as temp_dir:
+            absolute_path = str(Path(temp_dir) / "absolute" / "path")
+            with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": absolute_path}):
+                with warnings.catch_warnings(record=True) as w:
+                    warnings.simplefilter("always")
+                    config = load_config()
+
+                    # Should not issue a warning for absolute paths
+                    assert len(w) == 0
+                    assert config["BROKER_DEFAULT_DB_LOCATION"] == absolute_path
 
 
 class TestParseBool:
@@ -505,12 +509,19 @@ class TestConfigValidation:
 
     def test_broker_default_db_name_absolute_path_raises_error(self) -> None:
         """Test that absolute paths in BROKER_DEFAULT_DB_NAME raise an error."""
-        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "/tmp/broker.db"}):
-            with pytest.raises(
-                ValueError,
-                match="BROKER_DEFAULT_DB_NAME must be a relative path, not absolute",
-            ):
-                load_config()
+        import tempfile
+        from pathlib import Path
+
+        # Create a platform-appropriate absolute path
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_path = str(Path(temp_dir) / "broker.db")
+
+            with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": test_path}):
+                with pytest.raises(
+                    ValueError,
+                    match="BROKER_DEFAULT_DB_NAME must be a relative path, not absolute",
+                ):
+                    load_config()
 
     def test_broker_default_db_name_windows_absolute_path_raises_error(self) -> None:
         """Test that Windows absolute paths in BROKER_DEFAULT_DB_NAME raise an error."""
@@ -555,31 +566,39 @@ class TestConfigValidation:
 
     def test_broker_default_db_location_dangerous_characters_raises_error(self) -> None:
         """Test that dangerous characters in BROKER_DEFAULT_DB_LOCATION raise an error."""
-        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "/tmp/test|path"}):
-            with pytest.raises(
-                ValueError,
-                match="BROKER_DEFAULT_DB_LOCATION validation failed.*dangerous character",
-            ):
-                load_config()
+        import tempfile
+
+        # Create a platform-appropriate absolute path with dangerous characters
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_path = create_dangerous_path(temp_dir, "|")
+
+            with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}):
+                with pytest.raises(
+                    ValueError,
+                    match="BROKER_DEFAULT_DB_LOCATION validation failed.*dangerous character",
+                ):
+                    load_config()
 
     def test_broker_default_db_location_valid_absolute_path(self) -> None:
         """Test that valid absolute paths in BROKER_DEFAULT_DB_LOCATION are accepted."""
-        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "/tmp/valid_path"}):
-            config = load_config()
-            assert config["BROKER_DEFAULT_DB_LOCATION"] == "/tmp/valid_path"
+        import tempfile
+        from pathlib import Path
+
+        # Create a platform-appropriate absolute path
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_path = str(Path(temp_dir) / "valid_path")
+
+            with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}):
+                config = load_config()
+                assert config["BROKER_DEFAULT_DB_LOCATION"] == test_path
 
     def test_broker_default_db_name_dangerous_characters_in_compound(self) -> None:
-        """Test that dangerous characters are caught in compound database names."""
-        # This should fail when the compound name is processed, not during initial config load
-        # because the config load only does absolute path and nesting checks
-        # The dangerous character validation happens when _is_compound_db_name is called
+        """Test that dangerous characters are caught in compound database names at config load time."""
+        # Since we now validate dangerous characters at config load time,
+        # this should fail during load_config() itself
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "test|dir/broker.db"}):
-            # Config loading should succeed (it only checks absolute paths and nesting)
-            config = load_config()
-            assert config["BROKER_DEFAULT_DB_NAME"] == "test|dir/broker.db"
-
-            # But using it should fail when compound validation happens
-            from simplebroker.helpers import _is_compound_db_name
-
-            with pytest.raises(ValueError, match="dangerous character"):
-                _is_compound_db_name("test|dir/broker.db")
+            with pytest.raises(
+                ValueError,
+                match="BROKER_DEFAULT_DB_NAME validation failed.*dangerous character",
+            ):
+                load_config()
