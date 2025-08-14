@@ -13,6 +13,7 @@ are reclaimed to prevent test failures on Windows.
 """
 
 import os
+import platform
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -61,7 +62,11 @@ class TestEnvironmentVariableParsing:
     @patch.dict(
         os.environ,
         {
-            "BROKER_DEFAULT_DB_LOCATION": os.sep.join([os.sep + "tmp", "test"]),
+            "BROKER_DEFAULT_DB_LOCATION": (
+                "C:\\tmp\\test"
+                if platform.system() == "Windows"
+                else os.sep.join([os.sep + "tmp", "test"])
+            ),
             "BROKER_DEFAULT_DB_NAME": "custom.db",
             "BROKER_PROJECT_SCOPE": "1",
         },
@@ -70,9 +75,12 @@ class TestEnvironmentVariableParsing:
         """Test load_config reads environment variables correctly."""
         config = load_config()
         # Absolute path should remain unchanged
-        assert config["BROKER_DEFAULT_DB_LOCATION"] == os.sep.join(
-            [os.sep + "tmp", "test"]
+        expected_path = (
+            "C:\\tmp\\test"
+            if platform.system() == "Windows"
+            else os.sep.join([os.sep + "tmp", "test"])
         )
+        assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
         assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
         assert config["BROKER_PROJECT_SCOPE"] is True
 
