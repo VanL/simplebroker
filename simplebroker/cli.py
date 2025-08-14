@@ -17,7 +17,6 @@ from ._constants import (
 )
 from ._exceptions import DatabaseError
 from .helpers import (
-    _create_compound_db_directories,
     _find_project_database,
     _resolve_symlinks_safely,
     _validate_database_parent_directory,
@@ -25,6 +24,7 @@ from .helpers import (
     _validate_path_traversal_prevention,
     _validate_sqlite_database,
     _validate_working_directory,
+    ensure_compound_db_path,
 )
 
 # Cache the parser for better startup performance
@@ -623,17 +623,15 @@ def main() -> int:
                     # If we can't resolve even the working directory, keep original
                     pass
 
-        # Step 1: Create compound directories if needed
-        # We need to get the database filename to check if it's compound
-        db_filename = args.file
+        # Handle compound database names from environment variable
         if args.file == DEFAULT_DB_NAME and _config["BROKER_DEFAULT_DB_NAME"]:
-            db_filename = _config["BROKER_DEFAULT_DB_NAME"]
+            # Create compound path and directories as needed
+            db_path = ensure_compound_db_path(
+                working_dir, _config["BROKER_DEFAULT_DB_NAME"]
+            )
 
-        # Create compound directories within the parent directory
-        _create_compound_db_directories(db_path.parent, db_filename)
-
-        # Step 2: Validate parent directory and file permissions
-        _validate_database_parent_directory(db_path)
+        # Validate final database parent directory
+        _validate_database_parent_directory(db_path.parent)
 
         # Validate database file if it exists (only for read operations)
         # For write operations, allow overwriting invalid files

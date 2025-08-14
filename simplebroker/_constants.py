@@ -394,4 +394,16 @@ def load_config() -> Dict[str, Any]:
         )
         config["BROKER_DEFAULT_DB_LOCATION"] = ""
 
+    # Validate BROKER_DEFAULT_DB_NAME format (but don't create directories)
+    db_name = config["BROKER_DEFAULT_DB_NAME"]
+    if isinstance(db_name, str) and db_name:
+        from pathlib import PurePath
+
+        parts = list(PurePath(db_name).parts)
+        if len(parts) > 2:
+            raise ValueError(
+                f"Database name must not contain nested directories: {db_name}. "
+                f"Only single directory level is supported (e.g., 'dir/name.db')"
+            )
+
     return config

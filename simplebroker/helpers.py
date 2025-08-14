@@ -327,25 +327,36 @@ def _validate_working_directory(working_dir: Path) -> None:
 def _is_compound_db_name(db_name: str) -> tuple[bool, list[str]]:
     """Detect if database name contains path components and split them.
 
+    Only supports a single directory level (e.g., "some/name.db").
+    Deeper nesting is not allowed for security and simplicity.
+
     Args:
         db_name: Database name from BROKER_DEFAULT_DB_NAME
 
     Returns:
         Tuple of (is_compound, path_components)
-        - is_compound: True if db_name contains directory separators
+        - is_compound: True if db_name contains exactly one directory separator
         - path_components: List of path parts (empty if not compound)
 
     Examples:
         _is_compound_db_name("broker.db") -> (False, [])
         _is_compound_db_name("some/name.db") -> (True, ["some", "name.db"])
-        _is_compound_db_name(".weft/broker.db") -> (True, [".weft", "broker.db"])
-    """
 
+    Raises:
+        ValueError: If database name contains more than one directory level
+    """
     pure_path = PurePath(db_name)
     parts = list(pure_path.parts)
 
-    # If there's more than one part, it's compound
-    is_compound = len(parts) > 1
+    # Check for nested directories (more than 2 parts)
+    if len(parts) > 2:
+        raise ValueError(
+            f"Database name must not contain nested directories: {db_name}. "
+            f"Only single directory level is supported (e.g., 'dir/name.db')"
+        )
+
+    # If there are exactly 2 parts, it's compound
+    is_compound = len(parts) == 2
     return is_compound, parts if is_compound else []
 
 
@@ -378,6 +389,36 @@ def _create_compound_db_directories(base_dir: Path, db_name: str) -> None:
             raise ValueError(
                 f"Cannot create intermediate directories {intermediate_path}: {e}"
             ) from e
+
+
+def ensure_compound_db_path(base_dir: Path, db_name: str) -> Path:
+    """Ensure compound database path exists and return full database path.
+
+    Args:
+        base_dir: Base directory (e.g., /home/vanl/dev/)
+        db_name: Database name (e.g., ".config/broker.db")
+
+    Returns:
+        Full database path (e.g., /home/vanl/dev/.config/broker.db)
+
+    Raises:
+        ValueError: If directory creation fails or db_name is invalid
+    """
+    is_compound, parts = _is_compound_db_name(db_name)
+
+    if not is_compound:
+        return base_dir / db_name
+
+    # Create subdirectory and return full path
+    subdir_path = base_dir / parts[0]
+    try:
+        subdir_path.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError) as e:
+        raise ValueError(
+            f"Cannot create compound subdirectory {subdir_path}: {e}"
+        ) from e
+
+    return subdir_path / parts[1]
 
 
 def _validate_database_parent_directory(db_path: Path) -> None:

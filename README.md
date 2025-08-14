@@ -793,7 +793,7 @@ See [`examples/`](examples/) directory for more patterns including async process
 **Database Naming:**
 - `BROKER_DEFAULT_DB_NAME` - name of the broker database file (default: .broker.db)
 - Corresponds to the -f/--file command line argument
-- Can be a compound path (e.g., ".subdirectory/broker.db")
+- Can be a compound path including a single directory (e.g., ".subdirectory/broker.db")
 - Applies to all scopes 
 
 Example configurations:
