@@ -399,6 +399,13 @@ def load_config() -> Dict[str, Any]:
     if isinstance(db_name, str) and db_name:
         from pathlib import PurePath
 
+        # Check if it's an absolute path
+        if os.path.isabs(db_name):
+            raise ValueError(
+                f"BROKER_DEFAULT_DB_NAME must be a relative path, not absolute: {db_name}. "
+                f"Use BROKER_DEFAULT_DB_LOCATION to specify the directory instead."
+            )
+
         parts = list(PurePath(db_name).parts)
         if len(parts) > 2:
             raise ValueError(

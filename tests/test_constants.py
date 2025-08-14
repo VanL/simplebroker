@@ -498,3 +498,57 @@ class TestParseBool:
         """Test _parse_bool handles empty and None-like values."""
         assert _parse_bool("") is False
         assert _parse_bool(" ") is False
+
+
+class TestConfigValidation:
+    """Test config validation in load_config."""
+
+    def test_broker_default_db_name_absolute_path_raises_error(self) -> None:
+        """Test that absolute paths in BROKER_DEFAULT_DB_NAME raise an error."""
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "/tmp/broker.db"}):
+            with pytest.raises(
+                ValueError,
+                match="BROKER_DEFAULT_DB_NAME must be a relative path, not absolute",
+            ):
+                load_config()
+
+    def test_broker_default_db_name_windows_absolute_path_raises_error(self) -> None:
+        """Test that Windows absolute paths in BROKER_DEFAULT_DB_NAME raise an error."""
+        import platform
+
+        # Only test Windows absolute paths on Windows, or use a cross-platform absolute path
+        if platform.system() == "Windows":
+            test_path = "C:\\temp\\broker.db"
+        else:
+            # On Unix systems, test with a UNC path that would be absolute on Windows
+            # but skip this test since os.path.isabs behavior is platform-specific
+            pytest.skip("Windows absolute path test only relevant on Windows")
+
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": test_path}):
+            with pytest.raises(
+                ValueError,
+                match="BROKER_DEFAULT_DB_NAME must be a relative path, not absolute",
+            ):
+                load_config()
+
+    def test_broker_default_db_name_nested_directories_raises_error(self) -> None:
+        """Test that nested directories in BROKER_DEFAULT_DB_NAME raise an error."""
+        with patch.dict(
+            os.environ, {"BROKER_DEFAULT_DB_NAME": ".config/app/broker.db"}
+        ):
+            with pytest.raises(
+                ValueError, match="Database name must not contain nested directories"
+            ):
+                load_config()
+
+    def test_broker_default_db_name_valid_compound_path(self) -> None:
+        """Test that valid compound paths are accepted."""
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": ".config/broker.db"}):
+            config = load_config()
+            assert config["BROKER_DEFAULT_DB_NAME"] == ".config/broker.db"
+
+    def test_broker_default_db_name_simple_path(self) -> None:
+        """Test that simple database names work correctly."""
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "simple.db"}):
+            config = load_config()
+            assert config["BROKER_DEFAULT_DB_NAME"] == "simple.db"

@@ -35,11 +35,11 @@ class TestIsCompoundDbName:
 
     def test_cross_platform_separators(self) -> None:
         """Test that compound detection works with different separators."""
-        # On Unix, backslashes are treated as literal characters, not separators
-        # So "some\\name.db" is a single filename, not a compound path
+        # With the new implementation, backslashes are normalized to forward slashes
+        # So "some\\name.db" becomes "some/name.db" and is treated as compound
         is_compound, parts = _is_compound_db_name("some\\name.db")
-        assert is_compound is False  # Not compound on Unix
-        assert parts == []
+        assert is_compound is True  # Now compound after normalization
+        assert parts == ["some", "name.db"]
 
         # Forward slashes work as separators on all platforms
         is_compound, parts = _is_compound_db_name("some/name.db")
