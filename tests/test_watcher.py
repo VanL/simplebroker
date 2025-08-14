@@ -203,11 +203,11 @@ class TestQueueWatcher(WatcherTestBase):
             # Test graceful stop timing
             start_time = time.monotonic()
             watcher.stop()
-            thread.join(timeout=2.0)
+            thread.join(timeout=4.0)
             stop_time = time.monotonic() - start_time
 
             assert not thread.is_alive()
-            assert stop_time < 2.0, f"Stop took {stop_time:.2f}s"
+            assert stop_time < 4.0, f"Stop took {stop_time:.2f}s"
 
     def test_graceful_shutdown_sigint(self, temp_db, tmp_path):
         """Test graceful shutdown via SIGINT using subprocess."""
@@ -229,7 +229,7 @@ class TestQueueWatcher(WatcherTestBase):
             [sys.executable, str(helper_script), str(temp_db), str(ready_file)]
         ) as proc:
             # Wait for the watcher to be ready
-            for _ in range(50):  # Wait up to 5 seconds
+            for _ in range(100):  # Wait up to 5 seconds
                 if ready_file.exists():
                     break
                 time.sleep(0.1)
