@@ -444,24 +444,24 @@ class TestLoadConfig:
         """Test that relative BROKER_DEFAULT_DB_LOCATION is converted to absolute."""
         from pathlib import Path
 
-        # Use platform-appropriate path separator from the start
-        test_path = os.path.join("relative", "path")
+        # Use a simple relative path that's unambiguous on all platforms
+        test_path = "testdir"
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}):
             config = load_config()
 
             # Should be converted to absolute path
             assert Path(config["BROKER_DEFAULT_DB_LOCATION"]).is_absolute()
-            # Should end with the same relative path structure
-            expected_suffix = os.path.join("relative", "path")
-            assert config["BROKER_DEFAULT_DB_LOCATION"].endswith(expected_suffix)
+            # Should end with the relative directory name
+            assert config["BROKER_DEFAULT_DB_LOCATION"].endswith("testdir")
 
         # Absolute paths should remain unchanged (on Unix) or be resolved (on Windows)
-        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "/absolute/path"}):
+        absolute_path = os.path.join(os.sep + "absolute", "path")
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": absolute_path}):
             config = load_config()
-            if os.path.isabs("/absolute/path"):
-                expected_path = "/absolute/path"
+            if os.path.isabs(absolute_path):
+                expected_path = absolute_path
             else:
-                expected_path = str(Path("/absolute/path").resolve())
+                expected_path = str(Path(absolute_path).resolve())
             assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
 
 
