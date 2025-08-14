@@ -53,6 +53,7 @@ class TestEnvironmentVariableParsing:
     def test_load_config_defaults(self) -> None:
         """Test load_config returns correct defaults when no env vars set."""
         config = load_config()
+
         assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
         assert config["BROKER_DEFAULT_DB_NAME"] == DEFAULT_DB_NAME
         assert config["BROKER_PROJECT_SCOPE"] is False
@@ -60,7 +61,7 @@ class TestEnvironmentVariableParsing:
     @patch.dict(
         os.environ,
         {
-            "BROKER_DEFAULT_DB_LOCATION": "/tmp/test",
+            "BROKER_DEFAULT_DB_LOCATION": os.sep.join([os.sep + "tmp", "test"]),
             "BROKER_DEFAULT_DB_NAME": "custom.db",
             "BROKER_PROJECT_SCOPE": "1",
         },
@@ -69,14 +70,16 @@ class TestEnvironmentVariableParsing:
         """Test load_config reads environment variables correctly."""
         config = load_config()
         # Absolute path should remain unchanged
-        assert config["BROKER_DEFAULT_DB_LOCATION"] == "/tmp/test"
+        assert config["BROKER_DEFAULT_DB_LOCATION"] == os.sep.join(
+            [os.sep + "tmp", "test"]
+        )
         assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
         assert config["BROKER_PROJECT_SCOPE"] is True
 
     @patch.dict(
         os.environ,
         {
-            "BROKER_DEFAULT_DB_LOCATION": "relative/path",
+            "BROKER_DEFAULT_DB_LOCATION": os.sep.join(["tmp", "test"]),
             "BROKER_DEFAULT_DB_NAME": "custom.db",
             "BROKER_PROJECT_SCOPE": "1",
         },
@@ -88,12 +91,12 @@ class TestEnvironmentVariableParsing:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             config = load_config()
-
+            relative_path = os.sep.join(["tmp", "test"])
             # Should issue a warning
             assert len(w) == 1
             assert issubclass(w[0].category, UserWarning)
             assert "must be an absolute path" in str(w[0].message)
-            assert "relative/path" in str(w[0].message)
+            assert relative_path in str(w[0].message)
 
             # Should be reset to empty string
             assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
@@ -341,9 +344,9 @@ class TestDatabasePathResolution:
 
         abs_path = tmp_path / "absolute.db"
         args = argparse.Namespace(file=str(abs_path), dir=Path.cwd(), command="write")
-
+        absolute_path = os.sep.join([os.sep + "some", "otherpath"])
         config = {
-            "BROKER_DEFAULT_DB_LOCATION": "/some/other/path",
+            "BROKER_DEFAULT_DB_LOCATION": absolute_path,
             "BROKER_DEFAULT_DB_NAME": "other.db",
             "BROKER_PROJECT_SCOPE": True,
         }
@@ -375,9 +378,9 @@ class TestDatabasePathResolution:
                 dir=Path.cwd(),
                 command="write",
             )
-
+            absolute_path = os.sep.join([os.sep + "env", "default", "path"])
             config = {
-                "BROKER_DEFAULT_DB_LOCATION": "/env/default/path",
+                "BROKER_DEFAULT_DB_LOCATION": absolute_path,
                 "BROKER_DEFAULT_DB_NAME": DEFAULT_DB_NAME,
                 "BROKER_PROJECT_SCOPE": True,
             }
