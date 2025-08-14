@@ -229,7 +229,7 @@ class TestQueueWatcher(WatcherTestBase):
             [sys.executable, str(helper_script), str(temp_db), str(ready_file)]
         ) as proc:
             # Wait for the watcher to be ready
-            for _ in range(100):  # Wait up to 5 seconds
+            for _ in range(6000):  # Wait up to a minute. This is not what we are testing, and CI machines can be flaky and noisy
                 if ready_file.exists():
                     break
                 time.sleep(0.1)
