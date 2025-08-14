@@ -620,12 +620,6 @@ with QueueWatcher("my.db", "notifications", handle_message) as watcher:
 # Ensures proper cleanup even if an exception occurs
 ```
 
-### Database Scoping
-
-SimpleBroker is *directory-scoped* by default: Each directory gets its own `.broker.db` and is independent. However, you can configure project-level or global scoping using environment variables. See [Project Scoping](#project-scoping) for comprehensive details.
-
-### Async Integration Patterns
-
 SimpleBroker is synchronous by design for simplicity, but can be easily integrated with async applications:
 
 ```python
@@ -878,8 +872,15 @@ Control the database filename used in any scoping mode:
 export BROKER_DEFAULT_DB_NAME=project-queue.db
 export BROKER_PROJECT_SCOPE=true
 ```
-
 Now project scoping searches for `project-queue.db` instead of `.broker.db`.
+
+To better support git-like operation, the BROKER_DEFAULT_DB_NAME can be a compound name including a single subdirectory:
+
+```bash
+export BROKER_DEFAULT_DB_NAME=.project/queue.db
+export BROKER_PROJECT_SCOPE=true
+```
+Now project scoping searches for `.project/queue.db` instead of `.broker.db`.
 
 **Use cases:**
 - **Multiple projects**: Use different names to avoid conflicts
@@ -978,10 +979,10 @@ broker -d /explicit/dir -f custom.db write test "msg"
 # Uses: /explicit/dir/custom.db
 
 # 3. Project scoping finds existing database
-# (assuming /home/user/myproject/project.db exists)
+# (assuming /home/user/myproject/.config/project.db exists)
 cd /home/user/myproject/subdir
 broker write test "msg"
-# Uses: /home/user/myproject/project.db
+# Uses: /home/user/myproject/.config/project.db
 
 # 4. Project scoping enabled but no database found (errors out)
 cd /tmp/isolated
