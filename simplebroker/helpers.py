@@ -1,99 +1,18 @@
 """Helper functions and classes for SimpleBroker."""
 
 import os
-import platform
-import re
 import sqlite3
 import threading
 import time
 from pathlib import Path, PurePath
 from typing import Callable, List, Optional, Tuple, TypeVar, Union
 
-from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH, SIMPLEBROKER_MAGIC
+from ._constants import (
+    MAX_PROJECT_TRAVERSAL_DEPTH,
+    SIMPLEBROKER_MAGIC,
+    _validate_safe_path_components,
+)
 from ._exceptions import DatabaseError, OperationalError, StopException
-
-# Pre-compiled regex patterns for dangerous character detection
-# These are compiled once at module import time for maximum performance
-
-# Common dangerous characters across all platforms
-_COMMON_DANGEROUS_CHARS = [
-    "\0",  # Null byte - can truncate paths
-    "\r",
-    "\n",  # Line endings - can cause injection
-    "\t",  # Tab - can cause parsing issues
-    "\x7f",  # DEL character
-]
-
-# Unix/Mac shell metacharacters (excluding backslash - it's allowed as path separator)
-_UNIX_SHELL_CHARS = [
-    "|",
-    "&",
-    ";",
-    "$",
-    "`",
-    '"',
-    "'",
-    "<",
-    ">",
-    "(",
-    ")",
-    "{",
-    "}",
-    "[",
-    "]",
-    "*",
-    "?",
-    "~",
-    "^",
-    "!",
-    "#",
-]
-
-# Windows dangerous characters
-_WINDOWS_DANGEROUS_CHARS = [
-    ":",
-    "*",
-    "?",
-    '"',
-    "<",
-    ">",
-    "|",
-    # Note: backslash is allowed on Windows as it's the native path separator
-]
-
-# Create platform-specific character lists
-_unix_chars = _COMMON_DANGEROUS_CHARS + _UNIX_SHELL_CHARS
-_windows_chars = _COMMON_DANGEROUS_CHARS + _WINDOWS_DANGEROUS_CHARS
-
-# Pre-compile regex patterns for maximum performance
-_UNIX_DANGEROUS_REGEX = re.compile(f"[{re.escape(''.join(_unix_chars))}]")
-_WINDOWS_DANGEROUS_REGEX = re.compile(f"[{re.escape(''.join(_windows_chars))}]")
-
-# Windows reserved names (case-insensitive)
-_WINDOWS_RESERVED_NAMES = {
-    "CON",
-    "PRN",
-    "AUX",
-    "NUL",
-    "COM1",
-    "COM2",
-    "COM3",
-    "COM4",
-    "COM5",
-    "COM6",
-    "COM7",
-    "COM8",
-    "COM9",
-    "LPT1",
-    "LPT2",
-    "LPT3",
-    "LPT4",
-    "LPT5",
-    "LPT6",
-    "LPT7",
-    "LPT8",
-    "LPT9",
-}
 
 T = TypeVar("T")
 
@@ -609,140 +528,6 @@ def _validate_path_containment(
             raise ValueError(
                 "Project-scoped database path must be in parent directory chain"
             )
-
-
-def _validate_safe_path_components(path: str, context: str = "path") -> None:
-    """Validate that path components don't contain dangerous characters or reserved names.
-
-    This function provides comprehensive security validation for user-supplied paths,
-    preventing various attack vectors including path traversal, shell injection,
-    and Windows reserved names.
-
-    Args:
-        path: Path string to validate (can be filename or compound path)
-        context: Description of what is being validated for error messages
-
-    Raises:
-        ValueError: If path contains dangerous characters or reserved names
-
-    Security Features:
-        - Prevents path traversal attacks (..)
-        - Blocks null bytes and control characters
-        - Prevents shell injection on Unix/Mac
-        - Blocks Windows reserved names (CON, PRN, AUX, etc.)
-        - Validates each path component separately
-        - Uses pre-compiled regex for maximum performance
-        - Allows Windows drive letters (e.g., C:, D:)
-    """
-    if not isinstance(path, str) or not path:
-        raise ValueError(f"{context} must be a non-empty string")
-
-    # Normalize path separators for consistent processing
-    normalized_path = path.replace("\\", "/")
-    pure_path = PurePath(normalized_path)
-
-    # Use pre-compiled platform-specific regex for dangerous character detection
-    is_windows = platform.system() == "Windows"
-    dangerous_regex = _WINDOWS_DANGEROUS_REGEX if is_windows else _UNIX_DANGEROUS_REGEX
-
-    # Check for dangerous characters using optimized regex
-    if dangerous_regex.search(path):
-        # On Windows, check if colon is part of a legitimate drive letter
-        if is_windows and ":" in path:
-            # Windows drive letter pattern: C:, D:, etc. at the beginning of absolute paths
-            import re as re_module
-
-            drive_pattern = re_module.compile(r"^[A-Za-z]:")
-
-            # If it's just a drive letter, allow it
-            if drive_pattern.match(path):
-                # Check if there are other dangerous characters besides the drive colon
-                path_without_drive = path[2:]  # Remove "C:" part
-                if dangerous_regex.search(path_without_drive):
-                    match = dangerous_regex.search(path_without_drive)
-                    dangerous_char = match.group() if match else "unknown"
-                    raise ValueError(
-                        f"{context} contains dangerous character '{dangerous_char}': {path}. "
-                        f"Path components must not contain shell metacharacters or control characters."
-                    )
-                # Drive letter is OK, continue with other validations
-            else:
-                # Colon is not part of drive letter, it's dangerous
-                match = dangerous_regex.search(path)
-                dangerous_char = match.group() if match else "unknown"
-                raise ValueError(
-                    f"{context} contains dangerous character '{dangerous_char}': {path}. "
-                    f"Path components must not contain shell metacharacters or control characters."
-                )
-        else:
-            # Not Windows or no colon, regular dangerous character
-            match = dangerous_regex.search(path)
-            dangerous_char = match.group() if match else "unknown"
-            raise ValueError(
-                f"{context} contains dangerous character '{dangerous_char}': {path}. "
-                f"Path components must not contain shell metacharacters or control characters."
-            )
-
-    # Check each path component
-    for part in pure_path.parts:
-        if not part:  # Empty component (e.g., double slashes)
-            continue
-
-        # Check for parent directory references
-        if part == "..":
-            raise ValueError(
-                f"{context} must not contain parent directory references: {path}"
-            )
-
-        # Check for current directory references (usually not dangerous but suspicious)
-        if part == ".":
-            raise ValueError(
-                f"{context} must not contain current directory references: {path}"
-            )
-
-        # Windows reserved name validation using pre-compiled set
-        if is_windows:
-            # Remove extension for reserved name check
-            name_without_ext = part.split(".")[0].upper()
-            if name_without_ext in _WINDOWS_RESERVED_NAMES:
-                raise ValueError(
-                    f"{context} contains Windows reserved name '{part}': {path}. "
-                    f"Avoid names like CON, PRN, AUX, NUL, COM1-9, LPT1-9."
-                )
-
-        # Check for names that start or end with spaces/periods (problematic on Windows)
-        if part.startswith(" ") or part.endswith(" "):
-            raise ValueError(
-                f"{context} component cannot start or end with spaces: '{part}' in {path}"
-            )
-
-        if is_windows and (part.startswith(".") and part != "." and part != ".."):
-            # On Windows, leading dots can be problematic in some contexts
-            pass  # Allow hidden files but we already blocked . and ..
-
-        # Check for excessively long path components
-        if len(part) > 255:  # Most filesystems have 255 byte filename limits
-            raise ValueError(
-                f"{context} component too long (max 255 chars): '{part[:50]}...' in {path}"
-            )
-
-    # Also check for current directory in the original path before PurePath processing
-    # (PurePath normalizes some patterns away)
-    if (
-        "/./" in normalized_path
-        or normalized_path.startswith("./")
-        or normalized_path == "."
-    ):
-        raise ValueError(
-            f"{context} must not contain current directory references: {path}"
-        )
-
-    # Check total path length (Windows has 260 char limit, Unix varies but 1024 is safe)
-    max_path_length = 260 if is_windows else 1024
-    if len(path) > max_path_length:
-        raise ValueError(
-            f"{context} too long (max {max_path_length} chars): {len(path)} chars in {path[:50]}..."
-        )
 
 
 def _validate_path_traversal_prevention(filename: str) -> None:
