@@ -5,7 +5,7 @@ import sqlite3
 import threading
 import time
 from pathlib import Path, PurePath
-from typing import Callable, Optional, TypeVar, Union
+from typing import Callable, List, Optional, Tuple, TypeVar, Union
 
 from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH, SIMPLEBROKER_MAGIC
 from ._exceptions import DatabaseError, OperationalError, StopException
@@ -324,7 +324,7 @@ def _validate_working_directory(working_dir: Path) -> None:
             raise ValueError(f"Not a directory: {working_dir}")
 
 
-def _is_compound_db_name(db_name: str) -> tuple[bool, list[str]]:
+def _is_compound_db_name(db_name: str) -> Tuple[bool, List[str]]:
     """Detect if database name contains path components and split them.
 
     Only supports a single directory level (e.g., "some/name.db").
