@@ -384,15 +384,27 @@ def load_config() -> Dict[str, Any]:
 
     # Validate project scoping configuration
     db_location = config["BROKER_DEFAULT_DB_LOCATION"]
-    if isinstance(db_location, str) and db_location and not os.path.isabs(db_location):
-        # Issue warning and ignore non-absolute paths
-        warnings.warn(
-            f"BROKER_DEFAULT_DB_LOCATION must be an absolute path. "
-            f"Ignoring relative path: {db_location}",
-            UserWarning,
-            stacklevel=2,
-        )
-        config["BROKER_DEFAULT_DB_LOCATION"] = ""
+    if isinstance(db_location, str) and db_location:
+        # First validate for security (dangerous characters)
+        try:
+            from .helpers import _validate_safe_path_components
+
+            _validate_safe_path_components(db_location, "BROKER_DEFAULT_DB_LOCATION")
+        except ValueError as e:
+            raise ValueError(
+                f"BROKER_DEFAULT_DB_LOCATION validation failed: {e}"
+            ) from e
+
+        # Then check that it's an absolute path
+        if not os.path.isabs(db_location):
+            # Issue warning and ignore non-absolute paths
+            warnings.warn(
+                f"BROKER_DEFAULT_DB_LOCATION must be an absolute path. "
+                f"Ignoring relative path: {db_location}",
+                UserWarning,
+                stacklevel=2,
+            )
+            config["BROKER_DEFAULT_DB_LOCATION"] = ""
 
     # Validate BROKER_DEFAULT_DB_NAME format (but don't create directories)
     db_name = config["BROKER_DEFAULT_DB_NAME"]

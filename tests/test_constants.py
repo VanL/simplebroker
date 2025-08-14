@@ -552,3 +552,34 @@ class TestConfigValidation:
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "simple.db"}):
             config = load_config()
             assert config["BROKER_DEFAULT_DB_NAME"] == "simple.db"
+
+    def test_broker_default_db_location_dangerous_characters_raises_error(self) -> None:
+        """Test that dangerous characters in BROKER_DEFAULT_DB_LOCATION raise an error."""
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "/tmp/test|path"}):
+            with pytest.raises(
+                ValueError,
+                match="BROKER_DEFAULT_DB_LOCATION validation failed.*dangerous character",
+            ):
+                load_config()
+
+    def test_broker_default_db_location_valid_absolute_path(self) -> None:
+        """Test that valid absolute paths in BROKER_DEFAULT_DB_LOCATION are accepted."""
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "/tmp/valid_path"}):
+            config = load_config()
+            assert config["BROKER_DEFAULT_DB_LOCATION"] == "/tmp/valid_path"
+
+    def test_broker_default_db_name_dangerous_characters_in_compound(self) -> None:
+        """Test that dangerous characters are caught in compound database names."""
+        # This should fail when the compound name is processed, not during initial config load
+        # because the config load only does absolute path and nesting checks
+        # The dangerous character validation happens when _is_compound_db_name is called
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "test|dir/broker.db"}):
+            # Config loading should succeed (it only checks absolute paths and nesting)
+            config = load_config()
+            assert config["BROKER_DEFAULT_DB_NAME"] == "test|dir/broker.db"
+
+            # But using it should fail when compound validation happens
+            from simplebroker.helpers import _is_compound_db_name
+
+            with pytest.raises(ValueError, match="dangerous character"):
+                _is_compound_db_name("test|dir/broker.db")

@@ -128,10 +128,42 @@ class TestValidateSafePathComponents:
         if platform.system() != "Windows":
             pytest.skip("Windows validation not applicable on non-Windows")
 
-        dangerous_chars = [":", "*", "?", '"', "<", ">", "|"]
+        # Note: colon is handled specially for drive letters
+        dangerous_chars = ["*", "?", '"', "<", ">", "|"]
 
         for char in dangerous_chars:
             path = f"test{char}file.db"
+            with pytest.raises(ValueError, match="dangerous character"):
+                _validate_safe_path_components(path, "Test path")
+
+    def test_windows_drive_letters_allowed(self) -> None:
+        """Test that Windows drive letters are allowed."""
+        if platform.system() != "Windows":
+            pytest.skip("Windows drive letter test not applicable on non-Windows")
+
+        valid_drive_paths = [
+            "C:\\temp\\test.db",
+            "D:\\data\\broker.db",
+            "C:/temp/test.db",  # Forward slashes also work
+            "Z:\\project\\database.db",
+        ]
+
+        for path in valid_drive_paths:
+            # Should not raise any exception
+            _validate_safe_path_components(path, "Test path")
+
+    def test_windows_invalid_colons_rejected(self) -> None:
+        """Test that colons not part of drive letters are rejected on Windows."""
+        if platform.system() != "Windows":
+            pytest.skip("Windows colon test not applicable on non-Windows")
+
+        invalid_colon_paths = [
+            "test:file.db",  # Colon in middle
+            "C:\\test:dir\\file.db",  # Colon after drive letter
+            "temp\\file:name.db",  # Colon in filename
+        ]
+
+        for path in invalid_colon_paths:
             with pytest.raises(ValueError, match="dangerous character"):
                 _validate_safe_path_components(path, "Test path")
 

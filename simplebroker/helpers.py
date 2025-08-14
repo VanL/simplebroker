@@ -632,6 +632,7 @@ def _validate_safe_path_components(path: str, context: str = "path") -> None:
         - Blocks Windows reserved names (CON, PRN, AUX, etc.)
         - Validates each path component separately
         - Uses pre-compiled regex for maximum performance
+        - Allows Windows drive letters (e.g., C:, D:)
     """
     if not isinstance(path, str) or not path:
         raise ValueError(f"{context} must be a non-empty string")
@@ -646,13 +647,41 @@ def _validate_safe_path_components(path: str, context: str = "path") -> None:
 
     # Check for dangerous characters using optimized regex
     if dangerous_regex.search(path):
-        # Find the specific dangerous character for the error message
-        match = dangerous_regex.search(path)
-        dangerous_char = match.group() if match else "unknown"
-        raise ValueError(
-            f"{context} contains dangerous character '{dangerous_char}': {path}. "
-            f"Path components must not contain shell metacharacters or control characters."
-        )
+        # On Windows, check if colon is part of a legitimate drive letter
+        if is_windows and ":" in path:
+            # Windows drive letter pattern: C:, D:, etc. at the beginning of absolute paths
+            import re as re_module
+
+            drive_pattern = re_module.compile(r"^[A-Za-z]:")
+
+            # If it's just a drive letter, allow it
+            if drive_pattern.match(path):
+                # Check if there are other dangerous characters besides the drive colon
+                path_without_drive = path[2:]  # Remove "C:" part
+                if dangerous_regex.search(path_without_drive):
+                    match = dangerous_regex.search(path_without_drive)
+                    dangerous_char = match.group() if match else "unknown"
+                    raise ValueError(
+                        f"{context} contains dangerous character '{dangerous_char}': {path}. "
+                        f"Path components must not contain shell metacharacters or control characters."
+                    )
+                # Drive letter is OK, continue with other validations
+            else:
+                # Colon is not part of drive letter, it's dangerous
+                match = dangerous_regex.search(path)
+                dangerous_char = match.group() if match else "unknown"
+                raise ValueError(
+                    f"{context} contains dangerous character '{dangerous_char}': {path}. "
+                    f"Path components must not contain shell metacharacters or control characters."
+                )
+        else:
+            # Not Windows or no colon, regular dangerous character
+            match = dangerous_regex.search(path)
+            dangerous_char = match.group() if match else "unknown"
+            raise ValueError(
+                f"{context} contains dangerous character '{dangerous_char}': {path}. "
+                f"Path components must not contain shell metacharacters or control characters."
+            )
 
     # Check each path component
     for part in pure_path.parts:

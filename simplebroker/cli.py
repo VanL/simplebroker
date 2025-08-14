@@ -22,6 +22,7 @@ from .helpers import (
     _validate_database_parent_directory,
     _validate_path_containment,
     _validate_path_traversal_prevention,
+    _validate_safe_path_components,
     _validate_sqlite_database,
     _validate_working_directory,
     ensure_compound_db_path,
@@ -582,6 +583,12 @@ def main() -> int:
     # Validate and construct database path
     try:
         working_dir = args.dir
+
+        # Validate CLI directory argument for dangerous characters
+        _validate_safe_path_components(
+            str(working_dir), "Directory argument (-d/--dir)"
+        )
+
         _validate_working_directory(working_dir)
 
         # For project scoped paths that aren't absolute, we already have the resolved path
@@ -591,8 +598,10 @@ def main() -> int:
 
         # Prevent path traversal attacks - ensure db_path stays within working_dir
 
-        # Check for path traversal attempts
+        # Validate CLI file argument for dangerous characters and path traversal
         if not used_project_scope:
+            # Note: _validate_path_traversal_prevention now uses _validate_safe_path_components
+            # which provides comprehensive security validation
             _validate_path_traversal_prevention(args.file)
 
         # Resolve symlinks BEFORE validation and use resolved path throughout
