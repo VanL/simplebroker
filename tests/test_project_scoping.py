@@ -69,7 +69,7 @@ class TestEnvironmentVariableParsing:
         """Test load_config reads environment variables correctly."""
         import os
         from pathlib import Path
-        
+
         config = load_config()
         # On Unix systems, /tmp/test is absolute and stays unchanged
         # On Windows, /tmp/test is relative and gets resolved to absolute path
@@ -77,7 +77,7 @@ class TestEnvironmentVariableParsing:
             expected_path = "/tmp/test"
         else:
             expected_path = str(Path("/tmp/test").resolve())
-            
+
         assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
         assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
         assert config["BROKER_PROJECT_SCOPE"] is True

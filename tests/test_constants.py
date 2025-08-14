@@ -401,7 +401,7 @@ class TestLoadConfig:
         """Test project scoping environment variables."""
         import os
         from pathlib import Path
-        
+
         env_vars = {
             "BROKER_DEFAULT_DB_LOCATION": "/tmp/project",
             "BROKER_DEFAULT_DB_NAME": "custom.db",
@@ -417,7 +417,7 @@ class TestLoadConfig:
                 expected_path = "/tmp/project"
             else:
                 expected_path = str(Path("/tmp/project").resolve())
-            
+
             assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
             assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
             assert config["BROKER_PROJECT_SCOPE"] is True
@@ -444,12 +444,14 @@ class TestLoadConfig:
         """Test that relative BROKER_DEFAULT_DB_LOCATION is converted to absolute."""
         from pathlib import Path
 
-        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": "relative/path"}):
+        # Use platform-appropriate path separator from the start
+        test_path = os.path.join("relative", "path")
+        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}):
             config = load_config()
 
             # Should be converted to absolute path
             assert Path(config["BROKER_DEFAULT_DB_LOCATION"]).is_absolute()
-            # Use os.path.join to handle platform-specific separators
+            # Should end with the same relative path structure
             expected_suffix = os.path.join("relative", "path")
             assert config["BROKER_DEFAULT_DB_LOCATION"].endswith(expected_suffix)
 
