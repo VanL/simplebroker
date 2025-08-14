@@ -67,18 +67,36 @@ class TestEnvironmentVariableParsing:
     )
     def test_load_config_with_env_vars(self) -> None:
         """Test load_config reads environment variables correctly."""
-        import os
-        from pathlib import Path
-
         config = load_config()
-        # On Unix systems, /tmp/test is absolute and stays unchanged
-        # On Windows, /tmp/test is relative and gets resolved to absolute path
-        if os.path.isabs("/tmp/test"):
-            expected_path = "/tmp/test"
-        else:
-            expected_path = str(Path("/tmp/test").resolve())
+        # Absolute path should remain unchanged
+        assert config["BROKER_DEFAULT_DB_LOCATION"] == "/tmp/test"
+        assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
+        assert config["BROKER_PROJECT_SCOPE"] is True
 
-        assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
+    @patch.dict(
+        os.environ,
+        {
+            "BROKER_DEFAULT_DB_LOCATION": "relative/path",
+            "BROKER_DEFAULT_DB_NAME": "custom.db",
+            "BROKER_PROJECT_SCOPE": "1",
+        },
+    )
+    def test_load_config_with_relative_path_warning(self) -> None:
+        """Test load_config issues warning and ignores relative paths."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            config = load_config()
+
+            # Should issue a warning
+            assert len(w) == 1
+            assert issubclass(w[0].category, UserWarning)
+            assert "must be an absolute path" in str(w[0].message)
+            assert "relative/path" in str(w[0].message)
+
+            # Should be reset to empty string
+            assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
         assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
         assert config["BROKER_PROJECT_SCOPE"] is True
 

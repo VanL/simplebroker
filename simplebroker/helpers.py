@@ -4,7 +4,7 @@ import os
 import sqlite3
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Callable, Optional, TypeVar, Union
 
 from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH, SIMPLEBROKER_MAGIC
@@ -324,6 +324,62 @@ def _validate_working_directory(working_dir: Path) -> None:
             raise ValueError(f"Not a directory: {working_dir}")
 
 
+def _is_compound_db_name(db_name: str) -> tuple[bool, list[str]]:
+    """Detect if database name contains path components and split them.
+
+    Args:
+        db_name: Database name from BROKER_DEFAULT_DB_NAME
+
+    Returns:
+        Tuple of (is_compound, path_components)
+        - is_compound: True if db_name contains directory separators
+        - path_components: List of path parts (empty if not compound)
+
+    Examples:
+        _is_compound_db_name("broker.db") -> (False, [])
+        _is_compound_db_name("some/name.db") -> (True, ["some", "name.db"])
+        _is_compound_db_name(".weft/broker.db") -> (True, [".weft", "broker.db"])
+    """
+
+    pure_path = PurePath(db_name)
+    parts = list(pure_path.parts)
+
+    # If there's more than one part, it's compound
+    is_compound = len(parts) > 1
+    return is_compound, parts if is_compound else []
+
+
+def _create_compound_db_directories(base_dir: Path, db_name: str) -> None:
+    """Create intermediate directories for compound database names.
+
+    Args:
+        base_dir: Base directory where database will be located
+        db_name: Database name (may be compound like "some/name.db")
+
+    Raises:
+        ValueError: If directory creation fails
+    """
+    is_compound, parts = _is_compound_db_name(db_name)
+
+    if not is_compound:
+        return  # Nothing to create
+
+    # Create intermediate directories (exclude the final filename)
+    intermediate_parts = parts[:-1]  # All parts except the database filename
+
+    if intermediate_parts:
+        intermediate_path = base_dir
+        for part in intermediate_parts:
+            intermediate_path = intermediate_path / part
+
+        try:
+            intermediate_path.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError) as e:
+            raise ValueError(
+                f"Cannot create intermediate directories {intermediate_path}: {e}"
+            ) from e
+
+
 def _validate_database_parent_directory(db_path: Path) -> None:
     """Validate that database parent directory exists and has proper permissions.
 
@@ -434,7 +490,6 @@ def _validate_path_traversal_prevention(filename: str) -> None:
     Raises:
         ValueError: If path traversal attempt is detected
     """
-    from pathlib import PurePath
 
     file_path_pure = PurePath(filename)
 

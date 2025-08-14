@@ -793,6 +793,7 @@ See [`examples/`](examples/) directory for more patterns including async process
 **Database Naming:**
 - `BROKER_DEFAULT_DB_NAME` - name of the broker database file (default: .broker.db)
 - Corresponds to the -f/--file command line argument
+- Can be a compound path (e.g., ".subdirectory/broker.db")
 - Applies to all scopes 
 
 Example configurations:
@@ -855,7 +856,7 @@ broker write tasks "process data"  # Uses /home/user/myproject/.broker.db
 
 ### Global Scope
 
-Use a specific directory for all broker operations:
+Use a specific directory for all broker operations. Must be an absolute path.
 
 ```bash
 export BROKER_DEFAULT_DB_LOCATION=/var/lib/myapp
@@ -884,6 +885,7 @@ Now project scoping searches for `project-queue.db` instead of `.broker.db`.
 - **Multiple projects**: Use different names to avoid conflicts
 - **Descriptive names**: `analytics.db`, `build-queue.db`, etc.
 - **Environment separation**: `dev-queue.db` vs `prod-queue.db`
+- **Using config directories**: `.config/broker.db` vs `.broker.db`
 
 **Note:** If no project database is found during the upward search, SimpleBroker will error out and ask you to run `broker init` to create one.
 

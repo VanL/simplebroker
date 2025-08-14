@@ -17,6 +17,7 @@ from ._constants import (
 )
 from ._exceptions import DatabaseError
 from .helpers import (
+    _create_compound_db_directories,
     _find_project_database,
     _resolve_symlinks_safely,
     _validate_database_parent_directory,
@@ -622,7 +623,16 @@ def main() -> int:
                     # If we can't resolve even the working directory, keep original
                     pass
 
-        # Validate parent directory and file permissions
+        # Step 1: Create compound directories if needed
+        # We need to get the database filename to check if it's compound
+        db_filename = args.file
+        if args.file == DEFAULT_DB_NAME and _config["BROKER_DEFAULT_DB_NAME"]:
+            db_filename = _config["BROKER_DEFAULT_DB_NAME"]
+
+        # Create compound directories within the parent directory
+        _create_compound_db_directories(db_path.parent, db_filename)
+
+        # Step 2: Validate parent directory and file permissions
         _validate_database_parent_directory(db_path)
 
         # Validate database file if it exists (only for read operations)

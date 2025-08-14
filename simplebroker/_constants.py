@@ -21,7 +21,7 @@ Usage:
 """
 
 import os
-from pathlib import Path
+import warnings
 from typing import Any, Dict, Final
 
 # ==============================================================================
@@ -303,11 +303,14 @@ def load_config() -> Dict[str, Any]:
             BROKER_DEFAULT_DB_LOCATION (str): Default directory for database files.
                 Default: "" (current working directory)
                 Overrides current working directory default.
-                Can be absolute or relative path.
+                Must be an absolute path. If a relative path is provided,
+                a warning will be issued and the value will be ignored (reset to "").
 
             BROKER_DEFAULT_DB_NAME (str): Default database filename.
                 Default: ".broker.db"
                 Used for both project scoping search and fallback creation.
+                Can be a compound path (e.g. "subdir/.broker.db"), but
+                SimpleBroker will
 
             BROKER_PROJECT_SCOPE (bool): Enable git-like upward database search.
                 Default: False
@@ -382,7 +385,13 @@ def load_config() -> Dict[str, Any]:
     # Validate project scoping configuration
     db_location = config["BROKER_DEFAULT_DB_LOCATION"]
     if isinstance(db_location, str) and db_location and not os.path.isabs(db_location):
-        # Convert relative paths to absolute for consistency
-        config["BROKER_DEFAULT_DB_LOCATION"] = str(Path(db_location).resolve())
+        # Issue warning and ignore non-absolute paths
+        warnings.warn(
+            f"BROKER_DEFAULT_DB_LOCATION must be an absolute path. "
+            f"Ignoring relative path: {db_location}",
+            UserWarning,
+            stacklevel=2,
+        )
+        config["BROKER_DEFAULT_DB_LOCATION"] = ""
 
     return config

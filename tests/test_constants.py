@@ -440,29 +440,36 @@ class TestLoadConfig:
                     f"Failed for value: {value}"
                 )
 
-    def test_relative_db_location_resolution(self) -> None:
-        """Test that relative BROKER_DEFAULT_DB_LOCATION is converted to absolute."""
-        from pathlib import Path
+    def test_relative_db_location_warning_and_ignore(self) -> None:
+        """Test that relative BROKER_DEFAULT_DB_LOCATION issues warning and is ignored."""
+        import warnings
 
         # Use a simple relative path that's unambiguous on all platforms
         test_path = "testdir"
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}):
-            config = load_config()
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")  # Catch all warnings
+                config = load_config()
 
-            # Should be converted to absolute path
-            assert Path(config["BROKER_DEFAULT_DB_LOCATION"]).is_absolute()
-            # Should end with the relative directory name
-            assert config["BROKER_DEFAULT_DB_LOCATION"].endswith("testdir")
+                # Should issue a warning
+                assert len(w) == 1
+                assert issubclass(w[0].category, UserWarning)
+                assert "must be an absolute path" in str(w[0].message)
+                assert "testdir" in str(w[0].message)
 
-        # Absolute paths should remain unchanged (on Unix) or be resolved (on Windows)
+                # Should be reset to empty string
+                assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
+
+        # Absolute paths should remain unchanged
         absolute_path = os.path.join(os.sep + "absolute", "path")
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": absolute_path}):
-            config = load_config()
-            if os.path.isabs(absolute_path):
-                expected_path = absolute_path
-            else:
-                expected_path = str(Path(absolute_path).resolve())
-            assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                config = load_config()
+
+                # Should not issue a warning for absolute paths
+                assert len(w) == 0
+                assert config["BROKER_DEFAULT_DB_LOCATION"] == absolute_path
 
 
 class TestParseBool:
