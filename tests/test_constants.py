@@ -47,7 +47,7 @@ from simplebroker._constants import (
     load_config,
 )
 
-from .test_helpers import create_dangerous_path
+from .helper_scripts import create_dangerous_path
 
 
 class TestConstants:

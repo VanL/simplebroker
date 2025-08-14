@@ -17,7 +17,7 @@ import pytest
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
-from .helpers.timing import wait_for_condition, wait_for_count
+from .helper_scripts.timing import wait_for_condition, wait_for_count
 
 
 class WatcherMetrics:

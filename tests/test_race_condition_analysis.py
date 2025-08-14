@@ -86,9 +86,9 @@ class TestRaceConditionAnalysis:
     def test_database_creation_timing(self, temp_db, tmp_path):
         """Analyze database creation timing vs ready file creation."""
         # Use the instrumented script
-        helper_script = (
-            Path(__file__).parent / "helpers" / "watcher_sigint_script_instrumented.py"
-        )
+        from .helper_scripts import WATCHER_SIGINT_SCRIPT_INSTRUMENTED
+
+        helper_script = WATCHER_SIGINT_SCRIPT_INSTRUMENTED
         ready_file = tmp_path / "watcher_ready.txt"
 
         # Add a test message to the queue first
@@ -200,9 +200,9 @@ class TestRaceConditionAnalysis:
             with BrokerDB(temp_db) as db:
                 db.write(f"test_queue_{i}", f"message_{i}")
 
-        helper_script = (
-            Path(__file__).parent / "helpers" / "watcher_sigint_script_instrumented.py"
-        )
+        from .helper_scripts import WATCHER_SIGINT_SCRIPT_INSTRUMENTED
+
+        helper_script = WATCHER_SIGINT_SCRIPT_INSTRUMENTED
 
         # Start all processes simultaneously
         start_time = time.time()

@@ -20,8 +20,8 @@ from simplebroker.watcher import (
     _StopLoop,
 )
 
-from .helpers.database_errors import DatabaseErrorInjector
-from .helpers.watcher_base import WatcherTestBase
+from .helper_scripts.database_errors import DatabaseErrorInjector
+from .helper_scripts.watcher_base import WatcherTestBase
 
 
 class TestWatcherEdgeCases(WatcherTestBase):

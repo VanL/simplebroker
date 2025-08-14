@@ -9,7 +9,7 @@ from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
 # Import cleanup helper
-from .helpers.cleanup import register_watcher
+from .helper_scripts.cleanup import register_watcher
 
 
 class TestWatcherCleanup:

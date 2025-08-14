@@ -5,7 +5,7 @@ import sys
 import time
 
 from .conftest import managed_subprocess
-from .helpers.timestamp_validation import validate_timestamp
+from .helper_scripts.timestamp_validation import validate_timestamp
 
 
 def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages=None):

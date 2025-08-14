@@ -12,8 +12,8 @@ from simplebroker.db import BrokerDB
 pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueMoveWatcher
 
-from .helpers.cleanup import register_watcher
-from .helpers.watcher_base import WatcherTestBase
+from .helper_scripts.cleanup import register_watcher
+from .helper_scripts.watcher_base import WatcherTestBase
 
 
 class MoveCollector:

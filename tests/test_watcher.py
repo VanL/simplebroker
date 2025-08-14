@@ -6,7 +6,6 @@ import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 import pytest
@@ -17,7 +16,7 @@ from simplebroker.db import BrokerDB
 pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueWatcher
 
-from .helpers.watcher_base import WatcherTestBase
+from .helper_scripts.watcher_base import WatcherTestBase
 
 logger = logging.getLogger(__name__)
 
@@ -215,11 +214,10 @@ class TestQueueWatcher(WatcherTestBase):
 
         # This test uses a subprocess to properly test SIGINT handling
         # without interfering with the test runner
-
         # Prepare paths - use improved script with race condition mitigation
-        helper_script = (
-            Path(__file__).parent / "helpers" / "watcher_sigint_script_improved.py"
-        )
+        from .helper_scripts import WATCHER_SIGINT_SCRIPT_IMPROVED
+
+        helper_script = WATCHER_SIGINT_SCRIPT_IMPROVED
         ready_file = tmp_path / "watcher_ready.txt"
 
         # Add a test message to the queue

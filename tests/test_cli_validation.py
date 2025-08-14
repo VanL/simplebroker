@@ -9,7 +9,7 @@ import pytest
 
 from simplebroker.cli import main
 
-from .test_helpers import create_dangerous_path
+from .helper_scripts import create_dangerous_path
 
 
 class TestCliArgumentValidation:

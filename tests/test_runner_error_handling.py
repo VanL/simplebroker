@@ -11,7 +11,7 @@ import pytest
 from simplebroker._exceptions import IntegrityError, OperationalError
 from simplebroker._runner import SetupPhase, SQLiteRunner
 
-from .helpers.database_errors import DatabaseErrorInjector
+from .helper_scripts.database_errors import DatabaseErrorInjector
 
 
 class TestSQLiteRunnerErrorHandling:

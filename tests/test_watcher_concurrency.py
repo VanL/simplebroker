@@ -13,7 +13,7 @@ from simplebroker.db import BrokerDB
 pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueWatcher
 
-from .helpers.watcher_base import WatcherTestBase
+from .helper_scripts.watcher_base import WatcherTestBase
 
 
 class ConcurrentCollector:

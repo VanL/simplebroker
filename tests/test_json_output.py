@@ -4,7 +4,7 @@ import json
 import time
 
 from .conftest import run_cli
-from .helpers.timestamp_validation import validate_timestamp
+from .helper_scripts.timestamp_validation import validate_timestamp
 
 
 def test_read_json_single_message(workdir):

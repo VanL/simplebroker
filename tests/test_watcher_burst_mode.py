@@ -17,7 +17,7 @@ import pytest
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import PollingStrategy, QueueWatcher
 
-from .helpers.timing import wait_for_condition
+from .helper_scripts.timing import wait_for_condition
 
 
 @pytest.fixture

@@ -7,7 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from .conftest import run_cli
-from .helpers.timestamp_validation import validate_timestamp
+from .helper_scripts.timestamp_validation import validate_timestamp
 
 
 class TestBasicFunctionality:
