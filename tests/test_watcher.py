@@ -216,8 +216,10 @@ class TestQueueWatcher(WatcherTestBase):
         # This test uses a subprocess to properly test SIGINT handling
         # without interfering with the test runner
 
-        # Prepare paths
-        helper_script = Path(__file__).parent / "helpers" / "watcher_sigint_script.py"
+        # Prepare paths - use improved script with race condition mitigation
+        helper_script = (
+            Path(__file__).parent / "helpers" / "watcher_sigint_script_improved.py"
+        )
         ready_file = tmp_path / "watcher_ready.txt"
 
         # Add a test message to the queue
@@ -228,15 +230,46 @@ class TestQueueWatcher(WatcherTestBase):
         with managed_subprocess(
             [sys.executable, str(helper_script), str(temp_db), str(ready_file)]
         ) as proc:
-            # Wait for the watcher to be ready
-            for _ in range(
-                6000
-            ):  # Wait up to a minute. This is not what we are testing, and CI machines can be flaky and noisy
+            # Strategy: Monitor subprocess output for better debugging
+            ready_timeout = (
+                120  # Increased timeout for CI systems with high database contention
+            )
+            ready_detected = False
+
+            for _ in range(ready_timeout * 10):  # Check every 0.1s
                 if ready_file.exists():
+                    ready_detected = True
                     break
+
+                # Also check if process is still running (early termination detection)
+                if proc.proc.poll() is not None:
+                    # Process terminated early - check output for errors
+                    try:
+                        stdout, stderr = proc.proc.communicate(timeout=1.0)
+                        if stderr:
+                            pytest.fail(
+                                f"Subprocess terminated early with error: {stderr}"
+                            )
+                        else:
+                            pytest.fail(
+                                f"Subprocess terminated early with output: {stdout}"
+                            )
+                    except subprocess.TimeoutExpired:
+                        pytest.fail("Subprocess terminated early and is unresponsive")
+
                 time.sleep(0.1)
-            else:
-                pytest.fail("Watcher subprocess did not become ready in time")
+
+            if not ready_detected:
+                # Enhanced error reporting for debugging
+                poll_result = proc.proc.poll()
+                if poll_result is not None:
+                    pytest.fail(
+                        f"Subprocess terminated with exit code {poll_result} before becoming ready"
+                    )
+                else:
+                    pytest.fail(
+                        f"Watcher subprocess did not become ready in {ready_timeout}s (process still running)"
+                    )
 
             # Verify process is still running
             assert proc.proc.poll() is None, "Subprocess terminated prematurely"
