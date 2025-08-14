@@ -3,7 +3,7 @@ Utilities for testing timestamp-related functionality.
 """
 
 import time
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 from simplebroker.db import BrokerDB
 
@@ -159,7 +159,7 @@ def verify_timestamp_monotonicity(db: BrokerDB, queue: str) -> List[int]:
     return timestamps
 
 
-def count_unique_timestamps(db: BrokerDB) -> tuple[int, int]:
+def count_unique_timestamps(db: BrokerDB) -> Tuple[int, int]:
     """Count total and unique timestamps in database."""
     with db._lock:
         result = list(db._runner.run("SELECT COUNT(*) FROM messages", fetch=True))
