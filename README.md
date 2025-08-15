@@ -781,8 +781,8 @@ See [`examples/`](examples/) directory for more patterns including async process
 - `BROKER_VACUUM_LOCK_TIMEOUT` - Seconds before a vacuum lock is considered stale (default: 300)
 
 **Watcher Tuning:**
-- `SIMPLEBROKER_INITIAL_CHECKS` - Number of checks with zero delay (default: 100)
-- `SIMPLEBROKER_MAX_INTERVAL` - Maximum polling interval in seconds (default: 0.1)
+- `BROKER_INITIAL_CHECKS` - Number of checks with zero delay (default: 100)
+- `BROKER_MAX_INTERVAL` - Maximum polling interval in seconds (default: 0.1)
 
 **Database Naming:**
 - `BROKER_DEFAULT_DB_NAME` - name of the broker database file (default: .broker.db)
@@ -795,15 +795,15 @@ Example configurations:
 # High-throughput configuration
 export BROKER_SYNC_MODE=NORMAL
 export BROKER_READ_COMMIT_INTERVAL=100
-export SIMPLEBROKER_INITIAL_CHECKS=1000
+export BROKER_INITIAL_CHECKS=1000
 
 # Low-latency configuration  
-export SIMPLEBROKER_MAX_INTERVAL=0.01
+export BROKER_MAX_INTERVAL=0.01
 export BROKER_CACHE_MB=50
 
 # Power-saving configuration
-export SIMPLEBROKER_INITIAL_CHECKS=50
-export SIMPLEBROKER_MAX_INTERVAL=0.5
+export BROKER_INITIAL_CHECKS=50
+export BROKER_MAX_INTERVAL=0.5
 
 # Project scoping configuration
 export BROKER_PROJECT_SCOPE=true

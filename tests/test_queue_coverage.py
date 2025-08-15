@@ -80,16 +80,19 @@ def test_cleanup_finalizer_with_exception():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
 
-        # Create a persistent queue
-        queue = Queue("test", db_path=db_path, persistent=True)
+        # Create a persistent queue with logging enabled config
+        queue = Queue(
+            "test",
+            db_path=db_path,
+            persistent=True,
+            config={"BROKER_LOGGING_ENABLED": True},
+        )
 
         # Mock the connection cleanup to raise an exception
         queue.conn.cleanup = Mock(side_effect=Exception("Test exception"))
 
-        # Patch the logger and config to verify warning is logged
-        with patch("simplebroker.sbqueue.logger") as mock_logger, patch(
-            "simplebroker.sbqueue._config", {"BROKER_LOGGING_ENABLED": True}
-        ):
+        # Patch the logger to verify warning is logged
+        with patch("simplebroker.sbqueue.logger") as mock_logger:
             # Call the finalizer function directly
             queue._finalizer()
 

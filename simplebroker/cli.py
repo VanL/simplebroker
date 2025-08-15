@@ -81,11 +81,11 @@ def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def create_parser() -> argparse.ArgumentParser:
+def create_parser(*, config: Dict[str, Any] = _config) -> argparse.ArgumentParser:
     """Create the main parser with global options and subcommands.
 
     Returns:
-        ArgumentParser _configured with global options and subcommands
+        ArgumentParser configured with global options and subcommands
     """
     parser = CustomArgumentParser(
         prog=PROG_NAME,
@@ -95,11 +95,11 @@ def create_parser() -> argparse.ArgumentParser:
 
     # Add global arguments with environment-aware defaults
     default_dir = (
-        Path(_config["BROKER_DEFAULT_DB_LOCATION"])
-        if _config["BROKER_DEFAULT_DB_LOCATION"]
+        Path(config["BROKER_DEFAULT_DB_LOCATION"])
+        if config["BROKER_DEFAULT_DB_LOCATION"]
         else Path.cwd()
     )
-    default_file = _config["BROKER_DEFAULT_DB_NAME"]
+    default_file = config["BROKER_DEFAULT_DB_NAME"]
 
     # Custom action to track when -d was explicitly provided
     class DirectoryAction(argparse.Action):
@@ -401,13 +401,13 @@ class ArgumentProcessor:
 
 
 def _resolve_database_path(
-    args: argparse.Namespace, _config: Dict[str, Any]
+    args: argparse.Namespace, *, config: Dict[str, Any] = _config
 ) -> Tuple[Path, bool]:
     """Resolve final database path using precedence rules and project scoping.
 
     Args:
         args: Parsed command line arguments from argparse
-        _config: _configuration dictionary from load_config()
+        config: Configuration dictionary
 
     Returns:
         Tuple of (resolved_db_path, used_project_scope)
@@ -449,10 +449,10 @@ def _resolve_database_path(
     # Determine working dir and filename with env defaults
     working_dir = args.dir
     db_filename = args.file
-    if args.file == DEFAULT_DB_NAME and _config["BROKER_DEFAULT_DB_NAME"]:
-        db_filename = _config["BROKER_DEFAULT_DB_NAME"]
+    if args.file == DEFAULT_DB_NAME and config["BROKER_DEFAULT_DB_NAME"]:
+        db_filename = config["BROKER_DEFAULT_DB_NAME"]
 
-    if _config["BROKER_PROJECT_SCOPE"] and args.command != "init":
+    if config["BROKER_PROJECT_SCOPE"] and args.command != "init":
         # Use resolved working directory, not Path.cwd(), to account for -d flag
         search_start_dir = working_dir
         found_path = _find_project_database(db_filename, search_start_dir)
@@ -467,12 +467,12 @@ def _resolve_database_path(
             )
 
     # 3. Fallback to environment defaults / built-in defaults
-    if _config["BROKER_DEFAULT_DB_LOCATION"]:
-        working_dir = Path(_config["BROKER_DEFAULT_DB_LOCATION"])
+    if config["BROKER_DEFAULT_DB_LOCATION"]:
+        working_dir = Path(config["BROKER_DEFAULT_DB_LOCATION"])
     return working_dir / db_filename, False
 
 
-def main() -> int:
+def main(*, config: Dict[str, Any] = _config) -> int:
     """Main CLI entry point.
 
     Returns:
@@ -483,8 +483,6 @@ def main() -> int:
     if _PARSER_CACHE is None:
         _PARSER_CACHE = create_parser()
     parser = _PARSER_CACHE
-
-    global _config
 
     # Parse arguments, rearranging to put global options first
     try:
@@ -518,7 +516,7 @@ def main() -> int:
 
     # Resolve database path using new precedence system
     try:
-        db_path, used_project_scope = _resolve_database_path(args, _config)
+        db_path, used_project_scope = _resolve_database_path(args, config=config)
     except ValueError as e:
         print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
         return EXIT_ERROR
@@ -532,7 +530,7 @@ def main() -> int:
         # Init creates project root database in current directory only
         # Only respects BROKER_DEFAULT_DB_NAME, ignores BROKER_DEFAULT_DB_LOCATION
         # Never uses project scoping (would be circular - searching for what we're creating)
-        init_filename = _config["BROKER_DEFAULT_DB_NAME"]
+        init_filename = config["BROKER_DEFAULT_DB_NAME"]
         init_db_path = Path.cwd() / init_filename
         return commands.cmd_init(str(init_db_path), args.quiet)
 
@@ -633,10 +631,10 @@ def main() -> int:
                     pass
 
         # Handle compound database names from environment variable
-        if args.file == DEFAULT_DB_NAME and _config["BROKER_DEFAULT_DB_NAME"]:
+        if args.file == DEFAULT_DB_NAME and config["BROKER_DEFAULT_DB_NAME"]:
             # Create compound path and directories as needed
             db_path = ensure_compound_db_path(
-                working_dir, _config["BROKER_DEFAULT_DB_NAME"]
+                working_dir, config["BROKER_DEFAULT_DB_NAME"]
             )
 
         # Validate final database parent directory

@@ -16,8 +16,11 @@ Usage:
         raise ValueError("Message too large")
 
     # Load configuration once at module level
-    config = load_config()
-    timeout = config["BROKER_BUSY_TIMEOUT"]
+    _config = load_config()
+    timeout = _config["BROKER_BUSY_TIMEOUT"]
+
+    Note that functions that use _config values all take a config parameter,
+    which defaults to _config if not provided.
 """
 
 import os
@@ -31,7 +34,7 @@ from typing import Any, Dict, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "2.4.0"
+__version__: Final[str] = "2.5.0"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
@@ -494,15 +497,15 @@ def load_config() -> Dict[str, Any]:
                 Default: 0.15 (15%)
                 Prevents synchronized polling across multiple watchers.
 
-            SIMPLEBROKER_INITIAL_CHECKS (int): Burst mode checks with zero delay.
+            BROKER_INITIAL_CHECKS (int): Burst mode checks with zero delay.
                 Default: 100
                 Higher values = faster response to new messages.
 
-            SIMPLEBROKER_MAX_INTERVAL (float): Maximum polling interval in seconds.
+            BROKER_MAX_INTERVAL (float): Maximum polling interval in seconds.
                 Default: 0.1 (100ms)
                 Lower values = more responsive but higher CPU usage.
 
-            SIMPLEBROKER_BURST_SLEEP (float): Sleep between burst mode checks.
+            BROKER_BURST_SLEEP (float): Sleep between burst mode checks.
                 Default: 0.00001 (10μs)
                 Tiny delay to prevent CPU spinning.
 
@@ -574,14 +577,14 @@ def load_config() -> Dict[str, Any]:
         # Watcher settings
         "BROKER_SKIP_IDLE_CHECK": os.environ.get("BROKER_SKIP_IDLE_CHECK", "0") == "1",
         "BROKER_JITTER_FACTOR": float(os.environ.get("BROKER_JITTER_FACTOR", "0.15")),
-        "SIMPLEBROKER_INITIAL_CHECKS": int(
-            os.environ.get("SIMPLEBROKER_INITIAL_CHECKS", "100"),
+        "BROKER_INITIAL_CHECKS": int(
+            os.environ.get("BROKER_INITIAL_CHECKS", "100"),
         ),
-        "SIMPLEBROKER_MAX_INTERVAL": float(
-            os.environ.get("SIMPLEBROKER_MAX_INTERVAL", "0.1"),
+        "BROKER_MAX_INTERVAL": float(
+            os.environ.get("BROKER_MAX_INTERVAL", "0.1"),
         ),
-        "SIMPLEBROKER_BURST_SLEEP": float(
-            os.environ.get("SIMPLEBROKER_BURST_SLEEP", "0.00001"),
+        "BROKER_BURST_SLEEP": float(
+            os.environ.get("BROKER_BURST_SLEEP", "0.00001"),
         ),
         # Debug
         "BROKER_DEBUG": bool(os.environ.get("BROKER_DEBUG")),

@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple
 
 import pytest
 
+from simplebroker._constants import load_config
 from simplebroker.db import BrokerDB
 
 # Import will be available after implementation
@@ -843,13 +844,12 @@ class TestErrorScenarios(WatcherTestBase):
     """Test various error scenarios."""
 
     def test_handler_exception_no_error_handler(
-        self, broker_db, temp_db, capsys, caplog, monkeypatch
+        self, broker_db, temp_db, capsys, caplog
     ):
         """Test default behavior when handler fails and no error_handler."""
         # Enable logging for this test since it's testing logging behavior
-        from simplebroker.watcher import _config
-
-        monkeypatch.setitem(_config, "BROKER_LOGGING_ENABLED", True)
+        test_config = load_config()
+        test_config["BROKER_LOGGING_ENABLED"] = True
 
         broker_db.write("test_queue", "bad_message")
 
@@ -861,6 +861,7 @@ class TestErrorScenarios(WatcherTestBase):
                 "test_queue",
                 failing_handler,
                 db=watcher_db,
+                config=test_config,
             )
 
             thread = watcher.run_in_thread()
@@ -873,14 +874,11 @@ class TestErrorScenarios(WatcherTestBase):
         # Should have logged the error
         assert "Handler failed" in caplog.text or "Handler error" in caplog.text
 
-    def test_error_handler_exception(
-        self, broker_db, temp_db, capsys, caplog, monkeypatch
-    ):
+    def test_error_handler_exception(self, broker_db, temp_db, capsys, caplog):
         """Test when error_handler itself raises exception."""
         # Enable logging for this test since it's testing logging behavior
-        from simplebroker.watcher import _config
-
-        monkeypatch.setitem(_config, "BROKER_LOGGING_ENABLED", True)
+        test_config = load_config()
+        test_config["BROKER_LOGGING_ENABLED"] = True
 
         broker_db.write("test_queue", "message")
 
@@ -896,6 +894,7 @@ class TestErrorScenarios(WatcherTestBase):
                 handler,
                 db=watcher_db,
                 error_handler=bad_error_handler,
+                config=test_config,
             )
 
             thread = watcher.run_in_thread()

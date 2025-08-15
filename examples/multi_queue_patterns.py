@@ -17,18 +17,21 @@ Each pattern is a standalone function that can be run independently.
 from __future__ import annotations
 
 import logging
-
-# Import MultiQueueWatcher from the same directory
 import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from simplebroker import Queue
-
+# Add current directory to path for local imports
 sys.path.insert(0, str(Path(__file__).parent))
-from multi_queue_watcher import MultiQueueWatcher
+
+from multi_queue_watcher import MultiQueueWatcher  # noqa: E402
+
+from simplebroker import Queue
+from simplebroker._constants import load_config
+
+_config = load_config()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -329,12 +332,14 @@ def pattern_5_monitoring() -> None:
                 }
                 self.current_queue: Optional[str] = None
 
-            def _dispatch(self, message: str, timestamp: int) -> None:
+            def _dispatch(
+                self, message: str, timestamp: int, *, config: Dict[str, Any] = _config
+            ) -> None:
                 """Override to collect metrics."""
                 start_time = time.time()
 
                 try:
-                    super()._dispatch(message, timestamp)
+                    super()._dispatch(message, timestamp, config=config)
                     self.metrics["total_processed"] += 1
                     if self.current_queue:
                         self.metrics["queue_stats"][self.current_queue][

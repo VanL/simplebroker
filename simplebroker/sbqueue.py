@@ -70,6 +70,7 @@ class Queue:
         db_path: str = DEFAULT_DB_NAME,
         persistent: bool = False,
         runner: Optional[SQLRunner] = None,
+        config: Optional[Dict[str, Any]] = _config,
     ):
         """Initialize a Queue instance.
 
@@ -83,6 +84,7 @@ class Queue:
         self.name = name
         self._db_path = db_path
         self._persistent = persistent
+        self._config = config
 
         # Create DBConnection for robust connection management
         if persistent:
@@ -829,15 +831,23 @@ class Queue:
     def _install_finalizer(self) -> None:
         """Install weakref finalizer for cleanup."""
 
-        def cleanup(conn: Optional[DBConnection], watcher_conn_attr: str) -> None:
+        def cleanup(
+            conn: Optional[DBConnection],
+            config: Optional[Dict[str, Any]],
+            watcher_conn_attr: str,
+        ) -> None:
             """Cleanup function called by finalizer."""
+            if config is None:
+                config = _config
             try:
                 if conn:
                     conn.cleanup()
                 # Note: watcher_conn cleanup happens in cleanup_connections
             except Exception as e:
-                if _config.get("BROKER_LOGGING_ENABLED", True):
+                if config.get("BROKER_LOGGING_ENABLED", True):
                     logger.warning(f"Error during Queue finalizer cleanup: {e}")
 
         # Install finalizer with reference to connection
-        self._finalizer = weakref.finalize(self, cleanup, self.conn, "_watcher_conn")
+        self._finalizer = weakref.finalize(
+            self, cleanup, self.conn, self._config, "_watcher_conn"
+        )

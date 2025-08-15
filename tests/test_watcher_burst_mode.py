@@ -78,6 +78,7 @@ class InstrumentedQueueWatcher(QueueWatcher):
             old_strategy._initial_checks,
             old_strategy._max_interval,
             old_strategy._burst_sleep,
+            old_strategy._jitter_factor,
         )
         self._has_pending_messages_enabled = True
         self._found_messages_last_drain = False
@@ -87,9 +88,11 @@ class InstrumentedQueueWatcher(QueueWatcher):
         if not self._has_pending_messages_enabled:
             return True
 
-        # Use the Queue object's has_pending method
+        # Use the Queue object's has_pending method with proper since_timestamp
         if hasattr(self, "_queue_obj") and self._queue_obj:
-            return self._queue_obj.has_pending()
+            return self._queue_obj.has_pending(
+                self._last_seen_ts if self._last_seen_ts > 0 else None
+            )
 
         # Fallback to parent implementation
         return super()._has_pending_messages()
@@ -102,7 +105,9 @@ class InstrumentedQueueWatcher(QueueWatcher):
 
         # Check if we should drain using Queue's has_pending method
         if self._has_pending_messages_enabled:
-            if hasattr(self, "_queue_obj") and not self._queue_obj.has_pending():
+            if hasattr(self, "_queue_obj") and not self._queue_obj.has_pending(
+                self._last_seen_ts if self._last_seen_ts > 0 else None
+            ):
                 self._found_messages_last_drain = False
                 return
 
@@ -117,12 +122,15 @@ class InstrumentedQueueWatcher(QueueWatcher):
         if self._found_messages_last_drain:
             self._strategy.notify_activity()
 
-    def _dispatch(self, message: str, timestamp: int) -> None:
+    def _dispatch(self, message: str, timestamp: int, *, config=None) -> None:
         """Track message dispatches."""
         if not hasattr(self, "_message_count"):
             self._message_count = 0
         self._message_count += 1
-        super()._dispatch(message, timestamp)
+        if config is not None:
+            super()._dispatch(message, timestamp, config=config)
+        else:
+            super()._dispatch(message, timestamp)
 
 
 def test_burst_mode_resets_on_activity(no_jitter) -> None:

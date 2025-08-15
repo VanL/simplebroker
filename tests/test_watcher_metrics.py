@@ -145,7 +145,7 @@ class MonitoredQueueWatcher(QueueWatcher):
 
         self._maybe_log_stats()
 
-    def _dispatch(self, message: str, timestamp: int) -> None:
+    def _dispatch(self, message: str, timestamp: int, *, config=None) -> None:
         """Track message processing time."""
         start = time.perf_counter()
 
@@ -153,7 +153,10 @@ class MonitoredQueueWatcher(QueueWatcher):
             self._total_messages = 0
         self._total_messages += 1
 
-        super()._dispatch(message, timestamp)
+        if config is not None:
+            super()._dispatch(message, timestamp, config=config)
+        else:
+            super()._dispatch(message, timestamp)
 
         elapsed_ms = (time.perf_counter() - start) * 1000
         self.metrics.record_message(self._queue, elapsed_ms)

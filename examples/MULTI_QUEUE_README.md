@@ -123,9 +123,12 @@ def custom_error_handler(exc: Exception, message: str, timestamp: int) -> bool:
 
 ```python
 class MonitoredMultiQueueWatcher(MultiQueueWatcher):
-    def _dispatch(self, message: str, timestamp: int) -> None:
+    def _dispatch(self, message: str, timestamp: int, *, config=None) -> None:
         start_time = time.time()
-        super()._dispatch(message, timestamp)
+        if config is not None:
+            super()._dispatch(message, timestamp, config=config)
+        else:
+            super()._dispatch(message, timestamp)
         self.record_metrics(time.time() - start_time)
 ```
 

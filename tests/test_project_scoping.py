@@ -360,7 +360,7 @@ class TestDatabasePathResolution:
         }
 
         try:
-            result_path, used_scope = _resolve_database_path(args, config)
+            result_path, used_scope = _resolve_database_path(args, config=config)
             assert result_path == abs_path
             assert used_scope is False
         finally:
@@ -397,7 +397,7 @@ class TestDatabasePathResolution:
             with patch(
                 "simplebroker.cli._find_project_database", return_value=project_db
             ):
-                result_path, used_scope = _resolve_database_path(args, config)
+                result_path, used_scope = _resolve_database_path(args, config=config)
                 assert result_path == project_db
                 assert used_scope is True
         finally:
@@ -418,7 +418,7 @@ class TestDatabasePathResolution:
         }
 
         try:
-            result_path, used_scope = _resolve_database_path(args, config)
+            result_path, used_scope = _resolve_database_path(args, config=config)
             expected = Path(tmp_path) / "env" / "env.db"
             assert result_path == expected
             assert used_scope is False
@@ -441,7 +441,7 @@ class TestDatabasePathResolution:
 
         try:
             with pytest.raises(ValueError) as exc_info:
-                _resolve_database_path(args, config)
+                _resolve_database_path(args, config=config)
 
             assert "BROKER_PROJECT_SCOPE is enabled" in str(exc_info.value)
             assert "Run 'broker init'" in str(exc_info.value)
@@ -475,7 +475,7 @@ class TestDatabasePathResolution:
                 "BROKER_PROJECT_SCOPE": True,
             }
 
-            result_path, used_scope = _resolve_database_path(args, config)
+            result_path, used_scope = _resolve_database_path(args, config=config)
             expected = sub_dir / DEFAULT_DB_NAME
             assert result_path == expected
             assert used_scope is False  # Project scope not used for init

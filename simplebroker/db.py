@@ -175,10 +175,6 @@ MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1
 #   Interval=10:   ~96,000 messages/second (at-least-once, moderate concurrency)
 #   Interval=50:   ~286,000 messages/second (at-least-once, lower concurrency)
 #   Interval=100:  ~335,000 messages/second (at-least-once, lowest concurrency)
-#
-# Use configuration values loaded at module level
-READ_COMMIT_INTERVAL = _config["BROKER_READ_COMMIT_INTERVAL"]
-GENERATOR_BATCH_SIZE = _config["BROKER_GENERATOR_BATCH_SIZE"]
 
 
 class DBConnection:
@@ -212,7 +208,7 @@ class DBConnection:
         if self._runner:
             self._core = BrokerCore(self._runner)
 
-    def get_connection(self) -> "BrokerDB":
+    def get_connection(self, *, config: Dict[str, Any] = _config) -> "BrokerDB":
         """Get a robust database connection with retry logic.
 
         Returns thread-local connection that is cached and reused.
@@ -245,14 +241,14 @@ class DBConnection:
                 return connection
             except Exception as e:
                 if attempt >= max_retries - 1:
-                    if _config["BROKER_LOGGING_ENABLED"]:
+                    if config["BROKER_LOGGING_ENABLED"]:
                         logger.exception(
                             f"Failed to get database connection after {max_retries} retries: {e}"
                         )
                     raise RuntimeError(f"Failed to get database connection: {e}") from e
 
                 wait_time = 2 ** (attempt + 1)  # Exponential backoff
-                if _config["BROKER_LOGGING_ENABLED"]:
+                if config["BROKER_LOGGING_ENABLED"]:
                     logger.debug(
                         f"Database connection error (retry {attempt + 1}/{max_retries}): {e}. "
                         f"Retrying in {wait_time} seconds..."
@@ -277,7 +273,7 @@ class DBConnection:
             self._core = BrokerCore(self._runner)
         return self._core
 
-    def cleanup(self) -> None:
+    def cleanup(self, *, config: Dict[str, Any] = _config) -> None:
         """Clean up all connections and resources.
 
         Closes thread-local connections and releases resources.
@@ -288,7 +284,7 @@ class DBConnection:
             try:
                 self._thread_local.db.close()
             except Exception as e:
-                if _config["BROKER_LOGGING_ENABLED"]:
+                if config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing thread-local database: {e}")
             finally:
                 delattr(self._thread_local, "db")
@@ -303,7 +299,7 @@ class DBConnection:
             try:
                 connection.close()
             except Exception as e:
-                if _config["BROKER_LOGGING_ENABLED"]:
+                if config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing registered connection: {e}")
 
         # Clear the registry
@@ -316,7 +312,7 @@ class DBConnection:
                 try:
                     self._runner.close()
                 except Exception as e:
-                    if _config["BROKER_LOGGING_ENABLED"]:
+                    if config["BROKER_LOGGING_ENABLED"]:
                         logger.warning(f"Error closing runner: {e}")
                 finally:
                     self._runner = None
@@ -354,7 +350,7 @@ class BrokerCore:
     its own BrokerCore instance.
     """
 
-    def __init__(self, runner: SQLRunner):
+    def __init__(self, runner: SQLRunner, *, config: Dict[str, Any] = _config):
         """Initialize with a SQL runner.
 
         Args:
@@ -373,7 +369,7 @@ class BrokerCore:
 
         # Write counter for vacuum scheduling
         self._write_count = 0
-        self._vacuum_interval = _config["BROKER_AUTO_VACUUM_INTERVAL"]
+        self._vacuum_interval = config["BROKER_AUTO_VACUUM_INTERVAL"]
 
         # Setup database (must be done before creating TimestampGenerator)
         self._setup_database()
@@ -681,7 +677,9 @@ class BrokerCore:
         # This should never be reached due to the return/raise logic above
         raise AssertionError("Unreachable code in write retry loop")
 
-    def _log_ts_conflict(self, conflict_type: str, attempt: int) -> None:
+    def _log_ts_conflict(
+        self, conflict_type: str, attempt: int, *, config: Dict[str, Any] = _config
+    ) -> None:
         """Log timestamp conflict information for diagnostics.
 
         Args:
@@ -691,7 +689,7 @@ class BrokerCore:
         # Use warnings for now, can be replaced with proper logging
         if conflict_type == "transient":
             # Debug level - might be normal under extreme concurrency
-            if _config["BROKER_DEBUG"]:
+            if config["BROKER_DEBUG"]:
                 warnings.warn(
                     f"Timestamp conflict detected (attempt {attempt + 1}), retrying...",
                     RuntimeWarning,
@@ -713,7 +711,9 @@ class BrokerCore:
                 stacklevel=4,
             )
 
-    def _do_write_with_ts_retry(self, queue: str, message: str) -> None:
+    def _do_write_with_ts_retry(
+        self, queue: str, message: str, *, config: Dict[str, Any] = _config
+    ) -> None:
         """Execute write within retry context. Separates retry logic from transaction logic."""
         # Generate timestamp outside transaction for better concurrency
         # The timestamp generator has its own internal transaction for atomicity
@@ -726,7 +726,7 @@ class BrokerCore:
 
         # Increment write counter and check vacuum need
         # Only check if auto vacuum is enabled
-        if _config["BROKER_AUTO_VACUUM"] == 1:
+        if config["BROKER_AUTO_VACUUM"] == 1:
             self._write_count += 1
             if self._write_count >= self._vacuum_interval:
                 self._write_count = 0  # Reset counter
@@ -1031,6 +1031,7 @@ class BrokerCore:
         batch_size: Optional[int] = None,
         since_timestamp: Optional[int] = None,
         exact_timestamp: Optional[int] = None,
+        config: Dict[str, Any] = _config,
     ) -> Iterator[Union[Tuple[str, int], str]]:
         """Generator that claims messages from a queue.
 
@@ -1072,7 +1073,9 @@ class BrokerCore:
         else:
             # at_least_once: batch processing for performance
             effective_batch_size = (
-                batch_size if batch_size is not None else GENERATOR_BATCH_SIZE
+                batch_size
+                if batch_size is not None
+                else config["BROKER_GENERATOR_BATCH_SIZE"]
             )
             while True:
                 results = self._retrieve(
@@ -1337,6 +1340,7 @@ class BrokerCore:
         batch_size: Optional[int] = None,
         since_timestamp: Optional[int] = None,
         exact_timestamp: Optional[int] = None,
+        config: Dict[str, Any] = _config,
     ) -> Iterator[Union[Tuple[str, int], str]]:
         """Generator that moves messages from source queue to target queue.
 
@@ -1383,7 +1387,9 @@ class BrokerCore:
         else:
             # at_least_once: batch processing for performance
             effective_batch_size = (
-                batch_size if batch_size is not None else GENERATOR_BATCH_SIZE
+                batch_size
+                if batch_size is not None
+                else config["BROKER_GENERATOR_BATCH_SIZE"]
             )
             while True:
                 results = self._retrieve(
@@ -1584,7 +1590,7 @@ class BrokerCore:
         # Execute with retry logic
         _execute_with_retry(_do_broadcast)
 
-    def _should_vacuum(self) -> bool:
+    def _should_vacuum(self, *, config: Dict[str, Any] = _config) -> bool:
         """Check if vacuum needed (fast approximation)."""
         with self._lock:
             # Use a single table scan with conditional aggregation for better performance
@@ -1598,13 +1604,13 @@ class BrokerCore:
                 return False
 
             # Trigger if >=10% claimed OR >10k claimed messages
-            threshold_pct = _config["BROKER_VACUUM_THRESHOLD"]
+            threshold_pct = config["BROKER_VACUUM_THRESHOLD"]
             return bool(
                 (claimed_count >= total_count * threshold_pct)
                 or (claimed_count > 10000)
             )
 
-    def _vacuum_claimed_messages(self) -> None:
+    def _vacuum_claimed_messages(self, *, config: Dict[str, Any] = _config) -> None:
         """Delete claimed messages in batches."""
         # Skip vacuum if no db_path available (extensible runners)
         if not hasattr(self, "db_path"):
@@ -1618,7 +1624,7 @@ class BrokerCore:
 
         # Check for stale lock file (older than 5 minutes)
         stale_lock_timeout = int(
-            _config["BROKER_VACUUM_LOCK_TIMEOUT"]
+            config["BROKER_VACUUM_LOCK_TIMEOUT"]
         )  # 5 minutes default
         if vacuum_lock_path.exists():
             try:
@@ -1751,9 +1757,9 @@ class BrokerCore:
                 # Return None for non-SQLite backends or any errors
                 return None
 
-    def _do_vacuum_without_lock(self) -> None:
+    def _do_vacuum_without_lock(self, *, config: Dict[str, Any] = _config) -> None:
         """Perform the actual vacuum operation without file locking."""
-        batch_size = _config["BROKER_VACUUM_BATCH_SIZE"]
+        batch_size = config["BROKER_VACUUM_BATCH_SIZE"]
 
         # Use separate transaction per batch
         while True:

@@ -10,7 +10,6 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -92,10 +91,13 @@ class InstrumentedQueueWatcher(QueueWatcher):
 
         return has_messages
 
-    def _dispatch(self, message: str, timestamp: int) -> None:
+    def _dispatch(self, message: str, timestamp: int, *, config=None) -> None:
         """Override to track processed messages."""
         self.metrics.record_message()
-        super()._dispatch(message, timestamp)
+        if config is not None:
+            super()._dispatch(message, timestamp, config=config)
+        else:
+            super()._dispatch(message, timestamp)
 
     def _drain_queue(self) -> None:
         """Override to track drains."""
@@ -385,34 +387,36 @@ def test_disable_pre_check_via_env() -> None:
             # Get the default config
             default_config = load_config()
 
-            # Test with skip_idle_check = True by patching the config
+            # Test with skip_idle_check = True by passing config directly
             config_with_skip = default_config.copy()
             config_with_skip["BROKER_SKIP_IDLE_CHECK"] = True
 
             watcher = None
             watcher2 = None
 
-            with patch("simplebroker.watcher._config", config_with_skip):
-                watcher = InstrumentedQueueWatcher("empty_queue", handler, db=db_path)
+            watcher = InstrumentedQueueWatcher(
+                "empty_queue", handler, db=db_path, config=config_with_skip
+            )
 
-                # Pre-check should be disabled
-                assert watcher._skip_idle_check is True
+            # Pre-check should be disabled
+            assert watcher._skip_idle_check is True
 
-                # When skip_idle_check is True, pre-check should be skipped in main loop
+            # When skip_idle_check is True, pre-check should be skipped in main loop
 
-                # Watcher should still try to drain even with no messages
-                watcher._drain_queue()
-                assert watcher.metrics.drain_calls == 1
+            # Watcher should still try to drain even with no messages
+            watcher._drain_queue()
+            assert watcher.metrics.drain_calls == 1
 
             # Test with skip_idle_check = False (default)
             config_no_skip = default_config.copy()
             config_no_skip["BROKER_SKIP_IDLE_CHECK"] = False
 
-            with patch("simplebroker.watcher._config", config_no_skip):
-                watcher2 = InstrumentedQueueWatcher("empty_queue2", handler, db=db_path)
+            watcher2 = InstrumentedQueueWatcher(
+                "empty_queue2", handler, db=db_path, config=config_no_skip
+            )
 
-                # Pre-check should be enabled
-                assert watcher2._skip_idle_check is False
+            # Pre-check should be enabled
+            assert watcher2._skip_idle_check is False
 
             # Ensure watchers are stopped if they were started
             if watcher is not None:

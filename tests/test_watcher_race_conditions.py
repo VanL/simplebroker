@@ -55,7 +55,7 @@ class ConcurrencyTestWatcher(QueueWatcher):
         # Let parent handle the actual draining
         super()._drain_queue()
 
-    def _dispatch(self, message: str, timestamp: int) -> None:
+    def _dispatch(self, message: str, timestamp: int, *, config=None) -> None:
         """Add instrumentation to dispatch."""
         with self._lock:
             self.dispatch_count += 1
@@ -63,7 +63,10 @@ class ConcurrencyTestWatcher(QueueWatcher):
         if self._dispatch_delay > 0:
             time.sleep(self._dispatch_delay)
 
-        super()._dispatch(message, timestamp)
+        if config is not None:
+            super()._dispatch(message, timestamp, config=config)
+        else:
+            super()._dispatch(message, timestamp)
 
 
 def test_pre_check_race_no_message_loss() -> None:

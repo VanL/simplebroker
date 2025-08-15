@@ -15,7 +15,7 @@ import time
 import warnings
 from enum import Enum
 from pathlib import Path
-from typing import Any, Iterable, Literal, Protocol, cast
+from typing import Any, Dict, Iterable, Literal, Protocol, cast
 
 # Platform-specific imports for file locking
 try:
@@ -224,15 +224,17 @@ class SQLiteRunner:
 
         return cast("sqlite3.Connection", self._thread_local.conn)
 
-    def _apply_connection_settings(self, conn: sqlite3.Connection) -> None:
+    def _apply_connection_settings(
+        self, conn: sqlite3.Connection, *, config: Dict[str, Any] = _config
+    ) -> None:
         """Apply per-connection settings that don't require exclusive locks."""
         # Always set busy timeout for each connection
-        busy_timeout = _config["BROKER_BUSY_TIMEOUT"]
+        busy_timeout = config["BROKER_BUSY_TIMEOUT"]
         conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
 
         # Set WAL autocheckpoint for each connection
         # Default to 1000 pages (≈1MB) if not specified
-        wal_autocheckpoint = _config["BROKER_WAL_AUTOCHECKPOINT"]
+        wal_autocheckpoint = config["BROKER_WAL_AUTOCHECKPOINT"]
         if wal_autocheckpoint < 0:
             warnings.warn(
                 f"Invalid BROKER_WAL_AUTOCHECKPOINT '{wal_autocheckpoint}', "
@@ -320,15 +322,17 @@ class SQLiteRunner:
             self._apply_optimization_settings(self._thread_local.conn)
             self._thread_local.optimization_applied = True
 
-    def _apply_optimization_settings(self, conn: sqlite3.Connection) -> None:
+    def _apply_optimization_settings(
+        self, conn: sqlite3.Connection, *, config: Dict[str, Any] = _config
+    ) -> None:
         """Apply optimization settings to a connection."""
         # Cache size (default 10MB)
         # Negative values mean KiB (kibibytes), so we multiply by 1024
-        cache_mb = _config["BROKER_CACHE_MB"]
+        cache_mb = config["BROKER_CACHE_MB"]
         conn.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
 
         # Synchronous mode (default FULL)
-        sync_mode = _config["BROKER_SYNC_MODE"]
+        sync_mode = config["BROKER_SYNC_MODE"]
         # Validate sync mode
         if sync_mode not in ("FULL", "NORMAL", "OFF"):
             warnings.warn(

@@ -174,11 +174,18 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
                 # Should log but not crash
                 with patch("simplebroker.watcher.logger") as mock_logger:
+                    # Import the config loader to get full config with override
+                    from simplebroker._constants import load_config
+
+                    test_config = (
+                        load_config().copy()
+                    )  # Make a copy to avoid modifying global
+                    test_config["BROKER_LOGGING_ENABLED"] = True
                     with patch(
                         "simplebroker.watcher._config",
-                        {"BROKER_LOGGING_ENABLED": True},
+                        test_config,
                     ):
-                        watcher._dispatch("test", 12345)
+                        watcher._dispatch("test", 12345, config=test_config)
 
                     # Verify both errors were logged
                     mock_logger.exception.assert_called()

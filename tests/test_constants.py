@@ -186,9 +186,9 @@ class TestLoadConfig:
             # Watcher settings
             assert config["BROKER_SKIP_IDLE_CHECK"] is False
             assert config["BROKER_JITTER_FACTOR"] == 0.15
-            assert config["SIMPLEBROKER_INITIAL_CHECKS"] == 100
-            assert config["SIMPLEBROKER_MAX_INTERVAL"] == 0.1
-            assert config["SIMPLEBROKER_BURST_SLEEP"] == 0.00001
+            assert config["BROKER_INITIAL_CHECKS"] == 100
+            assert config["BROKER_MAX_INTERVAL"] == 0.1
+            assert config["BROKER_BURST_SLEEP"] == 0.00001
 
             # Debug
             assert config["BROKER_DEBUG"] is False
@@ -273,9 +273,9 @@ class TestLoadConfig:
         env_vars = {
             "BROKER_SKIP_IDLE_CHECK": "1",
             "BROKER_JITTER_FACTOR": "0.25",
-            "SIMPLEBROKER_INITIAL_CHECKS": "200",
-            "SIMPLEBROKER_MAX_INTERVAL": "0.5",
-            "SIMPLEBROKER_BURST_SLEEP": "0.0001",
+            "BROKER_INITIAL_CHECKS": "200",
+            "BROKER_MAX_INTERVAL": "0.5",
+            "BROKER_BURST_SLEEP": "0.0001",
         }
 
         with patch.dict(os.environ, env_vars):
@@ -283,9 +283,9 @@ class TestLoadConfig:
 
             assert config["BROKER_SKIP_IDLE_CHECK"] is True
             assert config["BROKER_JITTER_FACTOR"] == 0.25
-            assert config["SIMPLEBROKER_INITIAL_CHECKS"] == 200
-            assert config["SIMPLEBROKER_MAX_INTERVAL"] == 0.5
-            assert config["SIMPLEBROKER_BURST_SLEEP"] == 0.0001
+            assert config["BROKER_INITIAL_CHECKS"] == 200
+            assert config["BROKER_MAX_INTERVAL"] == 0.5
+            assert config["BROKER_BURST_SLEEP"] == 0.0001
 
     def test_debug_setting(self) -> None:
         """Test debug environment variable."""
@@ -369,9 +369,9 @@ class TestLoadConfig:
             # Watcher settings
             "BROKER_SKIP_IDLE_CHECK",
             "BROKER_JITTER_FACTOR",
-            "SIMPLEBROKER_INITIAL_CHECKS",
-            "SIMPLEBROKER_MAX_INTERVAL",
-            "SIMPLEBROKER_BURST_SLEEP",
+            "BROKER_INITIAL_CHECKS",
+            "BROKER_MAX_INTERVAL",
+            "BROKER_BURST_SLEEP",
             # Debug
             "BROKER_DEBUG",
             # Logging

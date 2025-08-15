@@ -78,7 +78,7 @@ import time
 import weakref
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, NamedTuple, Optional
 
 # For Python 3.8 compatibility, we avoid using Self type
 # and use string forward references instead
@@ -105,6 +105,8 @@ __all__ = [
     "logger_handler",
     "default_error_handler",
 ]
+
+_config = load_config()
 
 
 # Default message handlers for common use cases
@@ -190,8 +192,8 @@ def default_error_handler(exc: Exception, message: str, timestamp: int) -> bool:
     return True
 
 
-def _config_aware_default_error_handler(
-    exc: Exception, message: str, timestamp: int
+def config_aware_default_error_handler(
+    exc: Exception, message: str, timestamp: int, *, config: Dict[str, Any] = _config
 ) -> bool:
     """Internal default error handler that respects BROKER_LOGGING_ENABLED.
 
@@ -211,7 +213,7 @@ def _config_aware_default_error_handler(
     Returns:
         True to continue processing (don't stop the watcher)
     """
-    if _config["BROKER_LOGGING_ENABLED"]:
+    if config["BROKER_LOGGING_ENABLED"]:
         return default_error_handler(exc, message, timestamp)
     return True
 
@@ -229,7 +231,7 @@ class Message(NamedTuple):
 logger = logging.getLogger(__name__)
 
 # Load configuration once at module level
-_config = load_config()
+config = load_config()
 
 
 class _StopLoop(Exception):
@@ -256,6 +258,7 @@ class BaseWatcher(ABC):
         db: BrokerDB | str | Path | None = None,
         stop_event: threading.Event | None = None,
         polling_strategy: PollingStrategy | None = None,
+        config: Dict[str, Any] = _config,
     ) -> None:
         """Initialize base watcher.
 
@@ -264,6 +267,7 @@ class BaseWatcher(ABC):
             db: Database instance or path (uses default if None)
             stop_event: Optional event to signal watcher shutdown
             polling_strategy: Custom polling strategy (uses default if None)
+            config: Configuration dictionary (uses default if None)
 
         """
         # Handle queue parameter - either Queue object or string name
@@ -280,10 +284,15 @@ class BaseWatcher(ABC):
                 # Use default database
                 db_path = DEFAULT_DB_NAME
 
-            self._queue_obj = Queue(str(queue), db_path=db_path, persistent=True)
+            self._queue_obj = Queue(
+                str(queue), db_path=db_path, persistent=True, config=config
+            )
 
         # Event to signal the watcher to stop
         self._stop_event = stop_event or threading.Event()
+
+        # Store configuration
+        self._config = config
 
         # Weak reference to the thread running this watcher (for cleanup warnings)
         self._thread: weakref.ref[threading.Thread] | None = None
@@ -318,7 +327,7 @@ class BaseWatcher(ABC):
         """
         return self._queue_obj
 
-    def _create_strategy(self) -> PollingStrategy:
+    def _create_strategy(self, *, config: Dict[str, Any] = _config) -> PollingStrategy:
         """Create the default polling strategy for this watcher.
 
         This method provides the default PollingStrategy configuration
@@ -328,20 +337,22 @@ class BaseWatcher(ABC):
 
         Override Examples:
             class HighVolumeWatcher(QueueWatcher):
-                def _create_strategy(self) -> PollingStrategy:
+                def _create_strategy(self, *, config: Dict[str, Any] = _config) -> PollingStrategy:
                     # Faster polling for high-volume scenarios
                     return PollingStrategy(
                         stop_event=self._stop_event,
                         initial_checks=1000,
                         max_interval=0.001,
                         burst_sleep=0.00001,
+                        jitter_factor=0.15,
                     )
 
         Returns:
             PollingStrategy: Configured with environment settings from:
-                - SIMPLEBROKER_INITIAL_CHECKS (default: 100)
-                - SIMPLEBROKER_MAX_INTERVAL (default: 0.1)
-                - SIMPLEBROKER_BURST_SLEEP (default: 0.0002)
+                - BROKER_INITIAL_CHECKS (default: 100)
+                - BROKER_MAX_INTERVAL (default: 0.1)
+                - BROKER_BURST_SLEEP (default: 0.0002)
+                - BROKER_JITTER_FACTOR (default: 0.15 - 15%)
 
         See Also:
             PollingStrategy: For parameter details
@@ -349,13 +360,18 @@ class BaseWatcher(ABC):
         """
         return PollingStrategy(
             stop_event=self._stop_event,
-            initial_checks=_config["SIMPLEBROKER_INITIAL_CHECKS"],
-            max_interval=_config["SIMPLEBROKER_MAX_INTERVAL"],
-            burst_sleep=_config["SIMPLEBROKER_BURST_SLEEP"],
+            initial_checks=config["BROKER_INITIAL_CHECKS"],
+            max_interval=config["BROKER_MAX_INTERVAL"],
+            burst_sleep=config["BROKER_BURST_SLEEP"],
+            jitter_factor=config["BROKER_JITTER_FACTOR"],
         )
 
     def _process_with_retry(
-        self, process_func: Callable[[], Any], operation_name: str
+        self,
+        process_func: Callable[[], Any],
+        operation_name: str,
+        *,
+        config: Dict[str, Any] = _config,
     ) -> Any:
         """Execute a processing function with operational error retry.
 
@@ -378,14 +394,14 @@ class BaseWatcher(ABC):
                 return process_func()
             except OperationalError as e:
                 if attempt >= max_retries - 1:
-                    if _config["BROKER_LOGGING_ENABLED"]:
+                    if config["BROKER_LOGGING_ENABLED"]:
                         logger.exception(
                             f"Failed after {max_retries} operational errors: {e}",
                         )
                     raise
 
                 wait_time = self._calculate_retry_wait_time(attempt)
-                if _config["BROKER_LOGGING_ENABLED"]:
+                if config["BROKER_LOGGING_ENABLED"]:
                     logger.debug(
                         f"OperationalError during {operation_name} "
                         f"(retry {attempt + 1}/{max_retries}): {e}. "
@@ -412,6 +428,8 @@ class BaseWatcher(ABC):
         message: str,
         timestamp: int,
         error_handler: Callable[[Exception, str, int], bool | None],
+        *,
+        config: Dict[str, Any] = _config,
     ) -> None:
         """Handle errors from message handler.
 
@@ -427,14 +445,19 @@ class BaseWatcher(ABC):
         """
         stop_requested = False
         try:
-            result = error_handler(e, message, timestamp)
+            # Try calling with config first (for config-aware handlers)
+            try:
+                result = error_handler(e, message, timestamp, config=config)  # type: ignore[call-arg]
+            except TypeError:
+                # Fallback for handlers that don't accept config
+                result = error_handler(e, message, timestamp)
             if result is False:
                 # Error handler says stop
                 stop_requested = True
             # True or None means continue
         except Exception as eh_error:
             # Error handler itself failed
-            if _config["BROKER_LOGGING_ENABLED"]:
+            if config["BROKER_LOGGING_ENABLED"]:
                 logger.exception(
                     f"Error handler failed: {eh_error}\nOriginal error: {e}",
                 )
@@ -707,6 +730,8 @@ class BaseWatcher(ABC):
         message: str,
         timestamp: int,
         error_handler: Callable[[Exception, str, int], bool | None],
+        *,
+        config: Dict[str, Any] = _config,
     ) -> None:
         """Safely call the handler with error handling.
 
@@ -719,7 +744,9 @@ class BaseWatcher(ABC):
             if hasattr(self, "_handler") and self._handler is not None:
                 self._handler(message, timestamp)
         except Exception as e:
-            self._handle_handler_error(e, message, timestamp, error_handler)
+            self._handle_handler_error(
+                e, message, timestamp, error_handler, config=config
+            )
 
     def _try_dispatch_message(self, body: str, timestamp: int) -> bool:
         """Try to dispatch a message, return True if successful.
@@ -739,7 +766,7 @@ class BaseWatcher(ABC):
             _StopLoop: If stop was requested during dispatch
         """
         try:
-            self._dispatch(body, timestamp)
+            self._dispatch(body, timestamp, config=self._config)
             return True
         except _StopLoop:
             raise  # Re-raise stop signal
@@ -748,7 +775,9 @@ class BaseWatcher(ABC):
             # This ensures we'll retry the message next time
             return False
 
-    def _dispatch(self, message: str, timestamp: int) -> None:
+    def _dispatch(
+        self, message: str, timestamp: int, *, config: Dict[str, Any] = _config
+    ) -> None:
         """Dispatch a message to the handler with error handling and size validation.
 
         This method provides standardized message dispatch logic including:
@@ -769,7 +798,7 @@ class BaseWatcher(ABC):
         message_size = len(message.encode("utf-8"))
         if message_size > MAX_MESSAGE_SIZE:
             error_msg = f"Message size ({message_size} bytes) exceeds {MAX_MESSAGE_SIZE // (1024 * 1024)}MB limit"
-            if _config["BROKER_LOGGING_ENABLED"]:
+            if config["BROKER_LOGGING_ENABLED"]:
                 logger.error(error_msg)
             # Use error handler if available
             if self._error_handler:
@@ -778,12 +807,15 @@ class BaseWatcher(ABC):
                     message[:1000] + "...",
                     timestamp,
                     self._error_handler,
+                    config=config,
                 )
             return
 
         # Dispatch message using safe handler method if error handler is available
         if self._error_handler:
-            self._safe_call_handler(message, timestamp, self._error_handler)
+            self._safe_call_handler(
+                message, timestamp, self._error_handler, config=config
+            )
         elif self._handler:
             # Direct call if no error handler (legacy support)
             self._handler(message, timestamp)
@@ -860,12 +892,14 @@ class BaseWatcher(ABC):
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: Any,
+        *,
+        config: Dict[str, Any] = _config,
     ) -> None:
         """Exit context manager - stop and clean up."""
         try:
             self.stop()
         except Exception as e:
-            if _config["BROKER_LOGGING_ENABLED"]:
+            if config["BROKER_LOGGING_ENABLED"]:
                 logger.warning(f"Error during stop in __exit__: {e}")
 
     def _setup_finalizer(self) -> None:
@@ -970,6 +1004,7 @@ class PollingStrategy:
         initial_checks: int = 100,
         max_interval: float = 0.1,
         burst_sleep: float = 0.0002,
+        jitter_factor: float = 0.15,
     ) -> None:
         self._initial_checks = initial_checks
         self._max_interval = max_interval
@@ -979,6 +1014,7 @@ class PollingStrategy:
         self._data_version: int | None = None
         self._data_version_provider: Callable[[], int | None] | None = None
         self._pragma_failures = 0
+        self._jitter_factor = jitter_factor
 
     def wait_for_activity(self) -> None:
         """Wait for activity with optimized polling."""
@@ -1025,7 +1061,7 @@ class PollingStrategy:
 
         if base_delay > 0:
             # Add +/-15% jitter to prevent synchronized polling
-            jitter_factor = _config["BROKER_JITTER_FACTOR"]
+            jitter_factor = self._jitter_factor
             jittered_delay = (
                 random.uniform(-jitter_factor, jitter_factor) + 1
             ) * base_delay
@@ -1121,7 +1157,8 @@ class QueueWatcher(BaseWatcher):
         polling_strategy: PollingStrategy | None = None,
         error_handler: Callable[
             [Exception, str, int], bool | None
-        ] = _config_aware_default_error_handler,
+        ] = config_aware_default_error_handler,
+        config: Dict[str, Any] = _config,
     ) -> None:
         """Initialize the QueueWatcher.
 
@@ -1164,7 +1201,11 @@ class QueueWatcher(BaseWatcher):
 
         # Initialize parent class with queue-first pattern
         super().__init__(
-            queue, db=db, stop_event=stop_event, polling_strategy=polling_strategy
+            queue,
+            db=db,
+            stop_event=stop_event,
+            polling_strategy=polling_strategy,
+            config=config,
         )
 
         # Store queue name for backward compatibility
@@ -1179,7 +1220,7 @@ class QueueWatcher(BaseWatcher):
         self._batch_processing = batch_processing
 
         # Two-phase detection configuration
-        self._skip_idle_check = _config["BROKER_SKIP_IDLE_CHECK"]
+        self._skip_idle_check = config["BROKER_SKIP_IDLE_CHECK"]
 
     def _has_pending_messages(self) -> bool:
         """Fast check if queue has unclaimed messages.
@@ -1359,7 +1400,8 @@ class QueueMoveWatcher(BaseWatcher):
         polling_strategy: PollingStrategy | None = None,
         error_handler: Callable[
             [Exception, str, int], bool | None
-        ] = _config_aware_default_error_handler,
+        ] = config_aware_default_error_handler,
+        config: Dict[str, Any] = _config,
     ) -> None:
         """Initialize a QueueMoveWatcher.
 
@@ -1392,6 +1434,7 @@ class QueueMoveWatcher(BaseWatcher):
             db=db,
             stop_event=stop_event,
             polling_strategy=polling_strategy,
+            config=config,
         )
 
         # Store move-specific attributes
@@ -1472,11 +1515,11 @@ class QueueMoveWatcher(BaseWatcher):
             # Result is a dict containing 'message' and 'timestamp'
             # Type assertion: move() without args returns dict or None
             assert isinstance(result, dict)
-            self._dispatch(result["message"], result["timestamp"])
+            self._dispatch(result["message"], result["timestamp"], config=self._config)
 
             # Check max messages limit
             if self._max_messages and self._move_count >= self._max_messages:
-                if _config["BROKER_LOGGING_ENABLED"]:
+                if config["BROKER_LOGGING_ENABLED"]:
                     logger.info(f"Reached max_messages limit ({self._max_messages})")
                 self._stop_event.set()
                 raise _StopLoop
