@@ -1,14 +1,14 @@
 """
 Miscellaneous tests for SimpleBroker.
 
-T5 – List queues and delete operations
+T5 – list queues and delete operations
 """
 
 from .conftest import run_cli
 
 
 def test_list_and_delete(workdir):
-    """T5: List shows counts, delete removes messages."""
+    """T5: list shows counts, delete removes messages."""
     # Create two queues with messages
     rc, _, _ = run_cli("write", "q1", "x", cwd=workdir)
     assert rc == 0
@@ -19,7 +19,7 @@ def test_list_and_delete(workdir):
     rc, _, _ = run_cli("write", "q2", "z", cwd=workdir)
     assert rc == 0
 
-    # List should show both queues with counts
+    # list should show both queues with counts
     rc, out, _ = run_cli("list", cwd=workdir)
     assert rc == 0
     lines = sorted(out.splitlines())
@@ -29,7 +29,7 @@ def test_list_and_delete(workdir):
     rc, _, _ = run_cli("delete", "q1", cwd=workdir)
     assert rc == 0
 
-    # List should show q1 is gone
+    # list should show q1 is gone
     rc, out, _ = run_cli("list", cwd=workdir)
     assert rc == 0
     assert "q1" not in out
@@ -39,7 +39,7 @@ def test_list_and_delete(workdir):
     rc, _, _ = run_cli("delete", "--all", cwd=workdir)
     assert rc == 0
 
-    # List should be empty
+    # list should be empty
     rc, out, _ = run_cli("list", cwd=workdir)
     assert rc == 0
     assert out == ""

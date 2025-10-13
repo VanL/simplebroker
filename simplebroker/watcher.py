@@ -77,8 +77,9 @@ import threading
 import time
 import weakref
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, NamedTuple, Optional
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 # For Python 3.8 compatibility, we avoid using Self type
 # and use string forward references instead
@@ -193,7 +194,7 @@ def default_error_handler(exc: Exception, message: str, timestamp: int) -> bool:
 
 
 def config_aware_default_error_handler(
-    exc: Exception, message: str, timestamp: int, *, config: Dict[str, Any] = _config
+    exc: Exception, message: str, timestamp: int, *, config: dict[str, Any] = _config
 ) -> bool:
     """Internal default error handler that respects BROKER_LOGGING_ENABLED.
 
@@ -258,7 +259,7 @@ class BaseWatcher(ABC):
         db: BrokerDB | str | Path | None = None,
         stop_event: threading.Event | None = None,
         polling_strategy: PollingStrategy | None = None,
-        config: Dict[str, Any] = _config,
+        config: dict[str, Any] = _config,
     ) -> None:
         """Initialize base watcher.
 
@@ -327,7 +328,7 @@ class BaseWatcher(ABC):
         """
         return self._queue_obj
 
-    def _create_strategy(self, *, config: Dict[str, Any] = _config) -> PollingStrategy:
+    def _create_strategy(self, *, config: dict[str, Any] = _config) -> PollingStrategy:
         """Create the default polling strategy for this watcher.
 
         This method provides the default PollingStrategy configuration
@@ -337,7 +338,7 @@ class BaseWatcher(ABC):
 
         Override Examples:
             class HighVolumeWatcher(QueueWatcher):
-                def _create_strategy(self, *, config: Dict[str, Any] = _config) -> PollingStrategy:
+                def _create_strategy(self, *, config: dict[str, Any] = _config) -> PollingStrategy:
                     # Faster polling for high-volume scenarios
                     return PollingStrategy(
                         stop_event=self._stop_event,
@@ -371,7 +372,7 @@ class BaseWatcher(ABC):
         process_func: Callable[[], Any],
         operation_name: str,
         *,
-        config: Dict[str, Any] = _config,
+        config: dict[str, Any] = _config,
     ) -> Any:
         """Execute a processing function with operational error retry.
 
@@ -429,7 +430,7 @@ class BaseWatcher(ABC):
         timestamp: int,
         error_handler: Callable[[Exception, str, int], bool | None],
         *,
-        config: Dict[str, Any] = _config,
+        config: dict[str, Any] = _config,
     ) -> None:
         """Handle errors from message handler.
 
@@ -569,7 +570,7 @@ class BaseWatcher(ABC):
     def _drain_queue(self) -> None:
         """Process messages - must be implemented by subclasses."""
 
-    def _setup_signal_handler(self) -> Optional[SignalHandlerContext]:
+    def _setup_signal_handler(self) -> SignalHandlerContext | None:
         """Set up signal handler for SIGINT if in main thread.
 
         Returns:
@@ -731,7 +732,7 @@ class BaseWatcher(ABC):
         timestamp: int,
         error_handler: Callable[[Exception, str, int], bool | None],
         *,
-        config: Dict[str, Any] = _config,
+        config: dict[str, Any] = _config,
     ) -> None:
         """Safely call the handler with error handling.
 
@@ -776,7 +777,7 @@ class BaseWatcher(ABC):
             return False
 
     def _dispatch(
-        self, message: str, timestamp: int, *, config: Dict[str, Any] = _config
+        self, message: str, timestamp: int, *, config: dict[str, Any] = _config
     ) -> None:
         """Dispatch a message to the handler with error handling and size validation.
 
@@ -893,7 +894,7 @@ class BaseWatcher(ABC):
         exc_val: BaseException | None,
         exc_tb: Any,
         *,
-        config: Dict[str, Any] = _config,
+        config: dict[str, Any] = _config,
     ) -> None:
         """Exit context manager - stop and clean up."""
         try:
@@ -1158,7 +1159,7 @@ class QueueWatcher(BaseWatcher):
         error_handler: Callable[
             [Exception, str, int], bool | None
         ] = config_aware_default_error_handler,
-        config: Dict[str, Any] = _config,
+        config: dict[str, Any] = _config,
     ) -> None:
         """Initialize the QueueWatcher.
 
@@ -1401,7 +1402,7 @@ class QueueMoveWatcher(BaseWatcher):
         error_handler: Callable[
             [Exception, str, int], bool | None
         ] = config_aware_default_error_handler,
-        config: Dict[str, Any] = _config,
+        config: dict[str, Any] = _config,
     ) -> None:
         """Initialize a QueueMoveWatcher.
 

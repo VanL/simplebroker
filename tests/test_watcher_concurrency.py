@@ -4,7 +4,6 @@ import json
 import threading
 import time
 import warnings
-from typing import Dict, List, Tuple
 
 import pytest
 
@@ -21,9 +20,9 @@ class ConcurrentCollector:
 
     def __init__(self, worker_id: str):
         self.worker_id = worker_id
-        self.messages: List[Tuple[str, int]] = []
+        self.messages: list[tuple[str, int]] = []
         self.lock = threading.Lock()
-        self.processing_times: Dict[str, float] = {}
+        self.processing_times: dict[str, float] = {}
 
     def handler(self, msg: str, ts: int) -> None:
         """Collect messages with timing info."""
@@ -32,7 +31,7 @@ class ConcurrentCollector:
             self.messages.append((msg, ts))
             self.processing_times[msg] = start_time
 
-    def get_messages(self) -> List[str]:
+    def get_messages(self) -> list[str]:
         """Get just the message bodies."""
         with self.lock:
             return [msg for msg, _ in self.messages]

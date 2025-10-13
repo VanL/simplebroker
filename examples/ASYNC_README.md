@@ -53,7 +53,7 @@ The async version of BrokerCore that provides all queue operations:
 - `write()` - Add messages to queues
 - `read()` - Read and remove messages  
 - `stream_read()` - Stream messages efficiently
-- `list_queues()` - List all queues with counts
+- `list_queues()` - list all queues with counts
 - `move()` - Move messages between queues
 - `broadcast()` - Send to all queues
 - `vacuum()` - Clean up claimed messages

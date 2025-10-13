@@ -20,7 +20,6 @@ This example shows:
 import json
 import logging
 import time
-from typing import Optional
 
 from simplebroker import Queue, QueueWatcher
 
@@ -177,7 +176,7 @@ def custom_watcher_example() -> None:
 
         def handle_error(
             self, exception: Exception, message: str, timestamp: int
-        ) -> Optional[bool]:
+        ) -> bool | None:
             """Handle processing errors."""
             logger.error(f"Error processing message {timestamp}: {exception}")
             self.error_count += 1

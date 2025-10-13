@@ -37,7 +37,7 @@ A simple example showing the minimal implementation required for a custom runner
 # For standard usage, use: from simplebroker import Queue
 import sqlite3
 import logging
-from typing import Tuple, Any, Iterable
+from typing import Any, Iterable
 from simplebroker.ext import SQLRunner
 
 class LoggingRunner(SQLRunner):
@@ -57,8 +57,8 @@ class LoggingRunner(SQLRunner):
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA wal_autocheckpoint=1000")
     
-    def run(self, sql: str, params: Tuple[Any, ...] = (), 
-            *, fetch: bool = False) -> Iterable[Tuple[Any, ...]]:
+    def run(self, sql: str, params: tuple[Any, ...] = (), 
+            *, fetch: bool = False) -> Iterable[tuple[Any, ...]]:
         self.logger.debug(f"SQL: {sql}, params: {params}")
         try:
             cursor = self._conn.execute(sql, params)
@@ -112,7 +112,7 @@ import threading
 import queue
 import time
 import os
-from typing import Tuple, Any, Iterable, Optional, Callable
+from typing import tuple, Any, Iterable, Optional, Callable
 from simplebroker.ext import SQLRunner, TimestampGenerator
 
 class DaemonRunner(SQLRunner):
@@ -185,8 +185,8 @@ class DaemonRunner(SQLRunner):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA wal_autocheckpoint=1000")
     
-    def _execute_sql(self, conn, sql: str, params: Tuple[Any, ...] = (), 
-                     *, fetch: bool = False) -> Iterable[Tuple[Any, ...]]:
+    def _execute_sql(self, conn, sql: str, params: tuple[Any, ...] = (), 
+                     *, fetch: bool = False) -> Iterable[tuple[Any, ...]]:
         cursor = conn.execute(sql, params)
         return cursor.fetchall() if fetch else []
     
@@ -202,8 +202,8 @@ class DaemonRunner(SQLRunner):
             raise result
         return result
     
-    def run(self, sql: str, params: Tuple[Any, ...] = (), 
-            *, fetch: bool = False) -> Iterable[Tuple[Any, ...]]:
+    def run(self, sql: str, params: tuple[Any, ...] = (), 
+            *, fetch: bool = False) -> Iterable[tuple[Any, ...]]:
         return self._send_command("run", sql, params, fetch=fetch)
     
     def begin_immediate(self) -> None:
@@ -256,7 +256,7 @@ Complete async implementation using aiosqlite.
 import asyncio
 import aiosqlite
 import time
-from typing import Tuple, Any, Iterable, Optional
+from typing import tuple, Any, Iterable, Optional
 from simplebroker.ext import SQLRunner, TimestampGenerator
 
 class AsyncSQLiteRunner:
@@ -285,8 +285,8 @@ class AsyncSQLiteRunner:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA wal_autocheckpoint=1000")
     
-    async def run(self, sql: str, params: Tuple[Any, ...] = (), 
-                  *, fetch: bool = False) -> Iterable[Tuple[Any, ...]]:
+    async def run(self, sql: str, params: tuple[Any, ...] = (), 
+                  *, fetch: bool = False) -> Iterable[tuple[Any, ...]]:
         await self.ensure_connection()
         async with self._lock:
             cursor = await self._conn.execute(sql, params)
@@ -489,7 +489,7 @@ import sqlite3
 import threading
 import queue
 import contextlib
-from typing import Tuple, Any, Iterable, Optional
+from typing import tuple, Any, Iterable, Optional
 from simplebroker.ext import SQLRunner
 
 class PooledRunner(SQLRunner):
@@ -535,8 +535,8 @@ class PooledRunner(SQLRunner):
         finally:
             self._pool.put(conn)
     
-    def run(self, sql: str, params: Tuple[Any, ...] = (), 
-            *, fetch: bool = False) -> Iterable[Tuple[Any, ...]]:
+    def run(self, sql: str, params: tuple[Any, ...] = (), 
+            *, fetch: bool = False) -> Iterable[tuple[Any, ...]]:
         with self.get_connection() as conn:
             cursor = conn.execute(sql, params)
             return cursor.fetchall() if fetch else []
@@ -630,7 +630,7 @@ Complete mock runner implementation for testing.
 # test_mock_runner.py
 import pytest
 import sqlite3
-from typing import Dict, List, Tuple, Any, Iterable
+from typing import dict, list, tuple, Any, Iterable
 from simplebroker.ext import SQLRunner
 from simplebroker import Queue
 
@@ -638,15 +638,15 @@ class TestMockRunner(SQLRunner):
     """In-memory mock runner for testing."""
     
     def __init__(self):
-        self.messages: Dict[str, List[Tuple[str, int]]] = {}
+        self.messages: dict[str, list[tuple[str, int]]] = {}
         self.meta = {"last_ts": 0}
         self.in_transaction = False
         self.transaction_buffer = []
         self.call_history = []
         self.error_on_next_call = None
     
-    def run(self, sql: str, params: Tuple[Any, ...] = (), 
-            *, fetch: bool = False) -> Iterable[Tuple[Any, ...]]:
+    def run(self, sql: str, params: tuple[Any, ...] = (), 
+            *, fetch: bool = False) -> Iterable[tuple[Any, ...]]:
         """Execute SQL and track calls."""
         self.call_history.append(("run", sql, params, fetch))
         
@@ -897,7 +897,7 @@ Full async queue with all SimpleBroker features.
 import asyncio
 import aiosqlite
 import time
-from typing import Optional, List, AsyncIterator
+from typing import Optional, list, AsyncIterator
 from contextlib import asynccontextmanager
 
 class AsyncBrokerCore:
@@ -1056,7 +1056,7 @@ class AsyncBrokerCore:
         row = await cursor.fetchone()
         return row[0] if row else None
     
-    async def read_batch(self, queue: str, batch_size: int) -> List[str]:
+    async def read_batch(self, queue: str, batch_size: int) -> list[str]:
         """Read multiple messages in one transaction."""
         await self._ensure_connection()
         
@@ -1114,8 +1114,8 @@ class AsyncBrokerCore:
         row = await cursor.fetchone()
         return row[0] if row else 0
     
-    async def list_queues(self) -> List[Tuple[str, int]]:
-        """List all queues with message counts."""
+    async def list_queues(self) -> list[tuple[str, int]]:
+        """list all queues with message counts."""
         await self._ensure_connection()
         
         cursor = await self._conn.execute("""
@@ -1149,7 +1149,7 @@ class AsyncQueue:
     async def peek(self) -> Optional[str]:
         return await self._core.peek(self.name)
     
-    async def read_batch(self, size: int = 10) -> List[str]:
+    async def read_batch(self, size: int = 10) -> list[str]:
         return await self._core.read_batch(self.name, size)
     
     async def stream(self, batch_size: int = 10) -> AsyncIterator[str]:

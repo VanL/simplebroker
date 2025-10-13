@@ -21,8 +21,9 @@ import asyncio
 import concurrent.futures
 import functools
 import logging
+from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Optional, ParamSpec, TypeVar, cast
+from typing import Any, ParamSpec, TypeVar, cast
 
 # Use the public API - Queue and QueueWatcher
 from simplebroker import Queue, QueueWatcher
@@ -101,7 +102,7 @@ class AsyncBroker:
         q.write(message)
 
     @run_in_executor
-    def pop(self, queue: str) -> Optional[str]:
+    def pop(self, queue: str) -> str | None:
         """Pop a message from a queue (runs in thread pool)."""
         q = self._get_queue(queue)
         # read() removes and returns the oldest message
@@ -109,7 +110,7 @@ class AsyncBroker:
         return result if isinstance(result, str) else None
 
     @run_in_executor
-    def peek(self, queue: str) -> Optional[str]:
+    def peek(self, queue: str) -> str | None:
         """Peek at the next message without removing it."""
         q = self._get_queue(queue)
         # peek() returns the oldest message without removing it
@@ -178,7 +179,7 @@ class AsyncBroker:
         Async generator to stream messages from a queue.
 
         Yields:
-            Tuple of (message, timestamp) for each message
+            tuple of (message, timestamp) for each message
         """
 
         while True:

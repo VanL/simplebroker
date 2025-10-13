@@ -4,8 +4,6 @@ This module contains all SQL statements used by SimpleBroker's database operatio
 These templates can be imported by both sync and async implementations.
 """
 
-from typing import List
-
 # ============================================================================
 # TABLE CREATION
 # ============================================================================
@@ -171,7 +169,7 @@ WHERE id IN (
 # QUEUE OPERATIONS
 # ============================================================================
 
-# List queues with unclaimed message counts
+# list queues with unclaimed message counts
 LIST_QUEUES_UNCLAIMED = """
 SELECT queue, COUNT(*) as count
 FROM messages
@@ -285,7 +283,7 @@ DROP_OLD_INDEXES = [
 # ============================================================================
 
 
-def build_peek_query(where_conditions: List[str]) -> str:
+def build_peek_query(where_conditions: list[str]) -> str:
     """Build SELECT query for peek operations with dynamic WHERE clause."""
     where_clause = " AND ".join(where_conditions)
     return f"""
@@ -296,7 +294,7 @@ def build_peek_query(where_conditions: List[str]) -> str:
         """
 
 
-def build_claim_single_query(where_conditions: List[str]) -> str:
+def build_claim_single_query(where_conditions: list[str]) -> str:
     """Build UPDATE query for claiming single message."""
     where_clause = " AND ".join(where_conditions)
     return f"""
@@ -312,7 +310,7 @@ def build_claim_single_query(where_conditions: List[str]) -> str:
         """
 
 
-def build_claim_batch_query(where_conditions: List[str]) -> str:
+def build_claim_batch_query(where_conditions: list[str]) -> str:
     """Build UPDATE query for claiming batch of messages."""
     where_clause = " AND ".join(where_conditions)
     return f"""
@@ -328,7 +326,7 @@ def build_claim_batch_query(where_conditions: List[str]) -> str:
         """
 
 
-def build_move_by_id_query(where_conditions: List[str]) -> str:
+def build_move_by_id_query(where_conditions: list[str]) -> str:
     """Build UPDATE query for moving message by ID."""
     where_clause = " AND ".join(where_conditions)
     return f"""
@@ -342,13 +340,13 @@ def build_move_by_id_query(where_conditions: List[str]) -> str:
 
 def build_retrieve_query(
     operation: str,
-    where_conditions: List[str],
+    where_conditions: list[str],
 ) -> str:
     """Build safe retrieve query for peek, claim, or move operations.
 
     Args:
         operation: One of "peek", "claim", or "move"
-        where_conditions: List of SQL WHERE conditions (pre-validated)
+        where_conditions: list of SQL WHERE conditions (pre-validated)
 
     Returns:
         SQL query string with placeholders

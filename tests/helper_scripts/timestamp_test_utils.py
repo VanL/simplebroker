@@ -3,7 +3,7 @@ Utilities for testing timestamp-related functionality.
 """
 
 import time
-from typing import Callable, List, Optional, Tuple
+from collections.abc import Callable
 
 from simplebroker.db import BrokerDB
 
@@ -13,8 +13,8 @@ class TimeController:
 
     def __init__(self) -> None:
         self.original_time = time.time
-        self.fixed_time: Optional[float] = None
-        self.time_sequence: List[float] = []
+        self.fixed_time: float | None = None
+        self.time_sequence: list[float] = []
         self.call_count = 0
 
     def set_fixed_time(self, timestamp: float) -> None:
@@ -97,7 +97,7 @@ class ConflictSimulator:
     def __init__(self, db: BrokerDB):
         self.db = db
         self.original_generate = db.generate_timestamp
-        self.interceptor: Optional[Callable] = None
+        self.interceptor: Callable | None = None
 
     def simulate_race_condition(self) -> None:
         """Simulate a race condition in timestamp generation."""
@@ -133,7 +133,7 @@ class ConflictSimulator:
         self.db.generate_timestamp = self.original_generate  # type: ignore[method-assign]
 
 
-def verify_timestamp_monotonicity(db: BrokerDB, queue: str) -> List[int]:
+def verify_timestamp_monotonicity(db: BrokerDB, queue: str) -> list[int]:
     """Read all messages from queue and verify timestamps are monotonic."""
     timestamps = []
 
@@ -159,7 +159,7 @@ def verify_timestamp_monotonicity(db: BrokerDB, queue: str) -> List[int]:
     return timestamps
 
 
-def count_unique_timestamps(db: BrokerDB) -> Tuple[int, int]:
+def count_unique_timestamps(db: BrokerDB) -> tuple[int, int]:
     """Count total and unique timestamps in database."""
     with db._lock:
         result = list(db._runner.run("SELECT COUNT(*) FROM messages", fetch=True))

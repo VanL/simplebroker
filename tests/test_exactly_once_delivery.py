@@ -7,18 +7,17 @@ The delivery guarantee depends on the commit_interval parameter:
 
 import multiprocessing
 from pathlib import Path
-from typing import List, Tuple
 
 from simplebroker.sbqueue import Queue
 
 
 def read_messages_with_crash(
     db_path: str, queue: str, crash_after: int, batch_size: int = 100
-) -> Tuple[List[str], bool]:
+) -> tuple[list[str], bool]:
     """Read messages and simulate crash after N messages.
 
     Returns:
-        Tuple of (messages_read, did_crash)
+        tuple of (messages_read, did_crash)
     """
     messages = []
     crashed = False

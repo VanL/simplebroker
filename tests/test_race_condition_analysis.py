@@ -6,7 +6,6 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 import pytest
 
@@ -25,11 +24,11 @@ class SubprocessMonitor:
 
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self.steps_completed: List[str] = []
+        self.steps_completed: list[str] = []
         self.step_times: dict = {}
-        self.process: Optional[subprocess.Popen] = None
+        self.process: subprocess.Popen | None = None
 
-    def monitor_db_creation(self) -> Tuple[bool, float]:
+    def monitor_db_creation(self) -> tuple[bool, float]:
         """Monitor database file creation and initialization.
 
         Returns:

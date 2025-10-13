@@ -6,7 +6,6 @@ import subprocess
 import sys
 import threading
 import time
-from typing import List, Optional, Tuple
 
 import pytest
 
@@ -26,9 +25,9 @@ class MessageCollector:
     """Helper to collect messages from watchers."""
 
     def __init__(self):
-        self.messages: List[Tuple[str, int]] = []
+        self.messages: list[tuple[str, int]] = []
         self.lock = threading.Lock()
-        self.error: Optional[Exception] = None
+        self.error: Exception | None = None
 
     def handler(self, msg: str, ts: int) -> None:
         """Collect messages thread-safely."""
@@ -39,7 +38,7 @@ class MessageCollector:
         """Handler that always raises an error."""
         raise RuntimeError(f"Handler error for message: {msg}")
 
-    def get_messages(self) -> List[Tuple[str, int]]:
+    def get_messages(self) -> list[tuple[str, int]]:
         """Get collected messages thread-safely."""
         with self.lock:
             return self.messages.copy()

@@ -138,9 +138,9 @@ class MonitoredMultiQueueWatcher(MultiQueueWatcher):
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `queues` | `List[str]` | Required | List of queue names to monitor |
+| `queues` | `list[str]` | Required | list of queue names to monitor |
 | `default_handler` | `Callable` | `simple_print_handler` | Default message handler |
-| `queue_handlers` | `Dict[str, Callable]` | `None` | Queue-specific handlers |
+| `queue_handlers` | `dict[str, Callable]` | `None` | Queue-specific handlers |
 | `db` | `str/Path/BrokerDB` | `None` | Database path or instance |
 | `error_handler` | `Callable` | `default_error_handler` | Error handling function |
 | `polling_strategy` | `PollingStrategy` | `None` | Custom polling strategy |

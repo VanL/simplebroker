@@ -12,14 +12,13 @@ This tests the patterns that make sense for move operations:
 import concurrent.futures as cf
 import sqlite3
 from pathlib import Path
-from typing import List, Tuple, Union
 
 from simplebroker.db import BrokerDB
 
 
 def _concurrent_move_worker(
-    args: Tuple[int, str, str, str],
-) -> List[Union[str, Tuple[str, int]]]:
+    args: tuple[int, str, str, str],
+) -> list[str | tuple[str, int]]:
     """Worker function for concurrent move tests."""
     worker_id, db_path, source_queue, dest_queue = args
     moved = []

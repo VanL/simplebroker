@@ -2,7 +2,6 @@
 
 import threading
 import time
-from typing import List, Optional, Tuple
 
 import pytest
 
@@ -20,9 +19,9 @@ class MoveCollector:
     """Helper to collect moved messages and track events."""
 
     def __init__(self):
-        self.messages: List[Tuple[str, int]] = []
-        self.handler_calls: List[Tuple[str, int]] = []
-        self.errors: List[Tuple[Exception, str, int]] = []
+        self.messages: list[tuple[str, int]] = []
+        self.handler_calls: list[tuple[str, int]] = []
+        self.errors: list[tuple[Exception, str, int]] = []
         self.lock = threading.Lock()
 
     def handler(self, body: str, ts: int) -> None:
@@ -41,20 +40,18 @@ class MoveCollector:
         with self.lock:
             self.handler_calls.append((body, ts))
 
-    def capture_error_handler(
-        self, exc: Exception, body: str, ts: int
-    ) -> Optional[bool]:
+    def capture_error_handler(self, exc: Exception, body: str, ts: int) -> bool | None:
         """Capture errors for analysis."""
         with self.lock:
             self.errors.append((exc, body, ts))
         return None
 
-    def get_handler_calls(self) -> List[Tuple[str, int]]:
+    def get_handler_calls(self) -> list[tuple[str, int]]:
         """Get handler calls thread-safely."""
         with self.lock:
             return self.handler_calls.copy()
 
-    def get_errors(self) -> List[Tuple[Exception, str, int]]:
+    def get_errors(self) -> list[tuple[Exception, str, int]]:
         """Get captured errors thread-safely."""
         with self.lock:
             return self.errors.copy()
@@ -576,7 +573,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         def failing_handler(body: str, ts: int):
             raise RuntimeError("Handler explosion!")
 
-        def error_handler(exc: Exception, body: str, ts: int) -> Optional[bool]:
+        def error_handler(exc: Exception, body: str, ts: int) -> bool | None:
             nonlocal handler_error, error_message
             handler_error = exc
             error_message = body

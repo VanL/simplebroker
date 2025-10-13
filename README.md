@@ -116,7 +116,7 @@ $ broker peek myqueue
 $ broker move myqueue processed
 $ broker move errors retry --all
 
-# List all queues
+# list all queues
 $ broker list
 myqueue: 3
 processed: 1

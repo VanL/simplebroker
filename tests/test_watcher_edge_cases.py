@@ -340,12 +340,15 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 # Mock the config to enable logging just for this call
                 from simplebroker.watcher import _config
 
-                with patch(
-                    "simplebroker.watcher._config",
-                    {**_config, "BROKER_LOGGING_ENABLED": True},
-                ), patch(
-                    "simplebroker.sbqueue._config",
-                    {"BROKER_LOGGING_ENABLED": True},
+                with (
+                    patch(
+                        "simplebroker.watcher._config",
+                        {**_config, "BROKER_LOGGING_ENABLED": True},
+                    ),
+                    patch(
+                        "simplebroker.sbqueue._config",
+                        {"BROKER_LOGGING_ENABLED": True},
+                    ),
                 ):
                     # Should not raise when suppressed (as it is in real usage)
                     with contextlib.suppress(Exception):
@@ -404,10 +407,13 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 # Patch config to enable logging and capture the warning
                 from simplebroker.watcher import _config
 
-                with patch.dict(
-                    "simplebroker.watcher._config",
-                    {**_config, "BROKER_LOGGING_ENABLED": True},
-                ), patch("simplebroker.watcher.logger") as mock_logger:
+                with (
+                    patch.dict(
+                        "simplebroker.watcher._config",
+                        {**_config, "BROKER_LOGGING_ENABLED": True},
+                    ),
+                    patch("simplebroker.watcher.logger") as mock_logger,
+                ):
                     # Simulate context manager exit
                     try:
                         watcher.__exit__(None, None, None)

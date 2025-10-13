@@ -42,9 +42,10 @@ import sqlite3
 import threading
 import time
 import warnings
+from collections.abc import Callable
 from enum import Enum
 from pathlib import Path, PurePath
-from typing import Any, Callable, Dict, Optional, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 # Platform-specific imports for file locking
 try:
@@ -206,7 +207,7 @@ def _parse_bool(value: str) -> bool:
     return value.lower().strip() in ("1", "true", "yes", "on")
 
 
-def load_sqlite_config() -> Dict[str, Any]:
+def load_sqlite_config() -> dict[str, Any]:
     """Load SQLite configuration from environment variables with defaults."""
     return {
         "BUSY_TIMEOUT": int(
@@ -215,9 +216,9 @@ def load_sqlite_config() -> Dict[str, Any]:
         "CACHE_MB": int(
             os.environ.get("SQLITE_CACHE_MB", str(DEFAULT_CONFIG["CACHE_MB"]))
         ),
-        "SYNC_MODE": str(os.environ.get(
-            "SQLITE_SYNC_MODE", DEFAULT_CONFIG["SYNC_MODE"]
-        )).upper(),
+        "SYNC_MODE": str(
+            os.environ.get("SQLITE_SYNC_MODE", DEFAULT_CONFIG["SYNC_MODE"])
+        ).upper(),
         "WAL_AUTOCHECKPOINT": int(
             os.environ.get(
                 "SQLITE_WAL_AUTOCHECKPOINT", str(DEFAULT_CONFIG["WAL_AUTOCHECKPOINT"])
@@ -234,7 +235,7 @@ def load_sqlite_config() -> Dict[str, Any]:
 
 def interruptible_sleep(
     seconds: float,
-    stop_event: Optional[threading.Event] = None,
+    stop_event: threading.Event | None = None,
     chunk_size: float = 0.1,
 ) -> bool:
     """Sleep for specified duration, can be interrupted by stop event.
@@ -274,7 +275,7 @@ def execute_with_retry(
     *,
     max_retries: int = 10,
     retry_delay: float = 0.05,
-    stop_event: Optional[threading.Event] = None,
+    stop_event: threading.Event | None = None,
 ) -> T:
     """Execute database operation with retry logic for locked database errors.
 
@@ -421,7 +422,7 @@ def validate_safe_path_components(path: str, context: str = "path") -> None:
 
 
 def validate_database_path(
-    file_path: Path, check_magic: bool = False, magic_string: Optional[str] = None
+    file_path: Path, check_magic: bool = False, magic_string: str | None = None
 ) -> None:
     """Validate that a file is a valid SQLite database.
 
@@ -497,7 +498,7 @@ def validate_database_path(
 
 
 def is_valid_sqlite_database(
-    file_path: Path, check_magic: bool = False, magic_string: Optional[str] = None
+    file_path: Path, check_magic: bool = False, magic_string: str | None = None
 ) -> bool:
     """Check if file is a valid SQLite database.
 
@@ -543,7 +544,7 @@ class SQLiteConnectionManager:
 
     _instance_counter = itertools.count()
 
-    def __init__(self, db_path: str, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, db_path: str, config: dict[str, Any] | None = None):
         """Initialize connection manager.
 
         Args:
@@ -666,7 +667,7 @@ class SQLiteConnectionManager:
         finally:
             self._release_lock(lock_file, lock_path)
 
-    def _get_lock_path(self, phase: SetupPhase) -> Optional[Path]:
+    def _get_lock_path(self, phase: SetupPhase) -> Path | None:
         """Get lock file path for setup phase."""
         try:
             lock_path = Path(self._db_path).with_suffix(f".{phase.value}.lock")
@@ -883,7 +884,7 @@ class SQLiteConnectionManager:
 
 
 def create_optimized_connection(
-    db_path: str, config: Optional[Dict[str, Any]] = None
+    db_path: str, config: dict[str, Any] | None = None
 ) -> sqlite3.Connection:
     """Create a single optimized SQLite connection.
 

@@ -10,7 +10,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from queue import Empty, Queue
-from typing import IO, Dict, List, Optional, Tuple, Union
+from typing import IO
 
 logger = logging.getLogger(__name__)
 
@@ -103,14 +103,14 @@ class ManagedProcess:
             self._stderr_reader.start()
 
     @property
-    def stdout(self) -> Union[str, bytes]:
+    def stdout(self) -> str | bytes:
         """Get captured stdout."""
         if self._stdout_reader:
             return self._stdout_reader.get_output()
         return "" if self.text else b""
 
     @property
-    def stderr(self) -> Union[str, bytes]:
+    def stderr(self) -> str | bytes:
         """Get captured stderr."""
         if self._stderr_reader:
             return self._stderr_reader.get_output()
@@ -159,12 +159,12 @@ class ManagedProcess:
 
 @contextmanager
 def managed_subprocess(
-    cmd: Union[str, List[str]],
+    cmd: str | list[str],
     *,
     # Process configuration
-    cwd: Optional[Union[str, Path]] = None,
-    env: Optional[Dict[str, str]] = None,
-    stdin: Optional[Union[str, bytes]] = None,
+    cwd: str | Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin: str | bytes | None = None,
     # Timeout configuration
     timeout: float = 10.0,  # Total timeout for normal operation
     terminate_timeout: float = 2.0,  # Timeout for graceful termination
@@ -323,7 +323,7 @@ def managed_subprocess(
 
 
 # Convenience function for quick subprocess runs
-def run_subprocess(cmd: Union[str, List[str]], **kwargs) -> Tuple[int, str, str]:
+def run_subprocess(cmd: str | list[str], **kwargs) -> tuple[int, str, str]:
     """
     Run a subprocess and return (returncode, stdout, stderr).
 

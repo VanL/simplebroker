@@ -3,7 +3,7 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, NoReturn, Optional, Tuple
+from typing import Any, NoReturn
 
 from . import __version__ as VERSION
 from . import commands
@@ -81,7 +81,7 @@ def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def create_parser(*, config: Dict[str, Any] = _config) -> argparse.ArgumentParser:
+def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParser:
     """Create the main parser with global options and subcommands.
 
     Returns:
@@ -108,7 +108,7 @@ def create_parser(*, config: Dict[str, Any] = _config) -> argparse.ArgumentParse
             parser: argparse.ArgumentParser,
             namespace: argparse.Namespace,
             values: Any,
-            option_string: Optional[str] = None,
+            option_string: str | None = None,
         ) -> None:
             setattr(namespace, self.dest, Path(values))
             namespace._dir_explicitly_provided = True
@@ -153,7 +153,7 @@ def create_parser(*, config: Dict[str, Any] = _config) -> argparse.ArgumentParse
     peek_parser = subparsers.add_parser("peek", help="read without removing")
     add_read_peek_args(peek_parser)
 
-    # List command
+    # list command
     list_parser = subparsers.add_parser("list", help="list all queues")
     list_parser.add_argument(
         "--stats",
@@ -273,17 +273,17 @@ def create_parser(*, config: Dict[str, Any] = _config) -> argparse.ArgumentParse
     return parser
 
 
-def rearrange_args(argv: List[str]) -> List[str]:
+def rearrange_args(argv: list[str]) -> list[str]:
     """Rearrange arguments to put global options before subcommand.
 
     This allows global options to appear anywhere on the command line,
     including after the subcommand.
 
     Args:
-        argv: List of command line arguments (without program name)
+        argv: list of command line arguments (without program name)
 
     Returns:
-        List of rearranged arguments
+        list of rearranged arguments
 
     Raises:
         ArgumentParserError: If a global option that requires a value is missing its value
@@ -328,12 +328,12 @@ class ArgumentProcessor:
             "init",
         }
 
-        self.global_args: List[str] = []
-        self.command_args: List[str] = []
+        self.global_args: list[str] = []
+        self.command_args: list[str] = []
         self.found_command = False
-        self.expecting_value_for: Optional[str] = None
+        self.expecting_value_for: str | None = None
 
-    def process(self, argv: List[str]) -> List[str]:
+    def process(self, argv: list[str]) -> list[str]:
         """Process and rearrange arguments."""
         i = 0
         while i < len(argv):
@@ -401,8 +401,8 @@ class ArgumentProcessor:
 
 
 def _resolve_database_path(
-    args: argparse.Namespace, *, config: Dict[str, Any] = _config
-) -> Tuple[Path, bool]:
+    args: argparse.Namespace, *, config: dict[str, Any] = _config
+) -> tuple[Path, bool]:
     """Resolve final database path using precedence rules and project scoping.
 
     Args:
@@ -410,7 +410,7 @@ def _resolve_database_path(
         config: Configuration dictionary
 
     Returns:
-        Tuple of (resolved_db_path, used_project_scope)
+        tuple of (resolved_db_path, used_project_scope)
         where used_project_scope indicates if path came from upward search
 
     Precedence Order:
@@ -472,7 +472,7 @@ def _resolve_database_path(
     return working_dir / db_filename, False
 
 
-def main(*, config: Dict[str, Any] = _config) -> int:
+def main(*, config: dict[str, Any] = _config) -> int:
     """Main CLI entry point.
 
     Returns:

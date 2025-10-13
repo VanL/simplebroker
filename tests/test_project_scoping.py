@@ -563,7 +563,7 @@ def temp_db_cleanup():
     closed before the temporary directory is cleaned up.
 
     Returns:
-        Tuple of (tmp_path, cleanup_function)
+        tuple of (tmp_path, cleanup_function)
     """
     tmpdir = tempfile.mkdtemp()
     tmp_path = Path(tmpdir)

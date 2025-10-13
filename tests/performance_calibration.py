@@ -8,7 +8,6 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, Tuple
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -79,11 +78,11 @@ def measure_claim_performance() -> float:
         return time.perf_counter() - start
 
 
-def calibrate_machine_performance() -> Tuple[float, Dict[str, float]]:
+def calibrate_machine_performance() -> tuple[float, dict[str, float]]:
     """Calibrate current machine performance relative to baseline.
 
     Returns:
-        Tuple of (performance_ratio, individual_measurements)
+        tuple of (performance_ratio, individual_measurements)
         where performance_ratio is the scaling factor (1.0 = same as baseline,
         0.5 = half as fast, 2.0 = twice as fast)
     """

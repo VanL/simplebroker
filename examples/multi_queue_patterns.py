@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Add current directory to path for local imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -322,7 +322,7 @@ def pattern_5_monitoring() -> None:
         class MonitoredMultiQueueWatcher(MultiQueueWatcher):
             def __init__(self, *args: Any, **kwargs: Any) -> None:
                 super().__init__(*args, **kwargs)
-                self.metrics: Dict[str, Any] = {
+                self.metrics: dict[str, Any] = {
                     "total_processed": 0,
                     "queue_stats": {
                         queue: {"processed": 0, "errors": 0}
@@ -330,10 +330,10 @@ def pattern_5_monitoring() -> None:
                     },
                     "start_time": time.time(),
                 }
-                self.current_queue: Optional[str] = None
+                self.current_queue: str | None = None
 
             def _dispatch(
-                self, message: str, timestamp: int, *, config: Dict[str, Any] = _config
+                self, message: str, timestamp: int, *, config: dict[str, Any] = _config
             ) -> None:
                 """Override to collect metrics."""
                 start_time = time.time()

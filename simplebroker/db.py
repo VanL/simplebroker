@@ -8,18 +8,13 @@ import threading
 import time
 import warnings
 import weakref
+from collections.abc import Iterator
 from functools import lru_cache
 from pathlib import Path
 from typing import (
     Any,
-    Dict,
-    Iterator,
-    List,
     Literal,
-    Optional,
-    Tuple,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -130,7 +125,7 @@ QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
 
 # Cache for queue name validation
 @lru_cache(maxsize=1024)
-def _validate_queue_name_cached(queue: str) -> Optional[str]:
+def _validate_queue_name_cached(queue: str) -> str | None:
     """Validate queue name and return error message or None if valid.
 
     This is a module-level function to enable LRU caching.
@@ -186,7 +181,7 @@ class DBConnection:
     resources are released.
     """
 
-    def __init__(self, db_path: str, runner: Optional[SQLRunner] = None):
+    def __init__(self, db_path: str, runner: SQLRunner | None = None):
         """Initialize the connection manager.
 
         Args:
@@ -208,7 +203,7 @@ class DBConnection:
         if self._runner:
             self._core = BrokerCore(self._runner)
 
-    def get_connection(self, *, config: Dict[str, Any] = _config) -> "BrokerDB":
+    def get_connection(self, *, config: dict[str, Any] = _config) -> "BrokerDB":
         """Get a robust database connection with retry logic.
 
         Returns thread-local connection that is cached and reused.
@@ -273,7 +268,7 @@ class DBConnection:
             self._core = BrokerCore(self._runner)
         return self._core
 
-    def cleanup(self, *, config: Dict[str, Any] = _config) -> None:
+    def cleanup(self, *, config: dict[str, Any] = _config) -> None:
         """Clean up all connections and resources.
 
         Closes thread-local connections and releases resources.
@@ -350,7 +345,7 @@ class BrokerCore:
     its own BrokerCore instance.
     """
 
-    def __init__(self, runner: SQLRunner, *, config: Dict[str, Any] = _config):
+    def __init__(self, runner: SQLRunner, *, config: dict[str, Any] = _config):
         """Initialize with a SQL runner.
 
         Args:
@@ -575,14 +570,14 @@ class BrokerCore:
         # We don't need to hold self._lock here
         return self._timestamp_gen.generate()
 
-    def _decode_hybrid_timestamp(self, ts: int) -> Tuple[int, int]:
+    def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
 
         Args:
             ts: 64-bit hybrid timestamp
 
         Returns:
-            Tuple of (physical_us, logical_counter)
+            tuple of (physical_us, logical_counter)
         """
         # Extract physical time (upper 52 bits) and logical counter (lower 12 bits)
         physical_us = ts >> 12
@@ -678,7 +673,7 @@ class BrokerCore:
         raise AssertionError("Unreachable code in write retry loop")
 
     def _log_ts_conflict(
-        self, conflict_type: str, attempt: int, *, config: Dict[str, Any] = _config
+        self, conflict_type: str, attempt: int, *, config: dict[str, Any] = _config
     ) -> None:
         """Log timestamp conflict information for diagnostics.
 
@@ -712,7 +707,7 @@ class BrokerCore:
             )
 
     def _do_write_with_ts_retry(
-        self, queue: str, message: str, *, config: Dict[str, Any] = _config
+        self, queue: str, message: str, *, config: dict[str, Any] = _config
     ) -> None:
         """Execute write within retry context. Separates retry logic from transaction logic."""
         # Generate timestamp outside transaction for better concurrency
@@ -750,10 +745,10 @@ class BrokerCore:
     def _build_where_clause(
         self,
         queue: str,
-        exact_timestamp: Optional[int] = None,
-        since_timestamp: Optional[int] = None,
+        exact_timestamp: int | None = None,
+        since_timestamp: int | None = None,
         require_unclaimed: bool = True,
-    ) -> Tuple[List[str], List[Any]]:
+    ) -> tuple[list[str], list[Any]]:
         """Build WHERE clause and parameters for message queries.
 
         Args:
@@ -763,7 +758,7 @@ class BrokerCore:
             require_unclaimed: If True (default), only consider unclaimed messages
 
         Returns:
-            Tuple of (where_conditions list, params list)
+            tuple of (where_conditions list, params list)
         """
         if exact_timestamp is not None:
             # Optimize for unique index on ts column
@@ -787,11 +782,11 @@ class BrokerCore:
     def _execute_peek_operation(
         self,
         query: str,
-        params: List[Any],
+        params: list[Any],
         limit: int,
         offset: int = 0,
-        target_queue: Optional[str] = None,
-    ) -> List[Tuple[str, int]]:
+        target_queue: str | None = None,
+    ) -> list[tuple[str, int]]:
         """Execute a peek operation without transaction.
 
         Args:
@@ -802,7 +797,7 @@ class BrokerCore:
             target_queue: Target queue for move operations
 
         Returns:
-            List of (message_body, timestamp) tuples
+            list of (message_body, timestamp) tuples
         """
         with self._lock:
             if target_queue:
@@ -817,11 +812,11 @@ class BrokerCore:
     def _execute_transactional_operation(
         self,
         query: str,
-        params: List[Any],
+        params: list[Any],
         limit: int,
-        target_queue: Optional[str],
+        target_queue: str | None,
         commit_before_yield: bool,
-    ) -> List[Tuple[str, int]]:
+    ) -> list[tuple[str, int]]:
         """Execute a claim or move operation with transaction.
 
         Args:
@@ -832,7 +827,7 @@ class BrokerCore:
             commit_before_yield: If True, commit before returning (exactly-once)
 
         Returns:
-            List of (message_body, timestamp) tuples
+            list of (message_body, timestamp) tuples
         """
         with self._lock:
             try:
@@ -879,14 +874,14 @@ class BrokerCore:
         queue: str,
         operation: Literal["peek", "claim", "move"],
         *,
-        target_queue: Optional[str] = None,
+        target_queue: str | None = None,
         limit: int = 1,
         offset: int = 0,
-        exact_timestamp: Optional[int] = None,
-        since_timestamp: Optional[int] = None,
+        exact_timestamp: int | None = None,
+        since_timestamp: int | None = None,
         commit_before_yield: bool = True,
         require_unclaimed: bool = True,
-    ) -> List[Tuple[str, int]]:
+    ) -> list[tuple[str, int]]:
         """Unified retrieval with operation-specific behavior.
 
         Core principle: What's returned is what's committed (for claim/move).
@@ -902,7 +897,7 @@ class BrokerCore:
             require_unclaimed: If True (default), only consider unclaimed messages
 
         Returns:
-            List of (message_body, timestamp) tuples
+            list of (message_body, timestamp) tuples
 
         Raises:
             ValueError: If queue name is invalid or move lacks target_queue
@@ -941,9 +936,9 @@ class BrokerCore:
         self,
         queue: str,
         *,
-        exact_timestamp: Optional[int] = None,
+        exact_timestamp: int | None = None,
         with_timestamps: bool = True,
-    ) -> Optional[Union[Tuple[str, int], str]]:
+    ) -> tuple[str, int] | str | None:
         """Claim and return exactly one message from a queue.
 
         Uses exactly-once delivery semantics: message is committed before return.
@@ -983,8 +978,8 @@ class BrokerCore:
         *,
         with_timestamps: bool = True,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: Optional[int] = None,
-    ) -> Union[List[Tuple[str, int]], List[str]]:
+        since_timestamp: int | None = None,
+    ) -> list[tuple[str, int]] | list[str]:
         """Claim and return multiple messages from a queue.
 
         Args:
@@ -997,7 +992,7 @@ class BrokerCore:
             since_timestamp: If provided, only claim messages after this timestamp
 
         Returns:
-            List of (message_body, timestamp) tuples if with_timestamps=True,
+            list of (message_body, timestamp) tuples if with_timestamps=True,
             or list of message bodies if with_timestamps=False
 
         Raises:
@@ -1028,11 +1023,11 @@ class BrokerCore:
         *,
         with_timestamps: bool = True,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        batch_size: Optional[int] = None,
-        since_timestamp: Optional[int] = None,
-        exact_timestamp: Optional[int] = None,
-        config: Dict[str, Any] = _config,
-    ) -> Iterator[Union[Tuple[str, int], str]]:
+        batch_size: int | None = None,
+        since_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+        config: dict[str, Any] = _config,
+    ) -> Iterator[tuple[str, int] | str]:
         """Generator that claims messages from a queue.
 
         Args:
@@ -1099,9 +1094,9 @@ class BrokerCore:
         self,
         queue: str,
         *,
-        exact_timestamp: Optional[int] = None,
+        exact_timestamp: int | None = None,
         with_timestamps: bool = True,
-    ) -> Optional[Union[Tuple[str, int], str]]:
+    ) -> tuple[str, int] | str | None:
         """Peek at exactly one message from a queue without claiming it.
 
         Non-destructive read operation.
@@ -1136,8 +1131,8 @@ class BrokerCore:
         limit: int = PEEK_BATCH_SIZE,
         *,
         with_timestamps: bool = True,
-        since_timestamp: Optional[int] = None,
-    ) -> Union[List[Tuple[str, int]], List[str]]:
+        since_timestamp: int | None = None,
+    ) -> list[tuple[str, int]] | list[str]:
         """Peek at multiple messages from a queue without claiming them.
 
         Non-destructive batch read operation.
@@ -1149,7 +1144,7 @@ class BrokerCore:
             since_timestamp: If provided, only peek at messages after this timestamp
 
         Returns:
-            List of (message_body, timestamp) tuples if with_timestamps=True,
+            list of (message_body, timestamp) tuples if with_timestamps=True,
             or list of message bodies if with_timestamps=False
 
         Raises:
@@ -1173,10 +1168,10 @@ class BrokerCore:
         queue: str,
         *,
         with_timestamps: bool = True,
-        batch_size: Optional[int] = None,
-        since_timestamp: Optional[int] = None,
-        exact_timestamp: Optional[int] = None,
-    ) -> Iterator[Union[Tuple[str, int], str]]:
+        batch_size: int | None = None,
+        since_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+    ) -> Iterator[tuple[str, int] | str]:
         """Generator that peeks at messages in a queue without claiming them.
 
         Args:
@@ -1230,10 +1225,10 @@ class BrokerCore:
         source_queue: str,
         target_queue: str,
         *,
-        exact_timestamp: Optional[int] = None,
+        exact_timestamp: int | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = True,
-    ) -> Optional[Union[Tuple[str, int], str]]:
+    ) -> tuple[str, int] | str | None:
         """Move exactly one message from source queue to target queue.
 
         Atomic operation with exactly-once semantics.
@@ -1282,9 +1277,9 @@ class BrokerCore:
         *,
         with_timestamps: bool = True,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: Optional[int] = None,
+        since_timestamp: int | None = None,
         require_unclaimed: bool = True,
-    ) -> Union[List[Tuple[str, int]], List[str]]:
+    ) -> list[tuple[str, int]] | list[str]:
         """Move multiple messages from source queue to target queue.
 
         Atomic batch move operation with configurable delivery semantics.
@@ -1301,7 +1296,7 @@ class BrokerCore:
             require_unclaimed: If True (default), only move unclaimed messages
 
         Returns:
-            List of (message_body, timestamp) tuples if with_timestamps=True,
+            list of (message_body, timestamp) tuples if with_timestamps=True,
             or list of message bodies if with_timestamps=False
 
         Raises:
@@ -1337,11 +1332,11 @@ class BrokerCore:
         *,
         with_timestamps: bool = True,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        batch_size: Optional[int] = None,
-        since_timestamp: Optional[int] = None,
-        exact_timestamp: Optional[int] = None,
-        config: Dict[str, Any] = _config,
-    ) -> Iterator[Union[Tuple[str, int], str]]:
+        batch_size: int | None = None,
+        since_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+        config: dict[str, Any] = _config,
+    ) -> Iterator[tuple[str, int] | str]:
         """Generator that moves messages from source queue to target queue.
 
         Args:
@@ -1466,11 +1461,11 @@ class BrokerCore:
                     f"Failed to resynchronize timestamp generator: {e}"
                 ) from e
 
-    def get_conflict_metrics(self) -> Dict[str, int]:
+    def get_conflict_metrics(self) -> dict[str, int]:
         """Get metrics about timestamp conflicts for monitoring.
 
         Returns:
-            Dictionary with conflict_count and resync_count
+            dictionary with conflict_count and resync_count
         """
         return {
             "ts_conflict_count": getattr(self, "_ts_conflict_count", 0),
@@ -1482,43 +1477,43 @@ class BrokerCore:
         self._ts_conflict_count = 0
         self._ts_resync_count = 0
 
-    def list_queues(self) -> List[Tuple[str, int]]:
-        """List all queues with their unclaimed message counts.
+    def list_queues(self) -> list[tuple[str, int]]:
+        """list all queues with their unclaimed message counts.
 
         Returns:
-            List of (queue_name, unclaimed_message_count) tuples, sorted by name
+            list of (queue_name, unclaimed_message_count) tuples, sorted by name
 
         Raises:
             RuntimeError: If called from a forked process
         """
         self._check_fork_safety()
 
-        def _do_list() -> List[Tuple[str, int]]:
+        def _do_list() -> list[tuple[str, int]]:
             with self._lock:
                 return list(self._runner.run(SQL_SELECT_QUEUES_UNCLAIMED, fetch=True))
 
         # Execute with retry logic
         return _execute_with_retry(_do_list)
 
-    def get_queue_stats(self) -> List[Tuple[str, int, int]]:
+    def get_queue_stats(self) -> list[tuple[str, int, int]]:
         """Get all queues with both unclaimed and total message counts.
 
         Returns:
-            List of (queue_name, unclaimed_count, total_count) tuples, sorted by name
+            list of (queue_name, unclaimed_count, total_count) tuples, sorted by name
 
         Raises:
             RuntimeError: If called from a forked process
         """
         self._check_fork_safety()
 
-        def _do_stats() -> List[Tuple[str, int, int]]:
+        def _do_stats() -> list[tuple[str, int, int]]:
             with self._lock:
                 return list(self._runner.run(SQL_SELECT_QUEUES_STATS, fetch=True))
 
         # Execute with retry logic
         return _execute_with_retry(_do_stats)
 
-    def delete(self, queue: Optional[str] = None) -> None:
+    def delete(self, queue: str | None = None) -> None:
         """Delete messages from queue(s).
 
         Args:
@@ -1590,7 +1585,7 @@ class BrokerCore:
         # Execute with retry logic
         _execute_with_retry(_do_broadcast)
 
-    def _should_vacuum(self, *, config: Dict[str, Any] = _config) -> bool:
+    def _should_vacuum(self, *, config: dict[str, Any] = _config) -> bool:
         """Check if vacuum needed (fast approximation)."""
         with self._lock:
             # Use a single table scan with conditional aggregation for better performance
@@ -1610,7 +1605,7 @@ class BrokerCore:
                 or (claimed_count > 10000)
             )
 
-    def _vacuum_claimed_messages(self, *, config: Dict[str, Any] = _config) -> None:
+    def _vacuum_claimed_messages(self, *, config: dict[str, Any] = _config) -> None:
         """Delete claimed messages in batches."""
         # Skip vacuum if no db_path available (extensible runners)
         if not hasattr(self, "db_path"):
@@ -1699,7 +1694,7 @@ class BrokerCore:
         return _execute_with_retry(_do_check)
 
     def has_pending_messages(
-        self, queue: str, since_timestamp: Optional[int] = None
+        self, queue: str, since_timestamp: int | None = None
     ) -> bool:
         """Check if there are any unclaimed messages in the specified queue.
 
@@ -1721,7 +1716,7 @@ class BrokerCore:
         def _do_check() -> bool:
             """Inner function to execute the check with retry logic."""
             with self._lock:
-                params: Tuple[Any, ...]
+                params: tuple[Any, ...]
                 if since_timestamp is not None:
                     # Check for unclaimed messages after the specified timestamp
                     query = SQL_CHECK_PENDING_MESSAGES_SINCE
@@ -1737,7 +1732,7 @@ class BrokerCore:
         # Execute with retry logic
         return _execute_with_retry(_do_check)
 
-    def get_data_version(self) -> Optional[int]:
+    def get_data_version(self) -> int | None:
         """Get the data version from SQLite PRAGMA.
 
         Returns:
@@ -1757,7 +1752,7 @@ class BrokerCore:
                 # Return None for non-SQLite backends or any errors
                 return None
 
-    def _do_vacuum_without_lock(self, *, config: Dict[str, Any] = _config) -> None:
+    def _do_vacuum_without_lock(self, *, config: dict[str, Any] = _config) -> None:
         """Perform the actual vacuum operation without file locking."""
         batch_size = config["BROKER_VACUUM_BATCH_SIZE"]
 

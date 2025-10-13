@@ -5,7 +5,6 @@ import logging
 import threading
 import time
 import weakref
-from typing import Set
 
 import pytest
 
@@ -16,7 +15,7 @@ class WatcherTracker:
     """Track all watcher instances created during tests."""
 
     def __init__(self):
-        self._watchers: Set[weakref.ref] = set()
+        self._watchers: set[weakref.ref] = set()
         self._lock = threading.Lock()
 
     def register(self, watcher):

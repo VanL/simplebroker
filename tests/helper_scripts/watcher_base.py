@@ -2,9 +2,9 @@
 
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Union
 
 import pytest
 
@@ -22,7 +22,7 @@ class WatcherTestBase:
 
     def run_watcher_with_timeout(
         self,
-        watcher: Union[QueueWatcher, QueueMoveWatcher],
+        watcher: QueueWatcher | QueueMoveWatcher,
         timeout: float = DEFAULT_TIMEOUT,
     ) -> threading.Thread:
         """Run watcher with guaranteed timeout.
@@ -57,7 +57,7 @@ class WatcherTestBase:
     @contextmanager
     def create_test_watcher(
         self,
-        broker: Union[BrokerDB, str, Path],
+        broker: BrokerDB | str | Path,
         queue: str,
         handler: Callable[[str, int], None],
         **kwargs,
@@ -95,7 +95,7 @@ class WatcherTestBase:
     @contextmanager
     def create_test_move_watcher(
         self,
-        broker: Union[BrokerDB, str, Path],
+        broker: BrokerDB | str | Path,
         source_queue: str,
         dest_queue: str,
         handler: Callable[[str, int], None],
@@ -134,7 +134,7 @@ class WatcherTestBase:
 
     def run_watcher_until_messages(
         self,
-        watcher: Union[QueueWatcher, QueueMoveWatcher],
+        watcher: QueueWatcher | QueueMoveWatcher,
         collector,  # MessageCollector instance
         expected_count: int,
         timeout: float = 5.0,
@@ -167,7 +167,7 @@ class WatcherTestBase:
         return thread
 
     def assert_watcher_stops_quickly(
-        self, watcher: Union[QueueWatcher, QueueMoveWatcher], max_stop_time: float = 0.5
+        self, watcher: QueueWatcher | QueueMoveWatcher, max_stop_time: float = 0.5
     ):
         """Assert that watcher stops within expected time.
 

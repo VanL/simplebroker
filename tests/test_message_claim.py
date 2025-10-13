@@ -15,7 +15,6 @@ Tests cover:
 import concurrent.futures as cf
 import sqlite3
 from pathlib import Path
-from typing import List, Tuple
 
 from simplebroker.db import BrokerDB
 
@@ -163,7 +162,7 @@ def test_automatic_vacuum_trigger(workdir: Path):
     conn.close()
 
 
-def _concurrent_reader_worker(args: Tuple[int, str, str]) -> List[str]:
+def _concurrent_reader_worker(args: tuple[int, str, str]) -> list[str]:
     """Worker function for concurrent read tests."""
     worker_id, db_path, queue_name = args
     messages = []
@@ -317,7 +316,7 @@ def test_backward_compatibility_cli(workdir: Path):
     rc, _, _ = run_cli("read", "compat_queue", cwd=workdir)
     assert rc == 2  # EXIT_QUEUE_EMPTY
 
-    # List queues should still work with --stats flag to show claimed messages
+    # list queues should still work with --stats flag to show claimed messages
     rc, out, _ = run_cli("list", "--stats", cwd=workdir)
     assert rc == 0
     assert "compat_queue" in out
@@ -541,7 +540,7 @@ def test_manual_vacuum_cli_command(workdir: Path):
     rc, _, _ = run_cli("read", "vacuum_test", cwd=workdir)
     assert rc == 2  # EXIT_QUEUE_EMPTY
 
-    # List should show no messages in queue
+    # list should show no messages in queue
     rc, out, _ = run_cli("list", cwd=workdir)
     assert rc == 0
     # Queue might not appear if all messages were vacuumed

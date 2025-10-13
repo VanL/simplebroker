@@ -4,8 +4,9 @@ import os
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path, PurePath
-from typing import Callable, List, Optional, Tuple, TypeVar, Union
+from typing import TypeVar
 
 from ._constants import (
     MAX_PROJECT_TRAVERSAL_DEPTH,
@@ -19,7 +20,7 @@ T = TypeVar("T")
 
 def interruptible_sleep(
     seconds: float,
-    stop_event: Optional[threading.Event] = None,
+    stop_event: threading.Event | None = None,
     chunk_size: float = 0.1,
 ) -> bool:
     """Sleep for the specified duration, but can be interrupted by a stop event.
@@ -75,7 +76,7 @@ def _execute_with_retry(
     *,
     max_retries: int = 10,
     retry_delay: float = 0.05,
-    stop_event: Optional[threading.Event] = None,
+    stop_event: threading.Event | None = None,
 ) -> T:
     """Execute a database operation with retry logic for locked database errors.
 
@@ -136,9 +137,7 @@ def _is_filesystem_root(path: Path) -> bool:
     return p.parent == p
 
 
-def is_ancestor(
-    possible_ancestor: Union[str, Path], possible_descendant: Union[str, Path]
-) -> bool:
+def is_ancestor(possible_ancestor: str | Path, possible_descendant: str | Path) -> bool:
     """Check if possible_ancestor is an ancestor of possible_descendant."""
     path_ancestor = Path(possible_ancestor).resolve()
     path_descendant = Path(possible_descendant).resolve()
@@ -250,7 +249,7 @@ def _find_project_database(
     search_filename: str,
     starting_dir: Path,
     max_depth: int = MAX_PROJECT_TRAVERSAL_DEPTH,
-) -> Optional[Path]:
+) -> Path | None:
     """Search upward through directory hierarchy for SimpleBroker project database.
 
     Args:
@@ -328,7 +327,7 @@ def _validate_working_directory(working_dir: Path) -> None:
             raise ValueError(f"Not a directory: {working_dir}")
 
 
-def _is_compound_db_name(db_name: str) -> Tuple[bool, List[str]]:
+def _is_compound_db_name(db_name: str) -> tuple[bool, list[str]]:
     """Detect if database name contains path components and split them.
 
     Only supports a single directory level (e.g., "some/name.db").
@@ -338,9 +337,9 @@ def _is_compound_db_name(db_name: str) -> Tuple[bool, List[str]]:
         db_name: Database name from BROKER_DEFAULT_DB_NAME
 
     Returns:
-        Tuple of (is_compound, path_components)
+        tuple of (is_compound, path_components)
         - is_compound: True if db_name contains exactly one directory separator
-        - path_components: List of path parts (empty if not compound)
+        - path_components: list of path parts (empty if not compound)
 
     Examples:
         _is_compound_db_name("broker.db") -> (False, [])

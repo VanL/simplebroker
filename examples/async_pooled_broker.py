@@ -28,8 +28,9 @@ import os
 import threading
 import time
 import warnings
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Protocol
 
 try:
     import aiosqlite
@@ -99,7 +100,7 @@ from simplebroker.db import (
 )
 
 
-def _validate_queue_name(queue: str) -> Optional[str]:
+def _validate_queue_name(queue: str) -> str | None:
     """Validate queue name and return error message or None if valid."""
     if not queue:
         return "Queue name cannot be empty"
@@ -116,10 +117,10 @@ class AsyncSQLRunner(Protocol):
     async def run(
         self,
         sql: str,
-        params: Tuple[Any, ...] = (),
+        params: tuple[Any, ...] = (),
         *,
         fetch: bool = False,
-    ) -> List[Tuple[Any, ...]]:
+    ) -> list[tuple[Any, ...]]:
         """Execute SQL and optionally return rows."""
         ...
 
@@ -147,7 +148,7 @@ class PooledAsyncSQLiteRunner:
         self.db_path = db_path
         self.pool_size = pool_size
         self.max_connections = max_connections
-        self._pool: Optional[ConnectionPool] = None
+        self._pool: ConnectionPool | None = None
         self._local = threading.local()  # Thread local storage
 
     async def _ensure_pool(self) -> ConnectionPool:
@@ -208,8 +209,8 @@ class PooledAsyncSQLiteRunner:
         await conn.execute("PRAGMA wal_autocheckpoint=1000")
 
     async def run(
-        self, sql: str, params: Tuple[Any, ...] = (), *, fetch: bool = False
-    ) -> List[Tuple[Any, ...]]:
+        self, sql: str, params: tuple[Any, ...] = (), *, fetch: bool = False
+    ) -> list[tuple[Any, ...]]:
         """Execute SQL and optionally return rows."""
         pool = await self._ensure_pool()
 
@@ -389,7 +390,7 @@ class AsyncBrokerCore:
     def __init__(self, runner: AsyncSQLRunner):
         self._runner = runner
         self._lock = asyncio.Lock()
-        self._timestamp_gen: Optional[AsyncTimestampGenerator] = None
+        self._timestamp_gen: AsyncTimestampGenerator | None = None
         self._write_count = 0
         self._vacuum_interval = int(
             os.environ.get("BROKER_AUTO_VACUUM_INTERVAL", "100")
@@ -623,8 +624,8 @@ class AsyncBrokerCore:
         queue: str,
         peek: bool = False,
         all_messages: bool = False,
-        exact_timestamp: Optional[int] = None,
-    ) -> List[str]:
+        exact_timestamp: int | None = None,
+    ) -> list[str]:
         """Read message(s) from a queue."""
         messages = []
         async for message in self.stream_read(
@@ -638,16 +639,16 @@ class AsyncBrokerCore:
         queue: str,
         peek: bool = False,
         all_messages: bool = False,
-        exact_timestamp: Optional[int] = None,
+        exact_timestamp: int | None = None,
         commit_interval: int = 1,
-        since_timestamp: Optional[int] = None,
+        since_timestamp: int | None = None,
     ) -> AsyncIterator[str]:
         """Stream messages from a queue."""
         await self._ensure_initialized()
         self._validate_queue_name(queue)
 
         # Build WHERE clause
-        params: List[Any]
+        params: list[Any]
         if exact_timestamp is not None:
             where_conditions = ["ts = ?", "queue = ?", "claimed = 0"]
             params = [exact_timestamp, queue]
@@ -755,11 +756,11 @@ class AsyncBrokerCore:
                         await self._runner.rollback()
                         raise
 
-    async def list_queues(self) -> List[Tuple[str, int]]:
-        """List all queues with their unclaimed message counts."""
+    async def list_queues(self) -> list[tuple[str, int]]:
+        """list all queues with their unclaimed message counts."""
         await self._ensure_initialized()
 
-        async def _do_list() -> List[Tuple[Any, ...]]:
+        async def _do_list() -> list[tuple[Any, ...]]:
             async with self._lock:
                 result = await self._runner.run(SQL_SELECT_QUEUES_UNCLAIMED, fetch=True)
                 return list(result)
@@ -767,11 +768,11 @@ class AsyncBrokerCore:
         rows = await self._execute_with_retry(_do_list)
         return [(str(row[0]), int(row[1])) for row in rows]
 
-    async def get_queue_stats(self) -> List[Tuple[str, int, int]]:
+    async def get_queue_stats(self) -> list[tuple[str, int, int]]:
         """Get all queues with both unclaimed and total message counts."""
         await self._ensure_initialized()
 
-        async def _do_stats() -> List[Tuple[Any, ...]]:
+        async def _do_stats() -> list[tuple[Any, ...]]:
             async with self._lock:
                 result = await self._runner.run(SQL_SELECT_QUEUES_STATS, fetch=True)
                 return list(result)
@@ -779,7 +780,7 @@ class AsyncBrokerCore:
         rows = await self._execute_with_retry(_do_stats)
         return [(str(row[0]), int(row[1]), int(row[2])) for row in rows]
 
-    async def delete(self, queue: Optional[str] = None) -> None:
+    async def delete(self, queue: str | None = None) -> None:
         """Delete messages from queue(s)."""
         await self._ensure_initialized()
         if queue is not None:
@@ -831,15 +832,15 @@ class AsyncBrokerCore:
         source_queue: str,
         dest_queue: str,
         *,
-        message_id: Optional[int] = None,
+        message_id: int | None = None,
         require_unclaimed: bool = True,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Move message(s) from one queue to another."""
         await self._ensure_initialized()
         self._validate_queue_name(source_queue)
         self._validate_queue_name(dest_queue)
 
-        async def _do_move() -> Optional[Dict[str, Any]]:
+        async def _do_move() -> dict[str, Any] | None:
             async with self._lock:
                 await self._execute_with_retry(self._runner.begin_immediate)
 
@@ -979,14 +980,14 @@ class AsyncQueue:
         *,
         peek: bool = False,
         all_messages: bool = False,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Read a single message from this queue."""
         messages = await self._broker.read(
             self.name, peek=peek, all_messages=all_messages
         )
         return messages[0] if messages else None
 
-    async def read_all(self, *, peek: bool = False) -> List[str]:
+    async def read_all(self, *, peek: bool = False) -> list[str]:
         """Read all messages from this queue."""
         return await self._broker.read(self.name, peek=peek, all_messages=True)
 
@@ -1018,8 +1019,8 @@ class AsyncQueue:
         self,
         dest_queue: str,
         *,
-        message_id: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
+        message_id: int | None = None,
+    ) -> dict[str, Any] | None:
         """Move a message to another queue."""
         return await self._broker.move(
             self.name,

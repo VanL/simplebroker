@@ -13,7 +13,8 @@ Note: The extension API (SQLRunner) is designed for advanced users who need
 to customize database operations. Most users should use the standard Queue API.
 """
 
-from typing import Any, Iterable, List, Tuple
+from collections.abc import Iterable
+from typing import Any
 
 from simplebroker import Queue
 from simplebroker.ext import SetupPhase, SQLRunner
@@ -26,11 +27,11 @@ class LoggingRunner(SQLRunner):
         from simplebroker.ext import SQLiteRunner
 
         self._inner = SQLiteRunner(db_path)
-        self._log: List[str] = []
+        self._log: list[str] = []
 
     def run(
-        self, sql: str, params: Tuple[Any, ...] = (), *, fetch: bool = False
-    ) -> Iterable[Tuple[Any, ...]]:
+        self, sql: str, params: tuple[Any, ...] = (), *, fetch: bool = False
+    ) -> Iterable[tuple[Any, ...]]:
         self._log.append(f"SQL: {sql[:50]}... params={params}")
         return self._inner.run(sql, params, fetch=fetch)
 

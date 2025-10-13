@@ -3,11 +3,10 @@
 import platform
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 
 def create_platform_absolute_path(
-    relative_parts: str, base_dir: Optional[str] = None
+    relative_parts: str, base_dir: str | None = None
 ) -> str:
     """Create a platform-appropriate absolute path for testing.
 
@@ -71,9 +70,7 @@ def get_platform_drive_letter() -> str:
         return ""  # Unix systems don't use drive letters
 
 
-def create_windows_absolute_path(
-    relative_parts: str, drive: Optional[str] = None
-) -> str:
+def create_windows_absolute_path(relative_parts: str, drive: str | None = None) -> str:
     """Create a Windows-style absolute path for testing.
 
     Args:

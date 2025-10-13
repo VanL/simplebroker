@@ -788,8 +788,9 @@ class TestErrorHandling:
     def test_file_locking_fallback(self, temp_db_path):
         """Test file locking fallback mechanisms."""
         # Mock unavailable locking mechanisms
-        with patch("sqlite_connect.HAS_FCNTL", False), patch(
-            "sqlite_connect.HAS_MSVCRT", False
+        with (
+            patch("sqlite_connect.HAS_FCNTL", False),
+            patch("sqlite_connect.HAS_MSVCRT", False),
         ):
             manager = SQLiteConnectionManager(temp_db_path)
 

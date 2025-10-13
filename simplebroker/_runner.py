@@ -13,9 +13,10 @@ import sqlite3
 import threading
 import time
 import warnings
+from collections.abc import Iterable
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 # Platform-specific imports for file locking
 try:
@@ -225,7 +226,7 @@ class SQLiteRunner:
         return cast("sqlite3.Connection", self._thread_local.conn)
 
     def _apply_connection_settings(
-        self, conn: sqlite3.Connection, *, config: Dict[str, Any] = _config
+        self, conn: sqlite3.Connection, *, config: dict[str, Any] = _config
     ) -> None:
         """Apply per-connection settings that don't require exclusive locks."""
         # Always set busy timeout for each connection
@@ -323,7 +324,7 @@ class SQLiteRunner:
             self._thread_local.optimization_applied = True
 
     def _apply_optimization_settings(
-        self, conn: sqlite3.Connection, *, config: Dict[str, Any] = _config
+        self, conn: sqlite3.Connection, *, config: dict[str, Any] = _config
     ) -> None:
         """Apply optimization settings to a connection."""
         # Cache size (default 10MB)

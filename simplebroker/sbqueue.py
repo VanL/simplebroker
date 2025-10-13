@@ -6,8 +6,9 @@ queues without managing the underlying database connection.
 
 import logging
 import weakref
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal, Union
 
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config
 from ._runner import SQLRunner
@@ -61,7 +62,7 @@ class Queue:
     """
 
     # Type annotations for instance attributes
-    conn: Optional[DBConnection]
+    conn: DBConnection | None
 
     def __init__(
         self,
@@ -69,8 +70,8 @@ class Queue:
         *,
         db_path: str = DEFAULT_DB_NAME,
         persistent: bool = False,
-        runner: Optional[SQLRunner] = None,
-        config: Optional[Dict[str, Any]] = _config,
+        runner: SQLRunner | None = None,
+        config: dict[str, Any] | None = _config,
     ):
         """Initialize a Queue instance.
 
@@ -99,7 +100,7 @@ class Queue:
         self._install_finalizer()
 
     @contextmanager
-    def get_connection(self) -> Iterator[Union[BrokerCore, BrokerDB]]:
+    def get_connection(self) -> Iterator[BrokerCore | BrokerDB]:
         """Get connection for operations - handles both persistent and ephemeral modes.
 
         This context manager consolidates the connection logic. It yields either the
@@ -135,9 +136,9 @@ class Queue:
         *,
         all_messages: bool = False,
         with_timestamps: bool = False,
-        since_timestamp: Optional[int] = None,
-        message_id: Optional[int] = None,
-    ) -> Optional[Union[str, Tuple[str, int], Iterator[Union[str, Tuple[str, int]]]]]:
+        since_timestamp: int | None = None,
+        message_id: int | None = None,
+    ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None:
         """Read and remove message(s) from the queue (CLI-mirroring method).
 
         This is the high-level method that mirrors CLI behavior. For more precise
@@ -192,8 +193,8 @@ class Queue:
     # ========== Granular Read API (maps to internal claim methods) ==========
 
     def read_one(
-        self, *, exact_timestamp: Optional[int] = None, with_timestamps: bool = False
-    ) -> Optional[Union[str, Tuple[str, int]]]:
+        self, *, exact_timestamp: int | None = None, with_timestamps: bool = False
+    ) -> str | tuple[str, int] | None:
         """Read and remove exactly one message from the queue.
 
         This method provides exactly-once delivery semantics: the message is
@@ -224,8 +225,8 @@ class Queue:
         *,
         with_timestamps: bool = False,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: Optional[int] = None,
-    ) -> Union[List[str], List[Tuple[str, int]]]:
+        since_timestamp: int | None = None,
+    ) -> list[str] | list[tuple[str, int]]:
         """Read and remove multiple messages from the queue.
 
         Args:
@@ -237,7 +238,7 @@ class Queue:
             since_timestamp: Only read messages newer than this timestamp
 
         Returns:
-            List of messages or list of (message, timestamp) tuples if with_timestamps=True
+            list of messages or list of (message, timestamp) tuples if with_timestamps=True
 
         Raises:
             ValueError: If limit < 1
@@ -258,9 +259,9 @@ class Queue:
         *,
         with_timestamps: bool = False,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: Optional[int] = None,
-        exact_timestamp: Optional[int] = None,
-    ) -> Iterator[Union[str, Tuple[str, int]]]:
+        since_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+    ) -> Iterator[str | tuple[str, int]]:
         """Generator that reads and removes messages from the queue.
 
         This is memory-efficient for processing large queues.
@@ -294,9 +295,9 @@ class Queue:
         *,
         all_messages: bool = False,
         with_timestamps: bool = False,
-        since_timestamp: Optional[int] = None,
-        message_id: Optional[int] = None,
-    ) -> Optional[Union[str, Tuple[str, int], Iterator[Union[str, Tuple[str, int]]]]]:
+        since_timestamp: int | None = None,
+        message_id: int | None = None,
+    ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None:
         """View message(s) without removing them from the queue (CLI-mirroring method).
 
         This is the high-level method that mirrors CLI behavior. For more precise
@@ -351,8 +352,8 @@ class Queue:
     # ========== Granular Peek API ==========
 
     def peek_one(
-        self, *, exact_timestamp: Optional[int] = None, with_timestamps: bool = False
-    ) -> Optional[Union[str, Tuple[str, int]]]:
+        self, *, exact_timestamp: int | None = None, with_timestamps: bool = False
+    ) -> str | tuple[str, int] | None:
         """Peek at exactly one message without removing it from the queue.
 
         Args:
@@ -379,8 +380,8 @@ class Queue:
         limit: int = PEEK_BATCH_SIZE,
         *,
         with_timestamps: bool = False,
-        since_timestamp: Optional[int] = None,
-    ) -> Union[List[str], List[Tuple[str, int]]]:
+        since_timestamp: int | None = None,
+    ) -> list[str] | list[tuple[str, int]]:
         """Peek at multiple messages without removing them from the queue.
 
         Args:
@@ -389,7 +390,7 @@ class Queue:
             since_timestamp: Only peek at messages newer than this timestamp
 
         Returns:
-            List of messages or list of (message, timestamp) tuples if with_timestamps=True
+            list of messages or list of (message, timestamp) tuples if with_timestamps=True
 
         Raises:
             ValueError: If limit < 1
@@ -408,9 +409,9 @@ class Queue:
         self,
         *,
         with_timestamps: bool = False,
-        since_timestamp: Optional[int] = None,
-        exact_timestamp: Optional[int] = None,
-    ) -> Iterator[Union[str, Tuple[str, int]]]:
+        since_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+    ) -> Iterator[str | tuple[str, int]]:
         """Generator that peeks at messages without removing them from the queue.
 
         This is memory-efficient for viewing large queues.
@@ -439,12 +440,10 @@ class Queue:
         self,
         destination: Union[str, "Queue"],
         *,
-        message_id: Optional[int] = None,
-        since_timestamp: Optional[int] = None,
+        message_id: int | None = None,
+        since_timestamp: int | None = None,
         all_messages: bool = False,
-    ) -> Union[
-        Optional[Dict[str, Any]], List[Dict[str, Any]], Iterator[Dict[str, Any]]
-    ]:
+    ) -> dict[str, Any] | None | list[dict[str, Any]] | Iterator[dict[str, Any]]:
         """Move messages from this queue to another (CLI-mirroring method).
 
         This is the high-level method that mirrors CLI behavior. For more precise
@@ -459,7 +458,7 @@ class Queue:
         Returns:
             Depends on parameters:
             - Single dict with 'message' and 'timestamp' if moving one message
-            - List of dicts if moving many messages with limit
+            - list of dicts if moving many messages with limit
             - Generator of dicts if all_messages=True
             - None if no messages to move
 
@@ -494,7 +493,7 @@ class Queue:
             return None
         elif all_messages:
             # Return generator for all messages
-            def dict_generator() -> Iterator[Dict[str, Any]]:
+            def dict_generator() -> Iterator[dict[str, Any]]:
                 for result in self.move_generator(
                     dest_name, with_timestamps=True, since_timestamp=since_timestamp
                 ):
@@ -527,10 +526,10 @@ class Queue:
         self,
         destination: Union[str, "Queue"],
         *,
-        exact_timestamp: Optional[int] = None,
+        exact_timestamp: int | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = False,
-    ) -> Optional[Union[str, Tuple[str, int]]]:
+    ) -> str | tuple[str, int] | None:
         """Move exactly one message from this queue to another.
 
         Atomic operation with exactly-once semantics.
@@ -571,9 +570,9 @@ class Queue:
         *,
         with_timestamps: bool = False,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: Optional[int] = None,
+        since_timestamp: int | None = None,
         require_unclaimed: bool = True,
-    ) -> Union[List[str], List[Tuple[str, int]]]:
+    ) -> list[str] | list[tuple[str, int]]:
         """Move multiple messages from this queue to another.
 
         Atomic batch move operation with configurable delivery semantics.
@@ -589,7 +588,7 @@ class Queue:
             require_unclaimed: If True (default), only move unclaimed messages
 
         Returns:
-            List of messages or list of (message, timestamp) tuples if with_timestamps=True
+            list of messages or list of (message, timestamp) tuples if with_timestamps=True
 
         Raises:
             ValueError: If source and destination are the same or limit < 1
@@ -617,9 +616,9 @@ class Queue:
         *,
         with_timestamps: bool = False,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: Optional[int] = None,
-        exact_timestamp: Optional[int] = None,
-    ) -> Iterator[Union[str, Tuple[str, int]]]:
+        since_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+    ) -> Iterator[str | tuple[str, int]]:
         """Generator that moves messages from this queue to another.
 
         Args:
@@ -653,7 +652,7 @@ class Queue:
                 exact_timestamp=exact_timestamp,
             )
 
-    def delete(self, *, message_id: Optional[int] = None) -> bool:
+    def delete(self, *, message_id: int | None = None) -> bool:
         """Delete messages from this queue.
 
         Args:
@@ -724,7 +723,7 @@ class Queue:
 
         return f"Queue({', '.join(parts)})"
 
-    def has_pending(self, since_timestamp: Optional[int] = None) -> bool:
+    def has_pending(self, since_timestamp: int | None = None) -> bool:
         """Check if this queue has pending (unclaimed) messages.
 
         Args:
@@ -740,7 +739,7 @@ class Queue:
         with self.get_connection() as connection:
             return connection.has_pending_messages(self.name, since_timestamp)
 
-    def get_data_version(self) -> Optional[int]:
+    def get_data_version(self) -> int | None:
         """Get the database data version for change detection.
 
         Returns:
@@ -758,10 +757,10 @@ class Queue:
         *,
         peek: bool = False,
         all_messages: bool = True,
-        since_timestamp: Optional[int] = None,
+        since_timestamp: int | None = None,
         batch_processing: bool = False,
         commit_interval: int = 1,
-    ) -> Iterator[Tuple[str, int]]:
+    ) -> Iterator[tuple[str, int]]:
         """Stream messages with timestamps from the queue.
 
         This is an iterator that yields messages as they are retrieved from the database.
@@ -775,7 +774,7 @@ class Queue:
             commit_interval: How often to commit when processing multiple messages
 
         Yields:
-            Tuples of (message_body, timestamp)
+            tuples of (message_body, timestamp)
 
         Raises:
             QueueNameError: If the queue name is invalid
@@ -783,7 +782,7 @@ class Queue:
         """
         with self.get_connection() as connection:
             if peek:
-                # Type assertion since we know with_timestamps=True yields Tuple[str, int]
+                # Type assertion since we know with_timestamps=True yields tuple[str, int]
                 for result in connection.peek_generator(
                     self.name,
                     with_timestamps=True,
@@ -795,7 +794,7 @@ class Queue:
                 delivery_guarantee: Literal["exactly_once", "at_least_once"] = (
                     "exactly_once" if commit_interval == 1 else "at_least_once"
                 )
-                # Type assertion since we know with_timestamps=True yields Tuple[str, int]
+                # Type assertion since we know with_timestamps=True yields tuple[str, int]
                 for result in connection.claim_generator(
                     self.name,
                     with_timestamps=True,
@@ -832,8 +831,8 @@ class Queue:
         """Install weakref finalizer for cleanup."""
 
         def cleanup(
-            conn: Optional[DBConnection],
-            config: Optional[Dict[str, Any]],
+            conn: DBConnection | None,
+            config: dict[str, Any] | None,
             watcher_conn_attr: str,
         ) -> None:
             """Cleanup function called by finalizer."""

@@ -28,7 +28,7 @@ import platform
 import re
 import warnings
 from pathlib import PurePath
-from typing import Any, Dict, Final
+from typing import Any, Final
 
 # ==============================================================================
 # VERSION INFORMATION
@@ -422,7 +422,7 @@ def _parse_bool(value: str) -> bool:
     return value.lower().strip() in ("1", "true", "yes", "on")
 
 
-def load_config() -> Dict[str, Any]:
+def load_config() -> dict[str, Any]:
     """Load configuration from environment variables.
 
     This function reads all SimpleBroker environment variables and returns

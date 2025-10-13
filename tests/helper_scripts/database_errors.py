@@ -7,9 +7,9 @@ instead of mocking them, ensuring tests validate actual error handling behavior.
 import sqlite3
 import threading
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator, Optional
 
 
 class DatabaseErrorInjector:
@@ -243,7 +243,7 @@ class DatabaseErrorInjector:
             thread.join(timeout=2.0)
 
     @staticmethod
-    def trigger_wal_mode_error(db_path: str) -> Optional[str]:
+    def trigger_wal_mode_error(db_path: str) -> str | None:
         """Attempt to trigger WAL mode errors by switching modes under load.
 
         Args:

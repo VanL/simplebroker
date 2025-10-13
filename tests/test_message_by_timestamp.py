@@ -596,11 +596,11 @@ def test_list_command_reflects_operations(workdir: Path):
     ts = out.split("\t")[0]
     run_cli("read", "test_queue", "-m", ts, cwd=workdir)
 
-    # List should show 4 unclaimed
+    # list should show 4 unclaimed
     rc, out, err = run_cli("list", cwd=workdir)
     assert "test_queue: 4" in out
 
-    # List with --stats should show claimed
+    # list with --stats should show claimed
     rc, out, err = run_cli("list", "--stats", cwd=workdir)
     assert "test_queue: 4 (5 total, 1 claimed)" in out
 

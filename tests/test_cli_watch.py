@@ -18,7 +18,7 @@ def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages
         expected_messages: Set of expected message contents (optional)
 
     Returns:
-        List of parsed JSON objects
+        list of parsed JSON objects
     """
     import json
 

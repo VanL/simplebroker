@@ -26,8 +26,9 @@ import logging
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from simplebroker import Queue
 from simplebroker.db import BrokerDB
@@ -62,12 +63,11 @@ class MultiQueueWatcher(BaseWatcher):
 
     def __init__(
         self,
-        queues: List[str],
+        queues: list[str],
         default_handler: Callable[[str, int], None] = simple_print_handler,
-        queue_handlers: Optional[Dict[str, Callable[[str, int], None]]] = None,
-        queue_error_handlers: Optional[
-            Dict[str, Callable[[Exception, str, int], bool | None]]
-        ] = None,
+        queue_handlers: dict[str, Callable[[str, int], None]] | None = None,
+        queue_error_handlers: dict[str, Callable[[Exception, str, int], bool | None]]
+        | None = None,
         *,
         db: BrokerDB | str | Path | None = None,
         stop_event: threading.Event | None = None,
@@ -82,7 +82,7 @@ class MultiQueueWatcher(BaseWatcher):
         """Initialize a MultiQueueWatcher.
 
         Args:
-            queues: List of queue names to monitor
+            queues: list of queue names to monitor
             default_handler: Default function called with (message_body, timestamp)
             queue_handlers: Optional mapping of queue names to specific handlers
             queue_error_handlers: Optional mapping of queue names to specific error handlers
@@ -151,7 +151,7 @@ class MultiQueueWatcher(BaseWatcher):
         db_path = None
         if isinstance(db, BrokerDB):
             db_path = str(db.db_path)
-        elif isinstance(db, (str, Path)):
+        elif isinstance(db, str | Path):
             db_path = str(db)
         else:
             # Use database path from inherited queue object
@@ -163,7 +163,7 @@ class MultiQueueWatcher(BaseWatcher):
                 db_path = DEFAULT_DB_NAME
 
         # Create queue configuration dict
-        self._queues: Dict[str, Dict[str, Any]] = {}
+        self._queues: dict[str, dict[str, Any]] = {}
 
         # Create Queue objects for each queue (sharing same database)
         for queue_name in queues:
@@ -184,7 +184,7 @@ class MultiQueueWatcher(BaseWatcher):
             }
 
         # Multi-queue processing state
-        self._active_queues: List[str] = []
+        self._active_queues: list[str] = []
         self._queue_iterator: itertools.cycle[str] = itertools.cycle(
             []
         )  # Empty cycle, will be replaced when queues become active
@@ -311,8 +311,8 @@ class MultiQueueWatcher(BaseWatcher):
     def add_queue(
         self,
         queue_name: str,
-        handler: Optional[Callable[[str, int], None]] = None,
-        error_handler: Optional[Callable[[Exception, str, int], bool | None]] = None,
+        handler: Callable[[str, int], None] | None = None,
+        error_handler: Callable[[Exception, str, int], bool | None] | None = None,
     ) -> None:
         """Dynamically add a new queue to the watcher.
 
@@ -396,24 +396,24 @@ class MultiQueueWatcher(BaseWatcher):
 
         logger.info(f"Removed queue '{queue_name}' from MultiQueueWatcher")
 
-    def list_queues(self) -> List[str]:
+    def list_queues(self) -> list[str]:
         """Get a list of all configured queue names.
 
         Returns:
-            List of queue names
+            list of queue names
         """
         return list(self._queues.keys())
 
-    def get_active_queues(self) -> List[str]:
+    def get_active_queues(self) -> list[str]:
         """Get a list of currently active queue names (queues with messages).
 
         Returns:
-            List of active queue names
+            list of active queue names
         """
         return self._active_queues.copy()
 
 
-def create_sample_handlers() -> Dict[str, Callable[[str, int], None]]:
+def create_sample_handlers() -> dict[str, Callable[[str, int], None]]:
     """Create different handlers for different types of queues."""
 
     def orders_handler(message: str, timestamp: int) -> None:
@@ -461,7 +461,7 @@ def create_sample_handlers() -> Dict[str, Callable[[str, int], None]]:
     }
 
 
-def create_sample_messages() -> Dict[str, List[str]]:
+def create_sample_messages() -> dict[str, list[str]]:
     """Create sample messages for different queues."""
     return {
         "orders": [
@@ -496,7 +496,7 @@ def create_sample_messages() -> Dict[str, List[str]]:
     }
 
 
-def populate_queues_with_messages(db_path: str, messages: Dict[str, List[str]]) -> None:
+def populate_queues_with_messages(db_path: str, messages: dict[str, list[str]]) -> None:
     """Populate queues with sample messages."""
     print("\n📦 Populating queues with sample messages...")
 

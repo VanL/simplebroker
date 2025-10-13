@@ -5,7 +5,6 @@ import sys
 import time
 import warnings
 from pathlib import Path
-from typing import Optional, Union
 
 from ._constants import (
     EXIT_ERROR,
@@ -22,7 +21,7 @@ from .sbqueue import Queue
 from .watcher import QueueMoveWatcher, QueueWatcher
 
 
-def parse_exact_message_id(message_id_str: str) -> Optional[int]:
+def parse_exact_message_id(message_id_str: str) -> int | None:
     """Parse a message ID string with strict 19-digit validation.
 
     This function uses TimestampGenerator.validate() with exact=True to enforce
@@ -193,8 +192,8 @@ def cmd_read(
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
-    since_str: Optional[str] = None,
-    message_id_str: Optional[str] = None,
+    since_str: str | None = None,
+    message_id_str: str | None = None,
 ) -> int:
     """Read and remove message(s) from queue using Queue API.
 
@@ -302,8 +301,8 @@ def cmd_peek(
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
-    since_str: Optional[str] = None,
-    message_id_str: Optional[str] = None,
+    since_str: str | None = None,
+    message_id_str: str | None = None,
 ) -> int:
     """Peek at message(s) without removing them using Queue API.
 
@@ -406,7 +405,7 @@ def cmd_peek(
 
 
 def cmd_list(db_path: str, show_stats: bool = False) -> int:
-    """List all queues with counts.
+    """list all queues with counts.
 
     Args:
         db_path: Path to database file
@@ -452,7 +451,7 @@ def cmd_list(db_path: str, show_stats: bool = False) -> int:
 
 
 def cmd_delete(
-    db_path: str, queue_name: Optional[str] = None, message_id_str: Optional[str] = None
+    db_path: str, queue_name: str | None = None, message_id_str: str | None = None
 ) -> int:
     """Remove messages from queue(s).
 
@@ -494,8 +493,8 @@ def cmd_move(
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
-    message_id_str: Optional[str] = None,
-    since_str: Optional[str] = None,
+    message_id_str: str | None = None,
+    since_str: str | None = None,
 ) -> int:
     """Move message(s) between queues using Queue API.
 
@@ -672,9 +671,9 @@ def cmd_watch(
     peek: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
-    since_str: Optional[str] = None,
+    since_str: str | None = None,
     quiet: bool = False,
-    move_to: Optional[str] = None,
+    move_to: str | None = None,
 ) -> int:
     """Watch queue for new messages in real-time.
 
@@ -732,7 +731,7 @@ def cmd_watch(
 
     try:
         # Create appropriate watcher
-        watcher: Union[QueueWatcher, QueueMoveWatcher]
+        watcher: QueueWatcher | QueueMoveWatcher
         if move_to:
             # Use QueueMoveWatcher for move operations
             watcher = QueueMoveWatcher(

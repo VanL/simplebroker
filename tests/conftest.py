@@ -12,7 +12,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
 
 import pytest
 
@@ -53,9 +52,9 @@ def workdir(tmp_path: Path, monkeypatch) -> Path:
 def run_cli(
     *args,
     cwd: Path,
-    stdin: Optional[str] = None,
+    stdin: str | None = None,
     timeout: float = 5.0,
-) -> Tuple[int, str, str]:
+) -> tuple[int, str, str]:
     """
     Execute the SimpleBroker CLI (`python -m simplebroker.cli …`) inside *cwd*.
 

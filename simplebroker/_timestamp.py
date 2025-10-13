@@ -9,7 +9,7 @@ import random
 import threading
 import time
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING
 
 from ._constants import (
     LOGICAL_COUNTER_MASK,
@@ -82,14 +82,14 @@ class TimestampGenerator:
         # Add the logical counter in the bottom bits
         return time_base | logical
 
-    def _decode_hybrid_timestamp(self, ts: int) -> Tuple[int, int]:
+    def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
 
         Args:
             ts: 64-bit hybrid timestamp
 
         Returns:
-            Tuple of (physical_ns_base, logical_counter)
+            tuple of (physical_ns_base, logical_counter)
         """
         # Extract the time base (top bits)
         time_mask = ~LOGICAL_COUNTER_MASK
@@ -145,7 +145,7 @@ class TimestampGenerator:
     # -----------------------------------------------------------------
     # 1. compute next physical/logical pair entirely in memory
     # -----------------------------------------------------------------
-    def _next_components(self) -> Tuple[int, int]:
+    def _next_components(self) -> tuple[int, int]:
         """
         Generate next timestamp components using nanoseconds.
         """
@@ -217,7 +217,7 @@ class TimestampGenerator:
     # -----------------------------------------------------------------
     # 3. lightweight read helper when we lost the race
     # -----------------------------------------------------------------
-    def _peek_last_ts(self) -> Optional[int]:
+    def _peek_last_ts(self) -> int | None:
         rows = list(
             self._runner.run("SELECT value FROM meta WHERE key='last_ts'", fetch=True)
         )
@@ -304,7 +304,7 @@ class TimestampGenerator:
         return timestamp
 
     @staticmethod
-    def _parse_with_unit_suffix(timestamp_str: str) -> Optional[int]:
+    def _parse_with_unit_suffix(timestamp_str: str) -> int | None:
         """Parse timestamp with explicit unit suffixes (s, ms, ns)."""
         original_str = timestamp_str
         unit = None  # Default to None if no suffix found
@@ -351,7 +351,7 @@ class TimestampGenerator:
             raise TimestampError(f"Invalid timestamp: {original_str}") from None
 
     @staticmethod
-    def _parse_native_or_unix(timestamp_str: str) -> Optional[int]:
+    def _parse_native_or_unix(timestamp_str: str) -> int | None:
         """Parse as native timestamp or Unix timestamp based on heuristic."""
         try:
             # Try integer first
@@ -383,7 +383,7 @@ class TimestampGenerator:
             return None
 
     @staticmethod
-    def _parse_iso8601(timestamp_str: str) -> Optional[int]:
+    def _parse_iso8601(timestamp_str: str) -> int | None:
         """Try to parse as ISO 8601 date/datetime."""
         # Only try ISO parsing if the string contains date-like characters
         # ISO dates must contain '-' or 'T' or 'Z' or look like YYYYMMDD (exactly 8 digits)
@@ -440,7 +440,7 @@ class TimestampGenerator:
         return hybrid_ts
 
     @staticmethod
-    def _parse_numeric_timestamp(timestamp_str: str) -> Optional[int]:
+    def _parse_numeric_timestamp(timestamp_str: str) -> int | None:
         """Parse numeric timestamp with unit heuristic."""
         try:
             # Handle decimal numbers
