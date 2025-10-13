@@ -379,7 +379,12 @@ def test_metrics_aggregation() -> None:
                     for j in range(10):
                         broker.write(f"queue_{i}", f"q{i}_msg_{j}")
 
-                time.sleep(1.0)
+                assert wait_for_count(
+                    lambda: global_metrics.get_stats()["messages_processed"],
+                    expected_count=num_watchers * 10,
+                    timeout=3.0,
+                    at_least=True,
+                )
 
                 # Check aggregated metrics
                 stats = global_metrics.get_stats()

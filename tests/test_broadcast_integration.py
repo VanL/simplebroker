@@ -5,9 +5,30 @@ Tests how broadcast messages interact with checkpoint-based consumption.
 """
 
 import json
-import time
 
 from .conftest import run_cli
+from .helper_scripts.timing import wait_for_condition
+
+
+def _queue_has_broadcast(workdir, queue_name, checkpoint):
+    rc, out, _ = run_cli(
+        "peek",
+        queue_name,
+        "--all",
+        "--since",
+        str(checkpoint + 1),
+        cwd=workdir,
+    )
+    return rc == 0 and out.strip() == "broadcast_msg"
+
+
+def _has_expected_messages(workdir, queue_name, expected_count):
+    rc, out, _ = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
+    if rc != 0:
+        return False
+
+    lines = [line for line in out.strip().split("\n") if line]
+    return len(lines) >= expected_count
 
 
 def test_broadcast_with_since_filtering(workdir):
@@ -27,16 +48,15 @@ def test_broadcast_with_since_filtering(workdir):
     checkpoint = initial_msg["timestamp"]
 
     # Broadcast a message after the checkpoint
-    time.sleep(0.01)
     run_cli("broadcast", "broadcast_msg", cwd=workdir)
 
     # Check each queue for messages after checkpoint
     for q in queues:
-        rc, out, _ = run_cli(
-            "peek", q, "--all", "--since", str(checkpoint + 1), cwd=workdir
+        assert wait_for_condition(
+            lambda q=q: _queue_has_broadcast(workdir, q, checkpoint),
+            timeout=3.0,
+            interval=0.05,
         )
-        assert rc == 0
-        assert out.strip() == "broadcast_msg"
 
 
 def test_broadcast_checkpoint_based_workers(workdir):
@@ -81,9 +101,6 @@ def test_broadcast_ordering_with_timestamps(workdir):
     for q in queues:
         run_cli("write", q, f"msg1_{q}", cwd=workdir)
 
-    # Small delay to ensure different timestamp
-    time.sleep(0.01)
-
     # Broadcast
     run_cli("broadcast", "broadcast1", cwd=workdir)
 
@@ -93,8 +110,13 @@ def test_broadcast_ordering_with_timestamps(workdir):
 
     # Check ordering in each queue
     for q in queues:
+        assert wait_for_condition(
+            lambda q=q: _has_expected_messages(workdir, q, 3),
+            timeout=3.0,
+            interval=0.05,
+        )
         rc, out, _ = run_cli("peek", q, "--all", "--timestamps", cwd=workdir)
-        lines = out.strip().split("\n")
+        lines = [line for line in out.strip().split("\n") if line]
 
         # Extract timestamps and messages
         entries = []

@@ -10,6 +10,7 @@ Test cases:
 """
 
 from .conftest import run_cli
+from .helper_scripts.timing import wait_for_condition
 
 
 def test_cleanup_existing_database(workdir):
@@ -25,7 +26,7 @@ def test_cleanup_existing_database(workdir):
     # Clean it up
     rc, out, _ = run_cli("--cleanup", cwd=workdir)
     assert rc == 0
-    assert not db_path.exists()
+    assert wait_for_condition(lambda: not db_path.exists(), timeout=1.0, interval=0.05)
     assert "Database cleaned up" in out
 
 
@@ -55,7 +56,7 @@ def test_cleanup_with_quiet(workdir):
 
     # Verify database was removed
     db_path = workdir / ".broker.db"
-    assert not db_path.exists()
+    assert wait_for_condition(lambda: not db_path.exists(), timeout=1.0, interval=0.05)
 
 
 def test_cleanup_with_custom_location(tmp_path):
@@ -87,7 +88,9 @@ def test_cleanup_with_custom_location(tmp_path):
         "-d", str(custom_dir), "-f", custom_file, "--cleanup", cwd=tmp_path
     )
     assert rc == 0
-    assert not custom_db_path.exists()
+    assert wait_for_condition(
+        lambda: not custom_db_path.exists(), timeout=1.0, interval=0.05
+    )
     assert "Database cleaned up" in out
     assert str(custom_db_path) in out
 
@@ -168,4 +171,6 @@ def test_cleanup_order_with_other_flags(workdir):
         assert rc == 0
         assert out == ""  # All combinations include --quiet
         assert err == ""
-        assert not db_path.exists()
+        assert wait_for_condition(
+            lambda: not db_path.exists(), timeout=1.0, interval=0.05
+        )
