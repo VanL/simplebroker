@@ -242,9 +242,7 @@ class TestWatchCommand:
         # Start watch first (empty queue)
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "continuous"]
         with managed_subprocess(cmd, cwd=workdir) as proc:
-            assert proc.wait_for_output(
-                "Watching queue", timeout=2.0, stream="stderr"
-            )
+            assert proc.wait_for_output("Watching queue", timeout=2.0, stream="stderr")
 
             # Write messages while watching
             messages = []

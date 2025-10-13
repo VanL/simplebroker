@@ -159,9 +159,9 @@ def test_cleanup_order_with_other_flags(workdir):
         ["--cleanup", "-q"],
     ]
 
+    db_path = workdir / ".broker.db"
     for flags in flag_combinations:
         # Re-create database if needed
-        db_path = workdir / ".broker.db"
         if not db_path.exists():
             rc, _, _ = run_cli("write", "test", "message", cwd=workdir)
             assert rc == 0

@@ -136,9 +136,9 @@ class TestQueueWatcher(WatcherTestBase):
         thread = watcher.run_in_thread()
         try:
             # Wait for processing (fast polling will pick up messages quickly)
-            assert collector.wait_for_messages(
-                3, timeout=2.0
-            ), "Watcher did not process all messages in time"
+            assert collector.wait_for_messages(3, timeout=2.0), (
+                "Watcher did not process all messages in time"
+            )
         finally:
             # Stop the watcher
             watcher.stop()
@@ -175,9 +175,9 @@ class TestQueueWatcher(WatcherTestBase):
 
         thread = watcher.run_in_thread()
         try:
-            assert collector.wait_for_messages(
-                2, timeout=2.0
-            ), "Watcher did not observe messages in time"
+            assert collector.wait_for_messages(2, timeout=2.0), (
+                "Watcher did not observe messages in time"
+            )
         finally:
             watcher.stop()
             thread.join(timeout=2.0)

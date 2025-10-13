@@ -5,9 +5,8 @@ during testing, without adding any runtime dependencies to simplebroker.
 """
 
 import os
-import sys
 import subprocess
-from pathlib import Path
+import sys
 
 
 def run_with_coverage(cmd, **kwargs):
@@ -17,19 +16,21 @@ def run_with_coverage(cmd, **kwargs):
     with coverage enabled.
     """
     # Check if we're running under coverage
-    if os.environ.get('COVERAGE_PROCESS_START'):
+    if os.environ.get("COVERAGE_PROCESS_START"):
         # Prepend coverage run to the command if it's a Python command
-        if cmd[0] == sys.executable or 'python' in cmd[0].lower():
+        if cmd[0] == sys.executable or "python" in cmd[0].lower():
             # Replace: python -m simplebroker.cli ...
             # With: python -m coverage run --parallel-mode -m simplebroker.cli ...
             new_cmd = [
                 cmd[0],  # python executable
-                '-m', 'coverage', 'run',
-                '--parallel-mode',
-                '--source=simplebroker',
+                "-m",
+                "coverage",
+                "run",
+                "--parallel-mode",
+                "--source=simplebroker",
             ]
             # Add the rest of the original command (skipping python executable)
-            if len(cmd) > 1 and cmd[1] == '-m':
+            if len(cmd) > 1 and cmd[1] == "-m":
                 new_cmd.extend(cmd[1:])  # Keep the -m and rest
             else:
                 new_cmd.extend(cmd[1:])  # Just add the rest

@@ -30,7 +30,7 @@ from .helper_scripts.managed_subprocess import (
 from .helper_scripts.watcher_patch import patch_watchers
 
 # Import coverage subprocess helper if coverage is active
-if os.environ.get('COVERAGE_PROCESS_START'):
+if os.environ.get("COVERAGE_PROCESS_START"):
     from .coverage_subprocess import run_with_coverage
 else:
     run_with_coverage = None
