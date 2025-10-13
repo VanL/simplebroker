@@ -20,7 +20,7 @@ import pytest
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
-from .helper_scripts.timing import wait_for_count
+from .helper_scripts.timing import wait_for_condition, wait_for_count
 
 
 class MetricsCollector:
@@ -251,7 +251,11 @@ def test_metrics_efficiency_tracking() -> None:
             )
 
             thread1 = watcher1.run_in_thread()
-            time.sleep(0.5)  # Let it poll empty queue
+            assert wait_for_condition(
+                lambda: metrics1.get_stats()["total_wake_ups"] > 0,
+                timeout=2.0,
+                interval=0.05,
+            )
             watcher1.stop()
             thread1.join(timeout=1.0)
 
@@ -322,7 +326,11 @@ def test_metrics_logging() -> None:
                         broker.write("test_queue", f"message_{i}")
                         time.sleep(0.2)
 
-                    time.sleep(1.0)  # Should trigger at least one log
+                    assert wait_for_condition(
+                        lambda: mock_log.call_count >= 1,
+                        timeout=2.0,
+                        interval=0.05,
+                    )
                 finally:
                     watcher.stop()
                     thread.join(timeout=1.0)

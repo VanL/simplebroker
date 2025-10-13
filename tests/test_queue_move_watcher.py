@@ -12,6 +12,7 @@ pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueMoveWatcher
 
 from .helper_scripts.cleanup import register_watcher
+from .helper_scripts.timing import wait_for_condition
 from .helper_scripts.watcher_base import WatcherTestBase
 
 
@@ -272,12 +273,19 @@ class TestQueueMoveWatcher(WatcherTestBase):
         # Start watcher on empty queue
         thread = watcher.run_in_thread()
         try:
-            time.sleep(0.1)  # Let it poll a few times
-
             # Add message while watcher is running
             broker.write("empty_source", "delayed_message")
 
-            time.sleep(0.15)  # Wait for move
+            assert wait_for_condition(
+                lambda: watcher.move_count >= 1,
+                timeout=2.0,
+                interval=0.05,
+            )
+            assert wait_for_condition(
+                lambda: len(collector.get_handler_calls()) >= 1,
+                timeout=2.0,
+                interval=0.05,
+            )
         finally:
             # Stop with timeout safety
             watcher.stop()

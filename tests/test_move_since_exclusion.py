@@ -70,10 +70,8 @@ def test_move_without_since_works(tmp_path: Path) -> None:
         ],
         timeout=1.0,  # Short timeout since it processes immediately
     ) as proc:
-        # Give it time to process the message
-        import time
-
-        time.sleep(0.5)
+        # Wait until the watcher reports the processed message
+        assert proc.wait_for_output("test message", timeout=1.0)
 
         # Check that the message was processed and handler output was shown
         assert "test message" in proc.stdout
