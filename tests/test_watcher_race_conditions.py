@@ -18,6 +18,8 @@ import pytest
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
+from .helper_scripts.timing import wait_for_condition
+
 
 class ConcurrencyTestWatcher(QueueWatcher):
     """Watcher with hooks for testing concurrent behavior."""
@@ -500,13 +502,16 @@ def test_pre_check_database_contention() -> None:
             # Create watchers
             num_watchers = 10
 
+            processed_lock = threading.Lock()
+
             for i in range(num_watchers):
                 queue = f"queue_{i}"
                 processed_counts[queue] = 0
 
                 def make_handler(q):
                     def handler(msg, ts) -> None:
-                        processed_counts[q] += 1
+                        with processed_lock:
+                            processed_counts[q] += 1
 
                     return handler
 
@@ -530,7 +535,11 @@ def test_pre_check_database_contention() -> None:
 
             # Let it run
             contention_thread.join()
-            time.sleep(1.0)
+            assert wait_for_condition(
+                lambda: sum(processed_counts.values()) >= 100,
+                timeout=3.0,
+                interval=0.05,
+            )
 
             # Verify all watchers still functioned under contention
             total_processed = sum(processed_counts.values())
