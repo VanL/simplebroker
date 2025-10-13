@@ -5,6 +5,12 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2025-10-13
+### Changed
+- Updated Python version support: now requires Python 3.10+ (dropped 3.8, 3.9)
+- Added Python 3.14 support
+- Updated CI/CD testing matrix and package classifiers
+
 ## [2.5.0] - 2025-08-13
 ### Changed
 - Added config keyword argument to functions that use config values

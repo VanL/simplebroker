@@ -90,7 +90,7 @@ pip install simplebroker
 The CLI is available as both `broker` and `simplebroker`.
 
 **Requirements:**
-- Python 3.8+
+- Python 3.10+
 - SQLite 3.35+ (released March 2021) - required for `DELETE...RETURNING` support
 
 ## Quick Start

@@ -31,6 +31,16 @@ These examples show how to extend SimpleBroker using internal APIs or the extens
 - Test thoroughly under your specific workload conditions
 - Consider security implications for your environment
 
+## Standalone Utilities
+
+### [sqlite_connect.py](sqlite_connect.py) - SQLite Connection Utilities
+
+**[sqlite_connect.py](sqlite_connect.py)** extracts SQLite connection management patterns from SimpleBroker into a standalone module. It provides thread-safe connection handling, path validation, and database setup utilities that can be used in other projects.
+
+Features include thread-local connections, fork safety detection, cross-platform file locking, path security validation, and WAL mode setup. The module includes comprehensive error handling and retry logic for database contention.
+
+**[test_sqlite_connect.py](test_sqlite_connect.py)** contains the test suite for the utility.
+
 ## Security Considerations
 
 When working with message queues:

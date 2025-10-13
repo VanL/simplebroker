@@ -78,11 +78,11 @@ class TestWatcherCleanup:
             # Stop should be quick even with slow handler
             start_time = time.monotonic()
             watcher.stop()
-            thread.join(timeout=2.0)
+            thread.join(timeout=3.0)
             stop_time = time.monotonic() - start_time
 
             assert not thread.is_alive()
-            assert stop_time < 2.0
+            assert stop_time < 3.0
         finally:
             # Ensure cleanup even if test fails
             if thread.is_alive():

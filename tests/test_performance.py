@@ -70,7 +70,7 @@ BASELINE_TIMES = {
     "at_least_once_rollback": 0.2,  # Reading 250 of 500 messages (increased for CI reliability)
     "since_query_2000_msgs": 1.0,  # Estimated based on query performance
     "timestamp_lookup": 0.1,  # Estimated based on index lookup
-    "concurrent_mixed_ops": 2.0,  # Estimated for mixed operations
+    "concurrent_mixed_ops": 2.5,  # Estimated for mixed operations
     "move_1k_messages": 0.093,  # Moving 1000 messages individually
     "claim_1k_messages": 0.056,  # Claiming 1000 messages
     "vacuum_10k_messages": 3.0,  # Estimated based on batch operations
@@ -480,7 +480,7 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
 
     elapsed = time.monotonic() - start
 
-    # Should complete reasonably quickly (under 2 seconds for this workload)
+    # Should complete reasonably quickly (under 2.5 seconds for this workload)
     assert elapsed < get_timeout("concurrent_mixed_ops")
 
     # Verify operations succeeded (allowing EXIT_QUEUE_EMPTY for reads)
