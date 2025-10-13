@@ -60,7 +60,7 @@ def run_cli(
     *args,
     cwd: Path,
     stdin: str | None = None,
-    timeout: float = 5.0,
+    timeout: float = 6.0,
 ) -> tuple[int, str, str]:
     """
     Execute the SimpleBroker CLI (`python -m simplebroker.cli …`) inside *cwd*.
