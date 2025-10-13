@@ -442,6 +442,12 @@ class SQLiteRunner:
         if phase in self._completed_phases:
             return
 
+        # Fast-path: check if another process already completed this phase
+        if self._is_phase_already_completed(phase):
+            with self._setup_lock:
+                self._completed_phases.add(phase)
+            return
+
         # Get lock path for this phase
         lock_path = self._get_lock_path(phase)
         if lock_path is None:

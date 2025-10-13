@@ -116,3 +116,29 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["simplebroker"]
 
+[tool.coverage.run]
+source = ["simplebroker"]
+parallel = true
+concurrency = ["thread", "multiprocessing"]
+omit = [
+    "*/tests/*",
+    "*/examples/*",
+    "*/__pycache__/*",
+    "*/site-packages/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "pass",
+]
+show_missing = true
+skip_empty = true
+
+[tool.coverage.html]
+directory = "htmlcov"
+

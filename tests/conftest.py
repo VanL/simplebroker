@@ -8,6 +8,7 @@ exactly how an end-user would invoke it.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -27,6 +28,12 @@ from .helper_scripts.managed_subprocess import (
 
 # Import watcher patching
 from .helper_scripts.watcher_patch import patch_watchers
+
+# Import coverage subprocess helper if coverage is active
+if os.environ.get('COVERAGE_PROCESS_START'):
+    from .coverage_subprocess import run_with_coverage
+else:
+    run_with_coverage = None
 
 
 # --------------------------------------------------------------------------- #
@@ -78,12 +85,13 @@ def run_cli(
     cmd = [sys.executable, "-m", "simplebroker.cli", *map(str, args)]
 
     # Ensure UTF-8 encoding on Windows
-    import os
-
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
 
-    completed = subprocess.run(
+    # Use coverage-wrapped subprocess if available, otherwise normal subprocess
+    run_func = run_with_coverage if run_with_coverage else subprocess.run
+
+    completed = run_func(
         cmd,
         cwd=cwd,
         input=stdin,

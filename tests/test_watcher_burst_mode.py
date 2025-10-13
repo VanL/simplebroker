@@ -357,7 +357,11 @@ def test_burst_mode_with_batch_processing(no_jitter) -> None:
             for i in range(10):
                 broker.write("test_queue", f"message_{i}")
 
-            time.sleep(0.5)
+            assert wait_for_condition(
+                lambda: len(processed) >= 10,
+                timeout=2.0,
+                interval=0.05,
+            )
 
             # Should process all messages
             assert len(processed) == 10

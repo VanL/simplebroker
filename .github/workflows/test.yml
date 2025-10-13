@@ -106,8 +106,13 @@ jobs:
     - name: Run tests with coverage
       env:
         PYTEST_ADDOPTS: -ra -q --strict-markers -n auto --dist loadgroup
+        COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
       run: |
-        uv run pytest --cov=simplebroker --cov-report=term-missing --cov-report=html --cov-report=xml -m "not slow"
+        # Enable subprocess coverage tracking
+        uv run coverage run --parallel-mode --source=simplebroker -m pytest -m "not slow"
+        uv run coverage combine
+        uv run coverage xml
+        uv run coverage report --show-missing
 
     - name: Upload coverage reports
       uses: codecov/codecov-action@v5
