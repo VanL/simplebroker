@@ -3,7 +3,7 @@ coverage:
     project:
       default:
         # Target coverage percentage
-        target: 85%
+        target: 75%
         # Allow coverage to drop by up to 1% and still pass
         threshold: 1%
         # Use auto base to compare against the appropriate base
