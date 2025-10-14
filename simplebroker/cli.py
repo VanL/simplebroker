@@ -798,4 +798,4 @@ def main(*, config: dict[str, Any] = _config) -> int:
 if __name__ == "__main__":
     sys.exit(main())
 
-#~
+# ~

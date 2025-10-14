@@ -699,4 +699,5 @@ class SQLiteRunner:
         self.close()
         return False
 
-#~
+
+# ~

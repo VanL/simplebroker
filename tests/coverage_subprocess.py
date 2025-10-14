@@ -18,9 +18,9 @@ def run_with_coverage(cmd, **kwargs):
     # If running under coverage and this is a Python subprocess
     if os.environ.get("COVERAGE_PROCESS_START") and cmd[0] == sys.executable:
         # Ensure environment is passed to subprocess
-        env = kwargs.get('env', os.environ.copy())
-        env['COVERAGE_PROCESS_START'] = os.environ['COVERAGE_PROCESS_START']
-        kwargs['env'] = env
+        env = kwargs.get("env", os.environ.copy())
+        env["COVERAGE_PROCESS_START"] = os.environ["COVERAGE_PROCESS_START"]
+        kwargs["env"] = env
 
         # For Python subprocesses, inject coverage startup code
         # This is needed because coverage's automatic subprocess tracking
@@ -40,7 +40,7 @@ def run_with_coverage(cmd, **kwargs):
             )
             # Replace: python -m simplebroker.cli args...
             # With: python -c "coverage startup; import and run cli" args...
-            new_cmd = [cmd[0], "-c", startup_code] + cmd[m_index + 2:]
+            new_cmd = [cmd[0], "-c", startup_code] + cmd[m_index + 2 :]
             cmd = new_cmd
 
     return subprocess.run(cmd, **kwargs)

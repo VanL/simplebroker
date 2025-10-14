@@ -10,4 +10,4 @@ from .watcher import QueueMoveWatcher, QueueWatcher
 # Only export the new API
 __all__ = ["Queue", "QueueWatcher", "QueueMoveWatcher", "__version__"]
 
-#~
+# ~
