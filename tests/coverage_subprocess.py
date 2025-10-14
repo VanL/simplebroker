@@ -1,7 +1,7 @@
 """Coverage tracking helper for subprocess tests.
 
-This module provides a wrapper to enable coverage tracking in subprocesses
-during testing, without adding any runtime dependencies to simplebroker.
+This module ensures coverage is properly initialized in subprocesses
+when COVERAGE_PROCESS_START is set.
 """
 
 import os
@@ -12,28 +12,21 @@ import sys
 def run_with_coverage(cmd, **kwargs):
     """Run a subprocess with coverage tracking enabled.
 
-    This wraps subprocess.run() to inject coverage tracking when tests are run
-    with coverage enabled.
+    When COVERAGE_PROCESS_START is set, this ensures the subprocess
+    will automatically start coverage collection via Python's import hooks.
     """
-    # Check if we're running under coverage
+    # If running under coverage, ensure subprocess inherits the environment
+    # Coverage.py will automatically instrument subprocesses when
+    # COVERAGE_PROCESS_START is set - no manual wrapping needed
     if os.environ.get("COVERAGE_PROCESS_START"):
-        # Prepend coverage run to the command if it's a Python command
-        if cmd[0] == sys.executable or "python" in cmd[0].lower():
-            # Replace: python -m simplebroker.cli ...
-            # With: python -m coverage run --parallel-mode -m simplebroker.cli ...
-            new_cmd = [
-                cmd[0],  # python executable
-                "-m",
-                "coverage",
-                "run",
-                "--parallel-mode",
-                "--source=simplebroker",
-            ]
-            # Add the rest of the original command (skipping python executable)
-            if len(cmd) > 1 and cmd[1] == "-m":
-                new_cmd.extend(cmd[1:])  # Keep the -m and rest
-            else:
-                new_cmd.extend(cmd[1:])  # Just add the rest
-            cmd = new_cmd
+        # Ensure environment is passed to subprocess
+        env = kwargs.get('env', os.environ.copy())
+        # Make sure COVERAGE_PROCESS_START is in subprocess environment
+        env['COVERAGE_PROCESS_START'] = os.environ['COVERAGE_PROCESS_START']
+        kwargs['env'] = env
+
+        # For Python subprocesses, we need to ensure coverage is initialized
+        # This happens automatically when coverage is installed and COVERAGE_PROCESS_START is set
+        # No manual command wrapping needed - that causes double-wrapping issues
 
     return subprocess.run(cmd, **kwargs)
