@@ -494,3 +494,5 @@ class TimestampGenerator:
 
         except (ValueError, OverflowError):
             return None
+
+#~

@@ -361,3 +361,5 @@ def build_retrieve_query(
         return RETRIEVE_MOVE.format(where_clause=where_clause)
     else:
         raise ValueError(f"Invalid operation: {operation}")
+
+#~

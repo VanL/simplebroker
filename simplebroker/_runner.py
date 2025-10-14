@@ -698,3 +698,5 @@ class SQLiteRunner:
         self.cleanup_marker_files()
         self.close()
         return False
+
+#~
