@@ -572,6 +572,7 @@ class BrokerCore:
         # Note: The timestamp generator handles its own locking and state management
         # We don't need to hold self._lock here
         return self._timestamp_gen.generate()
+
     # Alias for backwards compatibility / shorter name
     get_ts = generate_timestamp
 
