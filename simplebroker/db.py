@@ -94,6 +94,9 @@ from ._sql import (
     GET_QUEUE_STATS as SQL_SELECT_QUEUES_STATS,
 )
 from ._sql import (
+    GET_TOTAL_MESSAGE_COUNT as SQL_SELECT_TOTAL_MESSAGE_COUNT,
+)
+from ._sql import (
     GET_VACUUM_STATS as SQL_SELECT_STATS_CLAIMED_TOTAL,
 )
 from ._sql import (
@@ -1512,6 +1515,49 @@ class BrokerCore:
 
         # Execute with retry logic
         return _execute_with_retry(_do_stats)
+
+    def status(self) -> dict[str, int]:
+        """Return high-level database status metrics.
+
+        Provides total message count across all queues, the last generated
+        timestamp from the meta table, and the on-disk size of the database
+        file. This avoids per-queue aggregation and is safe to call even when
+        the database is under load.
+
+        Returns:
+            Dictionary with keys:
+                - ``total_messages`` (int)
+                - ``last_timestamp`` (int)
+                - ``db_size`` (int, bytes)
+        """
+        self._check_fork_safety()
+
+        def _do_status() -> tuple[int, int]:
+            with self._lock:
+                total_rows = list(
+                    self._runner.run(SQL_SELECT_TOTAL_MESSAGE_COUNT, fetch=True)
+                )
+                last_ts_row = list(self._runner.run(SQL_SELECT_LAST_TS, fetch=True))
+
+                total_messages = int(total_rows[0][0]) if total_rows else 0
+                last_timestamp = int(last_ts_row[0][0]) if last_ts_row else 0
+                return total_messages, last_timestamp
+
+        total_messages, last_timestamp = _execute_with_retry(_do_status)
+
+        db_size = 0
+        db_path = getattr(self._runner, "_db_path", None)
+        if db_path:
+            try:
+                db_size = os.stat(db_path).st_size
+            except FileNotFoundError:
+                db_size = 0
+
+        return {
+            "total_messages": total_messages,
+            "last_timestamp": last_timestamp,
+            "db_size": db_size,
+        }
 
     def delete(self, queue: str | None = None) -> None:
         """Delete messages from queue(s).

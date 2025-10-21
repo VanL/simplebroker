@@ -1,3 +1,6 @@
+# mypy: allow-untyped-defs
+# mypy: disable-error-code=arg-type
+
 """Comprehensive test suite for sqlite_connect module.
 
 This test suite validates all functionality of the sqlite_connect module including:

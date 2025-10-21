@@ -14,7 +14,7 @@ $ broker read tasks
 ship it 🚀
 ```
 
-SimpleBroker is a zero-configuration message queue that runs anywhere Python runs. It's designed to be simple enough to understand in an afternoon, yet powerful enough for real work.
+SimpleBroker is a zero-configuration, no-dependency message queue that runs anywhere Python runs. It's designed to be simple enough to understand in an afternoon, yet powerful enough for real work.
 
 ## Table of Contents
 
@@ -139,6 +139,7 @@ $ broker --cleanup
 - `-q, --quiet` - Suppress non-error output
 - `--cleanup` - Delete the database file and exit
 - `--vacuum` - Remove claimed messages and exit
+- `--status` - Show global message count, last timestamp, and DB size
 - `--version` - Show version information
 - `--help` - Show help message
 
@@ -160,7 +161,7 @@ $ broker --cleanup
 ### Command Options
 
 **Common options for read/peek/move:**
-- `--all` - Process all messages
+- `--all` - Process all messages (CLI moves up to 1,000,000 per invocation; rerun for larger queues or use the Python API generators)
 - `--json` - Output as line-delimited JSON (includes timestamps)
 - `-t, --timestamps` - Include timestamps in output
 - `-m <id>` - Target specific message by its 19-digit timestamp ID

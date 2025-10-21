@@ -260,3 +260,14 @@ class TestWatchCommand:
             # Should have received all messages
             for msg in messages:
                 assert msg in stdout
+
+    def test_watch_move_same_queue(self, workdir):
+        """Ensure watch --move detects identical queues without crashing."""
+        from .conftest import run_cli
+
+        rc, out, err = run_cli("watch", "loop", "--move", "loop", cwd=workdir)
+
+        assert rc == 1
+        assert out == ""
+        assert "Cannot move messages to the same queue" in err
+        assert "UnboundLocalError" not in err

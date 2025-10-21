@@ -96,11 +96,20 @@ class TestRearrangeArgs:
 
     def test_boolean_flags(self):
         """Test flags that don't take values."""
-        args = ["write", "queue", "message", "--quiet", "--version", "--cleanup"]
+        args = [
+            "write",
+            "queue",
+            "message",
+            "--quiet",
+            "--version",
+            "--cleanup",
+            "--status",
+        ]
         assert rearrange_args(args) == [
             "--quiet",
             "--version",
             "--cleanup",
+            "--status",
             "write",
             "queue",
             "message",

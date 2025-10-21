@@ -450,6 +450,22 @@ def cmd_list(db_path: str, show_stats: bool = False) -> int:
     return EXIT_SUCCESS
 
 
+def cmd_status(db_path: str) -> int:
+    """Show high-level database status metrics."""
+    try:
+        with DBConnection(db_path) as conn:
+            db = conn.get_connection()
+            stats = db.status()
+    except Exception as e:
+        print(f"simplebroker: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+
+    print(f"total_messages: {stats['total_messages']}")
+    print(f"last_timestamp: {stats['last_timestamp']}")
+    print(f"db_size: {stats['db_size']}")
+    return EXIT_SUCCESS
+
+
 def cmd_delete(
     db_path: str, queue_name: str | None = None, message_id_str: str | None = None
 ) -> int:
@@ -729,9 +745,10 @@ def cmd_watch(
         )
         sys.stdout.flush()  # Ensure immediate output for real-time watching
 
+    watcher: QueueWatcher | QueueMoveWatcher | None = None
+
     try:
         # Create appropriate watcher
-        watcher: QueueWatcher | QueueMoveWatcher
         if move_to:
             # Use QueueMoveWatcher for move operations
             watcher = QueueMoveWatcher(
@@ -763,7 +780,8 @@ def cmd_watch(
         # Ensure any final output is flushed
         sys.stdout.flush()
         sys.stderr.flush()
-        watcher.stop()  # Ensure watcher is stopped cleanly
+        if watcher is not None:
+            watcher.stop()  # Ensure watcher is stopped cleanly
 
     return EXIT_SUCCESS
 
@@ -843,6 +861,7 @@ __all__ = [
     "cmd_vacuum",
     "cmd_watch",
     "cmd_init",
+    "cmd_status",
     "parse_exact_message_id",
 ]
 

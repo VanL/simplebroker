@@ -136,6 +136,9 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     parser.add_argument(
         "--vacuum", action="store_true", help="remove claimed messages and exit"
     )
+    parser.add_argument(
+        "--status", action="store_true", help="show database status and exit"
+    )
 
     # Create subparsers for commands
     subparsers = parser.add_subparsers(title="commands", dest="command", help=None)
@@ -310,6 +313,7 @@ class ArgumentProcessor:
             "--version",
             "--cleanup",
             "--vacuum",
+            "--status",
         }
 
         # Options that require values
@@ -509,6 +513,14 @@ def main(*, config: dict[str, Any] = _config) -> int:
             # If code can't be converted to int, return error code 1
             return EXIT_ERROR
 
+    # --status is mutually exclusive with subcommands
+    if getattr(args, "status", False) and args.command:
+        print(
+            f"{PROG_NAME}: error: --status cannot be used with commands",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
     # Handle --version flag
     if args.version:
         print(f"{PROG_NAME} {VERSION}")
@@ -572,6 +584,10 @@ def main(*, config: dict[str, Any] = _config) -> int:
         except Exception as e:
             print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
             return EXIT_ERROR
+
+    # Handle status flag
+    if args.status:
+        return commands.cmd_status(str(db_path))
 
     # Show help if no command given
     if not args.command:
