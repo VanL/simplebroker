@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.6.0] - 2025-10-21
 ### Added
 - Added --status flag that efficiently reports global information about the database 
+- Added .generate_timestamp() (alias: .get_ts()) methods on the Queue and db objects that delegate to the TimestampGenerator
 
 ## [2.5.1] - 2025-10-13
 ### Changed

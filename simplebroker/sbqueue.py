@@ -131,6 +131,18 @@ class Queue:
         with self.get_connection() as connection:
             connection.write(self.name, message)
 
+    def generate_timestamp(self) -> int:
+        """Generate a broker-compatible timestamp using the underlying database.
+
+        Returns:
+            64-bit hybrid timestamp unique within the database.
+        """
+        with self.get_connection() as connection:
+            return connection.generate_timestamp()
+
+    # Convenience alias
+    get_ts = generate_timestamp
+
     def read(
         self,
         *,

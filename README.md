@@ -525,6 +525,7 @@ SimpleBroker also provides a Python API for more advanced use cases:
 
 ```python
 from simplebroker import Queue, QueueWatcher
+from simplebroker.db import DBConnection
 import logging
 
 # Basic usage
@@ -558,6 +559,26 @@ def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
     return True  # Continue watching
 
 # Use peek=True for safe mode - messages aren't removed until explicitly acknowledged
+```
+
+### Generating timestamps without writing
+
+Sometimes you need a broker-compatible timestamp/ID before enqueueing a message (for logging, correlation IDs, or backpressure planning). You can ask SimpleBroker to generate one without writing a row:
+
+```python
+with DBConnection("/path/to/.broker.db") as conn:
+    db = conn.get_connection()
+    ts = db.generate_timestamp()  # alias: db.get_ts()
+
+queue = Queue("tasks", db_path="/path/to/.broker.db")
+ts2 = queue.generate_timestamp()  # alias: queue.get_ts()
+
+print(ts2 > ts)  # Monotonic within a database
+```
+
+Notes:
+- Timestamps are monotonic per database and match what `Queue.write()` uses internally.
+- Generating a timestamp does not reserve a slot; it simply gives you the next ID.
 watcher = QueueWatcher(
     queue=Queue("tasks"),
     handler=process_message,
