@@ -218,7 +218,9 @@ def _process_queue_fetch(
     with_timestamps = json_output or show_timestamps
 
     if exact_timestamp is not None:
-        result = fetch_one(exact_timestamp=exact_timestamp, with_timestamps=with_timestamps)
+        result = fetch_one(
+            exact_timestamp=exact_timestamp, with_timestamps=with_timestamps
+        )
         if result is None:
             return EXIT_QUEUE_EMPTY
 

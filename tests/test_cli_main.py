@@ -19,7 +19,9 @@ def reset_parser_cache():
 
 
 def test_main_prints_help_when_no_args(monkeypatch, capsys):
-    dummy_sys = types.SimpleNamespace(argv=["broker"], stderr=cli.sys.stderr, stdout=cli.sys.stdout)
+    dummy_sys = types.SimpleNamespace(
+        argv=["broker"], stderr=cli.sys.stderr, stdout=cli.sys.stdout
+    )
     monkeypatch.setattr(cli, "sys", dummy_sys)
 
     exit_code = cli.main()
