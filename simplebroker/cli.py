@@ -489,13 +489,25 @@ def main(*, config: dict[str, Any] = _config) -> int:
     parser = _PARSER_CACHE
 
     # Parse arguments, rearranging to put global options first
+    status_json_output = False
+
     try:
         if len(sys.argv) == 1:
             parser.print_help()
             return EXIT_SUCCESS
 
         # Rearrange arguments to put global options before subcommand
-        rearranged_args = rearrange_args(sys.argv[1:])
+        raw_args = list(sys.argv[1:])
+        if "--status" in raw_args:
+            processed_args: list[str] = []
+            for arg in raw_args:
+                if arg == "--json":
+                    status_json_output = True
+                    continue
+                processed_args.append(arg)
+            raw_args = processed_args
+
+        rearranged_args = rearrange_args(raw_args)
 
         # Use regular parse_args with rearranged arguments
         args = parser.parse_args(rearranged_args)
@@ -587,7 +599,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
 
     # Handle status flag
     if args.status:
-        return commands.cmd_status(str(db_path))
+        return commands.cmd_status(str(db_path), json_output=status_json_output)
 
     # Show help if no command given
     if not args.command:

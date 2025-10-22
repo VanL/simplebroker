@@ -139,7 +139,7 @@ $ broker --cleanup
 - `-q, --quiet` - Suppress non-error output
 - `--cleanup` - Delete the database file and exit
 - `--vacuum` - Remove claimed messages and exit
-- `--status` - Show global message count, last timestamp, and DB size
+- `--status` - Show global message count, last timestamp, and DB size (`--status --json` for JSON output)
 - `--version` - Show version information
 - `--help` - Show help message
 

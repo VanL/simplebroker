@@ -450,8 +450,13 @@ def cmd_list(db_path: str, show_stats: bool = False) -> int:
     return EXIT_SUCCESS
 
 
-def cmd_status(db_path: str) -> int:
-    """Show high-level database status metrics."""
+def cmd_status(db_path: str, *, json_output: bool = False) -> int:
+    """Show high-level database status metrics.
+
+    Args:
+        db_path: Path to the broker database.
+        json_output: When True, emit newline-delimited JSON instead of key/value lines.
+    """
     try:
         with DBConnection(db_path) as conn:
             db = conn.get_connection()
@@ -460,9 +465,12 @@ def cmd_status(db_path: str) -> int:
         print(f"simplebroker: error: {e}", file=sys.stderr)
         return EXIT_ERROR
 
-    print(f"total_messages: {stats['total_messages']}")
-    print(f"last_timestamp: {stats['last_timestamp']}")
-    print(f"db_size: {stats['db_size']}")
+    if json_output:
+        print(json.dumps(stats, ensure_ascii=False))
+    else:
+        print(f"total_messages: {stats['total_messages']}")
+        print(f"last_timestamp: {stats['last_timestamp']}")
+        print(f"db_size: {stats['db_size']}")
     return EXIT_SUCCESS
 
 

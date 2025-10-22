@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from .conftest import run_cli
 
 
@@ -52,8 +54,21 @@ class TestStatusCommand:
         assert stats["last_timestamp"] > 0
         assert stats["db_size"] >= baseline["db_size"]
 
+    def test_status_json_output(self, workdir):
+        rc, out, err = run_cli("--status", "--json", cwd=workdir)
+
+        assert rc == 0
+        assert err == ""
+
+        payload = json.loads(out)
+        assert payload["total_messages"] == 0
+        assert payload["last_timestamp"] == 0
+        assert payload["db_size"] >= 0
+
     def test_status_mutually_exclusive(self, workdir):
-        rc, out, err = run_cli("--status", "write", "queue", "msg", cwd=workdir)
+        rc, out, err = run_cli(
+            "--status", "--json", "write", "queue", "msg", cwd=workdir
+        )
 
         assert rc == 1
         assert "--status cannot be used with commands" in err

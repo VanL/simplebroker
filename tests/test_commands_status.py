@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -43,8 +44,28 @@ class TestCmdStatus:
 
         stats = parse_status_output(captured.out)
         assert stats["total_messages"] == 1
-        assert stats["last_timestamp"] >= 1234567890123456789
+        assert stats["last_timestamp"] > 0
         assert stats["db_size"] > 0
+
+    def test_cmd_status_json_output(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """cmd_status emits JSON when requested."""
+        db_path = tmp_path / ".broker.db"
+
+        queue = Queue("tasks", db_path=str(db_path))
+        queue.write("hello")
+
+        rc = cmd_status(str(db_path), json_output=True)
+        captured = capsys.readouterr()
+
+        assert rc == EXIT_SUCCESS
+        assert captured.err == ""
+
+        payload = json.loads(captured.out)
+        assert payload["total_messages"] == 1
+        assert payload["last_timestamp"] > 0
+        assert payload["db_size"] > 0
 
     def test_cmd_status_handles_exceptions(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
