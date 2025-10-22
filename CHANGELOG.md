@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.6.1] - 2025-10-21
 ### Added
 - Added --json as on option for the --status flag 
-
+- Refactored commands.py to consolidate common logic
+- Added tests
 
 ## [2.6.0] - 2025-10-21
 ### Added
