@@ -266,6 +266,28 @@ SELECT
 FROM messages
 """
 
+# SQLite VACUUM command to reclaim disk space
+VACUUM = """
+VACUUM
+"""
+
+# Set auto_vacuum mode to INCREMENTAL (2)
+# Mode 0 = NONE, 1 = FULL, 2 = INCREMENTAL
+SET_AUTO_VACUUM_INCREMENTAL = """
+PRAGMA auto_vacuum=2
+"""
+
+# Get current auto_vacuum mode
+GET_AUTO_VACUUM = """
+PRAGMA auto_vacuum
+"""
+
+# Run incremental vacuum to reclaim N pages
+# This only works when auto_vacuum mode is set to INCREMENTAL (2)
+INCREMENTAL_VACUUM = """
+PRAGMA incremental_vacuum(100)
+"""
+
 # ============================================================================
 # PRAGMA STATEMENTS
 # ============================================================================

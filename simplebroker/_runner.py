@@ -279,7 +279,9 @@ class SQLiteRunner:
         # Only check the SQLite header, not the magic string at this stage
         # If the file doesn't exist, SQLite will create it during connection
         db_path = Path(self._db_path)
-        if db_path.exists() and db_path.stat().st_size > 0:
+        is_new_database = not (db_path.exists() and db_path.stat().st_size > 0)
+
+        if not is_new_database:
             if not _is_valid_sqlite_db(db_path, verify_magic=False):
                 raise OperationalError(
                     f"File at {self._db_path} exists but is not a valid SQLite database"
@@ -291,6 +293,13 @@ class SQLiteRunner:
             try:
                 # Set timeout for setup operations
                 setup_conn.execute("PRAGMA busy_timeout=10000")
+
+                # For new databases, set auto_vacuum to INCREMENTAL before any tables are created
+                # This enables automatic space reclamation when rows are deleted
+                if is_new_database:
+                    from ._sql import SET_AUTO_VACUUM_INCREMENTAL
+
+                    setup_conn.execute(SET_AUTO_VACUUM_INCREMENTAL)
 
                 # Check current journal mode
                 cursor = setup_conn.execute("PRAGMA journal_mode")

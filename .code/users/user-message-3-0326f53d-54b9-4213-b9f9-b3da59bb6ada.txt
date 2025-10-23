@@ -1,0 +1,505 @@
+When I run the test suite for this project ('uv run pytest') it passes. This includes running it under xdist. However, I just found that if you run the suite with these arguments, it generates failures. What is going on? What is the root cause? Please investigate and report the most likely causes and what evidence supports the theories.
+
+$ uv run pytest tests/ --timeout=10 -x
+bringing up nodes...
+............................................................................................................s..s............................................................................s.....F.......F/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-1 (move_worker)
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+                 ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+        cmd,
+    ...<7 lines>...
+        env=env,  # Pass environment with UTF-8 encoding
+    )
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 554, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1038, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1970, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-475/popen-gw2/test_concurrent_moves_no_dupli0')
+
+Enable tracemalloc to get traceback where the object was allocated.
+See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+  warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-3 (move_worker)
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+                 ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+        cmd,
+    ...<7 lines>...
+        env=env,  # Pass environment with UTF-8 encoding
+    )
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 554, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1038, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1970, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-475/popen-gw2/test_concurrent_moves_no_dupli0')
+
+Enable tracemalloc to get traceback where the object was allocated.
+See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+  warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-5 (move_worker)
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+                 ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+        cmd,
+    ...<7 lines>...
+        env=env,  # Pass environment with UTF-8 encoding
+    )
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 554, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1038, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1970, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-475/popen-gw2/test_concurrent_moves_no_dupli0')
+
+Enable tracemalloc to get traceback where the object was allocated.
+See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+  warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-2 (move_worker)
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+                 ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+        cmd,
+    ...<7 lines>...
+        env=env,  # Pass environment with UTF-8 encoding
+    )
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 554, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1038, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1970, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-475/popen-gw2/test_concurrent_moves_no_dupli0')
+
+Enable tracemalloc to get traceback where the object was allocated.
+See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+  warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/_pytest/threadexception.py:58: PytestUnhandledThreadExceptionWarning: Exception in thread Thread-4 (move_worker)
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+                 ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+        cmd,
+    ...<7 lines>...
+        env=env,  # Pass environment with UTF-8 encoding
+    )
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 554, in run
+    with Popen(*popenargs, **kwargs) as process:
+         ~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1038, in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        pass_fds, cwd, env,
+                        ^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+                        gid, gids, uid, umask,
+                        ^^^^^^^^^^^^^^^^^^^^^^
+                        start_new_session, process_group)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1970, in _execute_child
+    raise child_exception_type(errno_num, err_msg, err_filename)
+FileNotFoundError: [Errno 2] No such file or directory: PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-475/popen-gw2/test_concurrent_moves_no_dupli0')
+
+Enable tracemalloc to get traceback where the object was allocated.
+See https://docs.pytest.org/en/stable/how-to/capture-warnings.html#resource-warnings for more info.
+  warnings.warn(pytest.PytestUnhandledThreadExceptionWarning(msg))
+...
+======================================================================================================================== FAILURES =========================================================================================================================
+__________________________________________________________________________________________________________________ test_parallel_writes ___________________________________________________________________________________________________________________
+[gw0] darwin -- Python 3.14.0 /Users/van/Developer/simplebroker/.venv/bin/python3
+
+workdir = PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-475/popen-gw0/test_parallel_writes0')
+
+    @pytest.mark.xdist_group(name="concurrency_serial")
+    def test_parallel_writes(workdir):
+        """T6: Multiple concurrent writers work correctly."""
+        import sys
+
+        # On Windows, reduce concurrency to avoid file locking issues
+        if sys.platform == "win32":
+            message_count = 50  # Further reduced for Windows
+            max_workers = 4  # Fewer concurrent workers on Windows
+        else:
+            message_count = 50  # Reduced to avoid xdist worker conflicts
+            max_workers = 4  # Reduced concurrency for test stability
+
+        def write_one(idx):
+            """Write a single message."""
+            from simplebroker import Queue
+
+            try:
+                # Use the API directly to avoid subprocess issues with xdist
+                queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
+                queue.write(f"msg_{idx:03d}")
+                return 0, idx, ""
+            except Exception as e:
+                if sys.platform == "win32":
+                    # On Windows, retry once if we get a locking error
+                    import time
+
+                    time.sleep(0.1)
+                    try:
+                        queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
+                        queue.write(f"msg_{idx:03d}")
+                        return 0, idx, ""
+                    except Exception as e2:
+                        return 1, idx, str(e2)
+                return 1, idx, str(e)
+
+        # Write messages in parallel
+        with cf.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            results = list(pool.map(write_one, range(message_count)))
+
+        # Check for failures
+        failures = [(idx, err) for rc, idx, err in results if rc != 0]
+        if failures:
+            print(f"Failed writes: {failures}")
+            for idx, err in failures[:5]:  # Show first 5 errors
+                print(f"  Write {idx} failed: {err}")
+
+        # All writes should succeed
+        assert all(rc == 0 for rc, _, _ in results)
+
+        # Read all messages
+        from simplebroker import Queue
+
+        queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
+        messages = []
+        while True:
+>           msg = queue.read()
+                  ^^^^^^^^^^^^
+
+/Users/van/Developer/simplebroker/tests/test_concurrency.py:91:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+/Users/van/Developer/simplebroker/simplebroker/sbqueue.py:203: in read
+    return self.read_one(with_timestamps=with_timestamps)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/van/Developer/simplebroker/simplebroker/sbqueue.py:227: in read_one
+    with self.get_connection() as connection:
+         ^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py:148: in __exit__
+    next(self.gen)
+/Users/van/Developer/simplebroker/simplebroker/sbqueue.py:117: in get_connection
+    with DBConnection(self._db_path, self._runner) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/van/Developer/simplebroker/simplebroker/db.py:328: in __exit__
+    self.cleanup()
+/Users/van/Developer/simplebroker/simplebroker/db.py:286: in cleanup
+    self._thread_local.db.close()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <simplebroker.db.BrokerDB object at 0x10a9aa850>
+
+    def close(self) -> None:
+        """Close the database connection."""
+        with self._lock:
+            # Clean up any marker files (especially for mocked paths in tests)
+            if hasattr(self._runner, "cleanup_marker_files"):
+                self._runner.cleanup_marker_files()
+            self._runner.close()
+            # Force garbage collection to release any lingering references on Windows
+>           gc.collect()
+E           Failed: Timeout (>10.0s) from pytest-timeout.
+
+/Users/van/Developer/simplebroker/simplebroker/db.py:1873: Failed
+------------------------------------------------------------------------------------------------------------------ Captured stdout call -------------------------------------------------------------------------------------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~ Stack of <unknown> (6116601856) ~~~~~~~~~~~~~~~~~~~~~~~~
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 411, in _perform_spawn
+    reply.run()
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 341, in run
+    self._result = func(*args, **kwargs)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 1160, in _thread_receiver
+    msg = Message.from_io(io)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 567, in from_io
+    header = io.read(9)  # type 1, channel 4, payload 4
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 534, in read
+    data = self._read(numbytes - len(buf))
+______________________________________________________________________________________________ TestConcurrentOperations.test_concurrent_moves_no_duplication ______________________________________________________________________________________________
+[gw2] darwin -- Python 3.14.0 /Users/van/Developer/simplebroker/.venv/bin/python3
+
+self = <tests.test_cli_move.TestConcurrentOperations object at 0x1076d60d0>, workdir = PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-475/popen-gw2/test_concurrent_moves_no_dupli0')
+
+    def test_concurrent_moves_no_duplication(self, workdir):
+        """Test that concurrent moves don't duplicate or lose messages."""
+        # Write many messages
+        num_messages = 100
+        for i in range(num_messages):
+            run_cli("write", "source", f"msg{i:03d}", cwd=workdir)
+
+        # Use barrier for synchronized start
+        num_workers = 5
+        barrier = threading.Barrier(num_workers)
+        results = [[] for _ in range(num_workers)]
+
+        def move_worker(worker_id: int):
+            """Worker that moves messages one by one."""
+            barrier.wait()  # Synchronize start
+            moved = []
+            while True:
+                rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+                if rc == 2:  # Queue empty
+                    break
+                if rc == 0:
+                    moved.append(out)
+            results[worker_id] = moved
+
+        # Run concurrent workers
+        threads = []
+        for i in range(num_workers):
+            t = threading.Thread(target=move_worker, args=(i,))
+            threads.append(t)
+            t.start()
+
+        # Wait for all workers
+        for t in threads:
+>           t.join()
+
+/Users/van/Developer/simplebroker/tests/test_cli_move.py:698:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <Thread(Thread-1 (move_worker), started 6199308288)>, timeout = None
+
+    def join(self, timeout=None):
+        """Wait until the thread terminates.
+
+        This blocks the calling thread until the thread whose join() method is
+        called terminates -- either normally or through an unhandled exception
+        or until the optional timeout occurs.
+
+        When the timeout argument is present and not None, it should be a
+        floating-point number specifying a timeout for the operation in seconds
+        (or fractions thereof). As join() always returns None, you must call
+        is_alive() after join() to decide whether a timeout happened -- if the
+        thread is still alive, the join() call timed out.
+
+        When the timeout argument is not present or None, the operation will
+        block until the thread terminates.
+
+        A thread can be join()ed many times.
+
+        join() raises a RuntimeError if an attempt is made to join the current
+        thread as that would cause a deadlock. It is also an error to join() a
+        thread before it has been started and attempts to do so raises the same
+        exception.
+
+        """
+        if not self._initialized:
+            raise RuntimeError("Thread.__init__() not called")
+        if not self._started.is_set():
+            raise RuntimeError("cannot join thread before it is started")
+        if self is current_thread():
+            raise RuntimeError("cannot join current thread")
+
+        # the behavior of a negative timeout isn't documented, but
+        # historically .join(timeout=x) for x<0 has acted as if timeout=0
+        if timeout is not None:
+            timeout = max(timeout, 0)
+
+>       self._os_thread_handle.join(timeout)
+E       Failed: Timeout (>10.0s) from pytest-timeout.
+
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py:1132: Failed
+------------------------------------------------------------------------------------------------------------------ Captured stdout call -------------------------------------------------------------------------------------------------------------------
++++++++++++++++++++++++++++++++++++ Timeout ++++++++++++++++++++++++++++++++++++
+~~~~~~~~~~~~~~~~~ Stack of Thread-5 (move_worker) (6266613760) ~~~~~~~~~~~~~~~~~
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1043, in _bootstrap
+    self._bootstrap_inner()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 556, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1220, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 2126, in _communicate
+    ready = selector.select(timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/selectors.py", line 398, in select
+    fd_event_list = self._selector.poll(timeout)
+~~~~~~~~~~~~~~~~~ Stack of Thread-4 (move_worker) (6249787392) ~~~~~~~~~~~~~~~~~
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1043, in _bootstrap
+    self._bootstrap_inner()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 556, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1220, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 2126, in _communicate
+    ready = selector.select(timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/selectors.py", line 398, in select
+    fd_event_list = self._selector.poll(timeout)
+~~~~~~~~~~~~~~~~~ Stack of Thread-3 (move_worker) (6232961024) ~~~~~~~~~~~~~~~~~
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1043, in _bootstrap
+    self._bootstrap_inner()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 556, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1220, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 2126, in _communicate
+    ready = selector.select(timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/selectors.py", line 398, in select
+    fd_event_list = self._selector.poll(timeout)
+~~~~~~~~~~~~~~~~~ Stack of Thread-2 (move_worker) (6216134656) ~~~~~~~~~~~~~~~~~
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1043, in _bootstrap
+    self._bootstrap_inner()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 556, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1220, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 2126, in _communicate
+    ready = selector.select(timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/selectors.py", line 398, in select
+    fd_event_list = self._selector.poll(timeout)
+~~~~~~~~~~~~~~~~~ Stack of Thread-1 (move_worker) (6199308288) ~~~~~~~~~~~~~~~~~
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1043, in _bootstrap
+    self._bootstrap_inner()
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1081, in _bootstrap_inner
+    self._context.run(self.run)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/threading.py", line 1023, in run
+    self._target(*self._args, **self._kwargs)
+  File "/Users/van/Developer/simplebroker/tests/test_cli_move.py", line 682, in move_worker
+    rc, out, _ = run_cli("move", "source", f"dest{worker_id}", cwd=workdir)
+  File "/Users/van/Developer/simplebroker/tests/conftest.py", line 94, in run_cli
+    completed = run_func(
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 556, in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 1220, in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py", line 2126, in _communicate
+    ready = selector.select(timeout)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/selectors.py", line 398, in select
+    fd_event_list = self._selector.poll(timeout)
+~~~~~~~~~~~~~~~~~~~~~~~ Stack of <unknown> (6182481920) ~~~~~~~~~~~~~~~~~~~~~~~~
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 411, in _perform_spawn
+    reply.run()
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 341, in run
+    self._result = func(*args, **kwargs)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 1160, in _thread_receiver
+    msg = Message.from_io(io)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 567, in from_io
+    header = io.read(9)  # type 1, channel 4, payload 4
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 534, in read
+    data = self._read(numbytes - len(buf))
++++++++++++++++++++++++++++++++++++ Timeout ++++++++++++++++++++++++++++++++++++
+================================================================================================================= short test summary info =================================================================================================================
+SKIPPED [1] tests/test_cli_validation.py:103: Windows-specific test
+SKIPPED [1] tests/test_cli_validation.py:79: Windows-specific test
+SKIPPED [1] tests/test_constants.py:536: Windows absolute path test only relevant on Windows
+FAILED tests/test_concurrency.py::test_parallel_writes@concurrency_serial - Failed: Timeout (>10.0s) from pytest-timeout.
+FAILED tests/test_cli_move.py::TestConcurrentOperations::test_concurrent_moves_no_duplication - Failed: Timeout (>10.0s) from pytest-timeout.

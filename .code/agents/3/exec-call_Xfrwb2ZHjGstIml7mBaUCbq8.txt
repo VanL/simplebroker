@@ -1,0 +1,568 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.14.0, pytest-8.4.1, pluggy-1.6.0 -- /Users/van/Developer/simplebroker/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/van/Developer/simplebroker
+configfile: pyproject.toml
+plugins: xdist-3.8.0, timeout-2.4.0, cov-6.2.1
+timeout: 10.0s
+timeout method: signal
+timeout func_only: False
+created: 8/8 workers
+8 workers [746 items]
+
+scheduling tests via LoadGroupScheduling
+
+tests/test_absolute_path.py::test_cleanup_with_absolute_path 
+tests/test_concurrency.py::test_parallel_writes@concurrency_serial 
+tests/test_batch_operations.py::TestBatchOperations::test_claim_many_exactly_once 
+tests/test_absolute_path.py::test_relative_path_still_works 
+tests/test_absolute_path.py::test_absolute_path_in_f_flag 
+tests/test_batch_operations.py::TestBatchOperations::test_claim_many_at_least_once 
+tests/test_absolute_path.py::test_absolute_path_with_explicit_dir 
+tests/test_absolute_path.py::test_absolute_path_with_inconsistent_dir 
+[gw7] [  0%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_claim_many_at_least_once 
+[gw6] [  0%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_claim_many_exactly_once 
+tests/test_batch_operations.py::TestBatchOperations::test_exact_timestamp_with_claim_one 
+[gw7] [  0%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_exact_timestamp_with_claim_one 
+tests/test_batch_operations.py::TestBatchOperations::test_empty_queue_behavior 
+[gw6] [  0%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_empty_queue_behavior 
+[gw3] [  0%] PASSED tests/test_absolute_path.py::test_absolute_path_with_inconsistent_dir 
+[gw2] [  0%] PASSED tests/test_absolute_path.py::test_absolute_path_with_explicit_dir 
+tests/test_batch_operations.py::TestBatchOperations::test_batch_with_timestamps_default 
+tests/test_batch_operations.py::TestBatchOperations::test_move_many_at_least_once 
+[gw7] [  0%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_batch_with_timestamps_default 
+[gw3] [  1%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_move_many_at_least_once 
+tests/test_broadcast.py::test_broadcast 
+tests/test_batch_operations.py::TestBatchOperations::test_move_many_exactly_once 
+[gw2] [  1%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_move_many_exactly_once 
+[gw4] [  1%] PASSED tests/test_absolute_path.py::test_cleanup_with_absolute_path 
+tests/test_batch_operations.py::TestBatchOperations::test_batch_with_since_timestamp 
+[gw4] [  1%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_batch_with_since_timestamp 
+tests/test_broadcast.py::test_broadcast_no_queues 
+tests/test_broadcast.py::test_broadcast_visible_to_new_connections 
+tests/test_broadcast_integration.py::test_broadcast_checkpoint_based_workers 
+[gw5] [  1%] PASSED tests/test_absolute_path.py::test_relative_path_still_works 
+tests/test_batch_operations.py::TestBatchOperations::test_limit_validation 
+[gw5] [  1%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_limit_validation 
+[gw1] [  1%] PASSED tests/test_absolute_path.py::test_absolute_path_in_f_flag 
+tests/test_batch_operations.py::TestBatchOperations::test_peek_many 
+[gw1] [  2%] PASSED tests/test_batch_operations.py::TestBatchOperations::test_peek_many 
+tests/test_broadcast_integration.py::test_broadcast_ordering_with_timestamps 
+tests/test_cleanup.py::test_cleanup_nonexistent_database 
+[gw7] [  2%] PASSED tests/test_broadcast.py::test_broadcast_no_queues 
+tests/test_cleanup.py::test_cleanup_with_quiet 
+tests/test_broadcast_integration.py::test_broadcast_empty_queue_behavior 
+[gw5] [  2%] PASSED tests/test_cleanup.py::test_cleanup_nonexistent_database 
+tests/test_cleanup.py::test_cleanup_exits_before_commands 
+[gw1] [  2%] PASSED tests/test_cleanup.py::test_cleanup_with_quiet 
+tests/test_cleanup.py::test_cleanup_permission_error 
+[gw6] [  2%] PASSED tests/test_broadcast.py::test_broadcast 
+[gw5] [  2%] PASSED tests/test_cleanup.py::test_cleanup_exits_before_commands 
+tests/test_broadcast_integration.py::test_broadcast_with_since_filtering 
+tests/test_cli_argument_parsing.py::test_equals_form_for_global_options 
+[gw3] [  2%] PASSED tests/test_broadcast.py::test_broadcast_visible_to_new_connections 
+tests/test_broadcast_integration.py::test_broadcast_race_condition_documentation 
+[gw1] [  2%] PASSED tests/test_cleanup.py::test_cleanup_permission_error 
+tests/test_cli_argument_parsing.py::test_global_option_value_not_mistaken_for_subcommand 
+[gw5] [  3%] PASSED tests/test_cli_argument_parsing.py::test_equals_form_for_global_options 
+tests/test_cli_argument_parsing.py::test_complex_argument_combinations 
+[gw1] [  3%] PASSED tests/test_cli_argument_parsing.py::test_global_option_value_not_mistaken_for_subcommand 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_system_exit_with_none_code 
+[gw1] [  3%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_system_exit_with_none_code 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_cleanup_general_error 
+[gw1] [  3%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_cleanup_general_error 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_dir_is_file_error 
+[gw1] [  3%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_dir_is_file_error 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_dir_not_directory_not_file 
+[gw1] [  3%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_dir_not_directory_not_file 
+[gw5] [  3%] PASSED tests/test_cli_argument_parsing.py::test_complex_argument_combinations 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_path_traversal_with_parent_refs 
+[gw1] [  4%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_path_traversal_with_parent_refs 
+[gw3] [  4%] PASSED tests/test_broadcast_integration.py::test_broadcast_race_condition_documentation 
+[gw7] [  4%] PASSED tests/test_broadcast_integration.py::test_broadcast_empty_queue_behavior 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_cleanup_permission_error 
+[gw5] [  4%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_cleanup_permission_error 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_system_exit_with_string_code 
+tests/test_cleanup.py::test_cleanup_order_with_other_flags 
+[gw3] [  4%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_system_exit_with_string_code 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_keyboard_interrupt_handling 
+[gw5] [  4%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_keyboard_interrupt_handling 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_invalid_message_id_formats 
+[gw3] [  4%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_invalid_message_id_formats 
+tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_general_exception_quiet_mode 
+[gw1] [  4%] PASSED tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_general_exception_quiet_mode 
+[gw4] [  5%] PASSED tests/test_broadcast_integration.py::test_broadcast_ordering_with_timestamps 
+tests/test_cli_global_options.py::test_multiple_global_options_mixed 
+tests/test_cleanup.py::test_cleanup_with_custom_location 
+tests/test_cli_global_options.py::test_global_options_between_args 
+tests/test_cli_global_options.py::test_version_flag_anywhere 
+[gw6] [  5%] PASSED tests/test_broadcast_integration.py::test_broadcast_with_since_filtering 
+tests/test_cli_argument_parsing.py::test_global_options_after_subcommand 
+[gw4] [  5%] PASSED tests/test_cleanup.py::test_cleanup_with_custom_location 
+tests/test_cli_main.py::test_main_prints_help_when_no_args 
+[gw3] [  5%] PASSED tests/test_cli_global_options.py::test_multiple_global_options_mixed 
+[gw4] [  5%] PASSED tests/test_cli_main.py::test_main_prints_help_when_no_args 
+tests/test_cli_global_options.py::test_cleanup_flag_anywhere 
+tests/test_cli_move.py::TestBasicFunctionality::test_specific_message_move_by_timestamp 
+[gw1] [  5%] PASSED tests/test_cli_global_options.py::test_version_flag_anywhere 
+tests/test_cli_main.py::test_main_status_json_flag_before_status 
+[gw5] [  5%] PASSED tests/test_cli_global_options.py::test_global_options_between_args 
+tests/test_cli_main.py::test_main_status_json_flag 
+[gw6] [  6%] PASSED tests/test_cli_argument_parsing.py::test_global_options_after_subcommand 
+[gw1] [  6%] PASSED tests/test_cli_main.py::test_main_status_json_flag_before_status 
+tests/test_cli_move.py::TestBasicFunctionality::test_single_message_move_default 
+tests/test_cli_move.py::TestBasicFunctionality::test_non_existent_destination_created 
+[gw3] [  6%] PASSED tests/test_cli_global_options.py::test_cleanup_flag_anywhere 
+[gw5] [  6%] PASSED tests/test_cli_main.py::test_main_status_json_flag 
+tests/test_cli_move.py::TestBasicFunctionality::test_bulk_move_with_all_flag 
+[gw2] [  6%] PASSED tests/test_broadcast_integration.py::test_broadcast_checkpoint_based_workers 
+tests/test_cleanup.py::test_cleanup_existing_database 
+tests/test_cli_move.py::TestTimestampFormats::test_since_unix_timestamp_formats 
+[gw7] [  6%] PASSED tests/test_cleanup.py::test_cleanup_order_with_other_flags 
+tests/test_cli_global_options.py::test_global_options_after_subcommand 
+[gw1] [  6%] PASSED tests/test_cli_move.py::TestBasicFunctionality::test_non_existent_destination_created 
+tests/test_cli_move.py::TestTimestampFormats::test_since_mixed_timestamp_formats 
+[gw2] [  6%] PASSED tests/test_cleanup.py::test_cleanup_existing_database 
+tests/test_cli_move.py::TestErrorCases::test_message_not_found_returns_exit_code_2 
+[gw4] [  7%] PASSED tests/test_cli_move.py::TestBasicFunctionality::test_specific_message_move_by_timestamp 
+tests/test_cli_move.py::TestBasicFunctionality::test_filtered_move_with_since_flag 
+[gw6] [  7%] PASSED tests/test_cli_move.py::TestBasicFunctionality::test_single_message_move_default 
+[gw7] [  7%] PASSED tests/test_cli_global_options.py::test_global_options_after_subcommand 
+tests/test_cli_move.py::TestTimestampFormats::test_since_iso_date_formats 
+tests/test_cli_move.py::TestErrorCases::test_invalid_timestamp_format_returns_exit_code_2 
+[gw2] [  7%] PASSED tests/test_cli_move.py::TestErrorCases::test_message_not_found_returns_exit_code_2 
+tests/test_cli_move.py::TestErrorCases::test_since_no_matches_returns_exit_code_2 
+[gw3] [  7%] PASSED tests/test_cli_move.py::TestBasicFunctionality::test_bulk_move_with_all_flag 
+tests/test_cli_move.py::TestErrorCases::test_empty_queue_returns_exit_code_2 
+[gw6] [  7%] PASSED tests/test_cli_move.py::TestTimestampFormats::test_since_iso_date_formats 
+tests/test_cli_move.py::TestEdgeCases::test_valid_special_queue_names 
+[gw2] [  7%] PASSED tests/test_cli_move.py::TestErrorCases::test_since_no_matches_returns_exit_code_2 
+[gw3] [  8%] PASSED tests/test_cli_move.py::TestErrorCases::test_empty_queue_returns_exit_code_2 
+tests/test_cli_move.py::TestEdgeCases::test_large_messages 
+tests/test_cli_move.py::TestEdgeCases::test_messages_with_newlines_and_tabs 
+[gw5] [  8%] PASSED tests/test_cli_move.py::TestTimestampFormats::test_since_unix_timestamp_formats 
+tests/test_cli_move.py::TestErrorCases::test_already_claimed_message_can_be_moved_by_id 
+[gw7] [  8%] PASSED tests/test_cli_move.py::TestErrorCases::test_invalid_timestamp_format_returns_exit_code_2 
+tests/test_cli_move.py::TestEdgeCases::test_invalid_queue_names_are_rejected 
+[gw3] [  8%] PASSED tests/test_cli_move.py::TestEdgeCases::test_messages_with_newlines_and_tabs 
+[gw4] [  8%] PASSED tests/test_cli_move.py::TestBasicFunctionality::test_filtered_move_with_since_flag 
+tests/test_cli_move.py::TestEdgeCases::test_timestamp_preservation_with_specific_move 
+tests/test_cli_move.py::TestErrorCases::test_since_exact_boundary 
+[gw2] [  8%] PASSED tests/test_cli_move.py::TestEdgeCases::test_large_messages 
+tests/test_cli_move.py::TestEdgeCases::test_move_preserves_timestamps 
+[gw5] [  8%] PASSED tests/test_cli_move.py::TestErrorCases::test_already_claimed_message_can_be_moved_by_id 
+tests/test_cli_move.py::TestEdgeCases::test_security_queue_names 
+[gw3] [  8%] PASSED tests/test_cli_move.py::TestEdgeCases::test_timestamp_preservation_with_specific_move 
+tests/test_cli_move.py::TestOutputFormats::test_json_output_multiple_messages 
+[gw4] [  9%] PASSED tests/test_cli_move.py::TestErrorCases::test_since_exact_boundary 
+tests/test_cli_move.py::TestOutputFormats::test_timestamp_output_format 
+[gw2] [  9%] PASSED tests/test_cli_move.py::TestEdgeCases::test_move_preserves_timestamps 
+tests/test_cli_move.py::TestOutputFormats::test_json_with_timestamp_flag_is_noop 
+[gw4] [  9%] PASSED tests/test_cli_move.py::TestOutputFormats::test_timestamp_output_format 
+tests/test_cli_move.py::TestConcurrentOperations::test_concurrent_bulk_moves_same_source 
+[gw5] [  9%] PASSED tests/test_cli_move.py::TestEdgeCases::test_security_queue_names 
+tests/test_cli_move.py::TestOutputFormats::test_output_order_preservation 
+[gw3] [  9%] PASSED tests/test_cli_move.py::TestOutputFormats::test_json_output_multiple_messages 
+[gw1] [  9%] PASSED tests/test_cli_move.py::TestTimestampFormats::test_since_mixed_timestamp_formats 
+tests/test_cli_move.py::TestConcurrentOperations::test_concurrent_moves_no_duplication 
+tests/test_cli_move.py::TestErrorCases::test_same_source_dest_queue_returns_exit_code_1 
+[gw2] [  9%] PASSED tests/test_cli_move.py::TestOutputFormats::test_json_with_timestamp_flag_is_noop 
+tests/test_cli_move.py::TestConcurrentOperations::test_concurrent_specific_message_moves 
+[gw1] [ 10%] PASSED tests/test_cli_move.py::TestErrorCases::test_same_source_dest_queue_returns_exit_code_1 
+tests/test_cli_move.py::TestIntegrationScenarios::test_queue_reorganization 
+[gw2] [ 10%] PASSED tests/test_cli_move.py::TestConcurrentOperations::test_concurrent_specific_message_moves 
+[gw6] [ 10%] PASSED tests/test_cli_move.py::TestEdgeCases::test_valid_special_queue_names 
+tests/test_cli_move.py::TestIntegrationScenarios::test_move_with_destination_already_populated 
+tests/test_cli_move.py::TestEdgeCases::test_zero_byte_message 
+[gw6] [ 10%] PASSED tests/test_cli_move.py::TestEdgeCases::test_zero_byte_message 
+tests/test_cli_move.py::TestCommandLineValidation::test_missing_arguments 
+[gw6] [ 10%] PASSED tests/test_cli_move.py::TestCommandLineValidation::test_missing_arguments 
+tests/test_cli_move.py::TestCommandLineValidation::test_help_text 
+[gw2] [ 10%] PASSED tests/test_cli_move.py::TestIntegrationScenarios::test_move_with_destination_already_populated 
+tests/test_cli_move.py::TestAtomicity::test_move_with_since_and_claimed_messages 
+[gw6] [ 10%] PASSED tests/test_cli_move.py::TestCommandLineValidation::test_help_text 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_empty_args 
+[gw6] [ 10%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_empty_args 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_global_options_before_subcommand 
+[gw6] [ 11%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_global_options_before_subcommand 
+[gw5] [ 11%] PASSED tests/test_cli_move.py::TestOutputFormats::test_output_order_preservation 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_global_options_after_subcommand 
+[gw6] [ 11%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_global_options_after_subcommand 
+tests/test_cli_move.py::TestMutualExclusivity::test_since_works_with_and_without_all 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_global_options_mixed 
+[gw6] [ 11%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_global_options_mixed 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_missing_value_at_end 
+[gw6] [ 11%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_missing_value_at_end 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_missing_value_before_another_flag 
+[gw6] [ 11%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_missing_value_before_another_flag 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_missing_value_before_subcommand 
+[gw6] [ 11%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_missing_value_before_subcommand 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_equals_without_value 
+[gw6] [ 12%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_equals_without_value 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_boolean_flags 
+[gw6] [ 12%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_boolean_flags 
+[gw1] [ 12%] PASSED tests/test_cli_move.py::TestIntegrationScenarios::test_queue_reorganization 
+tests/test_cli_move.py::TestAtomicity::test_bulk_move_atomicity_with_claimed_messages 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_subcommand_as_value 
+[gw6] [ 12%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_subcommand_as_value 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_short_and_long_options 
+[gw6] [ 12%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_short_and_long_options 
+tests/test_cli_rearrange_args.py::TestCLIMissingValues::test_missing_dir_value_at_end 
+[gw6] [ 12%] PASSED tests/test_cli_rearrange_args.py::TestCLIMissingValues::test_missing_dir_value_at_end 
+tests/test_cli_rearrange_args.py::TestCLIMissingValues::test_missing_dir_value_before_flag 
+[gw6] [ 12%] PASSED tests/test_cli_rearrange_args.py::TestCLIMissingValues::test_missing_dir_value_before_flag 
+[gw5] [ 13%] PASSED tests/test_cli_move.py::TestMutualExclusivity::test_since_works_with_and_without_all 
+tests/test_cli_rearrange_args.py::TestCLIMissingValues::test_missing_file_value_at_end 
+[gw0] [ 13%] FAILED tests/test_concurrency.py::test_parallel_writes@concurrency_serial 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_equals_form 
+[gw5] [ 13%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_equals_form 
+[gw6] [ 13%] PASSED tests/test_cli_rearrange_args.py::TestCLIMissingValues::test_missing_file_value_at_end 
+tests/test_cli_rearrange_args.py::TestCLIMissingValues::test_missing_file_value_before_flag 
+[gw6] [ 13%] PASSED tests/test_cli_rearrange_args.py::TestCLIMissingValues::test_missing_file_value_before_flag 
+[gw2] [ 13%] PASSED tests/test_cli_move.py::TestAtomicity::test_move_with_since_and_claimed_messages 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_no_global_options 
+[gw2] [ 13%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_no_global_options 
+[gw7] [ 13%] PASSED tests/test_cli_move.py::TestEdgeCases::test_invalid_queue_names_are_rejected 
+tests/test_cli_move.py::TestOutputFormats::test_json_output_single_message 
+[gw7] [ 14%] PASSED tests/test_cli_move.py::TestOutputFormats::test_json_output_single_message 
+[gw1] [ 14%] PASSED tests/test_cli_move.py::TestAtomicity::test_bulk_move_atomicity_with_claimed_messages 
+tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_multiple_missing_values 
+[gw1] [ 14%] PASSED tests/test_cli_rearrange_args.py::TestRearrangeArgs::test_multiple_missing_values 
+[gw4] [ 14%] FAILED tests/test_cli_move.py::TestConcurrentOperations::test_concurrent_bulk_moves_same_source 
+[gw3] [ 14%] FAILED tests/test_cli_move.py::TestConcurrentOperations::test_concurrent_moves_no_duplication 
+
+=================================== FAILURES ===================================
+_____________________________ test_parallel_writes _____________________________
+[gw0] darwin -- Python 3.14.0 /Users/van/Developer/simplebroker/.venv/bin/python3
+
+workdir = PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-482/popen-gw0/test_parallel_writes0')
+
+    @pytest.mark.xdist_group(name="concurrency_serial")
+    def test_parallel_writes(workdir):
+        """T6: Multiple concurrent writers work correctly."""
+        import sys
+    
+        # On Windows, reduce concurrency to avoid file locking issues
+        if sys.platform == "win32":
+            message_count = 50  # Further reduced for Windows
+            max_workers = 4  # Fewer concurrent workers on Windows
+        else:
+            message_count = 50  # Reduced to avoid xdist worker conflicts
+            max_workers = 4  # Reduced concurrency for test stability
+    
+        def write_one(idx):
+            """Write a single message."""
+            from simplebroker import Queue
+    
+            try:
+                # Use the API directly to avoid subprocess issues with xdist
+                queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
+                queue.write(f"msg_{idx:03d}")
+                return 0, idx, ""
+            except Exception as e:
+                if sys.platform == "win32":
+                    # On Windows, retry once if we get a locking error
+                    import time
+    
+                    time.sleep(0.1)
+                    try:
+                        queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
+                        queue.write(f"msg_{idx:03d}")
+                        return 0, idx, ""
+                    except Exception as e2:
+                        return 1, idx, str(e2)
+                return 1, idx, str(e)
+    
+        # Write messages in parallel
+        with cf.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            results = list(pool.map(write_one, range(message_count)))
+    
+        # Check for failures
+        failures = [(idx, err) for rc, idx, err in results if rc != 0]
+        if failures:
+            print(f"Failed writes: {failures}")
+            for idx, err in failures[:5]:  # Show first 5 errors
+                print(f"  Write {idx} failed: {err}")
+    
+        # All writes should succeed
+        assert all(rc == 0 for rc, _, _ in results)
+    
+        # Read all messages
+        from simplebroker import Queue
+    
+        queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
+        messages = []
+        while True:
+>           msg = queue.read()
+                  ^^^^^^^^^^^^
+
+/Users/van/Developer/simplebroker/tests/test_concurrency.py:91: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/Users/van/Developer/simplebroker/simplebroker/sbqueue.py:203: in read
+    return self.read_one(with_timestamps=with_timestamps)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/van/Developer/simplebroker/simplebroker/sbqueue.py:227: in read_one
+    with self.get_connection() as connection:
+         ^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py:148: in __exit__
+    next(self.gen)
+/Users/van/Developer/simplebroker/simplebroker/sbqueue.py:117: in get_connection
+    with DBConnection(self._db_path, self._runner) as conn:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/Users/van/Developer/simplebroker/simplebroker/db.py:328: in __exit__
+    self.cleanup()
+/Users/van/Developer/simplebroker/simplebroker/db.py:286: in cleanup
+    self._thread_local.db.close()
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <simplebroker.db.BrokerDB object at 0x10892e850>
+
+    def close(self) -> None:
+        """Close the database connection."""
+        with self._lock:
+            # Clean up any marker files (especially for mocked paths in tests)
+            if hasattr(self._runner, "cleanup_marker_files"):
+                self._runner.cleanup_marker_files()
+            self._runner.close()
+            # Force garbage collection to release any lingering references on Windows
+>           gc.collect()
+E           Failed: Timeout (>10.0s) from pytest-timeout.
+
+/Users/van/Developer/simplebroker/simplebroker/db.py:1873: Failed
+----------------------------- Captured stdout call -----------------------------
+~~~~~~~~~~~~~~~~~~~~~~~ Stack of <unknown> (6151401472) ~~~~~~~~~~~~~~~~~~~~~~~~
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 411, in _perform_spawn
+    reply.run()
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 341, in run
+    self._result = func(*args, **kwargs)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 1160, in _thread_receiver
+    msg = Message.from_io(io)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 567, in from_io
+    header = io.read(9)  # type 1, channel 4, payload 4
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 534, in read
+    data = self._read(numbytes - len(buf))
+_______ TestConcurrentOperations.test_concurrent_bulk_moves_same_source ________
+[gw4] darwin -- Python 3.14.0 /Users/van/Developer/simplebroker/.venv/bin/python3
+
+self = <tests.test_cli_move.TestConcurrentOperations object at 0x1074520d0>
+workdir = PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-482/popen-gw4/test_concurrent_bulk_moves_sam0')
+
+    def test_concurrent_bulk_moves_same_source(self, workdir):
+        """Test concurrent bulk moves from the same source queue."""
+        # Write messages
+        num_messages = 100
+        for i in range(num_messages):
+>           run_cli("write", "source", f"msg{i:03d}", cwd=workdir)
+
+/Users/van/Developer/simplebroker/tests/test_cli_move.py:715: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/Users/van/Developer/simplebroker/tests/conftest.py:94: in run_cli
+    completed = run_func(
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:554: in run
+    with Popen(*popenargs, **kwargs) as process:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1038: in __init__
+    self._execute_child(args, executable, preexec_fn, close_fds,
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <Popen: returncode: None args: ['/Users/van/Developer/simplebroker/.venv/bin...>
+args = ['/Users/van/Developer/simplebroker/.venv/bin/python3', '-m', 'simplebroker.cli', 'write', 'source', 'msg090']
+executable = b'/Users/van/Developer/simplebroker/.venv/bin/python3'
+preexec_fn = None, close_fds = True, pass_fds = ()
+cwd = PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-482/popen-gw4/test_concurrent_bulk_moves_sam0')
+env = {'BUN_INSTALL': '/opt/bun', 'CODER_MANAGED_BY_NPM': '1', 'CODEX_MANAGED_BY_NPM': '1', 'COLORFGBG': '7;0', ...}
+startupinfo = None, creationflags = 0, shell = False, p2cread = -1
+p2cwrite = -1, c2pread = 13, c2pwrite = 14, errread = 15, errwrite = 16
+restore_signals = True, gid = None, gids = None, uid = None, umask = -1
+start_new_session = False, process_group = -1
+
+    def _execute_child(self, args, executable, preexec_fn, close_fds,
+                       pass_fds, cwd, env,
+                       startupinfo, creationflags, shell,
+                       p2cread, p2cwrite,
+                       c2pread, c2pwrite,
+                       errread, errwrite,
+                       restore_signals,
+                       gid, gids, uid, umask,
+                       start_new_session, process_group):
+        """Execute program (POSIX version)"""
+    
+        if isinstance(args, (str, bytes)):
+            args = [args]
+        elif isinstance(args, os.PathLike):
+            if shell:
+                raise TypeError('path-like args is not allowed when '
+                                'shell is true')
+            args = [args]
+        else:
+            args = list(args)
+    
+        if shell:
+            # On Android the default shell is at '/system/bin/sh'.
+            unix_shell = ('/system/bin/sh' if
+                      hasattr(sys, 'getandroidapilevel') else '/bin/sh')
+            args = [unix_shell, "-c"] + args
+            if executable:
+                args[0] = executable
+    
+        if executable is None:
+            executable = args[0]
+    
+        sys.audit("subprocess.Popen", executable, args, cwd, env)
+    
+        if (_USE_POSIX_SPAWN
+                and os.path.dirname(executable)
+                and preexec_fn is None
+                and (not close_fds or _HAVE_POSIX_SPAWN_CLOSEFROM)
+                and not pass_fds
+                and cwd is None
+                and (p2cread == -1 or p2cread > 2)
+                and (c2pwrite == -1 or c2pwrite > 2)
+                and (errwrite == -1 or errwrite > 2)
+                and not start_new_session
+                and process_group == -1
+                and gid is None
+                and gids is None
+                and uid is None
+                and umask < 0):
+            self._posix_spawn(args, executable, env, restore_signals, close_fds,
+                              p2cread, p2cwrite,
+                              c2pread, c2pwrite,
+                              errread, errwrite)
+            return
+    
+        orig_executable = executable
+    
+        # For transferring possible exec failure from child to parent.
+        # Data format: "exception name:hex errno:description"
+        # Pickle is not used; it is complex and involves memory allocation.
+        errpipe_read, errpipe_write = os.pipe()
+        # errpipe_write must not be in the standard io 0, 1, or 2 fd range.
+        low_fds_to_close = []
+        while errpipe_write < 3:
+            low_fds_to_close.append(errpipe_write)
+            errpipe_write = os.dup(errpipe_write)
+        for low_fd in low_fds_to_close:
+            os.close(low_fd)
+        try:
+            try:
+                # We must avoid complex work that could involve
+                # malloc or free in the child process to avoid
+                # potential deadlocks, thus we do all this here.
+                # and pass it to fork_exec()
+    
+                if env is not None:
+                    env_list = []
+                    for k, v in env.items():
+                        k = os.fsencode(k)
+                        if b'=' in k:
+                            raise ValueError("illegal environment variable name")
+                        env_list.append(k + b'=' + os.fsencode(v))
+                else:
+                    env_list = None  # Use execv instead of execve.
+                executable = os.fsencode(executable)
+                if os.path.dirname(executable):
+                    executable_list = (executable,)
+                else:
+                    # This matches the behavior of os._execvpe().
+                    executable_list = tuple(
+                        os.path.join(os.fsencode(dir), executable)
+                        for dir in os.get_exec_path(env))
+                fds_to_keep = set(pass_fds)
+                fds_to_keep.add(errpipe_write)
+                self.pid = _fork_exec(
+                        args, executable_list,
+                        close_fds, tuple(sorted(map(int, fds_to_keep))),
+                        cwd, env_list,
+                        p2cread, p2cwrite, c2pread, c2pwrite,
+                        errread, errwrite,
+                        errpipe_read, errpipe_write,
+                        restore_signals, start_new_session,
+                        process_group, gid, gids, uid, umask,
+                        preexec_fn)
+                self._child_created = True
+            finally:
+                # be sure the FD is closed no matter what
+>               os.close(errpipe_write)
+E               Failed: Timeout (>10.0s) from pytest-timeout.
+
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1913: Failed
+----------------------------- Captured stdout call -----------------------------
+~~~~~~~~~~~~~~~~~~~~~~~ Stack of <unknown> (6186135552) ~~~~~~~~~~~~~~~~~~~~~~~~
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 411, in _perform_spawn
+    reply.run()
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 341, in run
+    self._result = func(*args, **kwargs)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 1160, in _thread_receiver
+    msg = Message.from_io(io)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 567, in from_io
+    header = io.read(9)  # type 1, channel 4, payload 4
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 534, in read
+    data = self._read(numbytes - len(buf))
+________ TestConcurrentOperations.test_concurrent_moves_no_duplication _________
+[gw3] darwin -- Python 3.14.0 /Users/van/Developer/simplebroker/.venv/bin/python3
+
+self = <tests.test_cli_move.TestConcurrentOperations object at 0x10717df90>
+workdir = PosixPath('/private/var/folders/n8/9s9_46616rx83v03qymlwp3w0000gn/T/pytest-of-van/pytest-482/popen-gw3/test_concurrent_moves_no_dupli0')
+
+    def test_concurrent_moves_no_duplication(self, workdir):
+        """Test that concurrent moves don't duplicate or lose messages."""
+        # Write many messages
+        num_messages = 100
+        for i in range(num_messages):
+>           run_cli("write", "source", f"msg{i:03d}", cwd=workdir)
+
+/Users/van/Developer/simplebroker/tests/test_cli_move.py:670: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/Users/van/Developer/simplebroker/tests/conftest.py:94: in run_cli
+    completed = run_func(
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:556: in run
+    stdout, stderr = process.communicate(input, timeout=timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:1220: in communicate
+    stdout, stderr = self._communicate(input, endtime, timeout)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/subprocess.py:2126: in _communicate
+    ready = selector.select(timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <selectors.PollSelector object at 0x1075c3770>, timeout = 6000
+
+    def select(self, timeout=None):
+        # This is shared between poll() and epoll().
+        # epoll() has a different signature and handling of timeout parameter.
+        if timeout is None:
+            timeout = None
+        elif timeout <= 0:
+            timeout = 0
+        else:
+            # poll() has a resolution of 1 millisecond, round away from
+            # zero to wait *at least* timeout seconds.
+            timeout = math.ceil(timeout * 1e3)
+        ready = []
+        try:
+>           fd_event_list = self._selector.poll(timeout)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: Timeout (>10.0s) from pytest-timeout.
+
+/opt/homebrew/Cellar/python@3.14/3.14.0/Frameworks/Python.framework/Versions/3.14/lib/python3.14/selectors.py:398: Failed
+----------------------------- Captured stdout call -----------------------------
+~~~~~~~~~~~~~~~~~~~~~~~ Stack of <unknown> (6188134400) ~~~~~~~~~~~~~~~~~~~~~~~~
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 411, in _perform_spawn
+    reply.run()
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 341, in run
+    self._result = func(*args, **kwargs)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 1160, in _thread_receiver
+    msg = Message.from_io(io)
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 567, in from_io
+    header = io.read(9)  # type 1, channel 4, payload 4
+  File "/Users/van/Developer/simplebroker/.venv/lib/python3.14/site-packages/execnet/gateway_base.py", line 534, in read
+    data = self._read(numbytes - len(buf))
+=========================== short test summary info ============================
+FAILED tests/test_concurrency.py::test_parallel_writes@concurrency_serial - F...
+FAILED tests/test_cli_move.py::TestConcurrentOperations::test_concurrent_bulk_moves_same_source
+FAILED tests/test_cli_move.py::TestConcurrentOperations::test_concurrent_moves_no_duplication
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 3 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!! xdist.dsession.Interrupted: stopping after 1 failures !!!!!!!!!!!!!
+======================== 3 failed, 106 passed in 17.84s ========================

@@ -76,6 +76,9 @@ from ._sql import (
 )
 from ._sql import (
     DROP_OLD_INDEXES,
+    GET_AUTO_VACUUM,
+    INCREMENTAL_VACUUM,
+    SET_AUTO_VACUUM_INCREMENTAL,
     build_retrieve_query,
 )
 from ._sql import (
@@ -110,6 +113,9 @@ from ._sql import (
 )
 from ._sql import (
     UPDATE_LAST_TS as SQL_UPDATE_META_LAST_TS,
+)
+from ._sql import (
+    VACUUM as SQL_VACUUM,
 )
 from ._timestamp import TimestampGenerator
 from .helpers import _execute_with_retry, interruptible_sleep
@@ -1654,8 +1660,14 @@ class BrokerCore:
                 or (claimed_count > 10000)
             )
 
-    def _vacuum_claimed_messages(self, *, config: dict[str, Any] = _config) -> None:
-        """Delete claimed messages in batches."""
+    def _vacuum_claimed_messages(
+        self, *, compact: bool = False, config: dict[str, Any] = _config
+    ) -> None:
+        """Delete claimed messages in batches.
+
+        Args:
+            compact: If True, also run SQLite VACUUM to reclaim disk space
+        """
         # Skip vacuum if no db_path available (extensible runners)
         if not hasattr(self, "db_path"):
             # For non-SQLite runners, vacuum is a no-op
@@ -1696,7 +1708,7 @@ class BrokerCore:
                 os.write(lock_fd, f"{os.getpid()}\n".encode())
                 lock_acquired = True
 
-                self._do_vacuum_without_lock()
+                self._do_vacuum_without_lock(compact=compact)
             finally:
                 os.close(lock_fd)
         except FileExistsError:
@@ -1801,9 +1813,16 @@ class BrokerCore:
                 # Return None for non-SQLite backends or any errors
                 return None
 
-    def _do_vacuum_without_lock(self, *, config: dict[str, Any] = _config) -> None:
-        """Perform the actual vacuum operation without file locking."""
+    def _do_vacuum_without_lock(
+        self, *, compact: bool = False, config: dict[str, Any] = _config
+    ) -> None:
+        """Perform the actual vacuum operation without file locking.
+
+        Args:
+            compact: If True, also run SQLite VACUUM to reclaim disk space
+        """
         batch_size = config["BROKER_VACUUM_BATCH_SIZE"]
+        had_claimed_messages = False
 
         # Use separate transaction per batch
         while True:
@@ -1821,6 +1840,9 @@ class BrokerCore:
                         self._runner.rollback()
                         break
 
+                    # We have claimed messages to delete
+                    had_claimed_messages = True
+
                     # SQLite doesn't support DELETE with LIMIT, so we need to use a subquery
                     self._runner.run(SQL_VACUUM_DELETE_BATCH, (batch_size,))
                     self._runner.commit()
@@ -1833,14 +1855,42 @@ class BrokerCore:
             # This is a background maintenance operation without stop event
             time.sleep(0.001)
 
-    def vacuum(self) -> None:
+        # After deleting claimed messages, reclaim space
+        if compact:
+            # Full vacuum with compact flag
+            with self._lock:
+                # Set auto_vacuum to INCREMENTAL before running VACUUM
+                # This enables automatic space reclamation for future deletes
+                # Must be set BEFORE VACUUM for it to take effect
+                self._runner.run(SET_AUTO_VACUUM_INCREMENTAL)
+
+                # VACUUM cannot be run inside a transaction in SQLite
+                # Running VACUUM will rebuild the database with auto_vacuum enabled
+                self._runner.run(SQL_VACUUM)
+        elif had_claimed_messages:
+            # Automatic vacuum: check if auto_vacuum is INCREMENTAL and run incremental vacuum
+            with self._lock:
+                try:
+                    # Check auto_vacuum mode
+                    result = list(self._runner.run(GET_AUTO_VACUUM, fetch=True))
+                    if result and result[0] and int(result[0][0]) == 2:
+                        # auto_vacuum is INCREMENTAL, reclaim up to 100 pages
+                        self._runner.run(INCREMENTAL_VACUUM)
+                except Exception:
+                    # Incremental vacuum is best-effort, don't fail if it doesn't work
+                    pass
+
+    def vacuum(self, compact: bool = False) -> None:
         """Manually trigger vacuum of claimed messages.
+
+        Args:
+            compact: If True, also run SQLite VACUUM to reclaim disk space
 
         Raises:
             RuntimeError: If called from a forked process
         """
         self._check_fork_safety()
-        self._vacuum_claimed_messages()
+        self._vacuum_claimed_messages(compact=compact)
 
     def close(self) -> None:
         """Close the database connection."""

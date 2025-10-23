@@ -137,6 +137,11 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         "--vacuum", action="store_true", help="remove claimed messages and exit"
     )
     parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="with --vacuum, also run SQLite VACUUM to reclaim disk space",
+    )
+    parser.add_argument(
         "--status", action="store_true", help="show database status and exit"
     )
 
@@ -313,6 +318,7 @@ class ArgumentProcessor:
             "--version",
             "--cleanup",
             "--vacuum",
+            "--compact",
             "--status",
         }
 
@@ -533,6 +539,22 @@ def main(*, config: dict[str, Any] = _config) -> int:
         )
         return EXIT_ERROR
 
+    # --compact requires --vacuum
+    if getattr(args, "compact", False) and not getattr(args, "vacuum", False):
+        print(
+            f"{PROG_NAME}: error: --compact can only be used with --vacuum",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    # --vacuum is mutually exclusive with subcommands
+    if getattr(args, "vacuum", False) and args.command:
+        print(
+            f"{PROG_NAME}: error: --vacuum cannot be used with commands",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
     # Handle --version flag
     if args.version:
         print(f"{PROG_NAME} {VERSION}")
@@ -592,7 +614,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     print(f"Database not found: {db_path}")
                 return EXIT_SUCCESS
 
-            return commands.cmd_vacuum(str(db_path))
+            return commands.cmd_vacuum(str(db_path), compact=args.compact)
         except Exception as e:
             print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
             return EXIT_ERROR

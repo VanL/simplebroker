@@ -627,11 +627,12 @@ def cmd_broadcast(db_path: str, message: str) -> int:
     return EXIT_SUCCESS
 
 
-def cmd_vacuum(db_path: str) -> int:
+def cmd_vacuum(db_path: str, compact: bool = False) -> int:
     """Vacuum claimed messages from the database.
 
     Args:
         db_path: Path to database file
+        compact: If True, also run SQLite VACUUM to reclaim disk space
 
     Returns:
         Exit code
@@ -645,16 +646,19 @@ def cmd_vacuum(db_path: str) -> int:
             cursor = db._conn.execute(COUNT_CLAIMED_MESSAGES)
             claimed_count = cursor.fetchone()[0]
 
-        if claimed_count == 0:
+        if claimed_count == 0 and not compact:
             print("No claimed messages to vacuum")
             return EXIT_SUCCESS
 
         # Run vacuum
-        db.vacuum()
+        db.vacuum(compact=compact)
 
         # Calculate elapsed time
         elapsed = time.monotonic() - start_time
-        print(f"Vacuumed {claimed_count} claimed messages in {elapsed:.1f}s")
+        if claimed_count > 0:
+            print(f"Vacuumed {claimed_count} claimed messages in {elapsed:.1f}s")
+        if compact:
+            print(f"Database compacted in {elapsed:.1f}s")
 
     return EXIT_SUCCESS
 
