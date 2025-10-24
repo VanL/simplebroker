@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simplebroker"
-version = "2.6.2"
+version = "2.7.0"
 description = "A lightweight message queue backed by SQLite"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -54,6 +54,7 @@ Issues = "https://github.com/VanL/simplebroker/issues"
 [tool.hatch.build]
 include = [
     "simplebroker/**/*.py",
+    "simplebroker/py.typed",
     "README.md",
     "LICENSE",
 ]
