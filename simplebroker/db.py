@@ -9,6 +9,7 @@ import time
 import warnings
 import weakref
 from collections.abc import Iterator
+from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
 from typing import (
@@ -19,6 +20,7 @@ from typing import (
 )
 
 from ._constants import (
+    ALIAS_PREFIX,
     LOGICAL_COUNTER_BITS,
     MAX_MESSAGE_SIZE,
     MAX_QUEUE_NAME_LENGTH,
@@ -45,10 +47,13 @@ from ._sql import (
     CHECK_QUEUE_EXISTS as SQL_SELECT_EXISTS_MESSAGES_BY_QUEUE,
 )
 from ._sql import (
-    CHECK_TS_UNIQUE_CONSTRAINT as SQL_SELECT_MESSAGES_SQL,
+    CHECK_TS_UNIQUE_INDEX as SQL_SELECT_COUNT_MESSAGES_TS_UNIQUE,
 )
 from ._sql import (
-    CHECK_TS_UNIQUE_INDEX as SQL_SELECT_COUNT_MESSAGES_TS_UNIQUE,
+    CREATE_ALIAS_TARGET_INDEX as SQL_CREATE_IDX_ALIASES_TARGET,
+)
+from ._sql import (
+    CREATE_ALIASES_TABLE as SQL_CREATE_TABLE_ALIASES,
 )
 from ._sql import (
     CREATE_MESSAGES_TABLE as SQL_CREATE_TABLE_MESSAGES,
@@ -66,6 +71,9 @@ from ._sql import (
     CREATE_UNCLAIMED_INDEX as SQL_CREATE_IDX_MESSAGES_UNCLAIMED,
 )
 from ._sql import (
+    DELETE_ALIAS as SQL_DELETE_ALIAS,
+)
+from ._sql import (
     DELETE_ALL_MESSAGES as SQL_DELETE_ALL_MESSAGES,
 )
 from ._sql import (
@@ -80,6 +88,9 @@ from ._sql import (
     INCREMENTAL_VACUUM,
     SET_AUTO_VACUUM_INCREMENTAL,
     build_retrieve_query,
+)
+from ._sql import (
+    GET_ALIAS_VERSION as SQL_SELECT_ALIAS_VERSION,
 )
 from ._sql import (
     GET_DATA_VERSION as SQL_GET_DATA_VERSION,
@@ -106,10 +117,25 @@ from ._sql import (
     INIT_LAST_TS as SQL_INSERT_META_LAST_TS,
 )
 from ._sql import (
+    INSERT_ALIAS as SQL_INSERT_ALIAS,
+)
+from ._sql import (
+    INSERT_ALIAS_VERSION_META as SQL_INSERT_ALIAS_VERSION_META,
+)
+from ._sql import (
     INSERT_MESSAGE as SQL_INSERT_MESSAGE,
 )
 from ._sql import (
     LIST_QUEUES_UNCLAIMED as SQL_SELECT_QUEUES_UNCLAIMED,
+)
+from ._sql import (
+    SELECT_ALIASES as SQL_SELECT_ALIASES,
+)
+from ._sql import (
+    SELECT_ALIASES_FOR_TARGET as SQL_SELECT_ALIASES_FOR_TARGET,
+)
+from ._sql import (
+    UPDATE_ALIAS_VERSION as SQL_UPDATE_ALIAS_VERSION,
 )
 from ._sql import (
     UPDATE_LAST_TS as SQL_UPDATE_META_LAST_TS,
@@ -380,9 +406,14 @@ class BrokerCore:
         self._verify_database_magic()
         self._ensure_schema_v2()
         self._ensure_schema_v3()
+        self._ensure_schema_v4()
 
         # Timestamp generator (created after database setup so meta table exists)
         self._timestamp_gen = TimestampGenerator(self._runner)
+
+        # Alias cache state
+        self._alias_cache: dict[str, str] = {}
+        self._alias_cache_version: int = -1
 
     def _setup_database(self) -> None:
         """Set up database with optimized settings and schema."""
@@ -419,6 +450,9 @@ class BrokerCore:
                 )
             _execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_META))
             _execute_with_retry(lambda: self._runner.run(SQL_INSERT_META_LAST_TS))
+            _execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_ALIASES))
+            _execute_with_retry(lambda: self._runner.run(SQL_CREATE_IDX_ALIASES_TARGET))
+            _execute_with_retry(lambda: self._runner.run(SQL_INSERT_ALIAS_VERSION_META))
 
             # Insert magic string and schema version if not exists
             _execute_with_retry(
@@ -480,64 +514,151 @@ class BrokerCore:
                 # If we can't read meta table, it might be corrupted
                 pass
 
+    def _read_schema_version_locked(self) -> int:
+        """Read schema version (expects caller to hold self._lock)."""
+        rows = list(
+            self._runner.run(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                fetch=True,
+            )
+        )
+        return int(rows[0][0]) if rows and rows[0][0] is not None else 1
+
+    def _write_schema_version_locked(self, version: int) -> None:
+        """Update schema version (expects caller to hold self._lock)."""
+        self._runner.run(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (version,),
+        )
+
     def _ensure_schema_v2(self) -> None:
         """Migrate to schema with claimed column."""
         with self._lock:
-            # Check if migration needed
+            current_version = self._read_schema_version_locked()
             rows = list(
                 self._runner.run(SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True)
             )
-            if rows and rows[0][0] > 0:
-                return  # Already migrated
+            has_claimed_column = bool(rows and rows[0][0])
 
-            # Perform migration
-            try:
-                self._runner.begin_immediate()
-                self._runner.run(
-                    "ALTER TABLE messages ADD COLUMN claimed INTEGER DEFAULT 0"
-                )
+            if current_version >= 2 and has_claimed_column:
+                # Schema already migrated; ensure index exists and exit
                 self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
+                return
+
+            self._runner.begin_immediate()
+            try:
+                if not has_claimed_column:
+                    try:
+                        self._runner.run(
+                            "ALTER TABLE messages ADD COLUMN claimed INTEGER DEFAULT 0"
+                        )
+                    except Exception as e:
+                        if "duplicate column name" not in str(e):
+                            raise
+
+                # Re-check column presence
+                rows = list(
+                    self._runner.run(SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True)
+                )
+                if not (rows and rows[0][0]):
+                    raise RuntimeError(
+                        "Failed to ensure messages.claimed column during schema migration"
+                    )
+
+                self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
+
+                if current_version < 2:
+                    self._write_schema_version_locked(2)
+
                 self._runner.commit()
-            except Exception as e:
+            except Exception:
                 self._runner.rollback()
-                # If the error is because column already exists, that's fine
-                if "duplicate column name" not in str(e):
-                    raise
+                raise
 
     def _ensure_schema_v3(self) -> None:
         """Add unique constraint to timestamp column."""
         with self._lock:
-            # Check if unique constraint already exists
-            rows = list(self._runner.run(SQL_SELECT_MESSAGES_SQL, fetch=True))
-            if rows and rows[0][0] and "ts INTEGER NOT NULL UNIQUE" in rows[0][0]:
-                return  # Already has unique constraint
-
+            current_version = self._read_schema_version_locked()
             # Check if unique index already exists
             rows = list(
                 self._runner.run(SQL_SELECT_COUNT_MESSAGES_TS_UNIQUE, fetch=True)
             )
-            if rows and rows[0][0] > 0:
-                return  # Already has unique index
+            has_unique_index = bool(rows and rows[0][0])
 
-            # Create unique index on timestamp column
+            if current_version >= 3:
+                if not has_unique_index:
+                    self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
+                return
+
+            if current_version < 2:
+                # Older schema – v2 migration will run first
+                return
+
             try:
                 self._runner.begin_immediate()
-                self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
+                if not has_unique_index:
+                    self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
+                self._write_schema_version_locked(3)
                 self._runner.commit()
             except IntegrityError as e:
                 self._runner.rollback()
                 if "UNIQUE constraint failed" in str(e):
                     raise RuntimeError(
                         "Cannot add unique constraint on timestamp column: "
-                        "duplicate timestamps exist in the database. "
-                        "This should not happen with SimpleBroker's hybrid timestamp algorithm."
+                        "duplicate timestamps exist in the database."
                     ) from e
                 raise
             except Exception as e:
                 self._runner.rollback()
-                # If the error is because index already exists, that's fine
-                if "already exists" not in str(e):
+                if "already exists" in str(e):
+                    self._runner.begin_immediate()
+                    self._write_schema_version_locked(3)
+                    self._runner.commit()
+                else:
                     raise
+
+    def _ensure_schema_v4(self) -> None:
+        """Add queue alias support (schema version 4)."""
+        with self._lock:
+            current_version = self._read_schema_version_locked()
+
+            if current_version >= 4:
+                self._runner.begin_immediate()
+                try:
+                    try:
+                        self._runner.run(SQL_CREATE_TABLE_ALIASES)
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            raise
+
+                    try:
+                        self._runner.run(SQL_CREATE_IDX_ALIASES_TARGET)
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            raise
+
+                    self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
+                    self._runner.commit()
+                except Exception:
+                    self._runner.rollback()
+                    raise
+                return
+
+            if current_version < 3:
+                # Await earlier migrations before attempting alias support
+                return
+
+            try:
+                self._runner.begin_immediate()
+                self._runner.run(SQL_CREATE_TABLE_ALIASES)
+                self._runner.run(SQL_CREATE_IDX_ALIASES_TARGET)
+                self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
+                self._write_schema_version_locked(4)
+                self._runner.commit()
+            except Exception:
+                self._runner.rollback()
+                raise
 
     def _check_fork_safety(self) -> None:
         """Check if we're still in the original process.
@@ -1595,18 +1716,26 @@ class BrokerCore:
         # Execute with retry logic
         _execute_with_retry(_do_delete)
 
-    def broadcast(self, message: str) -> None:
+    def broadcast(self, message: str, *, pattern: str | None = None) -> int:
         """Broadcast a message to all existing queues atomically.
 
         Args:
             message: Message body to broadcast to all queues
+            pattern: Optional fnmatch-style glob limiting target queues
+
+        Returns:
+            Number of queues that received the message
 
         Raises:
             RuntimeError: If called from a forked process or counter overflow
         """
         self._check_fork_safety()
 
+        # Variable to store the count
+        queue_count = 0
+
         def _do_broadcast() -> None:
+            nonlocal queue_count
             with self._lock:
                 # Use BEGIN IMMEDIATE to ensure we see all committed changes and
                 # prevent other connections from writing during our transaction
@@ -1616,12 +1745,20 @@ class BrokerCore:
                     rows = self._runner.run(SQL_SELECT_DISTINCT_QUEUES, fetch=True)
                     queues = [row[0] for row in rows]
 
+                    if pattern:
+                        queues = [
+                            queue for queue in queues if fnmatchcase(queue, pattern)
+                        ]
+
                     # Generate timestamps for all queues upfront (before inserts)
                     # This reduces transaction time and improves concurrency
                     queue_timestamps = []
                     for queue in queues:
                         timestamp = self.generate_timestamp()
                         queue_timestamps.append((queue, timestamp))
+
+                    # Store count before inserts
+                    queue_count = len(queue_timestamps)
 
                     # Insert message to each queue with pre-generated timestamp
                     for queue, timestamp in queue_timestamps:
@@ -1639,6 +1776,7 @@ class BrokerCore:
 
         # Execute with retry logic
         _execute_with_retry(_do_broadcast)
+        return queue_count
 
     def _should_vacuum(self, *, config: dict[str, Any] = _config) -> bool:
         """Check if vacuum needed (fast approximation)."""
@@ -2033,5 +2171,136 @@ class BrokerDB(BrokerCore):
             "Create a new instance in each process."
         )
 
+    # ~
+    def _load_aliases_locked(self) -> None:
+        """Refresh alias cache. Caller must hold self._lock."""
+        rows = list(self._runner.run(SQL_SELECT_ALIASES, fetch=True))
+        self._alias_cache = dict(rows)
+        self._alias_cache_version = self._current_alias_version_locked()
 
-# ~
+    def _current_alias_version_locked(self) -> int:
+        rows = list(self._runner.run(SQL_SELECT_ALIAS_VERSION, fetch=True))
+        return int(rows[0][0]) if rows and rows[0][0] is not None else 0
+
+    def _refresh_alias_cache_if_needed_locked(self) -> None:
+        if self._alias_cache_version < 0:
+            self._load_aliases_locked()
+            return
+
+        current_version = self._current_alias_version_locked()
+        if current_version != self._alias_cache_version:
+            self._load_aliases_locked()
+
+    def get_alias_version(self) -> int:
+        with self._lock:
+            self._refresh_alias_cache_if_needed_locked()
+            return self._alias_cache_version
+
+    def resolve_alias(self, alias: str) -> str | None:
+        with self._lock:
+            self._refresh_alias_cache_if_needed_locked()
+            return self._alias_cache.get(alias)
+
+    def canonicalize_queue(self, queue: str) -> str:
+        with self._lock:
+            self._refresh_alias_cache_if_needed_locked()
+            target = self._alias_cache.get(queue)
+            return target if target is not None else queue
+
+    def has_alias(self, alias: str) -> bool:
+        with self._lock:
+            self._refresh_alias_cache_if_needed_locked()
+            return alias in self._alias_cache
+
+    def list_aliases(self) -> list[tuple[str, str]]:
+        with self._lock:
+            self._load_aliases_locked()
+            return sorted(self._alias_cache.items())
+
+    def aliases_for_target(self, target: str) -> list[str]:
+        with self._lock:
+            rows = list(
+                self._runner.run(SQL_SELECT_ALIASES_FOR_TARGET, (target,), fetch=True)
+            )
+            return sorted(alias for (alias,) in rows)
+
+    def _increment_alias_version_locked(self) -> None:
+        self._runner.run(SQL_UPDATE_ALIAS_VERSION)
+        rows = list(self._runner.run(SQL_SELECT_ALIAS_VERSION, fetch=True))
+        self._alias_cache_version = int(rows[0][0]) if rows else 0
+
+    def _validate_alias_target(self, alias: str, target: str) -> None:
+        if alias == target:
+            raise ValueError("Alias and target must differ")
+        if not alias:
+            raise ValueError("Alias name cannot be empty")
+        if alias.startswith(ALIAS_PREFIX):
+            raise ValueError("Alias names should not include the '@' prefix")
+        if target.startswith(ALIAS_PREFIX):
+            raise ValueError("Target names should not include the '@' prefix")
+        if not target:
+            raise ValueError("Alias target cannot be empty")
+
+    def add_alias(self, alias: str, target: str) -> None:
+        should_warn = self.queue_exists_and_has_messages(alias)
+
+        with self._lock:
+            self._validate_alias_target(alias, target)
+
+            if self._alias_cache_version < 0:
+                self._load_aliases_locked()
+
+            if alias in self._alias_cache:
+                raise ValueError(f"Alias '{alias}' already exists")
+
+            if target in self._alias_cache:
+                raise ValueError("Cannot target another alias")
+
+            if should_warn:
+                warnings.warn(
+                    (
+                        f"Queue '{alias}' already exists with messages. "
+                        f"The alias @{alias} will redirect to '{target}' while "
+                        f"the queue {alias} remains accessible directly."
+                    ),
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+
+            visited = set()
+            to_visit = [target]
+            while to_visit:
+                current = to_visit.pop()
+                if current == alias:
+                    raise ValueError("Alias cycle detected")
+                if current in visited:
+                    continue
+                visited.add(current)
+                next_target = self._alias_cache.get(current)
+                if next_target is not None:
+                    to_visit.append(next_target)
+
+            self._runner.begin_immediate()
+            try:
+                self._runner.run(SQL_INSERT_ALIAS, (alias, target))
+                self._increment_alias_version_locked()
+                self._load_aliases_locked()
+                self._runner.commit()
+            except Exception:
+                self._runner.rollback()
+                raise
+
+    def remove_alias(self, alias: str) -> None:
+        with self._lock:
+            if self._alias_cache_version < 0:
+                self._load_aliases_locked()
+
+            self._runner.begin_immediate()
+            try:
+                self._runner.run(SQL_DELETE_ALIAS, (alias,))
+                self._increment_alias_version_locked()
+                self._load_aliases_locked()
+                self._runner.commit()
+            except Exception:
+                self._runner.rollback()
+                raise

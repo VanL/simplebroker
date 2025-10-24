@@ -86,7 +86,7 @@ class TestConstants:
         """Test database-related constants."""
         assert DEFAULT_DB_NAME == ".broker.db"
         assert SIMPLEBROKER_MAGIC == "simplebroker-v1"
-        assert SCHEMA_VERSION == 1
+        assert SCHEMA_VERSION >= 1
         assert isinstance(DEFAULT_DB_NAME, str)
         assert isinstance(SIMPLEBROKER_MAGIC, str)
         assert isinstance(SCHEMA_VERSION, int)

@@ -123,6 +123,8 @@ processed: 1
 
 # Broadcast to all queues
 $ broker broadcast "System maintenance at 5pm"
+# Target only matching queues using fnmatch-style globs
+$ broker broadcast --pattern 'jobs-*' "Pipeline paused"
 
 # Clean up when done
 $ broker --cleanup
@@ -156,7 +158,38 @@ $ broker --cleanup
 | `delete --all` | Delete all queues (marks for removal; use `--vacuum` to reclaim space) |
 | `broadcast <message\|->` | Send message to all existing queues |
 | `watch <queue> [options]` | Watch queue for new messages |
+| `alias <add|remove|list>` | Manage queue aliases |
 | `init [--force]` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
+
+#### Queue Aliases
+
+Use aliases when two agents refer to the same underlying queue with different names. Aliases are stored in the database, persist across processes, and update atomically.
+
+```bash
+$ broker alias add task1.outbox agent1-to-agent2
+$ broker alias add task2.inbox agent1-to-agent2
+$ broker write @task1.outbox "Job ready"
+$ broker read @task2.inbox
+Job ready
+$ broker alias list
+task1.outbox -> agent1-to-agent2
+task2.inbox -> agent1-to-agent2
+$ broker alias list --target agent1-to-agent2
+task1.outbox -> agent1-to-agent2
+task2.inbox -> agent1-to-agent2
+$ broker write task1.outbox "goes to literal queue"
+$ broker read task1.outbox
+goes to literal queue
+$ broker alias remove task1.outbox
+```
+
+- Plain queue names (`task1.outbox`) always refer to the literal queue. Use the
+  `@` prefix (`@task1.outbox`) to opt into alias resolution—if the alias is not
+  defined the command fails.
+- Alias names are plain queue names (no `@` prefix); when *using* an alias on the CLI, prefix it with `@`.
+- Use `alias list --target <queue>` to see which aliases point to a specific queue (reverse lookup).
+- A target must be a real queue name (not another alias). Attempts to alias an alias or create cycles raise `ValueError`.
+- Removing an alias does not affect stored messages; they remain under the canonical queue name.
 
 ### Command Options
 
@@ -321,6 +354,8 @@ $ broker read worker2  # -> "shutdown signal"
 ```
 
 **Note:** Broadcast sends to all *existing* queues at execution time. There's a small race window for queues created during broadcast.
+
+**Alias interaction:** Broadcast operations ignore aliases and work only on literal queue names. Pattern matching with `--pattern` matches queue names, not alias names.
 </details>
 
 <details>

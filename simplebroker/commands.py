@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import cast
 
 from ._constants import (
+    ALIAS_PREFIX,
     EXIT_ERROR,
     EXIT_QUEUE_EMPTY,
     EXIT_SUCCESS,
@@ -21,6 +22,63 @@ from .db import DBConnection
 from .helpers import _is_valid_sqlite_db
 from .sbqueue import Queue
 from .watcher import QueueMoveWatcher, QueueWatcher
+
+
+def _resolve_alias_name(db_path: str, name: str) -> tuple[str, str | None]:
+    """Resolve a queue name or alias, returning canonical queue and alias used."""
+    if not name.startswith(ALIAS_PREFIX):
+        return name, None
+
+    alias_key = name[len(ALIAS_PREFIX) :]
+    if not alias_key:
+        raise ValueError("Alias name cannot be empty")
+
+    with DBConnection(db_path) as conn:
+        db = conn.get_connection()
+        target = db.resolve_alias(alias_key)
+        if target is None:
+            raise ValueError(f"Alias '{alias_key}' is not defined")
+    return target, alias_key
+
+
+def cmd_alias_list(db_path: str, target: str | None = None) -> int:
+    with DBConnection(db_path) as conn:
+        db = conn.get_connection()
+        if target:
+            aliases = db.aliases_for_target(target)
+            if not aliases:
+                print(f"No aliases found for '{target}'")
+            else:
+                for alias in aliases:
+                    print(f"{alias} -> {target}")
+        else:
+            for alias, alias_target in db.list_aliases():
+                print(f"{alias} -> {alias_target}")
+    return EXIT_SUCCESS
+
+
+def cmd_alias_add(db_path: str, alias: str, target: str, *, quiet: bool = False) -> int:
+    with DBConnection(db_path) as conn:
+        db = conn.get_connection()
+        if quiet:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                db.add_alias(alias, target)
+        else:
+            db.add_alias(alias, target)
+    return EXIT_SUCCESS
+
+
+def cmd_alias_remove(db_path: str, alias: str) -> int:
+    with DBConnection(db_path) as conn:
+        db = conn.get_connection()
+
+        if not db.has_alias(alias):
+            print(f"simplebroker: alias '{alias}' does not exist", file=sys.stderr)
+            return EXIT_ERROR
+
+        db.remove_alias(alias)
+    return EXIT_SUCCESS
 
 
 def parse_exact_message_id(message_id_str: str) -> int | None:
@@ -285,7 +343,8 @@ def cmd_write(db_path: str, queue_name: str, message: str) -> int:
         Exit code
     """
     content = _get_message_content(message)
-    with Queue(queue_name, db_path=db_path) as queue:
+    canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
+    with Queue(canonical_queue, db_path=db_path) as queue:
         queue.write(content)
     return EXIT_SUCCESS
 
@@ -320,7 +379,8 @@ def cmd_read(
         return error_code
 
     # Create queue instance
-    with Queue(queue_name, db_path=db_path) as queue:
+    canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
+    with Queue(canonical_queue, db_path=db_path) as queue:
         return _process_queue_fetch(
             fetch_one=queue.read_one,
             fetch_generator=queue.read_generator,
@@ -607,12 +667,13 @@ def cmd_move(
                 return EXIT_SUCCESS
 
 
-def cmd_broadcast(db_path: str, message: str) -> int:
+def cmd_broadcast(db_path: str, message: str, pattern: str | None = None) -> int:
     """Send message to all queues.
 
     Args:
         db_path: Path to database file
         message: Message content or "-" for stdin
+        pattern: Optional fnmatch-style pattern limiting target queues
 
     Returns:
         Exit code
@@ -622,9 +683,10 @@ def cmd_broadcast(db_path: str, message: str) -> int:
     # Broadcast is a cross-queue operation, use DBConnection
     with DBConnection(db_path) as conn:
         db = conn.get_connection()
-        db.broadcast(content)
+        queue_count = db.broadcast(content, pattern=pattern)
 
-    return EXIT_SUCCESS
+    # Return EXIT_QUEUE_EMPTY if no queues matched, EXIT_SUCCESS otherwise
+    return EXIT_SUCCESS if queue_count > 0 else EXIT_QUEUE_EMPTY
 
 
 def cmd_vacuum(db_path: str, compact: bool = False) -> int:

@@ -36,6 +36,9 @@ else:
     run_with_coverage = None
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
 # --------------------------------------------------------------------------- #
 # Fixtures
 # --------------------------------------------------------------------------- #
@@ -87,6 +90,12 @@ def run_cli(
     # Ensure UTF-8 encoding on Windows
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    # Ensure the CLI can import the in-repo package from temporary workdirs
+    project_paths = [str(PROJECT_ROOT)]
+    existing_pythonpath = env.get("PYTHONPATH")
+    if existing_pythonpath:
+        project_paths.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(project_paths)
 
     # Use coverage-wrapped subprocess if available, otherwise normal subprocess
     run_func = run_with_coverage if run_with_coverage else subprocess.run

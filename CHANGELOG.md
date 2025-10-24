@@ -5,6 +5,18 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2025-10-24
+### Added
+- Selective broadcast support via `broker broadcast --pattern`, using fnmatch-style globs.
+- Queue alias management commands (`broker alias add/remove/list`) with explicit `@alias` usage.
+- Alias cache auto-refresh on version changes and warning when alias names already have messages.
+- CLI option `broker alias list --target <queue>` and reverse lookup helper in the Python API.
+- Dedicated test suites for alias DB/CLI behaviour.
+
+### Changed
+- Alias resolution now only occurs when the queue name is prefixed with `@`, keeping plain queue names untouched.
+- Schema migration for alias support now wraps DDL in transactions and gracefully handles existing tables/indexes.
+
 ## [2.6.2] - 2025-10-23
 ### Added
 - Set auto vacuum to INCREMENTAL by default 
@@ -202,4 +214,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - FIFO message guarantees
 - Simple command-line interface
 - Full test suite
-

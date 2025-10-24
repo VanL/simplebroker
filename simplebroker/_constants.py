@@ -44,6 +44,9 @@ __version__: Final[str] = "2.6.2"
 PROG_NAME: Final[str] = "simplebroker"
 """Program name used in CLI help and error messages."""
 
+ALIAS_PREFIX: Final[str] = "@"
+"""Prefix used to denote explicit alias references in the CLI."""
+
 # ==============================================================================
 # DATABASE CONFIGURATION
 # ==============================================================================
@@ -54,7 +57,7 @@ DEFAULT_DB_NAME: Final[str] = ".broker.db"
 SIMPLEBROKER_MAGIC: Final[str] = "simplebroker-v1"
 """Magic string stored in database to verify it's a SimpleBroker database."""
 
-SCHEMA_VERSION: Final[int] = 1
+SCHEMA_VERSION: Final[int] = 4
 """Current database schema version for migration compatibility."""
 
 # ==============================================================================

@@ -230,6 +230,40 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         "broadcast", help="send message to all queues"
     )
     broadcast_parser.add_argument("message", help="message content ('-' for stdin)")
+    broadcast_parser.add_argument(
+        "-p",
+        "--pattern",
+        help="only broadcast to queues matching this fnmatch-style glob",
+    )
+
+    alias_parser = subparsers.add_parser("alias", help="manage queue aliases")
+    alias_subparsers = alias_parser.add_subparsers(dest="alias_command")
+
+    alias_add = alias_subparsers.add_parser(
+        "add", help="create a new alias for a target queue"
+    )
+    alias_add.add_argument(
+        "alias", help="alias name (must be prefixed with @ when used)"
+    )
+    alias_add.add_argument("target", help="existing queue that alias points to")
+    alias_add.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="suppress warnings when alias shadows an existing queue",
+    )
+
+    alias_remove = alias_subparsers.add_parser(
+        "remove", help="remove an existing alias"
+    )
+    alias_remove.add_argument("alias", help="alias name to remove")
+
+    alias_list = alias_subparsers.add_parser("list", help="list configured aliases")
+    alias_list.add_argument(
+        "--target",
+        metavar="QUEUE",
+        help="show only aliases that point to the specified queue",
+    )
 
     # Watch command
     watch_parser = subparsers.add_parser(
@@ -815,7 +849,29 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 since_str=since_str,
             )
         elif args.command == "broadcast":
-            return commands.cmd_broadcast(db_path_str, args.message)
+            return commands.cmd_broadcast(
+                db_path_str, args.message, pattern=getattr(args, "pattern", None)
+            )
+        elif args.command == "alias":
+            subcommand = getattr(args, "alias_command", None)
+            if subcommand is None:
+                parser.error("alias subcommand is required")
+
+            if subcommand == "add":
+                return commands.cmd_alias_add(
+                    db_path_str,
+                    args.alias,
+                    args.target,
+                    quiet=getattr(args, "quiet", False),
+                )
+            if subcommand == "remove":
+                return commands.cmd_alias_remove(db_path_str, args.alias)
+            if subcommand == "list":
+                return commands.cmd_alias_list(
+                    db_path_str, target=getattr(args, "target", None)
+                )
+
+            parser.error("unknown alias subcommand")
         elif args.command == "watch":
             since_str = getattr(args, "since", None)
             move_to = getattr(args, "move", None)

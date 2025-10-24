@@ -28,6 +28,40 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 # ============================================================================
+# ALIAS TABLE OPERATIONS
+# ============================================================================
+
+# IMPORTANT NOTE: alias metadata (alias_version) lives in the meta table; see the meta-table
+# section for GET/UPDATE helpers that keep the alias cache in sync.
+
+CREATE_ALIASES_TABLE = """
+CREATE TABLE IF NOT EXISTS queue_aliases (
+    alias TEXT PRIMARY KEY,
+    target TEXT NOT NULL
+)
+"""
+
+CREATE_ALIAS_TARGET_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_queue_aliases_target ON queue_aliases(target)
+"""
+
+SELECT_ALIASES = """
+SELECT alias, target FROM queue_aliases
+"""
+
+SELECT_ALIASES_FOR_TARGET = """
+SELECT alias FROM queue_aliases WHERE target = ?
+"""
+
+INSERT_ALIAS = """
+INSERT INTO queue_aliases (alias, target) VALUES (?, ?)
+"""
+
+DELETE_ALIAS = """
+DELETE FROM queue_aliases WHERE alias = ?
+"""
+
+# ============================================================================
 # INDEX CREATION
 # ============================================================================
 
@@ -231,6 +265,22 @@ UPDATE meta SET value = ? WHERE key = 'last_ts'
 GET_MAX_MESSAGE_TS = """
 SELECT MAX(ts) FROM messages
 """
+
+# IMPORTANT NOTE: alias information is stored in the alias table; these meta operations
+
+# Alias metadata (alias_version)
+INSERT_ALIAS_VERSION_META = """
+INSERT OR IGNORE INTO meta (key, value) VALUES ('alias_version', 0)
+"""
+
+UPDATE_ALIAS_VERSION = """
+UPDATE meta SET value = value + 1 WHERE key = 'alias_version'
+"""
+
+GET_ALIAS_VERSION = """
+SELECT value FROM meta WHERE key = 'alias_version'
+"""
+
 
 # ============================================================================
 # STATUS OPERATIONS
