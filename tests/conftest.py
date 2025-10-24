@@ -90,6 +90,8 @@ def run_cli(
     # Ensure UTF-8 encoding on Windows
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    # Force unbuffered I/O so Windows pipes do not stall waiting for flushes
+    env["PYTHONUNBUFFERED"] = "1"
     # Ensure the CLI can import the in-repo package from temporary workdirs
     project_paths = [str(PROJECT_ROOT)]
     existing_pythonpath = env.get("PYTHONPATH")

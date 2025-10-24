@@ -158,7 +158,7 @@ $ broker --cleanup
 | `delete --all` | Delete all queues (marks for removal; use `--vacuum` to reclaim space) |
 | `broadcast <message\|->` | Send message to all existing queues |
 | `watch <queue> [options]` | Watch queue for new messages |
-| `alias <add|remove|list>` | Manage queue aliases |
+| `alias <add|remove|list|->` | Manage queue aliases |
 | `init [--force]` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
 
 #### Queue Aliases
