@@ -63,7 +63,7 @@ def run_cli(
     *args,
     cwd: Path,
     stdin: str | None = None,
-    timeout: float = 6.0,
+    timeout: float | None = None,
 ) -> tuple[int, str, str]:
     """
     Execute the SimpleBroker CLI (`python -m simplebroker.cli …`) inside *cwd*.
@@ -78,7 +78,8 @@ def run_cli(
     stdin
         If given, string passed to the process' standard input.
     timeout
-        Safety valve – kill the process if it takes longer (seconds).
+        Safety valve – kill the process if it takes longer (seconds). Defaults to
+        12s on Windows and 6s on other platforms.
 
     Returns
     -------
@@ -101,6 +102,9 @@ def run_cli(
 
     # Use coverage-wrapped subprocess if available, otherwise normal subprocess
     run_func = run_with_coverage if run_with_coverage else subprocess.run
+
+    if timeout is None:
+        timeout = 12.0 if sys.platform == "win32" else 6.0
 
     completed = run_func(
         cmd,

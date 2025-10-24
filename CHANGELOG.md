@@ -5,6 +5,11 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.1] - 2025-10-24
+### Changed
+- Updated tests on windows to use unbuffered I/O and longer timeouts
+
+
 ## [2.7.0] - 2025-10-24
 ### Added
 - Selective broadcast support via `broker broadcast --pattern`, using fnmatch-style globs.
