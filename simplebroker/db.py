@@ -135,6 +135,9 @@ from ._sql import (
     SELECT_ALIASES_FOR_TARGET as SQL_SELECT_ALIASES_FOR_TARGET,
 )
 from ._sql import (
+    SELECT_META_ALL as SQL_SELECT_META_ALL,
+)
+from ._sql import (
     UPDATE_ALIAS_VERSION as SQL_UPDATE_ALIAS_VERSION,
 )
 from ._sql import (
@@ -2224,10 +2227,27 @@ class BrokerDB(BrokerCore):
             )
             return sorted(alias for (alias,) in rows)
 
+    def get_meta(self) -> dict[str, int | str]:
+        with self._lock:
+            rows = list(self._runner.run(SQL_SELECT_META_ALL, fetch=True))
+            meta: dict[str, int | str] = {}
+            for key, value in rows:
+                if isinstance(value, int):
+                    meta[key] = value
+                    continue
+                if isinstance(value, str):
+                    try:
+                        meta[key] = int(value)
+                    except ValueError:
+                        meta[key] = value
+                    continue
+                meta[key] = str(value)
+            return meta
+
     def _increment_alias_version_locked(self) -> None:
-        self._runner.run(SQL_UPDATE_ALIAS_VERSION)
-        rows = list(self._runner.run(SQL_SELECT_ALIAS_VERSION, fetch=True))
-        self._alias_cache_version = int(rows[0][0]) if rows else 0
+        new_version = time.time_ns()
+        self._runner.run(SQL_UPDATE_ALIAS_VERSION, (new_version,))
+        self._alias_cache_version = new_version
 
     def _validate_alias_target(self, alias: str, target: str) -> None:
         if alias == target:

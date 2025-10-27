@@ -52,6 +52,15 @@ def test_aliases_for_target(db_path: Path) -> None:
         assert db.aliases_for_target("missing") == []
 
 
+def test_get_meta_includes_alias_version(db_path: Path) -> None:
+    with BrokerDB(str(db_path)) as db:
+        meta_before = db.get_meta()
+        assert "alias_version" in meta_before
+        db.add_alias("alpha", "shared")
+        meta_after = db.get_meta()
+        assert meta_after["alias_version"] > meta_before["alias_version"]
+
+
 def test_alias_reject_self_reference(db_path: Path) -> None:
     with BrokerDB(str(db_path)) as db:
         with pytest.raises(ValueError):
@@ -71,10 +80,10 @@ def test_alias_version_bumps(db_path: Path) -> None:
         version1 = db.get_alias_version()
         db.add_alias("x", "y")
         version2 = db.get_alias_version()
-        assert version2 == version1 + 1
+        assert version2 > version1
         db.remove_alias("x")
         version3 = db.get_alias_version()
-        assert version3 == version2 + 1
+        assert version3 > version2
 
 
 def test_alias_persistent_cache_refresh(tmp_path: Path) -> None:

@@ -266,6 +266,11 @@ GET_MAX_MESSAGE_TS = """
 SELECT MAX(ts) FROM messages
 """
 
+# Get all meta key-value pairs for dump
+SELECT_META_ALL = """
+SELECT key, value FROM meta
+"""
+
 # IMPORTANT NOTE: alias information is stored in the alias table; these meta operations
 
 # Alias metadata (alias_version)
@@ -274,7 +279,7 @@ INSERT OR IGNORE INTO meta (key, value) VALUES ('alias_version', 0)
 """
 
 UPDATE_ALIAS_VERSION = """
-UPDATE meta SET value = value + 1 WHERE key = 'alias_version'
+UPDATE meta SET value = ? WHERE key = 'alias_version'
 """
 
 GET_ALIAS_VERSION = """
