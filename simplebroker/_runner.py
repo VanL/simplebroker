@@ -36,8 +36,15 @@ except ImportError:
     msvcrt = None  # type: ignore[assignment]
 
 import contextlib
+import sys
 
-from typing_extensions import Self
+# Self was added to typing in Python 3.11
+if sys.version_info >= (3, 11):
+    from typing import Self
+else:
+    from typing import TypeVar
+
+    Self = TypeVar("Self", bound="SQLiteRunner")  # type: ignore[misc]
 
 from ._constants import ConnectionPhase, load_config
 from ._exceptions import DataError, IntegrityError, OperationalError
