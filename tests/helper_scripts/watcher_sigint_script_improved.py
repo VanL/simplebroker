@@ -97,8 +97,8 @@ def main() -> None:
         watcher.run_forever()
         exit_code = 0
     except KeyboardInterrupt:
-        # This shouldn't happen - watcher should handle it internally
-        exit_code = 1
+        # Treat external KeyboardInterrupt as graceful shutdown
+        exit_code = 0
     except Exception as e:
         print(f"Watcher error: {e}", flush=True)
         exit_code = 1

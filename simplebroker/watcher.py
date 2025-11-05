@@ -716,6 +716,9 @@ class BaseWatcher(ABC):
             except _StopLoop:
                 # Normal shutdown
                 break
+            except KeyboardInterrupt:
+                # Propagate KeyboardInterrupt so callers can handle it specifically
+                raise
             except Exception as e:
                 retry_count += 1
                 if not self._handle_retry(e, retry_count, max_retries):
@@ -729,6 +732,7 @@ class BaseWatcher(ABC):
         # Default implementation - just stop
         logger.info("Received SIGINT, stopping watcher...")
         self.stop(join=False)
+        raise KeyboardInterrupt
 
     def _safe_call_handler(
         self,
