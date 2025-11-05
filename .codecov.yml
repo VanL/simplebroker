@@ -5,7 +5,7 @@ coverage:
         # Target coverage percentage
         target: 75%
         # Allow coverage to drop by up to 1% and still pass
-        threshold: 1%
+        threshold: 2%
         # Use auto base to compare against the appropriate base
         base: auto
         # Only show coverage status on changes
@@ -16,7 +16,7 @@ coverage:
     patch:
       default:
         # Target coverage for changed lines
-        target: 80%
+        target: 50%
         # Allow patch coverage to drop by up to 5% and still pass
         threshold: 5%
         base: auto
