@@ -7,6 +7,7 @@ These tests ensure this promise is maintained.
 import ast
 import sys
 from pathlib import Path
+
 import pytest
 
 tomllib = None
@@ -15,6 +16,7 @@ try:
 except ImportError:
     # Python < 3.11
     pass
+
 
 @pytest.mark.skipif(tomllib is None, reason="tomllib not available in Python < 3.11")
 def test_pyproject_has_no_dependencies():
