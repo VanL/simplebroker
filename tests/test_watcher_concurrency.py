@@ -37,6 +37,44 @@ class ConcurrentCollector:
             return [msg for msg, _ in self.messages]
 
 
+def wait_for_queue_drain(
+    db_path,
+    queue_name: str,
+    collectors: list[ConcurrentCollector],
+    expected_total: int,
+    *,
+    timeout: float = 5.0,
+    poll_interval: float = 0.05,
+) -> None:
+    """Wait until the queue is empty and all expected messages are collected."""
+    deadline = time.perf_counter() + timeout
+
+    while time.perf_counter() < deadline:
+        total_collected = sum(len(collector.get_messages()) for collector in collectors)
+
+        if total_collected >= expected_total:
+            with BrokerDB(db_path) as db:
+                stats = {
+                    name: unclaimed for name, unclaimed, _total in db.get_queue_stats()
+                }
+                if stats.get(queue_name, 0) == 0:
+                    return
+
+        time.sleep(poll_interval)
+
+    distribution = {
+        collector.worker_id: len(collector.get_messages()) for collector in collectors
+    }
+    with BrokerDB(db_path) as db:
+        stats_snapshot = db.get_queue_stats()
+
+    pytest.fail(
+        "Timeout waiting for queue to drain: "
+        f"expected {expected_total}, got {sum(distribution.values())}; "
+        f"distribution={distribution}; stats={stats_snapshot}"
+    )
+
+
 @pytest.fixture
 def temp_db(tmp_path):
     """Create a temporary database."""
@@ -247,7 +285,13 @@ class TestWorkerPool(WatcherTestBase):
                 for i in range(50):
                     db.write("dynamic_queue", f"late_msg_{i}")
 
-            time.sleep(1.0)  # Give more time for processing
+            wait_for_queue_drain(
+                temp_db,
+                "dynamic_queue",
+                collectors,
+                expected_total=100,
+                timeout=6.0,
+            )
 
         finally:
             # Ensure all workers and database connections are cleaned up

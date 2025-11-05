@@ -104,8 +104,8 @@ def shutdown_test_process(
             try:
                 command = control_queue.get(timeout=0.1)
                 if command == "stop":
-                    stop_requested = True
                     watcher.stop()
+                    stop_requested = True
                     break
             except queue.Empty:
                 continue
