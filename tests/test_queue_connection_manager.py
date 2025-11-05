@@ -147,7 +147,7 @@ class TestQueueConnectionManager:
                 def get_connection():
                     with queue.get_connection() as conn:
                         with lock:
-                            connection_ids.append(id(conn))
+                            connection_ids.append(conn._runner.instance_id)
 
                 # Create multiple threads
                 threads = [threading.Thread(target=get_connection) for _ in range(5)]
@@ -188,7 +188,7 @@ class TestQueueConnectionManager:
                             )
 
                     connections = []
-                    connection_ids = []
+                    connection_runner_ids = []
                     lock = threading.Lock()
                     barrier = threading.Barrier(5)  # Synchronize thread starts
 
@@ -200,7 +200,12 @@ class TestQueueConnectionManager:
                                 with queue.get_connection() as conn2:
                                     with lock:
                                         connections.append((conn1, conn2))
-                                        connection_ids.append((id(conn1), id(conn2)))
+                                        connection_runner_ids.append(
+                                            (
+                                                conn1._runner.instance_id,
+                                                conn2._runner.instance_id,
+                                            )
+                                        )
                                         # Within same thread, should be cached
                                         assert conn1 is conn2, (
                                             "Same thread should get cached connection"
@@ -226,8 +231,10 @@ class TestQueueConnectionManager:
                     if len(connections) == 5:
                         # In persistent mode, each thread gets its own connection (no sharing)
                         # This follows the principle "don't share across threads"
-                        unique_ids = {id_pair[0] for id_pair in connection_ids}
-                        assert len(unique_ids) == 5, (
+                        unique_runner_ids = {
+                            runner_pair[0] for runner_pair in connection_runner_ids
+                        }
+                        assert len(unique_runner_ids) == 5, (
                             "Each thread should have its own connection (no sharing across threads)"
                         )
 
@@ -428,8 +435,9 @@ class TestQueueConnectionManager:
             original_init = SQLiteRunner.__init__
 
             def tracked_init(self, *args, **kwargs):
-                init_calls.append(id(self))
-                return original_init(self, *args, **kwargs)
+                result = original_init(self, *args, **kwargs)
+                init_calls.append(self.instance_id)
+                return result
 
             # Test persistent mode first
             queue1 = None
