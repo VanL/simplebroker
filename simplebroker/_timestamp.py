@@ -210,7 +210,7 @@ class TimestampGenerator:
             return bool(list(rows))
 
         try:
-            return _execute_with_retry(_op, max_retries=5, retry_delay=0.002)
+            return _execute_with_retry(_op, max_retries=15, retry_delay=0.002)
         except OperationalError as e:  # pragma busy_timeout etc.
             raise TimestampError(f"database busy while writing timestamp: {e}") from e
 
