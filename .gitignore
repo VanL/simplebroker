@@ -75,3 +75,6 @@ agent_history/
 .broker.db-wal
 weft/
 .aider*
+.codex*
+.code*
+.coder*

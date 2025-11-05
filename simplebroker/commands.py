@@ -5,6 +5,7 @@ import sys
 import time
 import warnings
 from collections.abc import Callable, Iterator
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import cast
 
@@ -434,12 +435,13 @@ def cmd_peek(
         )
 
 
-def cmd_list(db_path: str, show_stats: bool = False) -> int:
+def cmd_list(db_path: str, show_stats: bool = False, pattern: str | None = None) -> int:
     """list all queues with counts.
 
     Args:
         db_path: Path to database file
         show_stats: If True, show detailed statistics
+        pattern: Optional fnmatch-style glob limiting queues in output
 
     Returns:
         Exit code
@@ -451,6 +453,13 @@ def cmd_list(db_path: str, show_stats: bool = False) -> int:
 
         # Get full queue stats including claimed messages
         queue_stats = db.get_queue_stats()
+
+        if pattern:
+            queue_stats = [
+                (queue_name, unclaimed, total)
+                for queue_name, unclaimed, total in queue_stats
+                if fnmatchcase(queue_name, pattern)
+            ]
 
         # Filter to only show queues with unclaimed messages when not showing stats
         if not show_stats:

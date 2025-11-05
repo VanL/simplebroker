@@ -45,6 +45,30 @@ def test_list_and_delete(workdir):
     assert out == ""
 
 
+def test_list_with_pattern_filter(workdir):
+    """List should honor fnmatch-style patterns when provided."""
+    rc, _, _ = run_cli("write", "alpha", "a1", cwd=workdir)
+    assert rc == 0
+
+    rc, _, _ = run_cli("write", "alerts", "alert", cwd=workdir)
+    assert rc == 0
+
+    rc, _, _ = run_cli("write", "beta", "b1", cwd=workdir)
+    assert rc == 0
+
+    rc, out, _ = run_cli("list", "--pattern", "a*", cwd=workdir)
+    assert rc == 0
+    assert sorted(out.splitlines()) == ["alerts: 1", "alpha: 1"]
+
+    rc, out, _ = run_cli("list", "--pattern", "beta", cwd=workdir)
+    assert rc == 0
+    assert out.splitlines() == ["beta: 1"]
+
+    rc, out, _ = run_cli("list", "--pattern", "z*", cwd=workdir)
+    assert rc == 0
+    assert out == ""
+
+
 def test_peek_command(workdir):
     """Peek reads without removing messages."""
     # Write a message

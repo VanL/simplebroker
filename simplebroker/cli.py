@@ -168,6 +168,11 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         action="store_true",
         help="show statistics including claimed messages",
     )
+    list_parser.add_argument(
+        "-p",
+        "--pattern",
+        help="only show queues matching this fnmatch-style glob",
+    )
 
     # Purge command
     delete_parser = subparsers.add_parser("delete", help="remove messages")
@@ -799,7 +804,8 @@ def main(*, config: dict[str, Any] = _config) -> int:
             )
         elif args.command == "list":
             show_stats = getattr(args, "stats", False)
-            return commands.cmd_list(db_path_str, show_stats)
+            pattern = getattr(args, "pattern", None)
+            return commands.cmd_list(db_path_str, show_stats, pattern=pattern)
         elif args.command == "delete":
             # argparse mutual exclusion ensures exactly one of queue or --all is provided
             queue = None if args.all else args.queue
