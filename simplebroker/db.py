@@ -8,7 +8,7 @@ import threading
 import time
 import warnings
 import weakref
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
@@ -265,6 +265,7 @@ class DBConnection:
                 # Create one BrokerDB per thread, but cache it within the thread
                 # This avoids reconnection overhead within a thread
                 connection = BrokerDB(self.db_path)
+                connection.set_stop_event(self._stop_event)
 
                 # Register the connection for cleanup tracking
                 with self._registry_lock:
@@ -351,6 +352,21 @@ class DBConnection:
                     self._runner = None
                     self._core = None
 
+    def set_stop_event(self, stop_event: threading.Event | None) -> None:
+        """Set the stop event used for interruptible retries."""
+
+        if stop_event is None:
+            self._stop_event = threading.Event()
+        else:
+            self._stop_event = stop_event
+
+        # Update existing thread-local connection if present
+        if hasattr(self._thread_local, "db"):
+            try:
+                self._thread_local.db.set_stop_event(self._stop_event)
+            except AttributeError:
+                pass
+
     def __enter__(self) -> "DBConnection":
         """Enter context manager."""
         return self
@@ -400,6 +416,9 @@ class BrokerCore:
         # SQL runner for all database operations
         self._runner = runner
 
+        # Stop event to allow interruptible retries
+        self._stop_event = threading.Event()
+
         # Write counter for vacuum scheduling
         self._write_count = 0
         self._vacuum_interval = config["BROKER_AUTO_VACUUM_INTERVAL"]
@@ -418,18 +437,29 @@ class BrokerCore:
         self._alias_cache: dict[str, str] = {}
         self._alias_cache_version: int = -1
 
+    def set_stop_event(self, stop_event: threading.Event | None) -> None:
+        """Propagate stop event to retryable operations."""
+
+        self._stop_event = stop_event or threading.Event()
+
+    def _run_with_retry(self, operation: Callable[[], T], **kwargs: Any) -> T:
+        """Wrapper around _execute_with_retry that honors the stop event."""
+
+        kwargs.setdefault("stop_event", self._stop_event)
+        return _execute_with_retry(operation, **kwargs)
+
     def _setup_database(self) -> None:
         """Set up database with optimized settings and schema."""
         with self._lock:
             # Create table if it doesn't exist (using IF NOT EXISTS to handle race conditions)
-            _execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_MESSAGES))
+            self._run_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_MESSAGES))
             # Drop redundant indexes if they exist (from older versions)
             for drop_sql in DROP_OLD_INDEXES:
                 # Create a closure to capture the sql value
                 def drop_index(sql: str = drop_sql) -> Any:
                     return self._runner.run(sql)
 
-                _execute_with_retry(drop_index)
+                self._run_with_retry(drop_index)
 
             # Create only the composite covering index
             # This single index serves all our query patterns efficiently:
@@ -437,34 +467,38 @@ class BrokerCore:
             # - WHERE queue = ? AND ts > ? (uses first two columns)
             # - WHERE queue = ? ORDER BY id (uses first column + sorts by id)
             # - WHERE queue = ? AND ts > ? ORDER BY id LIMIT ? (uses all three)
-            _execute_with_retry(
+            self._run_with_retry(
                 lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS_ID)
             )
 
             # Create partial index for unclaimed messages (only if claimed column exists)
-            rows = _execute_with_retry(
+            rows = self._run_with_retry(
                 lambda: list(
                     self._runner.run(SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True)
                 )
             )
             if rows and rows[0][0] > 0:
-                _execute_with_retry(
+                self._run_with_retry(
                     lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
                 )
-            _execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_META))
-            _execute_with_retry(lambda: self._runner.run(SQL_INSERT_META_LAST_TS))
-            _execute_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_ALIASES))
-            _execute_with_retry(lambda: self._runner.run(SQL_CREATE_IDX_ALIASES_TARGET))
-            _execute_with_retry(lambda: self._runner.run(SQL_INSERT_ALIAS_VERSION_META))
+            self._run_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_META))
+            self._run_with_retry(lambda: self._runner.run(SQL_INSERT_META_LAST_TS))
+            self._run_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_ALIASES))
+            self._run_with_retry(
+                lambda: self._runner.run(SQL_CREATE_IDX_ALIASES_TARGET)
+            )
+            self._run_with_retry(
+                lambda: self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
+            )
 
             # Insert magic string and schema version if not exists
-            _execute_with_retry(
+            self._run_with_retry(
                 lambda: self._runner.run(
                     "INSERT OR IGNORE INTO meta (key, value) VALUES ('magic', ?)",
                     (SIMPLEBROKER_MAGIC,),
                 )
             )
-            _execute_with_retry(
+            self._run_with_retry(
                 lambda: self._runner.run(
                     "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
                     (SCHEMA_VERSION,),
@@ -472,7 +506,7 @@ class BrokerCore:
             )
 
             # final commit can also be retried
-            _execute_with_retry(self._runner.commit)
+            self._run_with_retry(self._runner.commit)
 
     def _verify_database_magic(self) -> None:
         """Verify database magic string and schema version for existing databases."""
@@ -850,8 +884,8 @@ class BrokerCore:
         # The timestamp generator has its own internal transaction for atomicity
         timestamp = self.generate_timestamp()
 
-        # Use existing _execute_with_retry for database lock handling
-        _execute_with_retry(
+        # Use retry helper with stop-aware behavior for database lock handling
+        self._run_with_retry(
             lambda: self._do_write_transaction(queue, message, timestamp)
         )
 
@@ -967,7 +1001,7 @@ class BrokerCore:
         """
         with self._lock:
             try:
-                _execute_with_retry(self._runner.begin_immediate)
+                self._run_with_retry(self._runner.begin_immediate)
             except Exception:
                 return []
 
@@ -1629,7 +1663,7 @@ class BrokerCore:
                 return list(self._runner.run(SQL_SELECT_QUEUES_UNCLAIMED, fetch=True))
 
         # Execute with retry logic
-        return _execute_with_retry(_do_list)
+        return self._run_with_retry(_do_list)
 
     def get_queue_stats(self) -> list[tuple[str, int, int]]:
         """Get all queues with both unclaimed and total message counts.
@@ -1647,7 +1681,7 @@ class BrokerCore:
                 return list(self._runner.run(SQL_SELECT_QUEUES_STATS, fetch=True))
 
         # Execute with retry logic
-        return _execute_with_retry(_do_stats)
+        return self._run_with_retry(_do_stats)
 
     def status(self) -> dict[str, int]:
         """Return high-level database status metrics.
@@ -1676,7 +1710,7 @@ class BrokerCore:
                 last_timestamp = int(last_ts_row[0][0]) if last_ts_row else 0
                 return total_messages, last_timestamp
 
-        total_messages, last_timestamp = _execute_with_retry(_do_status)
+        total_messages, last_timestamp = self._run_with_retry(_do_status)
 
         db_size = 0
         db_path = getattr(self._runner, "_db_path", None)
@@ -1717,7 +1751,7 @@ class BrokerCore:
                 self._runner.commit()
 
         # Execute with retry logic
-        _execute_with_retry(_do_delete)
+        self._run_with_retry(_do_delete)
 
     def broadcast(self, message: str, *, pattern: str | None = None) -> int:
         """Broadcast a message to all existing queues atomically.
@@ -1778,7 +1812,7 @@ class BrokerCore:
                     raise
 
         # Execute with retry logic
-        _execute_with_retry(_do_broadcast)
+        self._run_with_retry(_do_broadcast)
         return queue_count
 
     def _should_vacuum(self, *, config: dict[str, Any] = _config) -> bool:
@@ -1893,7 +1927,7 @@ class BrokerCore:
                 return bool(rows[0][0]) if rows else False
 
         # Execute with retry logic
-        return _execute_with_retry(_do_check)
+        return self._run_with_retry(_do_check)
 
     def has_pending_messages(
         self, queue: str, since_timestamp: int | None = None
@@ -1932,7 +1966,7 @@ class BrokerCore:
                 return bool(rows[0][0]) if rows else False
 
         # Execute with retry logic
-        return _execute_with_retry(_do_check)
+        return self._run_with_retry(_do_check)
 
     def get_data_version(self) -> int | None:
         """Get the data version from SQLite PRAGMA.

@@ -5,6 +5,7 @@ queues without managing the underlying database connection.
 """
 
 import logging
+import threading
 import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -86,6 +87,7 @@ class Queue:
         self._db_path = db_path
         self._persistent = persistent
         self._config = config
+        self._stop_event: threading.Event | None = None
 
         # Create DBConnection for robust connection management
         if persistent:
@@ -111,11 +113,20 @@ class Queue:
         """
         if self._persistent:
             assert self.conn is not None  # Type guard for mypy
+            self.conn.set_stop_event(self._stop_event)
             yield self.conn.get_connection()
         # Ephemeral mode - create a new connection for each operation
         else:
             with DBConnection(self._db_path, self._runner) as conn:
+                conn.set_stop_event(self._stop_event)
                 yield conn.get_connection()
+
+    def set_stop_event(self, stop_event: threading.Event | None) -> None:
+        """Propagate stop event to connections used by this queue."""
+
+        self._stop_event = stop_event
+        if self._persistent and self.conn is not None:
+            self.conn.set_stop_event(stop_event)
 
     def write(self, message: str) -> None:
         """Write a message to this queue.

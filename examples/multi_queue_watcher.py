@@ -177,6 +177,9 @@ class MultiQueueWatcher(BaseWatcher):
                 # Create new Queue object sharing same database
                 queue_obj = Queue(queue_name, db_path=db_path, persistent=persistent)
 
+            if hasattr(queue_obj, "set_stop_event"):
+                queue_obj.set_stop_event(self._stop_event)
+
             self._queues[queue_name] = {
                 "queue": queue_obj,
                 "handler": handler,
@@ -361,6 +364,9 @@ class MultiQueueWatcher(BaseWatcher):
 
         # Create Queue object sharing same database
         queue_obj = Queue(queue_name, db_path=db_path, persistent=self._persistent)
+
+        if hasattr(queue_obj, "set_stop_event"):
+            queue_obj.set_stop_event(self._stop_event)
 
         # Add to queues dictionary
         self._queues[queue_name] = {

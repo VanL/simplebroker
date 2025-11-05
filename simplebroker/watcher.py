@@ -292,6 +292,10 @@ class BaseWatcher(ABC):
         # Event to signal the watcher to stop
         self._stop_event = stop_event or threading.Event()
 
+        # Ensure underlying queue connections are aware of stop event
+        if hasattr(self._queue_obj, "set_stop_event"):
+            self._queue_obj.set_stop_event(self._stop_event)
+
         # Store configuration
         self._config = config
 

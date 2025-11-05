@@ -5,6 +5,13 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.1] - 2025-11-05
+### Added
+- Added -p/--pattern to list command
+### Changed
+- Updated tests to be more deterministic on Windows
+- Added run_with_retry helper and .set_stop_event so that queue watchers process stop events more quickly
+
 ## [2.7.2] - 2025-10-27
 ### Added
 - Added .get_meta method on BrokerCore/BrokerDB to provide a readout of the meta table
