@@ -102,14 +102,28 @@ def test_message_size_utf8_bytes(workdir):
     big_message = emoji * 2_621_440
 
     # This should work (just under 10MB in bytes)
-    rc, _, _ = run_cli("write", "test", "-", cwd=workdir, stdin=big_message)
+    rc, _, _ = run_cli(
+        "write",
+        "test",
+        "-",
+        cwd=workdir,
+        stdin=big_message,
+        timeout=20,
+    )
     assert rc == 0
 
     # Add one more emoji to exceed 10MB
     too_big_message = big_message + emoji
 
     # This should fail (exceeds 10MB in bytes)
-    rc, _, err = run_cli("write", "test", "-", cwd=workdir, stdin=too_big_message)
+    rc, _, err = run_cli(
+        "write",
+        "test",
+        "-",
+        cwd=workdir,
+        stdin=too_big_message,
+        timeout=20,
+    )
     assert rc == 1
     assert "exceeds maximum size" in err
 
@@ -122,12 +136,26 @@ def test_message_size_stdin_utf8(workdir):
     # Check if it would exceed limit
     if len(message.encode("utf-8")) > 10 * 1024 * 1024:
         # Should fail
-        rc, _, err = run_cli("write", "test", "-", cwd=workdir, stdin=message)
+        rc, _, err = run_cli(
+            "write",
+            "test",
+            "-",
+            cwd=workdir,
+            stdin=message,
+            timeout=20,
+        )
         assert rc == 1
         assert "exceeds maximum size" in err
     else:
         # Should succeed
-        rc, _, _ = run_cli("write", "test", "-", cwd=workdir, stdin=message)
+        rc, _, _ = run_cli(
+            "write",
+            "test",
+            "-",
+            cwd=workdir,
+            stdin=message,
+            timeout=20,
+        )
         assert rc == 0
 
 
@@ -144,12 +172,22 @@ def test_broadcast_size_utf8(workdir):
     too_big_message = big_message + emoji  # Just over 10MB
 
     # This should work (increase timeout for large message)
-    rc, _, _ = run_cli("broadcast", "-", cwd=workdir, stdin=big_message, timeout=30)
+    rc, _, _ = run_cli(
+        "broadcast",
+        "-",
+        cwd=workdir,
+        stdin=big_message,
+        timeout=20,
+    )
     assert rc == 0
 
     # This should fail
     rc, _, err = run_cli(
-        "broadcast", "-", cwd=workdir, stdin=too_big_message, timeout=30
+        "broadcast",
+        "-",
+        cwd=workdir,
+        stdin=too_big_message,
+        timeout=20,
     )
     assert rc == 1
     assert "exceeds maximum size" in err
