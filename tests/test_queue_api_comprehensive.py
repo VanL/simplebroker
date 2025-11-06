@@ -351,6 +351,51 @@ class TestQueueMoveMethods:
             finally:
                 source.close()
 
+
+class TestQueueLastTimestampCaching:
+    """Validate queue-level caching of meta.last_ts."""
+
+    def test_last_ts_updates_after_generate_and_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "test.db")
+
+            queue = Queue("ts_queue", db_path=db_path)
+            try:
+                assert queue.last_ts in (None, 0)
+
+                generated = queue.generate_timestamp()
+                assert queue.last_ts == generated
+
+                queue.write("hello")
+                cached = queue.last_ts
+                assert isinstance(cached, int)
+                assert cached >= generated
+
+                refreshed = queue.refresh_last_ts()
+                assert refreshed == queue.last_ts
+                assert refreshed >= generated
+            finally:
+                queue.close()
+
+    def test_refresh_last_ts_detects_external_writes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "test.db")
+
+            watcher_queue = Queue("watcher", db_path=db_path, persistent=True)
+            writer_queue = Queue("writer", db_path=db_path)
+            try:
+                assert watcher_queue.last_ts in (None, 0)
+
+                writer_queue.write("ping")
+                assert watcher_queue.last_ts in (None, 0)
+
+                refreshed = watcher_queue.refresh_last_ts()
+                assert refreshed == watcher_queue.last_ts
+                assert refreshed > 0
+            finally:
+                watcher_queue.close()
+                writer_queue.close()
+
     def test_move_one_exact_timestamp(self):
         """Test move_one with exact_timestamp parameter."""
         with tempfile.TemporaryDirectory() as tmpdir:

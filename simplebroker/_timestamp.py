@@ -131,6 +131,26 @@ class TimestampGenerator:
 
     # -- internal helpers -------------------------------------
 
+    def get_cached_last_ts(self) -> int:
+        """Return the most recently observed timestamp without hitting the database."""
+
+        with self._lock:
+            if not self._initialized:
+                self._initialize()
+            return self._last_ts
+
+    def refresh_last_ts(self) -> int:
+        """Refresh cached timestamp from the database with a lightweight read."""
+
+        with self._lock:
+            latest = self._peek_last_ts()
+            if latest is None:
+                self._last_ts = 0
+            else:
+                self._last_ts = latest
+            self._initialized = True
+            return self._last_ts
+
     def _ensure_pid(self) -> None:
         """
         Handle fork() transparently – cheap check, no DB access.

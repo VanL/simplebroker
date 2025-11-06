@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from simplebroker import Queue
 from simplebroker._constants import load_config
 from simplebroker.db import BrokerDB
 
@@ -192,6 +193,38 @@ class TestQueueWatcher(WatcherTestBase):
         assert len(remaining) == 2
         assert remaining[0] == "peek1"
         assert remaining[1] == "peek2"
+
+    def test_last_ts_cache_updates_on_data_version(self, temp_db):
+        """Watcher should refresh queue.last_ts when data_version changes."""
+
+        collector = MessageCollector()
+        watcher = QueueWatcher(
+            "ts_queue",
+            collector.handler,
+            db=temp_db,
+            peek=True,
+        )
+
+        thread = watcher.run_in_thread()
+        queue_writer = Queue("ts_queue", db_path=str(temp_db))
+        try:
+            time.sleep(0.1)  # Allow watcher to initialize polling
+            assert watcher._queue_obj.last_ts in (None, 0)
+
+            queue_writer.write("first")
+            assert collector.wait_for_messages(1, timeout=2.0)
+            first_cached = watcher._queue_obj.last_ts
+            assert isinstance(first_cached, int)
+            assert first_cached > 0
+
+            queue_writer.write("second")
+            assert collector.wait_for_messages(2, timeout=2.0)
+            assert isinstance(watcher._queue_obj.last_ts, int)
+            assert watcher._queue_obj.last_ts >= first_cached
+        finally:
+            watcher.stop()
+            thread.join(timeout=2.0)
+            queue_writer.close()
 
     def test_graceful_shutdown_stop_method(self, temp_db):
         """Test graceful shutdown via stop() method."""

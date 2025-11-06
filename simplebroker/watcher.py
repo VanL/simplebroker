@@ -702,7 +702,19 @@ class BaseWatcher(ABC):
                     def data_version_getter(q: Queue = queue) -> int | None:
                         return q.get_data_version()
 
-                    self._strategy.start(data_version_getter)
+                    # Seed last_ts before polling so watchers have an initial value
+                    try:
+                        queue.refresh_last_ts()
+                    except Exception:
+                        logger.debug("Initial last_ts refresh failed", exc_info=True)
+
+                    def on_data_version_change(q: Queue = queue) -> None:
+                        q.refresh_last_ts()
+
+                    self._strategy.start(
+                        data_version_getter,
+                        on_data_version_change=on_data_version_change,
+                    )
 
                 # Initial drain of existing messages
                 self._drain_queue()
@@ -1022,6 +1034,7 @@ class PollingStrategy:
         self._stop_event = stop_event
         self._data_version: int | None = None
         self._data_version_provider: Callable[[], int | None] | None = None
+        self._data_change_callback: Callable[[], None] | None = None
         self._pragma_failures = 0
         self._jitter_factor = jitter_factor
 
@@ -1057,12 +1070,16 @@ class PollingStrategy:
         self._check_count = 0
 
     def start(
-        self, data_version_provider: Callable[[], int | None] | None = None
+        self,
+        data_version_provider: Callable[[], int | None] | None = None,
+        *,
+        on_data_version_change: Callable[[], None] | None = None,
     ) -> None:
         """Initialize the strategy."""
         self._data_version_provider = data_version_provider
         self._check_count = 0
         self._data_version = None
+        self._data_change_callback = on_data_version_change
 
     def _get_delay(self) -> float:
         """Calculate delay based on check count."""
@@ -1102,6 +1119,12 @@ class PollingStrategy:
                 return False
             if version != self._data_version:
                 self._data_version = version
+                if self._data_change_callback is not None:
+                    try:
+                        self._data_change_callback()
+                    except Exception:
+                        # Swallow callback exceptions so polling continues
+                        logger.exception("data_version change callback failed")
                 return True  # Change detected!
 
             return False

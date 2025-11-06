@@ -740,6 +740,16 @@ class BrokerCore:
     # Alias for backwards compatibility / shorter name
     get_ts = generate_timestamp
 
+    def get_cached_last_timestamp(self) -> int:
+        """Return the last timestamp observed by the generator without new I/O."""
+
+        return self._timestamp_gen.get_cached_last_ts()
+
+    def refresh_last_timestamp(self) -> int:
+        """Refresh and return the generator's cached timestamp via a meta-table peek."""
+
+        return self._timestamp_gen.refresh_last_ts()
+
     def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
 

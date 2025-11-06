@@ -614,6 +614,27 @@ print(ts2 > ts)  # Monotonic within a database
 Notes:
 - Timestamps are monotonic per database and match what `Queue.write()` uses internally.
 - Generating a timestamp does not reserve a slot; it simply gives you the next ID.
+
+### Tracking the last generated timestamp
+
+Each `Queue` instance caches the most recent `meta.last_ts` value it has seen via the `queue.last_ts` attribute. The cache updates automatically after calls to `queue.write()` and `queue.generate_timestamp()`.
+
+For long-lived watchers or background processes, force a refresh without creating a new message by calling `queue.refresh_last_ts()`, which performs a lightweight, non-blocking read of the meta table:
+
+```python
+queue = Queue("tasks")
+print(queue.last_ts)  # None until we generate or refresh
+
+queue.write("build artifacts ready")
+print(queue.last_ts)  # Updated immediately after the write
+
+# Later, detect external writers without adding a message
+queue.refresh_last_ts()
+print(queue.last_ts)
+```
+
+Watchers automatically refresh their queue's `last_ts` whenever `PRAGMA data_version` reports changes, so you always have a current view of the most recent timestamp while the watcher is running.
+```python
 watcher = QueueWatcher(
     queue=Queue("tasks"),
     handler=process_message,

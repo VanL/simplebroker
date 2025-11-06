@@ -101,6 +101,9 @@ class Queue:
         # Install finalizer for cleanup
         self._install_finalizer()
 
+        # Cached last generated timestamp (meta.last_ts)
+        self._last_ts: int | None = None
+
     @contextmanager
     def get_connection(self) -> Iterator[BrokerCore | BrokerDB]:
         """Get connection for operations - handles both persistent and ephemeral modes.
@@ -128,6 +131,44 @@ class Queue:
         if self._persistent and self.conn is not None:
             self.conn.set_stop_event(stop_event)
 
+    @property
+    def last_ts(self) -> int | None:
+        """Return cached meta.last_ts, fetching lazily on first access."""
+
+        if self._last_ts is None:
+            try:
+                with self.get_connection() as connection:
+                    try:
+                        self._last_ts = connection.get_cached_last_timestamp()
+                    except AttributeError:
+                        # Older runners without hint support
+                        self._last_ts = connection.refresh_last_timestamp()
+            except Exception:
+                # Cache remains None; caller can use refresh_last_ts explicitly
+                return None
+
+        return self._last_ts
+
+    def refresh_last_ts(self) -> int:
+        """Refresh cached last timestamp using a lightweight meta-table read."""
+
+        with self.get_connection() as connection:
+            latest = connection.refresh_last_timestamp()
+        self._last_ts = latest
+        return latest
+
+    def _update_last_ts_hint(self, connection: BrokerCore | BrokerDB) -> None:
+        """Update cached last_ts using the connection's generator state."""
+
+        if self._last_ts is None:
+            return
+
+        try:
+            candidate = connection.get_cached_last_timestamp()
+        except AttributeError:
+            return
+        self._last_ts = candidate
+
     def write(self, message: str) -> None:
         """Write a message to this queue.
 
@@ -141,6 +182,7 @@ class Queue:
         """
         with self.get_connection() as connection:
             connection.write(self.name, message)
+            self._update_last_ts_hint(connection)
 
     def generate_timestamp(self) -> int:
         """Generate a broker-compatible timestamp using the underlying database.
@@ -149,7 +191,9 @@ class Queue:
             64-bit hybrid timestamp unique within the database.
         """
         with self.get_connection() as connection:
-            return connection.generate_timestamp()
+            timestamp = connection.generate_timestamp()
+            self._last_ts = timestamp
+            return timestamp
 
     # Convenience alias
     get_ts = generate_timestamp
