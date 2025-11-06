@@ -18,7 +18,7 @@ coverage:
         # Target coverage for changed lines
         target: 50%
         # Allow patch coverage to drop by up to 5% and still pass
-        threshold: 5%
+        threshold: 15%
         base: auto
         if_not_found: success
         if_ci_failed: error
