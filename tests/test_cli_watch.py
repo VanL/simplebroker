@@ -6,6 +6,7 @@ import time
 
 from .conftest import managed_subprocess
 from .helper_scripts.timestamp_validation import validate_timestamp
+from .helper_scripts.timing import scale_timeout_for_ci
 
 
 def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages=None):
@@ -242,7 +243,11 @@ class TestWatchCommand:
         # Start watch first (empty queue)
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "continuous"]
         with managed_subprocess(cmd, cwd=workdir) as proc:
-            assert proc.wait_for_output("Watching queue", timeout=2.0, stream="stderr")
+            assert proc.wait_for_output(
+                "Watching queue",
+                timeout=scale_timeout_for_ci(2.0),
+                stream="stderr",
+            )
 
             # Write messages while watching
             messages = []
@@ -252,7 +257,10 @@ class TestWatchCommand:
                 rc, _, _ = run_cli("write", "continuous", msg, cwd=workdir)
                 assert rc == 0
                 # Wait for each message to appear
-                assert proc.wait_for_output(msg, timeout=1.0)
+                assert proc.wait_for_output(
+                    msg,
+                    timeout=scale_timeout_for_ci(1.0),
+                )
 
             # Get final output
             stdout = proc.stdout

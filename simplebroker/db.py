@@ -580,7 +580,11 @@ class BrokerCore:
 
             if current_version >= 2 and has_claimed_column:
                 # Schema already migrated; ensure index exists and exit
-                self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
+                try:
+                    self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
+                except Exception as e:
+                    if "already exists" not in str(e):
+                        raise
                 return
 
             self._runner.begin_immediate()
@@ -625,7 +629,11 @@ class BrokerCore:
 
             if current_version >= 3:
                 if not has_unique_index:
-                    self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
+                    try:
+                        self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            raise
                 return
 
             if current_version < 2:
@@ -675,7 +683,11 @@ class BrokerCore:
                         if "already exists" not in str(e):
                             raise
 
-                    self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
+                    try:
+                        self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
+                    except Exception as e:
+                        if "already exists" not in str(e):
+                            raise
                     self._runner.commit()
                 except Exception:
                     self._runner.rollback()

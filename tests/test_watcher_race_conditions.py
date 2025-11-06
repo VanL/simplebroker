@@ -18,7 +18,7 @@ import pytest
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
-from .helper_scripts.timing import wait_for_condition
+from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 
 
 class ConcurrencyTestWatcher(QueueWatcher):
@@ -105,7 +105,19 @@ def test_pre_check_race_no_message_loss() -> None:
                     time.sleep(0.01)  # Small breaks to vary timing
 
             # Wait for all messages to be processed
-            time.sleep(2.0)
+            def processed_count() -> int:
+                with lock:
+                    return len(processed_messages)
+
+            success = wait_for_condition(
+                lambda: processed_count() >= len(expected_messages),
+                timeout=scale_timeout_for_ci(5.0),
+                interval=0.05,
+            )
+            if not success:
+                pytest.fail(
+                    f"Timed out waiting for watchers: processed {processed_count()} of {len(expected_messages)}"
+                )
 
             # Verify all messages were processed exactly once
             processed_bodies = [msg for msg, ts in processed_messages]
@@ -308,19 +320,27 @@ def test_multiple_queues_concurrent_activity() -> None:
                 concurrent.futures.wait(futures)
 
             # Wait for processing - give more time on slower systems
-            max_wait = 10.0  # Maximum wait time
-            start_time = time.monotonic()
-            all_done = False
-
-            while time.monotonic() - start_time < max_wait:
-                # Check if all queues have processed their messages
-                all_done = all(
-                    len(processed_by_queue[f"queue_{i}"]) == messages_per_queue
+            success = wait_for_condition(
+                lambda: all(
+                    len(processed_by_queue[f"queue_{i}"]) >= messages_per_queue
                     for i in range(num_queues)
+                ),
+                timeout=scale_timeout_for_ci(15.0),
+                interval=0.1,
+            )
+            if not success:
+                deficits = {
+                    queue: len(messages)
+                    for queue, messages in processed_by_queue.items()
+                    if len(messages) < messages_per_queue
+                }
+                pytest.fail(
+                    "Not all queues drained in time: "
+                    + ", ".join(
+                        f"{queue}={count}/{messages_per_queue}"
+                        for queue, count in deficits.items()
+                    )
                 )
-                if all_done:
-                    break
-                time.sleep(0.1)
 
             # Verify each queue processed its messages
             for i in range(num_queues):

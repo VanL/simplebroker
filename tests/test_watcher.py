@@ -17,6 +17,7 @@ from simplebroker.db import BrokerDB
 pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueWatcher
 
+from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 from .helper_scripts.watcher_base import WatcherTestBase
 
 logger = logging.getLogger(__name__)
@@ -511,8 +512,19 @@ class TestQueueWatcher(WatcherTestBase):
                 thread = watcher.run_in_thread()
                 workers.append((watcher, thread))
 
-            # Let workers process messages
-            time.sleep(0.7)
+            # Wait until all messages processed or timeout
+            def total_processed() -> int:
+                return sum(len(collector.get_messages()) for collector in collectors)
+
+            success = wait_for_condition(
+                lambda: total_processed() >= num_messages,
+                timeout=scale_timeout_for_ci(5.0),
+                interval=0.05,
+            )
+            if not success:
+                pytest.fail(
+                    f"Workers processed only {total_processed()} of {num_messages} messages"
+                )
         finally:
             # Stop all workers
             for watcher, _thread in workers:
