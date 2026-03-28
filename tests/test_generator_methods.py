@@ -357,9 +357,7 @@ class TestGeneratorMethods:
         try:
             assert next(gen) == "message1"
 
-            with pytest.raises(
-                RuntimeError, match="separate BrokerDB/Queue instance"
-            ):
+            with pytest.raises(RuntimeError, match="separate BrokerDB/Queue instance"):
                 broker.write("other_queue", "nested")
         finally:
             gen.close()
@@ -388,9 +386,7 @@ class TestGeneratorMethods:
         try:
             assert next(gen) == "message1"
 
-            with pytest.raises(
-                RuntimeError, match="separate BrokerDB/Queue instance"
-            ):
+            with pytest.raises(RuntimeError, match="separate BrokerDB/Queue instance"):
                 broker.write("other_queue", "nested")
         finally:
             gen.close()

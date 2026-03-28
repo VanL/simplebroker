@@ -86,9 +86,7 @@ class ConcurrencyTestWatcher(QueueWatcher):
                 raise
 
         if config is not None:
-            return super()._process_with_retry(
-                wrapped, operation_name, config=config
-            )
+            return super()._process_with_retry(wrapped, operation_name, config=config)
         return super()._process_with_retry(wrapped, operation_name)
 
 

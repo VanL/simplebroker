@@ -91,10 +91,11 @@ def test_injected_runner_handles_actual_queue_reads_in_both_modes():
                 runner.clear_log()
 
                 assert queue.read_one(with_timestamps=False) == "hello"
-                assert (
-                    _has_sql_marker(runner.sql_log, "DELETE FROM messages")
-                    or _has_sql_marker(runner.sql_log, "RETURNING")
-                ), "Injected runner should execute the claim/delete SQL"
+                assert _has_sql_marker(
+                    runner.sql_log, "DELETE FROM messages"
+                ) or _has_sql_marker(runner.sql_log, "RETURNING"), (
+                    "Injected runner should execute the claim/delete SQL"
+                )
                 assert queue.peek_one(with_timestamps=False) is None
             finally:
                 queue.close()

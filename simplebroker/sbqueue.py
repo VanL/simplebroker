@@ -909,7 +909,9 @@ class Queue:
                 if batch_processing and commit_interval > 1
                 else "exactly_once"
             )
-            batch_size = commit_interval if delivery_guarantee == "at_least_once" else None
+            batch_size = (
+                commit_interval if delivery_guarantee == "at_least_once" else None
+            )
 
             # Type assertion since we know with_timestamps=True yields tuple[str, int]
             for result in connection.claim_generator(

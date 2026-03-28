@@ -134,7 +134,9 @@ def test_alias_resolution_for_delete(workdir: Path) -> None:
     assert out == ""
 
 
-def test_cmd_watch_resolves_aliases(monkeypatch: pytest.MonkeyPatch, workdir: Path) -> None:
+def test_cmd_watch_resolves_aliases(
+    monkeypatch: pytest.MonkeyPatch, workdir: Path
+) -> None:
     db_path = workdir / "watch.db"
     with BrokerDB(str(db_path)) as db:
         db.add_alias("watch_alias", "source")
