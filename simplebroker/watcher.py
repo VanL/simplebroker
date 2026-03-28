@@ -1116,6 +1116,15 @@ class PollingStrategy:
 
             if self._data_version is None:
                 self._data_version = version
+                # Treat the first observed version as a cache-sync point.
+                # Otherwise a write that lands before the first poll can be
+                # processed before queue.last_ts is refreshed.
+                if self._data_change_callback is not None:
+                    try:
+                        self._data_change_callback()
+                    except Exception:
+                        # Swallow callback exceptions so polling continues
+                        logger.exception("data_version change callback failed")
                 return False
             if version != self._data_version:
                 self._data_version = version

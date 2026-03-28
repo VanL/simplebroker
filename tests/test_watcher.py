@@ -814,6 +814,30 @@ class TestQueueWatcher(WatcherTestBase):
 class TestPollingStrategy:
     """Test polling strategy behavior."""
 
+    def test_polling_strategy_primes_last_ts_callback(self):
+        """First observed data_version should still sync dependent caches."""
+        from simplebroker.watcher import PollingStrategy
+
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
+        version_container = [2]
+        callback_calls = []
+
+        def version_provider():
+            return version_container[0]
+
+        def on_data_version_change():
+            callback_calls.append(version_container[0])
+
+        strategy.start(
+            version_provider,
+            on_data_version_change=on_data_version_change,
+        )
+
+        # Establishing the initial baseline should still prime cache refreshes.
+        assert strategy._check_data_version() is False
+        assert callback_calls == [2]
+
     def test_polling_with_data_version(self, temp_db):
         """Test that polling uses PRAGMA data_version for efficient change detection."""
         # This test verifies the polling strategy detects changes quickly
