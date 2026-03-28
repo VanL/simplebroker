@@ -446,7 +446,14 @@ class TestQueueWatcher(WatcherTestBase):
 
             thread = watcher.run_in_thread()
             try:
-                time.sleep(0.2)
+                assert wait_for_condition(
+                    lambda: exception_count == 1 and handled_messages == ["message2"],
+                    timeout=scale_timeout_for_ci(2.0),
+                    interval=0.01,
+                ), (
+                    "Watcher did not handle the first exception and continue to "
+                    "process the second message in time"
+                )
             finally:
                 watcher.stop()
                 thread.join(timeout=2.0)
