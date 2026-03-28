@@ -227,6 +227,8 @@ To create a custom runner:
 
 2. Implement the SQLRunner protocol:
    ```python
+   from simplebroker.ext import SetupPhase
+
    class MyRunner(SQLRunner):
        def run(self, sql, params=(), *, fetch=False):
            # Your implementation
@@ -247,6 +249,13 @@ To create a custom runner:
        def close(self):
            # Cleanup
            pass
+
+       def setup(self, phase: SetupPhase):
+           # Optional backend setup hook
+           pass
+
+       def is_setup_complete(self, phase: SetupPhase) -> bool:
+           return True
    ```
 
 3. Use with the Queue API:
@@ -254,9 +263,15 @@ To create a custom runner:
    from simplebroker import Queue
    
    runner = MyRunner(config)
-   with Queue("myqueue", runner=runner) as q:
-       q.write("Hello from custom runner!")
+   try:
+       with Queue("myqueue", runner=runner) as q:
+           q.write("Hello from custom runner!")
+   finally:
+       runner.close()
    ```
+
+   The injected runner is caller-owned. `Queue.close()` cleans up queue state
+   but does not close the supplied runner for you.
 
 ## Important Notes
 

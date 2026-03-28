@@ -5,6 +5,26 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.6] - 2026-03-28
+### Fixed
+- Injected `runner=` queues now execute queue reads and writes through the supplied `SQLRunner` in both persistent and non-persistent modes instead of silently falling back to the built-in SQLite path.
+- `stream_messages(..., all_messages=False)` now yields at most one message in both peek and consume modes.
+
+### Changed
+- Materialized batch APIs (`claim_many()`, `move_many()`, `Queue.read_many()`, and `Queue.move_many()`) now always behave as exactly-once. Passing `delivery_guarantee="at_least_once"` emits `DeprecationWarning`; use the generator APIs for retryable batch processing.
+- Injected runners are now explicitly caller-owned in the docs and examples, and are reused for the lifetime of the `Queue` object.
+- Updated README wording to emphasize SimpleBroker as simple to install and operate, and refreshed documentation around generator batch semantics and delete behavior.
+
+## [2.8.5] - 2026-02-10
+### Changed
+- Fixed `move_generator(..., exact_timestamp=...)` in exactly-once mode to honor the filter correctly.
+- Transaction start failures now propagate as operational errors instead of being treated as empty queue results.
+- Unified alias resolution for CLI queue operations (`peek`, `move`, `watch`, and `delete`) when using `@alias`.
+- At-least-once generator semantics now commit only after a full batch is yielded; interrupted batches are rolled back for retry.
+- Switched internal DB core lock to `RLock` to avoid re-entrant deadlocks during generator-driven callbacks.
+- Replaced command-layer private DB handle access with public DB methods for claimed/overall stats.
+- Updated docs to clarify at-least-once rollback/retry and lock contention tradeoffs for larger batch sizes.
+
 ## [2.8.4] - 2025-11-06
 ### Added
 - `Queue.last_ts` lazy cache plus `refresh_last_ts()` for on-demand meta reads.

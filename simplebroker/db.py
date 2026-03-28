@@ -50,6 +50,9 @@ from ._sql import (
     CHECK_TS_UNIQUE_INDEX as SQL_SELECT_COUNT_MESSAGES_TS_UNIQUE,
 )
 from ._sql import (
+    COUNT_CLAIMED_MESSAGES as SQL_SELECT_COUNT_CLAIMED_MESSAGES,
+)
+from ._sql import (
     CREATE_ALIAS_TARGET_INDEX as SQL_CREATE_IDX_ALIASES_TARGET,
 )
 from ._sql import (
@@ -103,6 +106,9 @@ from ._sql import (
 )
 from ._sql import (
     GET_MAX_MESSAGE_TS as SQL_SELECT_MAX_TS,
+)
+from ._sql import (
+    GET_OVERALL_STATS as SQL_SELECT_OVERALL_STATS,
 )
 from ._sql import (
     GET_QUEUE_STATS as SQL_SELECT_QUEUES_STATS,
@@ -161,6 +167,40 @@ logger = logging.getLogger(__name__)
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
 
 
+class _BorrowedRunner:
+    """Delegate SQLRunner operations without taking ownership of close()."""
+
+    def __init__(self, runner: SQLRunner):
+        self._runner = runner
+
+    def run(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+        *,
+        fetch: bool = False,
+    ) -> Any:
+        return self._runner.run(sql, params, fetch=fetch)
+
+    def begin_immediate(self) -> None:
+        self._runner.begin_immediate()
+
+    def commit(self) -> None:
+        self._runner.commit()
+
+    def rollback(self) -> None:
+        self._runner.rollback()
+
+    def close(self) -> None:
+        """Borrowed runners remain caller-owned."""
+
+    def setup(self, phase: SetupPhase) -> None:
+        self._runner.setup(phase)
+
+    def is_setup_complete(self, phase: SetupPhase) -> bool:
+        return self._runner.is_setup_complete(phase)
+
+
 # Cache for queue name validation
 @lru_cache(maxsize=1024)
 def _validate_queue_name_cached(queue: str) -> str | None:
@@ -198,8 +238,8 @@ MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1
 # Can be increased for better performance with at-least-once delivery guarantee
 #
 # IMPORTANT: With commit_interval > 1:
-# - Messages are deleted from DB only AFTER they are yielded to consumer
-# - If consumer crashes mid-batch, unprocessed messages remain in DB
+# - Each batch is committed only AFTER it is fully yielded to consumer
+# - If consumer stops mid-batch, unread rows are rolled back and retried
 # - This provides at-least-once delivery (messages may be redelivered)
 # - Database lock is held for entire batch, reducing concurrency
 #
@@ -228,7 +268,9 @@ class DBConnection:
         """
         self.db_path = db_path
         self._external_runner = runner is not None
-        self._runner = runner
+        self._runner: SQLRunner | None = (
+            _BorrowedRunner(runner) if runner is not None else None
+        )
         self._core = None
         self._thread_local = threading.local()
         self._stop_event = threading.Event()
@@ -237,22 +279,29 @@ class DBConnection:
         self._connection_registry: weakref.WeakSet[Any] = weakref.WeakSet()
         self._registry_lock = threading.Lock()
 
-        # If we have an external runner, create core immediately
+        # If we have an external runner, create a borrowed core immediately.
         if self._runner:
             self._core = BrokerCore(self._runner)
 
-    def get_connection(self, *, config: dict[str, Any] = _config) -> "BrokerDB":
+    def get_connection(
+        self, *, config: dict[str, Any] = _config
+    ) -> "BrokerCore | BrokerDB":
         """Get a robust database connection with retry logic.
 
-        Returns thread-local connection that is cached and reused.
-        Includes exponential backoff retry on connection failures.
+        Returns a borrowed `BrokerCore` when using an injected runner, or a
+        thread-local `BrokerDB` when using the built-in SQLite backend.
 
         Returns:
-            BrokerDB instance
+            BrokerCore or BrokerDB instance
 
         Raises:
             RuntimeError: If connection cannot be established after retries
         """
+        if self._external_runner:
+            core = self.get_core()
+            core.set_stop_event(self._stop_event)
+            return core
+
         # Check thread-local storage first
         if hasattr(self._thread_local, "db"):
             return cast("BrokerDB", self._thread_local.db)
@@ -304,6 +353,7 @@ class DBConnection:
         if self._core is None:
             if self._runner is None:
                 self._runner = SQLiteRunner(self.db_path)
+            assert self._runner is not None
             self._core = BrokerCore(self._runner)
         return self._core
 
@@ -340,6 +390,10 @@ class DBConnection:
         with self._registry_lock:
             self._connection_registry.clear()
 
+        if self._external_runner:
+            self._core = None
+            return
+
         # Clean up runner/core if we own it
         if not self._external_runner:
             if self._runner:
@@ -366,6 +420,8 @@ class DBConnection:
                 self._thread_local.db.set_stop_event(self._stop_event)
             except AttributeError:
                 pass
+        if self._core is not None:
+            self._core.set_stop_event(self._stop_event)
 
     def __enter__(self) -> "DBConnection":
         """Enter context manager."""
@@ -405,8 +461,11 @@ class BrokerCore:
         Args:
             runner: SQL runner instance for database operations
         """
-        # Thread lock for protecting all database operations
-        self._lock = threading.Lock()
+        # Re-entrant lock allows same-thread read-only re-entry from generator
+        # callbacks. Mutating re-entry during an open at-least-once batch is
+        # guarded explicitly because SQLite cannot nest write transactions on
+        # the same connection.
+        self._lock = threading.RLock()
 
         # Store the process ID to detect fork()
         import os
@@ -436,6 +495,10 @@ class BrokerCore:
         # Alias cache state
         self._alias_cache: dict[str, str] = {}
         self._alias_cache_version: int = -1
+
+        # Active same-thread at-least-once batch state.
+        self._active_generator_batch: Literal["claim", "move"] | None = None
+        self._active_generator_batch_owner: int | None = None
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Propagate stop event to retryable operations."""
@@ -737,6 +800,35 @@ class BrokerCore:
         if error:
             raise ValueError(error)
 
+    def _set_active_generator_batch(
+        self, operation: Literal["claim", "move"] | None
+    ) -> None:
+        """Track whether the current thread is yielding an at-least-once batch."""
+
+        if operation is None:
+            self._active_generator_batch = None
+            self._active_generator_batch_owner = None
+            return
+
+        self._active_generator_batch = operation
+        self._active_generator_batch_owner = threading.get_ident()
+
+    def _assert_no_reentrant_mutation_during_batch(self, operation_name: str) -> None:
+        """Reject same-thread mutating re-entry during open at-least-once batches."""
+
+        if self._active_generator_batch is None:
+            return
+
+        if self._active_generator_batch_owner != threading.get_ident():
+            return
+
+        raise RuntimeError(
+            f"Cannot perform {operation_name} while an at_least_once "
+            f"{self._active_generator_batch}_generator batch is being yielded from "
+            "this BrokerDB instance. Use delivery_guarantee='exactly_once' or a "
+            "separate BrokerDB/Queue instance."
+        )
+
     def generate_timestamp(self) -> int:
         """Generate a timestamp using the TimestampGenerator.
 
@@ -745,6 +837,7 @@ class BrokerCore:
         Returns:
             64-bit hybrid timestamp that serves as both timestamp and unique message ID
         """
+        self._assert_no_reentrant_mutation_during_batch("generate_timestamp")
         # Note: The timestamp generator handles its own locking and state management
         # We don't need to hold self._lock here
         return self._timestamp_gen.generate()
@@ -790,6 +883,7 @@ class BrokerCore:
         """
         self._check_fork_safety()
         self._validate_queue_name(queue)
+        self._assert_no_reentrant_mutation_during_batch("write")
 
         # Check message size
         message_size = len(message.encode("utf-8"))
@@ -1022,10 +1116,9 @@ class BrokerCore:
             list of (message_body, timestamp) tuples
         """
         with self._lock:
-            try:
-                self._run_with_retry(self._runner.begin_immediate)
-            except Exception:
-                return []
+            self._run_with_retry(self._runner.begin_immediate)
+
+            should_commit = False
 
             try:
                 if target_queue:
@@ -1043,6 +1136,9 @@ class BrokerCore:
                 elif not results_list:
                     # No results, rollback
                     self._runner.rollback()
+                else:
+                    # Non-empty at_least_once operation: commit after query succeeds
+                    should_commit = True
 
                 return results_list
 
@@ -1050,16 +1146,77 @@ class BrokerCore:
                 self._runner.rollback()
                 raise
             finally:
-                # Commit if not already done (at-least-once semantics)
-                if (
-                    "results_list" in locals()
-                    and results_list
-                    and not commit_before_yield
-                ):
+                if should_commit:
+                    self._runner.commit()
+
+    def _yield_transactional_batches(
+        self,
+        queue: str,
+        *,
+        operation: Literal["claim", "move"],
+        with_timestamps: bool,
+        limit: int,
+        target_queue: str | None = None,
+        since_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+        require_unclaimed: bool = True,
+    ) -> Iterator[tuple[str, int] | str]:
+        """Yield claim/move results while keeping each batch transactional.
+
+        For at_least_once generator semantics, a batch is committed only after all
+        messages in that batch have been yielded to the caller. If iteration stops
+        mid-batch, the transaction is rolled back so unread messages are retried.
+        """
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+        if operation == "move":
+            if target_queue is None:
+                raise ValueError("target_queue is required for move operation")
+            self._validate_queue_name(target_queue)
+        elif target_queue is not None:
+            raise ValueError("target_queue is only valid for move operation")
+
+        where_conditions, params = self._build_where_clause(
+            queue, exact_timestamp, since_timestamp, require_unclaimed
+        )
+        query = build_retrieve_query(operation, where_conditions)
+
+        while True:
+            with self._lock:
+                self._run_with_retry(self._runner.begin_immediate)
+                transaction_open = True
+                try:
+                    if target_queue:
+                        query_params = tuple([target_queue] + params + [limit])
+                    else:
+                        query_params = tuple(params + [limit])
+
+                    results = self._runner.run(query, query_params, fetch=True)
+                    results_list = list(results) if results else []
+                    if not results_list:
+                        self._runner.rollback()
+                        return
+
+                    self._set_active_generator_batch(operation)
                     try:
-                        self._runner.commit()
-                    except Exception:
-                        pass  # Already rolled back
+                        for body, timestamp in results_list:
+                            if with_timestamps:
+                                yield (body, timestamp)
+                            else:
+                                yield body
+                    finally:
+                        self._set_active_generator_batch(None)
+
+                    self._runner.commit()
+                    transaction_open = False
+
+                except BaseException:
+                    if transaction_open:
+                        try:
+                            self._runner.rollback()
+                        except Exception:
+                            pass
+                    raise
 
     def _retrieve(
         self,
@@ -1098,6 +1255,8 @@ class BrokerCore:
 
         self._check_fork_safety()
         self._validate_queue_name(queue)
+        if operation != "peek":
+            self._assert_no_reentrant_mutation_during_batch(f"{operation} operation")
 
         if operation == "move" and not target_queue:
             raise ValueError("target_queue is required for move operation")
@@ -1163,6 +1322,26 @@ class BrokerCore:
         else:
             return results[0][0]
 
+    def _warn_on_materialized_delivery_guarantee(
+        self,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"],
+        *,
+        method_name: str,
+    ) -> None:
+        """Warn when deprecated at-least-once semantics are requested."""
+
+        if delivery_guarantee == "exactly_once":
+            return
+
+        warnings.warn(
+            f"{method_name}() materializes results before returning and now always "
+            "behaves as exactly-once. Passing delivery_guarantee="
+            "'at_least_once' is deprecated; use the generator APIs for "
+            "at_least_once batch processing.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+
     def claim_many(
         self,
         queue: str,
@@ -1178,9 +1357,11 @@ class BrokerCore:
             queue: Name of the queue
             limit: Maximum number of messages to claim
             with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
-            delivery_guarantee: Delivery semantics (default: exactly_once)
-                - exactly_once: Commit before returning (safer, slower)
-                - at_least_once: Return then commit (faster, may redeliver)
+            delivery_guarantee: Compatibility parameter for older callers.
+                Materialized batch APIs always behave as exactly-once. Passing
+                ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
+                as exactly-once. Use ``claim_generator()`` for retryable batch
+                processing.
             since_timestamp: If provided, only claim messages after this timestamp
 
         Returns:
@@ -1194,14 +1375,16 @@ class BrokerCore:
         if limit < 1:
             raise ValueError("limit must be at least 1")
 
-        commit_before = delivery_guarantee == "exactly_once"
+        self._warn_on_materialized_delivery_guarantee(
+            delivery_guarantee, method_name="claim_many"
+        )
 
         results = self._retrieve(
             queue,
             operation="claim",
             limit=limit,
             since_timestamp=since_timestamp,
-            commit_before_yield=commit_before,
+            commit_before_yield=True,
         )
 
         if with_timestamps:
@@ -1227,7 +1410,7 @@ class BrokerCore:
             with_timestamps: If True, yield (body, timestamp) tuples; if False, yield just bodies
             delivery_guarantee: Delivery semantics (default: exactly_once)
                 - exactly_once: Process one message at a time (safer, slower)
-                - at_least_once: Process in batches (faster, may redeliver)
+                - at_least_once: Commit each batch only after it is fully yielded
             since_timestamp: If provided, only claim messages after this timestamp
             exact_timestamp: If provided, only claim message with this exact timestamp
 
@@ -1258,29 +1441,19 @@ class BrokerCore:
                 else:
                     yield result[0][0]
         else:
-            # at_least_once: batch processing for performance
             effective_batch_size = (
                 batch_size
                 if batch_size is not None
                 else config["BROKER_GENERATOR_BATCH_SIZE"]
             )
-            while True:
-                results = self._retrieve(
-                    queue,
-                    operation="claim",
-                    limit=effective_batch_size,
-                    since_timestamp=since_timestamp,
-                    exact_timestamp=exact_timestamp,
-                    commit_before_yield=False,  # Commit after yielding
-                )
-                if not results:
-                    break
-
-                for body, timestamp in results:
-                    if with_timestamps:
-                        yield (body, timestamp)
-                    else:
-                        yield body
+            yield from self._yield_transactional_batches(
+                queue,
+                operation="claim",
+                with_timestamps=with_timestamps,
+                limit=effective_batch_size,
+                since_timestamp=since_timestamp,
+                exact_timestamp=exact_timestamp,
+            )
 
     def peek_one(
         self,
@@ -1481,9 +1654,11 @@ class BrokerCore:
             target_queue: Queue to move to
             limit: Maximum number of messages to move
             with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
-            delivery_guarantee: Delivery semantics (default: exactly_once)
-                - exactly_once: Commit before returning (safer, slower)
-                - at_least_once: Return then commit (faster, may redeliver)
+            delivery_guarantee: Compatibility parameter for older callers.
+                Materialized batch APIs always behave as exactly-once. Passing
+                ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
+                as exactly-once. Use ``move_generator()`` for retryable batch
+                processing.
             since_timestamp: If provided, only move messages after this timestamp
             require_unclaimed: If True (default), only move unclaimed messages
 
@@ -1500,7 +1675,9 @@ class BrokerCore:
         if limit < 1:
             raise ValueError("limit must be at least 1")
 
-        commit_before = delivery_guarantee == "exactly_once"
+        self._warn_on_materialized_delivery_guarantee(
+            delivery_guarantee, method_name="move_many"
+        )
 
         results = self._retrieve(
             source_queue,
@@ -1508,7 +1685,7 @@ class BrokerCore:
             target_queue=target_queue,
             limit=limit,
             since_timestamp=since_timestamp,
-            commit_before_yield=commit_before,
+            commit_before_yield=True,
             require_unclaimed=require_unclaimed,
         )
 
@@ -1537,7 +1714,7 @@ class BrokerCore:
             with_timestamps: If True, yield (body, timestamp) tuples; if False, yield just bodies
             delivery_guarantee: Delivery semantics (default: exactly_once)
                 - exactly_once: Process one message at a time (safer, slower)
-                - at_least_once: Process in batches (faster, may redeliver)
+                - at_least_once: Commit each batch only after it is fully yielded
             batch_size: Batch size for at_least_once mode (uses configured default if None)
             since_timestamp: If provided, only move messages after this timestamp
             exact_timestamp: If provided, move only message with this timestamp
@@ -1562,6 +1739,7 @@ class BrokerCore:
                     target_queue=target_queue,
                     limit=1,
                     since_timestamp=since_timestamp,
+                    exact_timestamp=exact_timestamp,
                     commit_before_yield=True,
                 )
                 if not result:
@@ -1572,30 +1750,20 @@ class BrokerCore:
                 else:
                     yield result[0][0]
         else:
-            # at_least_once: batch processing for performance
             effective_batch_size = (
                 batch_size
                 if batch_size is not None
                 else config["BROKER_GENERATOR_BATCH_SIZE"]
             )
-            while True:
-                results = self._retrieve(
-                    source_queue,
-                    operation="move",
-                    target_queue=target_queue,
-                    limit=effective_batch_size,
-                    since_timestamp=since_timestamp,
-                    exact_timestamp=exact_timestamp,
-                    commit_before_yield=False,  # Commit after yielding
-                )
-                if not results:
-                    break
-
-                for body, timestamp in results:
-                    if with_timestamps:
-                        yield (body, timestamp)
-                    else:
-                        yield body
+            yield from self._yield_transactional_batches(
+                source_queue,
+                operation="move",
+                with_timestamps=with_timestamps,
+                limit=effective_batch_size,
+                target_queue=target_queue,
+                since_timestamp=since_timestamp,
+                exact_timestamp=exact_timestamp,
+            )
 
     def _resync_timestamp_generator(self) -> None:
         """Resynchronize the timestamp generator with the actual maximum timestamp in messages.
@@ -1705,6 +1873,32 @@ class BrokerCore:
         # Execute with retry logic
         return self._run_with_retry(_do_stats)
 
+    def get_overall_stats(self) -> tuple[int, int]:
+        """Get overall claimed and total message counts."""
+        self._check_fork_safety()
+
+        def _do_stats() -> tuple[int, int]:
+            with self._lock:
+                rows = list(self._runner.run(SQL_SELECT_OVERALL_STATS, fetch=True))
+                claimed = int(rows[0][0]) if rows and rows[0][0] is not None else 0
+                total = int(rows[0][1]) if rows and rows[0][1] is not None else 0
+                return claimed, total
+
+        return self._run_with_retry(_do_stats)
+
+    def count_claimed_messages(self) -> int:
+        """Count messages currently marked as claimed."""
+        self._check_fork_safety()
+
+        def _do_count() -> int:
+            with self._lock:
+                rows = list(
+                    self._runner.run(SQL_SELECT_COUNT_CLAIMED_MESSAGES, fetch=True)
+                )
+                return int(rows[0][0]) if rows else 0
+
+        return self._run_with_retry(_do_count)
+
     def status(self) -> dict[str, int]:
         """Return high-level database status metrics.
 
@@ -1748,11 +1942,14 @@ class BrokerCore:
             "db_size": db_size,
         }
 
-    def delete(self, queue: str | None = None) -> None:
+    def delete(self, queue: str | None = None) -> int:
         """Delete messages from queue(s).
 
         Args:
             queue: Name of queue to delete. If None, delete all queues.
+
+        Returns:
+            Number of deleted rows.
 
         Raises:
             ValueError: If queue name is invalid
@@ -1761,8 +1958,9 @@ class BrokerCore:
         self._check_fork_safety()
         if queue is not None:
             self._validate_queue_name(queue)
+        self._assert_no_reentrant_mutation_during_batch("delete")
 
-        def _do_delete() -> None:
+        def _do_delete() -> int:
             with self._lock:
                 if queue is None:
                     # Purge all messages
@@ -1770,10 +1968,13 @@ class BrokerCore:
                 else:
                     # Purge specific queue
                     self._runner.run(SQL_DELETE_MESSAGES_BY_QUEUE, (queue,))
+                rows = list(self._runner.run("SELECT changes()", fetch=True))
+                deleted_count = int(rows[0][0]) if rows else 0
                 self._runner.commit()
+                return deleted_count
 
         # Execute with retry logic
-        self._run_with_retry(_do_delete)
+        return self._run_with_retry(_do_delete)
 
     def broadcast(self, message: str, *, pattern: str | None = None) -> int:
         """Broadcast a message to all existing queues atomically.
@@ -1789,6 +1990,7 @@ class BrokerCore:
             RuntimeError: If called from a forked process or counter overflow
         """
         self._check_fork_safety()
+        self._assert_no_reentrant_mutation_during_batch("broadcast")
 
         # Variable to store the count
         queue_count = 0
@@ -2087,6 +2289,7 @@ class BrokerCore:
             RuntimeError: If called from a forked process
         """
         self._check_fork_safety()
+        self._assert_no_reentrant_mutation_during_batch("vacuum")
         self._vacuum_claimed_messages(compact=compact)
 
     def close(self) -> None:
@@ -2318,6 +2521,7 @@ class BrokerDB(BrokerCore):
             raise ValueError("Alias target cannot be empty")
 
     def add_alias(self, alias: str, target: str) -> None:
+        self._assert_no_reentrant_mutation_during_batch("add_alias")
         should_warn = self.queue_exists_and_has_messages(alias)
 
         with self._lock:
@@ -2367,6 +2571,7 @@ class BrokerDB(BrokerCore):
                 raise
 
     def remove_alias(self, alias: str) -> None:
+        self._assert_no_reentrant_mutation_during_batch("remove_alias")
         with self._lock:
             if self._alias_cache_version < 0:
                 self._load_aliases_locked()

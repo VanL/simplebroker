@@ -7,6 +7,7 @@ or message loss in concurrent scenarios.
 from __future__ import annotations
 
 import concurrent.futures
+import math
 import tempfile
 import threading
 import time
@@ -15,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from simplebroker._exceptions import OperationalError
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
@@ -31,6 +33,7 @@ class ConcurrencyTestWatcher(QueueWatcher):
         self._drain_delay = 0
         self._dispatch_delay = 0
         self.pre_check_count = 0
+        self.pre_check_operational_errors = 0
         self.drain_count = 0
         self.dispatch_count = 0
         self._lock = threading.Lock()
@@ -69,6 +72,24 @@ class ConcurrencyTestWatcher(QueueWatcher):
             super()._dispatch(message, timestamp, config=config)
         else:
             super()._dispatch(message, timestamp)
+
+    def _process_with_retry(self, process_func, operation_name, *, config=None):
+        """Track pre-check OperationalErrors without changing retry behavior."""
+
+        def wrapped():
+            try:
+                return process_func()
+            except OperationalError:
+                if operation_name == "pending_messages_check":
+                    with self._lock:
+                        self.pre_check_operational_errors += 1
+                raise
+
+        if config is not None:
+            return super()._process_with_retry(
+                wrapped, operation_name, config=config
+            )
+        return super()._process_with_retry(wrapped, operation_name)
 
 
 def test_pre_check_race_no_message_loss() -> None:
@@ -496,12 +517,23 @@ def test_concurrent_pre_checks() -> None:
             # Analyze pre-check times
             with times_lock:
                 if pre_check_times:
-                    avg_time = sum(pre_check_times) / len(pre_check_times)
-                    max_time = max(pre_check_times)
+                    sorted_times = sorted(pre_check_times)
 
-                    # Even with many concurrent pre-checks, they should be fast
+                    def percentile(values: list[float], p: float) -> float:
+                        index = min(len(values) - 1, math.ceil(len(values) * p) - 1)
+                        return values[index]
+
+                    avg_time = sum(pre_check_times) / len(pre_check_times)
+                    p99_time = percentile(sorted_times, 0.99)
+                    total_pre_check_errors = sum(
+                        w.pre_check_operational_errors for w in watchers
+                    )
+
+                    # Even under xdist saturation, the steady-state pre-check path
+                    # should remain fast and should not require SQLite retries.
                     assert avg_time < 0.003  # < 3ms average
-                    assert max_time < 0.05  # < 50ms max
+                    assert p99_time < 0.025  # < 25ms for the 99th percentile
+                    assert total_pre_check_errors == 0
         finally:
             # Stop all watchers before closing broker
             for w in watchers:

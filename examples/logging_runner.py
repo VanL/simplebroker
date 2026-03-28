@@ -69,15 +69,18 @@ def main() -> None:
     # Create a custom runner
     runner = LoggingRunner("example.db")
 
-    # Use it with the Queue API
-    with Queue("demo", runner=runner) as q:
-        print("\nWriting messages...")
-        q.write("Hello from extension!")
-        q.write("This is logged!")
+    # Use it with the Queue API. Injected runners are caller-owned.
+    try:
+        with Queue("demo", runner=runner) as q:
+            print("\nWriting messages...")
+            q.write("Hello from extension!")
+            q.write("This is logged!")
 
-        print("\nReading messages...")
-        print(f"Read: {q.read()}")
-        print(f"Read: {q.read()}")
+            print("\nReading messages...")
+            print(f"Read: {q.read()}")
+            print(f"Read: {q.read()}")
+    finally:
+        runner.close()
 
     print("\nSQL Log:")
     print("-" * 50)

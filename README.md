@@ -14,7 +14,7 @@ $ broker read tasks
 ship it 🚀
 ```
 
-SimpleBroker is a zero-configuration, no-dependency message queue that runs anywhere Python runs. It's designed to be simple enough to understand in an afternoon, yet powerful enough for real work.
+SimpleBroker is a zero-configuration, no-dependency message queue that runs anywhere Python runs. It is designed to be simple to install, simple to operate, and powerful enough for real work.
 
 ## Table of Contents
 
@@ -58,7 +58,7 @@ SimpleBroker is a zero-configuration, no-dependency message queue that runs anyw
 - **Simple CLI** - Intuitive commands that work with pipes and scripts
 - **Portable** - Each directory gets its own isolated `.broker.db`
 - **Fast** - 1000+ messages/second throughput
-- **Lightweight** - ~2500 lines of code, no external dependencies
+- **Lightweight** - No external dependencies and a compact operational model
 - **Real-time** - Built-in watcher for event-driven workflows
 
 ## Use Cases
@@ -154,8 +154,8 @@ $ broker --cleanup
 | `peek <queue> [options]` | Return message(s) without removing |
 | `move <source> <dest> [options]` | Atomically transfer messages between queues |
 | `list [--stats]` | Show queues and message counts |
-| `delete <queue> [-m <id>]` | Delete queue or specific message (marks for removal; use `--vacuum` to reclaim space) |
-| `delete --all` | Delete all queues (marks for removal; use `--vacuum` to reclaim space) |
+| `delete <queue> [-m <id>]` | Delete a queue immediately, or claim a specific message by ID for later vacuum |
+| `delete --all` | Delete all queues immediately |
 | `broadcast <message\|->` | Send message to all existing queues |
 | `watch <queue> [options]` | Watch queue for new messages |
 | `alias <add|remove|list|->` | Manage queue aliases |
@@ -218,7 +218,7 @@ $ broker alias remove task1.outbox
 - `1` - General error (e.g., database access error, invalid arguments)
 - `2` - Queue empty, no matching messages, or invalid message ID format (only when queue is actually empty, no messages match the criteria, or the provided message ID has an invalid format)
 
-**Note:** The `delete` command marks messages as "claimed" for performance. Use `--vacuum` to permanently remove them.
+**Note:** `delete <queue>` and `delete --all` remove rows immediately. `delete <queue> -m <id>` uses claim semantics for a single message, so `--vacuum` reclaims its storage later.
 
 ## Critical Safety Notes
 
@@ -850,7 +850,10 @@ See [`examples/`](examples/) directory for more patterns including async process
 **Read Performance:**
 - `BROKER_READ_COMMIT_INTERVAL` - Number of messages to read before committing in `--all` mode (default: 1)
   - Default of 1 provides exactly-once delivery guarantee
-  - Increase for better performance with at-least-once delivery guarantee
+  - Increase for better throughput with at-least-once delivery semantics
+  - For values > 1, each batch is committed only after the full batch has been yielded to the consumer
+  - If processing stops mid-batch (crash/interrupt), unread messages in that batch are rolled back and retried
+  - Larger values keep transactions open longer and can increase write lock contention; tune batch size to workload
 
 **Vacuum Settings:**
 - `BROKER_AUTO_VACUUM` - Enable automatic vacuum of claimed messages (default: true)
@@ -1303,7 +1306,7 @@ uv run mypy simplebroker
 
 ## License
 
-MIT © 2025 Van Lindberg
+MIT © Van Lindberg
 
 ## Acknowledgments
 

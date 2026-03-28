@@ -17,9 +17,8 @@ from ._constants import (
     MAX_MESSAGE_SIZE,
 )
 from ._exceptions import TimestampError
-from ._sql import COUNT_CLAIMED_MESSAGES, GET_OVERALL_STATS
 from ._timestamp import TimestampGenerator
-from .db import DBConnection
+from .db import BrokerDB, DBConnection
 from .helpers import _is_valid_sqlite_db
 from .sbqueue import Queue
 from .watcher import QueueMoveWatcher, QueueWatcher
@@ -35,7 +34,7 @@ def _resolve_alias_name(db_path: str, name: str) -> tuple[str, str | None]:
         raise ValueError("Alias name cannot be empty")
 
     with DBConnection(db_path) as conn:
-        db = conn.get_connection()
+        db = cast(BrokerDB, conn.get_connection())
         target = db.resolve_alias(alias_key)
         if target is None:
             raise ValueError(f"Alias '{alias_key}' is not defined")
@@ -44,7 +43,7 @@ def _resolve_alias_name(db_path: str, name: str) -> tuple[str, str | None]:
 
 def cmd_alias_list(db_path: str, target: str | None = None) -> int:
     with DBConnection(db_path) as conn:
-        db = conn.get_connection()
+        db = cast(BrokerDB, conn.get_connection())
         if target:
             aliases = db.aliases_for_target(target)
             if not aliases:
@@ -60,7 +59,7 @@ def cmd_alias_list(db_path: str, target: str | None = None) -> int:
 
 def cmd_alias_add(db_path: str, alias: str, target: str, *, quiet: bool = False) -> int:
     with DBConnection(db_path) as conn:
-        db = conn.get_connection()
+        db = cast(BrokerDB, conn.get_connection())
         if quiet:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
@@ -72,7 +71,7 @@ def cmd_alias_add(db_path: str, alias: str, target: str, *, quiet: bool = False)
 
 def cmd_alias_remove(db_path: str, alias: str) -> int:
     with DBConnection(db_path) as conn:
-        db = conn.get_connection()
+        db = cast(BrokerDB, conn.get_connection())
 
         if not db.has_alias(alias):
             print(f"simplebroker: alias '{alias}' does not exist", file=sys.stderr)
@@ -422,8 +421,8 @@ def cmd_peek(
     if error_code is not None:
         return error_code
 
-    # Create queue instance
-    with Queue(queue_name, db_path=db_path) as queue:
+    canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
+    with Queue(canonical_queue, db_path=db_path) as queue:
         return _process_queue_fetch(
             fetch_one=queue.peek_one,
             fetch_generator=queue.peek_generator,
@@ -449,7 +448,7 @@ def cmd_list(db_path: str, show_stats: bool = False, pattern: str | None = None)
     # For list command, we need cross-queue operations
     # Use DBConnection as a context manager
     with DBConnection(db_path) as conn:
-        db = conn.get_connection()
+        db = cast(BrokerDB, conn.get_connection())
 
         # Get full queue stats including claimed messages
         queue_stats = db.get_queue_stats()
@@ -476,12 +475,7 @@ def cmd_list(db_path: str, show_stats: bool = False, pattern: str | None = None)
 
         # Only show overall claimed message stats if --stats flag is used
         if show_stats:
-            # Get overall stats
-            with db._lock:
-                cursor = db._conn.execute(GET_OVERALL_STATS)
-                row = cursor.fetchone()
-                total_claimed = row[0] or 0
-                total_messages = row[1] or 0
+            total_claimed, total_messages = db.get_overall_stats()
 
             if total_claimed > 0:
                 print(f"\nTotal claimed messages: {total_claimed}/{total_messages}")
@@ -498,7 +492,7 @@ def cmd_status(db_path: str, *, json_output: bool = False) -> int:
     """
     try:
         with DBConnection(db_path) as conn:
-            db = conn.get_connection()
+            db = cast(BrokerDB, conn.get_connection())
             stats = db.status()
     except Exception as e:
         print(f"simplebroker: error: {e}", file=sys.stderr)
@@ -526,8 +520,12 @@ def cmd_delete(
     Returns:
         Exit code
     """
+    canonical_queue = None
+    if queue_name is not None:
+        canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
+
     # Handle delete by timestamp
-    if message_id_str is not None and queue_name is not None:
+    if message_id_str is not None and canonical_queue is not None:
         # Validate exact timestamp
         exact_timestamp = parse_exact_message_id(message_id_str)
         if exact_timestamp is None:
@@ -535,7 +533,7 @@ def cmd_delete(
             return EXIT_QUEUE_EMPTY
 
         # Use Queue API to delete specific message
-        with Queue(queue_name, db_path=db_path) as queue:
+        with Queue(canonical_queue, db_path=db_path) as queue:
             deleted = queue.delete(message_id=exact_timestamp)
 
         # Return 0 for success (message deleted) or 2 for not found
@@ -543,8 +541,8 @@ def cmd_delete(
 
     # For full queue or all queues deletion, use DBConnection
     with DBConnection(db_path) as conn:
-        db = conn.get_connection()
-        db.delete(queue_name)
+        db = cast(BrokerDB, conn.get_connection())
+        db.delete(canonical_queue)
 
     return EXIT_SUCCESS
 
@@ -574,8 +572,11 @@ def cmd_move(
     Returns:
         Exit code
     """
-    # Check for same source and destination
-    if source_queue == dest_queue:
+    canonical_source, _ = _resolve_alias_name(db_path, source_queue)
+    canonical_dest, _ = _resolve_alias_name(db_path, dest_queue)
+
+    # Check for same source and destination after alias resolution
+    if canonical_source == canonical_dest:
         print(
             "simplebroker: error: Source and destination queues cannot be the same",
             file=sys.stderr,
@@ -601,12 +602,12 @@ def cmd_move(
             return EXIT_QUEUE_EMPTY
 
     # Create source queue instance
-    with Queue(source_queue, db_path=db_path) as queue:
+    with Queue(canonical_source, db_path=db_path) as queue:
         # Handle different move patterns
         if exact_timestamp is not None:
             # Move specific message by ID
             result = queue.move_one(
-                dest_queue,
+                canonical_dest,
                 exact_timestamp=exact_timestamp,
                 require_unclaimed=False,  # Allow moving claimed messages by ID
                 with_timestamps=True,
@@ -623,7 +624,7 @@ def cmd_move(
             # Use a large limit to move all available messages in one transaction
             try:
                 results = queue.move_many(
-                    dest_queue,
+                    canonical_dest,
                     limit=1000000,  # Large limit to capture all messages
                     with_timestamps=True,
                     delivery_guarantee="exactly_once",
@@ -651,10 +652,12 @@ def cmd_move(
 
         else:
             # Move single message
-            if since_timestamp:
+            if since_timestamp is not None:
                 # Use generator for since_timestamp support
                 gen = queue.move_generator(
-                    dest_queue, with_timestamps=True, since_timestamp=since_timestamp
+                    canonical_dest,
+                    with_timestamps=True,
+                    since_timestamp=since_timestamp,
                 )
                 try:
                     result = next(gen)
@@ -667,7 +670,7 @@ def cmd_move(
                     return EXIT_QUEUE_EMPTY
             else:
                 # Simple single message move
-                result = queue.move_one(dest_queue, with_timestamps=True)
+                result = queue.move_one(canonical_dest, with_timestamps=True)
                 if result is None:
                     return EXIT_QUEUE_EMPTY
 
@@ -691,7 +694,7 @@ def cmd_broadcast(db_path: str, message: str, pattern: str | None = None) -> int
 
     # Broadcast is a cross-queue operation, use DBConnection
     with DBConnection(db_path) as conn:
-        db = conn.get_connection()
+        db = cast(BrokerDB, conn.get_connection())
         queue_count = db.broadcast(content, pattern=pattern)
 
     # Return EXIT_QUEUE_EMPTY if no queues matched, EXIT_SUCCESS otherwise
@@ -709,13 +712,11 @@ def cmd_vacuum(db_path: str, compact: bool = False) -> int:
         Exit code
     """
     with DBConnection(db_path) as conn:
-        db = conn.get_connection()
+        db = cast(BrokerDB, conn.get_connection())
         start_time = time.monotonic()
 
         # Count claimed messages before vacuum
-        with db._lock:
-            cursor = db._conn.execute(COUNT_CLAIMED_MESSAGES)
-            claimed_count = cursor.fetchone()[0]
+        claimed_count = db.count_claimed_messages()
 
         if claimed_count == 0 and not compact:
             print("No claimed messages to vacuum")
@@ -780,12 +781,20 @@ def cmd_watch(
             sys.stderr.flush()
             return EXIT_ERROR
 
+    canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
+    canonical_move_to = None
+    if move_to is not None:
+        canonical_move_to, _ = _resolve_alias_name(db_path, move_to)
+
     # Print startup message (unless quiet)
     if not quiet:
         mode = "peek" if peek else "consume"
-        if move_to:
-            mode = f"move to {move_to}"
-        print(f"Watching queue '{queue_name}' ({mode} mode)...", file=sys.stderr)
+        if canonical_move_to is not None:
+            mode = f"move to {canonical_move_to}"
+        print(
+            f"Watching queue '{canonical_queue}' ({mode} mode)...",
+            file=sys.stderr,
+        )
         sys.stderr.flush()
 
     warned_newlines = False
@@ -802,18 +811,18 @@ def cmd_watch(
 
     try:
         # Create appropriate watcher
-        if move_to:
+        if canonical_move_to is not None:
             # Use QueueMoveWatcher for move operations
             watcher = QueueMoveWatcher(
-                queue_name,
-                move_to,
+                canonical_queue,
+                canonical_move_to,
                 handle_message,
                 db=db_path,
             )
         else:
             # Use regular QueueWatcher for consume/peek
             watcher = QueueWatcher(
-                queue_name,
+                canonical_queue,
                 handle_message,
                 db=db_path,
                 peek=peek,

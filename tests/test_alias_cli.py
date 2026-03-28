@@ -95,3 +95,70 @@ def test_resolve_alias_name_direct(workdir: Path) -> None:
 
     with pytest.raises(ValueError):
         commands._resolve_alias_name(str(db_path), "@missing")
+
+
+def test_alias_resolution_for_peek_and_move(workdir: Path) -> None:
+    rc, _, err = run_cli("alias", "add", "src_alias", "source", cwd=workdir)
+    assert rc == 0, err
+    rc, _, err = run_cli("alias", "add", "dst_alias", "dest", cwd=workdir)
+    assert rc == 0, err
+
+    rc, _, err = run_cli("write", "@src_alias", "payload", cwd=workdir)
+    assert rc == 0, err
+
+    rc, out, err = run_cli("peek", "@src_alias", cwd=workdir)
+    assert rc == 0, err
+    assert out == "payload"
+
+    rc, out, err = run_cli("move", "@src_alias", "@dst_alias", cwd=workdir)
+    assert rc == 0, err
+    assert out == "payload"
+
+    rc, out, err = run_cli("read", "@dst_alias", cwd=workdir)
+    assert rc == 0, err
+    assert out == "payload"
+
+
+def test_alias_resolution_for_delete(workdir: Path) -> None:
+    rc, _, err = run_cli("alias", "add", "del_alias", "delete_target", cwd=workdir)
+    assert rc == 0, err
+
+    rc, _, err = run_cli("write", "@del_alias", "payload", cwd=workdir)
+    assert rc == 0, err
+
+    rc, _, err = run_cli("delete", "@del_alias", cwd=workdir)
+    assert rc == 0, err
+
+    rc, out, err = run_cli("read", "@del_alias", cwd=workdir)
+    assert rc == 2, err
+    assert out == ""
+
+
+def test_cmd_watch_resolves_aliases(monkeypatch: pytest.MonkeyPatch, workdir: Path) -> None:
+    db_path = workdir / "watch.db"
+    with BrokerDB(str(db_path)) as db:
+        db.add_alias("watch_alias", "source")
+        db.add_alias("move_alias", "dest")
+
+    captured: dict[str, str] = {}
+
+    class FakeMoveWatcher:
+        def __init__(self, source: str, dest: str, *args, **kwargs):
+            captured["source"] = source
+            captured["dest"] = dest
+
+        def run_forever(self) -> None:
+            return
+
+        def stop(self) -> None:
+            return
+
+    monkeypatch.setattr(commands, "QueueMoveWatcher", FakeMoveWatcher)
+    rc = commands.cmd_watch(
+        str(db_path),
+        "@watch_alias",
+        quiet=True,
+        move_to="@move_alias",
+    )
+    assert rc == 0
+    assert captured == {"source": "source", "dest": "dest"}

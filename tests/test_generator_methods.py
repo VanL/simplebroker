@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import threading
 
 import pytest
 
@@ -258,6 +259,48 @@ class TestGeneratorMethods:
         remaining = list(broker.peek_generator("test_queue", with_timestamps=False))
         assert remaining == ["message1", "message3"]
 
+    def test_move_generator_exact_timestamp(self, broker):
+        """Test move_generator honors exact_timestamp in all delivery modes."""
+        # Add messages
+        broker.write("source_queue", "message1")
+        broker.write("source_queue", "message2")
+        broker.write("source_queue", "message3")
+
+        timestamps = list(broker.peek_generator("source_queue"))
+        target_ts = timestamps[1][1]  # Timestamp of message2
+
+        # exactly_once mode
+        moved = list(
+            broker.move_generator(
+                "source_queue",
+                "dest_queue",
+                with_timestamps=False,
+                exact_timestamp=target_ts,
+                delivery_guarantee="exactly_once",
+            )
+        )
+        assert moved == ["message2"]
+
+        source_remaining = list(
+            broker.peek_generator("source_queue", with_timestamps=False)
+        )
+        dest_messages = list(broker.peek_generator("dest_queue", with_timestamps=False))
+        assert source_remaining == ["message1", "message3"]
+        assert dest_messages == ["message2"]
+
+        # at_least_once mode should also honor exact timestamp.
+        moved_again = list(
+            broker.move_generator(
+                "source_queue",
+                "dest_queue2",
+                with_timestamps=False,
+                exact_timestamp=target_ts,
+                delivery_guarantee="at_least_once",
+                batch_size=10,
+            )
+        )
+        assert moved_again == []
+
     def test_move_generator_queue_validation(self, broker):
         """Test move_generator validates queue names."""
         broker.write("test_queue", "message")
@@ -267,3 +310,99 @@ class TestGeneratorMethods:
             ValueError, match="Source and target queues cannot be the same"
         ):
             list(broker.move_generator("test_queue", "test_queue"))
+
+    def test_at_least_once_generator_reentrant_call_no_deadlock(self, broker):
+        """Reentrant calls during generator consumption should not deadlock."""
+        for i in range(3):
+            broker.write("test_queue", f"message{i + 1}")
+
+        finished = threading.Event()
+        errors: list[Exception] = []
+
+        def worker() -> None:
+            try:
+                for _ in broker.claim_generator(
+                    "test_queue",
+                    with_timestamps=False,
+                    delivery_guarantee="at_least_once",
+                    batch_size=2,
+                ):
+                    # Re-enter BrokerDB while generator is active.
+                    broker.peek_one("test_queue", with_timestamps=False)
+                    break
+            except Exception as e:
+                errors.append(e)
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        assert finished.wait(timeout=2.0), "Generator consumption deadlocked"
+        thread.join(timeout=0.2)
+        assert not errors
+
+    def test_at_least_once_claim_generator_reentrant_write_rejected(self, broker):
+        """Mutating re-entry during claim batches should fail clearly and roll back."""
+        for i in range(3):
+            broker.write("test_queue", f"message{i + 1}")
+
+        gen = broker.claim_generator(
+            "test_queue",
+            with_timestamps=False,
+            delivery_guarantee="at_least_once",
+            batch_size=2,
+        )
+
+        try:
+            assert next(gen) == "message1"
+
+            with pytest.raises(
+                RuntimeError, match="separate BrokerDB/Queue instance"
+            ):
+                broker.write("other_queue", "nested")
+        finally:
+            gen.close()
+
+        remaining = list(broker.peek_generator("test_queue", with_timestamps=False))
+        other_messages = list(
+            broker.peek_generator("other_queue", with_timestamps=False)
+        )
+
+        assert remaining == ["message1", "message2", "message3"]
+        assert other_messages == []
+
+    def test_at_least_once_move_generator_reentrant_write_rejected(self, broker):
+        """Mutating re-entry during move batches should fail clearly and roll back."""
+        for i in range(3):
+            broker.write("source_queue", f"message{i + 1}")
+
+        gen = broker.move_generator(
+            "source_queue",
+            "dest_queue",
+            with_timestamps=False,
+            delivery_guarantee="at_least_once",
+            batch_size=2,
+        )
+
+        try:
+            assert next(gen) == "message1"
+
+            with pytest.raises(
+                RuntimeError, match="separate BrokerDB/Queue instance"
+            ):
+                broker.write("other_queue", "nested")
+        finally:
+            gen.close()
+
+        source_remaining = list(
+            broker.peek_generator("source_queue", with_timestamps=False)
+        )
+        dest_messages = list(broker.peek_generator("dest_queue", with_timestamps=False))
+        other_messages = list(
+            broker.peek_generator("other_queue", with_timestamps=False)
+        )
+
+        assert source_remaining == ["message1", "message2", "message3"]
+        assert dest_messages == []
+        assert other_messages == []

@@ -95,10 +95,13 @@ if __name__ == "__main__":
     # ADVANCED: Using a custom runner
     # For standard usage, just use: Queue("tasks")
     runner = LoggingRunner("logged.db")
-    with Queue("tasks", runner=runner) as q:
-        q.write("Hello, logged world!")
-        message = q.read()
-        print(f"Read: {message}")
+    try:
+        with Queue("tasks", runner=runner) as q:
+            q.write("Hello, logged world!")
+            message = q.read()
+            print(f"Read: {message}")
+    finally:
+        runner.close()
 ```
 
 ## Daemon Mode Runner
@@ -602,24 +605,26 @@ if __name__ == "__main__":
     runner = PooledRunner("pooled.db", pool_size=10)
     q = Queue("pooled_tasks", runner=runner)
     
-    start = time.time()
-    
-    # Run 10 workers concurrently
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = []
-        for i in range(10):
-            future = executor.submit(worker, i, q, 100)
-            futures.append(future)
+    try:
+        start = time.time()
         
-        for future in concurrent.futures.as_completed(futures):
-            worker_id, count = future.result()
-            print(f"Worker {worker_id} processed {count} messages")
-    
-    elapsed = time.time() - start
-    print(f"Total time: {elapsed:.2f}s")
-    print(f"Throughput: {1000/elapsed:.0f} messages/second")
-    
-    runner.close()
+        # Run 10 workers concurrently
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = []
+            for i in range(10):
+                future = executor.submit(worker, i, q, 100)
+                futures.append(future)
+            
+            for future in concurrent.futures.as_completed(futures):
+                worker_id, count = future.result()
+                print(f"Worker {worker_id} processed {count} messages")
+        
+        elapsed = time.time() - start
+        print(f"Total time: {elapsed:.2f}s")
+        print(f"Throughput: {1000/elapsed:.0f} messages/second")
+    finally:
+        q.close()
+        runner.close()
 ```
 
 ## Testing with Mock Runner
@@ -872,20 +877,24 @@ if __name__ == "__main__":
     runner = TestMockRunner()
     q = Queue("demo", runner=runner)
     
-    print("Writing messages...")
-    for i in range(5):
-        q.write(f"Demo message {i}")
-    
-    print("\nCall history:")
-    for call in runner.call_history:
-        print(f"  {call[0]}: {call[1][:50] if call[1] else ''}")
-    
-    print("\nReading messages:")
-    while True:
-        msg = q.read()
-        if msg is None:
-            break
-        print(f"  {msg}")
+    try:
+        print("Writing messages...")
+        for i in range(5):
+            q.write(f"Demo message {i}")
+        
+        print("\nCall history:")
+        for call in runner.call_history:
+            print(f"  {call[0]}: {call[1][:50] if call[1] else ''}")
+        
+        print("\nReading messages:")
+        while True:
+            msg = q.read()
+            if msg is None:
+                break
+            print(f"  {msg}")
+    finally:
+        q.close()
+        runner.close()
 ```
 
 ## Complete Async Queue Implementation

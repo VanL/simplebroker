@@ -41,22 +41,22 @@ class TestBatchOperations:
         assert remaining == ["message4", "message5"]
 
     def test_claim_many_at_least_once(self, broker):
-        """Test claim_many with at-least-once delivery."""
+        """Test claim_many deprecates at-least-once on list-returning APIs."""
         # Add test messages
         for i in range(5):
             broker.write("test_queue", f"message{i + 1}")
 
-        # Claim with at-least-once semantics
-        messages = broker.claim_many(
-            "test_queue",
-            limit=3,
-            delivery_guarantee="at_least_once",
-            with_timestamps=False,
-        )
+        with pytest.warns(DeprecationWarning, match="generator APIs"):
+            messages = broker.claim_many(
+                "test_queue",
+                limit=3,
+                delivery_guarantee="at_least_once",
+                with_timestamps=False,
+            )
         assert len(messages) == 3
         assert messages == ["message1", "message2", "message3"]
 
-        # Verify they're still gone (commit happened after return)
+        # Materialized batch APIs still commit before returning.
         remaining = broker.peek_many("test_queue", limit=10, with_timestamps=False)
         assert len(remaining) == 2
         assert remaining == ["message4", "message5"]
@@ -109,19 +109,19 @@ class TestBatchOperations:
         assert dest_messages == ["message1", "message2", "message3"]
 
     def test_move_many_at_least_once(self, broker):
-        """Test move_many with at-least-once delivery."""
+        """Test move_many deprecates at-least-once on list-returning APIs."""
         # Add test messages
         for i in range(5):
             broker.write("source_queue", f"message{i + 1}")
 
-        # Move with at-least-once semantics
-        messages = broker.move_many(
-            "source_queue",
-            "dest_queue",
-            limit=3,
-            delivery_guarantee="at_least_once",
-            with_timestamps=False,
-        )
+        with pytest.warns(DeprecationWarning, match="generator APIs"):
+            messages = broker.move_many(
+                "source_queue",
+                "dest_queue",
+                limit=3,
+                delivery_guarantee="at_least_once",
+                with_timestamps=False,
+            )
         assert len(messages) == 3
         assert messages == ["message1", "message2", "message3"]
 

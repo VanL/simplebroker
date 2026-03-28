@@ -33,22 +33,35 @@ def test_queue_delete_all():
 
 def test_queue_delete_by_id():
     """Test deleting a specific message by ID."""
-    # This test shows that delete(message_id=X) works, but we can't easily
-    # test it without exposing timestamps in the Queue API.
-    # For now, we'll test that the method exists and accepts the parameter.
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
 
         with Queue("test", db_path=db_path) as q:
             q.write("message1")
+            q.write("message2")
 
-            # We can't easily get the timestamp without extending the Queue API
-            # Just verify the method exists and returns False for non-existent ID
+            messages = list(q.peek_generator(with_timestamps=True))
+            target_ts = messages[0][1]
+
+            result = q.delete(message_id=target_ts)
+            assert result is True
+
+            remaining = list(q.peek_generator(with_timestamps=False))
+            assert remaining == ["message2"]
+
             result = q.delete(message_id=99999999999999999)
             assert result is False
 
-            # Verify message still exists
-            assert q.read() == "message1"
+            assert q.read() == "message2"
+
+
+def test_queue_delete_empty_queue_returns_false():
+    """Test deleting from an empty queue reports no-op status."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = str(Path(tmpdir) / "test.db")
+
+        with Queue("test", db_path=db_path) as q:
+            assert q.delete() is False
 
 
 def test_queue_move_all():

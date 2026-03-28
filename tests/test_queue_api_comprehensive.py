@@ -3,6 +3,8 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from simplebroker import Queue
 
 
@@ -87,7 +89,7 @@ class TestQueueReadMethods:
                 q.close()
 
     def test_read_many_delivery_guarantees(self):
-        """Test read_many with different delivery guarantees."""
+        """Test read_many deprecates at-least-once on materialized batches."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
 
@@ -102,10 +104,10 @@ class TestQueueReadMethods:
                 )
                 assert len(messages) == 5
 
-                # Test at_least_once
-                messages = q.read_many(
-                    5, delivery_guarantee="at_least_once", with_timestamps=False
-                )
+                with pytest.warns(DeprecationWarning, match="generator APIs"):
+                    messages = q.read_many(
+                        5, delivery_guarantee="at_least_once", with_timestamps=False
+                    )
                 assert len(messages) == 5
             finally:
                 q.close()
@@ -487,7 +489,7 @@ class TestQueueLastTimestampCaching:
                 source.close()
 
     def test_move_many_delivery_guarantees(self):
-        """Test move_many with different delivery guarantees."""
+        """Test move_many deprecates at-least-once on materialized batches."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
 
@@ -502,13 +504,13 @@ class TestQueueLastTimestampCaching:
                 )
                 assert len(messages) == 5
 
-                # Test at_least_once
-                messages = source.move_many(
-                    "dest2",
-                    5,
-                    delivery_guarantee="at_least_once",
-                    with_timestamps=False,
-                )
+                with pytest.warns(DeprecationWarning, match="generator APIs"):
+                    messages = source.move_many(
+                        "dest2",
+                        5,
+                        delivery_guarantee="at_least_once",
+                        with_timestamps=False,
+                    )
                 assert len(messages) == 5
             finally:
                 source.close()
@@ -683,6 +685,113 @@ class TestQueueHelperMethods:
             finally:
                 q.close()
 
+    def test_stream_messages_peek_single_message_mode(self):
+        """Test stream_messages respects all_messages=False in peek mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "test.db")
+
+            q = Queue("test", db_path=db_path)
+            try:
+                for i in range(3):
+                    q.write(f"message{i}")
+
+                messages = list(q.stream_messages(peek=True, all_messages=False))
+
+                assert len(messages) == 1
+                assert messages[0][0] == "message0"
+
+                # Peek mode should not remove the message.
+                remaining = list(q.peek_generator(with_timestamps=False))
+                assert remaining == ["message0", "message1", "message2"]
+            finally:
+                q.close()
+
+    def test_stream_messages_consume_single_message_mode(self):
+        """Test stream_messages respects all_messages=False in consume mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "test.db")
+
+            q = Queue("test", db_path=db_path)
+            try:
+                for i in range(3):
+                    q.write(f"message{i}")
+
+                messages = list(q.stream_messages(peek=False, all_messages=False))
+
+                assert len(messages) == 1
+                assert messages[0][0] == "message0"
+
+                remaining = list(q.peek_generator(with_timestamps=False))
+                assert remaining == ["message1", "message2"]
+            finally:
+                q.close()
+
+    def test_stream_messages_non_batch_mode_ignores_commit_interval(self):
+        """Non-batch streaming should remain exactly-once even if commit_interval > 1."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "test.db")
+
+            q = Queue("test", db_path=db_path)
+            try:
+                for i in range(5):
+                    q.write(f"message{i}")
+
+                gen = q.stream_messages(
+                    peek=False,
+                    all_messages=True,
+                    batch_processing=False,
+                    commit_interval=3,
+                )
+                first_message = next(gen)
+                gen.close()
+
+                assert first_message[0] == "message0"
+
+                remaining = list(q.peek_generator(with_timestamps=False))
+                assert remaining == ["message1", "message2", "message3", "message4"]
+            finally:
+                q.close()
+
+    def test_stream_messages_batch_mode_uses_commit_interval_as_batch_size(self):
+        """Batch streaming should use commit_interval as the at-least-once batch size."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "test.db")
+
+            q = Queue("test", db_path=db_path)
+            try:
+                for i in range(7):
+                    q.write(f"message{i}")
+
+                gen = q.stream_messages(
+                    peek=False,
+                    all_messages=True,
+                    batch_processing=True,
+                    commit_interval=3,
+                )
+
+                consumed = []
+                try:
+                    for message, timestamp in gen:
+                        consumed.append((message, timestamp))
+                        if len(consumed) == 4:
+                            break
+                finally:
+                    gen.close()
+
+                assert [message for message, _ in consumed] == [
+                    "message0",
+                    "message1",
+                    "message2",
+                    "message3",
+                ]
+
+                # Batch 1 (message0..message2) should commit.
+                # Batch 2 should roll back when the generator is closed mid-batch.
+                remaining = list(q.peek_generator(with_timestamps=False))
+                assert remaining == ["message3", "message4", "message5", "message6"]
+            finally:
+                q.close()
+
 
 class TestQueueConnectionModes:
     """Test persistent vs ephemeral connection modes."""
@@ -756,6 +865,28 @@ class TestQueueDelete:
                 # Queue is empty
                 assert q.has_pending() is False
                 assert q.peek_one() is None
+            finally:
+                q.close()
+
+    def test_delete_all_returns_false_when_queue_empty(self):
+        """Deleting an empty queue should report that nothing was deleted."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "test.db")
+
+            q = Queue("test", db_path=db_path)
+            try:
+                assert q.delete() is False
+            finally:
+                q.close()
+
+    def test_delete_all_returns_false_for_nonexistent_queue(self):
+        """Deleting a never-written queue should report no-op status."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "test.db")
+
+            q = Queue("missing", db_path=db_path)
+            try:
+                assert q.delete() is False
             finally:
                 q.close()
 

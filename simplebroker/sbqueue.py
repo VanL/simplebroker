@@ -81,22 +81,24 @@ class Queue:
             db_path: Path to the SQLite database (uses DEFAULT_DB_NAME)
             persistent: If True, maintain a persistent connection.
                        If False (default), use ephemeral connections.
-            runner: Optional custom SQLRunner implementation for extensions
+            runner: Optional custom SQLRunner implementation for extensions.
+                    Injected runners are caller-owned and are reused for the
+                    lifetime of this Queue object.
         """
         self.name = name
         self._db_path = db_path
         self._persistent = persistent
+        self._runner = runner
         self._config = config
         self._stop_event: threading.Event | None = None
 
-        # Create DBConnection for robust connection management
-        if persistent:
-            # For persistent mode, create and keep the connection
+        # Create DBConnection for persistent queues and injected-runner queues.
+        # The built-in no-runner path keeps its current "get in, get out"
+        # semantics only when persistent=False.
+        if persistent or runner is not None:
             self.conn = DBConnection(self._db_path, runner)
         else:
-            # For ephemeral mode, we'll create connections as needed
             self.conn = None
-            self._runner = runner  # Save for ephemeral connections
 
         # Install finalizer for cleanup
         self._install_finalizer()
@@ -109,16 +111,16 @@ class Queue:
         """Get connection for operations - handles both persistent and ephemeral modes.
 
         This context manager consolidates the connection logic. It yields either the
-        shared (persistent) BrokerDB instance or creates and yields a new one on the fly.
+        shared queue-lifetime connection object or creates a new built-in SQLite
+        connection on the fly for the no-runner ephemeral path.
 
         Yields:
-            BrokerDB: Connection object for database operations
+            BrokerCore or BrokerDB: Connection object for database operations
         """
-        if self._persistent:
+        if self.conn is not None:
             assert self.conn is not None  # Type guard for mypy
             self.conn.set_stop_event(self._stop_event)
             yield self.conn.get_connection()
-        # Ephemeral mode - create a new connection for each operation
         else:
             with DBConnection(self._db_path, self._runner) as conn:
                 conn.set_stop_event(self._stop_event)
@@ -128,7 +130,7 @@ class Queue:
         """Propagate stop event to connections used by this queue."""
 
         self._stop_event = stop_event
-        if self._persistent and self.conn is not None:
+        if self.conn is not None:
             self.conn.set_stop_event(stop_event)
 
     @property
@@ -245,7 +247,7 @@ class Queue:
             )
         else:
             # Read single message
-            if since_timestamp:
+            if since_timestamp is not None:
                 # Need to use generator with limit 1 for since_timestamp support
                 gen = self.read_generator(
                     with_timestamps=with_timestamps, since_timestamp=since_timestamp
@@ -299,9 +301,11 @@ class Queue:
         Args:
             limit: Maximum number of messages to read
             with_timestamps: If True, return list of (message, timestamp) tuples
-            delivery_guarantee: Delivery semantics
-                - exactly_once: Commit before returning (safer, slower)
-                - at_least_once: Return then commit (faster, may redeliver)
+            delivery_guarantee: Compatibility parameter for older callers.
+                Materialized batch APIs always behave as exactly-once. Passing
+                ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
+                as exactly-once. Use ``read_generator()`` for retryable batch
+                processing.
             since_timestamp: Only read messages newer than this timestamp
 
         Returns:
@@ -337,7 +341,7 @@ class Queue:
             with_timestamps: If True, yield (message, timestamp) tuples
             delivery_guarantee: Delivery semantics
                 - exactly_once: Process one message at a time (safer, slower)
-                - at_least_once: Process in batches (faster, may redeliver)
+                - at_least_once: Commit each batch after it is fully yielded
             since_timestamp: Only read messages newer than this timestamp
             exact_timestamp: Only read message with this exact timestamp
 
@@ -404,7 +408,7 @@ class Queue:
             )
         else:
             # Peek at single message
-            if since_timestamp:
+            if since_timestamp is not None:
                 # Need to use generator with limit 1 for since_timestamp support
                 gen = self.peek_generator(
                     with_timestamps=with_timestamps, since_timestamp=since_timestamp
@@ -570,7 +574,7 @@ class Queue:
             return dict_generator()
         else:
             # Move single message
-            if since_timestamp:
+            if since_timestamp is not None:
                 # Use generator with single iteration for since_timestamp support
                 gen = self.move_generator(
                     dest_name, with_timestamps=True, since_timestamp=since_timestamp
@@ -648,9 +652,11 @@ class Queue:
             destination: Target queue (name or Queue instance)
             limit: Maximum number of messages to move
             with_timestamps: If True, return list of (message, timestamp) tuples
-            delivery_guarantee: Delivery semantics
-                - exactly_once: Commit before returning (safer, slower)
-                - at_least_once: Return then commit (faster, may redeliver)
+            delivery_guarantee: Compatibility parameter for older callers.
+                Materialized batch APIs always behave as exactly-once. Passing
+                ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
+                as exactly-once. Use ``move_generator()`` for retryable batch
+                processing.
             since_timestamp: Only move messages newer than this timestamp
             require_unclaimed: If True (default), only move unclaimed messages
 
@@ -693,7 +699,7 @@ class Queue:
             with_timestamps: If True, yield (message, timestamp) tuples
             delivery_guarantee: Delivery semantics
                 - exactly_once: Process one message at a time (safer, slower)
-                - at_least_once: Process in batches (faster, may redeliver)
+                - at_least_once: Commit each batch after it is fully yielded
             since_timestamp: Only move messages newer than this timestamp
             exact_timestamp: Only move message with this exact timestamp
 
@@ -745,8 +751,7 @@ class Queue:
                 return message is not None
             else:
                 # Delete all messages in the queue
-                connection.delete(self.name)
-                return True
+                return connection.delete(self.name) > 0
 
     def __enter__(self) -> "Queue":
         """Enter the context manager."""
@@ -835,10 +840,13 @@ class Queue:
 
         Args:
             peek: If True, don't remove messages from queue
-            all_messages: If True, retrieve all available messages. If False, retrieve one.
+            all_messages: If True, stream all available messages. If False, yield at
+                         most one message.
             since_timestamp: Only retrieve messages newer than this timestamp
-            batch_processing: If True, process in batches for better performance
-            commit_interval: How often to commit when processing multiple messages
+            batch_processing: If True and peek=False, allow at-least-once batch
+                             processing. If False, consume one message at a time.
+            commit_interval: Batch size for at-least-once processing when
+                            batch_processing=True and peek=False. Ignored otherwise.
 
         Yields:
             tuples of (message_body, timestamp)
@@ -849,26 +857,69 @@ class Queue:
         """
         with self.get_connection() as connection:
             if peek:
-                # Type assertion since we know with_timestamps=True yields tuple[str, int]
-                for result in connection.peek_generator(
+                if all_messages:
+                    # Type assertion since we know with_timestamps=True yields tuple[str, int]
+                    for result in connection.peek_generator(
+                        self.name,
+                        with_timestamps=True,
+                        since_timestamp=since_timestamp,
+                    ):
+                        yield result  # type: ignore[misc]
+                else:
+                    generator = connection.peek_generator(
+                        self.name,
+                        with_timestamps=True,
+                        since_timestamp=since_timestamp,
+                    )
+                    try:
+                        result = next(generator)
+                    except StopIteration:
+                        return
+                    else:
+                        assert isinstance(result, tuple)
+                        yield result
+                    finally:
+                        close_generator = getattr(generator, "close", None)
+                        if callable(close_generator):
+                            close_generator()
+                return
+
+            if not all_messages:
+                generator = connection.claim_generator(
                     self.name,
                     with_timestamps=True,
+                    delivery_guarantee="exactly_once",
                     since_timestamp=since_timestamp,
-                ):
-                    yield result  # type: ignore[misc]
-            else:
-                # Map commit_interval to delivery_guarantee
-                delivery_guarantee: Literal["exactly_once", "at_least_once"] = (
-                    "exactly_once" if commit_interval == 1 else "at_least_once"
                 )
-                # Type assertion since we know with_timestamps=True yields tuple[str, int]
-                for result in connection.claim_generator(
-                    self.name,
-                    with_timestamps=True,
-                    delivery_guarantee=delivery_guarantee,
-                    since_timestamp=since_timestamp,
-                ):
-                    yield result  # type: ignore[misc]
+                try:
+                    result = next(generator)
+                except StopIteration:
+                    return
+                else:
+                    assert isinstance(result, tuple)
+                    yield result
+                finally:
+                    close_generator = getattr(generator, "close", None)
+                    if callable(close_generator):
+                        close_generator()
+                return
+
+            delivery_guarantee: Literal["exactly_once", "at_least_once"] = (
+                "at_least_once"
+                if batch_processing and commit_interval > 1
+                else "exactly_once"
+            )
+            batch_size = commit_interval if delivery_guarantee == "at_least_once" else None
+
+            # Type assertion since we know with_timestamps=True yields tuple[str, int]
+            for result in connection.claim_generator(
+                self.name,
+                with_timestamps=True,
+                delivery_guarantee=delivery_guarantee,
+                batch_size=batch_size,
+                since_timestamp=since_timestamp,
+            ):
+                yield result  # type: ignore[misc]
 
     def cleanup_connections(self) -> None:
         """Clean up all database connections.

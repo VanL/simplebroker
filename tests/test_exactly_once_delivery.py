@@ -2,7 +2,8 @@
 
 The delivery guarantee depends on the commit_interval parameter:
 - commit_interval=1 (default): Exactly-once delivery - messages are committed BEFORE yielding
-- commit_interval>1: At-least-once delivery - messages are committed AFTER yielding in batches
+- commit_interval>1: At-least-once delivery - each batch is committed only after
+  the entire batch has been yielded
 """
 
 import multiprocessing
@@ -26,21 +27,23 @@ def read_messages_with_crash(
     from simplebroker.db import BrokerDB
 
     with BrokerDB(db_path) as broker:
-        for i, message in enumerate(
-            broker.claim_generator(
-                queue,
-                with_timestamps=False,
-                delivery_guarantee="at_least_once",
-                batch_size=batch_size,
-            )
-        ):
-            messages.append(message)
-            if (
-                i == crash_after - 1
-            ):  # 0-indexed, so crash_after=2 means crash after 2nd message
-                # Simulate crash by abruptly exiting
-                crashed = True
-                break
+        generator = broker.claim_generator(
+            queue,
+            with_timestamps=False,
+            delivery_guarantee="at_least_once",
+            batch_size=batch_size,
+        )
+        try:
+            for i, message in enumerate(generator):
+                messages.append(message)
+                if (
+                    i == crash_after - 1
+                ):  # 0-indexed, so crash_after=2 means crash after 2nd message
+                    # Simulate crash by abruptly exiting
+                    crashed = True
+                    break
+        finally:
+            generator.close()
 
     return messages, crashed
 
@@ -80,17 +83,16 @@ def test_batch_commit_for_all_messages(workdir: Path):
     assert crashed
     assert len(messages) == 12
 
-    # Check how many messages remain
-    # With at-least-once delivery (default batch size), commits happen when batch is fetched
-    # We read 12 messages (crashed after message 11, 0-indexed), which means:
-    # - Batch 1 (messages 0-9): Fetched and committed, yielded 10 messages
-    # - Batch 2 (messages 10-19): Fetched and committed, started yielding, crashed after 2 messages
-    # Since batch 2 was fetched, it was committed even though we only yielded 2 messages
-    # So messages 0-19 are deleted, leaving messages 20-24 (5 messages)
+    # Check how many messages remain.
+    # With at-least-once delivery, a batch is committed only after it is fully yielded.
+    # We read 12 messages (crashed after message 11, 0-indexed):
+    # - Batch 1 (0-9): fully yielded and committed
+    # - Batch 2 (10-19): partially yielded then interrupted, so it rolls back
+    # Remaining: messages 10-24 (15 messages)
     q2 = Queue("test_queue", db_path=str(db_path))
     remaining = list(q2.peek(all_messages=True))
-    assert len(remaining) == 5, f"Expected 5 messages, got {len(remaining)}"
-    assert remaining[0] == "message20"  # First uncommitted message
+    assert len(remaining) == 15, f"Expected 15 messages, got {len(remaining)}"
+    assert remaining[0] == "message10"  # First message in rolled-back batch
     assert remaining[-1] == "message24"  # Last message
 
 
@@ -248,14 +250,12 @@ def test_commit_interval_parameter_respected(workdir: Path):
 
     assert len(messages_read) == 8
 
-    # With at-least-once delivery (default batch size), commits happen when batch is fetched
-    # We read 8 messages (0-7), behavior depends on configured batch size:
-    # - Each complete batch: Fetched and committed before yielding
-    # - Partial batch: May be fetched and committed even if not fully processed
-    # - Batch 3 (messages 6-8): Fetched and committed, yielded 2 messages (6-7), then crashed
-    # Since all three batches were fetched, they were all committed
-    # So messages 0-8 are deleted, leaving messages 9-14 (6 messages)
+    # At-least-once now commits only fully consumed batches.
+    # With batch_size=3 and reading 8 messages:
+    # - Batches [0-2] and [3-5] commit
+    # - Batch [6-8] is interrupted after yielding 6 and 7, so it rolls back
+    # Remaining: messages 6-14 (9 messages)
     q2 = Queue("test_queue", db_path=str(db_path))
     remaining = list(q2.peek(all_messages=True))
-    assert len(remaining) == 6, f"Expected 6 messages, got {len(remaining)}"
-    assert remaining[0] == "message9"  # First uncommitted message
+    assert len(remaining) == 9, f"Expected 9 messages, got {len(remaining)}"
+    assert remaining[0] == "message6"  # First message in rolled-back batch
