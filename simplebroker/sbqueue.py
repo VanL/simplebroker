@@ -171,6 +171,12 @@ class Queue:
             return
         self._last_ts = candidate
 
+    def _observe_timestamp(self, timestamp: int) -> None:
+        """Advance cached last_ts based on an observed message timestamp."""
+
+        if self._last_ts is None or timestamp > self._last_ts:
+            self._last_ts = timestamp
+
     def write(self, message: str) -> None:
         """Write a message to this queue.
 

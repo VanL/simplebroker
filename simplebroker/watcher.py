@@ -788,6 +788,7 @@ class BaseWatcher(ABC):
         """
         try:
             self._dispatch(body, timestamp, config=self._config)
+            self._queue_obj._observe_timestamp(timestamp)
             return True
         except _StopLoop:
             raise  # Re-raise stop signal
@@ -1061,9 +1062,13 @@ class PollingStrategy:
                 if self._stop_event.wait(timeout=wait_time):
                     break
                 remaining -= wait_time
-                # Re-check data_version between wait chunks so writes that land
-                # during backoff do not wait for the full polling interval.
-                if self._data_version_provider and self._check_data_version():
+                # Re-check data_version only between chunks so writes that land
+                # mid-backoff do not wait for the full polling interval.
+                if (
+                    remaining > 0
+                    and self._data_version_provider
+                    and self._check_data_version()
+                ):
                     return
 
         # Only increment if we actually waited (no activity detected)
