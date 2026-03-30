@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import math
+import os
 import tempfile
 import threading
 import time
@@ -20,7 +21,11 @@ from simplebroker._exceptions import OperationalError
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
-from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
+from .helper_scripts.timing import (
+    get_performance_threshold,
+    scale_timeout_for_ci,
+    wait_for_condition,
+)
 
 
 class ConcurrencyTestWatcher(QueueWatcher):
@@ -526,11 +531,19 @@ def test_concurrent_pre_checks() -> None:
                     total_pre_check_errors = sum(
                         w.pre_check_operational_errors for w in watchers
                     )
+                    avg_threshold = get_performance_threshold(
+                        "WATCHER_PRECHECK_AVG_SECONDS",
+                        0.005 if os.environ.get("CI") else 0.003,
+                    )
+                    p99_threshold = get_performance_threshold(
+                        "WATCHER_PRECHECK_P99_SECONDS",
+                        0.04 if os.environ.get("CI") else 0.025,
+                    )
 
                     # Even under xdist saturation, the steady-state pre-check path
                     # should remain fast and should not require SQLite retries.
-                    assert avg_time < 0.003  # < 3ms average
-                    assert p99_time < 0.025  # < 25ms for the 99th percentile
+                    assert avg_time < avg_threshold
+                    assert p99_time < p99_threshold
                     assert total_pre_check_errors == 0
         finally:
             # Stop all watchers before closing broker
