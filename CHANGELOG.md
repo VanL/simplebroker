@@ -5,6 +5,12 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2026-03-30
+### Changed
+- Refactored SQLite-specific internals into dedicated internal backend modules under `simplebroker._backends.sqlite` and moved built-in SQL definitions into `simplebroker._sql.sqlite`.
+- Standardized internal backend access through the new internal backend resolver used by helpers, runner setup, and database orchestration.
+- Preserved the public API and CLI behavior while making the built-in SQLite implementation easier to isolate from future external backends.
+
 ## [2.8.6] - 2026-03-28
 ### Fixed
 - Injected `runner=` queues now execute queue reads and writes through the supplied `SQLRunner` in both persistent and non-persistent modes instead of silently falling back to the built-in SQLite path.

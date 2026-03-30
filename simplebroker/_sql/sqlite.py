@@ -1,7 +1,7 @@
-"""SQL statement templates for SimpleBroker.
+"""SQLite SQL statement templates for SimpleBroker.
 
-This module contains all SQL statements used by SimpleBroker's database operations.
-These templates can be imported by both sync and async implementations.
+This module contains the built-in SQLite SQL used by SimpleBroker's database
+operations. It is intentionally SQLite-specific.
 """
 
 # ============================================================================
@@ -115,6 +115,12 @@ SELECT COUNT(*) FROM sqlite_master
 WHERE type='index' AND name='idx_messages_ts_unique'
 """
 
+# Check whether the meta table exists
+CHECK_META_TABLE_EXISTS = """
+SELECT COUNT(*) FROM sqlite_master
+WHERE type='table' AND name='meta'
+"""
+
 # ============================================================================
 # MESSAGE OPERATIONS - INSERT
 # ============================================================================
@@ -197,6 +203,11 @@ WHERE id IN (
     WHERE claimed = 1
     LIMIT ?
 )
+"""
+
+# SQLite rowcount from the most recent statement on the same connection
+SELECT_CHANGES = """
+SELECT changes()
 """
 
 # ============================================================================
@@ -311,6 +322,11 @@ FROM messages
 # Count only claimed messages (for pre-vacuum check)
 COUNT_CLAIMED_MESSAGES = """
 SELECT COUNT(*) FROM messages WHERE claimed = 1
+"""
+
+# Check whether any claimed messages remain
+CHECK_CLAIMED_MESSAGES_EXISTS = """
+SELECT EXISTS(SELECT 1 FROM messages WHERE claimed = 1 LIMIT 1)
 """
 
 # Get overall stats for list command with --stats

@@ -12,7 +12,6 @@ import os
 import sqlite3
 import threading
 import time
-import warnings
 from collections.abc import Iterable
 from enum import Enum
 from pathlib import Path
@@ -46,12 +45,14 @@ else:
 
     Self = TypeVar("Self", bound="SQLiteRunner")  # type: ignore[misc]
 
+from ._backends import get_configured_backend
 from ._constants import ConnectionPhase, load_config
 from ._exceptions import DataError, IntegrityError, OperationalError
-from .helpers import _execute_with_retry, _is_valid_sqlite_db
+from .helpers import _execute_with_retry
 
 # Load config once at module level
 _config = load_config()
+db_backend = get_configured_backend(_config)
 
 
 class SetupPhase(Enum):
@@ -236,100 +237,21 @@ class SQLiteRunner:
         self, conn: sqlite3.Connection, *, config: dict[str, Any] = _config
     ) -> None:
         """Apply per-connection settings that don't require exclusive locks."""
-        # Always set busy timeout for each connection
-        busy_timeout = config["BROKER_BUSY_TIMEOUT"]
-        conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
-
-        # Set WAL autocheckpoint for each connection
-        # Default to 1000 pages (≈1MB) if not specified
-        wal_autocheckpoint = config["BROKER_WAL_AUTOCHECKPOINT"]
-        if wal_autocheckpoint < 0:
-            warnings.warn(
-                f"Invalid BROKER_WAL_AUTOCHECKPOINT '{wal_autocheckpoint}', "
-                "must be >= 0. Using default of 1000.",
-                stacklevel=2,
-            )
-            wal_autocheckpoint = 1000
-        conn.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
-
-        # Apply optimization settings if that phase is complete
+        db_backend.apply_connection_settings(
+            conn,
+            config=config,
+            optimization_complete=SetupPhase.OPTIMIZATION in self._completed_phases,
+        )
         if SetupPhase.OPTIMIZATION in self._completed_phases:
-            self._apply_optimization_settings(conn)
             self._thread_local.optimization_applied = True
-
-    def _check_sqlite_version(self) -> None:
-        """Check SQLite version requirement."""
-        conn = sqlite3.connect(":memory:")
-        try:
-            cursor = conn.execute("SELECT sqlite_version()")
-            if cursor:
-                version = cursor.fetchone()
-                if version:
-                    version_parts = [int(x) for x in version[0].split(".")]
-                    if version_parts < [3, 35, 0]:
-                        msg = (
-                            f"SQLite version {version[0]} is too old. "
-                            f"SimpleBroker requires SQLite 3.35.0 or later for RETURNING clause support."
-                        )
-                        raise RuntimeError(
-                            msg,
-                        )
-        finally:
-            conn.close()
 
     def _setup_connection_phase(self) -> None:
         """Setup critical connection settings including WAL mode."""
-        # First check SQLite version
-        self._check_sqlite_version()
-
-        # Validate that existing database files are actually valid SQLite databases
-        # Only check the SQLite header, not the magic string at this stage
-        # If the file doesn't exist, SQLite will create it during connection
-        db_path = Path(self._db_path)
-        is_new_database = not (db_path.exists() and db_path.stat().st_size > 0)
-
-        if not is_new_database:
-            if not _is_valid_sqlite_db(db_path, verify_magic=False):
-                raise OperationalError(
-                    f"File at {self._db_path} exists but is not a valid SQLite database"
-                )
-
-        def do_setup() -> None:
-            # Use a separate connection for WAL setup to avoid holding locks
-            setup_conn = sqlite3.connect(self._db_path, isolation_level=None)
-            try:
-                # Set timeout for setup operations
-                setup_conn.execute("PRAGMA busy_timeout=10000")
-
-                # For new databases, set auto_vacuum to INCREMENTAL before any tables are created
-                # This enables automatic space reclamation when rows are deleted
-                if is_new_database:
-                    from ._sql import SET_AUTO_VACUUM_INCREMENTAL
-
-                    setup_conn.execute(SET_AUTO_VACUUM_INCREMENTAL)
-
-                # Check current journal mode
-                cursor = setup_conn.execute("PRAGMA journal_mode")
-                current_mode = cursor.fetchone()[0] if cursor else "delete"
-
-                if current_mode.lower() != "wal":
-                    # Enable WAL mode - this requires an exclusive lock
-                    cursor = setup_conn.execute("PRAGMA journal_mode=WAL")
-                    if cursor:
-                        result = cursor.fetchone()
-                        if result and result[0].lower() != "wal":
-                            msg = f"Failed to enable WAL mode, got: {result}"
-                            raise RuntimeError(
-                                msg,
-                            )
-
-                # WAL autocheckpoint is now set per-connection in _apply_connection_settings
-
-            finally:
-                setup_conn.close()
-
-        # Use retry logic for setup operations
-        _execute_with_retry(do_setup, max_retries=30, retry_delay=0.1)
+        _execute_with_retry(
+            lambda: db_backend.setup_connection_phase(self._db_path, config=_config),
+            max_retries=30,
+            retry_delay=0.1,
+        )
 
     def _setup_optimization_phase(self) -> None:
         """Setup performance optimizations."""
@@ -343,22 +265,7 @@ class SQLiteRunner:
         self, conn: sqlite3.Connection, *, config: dict[str, Any] = _config
     ) -> None:
         """Apply optimization settings to a connection."""
-        # Cache size (default 10MB)
-        # Negative values mean KiB (kibibytes), so we multiply by 1024
-        cache_mb = config["BROKER_CACHE_MB"]
-        conn.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
-
-        # Synchronous mode (default FULL)
-        sync_mode = config["BROKER_SYNC_MODE"]
-        # Validate sync mode
-        if sync_mode not in ("FULL", "NORMAL", "OFF"):
-            warnings.warn(
-                f"Invalid BROKER_SYNC_MODE '{sync_mode}', defaulting to FULL",
-                RuntimeWarning,
-                stacklevel=4,
-            )
-            sync_mode = "FULL"
-        conn.execute(f"PRAGMA synchronous={sync_mode}")
+        db_backend.apply_optimization_settings(conn, config=config)
 
     def run(
         self,

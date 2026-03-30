@@ -19,6 +19,7 @@ from typing import (
     cast,
 )
 
+from ._backends import get_configured_backend
 from ._constants import (
     ALIAS_PREFIX,
     LOGICAL_COUNTER_BITS,
@@ -35,9 +36,6 @@ from ._exceptions import (
 )
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner
 from ._sql import (
-    CHECK_CLAIMED_COLUMN as SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED,
-)
-from ._sql import (
     CHECK_PENDING_MESSAGES as SQL_CHECK_PENDING_MESSAGES,
 )
 from ._sql import (
@@ -47,31 +45,7 @@ from ._sql import (
     CHECK_QUEUE_EXISTS as SQL_SELECT_EXISTS_MESSAGES_BY_QUEUE,
 )
 from ._sql import (
-    CHECK_TS_UNIQUE_INDEX as SQL_SELECT_COUNT_MESSAGES_TS_UNIQUE,
-)
-from ._sql import (
     COUNT_CLAIMED_MESSAGES as SQL_SELECT_COUNT_CLAIMED_MESSAGES,
-)
-from ._sql import (
-    CREATE_ALIAS_TARGET_INDEX as SQL_CREATE_IDX_ALIASES_TARGET,
-)
-from ._sql import (
-    CREATE_ALIASES_TABLE as SQL_CREATE_TABLE_ALIASES,
-)
-from ._sql import (
-    CREATE_MESSAGES_TABLE as SQL_CREATE_TABLE_MESSAGES,
-)
-from ._sql import (
-    CREATE_META_TABLE as SQL_CREATE_TABLE_META,
-)
-from ._sql import (
-    CREATE_QUEUE_TS_ID_INDEX as SQL_CREATE_IDX_MESSAGES_QUEUE_TS_ID,
-)
-from ._sql import (
-    CREATE_TS_UNIQUE_INDEX as SQL_CREATE_IDX_MESSAGES_TS_UNIQUE,
-)
-from ._sql import (
-    CREATE_UNCLAIMED_INDEX as SQL_CREATE_IDX_MESSAGES_UNCLAIMED,
 )
 from ._sql import (
     DELETE_ALIAS as SQL_DELETE_ALIAS,
@@ -80,23 +54,10 @@ from ._sql import (
     DELETE_ALL_MESSAGES as SQL_DELETE_ALL_MESSAGES,
 )
 from ._sql import (
-    DELETE_CLAIMED_BATCH as SQL_VACUUM_DELETE_BATCH,
-)
-from ._sql import (
     DELETE_QUEUE_MESSAGES as SQL_DELETE_MESSAGES_BY_QUEUE,
 )
 from ._sql import (
-    DROP_OLD_INDEXES,
-    GET_AUTO_VACUUM,
-    INCREMENTAL_VACUUM,
-    SET_AUTO_VACUUM_INCREMENTAL,
-    build_retrieve_query,
-)
-from ._sql import (
     GET_ALIAS_VERSION as SQL_SELECT_ALIAS_VERSION,
-)
-from ._sql import (
-    GET_DATA_VERSION as SQL_GET_DATA_VERSION,
 )
 from ._sql import (
     GET_DISTINCT_QUEUES as SQL_SELECT_DISTINCT_QUEUES,
@@ -120,13 +81,7 @@ from ._sql import (
     GET_VACUUM_STATS as SQL_SELECT_STATS_CLAIMED_TOTAL,
 )
 from ._sql import (
-    INIT_LAST_TS as SQL_INSERT_META_LAST_TS,
-)
-from ._sql import (
     INSERT_ALIAS as SQL_INSERT_ALIAS,
-)
-from ._sql import (
-    INSERT_ALIAS_VERSION_META as SQL_INSERT_ALIAS_VERSION_META,
 )
 from ._sql import (
     INSERT_MESSAGE as SQL_INSERT_MESSAGE,
@@ -150,7 +105,7 @@ from ._sql import (
     UPDATE_LAST_TS as SQL_UPDATE_META_LAST_TS,
 )
 from ._sql import (
-    VACUUM as SQL_VACUUM,
+    build_retrieve_query,
 )
 from ._timestamp import TimestampGenerator
 from .helpers import _execute_with_retry, interruptible_sleep
@@ -160,6 +115,7 @@ T = TypeVar("T")
 
 # Load configuration once at module level
 _config = load_config()
+db_backend = get_configured_backend(_config)
 
 logger = logging.getLogger(__name__)
 
@@ -514,75 +470,17 @@ class BrokerCore:
     def _setup_database(self) -> None:
         """Set up database with optimized settings and schema."""
         with self._lock:
-            # Create table if it doesn't exist (using IF NOT EXISTS to handle race conditions)
-            self._run_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_MESSAGES))
-            # Drop redundant indexes if they exist (from older versions)
-            for drop_sql in DROP_OLD_INDEXES:
-                # Create a closure to capture the sql value
-                def drop_index(sql: str = drop_sql) -> Any:
-                    return self._runner.run(sql)
-
-                self._run_with_retry(drop_index)
-
-            # Create only the composite covering index
-            # This single index serves all our query patterns efficiently:
-            # - WHERE queue = ? (uses first column)
-            # - WHERE queue = ? AND ts > ? (uses first two columns)
-            # - WHERE queue = ? ORDER BY id (uses first column + sorts by id)
-            # - WHERE queue = ? AND ts > ? ORDER BY id LIMIT ? (uses all three)
-            self._run_with_retry(
-                lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_QUEUE_TS_ID)
+            db_backend.initialize_database(
+                self._runner,
+                run_with_retry=self._run_with_retry,
             )
-
-            # Create partial index for unclaimed messages (only if claimed column exists)
-            rows = self._run_with_retry(
-                lambda: list(
-                    self._runner.run(SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True)
-                )
-            )
-            if rows and rows[0][0] > 0:
-                self._run_with_retry(
-                    lambda: self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
-                )
-            self._run_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_META))
-            self._run_with_retry(lambda: self._runner.run(SQL_INSERT_META_LAST_TS))
-            self._run_with_retry(lambda: self._runner.run(SQL_CREATE_TABLE_ALIASES))
-            self._run_with_retry(
-                lambda: self._runner.run(SQL_CREATE_IDX_ALIASES_TARGET)
-            )
-            self._run_with_retry(
-                lambda: self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
-            )
-
-            # Insert magic string and schema version if not exists
-            self._run_with_retry(
-                lambda: self._runner.run(
-                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('magic', ?)",
-                    (SIMPLEBROKER_MAGIC,),
-                )
-            )
-            self._run_with_retry(
-                lambda: self._runner.run(
-                    "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
-                    (SCHEMA_VERSION,),
-                )
-            )
-
-            # final commit can also be retried
-            self._run_with_retry(self._runner.commit)
 
     def _verify_database_magic(self) -> None:
         """Verify database magic string and schema version for existing databases."""
         with self._lock:
             try:
                 # Check if meta table exists
-                rows = list(
-                    self._runner.run(
-                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='meta'",
-                        fetch=True,
-                    )
-                )
-                if not rows or rows[0][0] == 0:
+                if not db_backend.meta_table_exists(self._runner):
                     # New database, no verification needed
                     return
 
@@ -635,142 +533,29 @@ class BrokerCore:
     def _ensure_schema_v2(self) -> None:
         """Migrate to schema with claimed column."""
         with self._lock:
-            current_version = self._read_schema_version_locked()
-            rows = list(
-                self._runner.run(SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True)
+            db_backend.ensure_schema_v2(
+                self._runner,
+                current_version=self._read_schema_version_locked(),
+                write_schema_version=self._write_schema_version_locked,
             )
-            has_claimed_column = bool(rows and rows[0][0])
-
-            if current_version >= 2 and has_claimed_column:
-                # Schema already migrated; ensure index exists and exit
-                try:
-                    self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
-                except Exception as e:
-                    if "already exists" not in str(e):
-                        raise
-                return
-
-            self._runner.begin_immediate()
-            try:
-                if not has_claimed_column:
-                    try:
-                        self._runner.run(
-                            "ALTER TABLE messages ADD COLUMN claimed INTEGER DEFAULT 0"
-                        )
-                    except Exception as e:
-                        if "duplicate column name" not in str(e):
-                            raise
-
-                # Re-check column presence
-                rows = list(
-                    self._runner.run(SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True)
-                )
-                if not (rows and rows[0][0]):
-                    raise RuntimeError(
-                        "Failed to ensure messages.claimed column during schema migration"
-                    )
-
-                self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
-
-                if current_version < 2:
-                    self._write_schema_version_locked(2)
-
-                self._runner.commit()
-            except Exception:
-                self._runner.rollback()
-                raise
 
     def _ensure_schema_v3(self) -> None:
         """Add unique constraint to timestamp column."""
         with self._lock:
-            current_version = self._read_schema_version_locked()
-            # Check if unique index already exists
-            rows = list(
-                self._runner.run(SQL_SELECT_COUNT_MESSAGES_TS_UNIQUE, fetch=True)
+            db_backend.ensure_schema_v3(
+                self._runner,
+                current_version=self._read_schema_version_locked(),
+                write_schema_version=self._write_schema_version_locked,
             )
-            has_unique_index = bool(rows and rows[0][0])
-
-            if current_version >= 3:
-                if not has_unique_index:
-                    try:
-                        self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
-                    except Exception as e:
-                        if "already exists" not in str(e):
-                            raise
-                return
-
-            if current_version < 2:
-                # Older schema – v2 migration will run first
-                return
-
-            try:
-                self._runner.begin_immediate()
-                if not has_unique_index:
-                    self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
-                self._write_schema_version_locked(3)
-                self._runner.commit()
-            except IntegrityError as e:
-                self._runner.rollback()
-                if "UNIQUE constraint failed" in str(e):
-                    raise RuntimeError(
-                        "Cannot add unique constraint on timestamp column: "
-                        "duplicate timestamps exist in the database."
-                    ) from e
-                raise
-            except Exception as e:
-                self._runner.rollback()
-                if "already exists" in str(e):
-                    self._runner.begin_immediate()
-                    self._write_schema_version_locked(3)
-                    self._runner.commit()
-                else:
-                    raise
 
     def _ensure_schema_v4(self) -> None:
         """Add queue alias support (schema version 4)."""
         with self._lock:
-            current_version = self._read_schema_version_locked()
-
-            if current_version >= 4:
-                self._runner.begin_immediate()
-                try:
-                    try:
-                        self._runner.run(SQL_CREATE_TABLE_ALIASES)
-                    except Exception as e:
-                        if "already exists" not in str(e):
-                            raise
-
-                    try:
-                        self._runner.run(SQL_CREATE_IDX_ALIASES_TARGET)
-                    except Exception as e:
-                        if "already exists" not in str(e):
-                            raise
-
-                    try:
-                        self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
-                    except Exception as e:
-                        if "already exists" not in str(e):
-                            raise
-                    self._runner.commit()
-                except Exception:
-                    self._runner.rollback()
-                    raise
-                return
-
-            if current_version < 3:
-                # Await earlier migrations before attempting alias support
-                return
-
-            try:
-                self._runner.begin_immediate()
-                self._runner.run(SQL_CREATE_TABLE_ALIASES)
-                self._runner.run(SQL_CREATE_IDX_ALIASES_TARGET)
-                self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
-                self._write_schema_version_locked(4)
-                self._runner.commit()
-            except Exception:
-                self._runner.rollback()
-                raise
+            db_backend.ensure_schema_v4(
+                self._runner,
+                current_version=self._read_schema_version_locked(),
+                write_schema_version=self._write_schema_version_locked,
+            )
 
     def _check_fork_safety(self) -> None:
         """Check if we're still in the original process.
@@ -1928,18 +1713,12 @@ class BrokerCore:
 
         total_messages, last_timestamp = self._run_with_retry(_do_status)
 
-        db_size = 0
-        db_path = getattr(self._runner, "_db_path", None)
-        if db_path:
-            try:
-                db_size = os.stat(db_path).st_size
-            except FileNotFoundError:
-                db_size = 0
-
         return {
             "total_messages": total_messages,
             "last_timestamp": last_timestamp,
-            "db_size": db_size,
+            "db_size": db_backend.database_size_bytes(
+                getattr(self._runner, "_db_path", None)
+            ),
         }
 
     def delete(self, queue: str | None = None) -> int:
@@ -1964,12 +1743,14 @@ class BrokerCore:
             with self._lock:
                 if queue is None:
                     # Purge all messages
-                    self._runner.run(SQL_DELETE_ALL_MESSAGES)
+                    deleted_count = db_backend.delete_and_count_changes(
+                        self._runner, SQL_DELETE_ALL_MESSAGES
+                    )
                 else:
                     # Purge specific queue
-                    self._runner.run(SQL_DELETE_MESSAGES_BY_QUEUE, (queue,))
-                rows = list(self._runner.run("SELECT changes()", fetch=True))
-                deleted_count = int(rows[0][0]) if rows else 0
+                    deleted_count = db_backend.delete_and_count_changes(
+                        self._runner, SQL_DELETE_MESSAGES_BY_QUEUE, (queue,)
+                    )
                 self._runner.commit()
                 return deleted_count
 
@@ -2203,14 +1984,7 @@ class BrokerCore:
             The data version changes whenever the database file is modified.
         """
         with self._lock:
-            try:
-                rows = list(self._runner.run(SQL_GET_DATA_VERSION, fetch=True))
-                if rows and rows[0]:
-                    return int(rows[0][0])
-                return None
-            except Exception:
-                # Return None for non-SQLite backends or any errors
-                return None
+            return db_backend.get_data_version(self._runner)
 
     def _do_vacuum_without_lock(
         self, *, compact: bool = False, config: dict[str, Any] = _config
@@ -2228,22 +2002,17 @@ class BrokerCore:
             with self._lock:
                 self._runner.begin_immediate()
                 try:
-                    # First check if there are any claimed messages
-                    check_result = list(
-                        self._runner.run(
-                            "SELECT EXISTS(SELECT 1 FROM messages WHERE claimed = 1 LIMIT 1)",
-                            fetch=True,
-                        )
-                    )
-                    if not check_result or not check_result[0][0]:
+                    if not db_backend.has_claimed_messages(self._runner):
                         self._runner.rollback()
                         break
 
                     # We have claimed messages to delete
                     had_claimed_messages = True
 
-                    # SQLite doesn't support DELETE with LIMIT, so we need to use a subquery
-                    self._runner.run(SQL_VACUUM_DELETE_BATCH, (batch_size,))
+                    db_backend.delete_claimed_batch(
+                        self._runner,
+                        batch_size=batch_size,
+                    )
                     self._runner.commit()
                 except Exception:
                     self._runner.rollback()
@@ -2258,23 +2027,12 @@ class BrokerCore:
         if compact:
             # Full vacuum with compact flag
             with self._lock:
-                # Set auto_vacuum to INCREMENTAL before running VACUUM
-                # This enables automatic space reclamation for future deletes
-                # Must be set BEFORE VACUUM for it to take effect
-                self._runner.run(SET_AUTO_VACUUM_INCREMENTAL)
-
-                # VACUUM cannot be run inside a transaction in SQLite
-                # Running VACUUM will rebuild the database with auto_vacuum enabled
-                self._runner.run(SQL_VACUUM)
+                db_backend.compact_database(self._runner)
         elif had_claimed_messages:
             # Automatic vacuum: check if auto_vacuum is INCREMENTAL and run incremental vacuum
             with self._lock:
                 try:
-                    # Check auto_vacuum mode
-                    result = list(self._runner.run(GET_AUTO_VACUUM, fetch=True))
-                    if result and result[0] and int(result[0][0]) == 2:
-                        # auto_vacuum is INCREMENTAL, reclaim up to 100 pages
-                        self._runner.run(INCREMENTAL_VACUUM)
+                    db_backend.maybe_run_incremental_vacuum(self._runner)
                 except Exception:
                     # Incremental vacuum is best-effort, don't fail if it doesn't work
                     pass

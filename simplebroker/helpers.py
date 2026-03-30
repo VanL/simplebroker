@@ -1,21 +1,24 @@
 """Helper functions and classes for SimpleBroker."""
 
 import os
-import sqlite3
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path, PurePath
 from typing import TypeVar
 
+from ._backends import get_configured_backend
 from ._constants import (
     MAX_PROJECT_TRAVERSAL_DEPTH,
-    SIMPLEBROKER_MAGIC,
     _validate_safe_path_components,
+    load_config,
 )
-from ._exceptions import DatabaseError, OperationalError, StopException
+from ._exceptions import OperationalError, StopException
 
 T = TypeVar("T")
+
+_config = load_config()
+db_backend = get_configured_backend(_config)
 
 
 def interruptible_sleep(
@@ -150,99 +153,13 @@ def is_ancestor(possible_ancestor: str | Path, possible_descendant: str | Path) 
 
 
 def _validate_sqlite_database(file_path: Path, verify_magic: bool = True) -> None:
-    """Validate that a file is a valid SQLite database and raise detailed errors.
-
-    Args:
-        file_path: Path to the file to validate
-        verify_magic: Whether to verify SimpleBroker magic string
-
-    Raises:
-        DatabaseError: If the file is not a valid SQLite database with specific reason
-    """
-    # Verify arg types
-    if not isinstance(file_path, Path):
-        file_path = Path(file_path)
-
-    # Verify file existence and that it's a file
-    if not file_path.exists():
-        raise DatabaseError(f"Database file does not exist: {file_path}")
-
-    if not file_path.is_file():
-        raise DatabaseError(f"Path exists but is not a regular file: {file_path}")
-
-    # Check permissions
-    if not os.access(file_path.parent, os.R_OK | os.W_OK):
-        raise DatabaseError(f"Parent directory is not accessible: {file_path.parent}")
-
-    if not os.access(file_path, os.R_OK | os.W_OK):
-        raise DatabaseError(f"Database file is not readable/writable: {file_path}")
-
-    # First check the header (fast)
-    try:
-        with open(file_path, "rb") as f:
-            header = f.read(16)
-            if header != b"SQLite format 3\x00":
-                raise DatabaseError(
-                    f"File is not a valid SQLite database (invalid header): {file_path}"
-                )
-    except OSError as e:
-        raise DatabaseError(f"Cannot read database file: {file_path} ({e})") from e
-
-    # Check database integrity
-    try:
-        conn = sqlite3.connect(f"file:{file_path}?mode=ro", uri=True)
-        cursor = conn.cursor()
-        # PRAGMA integrity_check is more thorough but slower
-        # PRAGMA schema_version is faster and sufficient for most cases
-        cursor.execute("PRAGMA schema_version")
-        cursor.fetchone()
-
-        if verify_magic:
-            cursor.execute("SELECT value FROM meta WHERE key = 'magic'")
-            magic_row = cursor.fetchone()
-            if magic_row is None:
-                raise DatabaseError(
-                    f"Database is missing SimpleBroker metadata: {file_path}"
-                )
-            if magic_row[0] != SIMPLEBROKER_MAGIC:
-                raise DatabaseError(
-                    f"Database has incorrect magic string (not a SimpleBroker database): {file_path}"
-                )
-
-    except sqlite3.DatabaseError as e:
-        raise DatabaseError(
-            f"Database corruption or invalid format: {file_path} ({e})"
-        ) from e
-    except sqlite3.Error as e:
-        raise DatabaseError(
-            f"SQLite error while validating database: {file_path} ({e})"
-        ) from e
-    except OSError as e:
-        raise DatabaseError(
-            f"OS error while accessing database: {file_path} ({e})"
-        ) from e
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass  # Ignore close errors
+    """Compatibility wrapper for SQLite database validation."""
+    db_backend.validate_database(file_path, verify_magic)
 
 
 def _is_valid_sqlite_db(file_path: Path, verify_magic: bool = True) -> bool:
-    """Check if a file is a valid SQLite database.
-
-    Args:
-        file_path: Path to the file to check
-        verify_magic: Whether to verify SimpleBroker magic string
-
-    Returns:
-        True if the file is a valid SQLite database, False otherwise
-    """
-    try:
-        _validate_sqlite_database(file_path, verify_magic)
-        return True
-    except DatabaseError:
-        return False
+    """Compatibility wrapper for SQLite database validation checks."""
+    return db_backend.is_valid_database(file_path, verify_magic)
 
 
 def _find_project_database(
