@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from simplebroker._exceptions import IntegrityError, TimestampError
+from simplebroker._runner import SQLRunner
 from simplebroker._timestamp import TimestampGenerator
 
 
@@ -119,7 +120,7 @@ class TestTimestampEdgeCases:
 
     def test_timestamp_generator_far_future(self):
         """Test timestamp generation with far future time."""
-        mock_runner = Mock()
+        mock_runner = Mock(spec=SQLRunner)
         mock_runner.run.return_value = [(0,)]
 
         gen = TimestampGenerator(mock_runner)
@@ -138,7 +139,7 @@ class TestTimestampEdgeCases:
 
     def test_timestamp_generator_update_conflict(self):
         """Test handling of timestamp update conflicts - exhausted retries."""
-        mock_runner = Mock()
+        mock_runner = Mock(spec=SQLRunner)
 
         # Mock time_ns to return consistent nanoseconds
         with patch("simplebroker._timestamp.time") as mock_time:
@@ -215,7 +216,7 @@ class TestTimestampEdgeCases:
     def test_fork_reinitialization(self):
         """Test that fork causes reinitialization of timestamp generator."""
 
-        mock_runner = Mock()
+        mock_runner = Mock(spec=SQLRunner)
         mock_runner.run.return_value = [(1000,)]
 
         gen = TimestampGenerator(mock_runner)
@@ -244,7 +245,7 @@ class TestTimestampEdgeCases:
     def test_timestamp_magnitude_preservation(self):
         """Test that timestamps preserve the magnitude of time.time_ns()."""
 
-        mock_runner = Mock()
+        mock_runner = Mock(spec=SQLRunner)
 
         # Mock time.time_ns to return a known value
         test_ns = 1754685000000000000  # This should start with '1'
@@ -294,7 +295,7 @@ class TestTimestampEdgeCases:
 
     def test_timestamp_encoding_decoding_roundtrip(self):
         """Test that encoding and decoding are inverses of each other."""
-        mock_runner = Mock()
+        mock_runner = Mock(spec=SQLRunner)
         gen = TimestampGenerator(mock_runner)
 
         # Test various timestamp values
