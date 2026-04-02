@@ -675,31 +675,27 @@ class TestQueueWatcher(WatcherTestBase):
 
     def test_polling_lifecycle(self, broker_target):
         """Test that polling strategy lifecycle works correctly."""
-        db = make_broker(broker_target)
+        watcher = QueueWatcher(
+            "test_queue",
+            lambda m, t: None,
+            db=broker_target,
+        )
+
+        # Access internal strategy for testing
+        strategy = watcher._strategy
+
+        thread = watcher.run_in_thread()
         try:
-            watcher = QueueWatcher(
-                "test_queue",
-                lambda m, t: None,
-                db=db,
-            )
+            time.sleep(0.1)
 
-            # Access internal strategy for testing
-            strategy = watcher._strategy
-
-            thread = watcher.run_in_thread()
-            try:
-                time.sleep(0.1)
-
-                # Check count will be > 0 since polling has been running
-                assert strategy._check_count > 0
-            finally:
-                watcher.stop()
-                thread.join(timeout=2.0)
-
-            # Should be stopped
-            assert strategy._stop_event.is_set()
+            # Check count will be > 0 since polling has been running
+            assert strategy._check_count > 0
         finally:
-            db.close()
+            watcher.stop()
+            thread.join(timeout=2.0)
+
+        # Should be stopped
+        assert strategy._stop_event.is_set()
 
     def test_since_parameter_in_peek_mode(self, broker, broker_target):
         """Test that peek mode respects message ordering and 'since' tracking."""
