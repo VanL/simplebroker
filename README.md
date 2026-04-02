@@ -18,37 +18,51 @@ SimpleBroker is a zero-configuration, no-dependency message queue that runs anyw
 
 ## Table of Contents
 
-- [Features](#features)
-- [Use Cases](#use-cases)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Command Reference](#command-reference)
-  - [Global Options](#global-options)
-  - [Commands](#commands)
-  - [Command Options](#command-options)
-  - [Exit Codes](#exit-codes)
-- [Critical Safety Notes](#️-critical-safety-notes)
-  - [Potential Data Loss with `watch`](#potential-data-loss-with-watch)
-  - [Safe Message Handling](#safe-message-handling)
-- [Core Concepts](#core-concepts)
-  - [Timestamps as Message IDs](#timestamps-as-message-ids)
-  - [JSON for Safe Processing](#json-for-safe-processing)
-  - [Checkpoint-based Processing](#checkpoint-based-processing)
-- [Common Patterns](#common-patterns)
-- [Real-time Queue Watching](#real-time-queue-watching)
-- [Python API](#python-api)
-- [Performance & Tuning](#performance--tuning)
-- [Project Scoping](#project-scoping)
-  - [Basic Project Scoping](#basic-project-scoping)
-  - [Project Database Names](#project-database-names)
-  - [Error Behavior](#error-behavior-when-no-project-database-found)
-  - [Project Initialization](#project-initialization)
-  - [Precedence Rules](#precedence-rules)
-  - [Security Notes](#security-notes)
-  - [Common Use Cases](#common-use-cases)
-- [Architecture & Technical Details](#architecture--technical-details)
-- [Development & Contributing](#development--contributing)
-- [License](#license)
+- [SimpleBroker](#simplebroker)
+  - [Table of Contents](#table-of-contents)
+  - [Features](#features)
+  - [Use Cases](#use-cases)
+  - [Installation](#installation)
+  - [Quick Start](#quick-start)
+  - [Command Reference](#command-reference)
+    - [Global Options](#global-options)
+    - [Commands](#commands)
+      - [Queue Aliases](#queue-aliases)
+    - [Command Options](#command-options)
+    - [Exit Codes](#exit-codes)
+  - [Critical Safety Notes](#critical-safety-notes)
+    - [Safe Message Handling](#safe-message-handling)
+    - [Robust message handling with `watch`](#robust-message-handling-with-watch)
+  - [Core Concepts](#core-concepts)
+    - [Timestamps as Message IDs](#timestamps-as-message-ids)
+    - [JSON for Safe Processing](#json-for-safe-processing)
+    - [Checkpoint-based Processing](#checkpoint-based-processing)
+  - [Common Patterns](#common-patterns)
+  - [Real-time Queue Watching](#real-time-queue-watching)
+    - [Move Mode (`--move`)](#move-mode---move)
+  - [Python API](#python-api)
+    - [Generating timestamps without writing](#generating-timestamps-without-writing)
+    - [Tracking the last generated timestamp](#tracking-the-last-generated-timestamp)
+    - [Thread-Based Background Processing](#thread-based-background-processing)
+    - [Context Manager Support](#context-manager-support)
+    - [Advanced: Custom Extensions](#advanced-custom-extensions)
+  - [Performance \& Tuning](#performance--tuning)
+    - [Cross-Backend Benchmarking](#cross-backend-benchmarking)
+    - [Environment Variables](#environment-variables)
+  - [Project Scoping](#project-scoping)
+    - [Basic Project Scoping](#basic-project-scoping)
+    - [Global Scope](#global-scope)
+    - [Project Database Names](#project-database-names)
+    - [Error Behavior When No Project Database Found](#error-behavior-when-no-project-database-found)
+    - [Project Initialization](#project-initialization)
+    - [Precedence Rules](#precedence-rules)
+    - [Security Notes](#security-notes)
+    - [Common Use Cases](#common-use-cases)
+  - [Architecture \& Technical Details](#architecture--technical-details)
+  - [Development \& Contributing](#development--contributing)
+    - [Releases](#releases)
+  - [License](#license)
+  - [Acknowledgments](#acknowledgments)
 
 ## Features
 
@@ -93,43 +107,6 @@ The CLI is available as both `broker` and `simplebroker`.
 - Python 3.10+
 - SQLite 3.35+ (released March 2021) - required for `DELETE...RETURNING` support
 
-### Advanced: External Backend Plugins
-
-SimpleBroker core remains SQLite-first and ships with SQLite only.
-
-If you need a different backend, use an external plugin package through the
-public extension seam. This repository includes a sibling Postgres package for
-that purpose:
-
-```bash
-uv pip install -e "./extensions/simplebroker_pg[dev]"
-```
-
-Explicit Python usage:
-
-```python
-from simplebroker import Queue
-from simplebroker_pg import PostgresRunner
-
-runner = PostgresRunner(
-    "postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test",
-    schema="simplebroker_app",
-)
-
-queue = Queue("jobs", runner=runner, persistent=True)
-```
-
-CLI/project usage is selected through a `.simplebroker.toml` file in the project
-root:
-
-```toml
-version = 1
-backend = "postgres"
-target = "postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test"
-
-[backend_options]
-schema = "simplebroker_app"
-```
 
 ## Quick Start
 
@@ -1333,6 +1310,47 @@ This optimization is transparent - messages are still delivered exactly once.
 - **Database files**: Created with 0600 permissions (user-only)
 - **SQL injection**: Prevented via parameterized queries
 - **Message content**: Not validated - can contain any text including shell metacharacters
+</details>
+
+<details>
+<summary>Advanced: External Backend Plugins</summary>
+
+SimpleBroker core remains SQLite-first so that basic usage has no dependencies outside 
+the Python standard library.
+
+If you need a different backend, use an external plugin package through the
+public extension seam. This repository includes a sibling Postgres package for
+that purpose:
+
+```bash
+uv pip install -e "./extensions/simplebroker_pg[dev]"
+```
+
+Explicit Python usage:
+
+```python
+from simplebroker import Queue
+from simplebroker_pg import PostgresRunner
+
+runner = PostgresRunner(
+    "postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test",
+    schema="simplebroker_app",
+)
+
+queue = Queue("jobs", runner=runner, persistent=True)
+```
+
+CLI/project usage is selected through a `.simplebroker.toml` file in the project
+root:
+
+```toml
+version = 1
+backend = "postgres"
+target = "postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test"
+
+[backend_options]
+schema = "simplebroker_app"
+```
 </details>
 
 ## Development & Contributing
