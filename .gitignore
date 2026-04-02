@@ -1,3 +1,6 @@
+# Accidental database files created by str(BrokerCore) coercion
+<simplebroker.*>
+
 # Python
 __pycache__/
 *.py[cod]
