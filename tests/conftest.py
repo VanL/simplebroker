@@ -38,6 +38,7 @@ from .helper_scripts.managed_subprocess import (
     managed_subprocess,
     run_subprocess,
 )
+from .helper_scripts.timing import scale_timeout_for_ci
 
 # Import watcher patching
 from .helper_scripts.watcher_patch import patch_watchers
@@ -491,7 +492,7 @@ def run_cli(
     run_func = run_with_coverage if run_with_coverage else subprocess.run
 
     if timeout is None:
-        timeout = 12.0 if sys.platform == "win32" else 6.0
+        timeout = scale_timeout_for_ci(12.0 if sys.platform == "win32" else 6.0)
 
     completed = run_func(
         cmd,

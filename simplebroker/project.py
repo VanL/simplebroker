@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from ._backend_plugins import get_backend_plugin
+from ._backend_plugins import BackendPlugin, get_backend_plugin
 from ._constants import load_config
 from ._project_config import (
     PROJECT_CONFIG_FILENAME,
@@ -34,7 +34,7 @@ def _root_from_relative_target(target_path: Path, relative_target: Path) -> Path
     return root.resolve(strict=False)
 
 
-def _requested_backend_plugin(name: str):
+def _requested_backend_plugin(name: str) -> BackendPlugin:
     try:
         return get_backend_plugin(name)
     except RuntimeError as exc:

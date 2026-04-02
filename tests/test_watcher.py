@@ -686,10 +686,11 @@ class TestQueueWatcher(WatcherTestBase):
 
         thread = watcher.run_in_thread()
         try:
-            time.sleep(0.1)
-
-            # Check count will be > 0 since polling has been running
-            assert strategy._check_count > 0
+            assert wait_for_condition(
+                lambda: strategy._check_count > 0,
+                timeout=scale_timeout_for_ci(2.0),
+                interval=0.01,
+            ), "Polling strategy did not complete an idle check in time"
         finally:
             watcher.stop()
             thread.join(timeout=2.0)

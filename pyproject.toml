@@ -88,14 +88,6 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 
-[[tool.mypy.overrides]]
-module = "tests.*"
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-module = ["aiosqlite", "aiosqlitepool"]
-ignore_missing_imports = true
-
 [tool.ruff]
 target-version = "py310"
 line-length = 88
