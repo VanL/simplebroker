@@ -2,12 +2,13 @@ name: Test Postgres Extension
 
 on:
   push:
-    tags:
-      - "simplebroker-pg-v*"
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  test-pg-extension:
+  test-pg:
     runs-on: ubuntu-latest
 
     steps:
@@ -28,4 +29,4 @@ jobs:
 
     - name: Run PG-backed test suites
       run: |
-        uv run ./bin/pytest-pg
+        uv run bin/pytest-pg
