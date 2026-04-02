@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from psycopg import conninfo as pg_conninfo
 from simplebroker_pg import PostgresRunner
 
 from simplebroker import Queue
@@ -63,6 +64,13 @@ def _run_cli(
     return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
 
 
+def _dsn_parts() -> dict[str, str]:
+    return {
+        key: str(value)
+        for key, value in pg_conninfo.conninfo_to_dict(_require_test_dsn()).items()
+    }
+
+
 def test_postgres_runner_roundtrip() -> None:
     """Explicit runner injection should work end-to-end."""
     schema = _schema_name()
@@ -104,7 +112,7 @@ def test_postgres_cli_project_config_roundtrip(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    env = {"BROKER_PROJECT_SCOPE": "1"}
+    env = {"BROKER_PROJECT_SCOPE": "1", "BROKER_BACKEND": "sqlite"}
 
     code, stdout, stderr = _run_cli("init", cwd=nested, env=env)
     assert code == 0, stderr
@@ -118,3 +126,92 @@ def test_postgres_cli_project_config_roundtrip(tmp_path: Path) -> None:
 
     code, stdout, stderr = _run_cli("--cleanup", cwd=nested, env=env)
     assert code == 0, stderr
+
+
+def test_postgres_cli_env_selected_backend_roundtrip(tmp_path: Path) -> None:
+    """The CLI should operate against env-selected Postgres without any toml."""
+    schema = _schema_name()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    env = {
+        "BROKER_BACKEND": "postgres",
+        "BROKER_BACKEND_TARGET": _require_test_dsn(),
+        "BROKER_BACKEND_SCHEMA": schema,
+    }
+
+    code, stdout, stderr = _run_cli("init", cwd=project_root, env=env)
+    assert code == 0, stderr
+
+    code, stdout, stderr = _run_cli("write", "jobs", "hello", cwd=project_root, env=env)
+    assert code == 0, stderr
+
+    code, stdout, stderr = _run_cli("read", "jobs", cwd=project_root, env=env)
+    assert code == 0, stderr
+    assert stdout == "hello"
+
+    code, stdout, stderr = _run_cli("--cleanup", cwd=project_root, env=env)
+    assert code == 0, stderr
+
+
+def test_postgres_cli_password_env_merges_into_target(tmp_path: Path) -> None:
+    """BROKER_BACKEND_PASSWORD should work with a passwordless target string."""
+    parts = _dsn_parts()
+    password = parts.get("password")
+    if not password:
+        pytest.skip("test DSN does not include a password to inject")
+
+    schema = _schema_name()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    env = {
+        "BROKER_BACKEND": "postgres",
+        "BROKER_BACKEND_TARGET": pg_conninfo.make_conninfo(
+            host=parts["host"],
+            port=parts["port"],
+            user=parts["user"],
+            dbname=parts["dbname"],
+        ),
+        "BROKER_BACKEND_PASSWORD": password,
+        "BROKER_BACKEND_SCHEMA": schema,
+    }
+
+    code, stdout, stderr = _run_cli("init", cwd=project_root, env=env)
+    assert code == 0, stderr
+
+    code, stdout, stderr = _run_cli("write", "jobs", "hello", cwd=project_root, env=env)
+    assert code == 0, stderr
+
+    code, stdout, stderr = _run_cli("read", "jobs", cwd=project_root, env=env)
+    assert code == 0, stderr
+    assert stdout == "hello"
+
+    code, stdout, stderr = _run_cli("--cleanup", cwd=project_root, env=env)
+    assert code == 0, stderr
+
+
+def test_postgres_cli_missing_database_is_not_backend_unavailable(
+    tmp_path: Path,
+) -> None:
+    """A bad target should fail as a connection error, not availability."""
+    parts = _dsn_parts()
+    schema = _schema_name()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    env = {
+        "BROKER_BACKEND": "postgres",
+        "BROKER_BACKEND_HOST": parts["host"],
+        "BROKER_BACKEND_PORT": parts["port"],
+        "BROKER_BACKEND_USER": parts["user"],
+        "BROKER_BACKEND_DATABASE": f"missing_{uuid.uuid4().hex[:12]}",
+        "BROKER_BACKEND_SCHEMA": schema,
+    }
+    if "password" in parts:
+        env["BROKER_BACKEND_PASSWORD"] = parts["password"]
+
+    code, stdout, stderr = _run_cli("init", cwd=project_root, env=env)
+    assert code != 0
+    assert "not available" not in stderr
+    assert "Could not connect to Postgres target" in stderr

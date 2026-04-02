@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from simplebroker._constants import load_config
 from simplebroker._project_config import load_project_config, resolve_project_target
 from simplebroker.db import BrokerDB
 from simplebroker.project import (
@@ -210,3 +211,61 @@ def test_public_broker_target_roundtrip_serialization(tmp_path: Path) -> None:
     decoded = deserialize_broker_target(encoded)
 
     assert decoded == original
+
+
+def test_resolve_target_defaults_to_sqlite_without_toml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without toml and without BROKER_BACKEND, sqlite discovery still returns None."""
+    monkeypatch.chdir(tmp_path)
+
+    target = resolve_broker_target(tmp_path, config=load_config())
+
+    assert target is None
+
+
+def test_resolve_target_unknown_backend_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unknown backend names should produce a user-facing availability error."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("BROKER_BACKEND", "mysql")
+
+    with pytest.raises(
+        RuntimeError, match="Requested backend 'mysql' is not available"
+    ):
+        target_for_directory(tmp_path, config=load_config())
+
+
+def test_resolve_target_missing_postgres_plugin_has_install_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Missing postgres plugin should recommend the extension package."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("BROKER_BACKEND", "postgres")
+    config = load_config()
+
+    def raise_unknown(name: str):
+        raise RuntimeError(f"Unknown backend plugin: {name}")
+
+    monkeypatch.setattr("simplebroker.project.get_backend_plugin", raise_unknown)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Requested backend 'postgres' is not available. Install simplebroker-pg.",
+    ):
+        target_for_directory(tmp_path, config=config)
+
+
+def test_toml_overrides_env_backend_in_public_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A direct project config should win over BROKER_BACKEND env selection."""
+    monkeypatch.setenv("BROKER_BACKEND", "postgres")
+    _write_project_config(
+        tmp_path / ".simplebroker.toml", backend="sqlite", target="x.db"
+    )
+
+    target = target_for_directory(tmp_path, config=load_config())
+
+    assert target.backend_name == "sqlite"

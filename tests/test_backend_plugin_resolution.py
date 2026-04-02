@@ -38,6 +38,9 @@ def test_external_backend_plugin_resolves_via_entry_point(monkeypatch) -> None:
         sql = sqlite_sql
         schema_version = 1
 
+        def init_backend(self, config, **kwargs):
+            raise NotImplementedError
+
         def create_runner(self, target: str, **kwargs):  # pragma: no cover - unused
             raise NotImplementedError
 
@@ -137,6 +140,9 @@ def test_external_backend_plugin_with_invalid_sql_namespace_is_rejected(
         sql = object()
         schema_version = 1
 
+        def init_backend(self, config, **kwargs):
+            raise NotImplementedError
+
     class EntryPointsMock(list[EntryPoint]):
         def select(self, *, group: str, name: str):
             if group == "simplebroker.backends" and name == "dummy":
@@ -172,3 +178,14 @@ def test_legacy_runner_without_backend_plugin_still_looks_like_sqlite() -> None:
 
     runner = LegacyRunner(":memory:")
     assert not isinstance(runner, BackendAwareRunner)
+
+
+def test_sqlite_plugin_has_init_backend() -> None:
+    """The built-in sqlite plugin should expose init_backend()."""
+    from simplebroker._constants import load_config
+
+    plugin = get_backend_plugin("sqlite")
+    result = plugin.init_backend(load_config())
+
+    assert "target" in result
+    assert "backend_options" in result

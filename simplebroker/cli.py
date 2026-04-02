@@ -29,6 +29,7 @@ from .helpers import (
     _validate_working_directory,
     ensure_compound_db_path,
 )
+from .project import _configured_backend_target
 
 # Cache the parser for better startup performance
 _PARSER_CACHE = None
@@ -91,7 +92,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     """
     parser = CustomArgumentParser(
         prog=PROG_NAME,
-        description="Simple message broker with SQLite backend",
+        description="Simple message broker with pluggable backends",
         allow_abbrev=False,  # Prevent ambiguous abbreviations
     )
 
@@ -99,6 +100,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     default_dir = (
         Path(config["BROKER_DEFAULT_DB_LOCATION"])
         if config["BROKER_DEFAULT_DB_LOCATION"]
+        and config.get("BROKER_BACKEND", "sqlite") == "sqlite"
         else Path.cwd()
     )
     default_file = config["BROKER_DEFAULT_DB_NAME"]
@@ -547,10 +549,20 @@ def _resolve_target(
     args: argparse.Namespace, *, config: dict[str, Any] = _config
 ) -> ResolvedTarget:
     """Resolve the backend target for the current CLI invocation."""
+    root = Path(args.dir).expanduser().resolve()
+
     if config["BROKER_PROJECT_SCOPE"]:
-        config_path = find_project_config(args.dir)
+        config_path = find_project_config(root)
         if config_path is not None:
             return resolve_project_target(config_path)
+
+    configured_target = _configured_backend_target(
+        root,
+        config=config,
+        used_project_scope=False,
+    )
+    if configured_target is not None:
+        return configured_target
 
     if args.command == "init":
         init_filename = config["BROKER_DEFAULT_DB_NAME"]

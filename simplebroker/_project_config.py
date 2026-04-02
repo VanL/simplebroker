@@ -148,12 +148,22 @@ def resolve_project_target(config_path: Path) -> ResolvedTarget:
     """Resolve a project config into an internal target object."""
     config_data = load_project_config(config_path)
     backend_name = config_data["backend"]
-    get_backend_plugin(backend_name)
+    plugin = get_backend_plugin(backend_name)
     target = config_data["target"]
     backend_options = dict(config_data["backend_options"])
 
     if backend_name == "sqlite":
         target = str((config_path.parent / target).expanduser().resolve())
+    else:
+        from ._constants import load_config
+
+        resolved = plugin.init_backend(
+            load_config(),
+            toml_target=target,
+            toml_options=backend_options,
+        )
+        target = str(resolved["target"])
+        backend_options = dict(resolved["backend_options"])
 
     return ResolvedTarget(
         backend_name=backend_name,

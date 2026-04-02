@@ -52,7 +52,7 @@ def require_schema_name(backend_options: Mapping[str, Any] | None) -> str:
     schema = backend_options.get("schema")
     if not isinstance(schema, str) or not schema:
         raise DatabaseError(
-            "Postgres backend requires backend_options.schema in .simplebroker.toml"
+            "Postgres backend requires backend_options.schema or BROKER_BACKEND_SCHEMA"
         )
     if schema == "public":
         raise DatabaseError("Postgres backend refuses to use schema 'public'")

@@ -203,6 +203,44 @@ class TestLoadConfig:
             assert config["BROKER_DEFAULT_DB_NAME"] == DEFAULT_DB_NAME
             assert config["BROKER_PROJECT_SCOPE"] is False
 
+            # Backend selection
+            assert config["BROKER_BACKEND"] == "sqlite"
+            assert config["BROKER_BACKEND_HOST"] == "localhost"
+            assert config["BROKER_BACKEND_PORT"] == 5432
+            assert config["BROKER_BACKEND_USER"] == "postgres"
+            assert config["BROKER_BACKEND_PASSWORD"] == ""
+            assert config["BROKER_BACKEND_DATABASE"] == "simplebroker"
+            assert config["BROKER_BACKEND_SCHEMA"] == "simplebroker_pg_v1"
+            assert config["BROKER_BACKEND_TARGET"] == ""
+
+    def test_backend_selection_reads_from_env(self) -> None:
+        """Test backend-selection environment variables."""
+        env_vars = {
+            "BROKER_BACKEND": "postgres",
+            "BROKER_BACKEND_HOST": "db.example.com",
+            "BROKER_BACKEND_PORT": "5433",
+            "BROKER_BACKEND_USER": "broker",
+            "BROKER_BACKEND_PASSWORD": "secret",
+            "BROKER_BACKEND_DATABASE": "simplebroker_app",
+            "BROKER_BACKEND_SCHEMA": "broker_schema",
+            "BROKER_BACKEND_TARGET": "postgresql://broker@db.example.com/simplebroker",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=True):
+            config = load_config()
+
+            assert config["BROKER_BACKEND"] == "postgres"
+            assert config["BROKER_BACKEND_HOST"] == "db.example.com"
+            assert config["BROKER_BACKEND_PORT"] == 5433
+            assert config["BROKER_BACKEND_USER"] == "broker"
+            assert config["BROKER_BACKEND_PASSWORD"] == "secret"
+            assert config["BROKER_BACKEND_DATABASE"] == "simplebroker_app"
+            assert config["BROKER_BACKEND_SCHEMA"] == "broker_schema"
+            assert (
+                config["BROKER_BACKEND_TARGET"]
+                == "postgresql://broker@db.example.com/simplebroker"
+            )
+
     def test_custom_sqlite_settings(self) -> None:
         """Test SQLite-related environment variables."""
         env_vars = {
@@ -382,6 +420,15 @@ class TestLoadConfig:
             "BROKER_DEFAULT_DB_LOCATION",
             "BROKER_DEFAULT_DB_NAME",
             "BROKER_PROJECT_SCOPE",
+            # Backend selection
+            "BROKER_BACKEND",
+            "BROKER_BACKEND_HOST",
+            "BROKER_BACKEND_PORT",
+            "BROKER_BACKEND_USER",
+            "BROKER_BACKEND_PASSWORD",
+            "BROKER_BACKEND_DATABASE",
+            "BROKER_BACKEND_SCHEMA",
+            "BROKER_BACKEND_TARGET",
         }
 
         assert set(config.keys()) == expected_keys

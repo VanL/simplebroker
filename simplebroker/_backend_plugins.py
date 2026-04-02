@@ -24,6 +24,14 @@ class BackendPlugin(Protocol):
     sql: BackendSQLNamespace
     schema_version: int
 
+    def init_backend(
+        self,
+        config: Mapping[str, Any],
+        *,
+        toml_target: str = "",
+        toml_options: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
     def create_runner(
         self,
         target: str,

@@ -34,6 +34,42 @@ def _root_from_relative_target(target_path: Path, relative_target: Path) -> Path
     return root.resolve(strict=False)
 
 
+def _requested_backend_plugin(name: str):
+    try:
+        return get_backend_plugin(name)
+    except RuntimeError as exc:
+        if str(exc) != f"Unknown backend plugin: {name}":
+            raise
+        if name == "postgres":
+            raise RuntimeError(
+                "Requested backend 'postgres' is not available. "
+                "Install simplebroker-pg."
+            ) from exc
+        raise RuntimeError(f"Requested backend '{name}' is not available.") from exc
+
+
+def _configured_backend_target(
+    root: Path,
+    *,
+    config: Mapping[str, Any],
+    used_project_scope: bool,
+) -> BrokerTarget | None:
+    backend_name = str(config.get("BROKER_BACKEND", "sqlite"))
+    if backend_name == "sqlite":
+        return None
+
+    plugin = _requested_backend_plugin(backend_name)
+    resolved = plugin.init_backend(config)
+    return ResolvedTarget(
+        backend_name=backend_name,
+        target=str(resolved["target"]),
+        backend_options=dict(cast(dict[str, Any], resolved["backend_options"])),
+        project_root=root,
+        used_project_scope=used_project_scope,
+        legacy_sqlite_path_mode=False,
+    )
+
+
 def _sqlite_target(
     target_path: Path,
     *,
@@ -58,13 +94,15 @@ def resolve_broker_target(
     *,
     config: dict[str, Any] | None = None,
 ) -> BrokerTarget | None:
-    """Discover an existing SimpleBroker target from a directory.
+    """Discover or synthesize a SimpleBroker target from a directory.
 
     Resolution order:
     1. Upward `.simplebroker.toml` search
     2. Legacy upward sqlite database discovery using `BROKER_DEFAULT_DB_NAME`
+    3. Env-selected non-sqlite backend synthesis
 
-    Returns `None` when no existing broker target is found.
+    Returns `None` when no sqlite target is discovered and no non-sqlite backend
+    is selected.
     """
 
     config_dict = _config_dict(config)
@@ -77,6 +115,14 @@ def resolve_broker_target(
     config_path = find_project_config(start_dir)
     if config_path is not None:
         return resolve_project_target(config_path)
+
+    configured_target = _configured_backend_target(
+        start_dir,
+        config=config_dict,
+        used_project_scope=False,
+    )
+    if configured_target is not None:
+        return configured_target
 
     default_target = Path(str(config_dict["BROKER_DEFAULT_DB_NAME"]))
     if default_target.is_absolute():
@@ -105,7 +151,8 @@ def target_for_directory(
     """Return the broker target rooted at an explicit directory.
 
     If `directory/.simplebroker.toml` exists, it defines the target. Otherwise,
-    the configured default sqlite target path is resolved relative to `directory`.
+    a selected non-sqlite backend is synthesized from env/config, or the
+    configured default sqlite target path is resolved relative to `directory`.
     """
 
     config_dict = _config_dict(config)
@@ -114,6 +161,14 @@ def target_for_directory(
     config_path = root / PROJECT_CONFIG_FILENAME
     if config_path.is_file():
         return resolve_project_target(config_path)
+
+    configured_target = _configured_backend_target(
+        root,
+        config=config_dict,
+        used_project_scope=False,
+    )
+    if configured_target is not None:
+        return configured_target
 
     default_target = Path(str(config_dict["BROKER_DEFAULT_DB_NAME"]))
     target_path = (

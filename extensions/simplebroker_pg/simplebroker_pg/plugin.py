@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable, Mapping
-from typing import Any, Protocol, cast
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol, cast
+from urllib.parse import quote
+
+from psycopg import ProgrammingError, conninfo
 
 from simplebroker._backend_plugins import ActivityWaiter, BackendPlugin
 from simplebroker._exceptions import DatabaseError
@@ -43,12 +48,208 @@ class _DsnAwareRunner(SQLRunner, Protocol):
     def schema(self) -> str: ...
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedPostgresEnv:
+    """Normalized Postgres backend configuration derived from env/toml."""
+
+    target_mode: Literal["env_target", "toml_target", "parts"]
+    host: str | None
+    port: int | None
+    user: str | None
+    password: str | None
+    database: str | None
+    target: str | None
+    schema: str
+
+
+def _require_text(value: object, *, name: str) -> str:
+    if not isinstance(value, str):
+        raise DatabaseError(f"{name} must be a non-empty string")
+    cleaned = value.strip()
+    if not cleaned:
+        raise DatabaseError(f"{name} must be a non-empty string")
+    return cleaned
+
+
+def _optional_text(value: object, *, name: str) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise DatabaseError(f"{name} must be a string")
+    return value.strip()
+
+
+def _password_text(value: object, *, name: str) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise DatabaseError(f"{name} must be a string")
+    return value
+
+
+def _require_port(value: object) -> int:
+    if isinstance(value, bool):
+        raise DatabaseError(
+            "BROKER_BACKEND_PORT must be an integer between 1 and 65535"
+        )
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            raise DatabaseError(
+                "BROKER_BACKEND_PORT must be an integer between 1 and 65535"
+            )
+        try:
+            port = int(raw)
+        except ValueError as exc:
+            raise DatabaseError(
+                "BROKER_BACKEND_PORT must be an integer between 1 and 65535"
+            ) from exc
+    elif isinstance(value, int):
+        port = value
+    else:
+        raise DatabaseError(
+            "BROKER_BACKEND_PORT must be an integer between 1 and 65535"
+        )
+
+    if port < 1 or port > 65535:
+        raise DatabaseError(
+            "BROKER_BACKEND_PORT must be an integer between 1 and 65535"
+        )
+    return port
+
+
+def _validated_target(target: str, *, password: str | None = None) -> str:
+    try:
+        if password:
+            return conninfo.make_conninfo(target, password=password)
+        conninfo.make_conninfo(target)
+    except ProgrammingError as exc:
+        raise DatabaseError(f"Invalid Postgres target: {exc}") from exc
+    return target
+
+
+def verify_env(
+    config: Mapping[str, Any],
+    *,
+    toml_target: str = "",
+    toml_options: Mapping[str, Any] | None = None,
+) -> VerifiedPostgresEnv:
+    """Validate and normalize Postgres config before it is used."""
+
+    toml_opts = dict(toml_options) if toml_options else {}
+
+    if "BROKER_BACKEND_SCHEMA" in os.environ:
+        schema_source: object = os.environ["BROKER_BACKEND_SCHEMA"]
+    elif "schema" in toml_opts:
+        schema_source = toml_opts["schema"]
+    else:
+        schema_source = config.get("BROKER_BACKEND_SCHEMA", "simplebroker_pg_v1")
+    schema = require_schema_name({"schema": schema_source})
+
+    password = _password_text(
+        config.get("BROKER_BACKEND_PASSWORD", ""),
+        name="BROKER_BACKEND_PASSWORD",
+    )
+    env_target = _optional_text(
+        config.get("BROKER_BACKEND_TARGET", ""),
+        name="BROKER_BACKEND_TARGET",
+    )
+    if env_target:
+        return VerifiedPostgresEnv(
+            target_mode="env_target",
+            host=None,
+            port=None,
+            user=None,
+            password=password or None,
+            database=None,
+            target=_validated_target(env_target, password=password or None),
+            schema=schema,
+        )
+
+    cleaned_toml_target = _optional_text(toml_target, name="toml target")
+    if cleaned_toml_target:
+        return VerifiedPostgresEnv(
+            target_mode="toml_target",
+            host=None,
+            port=None,
+            user=None,
+            password=password or None,
+            database=None,
+            target=_validated_target(cleaned_toml_target, password=password or None),
+            schema=schema,
+        )
+
+    return VerifiedPostgresEnv(
+        target_mode="parts",
+        host=_require_text(
+            config.get("BROKER_BACKEND_HOST", "localhost"),
+            name="BROKER_BACKEND_HOST",
+        ),
+        port=_require_port(config.get("BROKER_BACKEND_PORT", 5432)),
+        user=_require_text(
+            config.get("BROKER_BACKEND_USER", "postgres"),
+            name="BROKER_BACKEND_USER",
+        ),
+        password=password or None,
+        database=_require_text(
+            config.get("BROKER_BACKEND_DATABASE", "simplebroker"),
+            name="BROKER_BACKEND_DATABASE",
+        ),
+        target=None,
+        schema=schema,
+    )
+
+
 class PostgresBackendPlugin:
     """Backend plugin implementing the SimpleBroker extension contract."""
 
     name = "postgres"
     sql: BackendSQLNamespace = ensure_backend_sql_namespace(pg_sql)
     schema_version = POSTGRES_SCHEMA_VERSION
+
+    def init_backend(
+        self,
+        config: Mapping[str, Any],
+        *,
+        toml_target: str = "",
+        toml_options: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        verified = verify_env(
+            config,
+            toml_target=toml_target,
+            toml_options=toml_options,
+        )
+
+        if verified.target is not None:
+            target = verified.target
+        else:
+            assert verified.host is not None
+            assert verified.port is not None
+            assert verified.user is not None
+            assert verified.database is not None
+
+            host = verified.host
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+
+            encoded_user = quote(verified.user, safe="")
+            encoded_database = quote(verified.database, safe="")
+            if verified.password:
+                encoded_password = quote(verified.password, safe="")
+                target = (
+                    f"postgresql://{encoded_user}:{encoded_password}"
+                    f"@{host}:{verified.port}/{encoded_database}"
+                )
+            else:
+                target = (
+                    f"postgresql://{encoded_user}"
+                    f"@{host}:{verified.port}/{encoded_database}"
+                )
+
+        return {
+            "target": target,
+            "backend_options": {"schema": verified.schema},
+        }
 
     def create_runner(
         self,

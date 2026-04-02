@@ -543,6 +543,31 @@ def load_config() -> dict[str, Any]:
                 When enabled, searches upward through directory hierarchy
                 to find existing databases before creating new ones.
 
+        Backend Selection:
+            BROKER_BACKEND (str): Backend name.
+                Default: "sqlite"
+
+            BROKER_BACKEND_HOST (str): Postgres host.
+                Default: "localhost"
+
+            BROKER_BACKEND_PORT (int): Postgres port.
+                Default: 5432
+
+            BROKER_BACKEND_USER (str): Postgres user.
+                Default: "postgres"
+
+            BROKER_BACKEND_PASSWORD (str): Postgres password.
+                Default: ""
+
+            BROKER_BACKEND_DATABASE (str): Postgres database name.
+                Default: "simplebroker"
+
+            BROKER_BACKEND_SCHEMA (str): Postgres schema name.
+                Default: "simplebroker_pg_v1"
+
+            BROKER_BACKEND_TARGET (str): Full Postgres DSN/conninfo string.
+                Default: ""
+
     """
     config = {
         # SQLite performance settings
@@ -601,6 +626,19 @@ def load_config() -> dict[str, Any]:
         "BROKER_PROJECT_SCOPE": _parse_bool(
             os.environ.get("BROKER_PROJECT_SCOPE", "0")
         ),
+        # Backend selection
+        "BROKER_BACKEND": os.environ.get("BROKER_BACKEND", "sqlite"),
+        "BROKER_BACKEND_HOST": os.environ.get("BROKER_BACKEND_HOST", "localhost"),
+        "BROKER_BACKEND_PORT": int(os.environ.get("BROKER_BACKEND_PORT", "5432")),
+        "BROKER_BACKEND_USER": os.environ.get("BROKER_BACKEND_USER", "postgres"),
+        "BROKER_BACKEND_PASSWORD": os.environ.get("BROKER_BACKEND_PASSWORD", ""),
+        "BROKER_BACKEND_DATABASE": os.environ.get(
+            "BROKER_BACKEND_DATABASE", "simplebroker"
+        ),
+        "BROKER_BACKEND_SCHEMA": os.environ.get(
+            "BROKER_BACKEND_SCHEMA", "simplebroker_pg_v1"
+        ),
+        "BROKER_BACKEND_TARGET": os.environ.get("BROKER_BACKEND_TARGET", ""),
     }
 
     # Validate SYNC_MODE

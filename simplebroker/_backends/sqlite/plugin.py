@@ -41,6 +41,19 @@ class SQLiteBackendPlugin:
     sql: BackendSQLNamespace = ensure_backend_sql_namespace(_sql)
     schema_version = SCHEMA_VERSION
 
+    def init_backend(
+        self,
+        config: Mapping[str, Any],
+        *,
+        toml_target: str = "",
+        toml_options: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        del config
+        return {
+            "target": toml_target,
+            "backend_options": dict(toml_options) if toml_options else {},
+        }
+
     def create_runner(
         self,
         target: str,
