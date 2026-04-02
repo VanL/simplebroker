@@ -49,6 +49,8 @@ from simplebroker._constants import (
 
 from .helper_scripts import create_dangerous_path
 
+pytestmark = [pytest.mark.shared]
+
 
 class TestConstants:
     """Test that all constants are defined with expected values."""

@@ -9,18 +9,18 @@ from __future__ import annotations
 import json
 import logging
 import os
-import tempfile
 import threading
 import time
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
+from .helper_scripts.broker_factory import make_broker
 from .helper_scripts.timing import wait_for_condition, wait_for_count
+
+pytestmark = [pytest.mark.shared]
 
 
 class MetricsCollector:
@@ -176,238 +176,232 @@ class MonitoredQueueWatcher(QueueWatcher):
             self._last_log_time = current_time
 
 
-def test_metrics_collection_basic() -> None:
+def test_metrics_collection_basic(broker_target) -> None:
     """Test basic metrics collection functionality."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
+    broker = make_broker(broker_target)
 
-        try:
-            metrics = MetricsCollector()
-            processed = []
+    try:
+        metrics = MetricsCollector()
+        processed = []
 
-            def handler(msg, ts) -> None:
-                processed.append(msg)
-                time.sleep(0.01)  # Simulate processing time
+        def handler(msg, ts) -> None:
+            processed.append(msg)
+            time.sleep(0.01)  # Simulate processing time
 
+        watcher = MonitoredQueueWatcher(
+            "test_queue",
+            handler,
+            db=broker_target,
+            metrics_collector=metrics,
+        )
+
+        # Process some messages
+        for i in range(10):
+            broker.write("test_queue", f"message_{i}")
+
+        thread = watcher.run_in_thread()
+
+        # Wait for all messages to be processed
+        assert wait_for_count(
+            lambda: metrics.get_stats()["messages_processed"],
+            expected_count=10,
+            timeout=2.0,
+        )
+
+        watcher.stop()
+        thread.join(timeout=1.0)
+
+        # Check metrics
+        stats = metrics.get_stats()
+
+        assert stats["messages_processed"] == 10
+        assert stats["total_wake_ups"] > 0
+        # Note: Not asserting on efficiency as it depends on implementation
+        assert stats["throughput_per_sec"] > 0
+
+        # Check timing metrics
+        assert "pre_check_time_us_avg" in stats
+        assert stats["pre_check_time_us_avg"] < 1000  # < 1ms
+        assert "handler_time_ms_avg" in stats
+        assert stats["handler_time_ms_avg"] > 5  # Should reflect sleep
+    finally:
+        broker.close()
+
+
+def test_metrics_efficiency_tracking(broker_target) -> None:
+    """Test efficiency metrics under different conditions."""
+    broker = make_broker(broker_target)
+
+    try:
+        # Test scenario 1: All empty wakes
+        metrics1 = MetricsCollector()
+
+        def handler(msg, ts) -> None:
+            pass
+
+        watcher1 = MonitoredQueueWatcher(
+            "empty_queue",
+            handler,
+            db=broker_target,
+            metrics_collector=metrics1,
+        )
+
+        thread1 = watcher1.run_in_thread()
+        assert wait_for_condition(
+            lambda: metrics1.get_stats()["total_wake_ups"] > 0,
+            timeout=2.0,
+            interval=0.05,
+        )
+        watcher1.stop()
+        thread1.join(timeout=1.0)
+
+        metrics1.get_stats()
+        # Note: Not asserting on efficiency as it depends on implementation
+
+        # Test scenario 2: Active queue
+        metrics2 = MetricsCollector()
+        watcher2 = MonitoredQueueWatcher(
+            "active_queue",
+            handler,
+            db=broker_target,
+            metrics_collector=metrics2,
+        )
+
+        # Add messages continuously
+        thread2 = watcher2.run_in_thread()
+        for i in range(20):
+            broker.write("active_queue", f"message_{i}")
+            time.sleep(0.02)
+
+        # Wait for messages to be processed
+        assert wait_for_count(
+            lambda: metrics2.get_stats()["messages_processed"],
+            expected_count=20,
+            timeout=2.0,
+        )
+
+        watcher2.stop()
+        thread2.join(timeout=1.0)
+
+        stats2 = metrics2.get_stats()
+        assert stats2["messages_processed"] == 20
+        # Note: Not asserting on efficiency as it depends on implementation
+    finally:
+        broker.close()
+
+
+def test_metrics_logging(broker_target) -> None:
+    """Test periodic logging of metrics."""
+    broker = make_broker(broker_target)
+
+    # Set short log interval
+    os.environ["BROKER_WATCHER_LOG_INTERVAL"] = "0.5"
+
+    try:
+        metrics = MetricsCollector()
+
+        def handler(msg, ts) -> None:
+            pass
+
+        # Capture log output
+        with patch("logging.Logger.info") as mock_log:
             watcher = MonitoredQueueWatcher(
                 "test_queue",
                 handler,
-                db=db_path,
+                db=broker_target,
                 metrics_collector=metrics,
             )
 
-            # Process some messages
-            for i in range(10):
-                broker.write("test_queue", f"message_{i}")
-
             thread = watcher.run_in_thread()
 
-            # Wait for all messages to be processed
-            assert wait_for_count(
-                lambda: metrics.get_stats()["messages_processed"],
-                expected_count=10,
-                timeout=2.0,
-            )
-
-            watcher.stop()
-            thread.join(timeout=1.0)
-
-            # Check metrics
-            stats = metrics.get_stats()
-
-            assert stats["messages_processed"] == 10
-            assert stats["total_wake_ups"] > 0
-            # Note: Not asserting on efficiency as it depends on implementation
-            assert stats["throughput_per_sec"] > 0
-
-            # Check timing metrics
-            assert "pre_check_time_us_avg" in stats
-            assert stats["pre_check_time_us_avg"] < 1000  # < 1ms
-            assert "handler_time_ms_avg" in stats
-            assert stats["handler_time_ms_avg"] > 5  # Should reflect sleep
-        finally:
-            broker.close()
-
-
-def test_metrics_efficiency_tracking() -> None:
-    """Test efficiency metrics under different conditions."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-
-        try:
-            # Test scenario 1: All empty wakes
-            metrics1 = MetricsCollector()
-
-            def handler(msg, ts) -> None:
-                pass
-
-            watcher1 = MonitoredQueueWatcher(
-                "empty_queue",
-                handler,
-                db=db_path,
-                metrics_collector=metrics1,
-            )
-
-            thread1 = watcher1.run_in_thread()
-            assert wait_for_condition(
-                lambda: metrics1.get_stats()["total_wake_ups"] > 0,
-                timeout=2.0,
-                interval=0.05,
-            )
-            watcher1.stop()
-            thread1.join(timeout=1.0)
-
-            metrics1.get_stats()
-            # Note: Not asserting on efficiency as it depends on implementation
-
-            # Test scenario 2: Active queue
-            metrics2 = MetricsCollector()
-            watcher2 = MonitoredQueueWatcher(
-                "active_queue",
-                handler,
-                db=db_path,
-                metrics_collector=metrics2,
-            )
-
-            # Add messages continuously
-            thread2 = watcher2.run_in_thread()
-            for i in range(20):
-                broker.write("active_queue", f"message_{i}")
-                time.sleep(0.02)
-
-            # Wait for messages to be processed
-            assert wait_for_count(
-                lambda: metrics2.get_stats()["messages_processed"],
-                expected_count=20,
-                timeout=2.0,
-            )
-
-            watcher2.stop()
-            thread2.join(timeout=1.0)
-
-            stats2 = metrics2.get_stats()
-            assert stats2["messages_processed"] == 20
-            # Note: Not asserting on efficiency as it depends on implementation
-        finally:
-            broker.close()
-
-
-def test_metrics_logging() -> None:
-    """Test periodic logging of metrics."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-
-        # Set short log interval
-        os.environ["BROKER_WATCHER_LOG_INTERVAL"] = "0.5"
-
-        try:
-            metrics = MetricsCollector()
-
-            def handler(msg, ts) -> None:
-                pass
-
-            # Capture log output
-            with patch("logging.Logger.info") as mock_log:
-                watcher = MonitoredQueueWatcher(
-                    "test_queue",
-                    handler,
-                    db=db_path,
-                    metrics_collector=metrics,
-                )
-
-                thread = watcher.run_in_thread()
-
-                try:
-                    # Generate some activity
-                    for i in range(5):
-                        broker.write("test_queue", f"message_{i}")
-                        time.sleep(0.2)
-
-                    assert wait_for_condition(
-                        lambda: mock_log.call_count >= 1,
-                        timeout=2.0,
-                        interval=0.05,
-                    )
-                finally:
-                    watcher.stop()
-                    thread.join(timeout=1.0)
-
-                # Check that stats were logged
-                assert mock_log.call_count >= 1
-
-                # Verify log format
-                log_call = mock_log.call_args_list[0]
-                log_message = log_call[0][0]
-                assert "Watcher stats for test_queue" in log_message
-                assert "efficiency" in log_message
-
-        finally:
-            os.environ.pop("BROKER_WATCHER_LOG_INTERVAL", None)
-            broker.close()
-
-
-def test_metrics_aggregation() -> None:
-    """Test aggregation of metrics across multiple watchers."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-
-        try:
-            # Global metrics collector
-            global_metrics = MetricsCollector()
-
-            # Create multiple watchers sharing metrics
-            num_watchers = 5
-            watchers = []
-            threads = []
-
-            def handler(msg, ts) -> None:
-                time.sleep(0.001)
-
-            for i in range(num_watchers):
-                watcher = MonitoredQueueWatcher(
-                    f"queue_{i}",
-                    handler,
-                    db=db_path,
-                    metrics_collector=global_metrics,
-                )
-                watchers.append(watcher)
-                thread = watcher.run_in_thread()
-                threads.append(thread)
-
             try:
-                # Let watchers run without messages to generate empty wake-ups
-                time.sleep(0.2)
+                # Generate some activity
+                for i in range(5):
+                    broker.write("test_queue", f"message_{i}")
+                    time.sleep(0.2)
 
-                # Generate activity
-                for i in range(num_watchers):
-                    for j in range(10):
-                        broker.write(f"queue_{i}", f"q{i}_msg_{j}")
-
-                assert wait_for_count(
-                    lambda: global_metrics.get_stats()["messages_processed"],
-                    expected_count=num_watchers * 10,
-                    timeout=3.0,
-                    at_least=True,
+                assert wait_for_condition(
+                    lambda: mock_log.call_count >= 1,
+                    timeout=2.0,
+                    interval=0.05,
                 )
-
-                # Check aggregated metrics
-                stats = global_metrics.get_stats()
-
-                assert stats["messages_processed"] == num_watchers * 10
-                assert stats["total_wake_ups"] > stats["messages_processed"]
-                assert stats["efficiency"] > 0.5
             finally:
-                # Stop all watchers and join threads
-                for w in watchers:
-                    w.stop()
-                for t in threads:
-                    t.join(timeout=1.0)
+                watcher.stop()
+                thread.join(timeout=1.0)
+
+            # Check that stats were logged
+            assert mock_log.call_count >= 1
+
+            # Verify at least one log call contains watcher stats
+            log_messages = [call[0][0] for call in mock_log.call_args_list if call[0]]
+            stats_messages = [
+                m for m in log_messages if "Watcher stats for test_queue" in m
+            ]
+            assert stats_messages, f"No watcher stats log found in: {log_messages}"
+            assert "efficiency" in stats_messages[0]
+
+    finally:
+        os.environ.pop("BROKER_WATCHER_LOG_INTERVAL", None)
+        broker.close()
+
+
+def test_metrics_aggregation(broker_target) -> None:
+    """Test aggregation of metrics across multiple watchers."""
+    broker = make_broker(broker_target)
+
+    try:
+        # Global metrics collector
+        global_metrics = MetricsCollector()
+
+        # Create multiple watchers sharing metrics
+        num_watchers = 5
+        watchers = []
+        threads = []
+
+        def handler(msg, ts) -> None:
+            time.sleep(0.001)
+
+        for i in range(num_watchers):
+            watcher = MonitoredQueueWatcher(
+                f"queue_{i}",
+                handler,
+                db=broker_target,
+                metrics_collector=global_metrics,
+            )
+            watchers.append(watcher)
+            thread = watcher.run_in_thread()
+            threads.append(thread)
+
+        try:
+            # Let watchers run without messages to generate empty wake-ups
+            time.sleep(0.2)
+
+            # Generate activity
+            for i in range(num_watchers):
+                for j in range(10):
+                    broker.write(f"queue_{i}", f"q{i}_msg_{j}")
+
+            assert wait_for_count(
+                lambda: global_metrics.get_stats()["messages_processed"],
+                expected_count=num_watchers * 10,
+                timeout=3.0,
+                at_least=True,
+            )
+
+            # Check aggregated metrics
+            stats = global_metrics.get_stats()
+
+            assert stats["messages_processed"] == num_watchers * 10
+            assert stats["total_wake_ups"] > stats["messages_processed"]
+            assert stats["efficiency"] > 0.5
         finally:
-            broker.close()
+            # Stop all watchers and join threads
+            for w in watchers:
+                w.stop()
+            for t in threads:
+                t.join(timeout=1.0)
+    finally:
+        broker.close()
 
 
 def test_metrics_export_format() -> None:

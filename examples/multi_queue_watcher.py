@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from simplebroker import Queue
+from simplebroker._targets import ResolvedTarget
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import (
     BaseWatcher,
@@ -148,19 +149,14 @@ class MultiQueueWatcher(BaseWatcher):
         )
 
         # Determine database path for creating additional Queue objects
-        db_path = None
+        db_path: str | ResolvedTarget
         if isinstance(db, BrokerDB):
             db_path = str(db.db_path)
-        elif isinstance(db, str | Path):
+        elif isinstance(db, (str, Path)):
             db_path = str(db)
         else:
             # Use database path from inherited queue object
-            if hasattr(initial_queue, "_db_path"):
-                db_path = initial_queue._db_path
-            else:
-                from simplebroker._constants import DEFAULT_DB_NAME
-
-                db_path = DEFAULT_DB_NAME
+            db_path = initial_queue._db_path
 
         # Create queue configuration dict
         self._queues: dict[str, dict[str, Any]] = {}

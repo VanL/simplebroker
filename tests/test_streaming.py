@@ -1,91 +1,98 @@
 """Test streaming functionality for memory efficiency."""
 
 import json
+import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from .conftest import run_cli
+from .conftest import POSTGRES_TEST_BACKEND, run_cli
+
+
+def _is_pg_backend() -> bool:
+    return os.environ.get("BROKER_TEST_BACKEND") == POSTGRES_TEST_BACKEND
+
+
+def _bulk_write_pg(runner: Any, queue: str, count: int) -> None:
+    """Write messages directly via the PG runner (no subprocess overhead)."""
+    from simplebroker._backend_plugins import get_backend_plugin
+    from simplebroker.db import BrokerCore
+
+    plugin = get_backend_plugin("postgres")
+    core = BrokerCore(runner, backend_plugin=plugin)
+    try:
+        for i in range(count):
+            core.write(queue, f"message_{i}")
+    finally:
+        core.close()
 
 
 @pytest.mark.slow
-def test_streaming_read_all(workdir: Path):
+def test_streaming_read_all(workdir: Path, pg_worker_runner):
     """Test that read --all uses streaming and doesn't blow memory."""
-    db_filename = "test.db"
+    count = 1000
+    if _is_pg_backend():
+        _bulk_write_pg(pg_worker_runner, "test_queue", count)
+    else:
+        for i in range(count):
+            code, _, stderr = run_cli(
+                "write", "test_queue", f"message_{i}", cwd=workdir
+            )
+            assert code == 0
 
-    # Write many messages to test streaming
-    for i in range(1000):
-        code, stdout, stderr = run_cli(
-            "-f", db_filename, "write", "test_queue", f"message_{i}", cwd=workdir
-        )
-        assert code == 0
-
-    # Read all messages - this should stream without loading all into memory
-    # Use longer timeout for Windows where subprocess communication can be slower
     code, stdout, stderr = run_cli(
-        "-f", db_filename, "read", "test_queue", "--all", cwd=workdir, timeout=60.0
+        "read", "test_queue", "--all", cwd=workdir, timeout=120.0
     )
-    assert code == 0
+    assert code == 0, stderr
 
-    # Verify we got all messages
     lines = stdout.strip().split("\n")
-    assert len(lines) == 1000
+    assert len(lines) == count
     assert lines[0] == "message_0"
-    assert lines[999] == "message_999"
+    assert lines[count - 1] == f"message_{count - 1}"
 
-    # Verify queue is now empty
-    code, stdout, stderr = run_cli("-f", db_filename, "list", cwd=workdir)
+    code, stdout, stderr = run_cli("list", cwd=workdir)
     assert code == 0
     assert stdout.strip() == ""
 
 
 @pytest.mark.slow
-def test_streaming_peek_all(workdir: Path):
+def test_streaming_peek_all(workdir: Path, pg_worker_runner):
     """Test that peek --all uses streaming and doesn't blow memory."""
-    db_filename = "test.db"
+    count = 1000
+    if _is_pg_backend():
+        _bulk_write_pg(pg_worker_runner, "test_queue", count)
+    else:
+        for i in range(count):
+            code, _, stderr = run_cli(
+                "write", "test_queue", f"message_{i}", cwd=workdir
+            )
+            assert code == 0
 
-    # Write many messages to test streaming
-    for i in range(1000):
-        code, stdout, stderr = run_cli(
-            "-f", db_filename, "write", "test_queue", f"message_{i}", cwd=workdir
-        )
-        assert code == 0
-
-    # Peek all messages - this should stream without loading all into memory
-    # Use longer timeout for Windows where subprocess communication can be slower
     code, stdout, stderr = run_cli(
-        "-f", db_filename, "peek", "test_queue", "--all", cwd=workdir, timeout=60.0
+        "peek", "test_queue", "--all", cwd=workdir, timeout=120.0
     )
-    assert code == 0
+    assert code == 0, stderr
 
-    # Verify we got all messages
     lines = stdout.strip().split("\n")
-    assert len(lines) == 1000
+    assert len(lines) == count
     assert lines[0] == "message_0"
-    assert lines[999] == "message_999"
+    assert lines[count - 1] == f"message_{count - 1}"
 
-    # Verify messages are still in queue
-    code, stdout, stderr = run_cli("-f", db_filename, "list", cwd=workdir)
+    code, stdout, stderr = run_cli("list", cwd=workdir)
     assert code == 0
-    assert "test_queue: 1000" in stdout
+    assert f"test_queue: {count}" in stdout
 
 
 def test_json_output_now_ndjson(workdir: Path):
     """Test that JSON output now uses line-delimited JSON (ndjson) format."""
-    # Write a few messages
     for i in range(5):
-        code, stdout, stderr = run_cli(
-            "-f", "test.db", "write", "test_queue", f"message_{i}", cwd=workdir
-        )
+        code, _, stderr = run_cli("write", "test_queue", f"message_{i}", cwd=workdir)
         assert code == 0
 
-    # Read all with JSON output
-    code, stdout, stderr = run_cli(
-        "-f", "test.db", "read", "test_queue", "--all", "--json", cwd=workdir
-    )
+    code, stdout, stderr = run_cli("read", "test_queue", "--all", "--json", cwd=workdir)
     assert code == 0
 
-    # Parse each line as a separate JSON object (ndjson)
     lines = stdout.strip().split("\n")
     assert len(lines) == 5
 

@@ -1,0 +1,31 @@
+name: Test Postgres Extension
+
+on:
+  push:
+    tags:
+      - "simplebroker-pg-v*"
+  workflow_dispatch:
+
+jobs:
+  test-pg-extension:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          extensions/simplebroker_pg/pyproject.toml
+
+    - name: Run PG-backed test suites
+      run: |
+        uv run ./bin/pytest-pg

@@ -10,8 +10,6 @@ Tests verify:
 """
 
 import multiprocessing
-import subprocess
-import sys
 
 import pytest
 
@@ -200,19 +198,11 @@ def write_messages_subprocess(process_id, workdir):
 
     for i in range(20):
         msg = f"process_{process_id}_msg_{i}"
-        # Call the broker CLI directly
-        result = subprocess.run(
-            [sys.executable, "-m", "simplebroker", "write", f"queue_{process_id}", msg],
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-
-        if result.returncode == 0:
+        rc, _, err = run_cli("write", f"queue_{process_id}", msg, cwd=workdir)
+        if rc == 0:
             messages_written.append(msg)
         else:
-            errors.append(f"Message {i}: {result.stderr}")
+            errors.append(f"Message {i}: {err}")
 
     return messages_written, errors
 
@@ -244,28 +234,16 @@ def test_timestamp_uniqueness_across_instances(workdir):
     all_timestamps = set()
 
     for process_id in range(5):
-        # Use the CLI to peek all messages with timestamps
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "simplebroker",
-                "peek",
-                f"queue_{process_id}",
-                "--all",
-                "--timestamps",
-            ],
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
+        rc, out, err = run_cli(
+            "peek",
+            f"queue_{process_id}",
+            "--all",
+            "--timestamps",
+            cwd=workdir,
         )
+        assert rc == 0, f"Failed to peek queue_{process_id}: {err}"
 
-        assert result.returncode == 0, (
-            f"Failed to peek queue_{process_id}: {result.stderr}"
-        )
-
-        lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+        lines = out.strip().split("\n") if out.strip() else []
         assert len(lines) == 20, (
             f"Expected 20 messages for process {process_id}, got {len(lines)}"
         )
@@ -294,41 +272,13 @@ def test_timestamp_uniqueness_across_instances(workdir):
 
     # Additional test: rapid writes to same queue to stress timestamp generation
     for i in range(10):
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "simplebroker",
-                "write",
-                "stress_test",
-                f"rapid_{i}",
-            ],
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        assert result.returncode == 0, f"Failed to write rapid_{i}: {result.stderr}"
+        rc, _, err = run_cli("write", "stress_test", f"rapid_{i}", cwd=workdir)
+        assert rc == 0, f"Failed to write rapid_{i}: {err}"
 
     # Read back with peek to verify order
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "simplebroker",
-            "peek",
-            "stress_test",
-            "--all",
-            "--timestamps",
-        ],
-        cwd=str(workdir),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-
-    assert result.returncode == 0, f"Failed to peek stress_test: {result.stderr}"
-    lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+    rc, out, err = run_cli("peek", "stress_test", "--all", "--timestamps", cwd=workdir)
+    assert rc == 0, f"Failed to peek stress_test: {err}"
+    lines = out.strip().split("\n") if out.strip() else []
     assert len(lines) == 10
     for i, line in enumerate(lines):
         # Parse timestamp and message (format: timestamp\tmessage)
@@ -340,6 +290,7 @@ def test_timestamp_uniqueness_across_instances(workdir):
         )
 
 
+@pytest.mark.sqlite_only
 def test_sqlite_version_check(workdir, monkeypatch):
     """Test that old SQLite versions are rejected."""
     db_path = workdir / ".broker.db"
@@ -381,6 +332,7 @@ def test_sqlite_version_check(workdir, monkeypatch):
     assert "3.35.0 or later" in str(exc_info.value)
 
 
+@pytest.mark.sqlite_only
 def test_cleanup_toctou_fix(workdir):
     """Test that cleanup handles TOCTOU race condition gracefully."""
     # Create a database file

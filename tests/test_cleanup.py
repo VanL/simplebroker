@@ -9,8 +9,21 @@ Test cases:
 - Cleanup exits without processing commands
 """
 
-from .conftest import run_cli
+import os
+import subprocess
+import sys
+
+import pytest
+
+from simplebroker._backend_plugins import get_backend_plugin
+from simplebroker._project_config import PROJECT_CONFIG_FILENAME, load_project_config
+
+from .conftest import build_cli_env, run_cli
 from .helper_scripts.timing import wait_for_condition
+
+
+def _uses_sqlite_backend() -> bool:
+    return os.environ.get("BROKER_TEST_BACKEND", "sqlite") == "sqlite"
 
 
 def test_cleanup_existing_database(workdir):
@@ -21,20 +34,52 @@ def test_cleanup_existing_database(workdir):
 
     # Verify database exists
     db_path = workdir / ".broker.db"
-    assert db_path.exists()
+    if _uses_sqlite_backend():
+        assert db_path.exists()
 
     # Clean it up
     rc, out, _ = run_cli("--cleanup", cwd=workdir)
     assert rc == 0
-    assert wait_for_condition(lambda: not db_path.exists(), timeout=1.0, interval=0.05)
     assert "Database cleaned up" in out
+    if _uses_sqlite_backend():
+        assert wait_for_condition(
+            lambda: not db_path.exists(), timeout=1.0, interval=0.05
+        )
+    else:
+        # On PG, --cleanup drops the schema.  Re-init then verify empty.
+        rc, _, _ = run_cli("init", cwd=workdir)
+        assert rc == 0
+        rc, out, err = run_cli("list", cwd=workdir)
+        assert rc == 0, err
+        assert out == ""
 
 
 def test_cleanup_nonexistent_database(workdir):
     """Test cleaning up a non-existent database."""
     # Ensure database doesn't exist
     db_path = workdir / ".broker.db"
-    assert not db_path.exists()
+    if _uses_sqlite_backend():
+        assert not db_path.exists()
+    else:
+        config = load_project_config(workdir / PROJECT_CONFIG_FILENAME)
+        get_backend_plugin("postgres").cleanup_target(
+            str(config["target"]),
+            backend_options=dict(config["backend_options"]),
+        )
+
+        proc = subprocess.run(
+            [sys.executable, "-m", "simplebroker.cli", "--cleanup"],
+            cwd=workdir,
+            capture_output=True,
+            text=True,
+            env=build_cli_env(),
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        assert proc.returncode == 0
+        assert "Database not found, nothing to clean up" in proc.stdout
+        return
 
     # Cleanup should succeed with appropriate message
     rc, out, _ = run_cli("--cleanup", cwd=workdir)
@@ -56,9 +101,20 @@ def test_cleanup_with_quiet(workdir):
 
     # Verify database was removed
     db_path = workdir / ".broker.db"
-    assert wait_for_condition(lambda: not db_path.exists(), timeout=1.0, interval=0.05)
+    if _uses_sqlite_backend():
+        assert wait_for_condition(
+            lambda: not db_path.exists(), timeout=1.0, interval=0.05
+        )
+    else:
+        # On PG, --cleanup drops the schema.  Re-init then verify empty.
+        rc, _, _ = run_cli("init", cwd=workdir)
+        assert rc == 0
+        rc, out, err = run_cli("list", cwd=workdir)
+        assert rc == 0, err
+        assert out == ""
 
 
+@pytest.mark.sqlite_only
 def test_cleanup_with_custom_location(tmp_path):
     """Test cleanup with custom -d and -f options."""
     # Create custom directory
@@ -106,13 +162,21 @@ def test_cleanup_exits_before_commands(workdir):
 
     # Verify no database was created (write command was not executed)
     db_path = workdir / ".broker.db"
-    assert not db_path.exists()
+    if _uses_sqlite_backend():
+        assert not db_path.exists()
 
     # Double-check by trying to read - should get empty queue error
-    rc, _, _ = run_cli("read", "test", cwd=workdir)
-    assert rc == 2  # EXIT_QUEUE_EMPTY
+    if _uses_sqlite_backend():
+        rc, _, _ = run_cli("read", "test", cwd=workdir)
+        assert rc == 2  # EXIT_QUEUE_EMPTY
+    else:
+        # On PG, the schema was dropped by --cleanup, so read fails with
+        # "schema does not exist" (rc=1), not EXIT_QUEUE_EMPTY (rc=2).
+        rc, _, _ = run_cli("read", "test", cwd=workdir)
+        assert rc in (1, 2)
 
 
+@pytest.mark.sqlite_only
 def test_cleanup_permission_error(workdir, monkeypatch):
     """Test cleanup handles permission errors gracefully."""
     import os
@@ -162,7 +226,13 @@ def test_cleanup_order_with_other_flags(workdir):
     db_path = workdir / ".broker.db"
     for flags in flag_combinations:
         # Re-create database if needed
-        if not db_path.exists():
+        if _uses_sqlite_backend() and not db_path.exists():
+            rc, _, _ = run_cli("write", "test", "message", cwd=workdir)
+            assert rc == 0
+        elif not _uses_sqlite_backend():
+            # On PG, re-init the schema after previous cleanup dropped it
+            rc, _, _ = run_cli("init", cwd=workdir)
+            assert rc == 0
             rc, _, _ = run_cli("write", "test", "message", cwd=workdir)
             assert rc == 0
 
@@ -171,6 +241,14 @@ def test_cleanup_order_with_other_flags(workdir):
         assert rc == 0
         assert out == ""  # All combinations include --quiet
         assert err == ""
-        assert wait_for_condition(
-            lambda: not db_path.exists(), timeout=1.0, interval=0.05
-        )
+        if _uses_sqlite_backend():
+            assert wait_for_condition(
+                lambda: not db_path.exists(), timeout=1.0, interval=0.05
+            )
+        else:
+            # On PG, --cleanup drops the schema.  Re-init then verify empty.
+            rc, _, _ = run_cli("init", cwd=workdir)
+            assert rc == 0
+            rc, out, err = run_cli("list", cwd=workdir)
+            assert rc == 0, err
+            assert out == ""

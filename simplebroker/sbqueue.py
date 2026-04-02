@@ -9,10 +9,12 @@ import threading
 import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Literal, Union
+from typing import Any, Literal, Union, cast
 
+from ._backend_plugins import ActivityWaiter, BackendAwareRunner, get_backend_plugin
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config
 from ._runner import SQLRunner
+from ._targets import ResolvedTarget
 from .db import BrokerCore, BrokerDB, DBConnection
 
 logger = logging.getLogger(__name__)
@@ -69,7 +71,7 @@ class Queue:
         self,
         name: str,
         *,
-        db_path: str = DEFAULT_DB_NAME,
+        db_path: str | ResolvedTarget = DEFAULT_DB_NAME,
         persistent: bool = False,
         runner: SQLRunner | None = None,
         config: dict[str, Any] | None = _config,
@@ -89,14 +91,14 @@ class Queue:
         self._db_path = db_path
         self._persistent = persistent
         self._runner = runner
-        self._config = config
+        self._config = config or _config
         self._stop_event: threading.Event | None = None
 
         # Create DBConnection for persistent queues and injected-runner queues.
         # The built-in no-runner path keeps its current "get in, get out"
         # semantics only when persistent=False.
         if persistent or runner is not None:
-            self.conn = DBConnection(self._db_path, runner)
+            self.conn = DBConnection(self._db_path, runner, config=self._config)
         else:
             self.conn = None
 
@@ -105,6 +107,13 @@ class Queue:
 
         # Cached last generated timestamp (meta.last_ts)
         self._last_ts: int | None = None
+        self._activity_waiter: ActivityWaiter | None = None
+
+    @property
+    def db_target(self) -> str | ResolvedTarget:
+        """Return the configured broker target for this queue."""
+
+        return self._db_path
 
     @contextmanager
     def get_connection(self) -> Iterator[BrokerCore | BrokerDB]:
@@ -122,7 +131,7 @@ class Queue:
             self.conn.set_stop_event(self._stop_event)
             yield self.conn.get_connection()
         else:
-            with DBConnection(self._db_path, self._runner) as conn:
+            with DBConnection(self._db_path, self._runner, config=self._config) as conn:
                 conn.set_stop_event(self._stop_event)
                 yield conn.get_connection()
 
@@ -574,7 +583,7 @@ class Queue:
                 for result in self.move_generator(
                     dest_name, with_timestamps=True, since_timestamp=since_timestamp
                 ):
-                    msg, ts = result  # type: ignore[misc]
+                    msg, ts = cast(tuple[str, int], result)
                     yield {"message": msg, "timestamp": ts}
 
             return dict_generator()
@@ -587,7 +596,7 @@ class Queue:
                 )
                 try:
                     result = next(gen)
-                    msg, ts = result  # type: ignore[misc]
+                    msg, ts = cast(tuple[str, int], result)
                     return {"message": msg, "timestamp": ts}
                 except StopIteration:
                     return None
@@ -794,8 +803,13 @@ class Queue:
         """
         parts = [f"'{self.name}'"]
 
-        if self._db_path != DEFAULT_DB_NAME:
-            parts.append(f"db_path='{self._db_path}'")
+        db_repr = (
+            self._db_path.target
+            if isinstance(self._db_path, ResolvedTarget)
+            else self._db_path
+        )
+        if db_repr != DEFAULT_DB_NAME:
+            parts.append(f"db_path='{db_repr}'")
         if self._persistent:
             parts.append("persistent=True")
 
@@ -829,6 +843,42 @@ class Queue:
         """
         with self.get_connection() as connection:
             return connection.get_data_version()
+
+    def create_activity_waiter(
+        self,
+        *,
+        stop_event: threading.Event,
+    ) -> ActivityWaiter | None:
+        """Create or reuse a backend-native waiter for watcher wakeups."""
+        if self._activity_waiter is not None:
+            return self._activity_waiter
+
+        plugin = get_backend_plugin("sqlite")
+        target: str | None = None
+        backend_options: dict[str, Any] | None = None
+        runner: SQLRunner | None = None
+
+        if isinstance(self._db_path, ResolvedTarget):
+            plugin = self._db_path.plugin
+            target = self._db_path.target
+            backend_options = dict(self._db_path.backend_options)
+        elif self._runner is not None:
+            runner = self._runner
+            if isinstance(self._runner, BackendAwareRunner):
+                plugin = self._runner.backend_plugin
+        else:
+            target = str(self._db_path)
+
+        waiter = plugin.create_activity_waiter(
+            target=target,
+            backend_options=backend_options,
+            runner=runner,
+            queue_name=self.name,
+            stop_event=stop_event,
+        )
+        if waiter is not None:
+            self._activity_waiter = waiter
+        return waiter
 
     def stream_messages(
         self,
@@ -936,6 +986,9 @@ class Queue:
         """
         if self.conn:
             self.conn.cleanup()
+        if self._activity_waiter is not None:
+            self._activity_waiter.close()
+            self._activity_waiter = None
         if hasattr(self, "_watcher_conn"):
             self._watcher_conn.cleanup()
             delattr(self, "_watcher_conn")
@@ -946,6 +999,9 @@ class Queue:
         This is called automatically when using the queue as a context manager.
         In ephemeral mode, this is a no-op as connections are closed after each operation.
         """
+        if self._activity_waiter is not None:
+            self._activity_waiter.close()
+            self._activity_waiter = None
         if self.conn:
             if hasattr(self, "_finalizer"):
                 self._finalizer.detach()

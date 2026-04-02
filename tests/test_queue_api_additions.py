@@ -7,170 +7,154 @@ import pytest
 
 from simplebroker import Queue
 
+pytestmark = [pytest.mark.shared]
 
-def test_queue_delete_all():
+
+def test_queue_delete_all(queue_factory):
     """Test deleting all messages in a queue."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = str(Path(tmpdir) / "test.db")
+    q = queue_factory("test")
 
-        with Queue("test", db_path=db_path) as q:
-            # Write some messages
-            q.write("message1")
-            q.write("message2")
-            q.write("message3")
+    # Write some messages
+    q.write("message1")
+    q.write("message2")
+    q.write("message3")
 
-            # Verify they exist
-            assert q.peek() == "message1"
+    # Verify they exist
+    assert q.peek() == "message1"
 
-            # Delete all messages
-            result = q.delete()
-            assert result is True
+    # Delete all messages
+    result = q.delete()
+    assert result is True
 
-            # Verify queue is empty
-            assert q.peek() is None
-            assert q.read() is None
+    # Verify queue is empty
+    assert q.peek() is None
+    assert q.read() is None
 
 
-def test_queue_delete_by_id():
+def test_queue_delete_by_id(queue_factory):
     """Test deleting a specific message by ID."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = str(Path(tmpdir) / "test.db")
+    q = queue_factory("test")
 
-        with Queue("test", db_path=db_path) as q:
-            q.write("message1")
-            q.write("message2")
+    q.write("message1")
+    q.write("message2")
 
-            messages = list(q.peek_generator(with_timestamps=True))
-            target_ts = messages[0][1]
+    messages = list(q.peek_generator(with_timestamps=True))
+    target_ts = messages[0][1]
 
-            result = q.delete(message_id=target_ts)
-            assert result is True
+    result = q.delete(message_id=target_ts)
+    assert result is True
 
-            remaining = list(q.peek_generator(with_timestamps=False))
-            assert remaining == ["message2"]
+    remaining = list(q.peek_generator(with_timestamps=False))
+    assert remaining == ["message2"]
 
-            result = q.delete(message_id=99999999999999999)
-            assert result is False
+    result = q.delete(message_id=99999999999999999)
+    assert result is False
 
-            assert q.read() == "message2"
+    assert q.read() == "message2"
 
 
-def test_queue_delete_empty_queue_returns_false():
+def test_queue_delete_empty_queue_returns_false(queue_factory):
     """Test deleting from an empty queue reports no-op status."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = str(Path(tmpdir) / "test.db")
-
-        with Queue("test", db_path=db_path) as q:
-            assert q.delete() is False
+    q = queue_factory("test")
+    assert q.delete() is False
 
 
-def test_queue_move_all():
+def test_queue_move_all(queue_factory):
     """Test moving all messages between queues."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = str(Path(tmpdir) / "test.db")
+    src = queue_factory("source")
 
-        with Queue("source", db_path=db_path) as src:
-            # Write messages to source
-            src.write("message1")
-            src.write("message2")
-            src.write("message3")
+    # Write messages to source
+    src.write("message1")
+    src.write("message2")
+    src.write("message3")
 
-            # Move all to destination
-            moved = list(src.move("destination", all_messages=True))
-            assert len(moved) == 3
+    # Move all to destination
+    moved = list(src.move("destination", all_messages=True))
+    assert len(moved) == 3
 
-            # Verify source is empty
-            assert src.read() is None
+    # Verify source is empty
+    assert src.read() is None
 
-        # Verify destination has all messages
-        with Queue("destination", db_path=db_path) as dst:
-            messages = list(dst.read(all_messages=True))
-            assert messages == ["message1", "message2", "message3"]
+    # Verify destination has all messages
+    dst = queue_factory("destination")
+    messages = list(dst.read(all_messages=True))
+    assert messages == ["message1", "message2", "message3"]
 
 
-def test_queue_move_single_message():
+def test_queue_move_single_message(queue_factory):
     """Test moving a specific message by ID."""
     # Similar to delete, we can't easily test message_id without exposing timestamps
     # Test that the method exists and handles invalid IDs
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = str(Path(tmpdir) / "test.db")
+    src = queue_factory("source")
 
-        with Queue("source", db_path=db_path) as src:
-            src.write("message1")
-            src.write("message2")
+    src.write("message1")
+    src.write("message2")
 
-            # Try to move non-existent message
-            moved = src.move("destination", message_id=99999999999999999)
-            assert moved is None
+    # Try to move non-existent message
+    moved = src.move("destination", message_id=99999999999999999)
+    assert moved is None
 
-            # Verify messages still in source
-            messages = list(src.read(all_messages=True))
-            assert len(messages) == 2
+    # Verify messages still in source
+    messages = list(src.read(all_messages=True))
+    assert len(messages) == 2
 
 
-def test_queue_move_since_timestamp():
+def test_queue_move_since_timestamp(queue_factory):
     """Test moving messages newer than a timestamp."""
     # Test basic functionality - since_timestamp=0 should move all
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = str(Path(tmpdir) / "test.db")
+    src = queue_factory("source")
 
-        with Queue("source", db_path=db_path) as src:
-            src.write("message1")
-            src.write("message2")
-            src.write("message3")
+    src.write("message1")
+    src.write("message2")
+    src.write("message3")
 
-            # Move all messages (since timestamp 0) - need to use all_messages=True with since_timestamp
-            moved = list(src.move("destination", since_timestamp=0, all_messages=True))
-            assert len(moved) == 3
+    # Move all messages (since timestamp 0) - need to use all_messages=True with since_timestamp
+    moved = list(src.move("destination", since_timestamp=0, all_messages=True))
+    assert len(moved) == 3
 
-            # Verify source is empty
-            assert src.read() is None
+    # Verify source is empty
+    assert src.read() is None
 
-        # Verify destination has all messages
-        with Queue("destination", db_path=db_path) as dst:
-            messages = list(dst.read(all_messages=True))
-            assert messages == ["message1", "message2", "message3"]
+    # Verify destination has all messages
+    dst = queue_factory("destination")
+    messages = list(dst.read(all_messages=True))
+    assert messages == ["message1", "message2", "message3"]
 
 
-def test_queue_move_validation():
+def test_queue_move_validation(queue_factory):
     """Test move method validation."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = str(Path(tmpdir) / "test.db")
+    q = queue_factory("test")
+    q.write("message")
 
-        with Queue("test", db_path=db_path) as q:
-            q.write("message")
+    # Cannot move to same queue
+    with pytest.raises(ValueError, match="cannot be the same"):
+        q.move("test")
 
-            # Cannot move to same queue
-            with pytest.raises(ValueError, match="cannot be the same"):
-                q.move("test")
+    # Cannot use message_id with all_messages
+    with pytest.raises(ValueError, match="cannot be used with"):
+        q.move("other", message_id=123, all_messages=True)
 
-            # Cannot use message_id with all_messages
-            with pytest.raises(ValueError, match="cannot be used with"):
-                q.move("other", message_id=123, all_messages=True)
-
-            # Cannot use message_id with since_timestamp
-            with pytest.raises(ValueError, match="cannot be used with"):
-                q.move("other", message_id=123, since_timestamp=456)
+    # Cannot use message_id with since_timestamp
+    with pytest.raises(ValueError, match="cannot be used with"):
+        q.move("other", message_id=123, since_timestamp=456)
 
 
-def test_queue_move_with_queue_instance():
+def test_queue_move_with_queue_instance(queue_factory):
     """Test moving to a Queue instance instead of string."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = str(Path(tmpdir) / "test.db")
+    src = queue_factory("source")
+    dst = queue_factory("destination")
 
-        with Queue("source", db_path=db_path) as src:
-            src.write("message1")
-            src.write("message2")
+    src.write("message1")
+    src.write("message2")
 
-            with Queue("destination", db_path=db_path) as dst:
-                # Move using Queue instance
-                moved = list(src.move(dst, all_messages=True))
-                assert len(moved) == 2
+    # Move using Queue instance
+    moved = list(src.move(dst, all_messages=True))
+    assert len(moved) == 2
 
-                # Verify messages moved
-                assert src.read() is None
-                messages = list(dst.read(all_messages=True))
-                assert messages == ["message1", "message2"]
+    # Verify messages moved
+    assert src.read() is None
+    messages = list(dst.read(all_messages=True))
+    assert messages == ["message1", "message2"]
 
 
 def test_queue_str_representation():

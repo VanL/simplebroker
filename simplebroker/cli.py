@@ -16,6 +16,8 @@ from ._constants import (
     load_config,
 )
 from ._exceptions import DatabaseError
+from ._project_config import find_project_config, resolve_project_target
+from ._targets import ResolvedTarget
 from .helpers import (
     _find_project_database,
     _resolve_symlinks_safely,
@@ -521,6 +523,51 @@ def _resolve_database_path(
     return working_dir / db_filename, False
 
 
+def _build_sqlite_target(
+    db_path: Path,
+    *,
+    used_project_scope: bool,
+    legacy_sqlite_path_mode: bool,
+    project_root: Path | None = None,
+    config_path: Path | None = None,
+) -> ResolvedTarget:
+    """Build a resolved target for the built-in SQLite backend."""
+    return ResolvedTarget(
+        backend_name="sqlite",
+        target=str(db_path),
+        backend_options={},
+        project_root=project_root,
+        config_path=config_path,
+        used_project_scope=used_project_scope,
+        legacy_sqlite_path_mode=legacy_sqlite_path_mode,
+    )
+
+
+def _resolve_target(
+    args: argparse.Namespace, *, config: dict[str, Any] = _config
+) -> ResolvedTarget:
+    """Resolve the backend target for the current CLI invocation."""
+    if config["BROKER_PROJECT_SCOPE"]:
+        config_path = find_project_config(args.dir)
+        if config_path is not None:
+            return resolve_project_target(config_path)
+
+    if args.command == "init":
+        init_filename = config["BROKER_DEFAULT_DB_NAME"]
+        return _build_sqlite_target(
+            Path.cwd() / init_filename,
+            used_project_scope=False,
+            legacy_sqlite_path_mode=True,
+        )
+
+    db_path, used_project_scope = _resolve_database_path(args, config=config)
+    return _build_sqlite_target(
+        db_path,
+        used_project_scope=used_project_scope,
+        legacy_sqlite_path_mode=True,
+    )
+
+
 def main(*, config: dict[str, Any] = _config) -> int:
     """Main CLI entry point.
 
@@ -599,47 +646,57 @@ def main(*, config: dict[str, Any] = _config) -> int:
         print(f"{PROG_NAME} {VERSION}")
         return EXIT_SUCCESS
 
-    # Resolve database path using new precedence system
+    # Resolve backend target using precedence system / project config
     try:
-        db_path, used_project_scope = _resolve_database_path(args, config=config)
+        resolved_target = _resolve_target(args, config=config)
     except ValueError as e:
         print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
         return EXIT_ERROR
+    db_path = resolved_target.target_path
+    used_project_scope = resolved_target.used_project_scope
 
     # Set flag for modified path validation - track if USER provided absolute path
     user_provided_absolute_path = Path(args.file).is_absolute()
     absolute_path_provided = user_provided_absolute_path or used_project_scope
 
-    # Handle init command with special path resolution
+    # Handle init command
     if args.command == "init":
-        # Init creates project root database in current directory only
-        # Only respects BROKER_DEFAULT_DB_NAME, ignores BROKER_DEFAULT_DB_LOCATION
-        # Never uses project scoping (would be circular - searching for what we're creating)
-        init_filename = config["BROKER_DEFAULT_DB_NAME"]
-        init_db_path = Path.cwd() / init_filename
-        return commands.cmd_init(str(init_db_path), args.quiet)
+        return commands.cmd_init(resolved_target, args.quiet)
 
     # Handle cleanup flag
     if args.cleanup:
         try:
-            # Check if file existed before deletion for messaging purposes
-            file_existed = db_path.exists()
+            if resolved_target.legacy_sqlite_path_mode:
+                assert db_path is not None
+                file_existed = db_path.exists()
 
-            try:
-                # Use missing_ok=True to handle TOCTOU race condition atomically
-                # This will succeed whether the file exists or not
-                db_path.unlink(missing_ok=True)
+                try:
+                    db_path.unlink(missing_ok=True)
 
-                if file_existed and not args.quiet:
-                    print(f"Database cleaned up: {db_path}")
-                elif not file_existed and not args.quiet:
-                    print(f"Database not found, nothing to clean up: {db_path}")
-            except PermissionError:
-                print(
-                    f"{PROG_NAME}: error: Permission denied: {db_path}",
-                    file=sys.stderr,
+                    if file_existed and not args.quiet:
+                        print(f"Database cleaned up: {db_path}")
+                    elif not file_existed and not args.quiet:
+                        print(f"Database not found, nothing to clean up: {db_path}")
+                except PermissionError:
+                    print(
+                        f"{PROG_NAME}: error: Permission denied: {db_path}",
+                        file=sys.stderr,
+                    )
+                    return EXIT_ERROR
+            else:
+                existed = resolved_target.plugin.cleanup_target(
+                    resolved_target.target,
+                    backend_options=resolved_target.backend_options,
+                    config=config,
                 )
-                return EXIT_ERROR
+                if not args.quiet:
+                    if existed:
+                        print(f"Database cleaned up: {resolved_target.target}")
+                    else:
+                        print(
+                            "Database not found, nothing to clean up: "
+                            f"{resolved_target.target}"
+                        )
             return EXIT_SUCCESS
         except Exception as e:
             print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
@@ -648,19 +705,23 @@ def main(*, config: dict[str, Any] = _config) -> int:
     # Handle vacuum flag
     if args.vacuum:
         try:
-            if not db_path.exists():
+            if (
+                resolved_target.legacy_sqlite_path_mode
+                and db_path is not None
+                and not db_path.exists()
+            ):
                 if not args.quiet:
                     print(f"Database not found: {db_path}")
                 return EXIT_SUCCESS
 
-            return commands.cmd_vacuum(str(db_path), compact=args.compact)
+            return commands.cmd_vacuum(resolved_target, compact=args.compact)
         except Exception as e:
             print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
             return EXIT_ERROR
 
     # Handle status flag
     if args.status:
-        return commands.cmd_status(str(db_path), json_output=status_json_output)
+        return commands.cmd_status(resolved_target, json_output=status_json_output)
 
     # Show help if no command given
     if not args.command:
@@ -669,77 +730,58 @@ def main(*, config: dict[str, Any] = _config) -> int:
 
     # Validate and construct database path
     try:
-        working_dir = args.dir
+        if resolved_target.legacy_sqlite_path_mode:
+            assert db_path is not None
+            working_dir = args.dir
 
-        # Validate CLI directory argument for dangerous characters
-        _validate_safe_path_components(
-            str(working_dir), "Directory argument (-d/--dir)"
-        )
-
-        _validate_working_directory(working_dir)
-
-        # For project scoped paths that aren't absolute, we already have the resolved path
-        if not absolute_path_provided and not used_project_scope:
-            # Traditional path construction for non-absolute, non-project-scoped paths
-            db_path = working_dir / args.file
-
-        # Prevent path traversal attacks - ensure db_path stays within working_dir
-
-        # Validate CLI file argument for dangerous characters and path traversal
-        if not used_project_scope:
-            # Note: _validate_path_traversal_prevention now uses _validate_safe_path_components
-            # which provides comprehensive security validation
-            _validate_path_traversal_prevention(args.file)
-
-        # Resolve symlinks BEFORE validation and use resolved path throughout
-        # This prevents symlink-based path traversal attacks
-        try:
-            resolved_db_path = _resolve_symlinks_safely(db_path)
-            resolved_working_dir = _resolve_symlinks_safely(working_dir)
-
-            # Enhanced path validation with project scope exception
-            if not absolute_path_provided:
-                _validate_path_containment(
-                    resolved_db_path, resolved_working_dir, used_project_scope
-                )
-
-            # Use the resolved path from now on to prevent symlink attacks
-            db_path = resolved_db_path
-
-        except (RuntimeError, OSError):
-            # resolve() can fail if parent directories don't exist yet
-            # In this case, we create a resolved path based on resolved working dir
-            if not absolute_path_provided:
-                try:
-                    resolved_working_dir = working_dir.resolve()
-                    # Manually construct the resolved path
-                    if not used_project_scope:
-                        db_path = resolved_working_dir / args.file
-                except (RuntimeError, OSError):
-                    # If we can't resolve even the working directory, keep original
-                    pass
-
-        # Handle compound database names from environment variable
-        if args.file == DEFAULT_DB_NAME and config["BROKER_DEFAULT_DB_NAME"]:
-            # Create compound path and directories as needed
-            db_path = ensure_compound_db_path(
-                working_dir, config["BROKER_DEFAULT_DB_NAME"]
+            _validate_safe_path_components(
+                str(working_dir), "Directory argument (-d/--dir)"
             )
 
-        # Validate final database parent directory
-        _validate_database_parent_directory(db_path.parent)
+            _validate_working_directory(working_dir)
 
-        # Validate database file if it exists (only for read operations)
-        # For write operations, allow overwriting invalid files
-        if db_path.exists() and args.command in (
-            "read",
-            "peek",
-            "move",
-            "list",
-            "stats",
-            "vacuum",
-        ):
-            _validate_sqlite_database(db_path, verify_magic=False)
+            if not absolute_path_provided and not used_project_scope:
+                db_path = working_dir / args.file
+
+            if not used_project_scope:
+                _validate_path_traversal_prevention(args.file)
+
+            try:
+                resolved_db_path = _resolve_symlinks_safely(db_path)
+                resolved_working_dir = _resolve_symlinks_safely(working_dir)
+
+                if not absolute_path_provided:
+                    _validate_path_containment(
+                        resolved_db_path, resolved_working_dir, used_project_scope
+                    )
+
+                db_path = resolved_db_path
+
+            except (RuntimeError, OSError):
+                if not absolute_path_provided:
+                    try:
+                        resolved_working_dir = working_dir.resolve()
+                        if not used_project_scope:
+                            db_path = resolved_working_dir / args.file
+                    except (RuntimeError, OSError):
+                        pass
+
+            if args.file == DEFAULT_DB_NAME and config["BROKER_DEFAULT_DB_NAME"]:
+                db_path = ensure_compound_db_path(
+                    working_dir, config["BROKER_DEFAULT_DB_NAME"]
+                )
+
+            _validate_database_parent_directory(db_path.parent)
+
+            if db_path.exists() and args.command in (
+                "read",
+                "peek",
+                "move",
+                "list",
+                "stats",
+                "vacuum",
+            ):
+                _validate_sqlite_database(db_path, verify_magic=False)
 
     except (ValueError, DatabaseError) as e:
         print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
@@ -747,11 +789,21 @@ def main(*, config: dict[str, Any] = _config) -> int:
 
     # Execute command
     try:
-        db_path_str = str(db_path)
+        if (
+            not resolved_target.legacy_sqlite_path_mode
+            and not args.cleanup
+            and args.command not in {"init", "write", "broadcast"}
+        ):
+            resolved_target.plugin.validate_target(
+                resolved_target.target,
+                backend_options=resolved_target.backend_options,
+                verify_initialized=True,
+                config=config,
+            )
 
         # Dispatch to appropriate command handler
         if args.command == "write":
-            return commands.cmd_write(db_path_str, args.queue, args.message)
+            return commands.cmd_write(resolved_target, args.queue, args.message)
         elif args.command == "read":
             since_str = getattr(args, "since", None)
             message_id_str = getattr(args, "message_id", None)
@@ -769,7 +821,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     parser.error("--message cannot be used with --all or --since")
 
             return commands.cmd_read(
-                db_path_str,
+                resolved_target,
                 args.queue,
                 args.all,
                 args.json,
@@ -794,7 +846,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     parser.error("--message cannot be used with --all or --since")
 
             return commands.cmd_peek(
-                db_path_str,
+                resolved_target,
                 args.queue,
                 args.all,
                 args.json,
@@ -805,7 +857,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
         elif args.command == "list":
             show_stats = getattr(args, "stats", False)
             pattern = getattr(args, "pattern", None)
-            return commands.cmd_list(db_path_str, show_stats, pattern=pattern)
+            return commands.cmd_list(resolved_target, show_stats, pattern=pattern)
         elif args.command == "delete":
             # argparse mutual exclusion ensures exactly one of queue or --all is provided
             queue = None if args.all else args.queue
@@ -823,7 +875,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 if queue is None:
                     parser.error("--message requires a queue name")
 
-            return commands.cmd_delete(db_path_str, queue, message_id_str)
+            return commands.cmd_delete(resolved_target, queue, message_id_str)
         elif args.command == "move":
             # Get arguments
             all_messages = getattr(args, "all", False)
@@ -845,7 +897,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     parser.error("--message cannot be used with --since")
 
             return commands.cmd_move(
-                db_path_str,
+                resolved_target,
                 args.source_queue,
                 args.dest_queue,
                 all_messages=all_messages,
@@ -856,7 +908,9 @@ def main(*, config: dict[str, Any] = _config) -> int:
             )
         elif args.command == "broadcast":
             return commands.cmd_broadcast(
-                db_path_str, args.message, pattern=getattr(args, "pattern", None)
+                resolved_target,
+                args.message,
+                pattern=getattr(args, "pattern", None),
             )
         elif args.command == "alias":
             subcommand = getattr(args, "alias_command", None)
@@ -865,16 +919,16 @@ def main(*, config: dict[str, Any] = _config) -> int:
 
             if subcommand == "add":
                 return commands.cmd_alias_add(
-                    db_path_str,
+                    resolved_target,
                     args.alias,
                     args.target,
                     quiet=getattr(args, "quiet", False),
                 )
             if subcommand == "remove":
-                return commands.cmd_alias_remove(db_path_str, args.alias)
+                return commands.cmd_alias_remove(resolved_target, args.alias)
             if subcommand == "list":
                 return commands.cmd_alias_list(
-                    db_path_str, target=getattr(args, "target", None)
+                    resolved_target, target=getattr(args, "target", None)
                 )
 
             parser.error("unknown alias subcommand")
@@ -882,7 +936,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
             since_str = getattr(args, "since", None)
             move_to = getattr(args, "move", None)
             return commands.cmd_watch(
-                db_path_str,
+                resolved_target,
                 args.queue,
                 args.peek,
                 args.json,

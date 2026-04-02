@@ -6,8 +6,6 @@ Tests filtering messages by timestamp for read and peek commands.
 
 import datetime
 import json
-import subprocess
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -275,27 +273,17 @@ def test_since_with_commit_interval(workdir):
     lines = out.strip().split("\n")
     ts10 = int(lines[9].split("\t")[0])
 
-    # Read with commit interval and --since
-    # Set commit interval via environment variable
-    import os
-
-    env = os.environ.copy()
-    env["BROKER_READ_COMMIT_INTERVAL"] = "5"
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "simplebroker.cli",
+    rc, out, err = run_cli(
         "read",
         "batch_queue",
         "--all",
         "--since",
         str(ts10),
-    ]
-    proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True, env=env)
-
-    assert proc.returncode == 0
-    messages = proc.stdout.strip().split("\n")
+        cwd=workdir,
+        env={"BROKER_READ_COMMIT_INTERVAL": "5"},
+    )
+    assert rc == 0, err
+    messages = out.strip().split("\n")
     assert len(messages) == 10  # msg10 through msg19
     assert messages[0] == "msg10"
     assert messages[-1] == "msg19"
@@ -414,24 +402,9 @@ def test_since_iso_date_precise_boundary(workdir):
     test_date = "2024-01-15"
     at_midnight = "2024-01-15T00:00:00Z"
 
-    # Since we can't control message timestamps, we verify the parsing behavior
-    # by checking that these timestamps parse to the expected values
-    import subprocess
-    import sys
-
     # Helper to check if a timestamp would filter our messages
     def check_since(ts_str):
-        cmd = [
-            sys.executable,
-            "-m",
-            "simplebroker.cli",
-            "peek",
-            queue_name,
-            "--all",
-            f"--since={ts_str}",
-        ]
-        proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
-        return proc.returncode, proc.stdout, proc.stderr
+        return run_cli("peek", queue_name, "--all", f"--since={ts_str}", cwd=workdir)
 
     # All these should behave identically (date-only = midnight UTC)
     rc1, _, _ = check_since(test_date)
@@ -747,6 +720,7 @@ def test_since_multiple_readers(workdir):
             future.result()
 
 
+@pytest.mark.sqlite_only
 def test_since_index_usage(workdir):
     """Verify timestamp index is used for queries."""
     queue_name = "index_test_queue"
@@ -1050,10 +1024,6 @@ def test_since_negative_timestamps(workdir):
     # Write a message
     run_cli("write", queue_name, "test", cwd=workdir)
 
-    # Test directly via Python to avoid argparse issues with negative numbers
-    import subprocess
-    import sys
-
     # Test various negative formats by passing as single string to avoid argparse issues
     negative_tests = [
         ("-1", "raw negative"),
@@ -1061,20 +1031,9 @@ def test_since_negative_timestamps(workdir):
     ]
 
     for ts_str, desc in negative_tests:
-        # Use = syntax to avoid argparse interpreting as flag
-        cmd = [
-            sys.executable,
-            "-m",
-            "simplebroker.cli",
-            "peek",
-            queue_name,
-            f"--since={ts_str}",
-        ]
-        proc = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
-        assert proc.returncode == 1, f"Expected error for {desc}"
-        assert "Invalid timestamp" in proc.stderr, (
-            f"Wrong error message for {desc}: {proc.stderr}"
-        )
+        rc, out, err = run_cli("peek", queue_name, f"--since={ts_str}", cwd=workdir)
+        assert rc == 1, f"Expected error for {desc}"
+        assert "Invalid timestamp" in err, f"Wrong error message for {desc}: {err}"
 
 
 def test_since_scientific_notation_rejected(workdir):
@@ -1300,6 +1259,7 @@ def test_since_single_message_mode(workdir):
     assert out == "msg0\nmsg1\nmsg3\nmsg4"
 
 
+@pytest.mark.sqlite_only
 def test_since_error_propagation(workdir):
     """Test that database errors are properly propagated with --since."""
     # Create a queue

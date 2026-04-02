@@ -90,12 +90,15 @@ from ._constants import (
     load_config,
 )
 from ._exceptions import OperationalError
+from ._targets import ResolvedTarget
 from .db import BrokerDB
 from .helpers import interruptible_sleep
 from .sbqueue import Queue
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from ._backend_plugins import ActivityWaiter
 
 __all__ = [
     "Message",
@@ -256,7 +259,7 @@ class BaseWatcher(ABC):
         self,
         queue: str | Queue,
         *,
-        db: BrokerDB | str | Path | None = None,
+        db: BrokerDB | str | Path | ResolvedTarget | None = None,
         stop_event: threading.Event | None = None,
         polling_strategy: PollingStrategy | None = None,
         config: dict[str, Any] = _config,
@@ -276,9 +279,12 @@ class BaseWatcher(ABC):
             self._queue_obj = queue
         else:
             # Create Queue object with persistent=True by default for watchers
+            db_path: str | ResolvedTarget
             if db is not None:
                 if isinstance(db, BrokerDB):
                     db_path = str(db.db_path)
+                elif isinstance(db, ResolvedTarget):
+                    db_path = db
                 else:
                     db_path = str(db)
             else:
@@ -552,6 +558,8 @@ class BaseWatcher(ABC):
 
         if should_cleanup:
             self._cleanup_thread_local()
+            if hasattr(self._strategy, "close"):
+                self._strategy.close()
 
         # detach finalizer if it exists - resources are already released
         if hasattr(self, "_finalizer"):
@@ -711,9 +719,14 @@ class BaseWatcher(ABC):
                     def on_data_version_change(q: Queue = queue) -> None:
                         q.refresh_last_ts()
 
+                    activity_waiter = queue.create_activity_waiter(
+                        stop_event=self._stop_event
+                    )
+
                     self._strategy.start(
                         data_version_getter,
                         on_data_version_change=on_data_version_change,
+                        activity_waiter=activity_waiter,
                     )
 
                 # Initial drain of existing messages
@@ -1036,6 +1049,7 @@ class PollingStrategy:
         self._data_version: int | None = None
         self._data_version_provider: Callable[[], int | None] | None = None
         self._data_change_callback: Callable[[], None] | None = None
+        self._activity_waiter: ActivityWaiter | None = None
         self._pragma_failures = 0
         self._jitter_factor = jitter_factor
 
@@ -1050,12 +1064,19 @@ class PollingStrategy:
         # Calculate delay based on check count
         delay = self._get_delay()
 
+        if self._activity_waiter is not None:
+            wait_timeout = max(delay, self._burst_sleep)
+            if self._activity_waiter.wait(wait_timeout):
+                return
+            self._check_count += 1
+            return
+
         if delay == 0:
             # Micro-sleep to prevent CPU spinning while maintaining responsiveness
             interruptible_sleep(self._burst_sleep, self._stop_event)
         else:
-            # Use shorter timeout chunks for faster SIGINT response
-            chunk_timeout = min(delay, 0.05)  # Max 50ms chunks
+            # Use shorter timeout chunks so backoff stays responsive to writes.
+            chunk_timeout = min(delay, 0.02)
             remaining = delay
             while remaining > 0 and not self._stop_event.is_set():
                 wait_time = min(remaining, chunk_timeout)
@@ -1083,12 +1104,21 @@ class PollingStrategy:
         data_version_provider: Callable[[], int | None] | None = None,
         *,
         on_data_version_change: Callable[[], None] | None = None,
+        activity_waiter: ActivityWaiter | None = None,
     ) -> None:
         """Initialize the strategy."""
+        self.close()
         self._data_version_provider = data_version_provider
         self._check_count = 0
         self._data_version = None
         self._data_change_callback = on_data_version_change
+        self._activity_waiter = activity_waiter
+
+    def close(self) -> None:
+        """Release any backend-native waiter owned by this strategy."""
+        if self._activity_waiter is not None:
+            self._activity_waiter.close()
+            self._activity_waiter = None
 
     def _get_delay(self) -> float:
         """Calculate delay based on check count."""
@@ -1199,7 +1229,7 @@ class QueueWatcher(BaseWatcher):
         queue: str | Queue,
         handler: Callable[[str, int], None],
         *,
-        db: BrokerDB | str | Path | None = None,
+        db: BrokerDB | str | Path | ResolvedTarget | None = None,
         stop_event: threading.Event | None = None,
         peek: bool = False,
         since_timestamp: int | None = None,
@@ -1444,7 +1474,7 @@ class QueueMoveWatcher(BaseWatcher):
         dest_queue: str,
         handler: Callable[[str, int], None],
         *,
-        db: BrokerDB | str | Path | None = None,
+        db: BrokerDB | str | Path | ResolvedTarget | None = None,
         stop_event: threading.Event | None = None,
         max_messages: int | None = None,
         polling_strategy: PollingStrategy | None = None,

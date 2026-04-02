@@ -33,6 +33,7 @@ def _read_until_empty_helper(args):
 
 
 @pytest.mark.xdist_group(name="concurrency_serial")
+@pytest.mark.sqlite_only
 def test_parallel_writes(workdir):
     """T6: Multiple concurrent writers work correctly."""
     import sys

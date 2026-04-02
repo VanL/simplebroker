@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "simplebroker-pg"
+version = "1.0.0"
+description = "Postgres backend plugin for SimpleBroker"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Van Lindberg", email = "van.lindberg@gmail.com"},
+]
+dependencies = [
+    "simplebroker>=3.0.0",
+    "psycopg[binary]>=3,<4",
+    "psycopg-pool>=3.1,<4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-timeout>=2.4.0",
+]
+
+[project.entry-points."simplebroker.backends"]
+postgres = "simplebroker_pg.plugin:get_backend_plugin"
+
+[tool.hatch.build]
+include = [
+    "simplebroker_pg/**/*.py",
+    "README.md",
+]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+addopts = "-ra -q"
+markers = [
+    "pg_only: tests that validate the Postgres extension package",
+]

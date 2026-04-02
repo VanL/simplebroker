@@ -20,58 +20,43 @@ import pytest
 from simplebroker.db import BrokerDB
 
 
-def test_normal_operation_no_conflicts(workdir):
+@pytest.mark.shared
+def test_normal_operation_no_conflicts(broker):
     """Verify normal operation has zero overhead."""
-    db = BrokerDB(str(workdir / "test.db"))
-    try:
-        # Write several messages
-        for i in range(10):
-            db.write("queue", f"Message {i}")
+    for i in range(10):
+        broker.write("queue", f"Message {i}")
 
-        # No conflicts should occur in normal operation
-        assert db.get_conflict_metrics()["ts_conflict_count"] == 0
-        assert db.get_conflict_metrics()["ts_resync_count"] == 0
+    assert broker.get_conflict_metrics()["ts_conflict_count"] == 0
+    assert broker.get_conflict_metrics()["ts_resync_count"] == 0
 
-        # Verify all messages written
-        messages = list(db.peek_generator("queue", with_timestamps=False))
-        assert len(messages) == 10
-    finally:
-        db.close()
+    messages = list(broker.peek_generator("queue", with_timestamps=False))
+    assert len(messages) == 10
 
 
-def test_forced_conflict_handled(workdir):
+@pytest.mark.shared
+def test_forced_conflict_handled(broker):
     """Test that if somehow a conflict occurs, it's handled gracefully."""
-    db = BrokerDB(str(workdir / "test.db"))
-
-    # Artificially create a duplicate timestamp scenario
-    # This should never happen in practice, but if it does...
-
-    # Insert a message with a specific timestamp
-    with db._lock:
-        db._runner.run(
-            "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
+    # Insert a message with a known timestamp via raw runner
+    with broker._lock:
+        broker._runner.run(
+            broker._sql.INSERT_MESSAGE,
             ("queue", "Message 1", 12345),
         )
-        # Don't set meta - let the timestamp generator figure it out itself
-        db._runner.commit()
+        broker._runner.commit()
 
-    # Force timestamp generator to return values that will conflict
-    # at the INSERT level (not inside the generator)
-    original = db._timestamp_gen.generate
+    original = broker._timestamp_gen.generate
     call_count = 0
 
     def mock_generate():
         nonlocal call_count
         call_count += 1
-        if call_count <= 2:  # First 2 calls return values that will conflict
-            return 12345  # This will cause INSERT to fail
-        return original()  # Then return normal timestamps
+        if call_count <= 2:
+            return 12345
+        return original()
 
-    db._timestamp_gen.generate = mock_generate
+    broker._timestamp_gen.generate = mock_generate
 
     try:
-        # This should retry and eventually succeed through resilience mechanism
-        # Suppress expected warnings about timestamp conflicts
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -83,173 +68,129 @@ def test_forced_conflict_handled(workdir):
                 message="Timestamp generator resynchronized",
                 category=RuntimeWarning,
             )
-            db.write("queue", "Message 2")
+            broker.write("queue", "Message 2")
 
-        # Verify the write succeeded
-        messages = list(db.peek_generator("queue", with_timestamps=False))
+        messages = list(broker.peek_generator("queue", with_timestamps=False))
         assert len(messages) == 2
 
-        # Verify resilience kicked in
-        assert db.get_conflict_metrics()["ts_conflict_count"] > 0
-        assert db.get_conflict_metrics()["ts_resync_count"] > 0
+        assert broker.get_conflict_metrics()["ts_conflict_count"] > 0
+        assert broker.get_conflict_metrics()["ts_resync_count"] > 0
     finally:
-        db._timestamp_gen.generate = original
+        broker._timestamp_gen.generate = original
 
 
-def test_transient_conflict_recovery(workdir):
+@pytest.mark.shared
+def test_transient_conflict_recovery(broker):
     """Test recovery from a single transient conflict."""
-    db_path = workdir / "test.db"
-    db = BrokerDB(str(db_path))
-    try:
-        # Write a normal message first
-        db.write("queue", "Message 1")
+    broker.write("queue", "Message 1")
+    broker.write("queue", "Message 2")
 
-        # Write another message - in normal operation this should work fine
-        # We're testing that the resilience system doesn't interfere with normal operation
-        db.write("queue", "Message 2")
-
-        # Just verify no errors occurred
-        messages = list(db.peek_generator("queue", with_timestamps=False))
-        assert len(messages) == 2
-    finally:
-        db.close()
+    messages = list(broker.peek_generator("queue", with_timestamps=False))
+    assert len(messages) == 2
 
 
-def test_truly_unresolvable_conflict_fails_safely(workdir):
+@pytest.mark.shared
+def test_truly_unresolvable_conflict_fails_safely(broker):
     """Test that truly unresolvable conflicts fail with clear error."""
-    db = BrokerDB(str(workdir / "test.db"))
-    try:
-        # Insert a message with a specific timestamp
-        with db._lock:
-            db._runner.run(
-                "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
-                ("queue", "Message 1", 12345),
-            )
-            db._runner.commit()
+    with broker._lock:
+        broker._runner.run(
+            broker._sql.INSERT_MESSAGE,
+            ("queue", "Message 1", 12345),
+        )
+        broker._runner.commit()
 
-        # Force generator to always return same timestamp
-        # This simulates a broken timestamp generator
-        db._timestamp_gen.generate = lambda: 12345
+    broker._timestamp_gen.generate = lambda: 12345
 
-        # This should fail after retries
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Timestamp conflict persisted",
-                category=RuntimeWarning,
-            )
-            warnings.filterwarnings(
-                "ignore",
-                message="Timestamp generator resynchronized",
-                category=RuntimeWarning,
-            )
-            warnings.filterwarnings(
-                "ignore",
-                message="Timestamp conflict unresolvable",
-                category=RuntimeWarning,
-            )
-            with pytest.raises(RuntimeError) as exc_info:
-                db.write("queue", "Message 2")
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Timestamp conflict persisted",
+            category=RuntimeWarning,
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message="Timestamp generator resynchronized",
+            category=RuntimeWarning,
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message="Timestamp conflict unresolvable",
+            category=RuntimeWarning,
+        )
+        with pytest.raises(RuntimeError) as exc_info:
+            broker.write("queue", "Message 2")
 
-            assert "Failed to write message" in str(exc_info.value)
-    finally:
-        db.close()
+        assert "Failed to write message" in str(exc_info.value)
 
 
-def test_resync_fixes_inconsistent_state(workdir):
+@pytest.mark.shared
+def test_resync_fixes_inconsistent_state(broker):
     """Test that resync can fix inconsistent state."""
-    db = BrokerDB(str(workdir / "test.db"))
-    try:
-        # Write some messages
-        for i in range(5):
-            db.write("queue", f"Message {i}")
-
-        # Corrupt meta table (simulate inconsistent state)
-        with db._lock:
-            db._runner.run("UPDATE meta SET value = 0 WHERE key = 'last_ts'")
-            db._runner.commit()
-
-        # Resync should fix it
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="Timestamp generator resynchronized",
-                category=RuntimeWarning,
-            )
-            db._resync_timestamp_generator()
-
-        # Verify we can still write
-        db.write("queue", "Message after resync")
-
-        messages = list(db.peek_generator("queue", with_timestamps=False))
-        assert len(messages) == 6
-    finally:
-        db.close()
-
-
-def test_state_inconsistency_direct_fix(workdir):
-    """Test that resync correctly fixes state inconsistency."""
-    db_path = workdir / "test.db"
-    db = BrokerDB(str(db_path))
-
-    # Write some messages
     for i in range(5):
-        db.write("queue", f"Message {i}")
+        broker.write("queue", f"Message {i}")
 
-    # Get current state
-    with db._lock:
-        result = list(db._runner.run("SELECT MAX(ts) FROM messages", fetch=True))
-        max_ts = result[0][0]
+    # Corrupt last_ts via the backend plugin's typed accessor
+    broker._backend_plugin.write_last_ts(broker._runner, 0)
 
-    # Corrupt meta
-    with db._lock:
-        db._runner.run("UPDATE meta SET value = 0 WHERE key = 'last_ts'")
-        db._runner.commit()
-
-    # Call resync directly
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
             message="Timestamp generator resynchronized",
             category=RuntimeWarning,
         )
-        db._resync_timestamp_generator()
+        broker._resync_timestamp_generator()
 
-    # Verify it was fixed
-    with db._lock:
-        result = list(
-            db._runner.run("SELECT value FROM meta WHERE key = 'last_ts'", fetch=True)
+    broker.write("queue", "Message after resync")
+
+    messages = list(broker.peek_generator("queue", with_timestamps=False))
+    assert len(messages) == 6
+
+
+@pytest.mark.shared
+def test_state_inconsistency_direct_fix(broker):
+    """Test that resync correctly fixes state inconsistency."""
+    for i in range(5):
+        broker.write("queue", f"Message {i}")
+
+    with broker._lock:
+        result = list(broker._runner.run(broker._sql.GET_MAX_MESSAGE_TS, fetch=True))
+        max_ts = result[0][0]
+
+    broker._backend_plugin.write_last_ts(broker._runner, 0)
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Timestamp generator resynchronized",
+            category=RuntimeWarning,
         )
-        new_value = result[0][0]
+        broker._resync_timestamp_generator()
 
+    new_value = broker._backend_plugin.read_last_ts(broker._runner)
     assert new_value == max_ts
 
 
-def test_unresolvable_conflict(workdir):
+@pytest.mark.shared
+def test_unresolvable_conflict(broker):
     """Test handling of truly unresolvable conflicts."""
-    db_path = workdir / "test.db"
-    db = BrokerDB(str(db_path))
-
-    # Write a message with a specific timestamp
-    with db._lock:
-        db._runner.begin_immediate()
-        db._runner.run(
-            "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
+    with broker._lock:
+        broker._runner.begin_immediate()
+        broker._runner.run(
+            broker._sql.INSERT_MESSAGE,
             ("queue", "Message 1", 12345),
         )
-        db._runner.run("UPDATE meta SET value = 12344 WHERE key = 'last_ts'")
-        db._runner.commit()
+        broker._runner.commit()
 
-    # Force timestamp generator to always return the same value
-    original = db._timestamp_gen.generate
+    broker._backend_plugin.write_last_ts(broker._runner, 12344)
+
+    original = broker._timestamp_gen.generate
 
     def always_return_12345():
         return 12345
 
-    db._timestamp_gen.generate = always_return_12345
+    broker._timestamp_gen.generate = always_return_12345
 
     try:
-        # This should fail after retries
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -267,54 +208,45 @@ def test_unresolvable_conflict(workdir):
                 category=RuntimeWarning,
             )
             with pytest.raises(RuntimeError) as exc_info:
-                db.write("queue", "Message 2")
+                broker.write("queue", "Message 2")
 
         assert "Failed to write message" in str(exc_info.value)
-        # With new approach, metrics might be different
-        metrics = db.get_conflict_metrics()
+        metrics = broker.get_conflict_metrics()
         assert metrics["ts_conflict_count"] >= 1
         assert metrics["ts_resync_count"] >= 1
     finally:
-        db._timestamp_gen.generate = original
+        broker._timestamp_gen.generate = original
 
 
-def test_metrics_can_be_reset(workdir):
+@pytest.mark.shared
+def test_metrics_can_be_reset(broker):
     """Test metric tracking and reset functionality."""
-    db = BrokerDB(str(workdir / "test.db"))
+    assert broker.get_conflict_metrics()["ts_conflict_count"] == 0
 
-    # Initially no conflicts
-    assert db.get_conflict_metrics()["ts_conflict_count"] == 0
+    broker._ts_conflict_count = 5
+    broker._ts_resync_count = 2
 
-    # Force a conflict by direct manipulation
-    db._ts_conflict_count = 5
-    db._ts_resync_count = 2
+    assert broker.get_conflict_metrics()["ts_conflict_count"] == 5
+    assert broker.get_conflict_metrics()["ts_resync_count"] == 2
 
-    assert db.get_conflict_metrics()["ts_conflict_count"] == 5
-    assert db.get_conflict_metrics()["ts_resync_count"] == 2
+    broker.reset_conflict_metrics()
 
-    # Reset
-    db.reset_conflict_metrics()
-
-    assert db.get_conflict_metrics()["ts_conflict_count"] == 0
-    assert db.get_conflict_metrics()["ts_resync_count"] == 0
+    assert broker.get_conflict_metrics()["ts_conflict_count"] == 0
+    assert broker.get_conflict_metrics()["ts_resync_count"] == 0
 
 
+@pytest.mark.sqlite_only
 def test_concurrent_writes_simple(workdir):
     """Simple test of concurrent writes without complex multiprocessing."""
-    import warnings
-
-    # Filter out the timestamp conflict warning which is expected in this test
     warnings.filterwarnings(
         "ignore", message="Timestamp conflict persisted", category=RuntimeWarning
     )
 
     db_path = workdir / "test.db"
 
-    # Create the database first
     setup_db = BrokerDB(str(db_path))
     setup_db.close()
 
-    # Multiple threads will write to the same database
     def write_messages(thread_id):
         db = BrokerDB(str(db_path))
         try:
@@ -332,7 +264,6 @@ def test_concurrent_writes_simple(workdir):
     for t in threads:
         t.join()
 
-    # Verify all messages were written
     db = BrokerDB(str(db_path))
     try:
         for i in range(3):

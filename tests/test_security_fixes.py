@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+import pytest
+
 from .conftest import run_cli
 
 
@@ -22,6 +24,7 @@ def test_stdin_size_limit_streaming(workdir: Path):
     assert "exceeds maximum size" in stderr.lower()
 
 
+@pytest.mark.sqlite_only
 def test_path_traversal_protection(workdir: Path):
     """Test that path traversal attacks are prevented."""
     # Test relative paths with parent directory references
@@ -79,6 +82,7 @@ def test_path_traversal_protection(workdir: Path):
             ), f"Expected permission/database error for /etc/passwd, got: {stderr}"
 
 
+@pytest.mark.sqlite_only
 def test_safe_path_within_directory(workdir: Path):
     """Test that legitimate paths within the directory still work."""
     # Create a subdirectory

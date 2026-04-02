@@ -16,6 +16,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from .conftest import run_cli
 
 # ============================================================================
@@ -630,6 +632,7 @@ def test_mutual_exclusivity_with_since(workdir: Path):
 # ============================================================================
 
 
+@pytest.mark.sqlite_only
 def test_read_by_timestamp_gets_vacuumed(workdir: Path):
     """Test that messages read by timestamp are properly vacuumed."""
     db_path = workdir / ".broker.db"
@@ -666,6 +669,7 @@ def test_read_by_timestamp_gets_vacuumed(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_delete_by_timestamp_gets_vacuumed(workdir: Path):
     """Test that messages deleted by timestamp are properly vacuumed."""
     db_path = workdir / ".broker.db"
@@ -700,6 +704,7 @@ def test_delete_by_timestamp_gets_vacuumed(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_peek_by_timestamp_not_vacuumed(workdir: Path):
     """Test that messages peeked by timestamp are not affected by vacuum."""
     db_path = workdir / ".broker.db"

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simplebroker"
-version = "2.9.0"
+version = "3.0.0"
 description = "A lightweight message queue backed by SQLite"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -71,6 +71,9 @@ testpaths = ["tests"]
 addopts = "-ra -q --strict-markers -m 'not slow' -n auto --dist loadgroup"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "shared: backend-agnostic black-box tests that should pass across supported backends",
+    "sqlite_only: tests that validate built-in SQLite-specific behavior",
+    "pg_only: tests that validate the Postgres extension package",
 ]
 
 [tool.mypy]

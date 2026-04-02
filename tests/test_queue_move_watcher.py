@@ -5,8 +5,6 @@ import time
 
 import pytest
 
-from simplebroker.db import BrokerDB
-
 # Import will be available after implementation
 pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueMoveWatcher
@@ -14,6 +12,8 @@ from simplebroker.watcher import QueueMoveWatcher
 from .helper_scripts.cleanup import register_watcher
 from .helper_scripts.timing import wait_for_condition
 from .helper_scripts.watcher_base import WatcherTestBase
+
+pytestmark = [pytest.mark.shared]
 
 
 class MoveCollector:
@@ -58,25 +58,10 @@ class MoveCollector:
             return self.errors.copy()
 
 
-@pytest.fixture
-def temp_db(tmp_path):
-    """Create a temporary database for testing."""
-    db_path = tmp_path / "test.db"
-    return db_path
-
-
-@pytest.fixture
-def broker(temp_db):
-    """Create a BrokerDB instance (acting as SimpleBroker)."""
-    db = BrokerDB(temp_db)
-    yield db
-    db.close()
-
-
 class TestQueueMoveWatcher(WatcherTestBase):
     """Test the QueueMoveWatcher class."""
 
-    def test_basic_move_functionality(self, broker, temp_db):
+    def test_basic_move_functionality(self, broker, broker_target):
         """Test basic message move from one queue to another."""
         # Add messages to source queue
         broker.write("source_queue", "message1")
@@ -90,7 +75,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source_queue",
             "dest_queue",
             collector.handler,
-            db=broker,
+            db=broker_target,
         )
         register_watcher(watcher)
 
@@ -120,7 +105,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         )
         assert len(from_messages) == 0
 
-    def test_handler_execution_verification(self, broker, temp_db):
+    def test_handler_execution_verification(self, broker, broker_target):
         """Test that handler is called for each moved message."""
         # Add messages
         broker.write("source", "msg1")
@@ -141,7 +126,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             tracking_handler,
-            db=broker,
+            db=broker_target,
         )
         register_watcher(watcher)
 
@@ -155,7 +140,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert handler_calls[1]["body"] == "msg2"
         assert handler_calls[1]["queue"] == "dest"
 
-    def test_handler_failure_isolation(self, broker, temp_db):
+    def test_handler_failure_isolation(self, broker, broker_target):
         """Test that handler failures don't prevent message move."""
         # Add messages
         broker.write("source", "message1")
@@ -168,7 +153,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             collector.conditional_error_handler,
-            db=broker,
+            db=broker_target,
             error_handler=collector.capture_error_handler,
         )
         register_watcher(watcher)
@@ -195,7 +180,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert len(handler_calls) == 2
         assert [body for body, ts in handler_calls] == ["message1", "message3"]
 
-    def test_order_preservation_global_id(self, broker, temp_db):
+    def test_order_preservation_global_id(self, broker, broker_target):
         """Test that moved messages maintain their global ID order."""
         # Add messages - they'll get sequential global IDs
         broker.write("source", "msg1")  # ID=1
@@ -212,7 +197,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             capture_id_handler,
-            db=broker,
+            db=broker_target,
         )
         register_watcher(watcher)
 
@@ -223,7 +208,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert len(moved_ids) == 3
         assert moved_ids == ["msg1", "msg2", "msg3"]  # Should maintain order
 
-    def test_mixed_source_ordering_behavior(self, broker, temp_db):
+    def test_mixed_source_ordering_behavior(self, broker, broker_target):
         """Test ordering when destination queue already has messages."""
         # Write to destination queue first
         broker.write("dest", "dest1")  # ID=1
@@ -244,7 +229,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             lambda body, ts: None,
-            db=broker,
+            db=broker_target,
         )
         register_watcher(watcher)
 
@@ -258,7 +243,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         # Expected order: dest1, dest2, src1, src2, dest3, src3
         assert dest_messages == ["dest1", "dest2", "src1", "src2", "dest3", "src3"]
 
-    def test_empty_queue_handling(self, broker, temp_db):
+    def test_empty_queue_handling(self, broker, broker_target):
         """Test watcher behavior with empty source queue."""
         collector = MoveCollector()
 
@@ -266,7 +251,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "empty_source",
             "dest",
             collector.handler,
-            db=broker,
+            db=broker_target,
         )
         register_watcher(watcher)
 
@@ -303,7 +288,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         dest_messages = list(broker.peek_generator("dest", with_timestamps=False))
         assert dest_messages == ["delayed_message"]
 
-    def test_concurrent_operations(self, broker, temp_db):
+    def test_concurrent_operations(self, broker, broker_target):
         """Test concurrent writes during move operations."""
         moved_count = 0
         moved_lock = threading.Lock()
@@ -322,7 +307,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             counting_handler,
-            db=broker,
+            db=broker_target,
         )
         register_watcher(watcher)
 
@@ -392,7 +377,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         source_messages = list(broker.peek_generator("source", with_timestamps=False))
         assert len(source_messages) == 0
 
-    def test_transaction_safety(self, broker, temp_db):
+    def test_transaction_safety(self, broker, broker_target):
         """Test that moves are atomic and transactional."""
         # This test simulates transaction behavior by checking atomicity
 
@@ -410,7 +395,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             slow_handler,
-            db=broker,
+            db=broker_target,
         )
         register_watcher(watcher)
 
@@ -436,17 +421,17 @@ class TestQueueMoveWatcher(WatcherTestBase):
             if thread.is_alive():
                 pytest.fail("Watcher thread did not stop within timeout")
 
-    def test_same_queue_validation(self, broker, temp_db):
+    def test_same_queue_validation(self, broker, broker_target):
         """Test that source_queue and dest_queue must be different."""
         with pytest.raises(ValueError, match="Cannot move messages to the same queue"):
             QueueMoveWatcher(
                 "same_queue",
                 "same_queue",
                 lambda body, ts: None,
-                db=broker,
+                db=broker_target,
             )
 
-    def test_max_messages_limit(self, broker, temp_db):
+    def test_max_messages_limit(self, broker, broker_target):
         """Test max_messages parameter limits moves."""
         # Add 10 messages
         for i in range(10):
@@ -461,7 +446,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             track_handler,
-            db=broker,
+            db=broker_target,
             max_messages=5,
         )
         register_watcher(watcher)
@@ -479,7 +464,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert len(source_messages) == 5
         assert source_messages == ["msg_5", "msg_6", "msg_7", "msg_8", "msg_9"]
 
-    def test_stop_event_handling(self, broker, temp_db):
+    def test_stop_event_handling(self, broker, broker_target):
         """Test that stop_event properly stops the watcher."""
         stop_event = threading.Event()
 
@@ -491,7 +476,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             lambda body, ts: None,
-            db=broker,
+            db=broker_target,
             stop_event=stop_event,
         )
         register_watcher(watcher)
@@ -512,13 +497,13 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert watcher.move_count >= 0
         assert watcher.move_count <= 5
 
-    def test_move_properties(self, broker, temp_db):
+    def test_move_properties(self, broker, broker_target):
         """Test QueueMoveWatcher properties."""
         watcher = QueueMoveWatcher(
             "source_queue",
             "dest_queue",
             lambda body, ts: None,
-            db=broker,
+            db=broker_target,
         )
         register_watcher(watcher)
 
@@ -533,19 +518,15 @@ class TestQueueMoveWatcher(WatcherTestBase):
 
         assert watcher.move_count == 1
 
-    def test_message_preservation(self, broker, temp_db):
+    def test_message_preservation(self, broker, broker_target):
         """Test that message ID, content, and timestamp are preserved during move."""
         # Write a message and capture its details
         broker.write("source", "preserved_content")
 
-        # Read to get message details
-        with broker._lock:
-            result = broker._runner.run(
-                "SELECT id, body, ts FROM messages WHERE queue = ? LIMIT 1",
-                ("source",),
-                fetch=True,
-            )
-            original_id, original_body, original_ts = result[0]
+        # Get message details via public API
+        peeked = broker.peek_one("source", with_timestamps=True)
+        assert peeked is not None
+        original_body, original_ts = peeked
 
         preserved_data = {}
 
@@ -558,7 +539,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             capture_handler,
-            db=broker,
+            db=broker_target,
         )
         register_watcher(watcher)
 
@@ -571,7 +552,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert preserved_data["ts"] == original_ts
         assert preserved_data["queue"] == "dest"  # Only queue changes
 
-    def test_error_handler_called_on_handler_failure(self, broker, temp_db):
+    def test_error_handler_called_on_handler_failure(self, broker, broker_target):
         """Test that error_handler is properly called when handler fails."""
         broker.write("source", "error_message")
 
@@ -591,7 +572,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
             "source",
             "dest",
             failing_handler,
-            db=broker,
+            db=broker_target,
             error_handler=error_handler,
         )
         register_watcher(watcher)

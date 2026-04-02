@@ -4,6 +4,8 @@ This package keeps the historical ``simplebroker._sql`` import path stable while
 the SQLite-specific SQL lives in :mod:`simplebroker._sql.sqlite`.
 """
 
+from ._contract import BackendSQLNamespace, ensure_backend_sql_namespace
+from ._query_spec import RetrieveOperation, RetrieveQuerySpec
 from .sqlite import (
     ALTER_MESSAGES_ADD_CLAIMED,
     BEGIN_IMMEDIATE,
@@ -62,6 +64,10 @@ from .sqlite import (
 )
 
 __all__ = [
+    "BackendSQLNamespace",
+    "RetrieveOperation",
+    "RetrieveQuerySpec",
+    "ensure_backend_sql_namespace",
     "ALTER_MESSAGES_ADD_CLAIMED",
     "BEGIN_IMMEDIATE",
     "CHECK_CLAIMED_COLUMN",

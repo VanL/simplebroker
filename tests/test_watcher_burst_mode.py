@@ -7,17 +7,17 @@ from __future__ import annotations
 
 import os
 import sys
-import tempfile
 import threading
 import time
-from pathlib import Path
 
 import pytest
 
-from simplebroker.db import BrokerDB
 from simplebroker.watcher import PollingStrategy, QueueWatcher
 
+from .helper_scripts.broker_factory import make_broker
 from .helper_scripts.timing import wait_for_condition
+
+pytestmark = [pytest.mark.shared]
 
 
 @pytest.fixture
@@ -133,351 +133,337 @@ class InstrumentedQueueWatcher(QueueWatcher):
             super()._dispatch(message, timestamp)
 
 
-def test_burst_mode_resets_on_activity(no_jitter) -> None:
+def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
     """Verify burst mode resets when messages are found."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-        watcher = None
-        try:
-            processed_messages = []
+    broker = make_broker(broker_target)
+    watcher = None
+    try:
+        processed_messages = []
 
-            def handler(msg, ts) -> None:
-                processed_messages.append((msg, time.time()))
+        def handler(msg, ts) -> None:
+            processed_messages.append((msg, time.time()))
 
-            watcher = InstrumentedQueueWatcher("test_queue", handler, db=db_path)
-            strategy = watcher._strategy
+        watcher = InstrumentedQueueWatcher("test_queue", handler, db=broker_target)
+        strategy = watcher._strategy
 
-            # Start watcher
-            watcher.run_in_thread()
+        # Start watcher
+        watcher.run_in_thread()
 
-            # Wait for backoff - verify delays are increasing
-            def has_backed_off():
-                if len(strategy.delay_history) < 10:
-                    return False
-                recent_delays = strategy.delay_history[-5:]
-                # Check that we have non-zero delays indicating backoff
-                return all(d > 0 for d in recent_delays)
+        # Wait for backoff - verify delays are increasing
+        def has_backed_off():
+            if len(strategy.delay_history) < 10:
+                return False
+            recent_delays = strategy.delay_history[-5:]
+            # Check that we have non-zero delays indicating backoff
+            return all(d > 0 for d in recent_delays)
 
-            wait_for_condition(
-                has_backed_off,
-                timeout=2.0,
-                message="Watcher should back off when no messages available",
-            )
+        wait_for_condition(
+            has_backed_off,
+            timeout=2.0,
+            message="Watcher should back off when no messages available",
+        )
 
-            # Record polling state before message
-            delay_count_before = len(strategy.delay_history)
+        # Record polling state before message
+        delay_count_before = len(strategy.delay_history)
 
-            # Add a message and record when
-            message_time = time.time()
-            broker.write("test_queue", "test message")
+        # Add a message and record when
+        message_time = time.time()
+        broker.write("test_queue", "test message")
 
-            # Wait for message processing
-            wait_for_condition(
-                lambda: len(processed_messages) > 0,
-                timeout=1.0,
-                message="Message should be processed",
-            )
+        # Wait for message processing
+        wait_for_condition(
+            lambda: len(processed_messages) > 0,
+            timeout=1.0,
+            message="Message should be processed",
+        )
 
-            # Verify rapid polling resumed after message (burst mode)
-            # Count zero-delay polls that happened after the message
-            def burst_mode_resumed():
-                if len(strategy.delay_history) <= delay_count_before:
-                    return False
-                new_delays = strategy.delay_history[delay_count_before:]
-                # In burst mode, we should see multiple zero delays
-                zero_count = sum(1 for d in new_delays if d == 0)
-                return zero_count >= 5  # At least 5 rapid polls
+        # Verify rapid polling resumed after message (burst mode)
+        # Count zero-delay polls that happened after the message
+        def burst_mode_resumed():
+            if len(strategy.delay_history) <= delay_count_before:
+                return False
+            new_delays = strategy.delay_history[delay_count_before:]
+            # In burst mode, we should see multiple zero delays
+            zero_count = sum(1 for d in new_delays if d == 0)
+            return zero_count >= 5  # At least 5 rapid polls
 
-            wait_for_condition(
-                burst_mode_resumed,
-                timeout=1.0,
-                message="Should resume burst mode after finding message",
-            )
+        wait_for_condition(
+            burst_mode_resumed,
+            timeout=1.0,
+            message="Should resume burst mode after finding message",
+        )
 
-            # Verify message was processed quickly after being written
-            process_latency = processed_messages[0][1] - message_time
-            assert process_latency < 0.1, (
-                f"Message should be processed quickly, took {process_latency:.3f}s"
-            )
+        # Verify message was processed quickly after being written
+        process_latency = processed_messages[0][1] - message_time
+        assert process_latency < 0.1, (
+            f"Message should be processed quickly, took {process_latency:.3f}s"
+        )
 
-        finally:
-            if watcher is not None:
-                watcher.stop()
-            broker.close()
+    finally:
+        if watcher is not None:
+            watcher.stop()
+        broker.close()
 
 
-def test_burst_mode_no_reset_on_empty_wake(no_jitter) -> None:
+def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
     """Verify burst mode doesn't reset when no messages found."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-        active_watcher = None
-        idle_watcher = None
-        try:
-            processed_counts = {"active": 0, "idle": 0}
+    broker = make_broker(broker_target)
+    active_watcher = None
+    idle_watcher = None
+    try:
+        processed_counts = {"active": 0, "idle": 0}
 
-            def make_handler(queue_name):
-                def handler(msg, ts) -> None:
-                    processed_counts[queue_name] += 1
+        def make_handler(queue_name):
+            def handler(msg, ts) -> None:
+                processed_counts[queue_name] += 1
 
-                return handler
+            return handler
 
-            # Create two watchers - one active, one idle
-            active_watcher = InstrumentedQueueWatcher(
-                "active_queue",
-                make_handler("active"),
-                db=db_path,
-            )
-            idle_watcher = InstrumentedQueueWatcher(
-                "idle_queue",
-                make_handler("idle"),
-                db=db_path,
-            )
+        # Create two watchers - one active, one idle
+        active_watcher = InstrumentedQueueWatcher(
+            "active_queue",
+            make_handler("active"),
+            db=broker_target,
+        )
+        idle_watcher = InstrumentedQueueWatcher(
+            "idle_queue",
+            make_handler("idle"),
+            db=broker_target,
+        )
 
-            active_watcher.run_in_thread()
-            idle_watcher.run_in_thread()
+        active_watcher.run_in_thread()
+        idle_watcher.run_in_thread()
 
-            # Wait for both to back off
-            def both_backed_off():
-                active_delays = active_watcher._strategy.delay_history
-                idle_delays = idle_watcher._strategy.delay_history
-                if len(active_delays) < 20 or len(idle_delays) < 20:
-                    return False
-                # Check recent delays are non-zero
-                return all(d > 0 for d in active_delays[-5:]) and all(
-                    d > 0 for d in idle_delays[-5:]
-                )
-
-            wait_for_condition(
-                both_backed_off,
-                timeout=2.0,
-                message="Both watchers should back off",
+        # Wait for both to back off
+        def both_backed_off():
+            active_delays = active_watcher._strategy.delay_history
+            idle_delays = idle_watcher._strategy.delay_history
+            if len(active_delays) < 20 or len(idle_delays) < 20:
+                return False
+            # Check recent delays are non-zero
+            return all(d > 0 for d in active_delays[-5:]) and all(
+                d > 0 for d in idle_delays[-5:]
             )
 
-            # Record delay counts before message
-            active_delays_before = len(active_watcher._strategy.delay_history)
-            idle_delays_before = len(idle_watcher._strategy.delay_history)
+        wait_for_condition(
+            both_backed_off,
+            timeout=2.0,
+            message="Both watchers should back off",
+        )
 
-            # Write to active queue only
-            broker.write("active_queue", "message")
+        # Record delay counts before message
+        active_delays_before = len(active_watcher._strategy.delay_history)
+        idle_delays_before = len(idle_watcher._strategy.delay_history)
 
-            # Wait for active watcher to process
-            wait_for_condition(
-                lambda: processed_counts["active"] == 1,
-                timeout=1.0,
-                message="Active watcher should process message",
-            )
+        # Write to active queue only
+        broker.write("active_queue", "message")
 
-            # Give time for more polling cycles
-            time.sleep(0.2)
+        # Wait for active watcher to process
+        wait_for_condition(
+            lambda: processed_counts["active"] == 1,
+            timeout=1.0,
+            message="Active watcher should process message",
+        )
 
-            # Active watcher should show burst mode (zero delays)
-            active_new_delays = active_watcher._strategy.delay_history[
-                active_delays_before:
-            ]
-            active_zero_count = sum(1 for d in active_new_delays if d == 0)
-            assert active_zero_count >= 3, (
-                f"Active watcher should reset to burst, got {active_zero_count} zero delays"
-            )
+        # Give time for more polling cycles
+        time.sleep(0.2)
 
-            # Idle watcher should continue with non-zero delays
-            idle_new_delays = idle_watcher._strategy.delay_history[idle_delays_before:]
-            if len(idle_new_delays) > 0:
-                idle_zero_count = sum(1 for d in idle_new_delays if d == 0)
-                assert idle_zero_count == 0, "Idle watcher should not have zero delays"
+        # Active watcher should show burst mode (zero delays)
+        active_new_delays = active_watcher._strategy.delay_history[
+            active_delays_before:
+        ]
+        active_zero_count = sum(1 for d in active_new_delays if d == 0)
+        assert active_zero_count >= 3, (
+            f"Active watcher should reset to burst, got {active_zero_count} zero delays"
+        )
 
-        finally:
-            if active_watcher is not None:
-                active_watcher.stop()
-            if idle_watcher is not None:
-                idle_watcher.stop()
-            broker.close()
+        # Idle watcher should continue with non-zero delays
+        idle_new_delays = idle_watcher._strategy.delay_history[idle_delays_before:]
+        if len(idle_new_delays) > 0:
+            idle_zero_count = sum(1 for d in idle_new_delays if d == 0)
+            assert idle_zero_count == 0, "Idle watcher should not have zero delays"
+
+    finally:
+        if active_watcher is not None:
+            active_watcher.stop()
+        if idle_watcher is not None:
+            idle_watcher.stop()
+        broker.close()
 
 
-def test_burst_mode_gradual_backoff(no_jitter) -> None:
+def test_burst_mode_gradual_backoff(no_jitter, broker_target) -> None:
     """Test the gradual backoff behavior."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-        try:
+    broker = make_broker(broker_target)
+    try:
 
-            def handler(msg, ts) -> None:
-                pass
+        def handler(msg, ts) -> None:
+            pass
 
-            watcher = InstrumentedQueueWatcher("test_queue", handler, db=db_path)
-            strategy = watcher._strategy
+        watcher = InstrumentedQueueWatcher("test_queue", handler, db=broker_target)
+        strategy = watcher._strategy
 
-            # Manually test the delay calculation at different check counts
-            # Test base delay to avoid jitter issues
-            strategy._check_count = 0
-            assert strategy._calculate_base_delay() == 0  # Burst mode
+        # Manually test the delay calculation at different check counts
+        # Test base delay to avoid jitter issues
+        strategy._check_count = 0
+        assert strategy._calculate_base_delay() == 0  # Burst mode
 
-            strategy._check_count = 50
-            assert strategy._calculate_base_delay() == 0  # Still burst mode
+        strategy._check_count = 50
+        assert strategy._calculate_base_delay() == 0  # Still burst mode
 
-            strategy._check_count = 100
-            assert strategy._calculate_base_delay() == 0  # End of burst mode
+        strategy._check_count = 100
+        assert strategy._calculate_base_delay() == 0  # End of burst mode
 
-            strategy._check_count = 150
-            base_delay = strategy._calculate_base_delay()
-            assert 0 < base_delay < strategy._max_interval  # Gradual increase
+        strategy._check_count = 150
+        base_delay = strategy._calculate_base_delay()
+        assert 0 < base_delay < strategy._max_interval  # Gradual increase
 
-            strategy._check_count = 300
-            assert (
-                strategy._calculate_base_delay() == strategy._max_interval
-            )  # Max backoff
-        finally:
-            broker.close()
+        strategy._check_count = 300
+        assert strategy._calculate_base_delay() == strategy._max_interval  # Max backoff
+    finally:
+        broker.close()
 
 
-def test_burst_mode_with_batch_processing(no_jitter) -> None:
+def test_burst_mode_with_batch_processing(no_jitter, broker_target) -> None:
     """Test burst mode with batch message processing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-        watcher = None
-        try:
-            processed = []
+    broker = make_broker(broker_target)
+    watcher = None
+    try:
+        processed = []
 
-            def handler(msg, ts) -> None:
-                processed.append(msg)
+        def handler(msg, ts) -> None:
+            processed.append(msg)
 
-            watcher = InstrumentedQueueWatcher(
-                "test_queue",
-                handler,
-                db=db_path,
-                batch_processing=True,
-            )
+        watcher = InstrumentedQueueWatcher(
+            "test_queue",
+            handler,
+            db=broker_target,
+            batch_processing=True,
+        )
 
-            watcher.run_in_thread()
-            time.sleep(0.2)
+        watcher.run_in_thread()
+        time.sleep(0.2)
 
-            # Add multiple messages
-            for i in range(10):
-                broker.write("test_queue", f"message_{i}")
+        # Add multiple messages
+        for i in range(10):
+            broker.write("test_queue", f"message_{i}")
 
-            assert wait_for_condition(
-                lambda: len(processed) >= 10,
-                timeout=2.0,
-                interval=0.05,
-            )
+        assert wait_for_condition(
+            lambda: len(processed) >= 10,
+            timeout=2.0,
+            interval=0.05,
+        )
 
-            # Should process all messages
-            assert len(processed) == 10
-            # With batch processing, counter resets after processing the batch
-            # Verify we processed messages efficiently
-            assert watcher._message_count == 10
+        # Should process all messages
+        assert len(processed) == 10
+        # With batch processing, counter resets after processing the batch
+        # Verify we processed messages efficiently
+        assert watcher._message_count == 10
 
-        finally:
-            if watcher is not None:
-                watcher.stop()
-            broker.close()
+    finally:
+        if watcher is not None:
+            watcher.stop()
+        broker.close()
 
 
-def test_burst_mode_with_errors_single_message(no_jitter) -> None:
+def test_burst_mode_with_errors_single_message(no_jitter, broker_target) -> None:
     """Test burst mode behavior when handler errors occur (single-message mode)."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-        watcher = None
-        try:
-            call_count = 0
-            error_count = 0
-            successful_messages = []
+    broker = make_broker(broker_target)
+    watcher = None
+    try:
+        call_count = 0
+        error_count = 0
+        successful_messages = []
 
-            def handler(msg, ts) -> None:
-                nonlocal call_count, error_count
-                call_count += 1
-                if call_count % 2 == 1:
-                    error_count += 1
-                    msg = "Test error"
-                    raise ValueError(msg)
-                successful_messages.append(msg)
+        def handler(msg, ts) -> None:
+            nonlocal call_count, error_count
+            call_count += 1
+            if call_count % 2 == 1:
+                error_count += 1
+                msg = "Test error"
+                raise ValueError(msg)
+            successful_messages.append(msg)
 
-            # Test with default single-message processing
-            watcher = InstrumentedQueueWatcher(
-                "test_queue",
-                handler,
-                db=db_path,
-                # batch_processing=False is the default
-            )
-            watcher.run_in_thread()
+        # Test with default single-message processing
+        watcher = InstrumentedQueueWatcher(
+            "test_queue",
+            handler,
+            db=broker_target,
+            # batch_processing=False is the default
+        )
+        watcher.run_in_thread()
 
-            # Add messages
-            for i in range(4):
-                broker.write("test_queue", f"message_{i}")
+        # Add messages
+        for i in range(4):
+            broker.write("test_queue", f"message_{i}")
 
-            # Wait for all messages to be processed with a generous timeout for CI
-            wait_for_condition(
-                lambda: call_count >= 4,
-                timeout=10.0,  # Very generous timeout for slow CI
-                message="Failed to process all 4 messages",
-            )
+        # Wait for all messages to be processed with a generous timeout for CI
+        wait_for_condition(
+            lambda: call_count >= 4,
+            timeout=10.0,  # Very generous timeout for slow CI
+            message="Failed to process all 4 messages",
+        )
 
-            # Verify all messages were attempted despite errors
-            assert call_count == 4
-            assert error_count == 2  # Errors on 1st and 3rd messages
-            assert len(successful_messages) == 2  # 2nd and 4th messages succeeded
+        # Verify all messages were attempted despite errors
+        assert call_count == 4
+        assert error_count == 2  # Errors on 1st and 3rd messages
+        assert len(successful_messages) == 2  # 2nd and 4th messages succeeded
 
-        finally:
-            if watcher is not None:
-                watcher.stop()
-            broker.close()
+    finally:
+        if watcher is not None:
+            watcher.stop()
+        broker.close()
 
 
-def test_burst_mode_with_errors_batch_processing(no_jitter) -> None:
+def test_burst_mode_with_errors_batch_processing(no_jitter, broker_target) -> None:
     """Test burst mode behavior when handler errors occur (batch mode)."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-        watcher = None
-        try:
-            call_count = 0
-            error_count = 0
-            successful_messages = []
+    broker = make_broker(broker_target)
+    watcher = None
+    try:
+        call_count = 0
+        error_count = 0
+        successful_messages = []
 
-            def handler(msg, ts) -> None:
-                nonlocal call_count, error_count
-                call_count += 1
-                if call_count % 2 == 1:
-                    error_count += 1
-                    msg = "Test error"
-                    raise ValueError(msg)
-                successful_messages.append(msg)
+        def handler(msg, ts) -> None:
+            nonlocal call_count, error_count
+            call_count += 1
+            if call_count % 2 == 1:
+                error_count += 1
+                msg = "Test error"
+                raise ValueError(msg)
+            successful_messages.append(msg)
 
-            # Test with batch processing enabled
-            watcher = InstrumentedQueueWatcher(
-                "test_queue",
-                handler,
-                db=db_path,
-                batch_processing=True,  # Process all messages in one polling cycle
-            )
-            watcher.run_in_thread()
+        # Test with batch processing enabled
+        watcher = InstrumentedQueueWatcher(
+            "test_queue",
+            handler,
+            db=broker_target,
+            batch_processing=True,  # Process all messages in one polling cycle
+        )
+        watcher.run_in_thread()
 
-            # Add messages
-            for i in range(4):
-                broker.write("test_queue", f"message_{i}")
+        # Add messages
+        for i in range(4):
+            broker.write("test_queue", f"message_{i}")
 
-            # Wait for all messages to be processed with a generous timeout for CI
-            wait_for_condition(
-                lambda: call_count >= 4,
-                timeout=10.0,  # Very generous timeout for slow CI
-                message="Failed to process all 4 messages",
-            )
+        # Wait for all messages to be processed with a generous timeout for CI
+        wait_for_condition(
+            lambda: call_count >= 4,
+            timeout=10.0,  # Very generous timeout for slow CI
+            message="Failed to process all 4 messages",
+        )
 
-            # Verify all messages were attempted despite errors
-            assert call_count == 4
-            assert error_count == 2  # Errors on 1st and 3rd messages
-            assert len(successful_messages) == 2  # 2nd and 4th messages succeeded
+        # Verify all messages were attempted despite errors
+        assert call_count == 4
+        assert error_count == 2  # Errors on 1st and 3rd messages
+        assert len(successful_messages) == 2  # 2nd and 4th messages succeeded
 
-        finally:
-            if watcher is not None:
-                watcher.stop()
-            broker.close()
+    finally:
+        if watcher is not None:
+            watcher.stop()
+        broker.close()
 
 
-def test_polling_jitter() -> None:
+def test_polling_jitter(broker_target) -> None:
     """Test that polling includes jitter to prevent synchronization."""
     # Import and directly modify the config
     from simplebroker.watcher import _config
@@ -487,309 +473,299 @@ def test_polling_jitter() -> None:
     _config["BROKER_JITTER_FACTOR"] = 0.2
 
     watchers = []
-    with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            db_path = Path(tmpdir) / "test.db"
-            broker = BrokerDB(db_path)
+    broker = make_broker(broker_target)
+    try:
 
-            def handler(msg, ts) -> None:
-                pass
+        def handler(msg, ts) -> None:
+            pass
 
-            # Create multiple watchers
-            for i in range(5):
-                w = InstrumentedQueueWatcher(f"queue_{i}", handler, db=db_path)
-                watchers.append(w)
-                w.run_in_thread()
+        # Create multiple watchers
+        for i in range(5):
+            w = InstrumentedQueueWatcher(f"queue_{i}", handler, db=broker_target)
+            watchers.append(w)
+            w.run_in_thread()
 
-            # Wait until we have enough samples to test jitter properly
-            # Keep running until we collect sufficient backed-off delay samples
-            required_samples = 30  # Need at least 30 samples for meaningful jitter test
-            start_time = time.monotonic()
-            max_wait = 60.0  # Give up to 60 seconds to collect samples
+        # Wait until we have enough samples to test jitter properly
+        # Keep running until we collect sufficient backed-off delay samples
+        required_samples = 30  # Need at least 30 samples for meaningful jitter test
+        start_time = time.monotonic()
+        max_wait = 60.0  # Give up to 60 seconds to collect samples
 
-            while time.monotonic() - start_time < max_wait:
-                # Count backed-off samples across all watchers
-                all_backed_off_delays = []
+        while time.monotonic() - start_time < max_wait:
+            # Count backed-off samples across all watchers
+            all_backed_off_delays = []
 
-                for w in watchers:
-                    strategy = w._strategy
-                    if len(strategy.delay_history) > 0:
-                        # Collect delays that indicate backed-off state (near max_interval)
-                        # Using 0.7 threshold to ensure we're testing at full backoff
-                        backed_off = [
-                            d
-                            for d in strategy.delay_history
-                            if d > strategy._max_interval * 0.7
-                        ]
-                        all_backed_off_delays.extend(backed_off)
-
-                # If we have enough backed-off samples, we can proceed
-                if len(all_backed_off_delays) >= required_samples:
-                    break
-
-                time.sleep(0.1)  # Check every 100ms
-
-            # Ensure we got enough samples before timeout
-            elapsed = time.monotonic() - start_time
-            assert elapsed < max_wait, (
-                f"Timeout: could not collect {required_samples} backed-off samples in {max_wait}s"
-            )
-
-            # Collect the same backed-off delays we were waiting for
-            all_delays = []
-            all_strategies = []
             for w in watchers:
                 strategy = w._strategy
-                all_strategies.append(strategy)
-                # Collect delays that indicate backed-off state (same criteria as wait loop)
-                backed_off_delays = [
-                    d
-                    for d in strategy.delay_history
-                    if d > strategy._max_interval * 0.7
-                ]
-                all_delays.extend(backed_off_delays)
+                if len(strategy.delay_history) > 0:
+                    # Collect delays that indicate backed-off state (near max_interval)
+                    # Using 0.7 threshold to ensure we're testing at full backoff
+                    backed_off = [
+                        d
+                        for d in strategy.delay_history
+                        if d > strategy._max_interval * 0.7
+                    ]
+                    all_backed_off_delays.extend(backed_off)
 
-            # We should have collected enough samples from the wait loop above
-            assert len(all_delays) >= 20, (
-                f"Should have at least 20 delay samples for jitter test, got {len(all_delays)}"
-            )
+            # If we have enough backed-off samples, we can proceed
+            if len(all_backed_off_delays) >= required_samples:
+                break
 
-            # Delays should vary due to jitter
-            unique_delays = set(all_delays)
+            time.sleep(0.1)  # Check every 100ms
 
-            # With jitter and multiple watchers, we should see variety
-            # But since we're using random.uniform, we might get some repeated values
-            # Require at least 2 unique values as absolute minimum
-            assert len(unique_delays) >= 2, (
-                f"Delays should vary due to jitter: got only {len(unique_delays)} unique values from {len(all_delays)} samples"
-            )
+        # Ensure we got enough samples before timeout
+        elapsed = time.monotonic() - start_time
+        assert elapsed < max_wait, (
+            f"Timeout: could not collect {required_samples} backed-off samples in {max_wait}s"
+        )
 
-            # Calculate the actual base delay for backed-off state
-            actual_base_delay = all_strategies[0]._max_interval  # 0.1
-
-            # Check jitter range against actual base delay
-            min_delay = min(all_delays)
-            max_delay = max(all_delays)
-
-            # With jitter factor of 0.2 (±20%), delays should be:
-            # theoretical min: 0.1 * (1 - 0.2) = 0.08
-            # theoretical max: 0.1 * (1 + 0.2) = 0.12
-            # Allow some tolerance for timing/rounding issues
-            assert min_delay >= actual_base_delay * 0.70, (
-                f"Min delay {min_delay} should be >= {actual_base_delay * 0.70} (with tolerance)"
-            )
-            assert max_delay <= actual_base_delay * 1.30, (
-                f"Max delay {max_delay} should be <= {actual_base_delay * 1.30} (with tolerance)"
-            )
-
-            # Verify we have some spread of delays (not all identical)
-            # With many samples, even a small spread shows jitter is working
-            delay_spread = max_delay - min_delay
-            assert delay_spread > 0, (
-                f"Delay spread should be non-zero to show jitter is active, got {delay_spread}"
-            )
-
-            # If we have enough unique values, check for reasonable spread
-            if len(unique_delays) >= 5:
-                assert delay_spread >= actual_base_delay * 0.05, (
-                    f"With {len(unique_delays)} unique values, spread {delay_spread} should be at least 5% of base delay"
-                )
-
-            # Cleanup watchers
-            for w in watchers:
-                try:
-                    w.stop()
-                    if sys.platform == "win32":
-                        time.sleep(0.5)  # Allow threads to terminate
-                except Exception:
-                    pass  # Ignore errors during cleanup
-        finally:
-            # Restore original config value
-            _config["BROKER_JITTER_FACTOR"] = original_jitter
-
-            # Delete the watchers list to clean up references
-            for w in watchers:
-                del w
-            # On Windows, add a small delay to ensure threads fully terminate
-            # and file handles are released before closing the database
-
-            if sys.platform == "win32":
-                time.sleep(1)
-
-            # Now safe to close the broker
-            broker.close()
-
-
-def test_burst_mode_with_peek_mode(no_jitter) -> None:
-    """Test burst mode behavior in peek mode."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-        watcher = None
-        try:
-            peeked_messages = []
-
-            def handler(msg, ts) -> None:
-                peeked_messages.append((msg, ts))
-
-            watcher = InstrumentedQueueWatcher(
-                "test_queue", handler, db=db_path, peek=True
-            )
-            strategy = watcher._strategy
-
-            watcher.run_in_thread()
-
-            # Let it start and potentially back off
-            time.sleep(0.2)
-
-            # Record state before message
-            delays_before = len(strategy.delay_history)
-
-            # Add first message
-            broker.write("test_queue", "message_1")
-
-            # Wait for first peek
-            wait_for_condition(
-                lambda: len(peeked_messages) == 1,
-                timeout=1.0,
-                message="Should peek first message",
-            )
-
-            # In peek mode with since_timestamp, same message won't be peeked again
-            # Add more messages to verify continued burst mode
-            for i in range(2, 5):
-                broker.write("test_queue", f"message_{i}")
-                time.sleep(0.01)
-
-            # Wait for all peeks
-            wait_for_condition(
-                lambda: len(peeked_messages) == 4,
-                timeout=1.0,
-                message="Should peek all messages",
-            )
-
-            # Verify messages were peeked in order and only once each
-            assert [msg for msg, _ in peeked_messages] == [
-                "message_1",
-                "message_2",
-                "message_3",
-                "message_4",
+        # Collect the same backed-off delays we were waiting for
+        all_delays = []
+        all_strategies = []
+        for w in watchers:
+            strategy = w._strategy
+            all_strategies.append(strategy)
+            # Collect delays that indicate backed-off state (same criteria as wait loop)
+            backed_off_delays = [
+                d for d in strategy.delay_history if d > strategy._max_interval * 0.7
             ]
+            all_delays.extend(backed_off_delays)
 
-            # Verify burst mode was maintained during message processing
-            new_delays = strategy.delay_history[delays_before:]
-            zero_count = sum(1 for d in new_delays if d == 0)
-            assert zero_count > 5, (
-                "Should maintain burst mode while processing messages"
+        # We should have collected enough samples from the wait loop above
+        assert len(all_delays) >= 20, (
+            f"Should have at least 20 delay samples for jitter test, got {len(all_delays)}"
+        )
+
+        # Delays should vary due to jitter
+        unique_delays = set(all_delays)
+
+        # With jitter and multiple watchers, we should see variety
+        # But since we're using random.uniform, we might get some repeated values
+        # Require at least 2 unique values as absolute minimum
+        assert len(unique_delays) >= 2, (
+            f"Delays should vary due to jitter: got only {len(unique_delays)} unique values from {len(all_delays)} samples"
+        )
+
+        # Calculate the actual base delay for backed-off state
+        actual_base_delay = all_strategies[0]._max_interval  # 0.1
+
+        # Check jitter range against actual base delay
+        min_delay = min(all_delays)
+        max_delay = max(all_delays)
+
+        # With jitter factor of 0.2 (±20%), delays should be:
+        # theoretical min: 0.1 * (1 - 0.2) = 0.08
+        # theoretical max: 0.1 * (1 + 0.2) = 0.12
+        # Allow some tolerance for timing/rounding issues
+        assert min_delay >= actual_base_delay * 0.70, (
+            f"Min delay {min_delay} should be >= {actual_base_delay * 0.70} (with tolerance)"
+        )
+        assert max_delay <= actual_base_delay * 1.30, (
+            f"Max delay {max_delay} should be <= {actual_base_delay * 1.30} (with tolerance)"
+        )
+
+        # Verify we have some spread of delays (not all identical)
+        # With many samples, even a small spread shows jitter is working
+        delay_spread = max_delay - min_delay
+        assert delay_spread > 0, (
+            f"Delay spread should be non-zero to show jitter is active, got {delay_spread}"
+        )
+
+        # If we have enough unique values, check for reasonable spread
+        if len(unique_delays) >= 5:
+            assert delay_spread >= actual_base_delay * 0.05, (
+                f"With {len(unique_delays)} unique values, spread {delay_spread} should be at least 5% of base delay"
             )
 
-            # Verify messages are still in queue (peek doesn't remove them)
-            # Use peek_many to get all messages, which doesn't remove them
-            messages = list(broker.peek_many("test_queue", limit=10))
-            assert len(messages) == 4, "All messages should still be in queue"
+        # Cleanup watchers
+        for w in watchers:
+            try:
+                w.stop()
+                if sys.platform == "win32":
+                    time.sleep(0.5)  # Allow threads to terminate
+            except Exception:
+                pass  # Ignore errors during cleanup
+    finally:
+        # Restore original config value
+        _config["BROKER_JITTER_FACTOR"] = original_jitter
 
-        finally:
-            if watcher is not None:
-                watcher.stop()
-            broker.close()
+        # Delete the watchers list to clean up references
+        for w in watchers:
+            del w
+        # On Windows, add a small delay to ensure threads fully terminate
+        # and file handles are released before closing the database
+
+        if sys.platform == "win32":
+            time.sleep(1)
+
+        # Now safe to close the broker
+        broker.close()
 
 
-def test_burst_mode_state_transitions(no_jitter) -> None:
+def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
+    """Test burst mode behavior in peek mode."""
+    broker = make_broker(broker_target)
+    watcher = None
+    try:
+        peeked_messages = []
+
+        def handler(msg, ts) -> None:
+            peeked_messages.append((msg, ts))
+
+        watcher = InstrumentedQueueWatcher(
+            "test_queue", handler, db=broker_target, peek=True
+        )
+        strategy = watcher._strategy
+
+        watcher.run_in_thread()
+
+        # Let it start and potentially back off
+        time.sleep(0.2)
+
+        # Record state before message
+        delays_before = len(strategy.delay_history)
+
+        # Add first message
+        broker.write("test_queue", "message_1")
+
+        # Wait for first peek
+        wait_for_condition(
+            lambda: len(peeked_messages) == 1,
+            timeout=1.0,
+            message="Should peek first message",
+        )
+
+        # In peek mode with since_timestamp, same message won't be peeked again
+        # Add more messages to verify continued burst mode
+        for i in range(2, 5):
+            broker.write("test_queue", f"message_{i}")
+            time.sleep(0.01)
+
+        # Wait for all peeks
+        wait_for_condition(
+            lambda: len(peeked_messages) == 4,
+            timeout=1.0,
+            message="Should peek all messages",
+        )
+
+        # Verify messages were peeked in order and only once each
+        assert [msg for msg, _ in peeked_messages] == [
+            "message_1",
+            "message_2",
+            "message_3",
+            "message_4",
+        ]
+
+        # Verify burst mode was maintained during message processing
+        new_delays = strategy.delay_history[delays_before:]
+        zero_count = sum(1 for d in new_delays if d == 0)
+        assert zero_count > 5, "Should maintain burst mode while processing messages"
+
+        # Verify messages are still in queue (peek doesn't remove them)
+        # Use peek_many to get all messages, which doesn't remove them
+        messages = list(broker.peek_many("test_queue", limit=10))
+        assert len(messages) == 4, "All messages should still be in queue"
+
+    finally:
+        if watcher is not None:
+            watcher.stop()
+        broker.close()
+
+
+def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:
     """Test transitions between burst and backed-off states."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        broker = BrokerDB(db_path)
-        watcher = None
-        try:
-            processed_messages = []
+    broker = make_broker(broker_target)
+    watcher = None
+    try:
+        processed_messages = []
 
-            def handler(msg, ts) -> None:
-                processed_messages.append(msg)
+        def handler(msg, ts) -> None:
+            processed_messages.append(msg)
 
-            watcher = InstrumentedQueueWatcher("test_queue", handler, db=db_path)
-            strategy = watcher._strategy
+        watcher = InstrumentedQueueWatcher("test_queue", handler, db=broker_target)
+        strategy = watcher._strategy
 
-            watcher.run_in_thread()
+        watcher.run_in_thread()
 
-            # Phase 1: Verify initial burst mode (zero delays)
-            def initial_burst_mode():
-                if len(strategy.delay_history) < 5:
-                    return False
-                # Should see zero delays in burst mode
-                return all(d == 0 for d in strategy.delay_history[:5])
+        # Phase 1: Verify initial burst mode (zero delays)
+        def initial_burst_mode():
+            if len(strategy.delay_history) < 5:
+                return False
+            # Should see zero delays in burst mode
+            return all(d == 0 for d in strategy.delay_history[:5])
 
-            wait_for_condition(
-                initial_burst_mode,
-                timeout=1.0,
-                message="Should start in burst mode with zero delays",
-            )
+        wait_for_condition(
+            initial_burst_mode,
+            timeout=1.0,
+            message="Should start in burst mode with zero delays",
+        )
 
-            # Phase 2: Wait for backoff (non-zero delays)
-            def has_backed_off():
-                if len(strategy.delay_history) < 120:  # Need enough history
-                    return False
-                # Check recent delays are non-zero
-                recent = strategy.delay_history[-10:]
-                return all(d > 0 for d in recent)
+        # Phase 2: Wait for backoff (non-zero delays)
+        def has_backed_off():
+            if len(strategy.delay_history) < 120:  # Need enough history
+                return False
+            # Check recent delays are non-zero
+            recent = strategy.delay_history[-10:]
+            return all(d > 0 for d in recent)
 
-            wait_for_condition(
-                has_backed_off,
-                timeout=2.0,
-                message="Should back off when no messages",
-            )
+        wait_for_condition(
+            has_backed_off,
+            timeout=2.0,
+            message="Should back off when no messages",
+        )
 
-            # Phase 3: Add message and verify burst reset
-            delays_before_msg = len(strategy.delay_history)
-            broker.write("test_queue", "wake up!")
+        # Phase 3: Add message and verify burst reset
+        delays_before_msg = len(strategy.delay_history)
+        broker.write("test_queue", "wake up!")
 
-            # Wait for message processing
-            wait_for_condition(
-                lambda: len(processed_messages) == 1,
-                timeout=1.0,
-                message="Message should be processed",
-            )
+        # Wait for message processing
+        wait_for_condition(
+            lambda: len(processed_messages) == 1,
+            timeout=1.0,
+            message="Message should be processed",
+        )
 
-            # Verify return to burst mode
-            def returned_to_burst():
-                if len(strategy.delay_history) <= delays_before_msg + 3:
-                    return False
-                new_delays = strategy.delay_history[delays_before_msg:]
-                # Should see zero delays after processing message
-                zero_count = sum(1 for d in new_delays if d == 0)
-                return zero_count >= 3
+        # Verify return to burst mode
+        def returned_to_burst():
+            if len(strategy.delay_history) <= delays_before_msg + 3:
+                return False
+            new_delays = strategy.delay_history[delays_before_msg:]
+            # Should see zero delays after processing message
+            zero_count = sum(1 for d in new_delays if d == 0)
+            return zero_count >= 3
 
-            wait_for_condition(
-                returned_to_burst,
-                timeout=1.0,
-                message="Should return to burst mode after message",
-            )
+        wait_for_condition(
+            returned_to_burst,
+            timeout=1.0,
+            message="Should return to burst mode after message",
+        )
 
-            # Phase 4: Continuous activity should maintain burst mode
-            start_count = len(strategy.delay_history)
+        # Phase 4: Continuous activity should maintain burst mode
+        start_count = len(strategy.delay_history)
 
-            # Add messages continuously
-            for i in range(5):
-                broker.write("test_queue", f"message_{i}")
-                time.sleep(0.02)  # Small delay between messages
+        # Add messages continuously
+        for i in range(5):
+            broker.write("test_queue", f"message_{i}")
+            time.sleep(0.02)  # Small delay between messages
 
-            # Wait for all messages
-            wait_for_condition(
-                lambda: len(processed_messages) == 6,  # 1 + 5 messages
-                timeout=2.0,
-                message="All messages should be processed",
-            )
+        # Wait for all messages
+        wait_for_condition(
+            lambda: len(processed_messages) == 6,  # 1 + 5 messages
+            timeout=2.0,
+            message="All messages should be processed",
+        )
 
-            # Verify stayed in burst mode during activity
-            activity_delays = strategy.delay_history[start_count:]
-            zero_count = sum(1 for d in activity_delays if d == 0)
-            assert zero_count > len(activity_delays) * 0.8, (
-                "Should mostly stay in burst mode with continuous activity"
-            )
+        # Verify stayed in burst mode during activity
+        activity_delays = strategy.delay_history[start_count:]
+        zero_count = sum(1 for d in activity_delays if d == 0)
+        assert zero_count > len(activity_delays) * 0.8, (
+            "Should mostly stay in burst mode with continuous activity"
+        )
 
-        finally:
-            if watcher is not None:
-                watcher.stop()
-            broker.close()
+    finally:
+        if watcher is not None:
+            watcher.stop()
+        broker.close()
 
 
 if __name__ == "__main__":

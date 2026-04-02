@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
 from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
+from simplebroker._targets import ResolvedTarget
 from simplebroker.commands import cmd_status
-from simplebroker.sbqueue import Queue
+
+from .helper_scripts.broker_factory import make_queue
+
+pytestmark = [pytest.mark.shared]
 
 
 def parse_status_output(output: str) -> dict[str, int]:
@@ -27,16 +30,17 @@ class TestCmdStatus:
     """Unit tests for commands.cmd_status."""
 
     def test_cmd_status_success(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, broker_target: ResolvedTarget, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """cmd_status prints database metrics and returns success."""
-        db_path = tmp_path / ".broker.db"
-
         # Populate the database with a small amount of data via public API
-        queue = Queue("tasks", db_path=str(db_path))
-        queue.write("hello")
+        queue = make_queue("tasks", broker_target)
+        try:
+            queue.write("hello")
+        finally:
+            queue.close()
 
-        rc = cmd_status(str(db_path))
+        rc = cmd_status(broker_target)
         captured = capsys.readouterr()
 
         assert rc == EXIT_SUCCESS
@@ -48,15 +52,16 @@ class TestCmdStatus:
         assert stats["db_size"] > 0
 
     def test_cmd_status_json_output(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, broker_target: ResolvedTarget, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """cmd_status emits JSON when requested."""
-        db_path = tmp_path / ".broker.db"
+        queue = make_queue("tasks", broker_target)
+        try:
+            queue.write("hello")
+        finally:
+            queue.close()
 
-        queue = Queue("tasks", db_path=str(db_path))
-        queue.write("hello")
-
-        rc = cmd_status(str(db_path), json_output=True)
+        rc = cmd_status(broker_target, json_output=True)
         captured = capsys.readouterr()
 
         assert rc == EXIT_SUCCESS

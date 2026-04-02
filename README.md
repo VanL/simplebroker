@@ -93,6 +93,44 @@ The CLI is available as both `broker` and `simplebroker`.
 - Python 3.10+
 - SQLite 3.35+ (released March 2021) - required for `DELETE...RETURNING` support
 
+### Advanced: External Backend Plugins
+
+SimpleBroker core remains SQLite-first and ships with SQLite only.
+
+If you need a different backend, use an external plugin package through the
+public extension seam. This repository includes a sibling Postgres package for
+that purpose:
+
+```bash
+uv pip install -e "./extensions/simplebroker_pg[dev]"
+```
+
+Explicit Python usage:
+
+```python
+from simplebroker import Queue
+from simplebroker_pg import PostgresRunner
+
+runner = PostgresRunner(
+    "postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test",
+    schema="simplebroker_app",
+)
+
+queue = Queue("jobs", runner=runner, persistent=True)
+```
+
+CLI/project usage is selected through a `.simplebroker.toml` file in the project
+root:
+
+```toml
+version = 1
+backend = "postgres"
+target = "postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test"
+
+[backend_options]
+schema = "simplebroker_app"
+```
+
 ## Quick Start
 
 ```bash
@@ -827,6 +865,28 @@ See [`examples/`](examples/) directory for more patterns including async process
 - **Scalability**: Tested with 100k+ messages per queue
 - **Optimization**: Use `--all` for bulk operations
 
+### Cross-Backend Benchmarking
+
+If you want an apples-to-apples CLI benchmark for SQLite vs Postgres, the repo
+includes a black-box harness that reuses the same `run_cli()` hook as the test
+suite:
+
+```bash
+# Quick SQLite-only smoke run
+uv run python -m tests.backend_benchmark --backends sqlite --iterations 1 --warmups 0
+
+# SQLite vs Postgres comparison
+export SIMPLEBROKER_PG_TEST_DSN="postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test"
+uv run python -m tests.backend_benchmark --backends sqlite postgres
+
+# Machine-readable output
+uv run python -m tests.backend_benchmark --backends sqlite postgres --format json
+```
+
+The harness measures end-to-end CLI behavior for repeated single-message
+`write` and `read`, bulk `read --all`, bulk `move --all`, and repeated
+`--status --json` calls.
+
 ### Environment Variables
 
 <details>
@@ -1290,6 +1350,7 @@ uv sync --all-extras
 # Run tests
 uv run pytest              # Fast tests only
 uv run pytest -m ""        # All tests including slow ones
+uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
 
 # Lint and format
 uv run ruff check --fix simplebroker tests

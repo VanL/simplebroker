@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import Any, Protocol, cast
 
 from . import sqlite
-
-if TYPE_CHECKING:
-    from .._runner import SQLRunner
 
 DEFAULT_BACKEND = "sqlite"
 _INTERNAL_BACKEND_KEY = "_BROKER_INTERNAL_BACKEND"
@@ -40,55 +37,6 @@ class BuiltinBackend(Protocol):
     def setup_connection_phase(
         self, db_path: str, *, config: dict[str, Any]
     ) -> None: ...
-
-    def initialize_database(
-        self,
-        runner: SQLRunner,
-        *,
-        run_with_retry: Callable[[Callable[[], Any]], Any],
-    ) -> None: ...
-
-    def meta_table_exists(self, runner: SQLRunner) -> bool: ...
-
-    def ensure_schema_v2(
-        self,
-        runner: SQLRunner,
-        *,
-        current_version: int,
-        write_schema_version: Callable[[int], None],
-    ) -> None: ...
-
-    def ensure_schema_v3(
-        self,
-        runner: SQLRunner,
-        *,
-        current_version: int,
-        write_schema_version: Callable[[int], None],
-    ) -> None: ...
-
-    def ensure_schema_v4(
-        self,
-        runner: SQLRunner,
-        *,
-        current_version: int,
-        write_schema_version: Callable[[int], None],
-    ) -> None: ...
-
-    def delete_and_count_changes(
-        self, runner: SQLRunner, sql: str, params: tuple[Any, ...] = ()
-    ) -> int: ...
-
-    def database_size_bytes(self, db_path: str | Path | None) -> int: ...
-
-    def get_data_version(self, runner: SQLRunner) -> int | None: ...
-
-    def has_claimed_messages(self, runner: SQLRunner) -> bool: ...
-
-    def delete_claimed_batch(self, runner: SQLRunner, *, batch_size: int) -> None: ...
-
-    def compact_database(self, runner: SQLRunner) -> None: ...
-
-    def maybe_run_incremental_vacuum(self, runner: SQLRunner) -> None: ...
 
 
 _BUILTIN_BACKENDS: dict[str, BuiltinBackend] = {

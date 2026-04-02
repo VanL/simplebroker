@@ -13,6 +13,7 @@ from queue import Empty, Queue
 from typing import IO
 
 logger = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class OutputReader(threading.Thread):
@@ -204,6 +205,17 @@ def managed_subprocess(
     if isinstance(cmd, str):
         cmd = cmd.split()
 
+    full_env = os.environ.copy()
+    if env:
+        full_env.update(env)
+    full_env["PYTHONIOENCODING"] = "utf-8"
+    full_env["PYTHONUNBUFFERED"] = "1"
+    project_paths = [str(PROJECT_ROOT)]
+    existing_pythonpath = full_env.get("PYTHONPATH")
+    if existing_pythonpath:
+        project_paths.append(existing_pythonpath)
+    full_env["PYTHONPATH"] = os.pathsep.join(project_paths)
+
     # Setup stdio
     stdin_pipe = subprocess.PIPE if stdin is not None else None
     stdout_pipe = subprocess.PIPE if capture_output else None
@@ -212,7 +224,7 @@ def managed_subprocess(
     # Merge popen_kwargs
     popen_args = {
         "cwd": cwd,
-        "env": env,
+        "env": full_env,
         "stdin": stdin_pipe,
         "stdout": stdout_pipe,
         "stderr": stderr_pipe,

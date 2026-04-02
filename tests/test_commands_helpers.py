@@ -10,6 +10,8 @@ import pytest
 from simplebroker._constants import EXIT_ERROR, EXIT_QUEUE_EMPTY, EXIT_SUCCESS
 from simplebroker.commands import _process_queue_fetch, _resolve_timestamp_filters
 
+pytestmark = [pytest.mark.shared]
+
 
 class TestResolveTimestampFilters:
     def test_valid_filters(self, capsys: pytest.CaptureFixture[str]) -> None:

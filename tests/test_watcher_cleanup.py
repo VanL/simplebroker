@@ -5,24 +5,24 @@ import time
 
 import pytest
 
-from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
 # Import cleanup helper
 from .helper_scripts.cleanup import register_watcher
 
+pytestmark = [pytest.mark.shared]
+
 
 class TestWatcherCleanup:
     """Test watcher cleanup functionality."""
 
-    def test_watcher_auto_cleanup(self, temp_db):
+    def test_watcher_auto_cleanup(self, broker_target):
         """Test that watchers are automatically cleaned up."""
         # Get initial thread count
         initial_threads = len(threading.enumerate())
 
         # Create and start a watcher
-        db = BrokerDB(temp_db)
-        watcher = QueueWatcher("test_queue", lambda m, t: None, db=db)
+        watcher = QueueWatcher("test_queue", lambda m, t: None, db=broker_target)
         register_watcher(watcher)  # Register for automatic cleanup
         thread = watcher.run_in_thread()
 
@@ -33,18 +33,15 @@ class TestWatcherCleanup:
         assert len(threading.enumerate()) > initial_threads
 
         # Don't stop explicitly - let cleanup handle it
-        # The cleanup fixture should stop this watcher
 
-    def test_multiple_watchers_cleanup(self, temp_db):
+    def test_multiple_watchers_cleanup(self, broker_target):
         """Test multiple watchers are cleaned up."""
-        db = BrokerDB(temp_db)
-
         # Create multiple watchers
         watchers = []
         threads = []
 
         for i in range(3):
-            watcher = QueueWatcher(f"queue_{i}", lambda m, t: None, db=db)
+            watcher = QueueWatcher(f"queue_{i}", lambda m, t: None, db=broker_target)
             register_watcher(watcher)  # Register for automatic cleanup
             thread = watcher.run_in_thread()
             watchers.append(watcher)
@@ -56,18 +53,16 @@ class TestWatcherCleanup:
 
         # Don't stop them - cleanup should handle it
 
-    def test_watcher_stops_quickly(self, temp_db):
+    def test_watcher_stops_quickly(self, broker, broker_target):
         """Test that watchers stop within reasonable time."""
-        db = BrokerDB(temp_db)
-
         # Add a message
-        db.write("test_queue", "test message")
+        broker.write("test_queue", "test message")
 
         # Create watcher with slow handler
         def slow_handler(msg, ts):
             time.sleep(0.5)  # Simulate slow processing
 
-        watcher = QueueWatcher("test_queue", slow_handler, db=db)
+        watcher = QueueWatcher("test_queue", slow_handler, db=broker_target)
         register_watcher(watcher)  # Register for automatic cleanup
         thread = watcher.run_in_thread()
 
@@ -88,9 +83,3 @@ class TestWatcherCleanup:
             if thread.is_alive():
                 watcher.stop()
                 thread.join(timeout=1.0)
-
-
-@pytest.fixture
-def temp_db(tmp_path):
-    """Create a temporary database for testing."""
-    return tmp_path / "test.db"

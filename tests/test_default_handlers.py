@@ -13,6 +13,8 @@ from simplebroker.watcher import (
     simple_print_handler,
 )
 
+pytestmark = [pytest.mark.shared]
+
 
 class TestDefaultHandlers:
     """Test the default message handlers."""

@@ -17,14 +17,24 @@ from ._constants import (
     MAX_MESSAGE_SIZE,
 )
 from ._exceptions import TimestampError
+from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
 from .db import BrokerDB, DBConnection
 from .helpers import _is_valid_sqlite_db
 from .sbqueue import Queue
 from .watcher import QueueMoveWatcher, QueueWatcher
 
+DBTarget = str | ResolvedTarget
 
-def _resolve_alias_name(db_path: str, name: str) -> tuple[str, str | None]:
+
+def _target_string(db_target: DBTarget) -> str:
+    """Return a human-readable target string."""
+    if isinstance(db_target, ResolvedTarget):
+        return db_target.target
+    return db_target
+
+
+def _resolve_alias_name(db_path: DBTarget, name: str) -> tuple[str, str | None]:
     """Resolve a queue name or alias, returning canonical queue and alias used."""
     if not name.startswith(ALIAS_PREFIX):
         return name, None
@@ -41,7 +51,7 @@ def _resolve_alias_name(db_path: str, name: str) -> tuple[str, str | None]:
     return target, alias_key
 
 
-def cmd_alias_list(db_path: str, target: str | None = None) -> int:
+def cmd_alias_list(db_path: DBTarget, target: str | None = None) -> int:
     with DBConnection(db_path) as conn:
         db = cast(BrokerDB, conn.get_connection())
         if target:
@@ -57,7 +67,9 @@ def cmd_alias_list(db_path: str, target: str | None = None) -> int:
     return EXIT_SUCCESS
 
 
-def cmd_alias_add(db_path: str, alias: str, target: str, *, quiet: bool = False) -> int:
+def cmd_alias_add(
+    db_path: DBTarget, alias: str, target: str, *, quiet: bool = False
+) -> int:
     with DBConnection(db_path) as conn:
         db = cast(BrokerDB, conn.get_connection())
         if quiet:
@@ -69,7 +81,7 @@ def cmd_alias_add(db_path: str, alias: str, target: str, *, quiet: bool = False)
     return EXIT_SUCCESS
 
 
-def cmd_alias_remove(db_path: str, alias: str) -> int:
+def cmd_alias_remove(db_path: DBTarget, alias: str) -> int:
     with DBConnection(db_path) as conn:
         db = cast(BrokerDB, conn.get_connection())
 
@@ -331,7 +343,7 @@ def _process_queue_fetch(
     return EXIT_SUCCESS
 
 
-def cmd_write(db_path: str, queue_name: str, message: str) -> int:
+def cmd_write(db_path: DBTarget, queue_name: str, message: str) -> int:
     """Write message to queue using Queue API.
 
     Args:
@@ -350,7 +362,7 @@ def cmd_write(db_path: str, queue_name: str, message: str) -> int:
 
 
 def cmd_read(
-    db_path: str,
+    db_path: DBTarget,
     queue_name: str,
     all_messages: bool = False,
     json_output: bool = False,
@@ -393,7 +405,7 @@ def cmd_read(
 
 
 def cmd_peek(
-    db_path: str,
+    db_path: DBTarget,
     queue_name: str,
     all_messages: bool = False,
     json_output: bool = False,
@@ -434,7 +446,9 @@ def cmd_peek(
         )
 
 
-def cmd_list(db_path: str, show_stats: bool = False, pattern: str | None = None) -> int:
+def cmd_list(
+    db_path: DBTarget, show_stats: bool = False, pattern: str | None = None
+) -> int:
     """list all queues with counts.
 
     Args:
@@ -483,7 +497,7 @@ def cmd_list(db_path: str, show_stats: bool = False, pattern: str | None = None)
     return EXIT_SUCCESS
 
 
-def cmd_status(db_path: str, *, json_output: bool = False) -> int:
+def cmd_status(db_path: DBTarget, *, json_output: bool = False) -> int:
     """Show high-level database status metrics.
 
     Args:
@@ -508,7 +522,9 @@ def cmd_status(db_path: str, *, json_output: bool = False) -> int:
 
 
 def cmd_delete(
-    db_path: str, queue_name: str | None = None, message_id_str: str | None = None
+    db_path: DBTarget,
+    queue_name: str | None = None,
+    message_id_str: str | None = None,
 ) -> int:
     """Remove messages from queue(s).
 
@@ -548,7 +564,7 @@ def cmd_delete(
 
 
 def cmd_move(
-    db_path: str,
+    db_path: DBTarget,
     source_queue: str,
     dest_queue: str,
     all_messages: bool = False,
@@ -615,7 +631,7 @@ def cmd_move(
             if result is None:
                 return EXIT_QUEUE_EMPTY
 
-            message, timestamp = result  # type: ignore[misc]
+            message, timestamp = cast(tuple[str, int], result)
             _output_message(message, timestamp, json_output, show_timestamps, False)
             return EXIT_SUCCESS
 
@@ -634,7 +650,7 @@ def cmd_move(
                 # Output each moved message
                 warned_newlines = False
                 for result in results:
-                    message, timestamp = result  # type: ignore[misc]
+                    message, timestamp = cast(tuple[str, int], result)
                     warned_newlines = _output_message(
                         message,
                         timestamp,
@@ -661,7 +677,7 @@ def cmd_move(
                 )
                 try:
                     result = next(gen)
-                    message, timestamp = result  # type: ignore[misc]
+                    message, timestamp = cast(tuple[str, int], result)
                     _output_message(
                         message, timestamp, json_output, show_timestamps, False
                     )
@@ -674,12 +690,12 @@ def cmd_move(
                 if result is None:
                     return EXIT_QUEUE_EMPTY
 
-                message, timestamp = result  # type: ignore[misc]
+                message, timestamp = cast(tuple[str, int], result)
                 _output_message(message, timestamp, json_output, show_timestamps, False)
                 return EXIT_SUCCESS
 
 
-def cmd_broadcast(db_path: str, message: str, pattern: str | None = None) -> int:
+def cmd_broadcast(db_path: DBTarget, message: str, pattern: str | None = None) -> int:
     """Send message to all queues.
 
     Args:
@@ -701,7 +717,7 @@ def cmd_broadcast(db_path: str, message: str, pattern: str | None = None) -> int
     return EXIT_SUCCESS if queue_count > 0 else EXIT_QUEUE_EMPTY
 
 
-def cmd_vacuum(db_path: str, compact: bool = False) -> int:
+def cmd_vacuum(db_path: DBTarget, compact: bool = False) -> int:
     """Vacuum claimed messages from the database.
 
     Args:
@@ -736,7 +752,7 @@ def cmd_vacuum(db_path: str, compact: bool = False) -> int:
 
 
 def cmd_watch(
-    db_path: str,
+    db_path: DBTarget,
     queue_name: str,
     peek: bool = False,
     json_output: bool = False,
@@ -848,7 +864,7 @@ def cmd_watch(
     return EXIT_SUCCESS
 
 
-def cmd_init(db_path: str, quiet: bool) -> int:
+def cmd_init(db_path: DBTarget, quiet: bool) -> int:
     """Initialize a SimpleBroker database at the specified path.
 
     Args:
@@ -873,6 +889,53 @@ def cmd_init(db_path: str, quiet: bool) -> int:
     Security Note:
         Never destroys existing data. SimpleBroker init is non-destructive by design.
     """
+    if isinstance(db_path, ResolvedTarget):
+        target_str = db_path.target
+        target_path = db_path.target_path
+
+        if db_path.backend_name == "sqlite" and target_path is not None:
+            if target_path.exists():
+                if _is_valid_sqlite_db(target_path):
+                    if not quiet:
+                        print(f"SimpleBroker database already exists: {target_str}")
+                    return EXIT_SUCCESS
+
+                print(
+                    f"Error: File exists but is not a SimpleBroker database: {target_str}\n"
+                    f"Please remove the file manually and run 'broker init' again.",
+                    file=sys.stderr,
+                )
+                return EXIT_ERROR
+
+        else:
+            try:
+                db_path.plugin.validate_target(
+                    target_str,
+                    backend_options=db_path.backend_options,
+                    verify_initialized=True,
+                )
+            except Exception:
+                pass
+            else:
+                if not quiet:
+                    print(f"SimpleBroker target already exists: {target_str}")
+                return EXIT_SUCCESS
+
+        try:
+            db_path.plugin.initialize_target(
+                target_str,
+                backend_options=db_path.backend_options,
+            )
+            if not quiet:
+                if db_path.backend_name == "sqlite":
+                    print(f"Initialized SimpleBroker database: {target_str}")
+                else:
+                    print(f"Initialized SimpleBroker target: {target_str}")
+            return EXIT_SUCCESS
+        except Exception as e:
+            print(f"Error initializing database: {e}", file=sys.stderr)
+            return EXIT_ERROR
+
     db_path_obj = Path(db_path)
 
     # Check if database already exists

@@ -192,6 +192,7 @@ class TestCLIMissingValues:
         assert code == 1
         assert "error: option --file requires an argument" in stderr
 
+    @pytest.mark.sqlite_only
     def test_valid_usage_after_fix(self, workdir: Path):
         """Test that valid usage still works after the fix."""
         # Create a subdirectory

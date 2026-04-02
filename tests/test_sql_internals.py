@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from simplebroker._sql import build_retrieve_query
+from simplebroker._sql import RetrieveQuerySpec, build_retrieve_query
 from simplebroker.db import BrokerDB
 
 
@@ -15,25 +15,73 @@ class TestSQLBuilders:
     def test_build_retrieve_query_peek(self):
         """Test building peek queries."""
         # Basic peek
-        query = build_retrieve_query("peek", ["queue = ?", "claimed = 0"])
+        query, params = build_retrieve_query(
+            "peek",
+            RetrieveQuerySpec(
+                queue="jobs",
+                limit=5,
+                offset=2,
+                exact_timestamp=None,
+                since_timestamp=None,
+                require_unclaimed=True,
+                target_queue=None,
+            ),
+        )
         assert "SELECT body, ts FROM messages" in query
         assert "WHERE queue = ? AND claimed = 0" in query
         assert "ORDER BY id" in query
         assert "LIMIT ?" in query
+        assert "OFFSET ?" in query
         assert "DELETE" not in query
+        assert params == ("jobs", 5, 2)
 
         # Peek with timestamp filter
-        query = build_retrieve_query("peek", ["queue = ?", "ts > ?", "claimed = 0"])
-        assert "WHERE queue = ? AND ts > ? AND claimed = 0" in query
+        query, params = build_retrieve_query(
+            "peek",
+            RetrieveQuerySpec(
+                queue="jobs",
+                limit=1,
+                offset=0,
+                exact_timestamp=None,
+                since_timestamp=123,
+                require_unclaimed=True,
+                target_queue=None,
+            ),
+        )
+        assert "WHERE queue = ? AND claimed = 0 AND ts > ?" in query
+        assert params == ("jobs", 123, 1, 0)
 
         # Peek with exact timestamp (optimized order)
-        query = build_retrieve_query("peek", ["ts = ?", "queue = ?"])
+        query, params = build_retrieve_query(
+            "peek",
+            RetrieveQuerySpec(
+                queue="jobs",
+                limit=1,
+                offset=0,
+                exact_timestamp=999,
+                since_timestamp=None,
+                require_unclaimed=True,
+                target_queue=None,
+            ),
+        )
         assert "WHERE ts = ? AND queue = ?" in query
+        assert params == (999, "jobs", 1, 0)
 
     def test_build_retrieve_query_claim(self):
         """Test building claim queries."""
         # Basic claim
-        query = build_retrieve_query("claim", ["queue = ?", "claimed = 0"])
+        query, params = build_retrieve_query(
+            "claim",
+            RetrieveQuerySpec(
+                queue="jobs",
+                limit=2,
+                offset=0,
+                exact_timestamp=None,
+                since_timestamp=None,
+                require_unclaimed=True,
+                target_queue=None,
+            ),
+        )
         assert "UPDATE messages" in query
         assert "SET claimed = 1" in query
         assert "WHERE id IN" in query
@@ -42,15 +90,39 @@ class TestSQLBuilders:
         assert "ORDER BY id" in query
         assert "LIMIT ?" in query
         assert "RETURNING body, ts" in query
+        assert params == ("jobs", 2)
 
         # Claim with timestamp filter
-        query = build_retrieve_query("claim", ["queue = ?", "ts > ?", "claimed = 0"])
-        assert "WHERE queue = ? AND ts > ? AND claimed = 0" in query
+        query, params = build_retrieve_query(
+            "claim",
+            RetrieveQuerySpec(
+                queue="jobs",
+                limit=2,
+                offset=0,
+                exact_timestamp=None,
+                since_timestamp=123,
+                require_unclaimed=True,
+                target_queue=None,
+            ),
+        )
+        assert "WHERE queue = ? AND claimed = 0 AND ts > ?" in query
+        assert params == ("jobs", 123, 2)
 
     def test_build_retrieve_query_move(self):
         """Test building move queries."""
         # Basic move
-        query = build_retrieve_query("move", ["queue = ?", "claimed = 0"])
+        query, params = build_retrieve_query(
+            "move",
+            RetrieveQuerySpec(
+                queue="jobs",
+                limit=3,
+                offset=0,
+                exact_timestamp=None,
+                since_timestamp=None,
+                require_unclaimed=True,
+                target_queue="done",
+            ),
+        )
         assert "UPDATE messages" in query
         assert "SET queue = ?, claimed = 0" in query  # Move also resets claimed flag
         assert "WHERE id IN" in query
@@ -59,24 +131,40 @@ class TestSQLBuilders:
         assert "ORDER BY id" in query
         assert "LIMIT ?" in query
         assert "RETURNING body, ts" in query
+        assert params == ("done", "jobs", 3)
 
         # Move with timestamp filter
-        query = build_retrieve_query("move", ["queue = ?", "ts > ?"])
+        query, params = build_retrieve_query(
+            "move",
+            RetrieveQuerySpec(
+                queue="jobs",
+                limit=1,
+                offset=0,
+                exact_timestamp=None,
+                since_timestamp=123,
+                require_unclaimed=False,
+                target_queue="done",
+            ),
+        )
         assert "WHERE queue = ? AND ts > ?" in query
+        assert "WHERE queue = ? AND claimed = 0 AND ts > ?" not in query
+        assert params == ("done", "jobs", 123, 1)
 
     def test_build_retrieve_query_invalid_operation(self):
         """Test that invalid operations raise errors."""
         with pytest.raises(ValueError, match="Invalid operation"):
-            build_retrieve_query("invalid", ["queue = ?"])
-
-    def test_build_retrieve_query_empty_conditions(self):
-        """Test with empty conditions list."""
-        # Should still generate valid SQL with empty WHERE clause
-        query = build_retrieve_query("peek", [])
-        assert "SELECT body, ts FROM messages" in query
-        assert "ORDER BY id" in query
-        # Empty conditions still creates WHERE clause, just empty
-        assert "WHERE" in query
+            build_retrieve_query(  # type: ignore[arg-type]
+                "invalid",
+                RetrieveQuerySpec(
+                    queue="jobs",
+                    limit=1,
+                    offset=0,
+                    exact_timestamp=None,
+                    since_timestamp=None,
+                    require_unclaimed=True,
+                    target_queue=None,
+                ),
+            )
 
 
 class TestRetrieveMethod:
@@ -322,43 +410,55 @@ class TestRetrieveMethod:
                     )
 
 
-class TestBuildWhereClause:
-    """Test the _build_where_clause method."""
+class TestBuildRetrieveSpec:
+    """Test the backend-neutral retrieve-query specification builder."""
 
-    def test_build_where_clause_basic(self):
-        """Test basic WHERE clause building."""
+    def test_build_retrieve_spec_basic(self):
+        """Test retrieve spec construction."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
             with BrokerDB(db_path) as db:
-                # Basic query
-                conditions, params = db._build_where_clause("test_queue")
-                assert "queue = ?" in conditions
-                assert "claimed = 0" in conditions
-                assert params == ["test_queue"]
-
-                # With since_timestamp
-                conditions, params = db._build_where_clause(
-                    "test_queue", since_timestamp=12345
+                spec = db._build_retrieve_spec("test_queue", 10)
+                assert spec == RetrieveQuerySpec(
+                    queue="test_queue",
+                    limit=10,
+                    offset=0,
+                    exact_timestamp=None,
+                    since_timestamp=None,
+                    require_unclaimed=True,
+                    target_queue=None,
                 )
-                assert "queue = ?" in conditions
-                assert "claimed = 0" in conditions
-                assert "ts > ?" in conditions
-                assert params == ["test_queue", 12345]
 
-                # With exact_timestamp (optimized order)
-                conditions, params = db._build_where_clause(
-                    "test_queue", exact_timestamp=67890
+                spec = db._build_retrieve_spec(
+                    "test_queue",
+                    1,
+                    exact_timestamp=67890,
+                    require_unclaimed=False,
                 )
-                assert conditions[0] == "ts = ?"  # ts first for index optimization
-                assert conditions[1] == "queue = ?"
-                assert "claimed = 0" in conditions
-                assert params == [67890, "test_queue"]
+                assert spec == RetrieveQuerySpec(
+                    queue="test_queue",
+                    limit=1,
+                    offset=0,
+                    exact_timestamp=67890,
+                    since_timestamp=None,
+                    require_unclaimed=False,
+                    target_queue=None,
+                )
 
-                # Without require_unclaimed
-                conditions, params = db._build_where_clause(
-                    "test_queue", require_unclaimed=False
+                spec = db._build_retrieve_spec(
+                    "test_queue",
+                    5,
+                    offset=2,
+                    target_queue="dest",
+                    since_timestamp=12345,
                 )
-                assert "queue = ?" in conditions
-                assert "claimed = 0" not in conditions
-                assert params == ["test_queue"]
+                assert spec == RetrieveQuerySpec(
+                    queue="test_queue",
+                    limit=5,
+                    offset=2,
+                    exact_timestamp=None,
+                    since_timestamp=12345,
+                    require_unclaimed=True,
+                    target_queue="dest",
+                )

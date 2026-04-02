@@ -7,9 +7,13 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from simplebroker import Queue
 from simplebroker._runner import SetupPhase, SQLiteRunner
 from simplebroker.db import BrokerCore, BrokerDB
+
+pytestmark = [pytest.mark.sqlite_only]
 
 
 class RecordingRunner:

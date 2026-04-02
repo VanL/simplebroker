@@ -1,9 +1,15 @@
 """Public extension points for SimpleBroker.
 
 This module provides the public API for extending SimpleBroker with custom
-runners and accessing core components like timestamp generation.
+runners, backend plugins, and core components like timestamp generation.
 """
 
+from ._backend_plugins import (
+    ActivityWaiter,
+    BackendAwareRunner,
+    BackendPlugin,
+    get_backend_plugin,
+)
 from ._exceptions import (
     BrokerError,
     DataError,
@@ -21,6 +27,10 @@ __all__ = [
     "SQLRunner",
     "SQLiteRunner",
     "SetupPhase",
+    "BackendPlugin",
+    "ActivityWaiter",
+    "BackendAwareRunner",
+    "get_backend_plugin",
     "TimestampGenerator",
     # Exceptions
     "BrokerError",

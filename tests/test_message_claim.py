@@ -16,11 +16,14 @@ import concurrent.futures as cf
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
 
 
+@pytest.mark.sqlite_only
 def test_messages_marked_as_claimed_not_deleted(workdir: Path):
     """Test that messages are marked as claimed (claimed=1) instead of being deleted."""
     db_path = workdir / "test.db"
@@ -59,6 +62,7 @@ def test_messages_marked_as_claimed_not_deleted(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_claimed_messages_not_returned_by_subsequent_reads(workdir: Path):
     """Test that claimed messages are not returned by subsequent read operations."""
     db_path = workdir / "test.db"
@@ -87,6 +91,7 @@ def test_claimed_messages_not_returned_by_subsequent_reads(workdir: Path):
         assert len(last_check) == 0
 
 
+@pytest.mark.sqlite_only
 def test_vacuum_removes_claimed_messages(workdir: Path):
     """Test that vacuum process properly removes claimed messages."""
     db_path = workdir / "test.db"
@@ -124,6 +129,7 @@ def test_vacuum_removes_claimed_messages(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_automatic_vacuum_trigger(workdir: Path):
     """Test automatic vacuum triggers based on 10% threshold."""
 
@@ -179,6 +185,7 @@ def _concurrent_reader_worker(args: tuple[int, str, str]) -> list[str]:
     return messages
 
 
+@pytest.mark.sqlite_only
 def test_concurrent_reads_no_duplicate_delivery(workdir: Path):
     """Test that concurrent reads don't deliver the same message twice."""
     db_path = workdir / "test.db"
@@ -212,6 +219,7 @@ def test_concurrent_reads_no_duplicate_delivery(workdir: Path):
     assert set(all_messages) == expected
 
 
+@pytest.mark.sqlite_only
 def test_schema_migration_adds_claimed_column(workdir: Path):
     """Test that schema migration properly adds claimed column to existing databases."""
     db_path = workdir / "test.db"
@@ -260,6 +268,7 @@ def test_schema_migration_adds_claimed_column(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_schema_migration_idempotent(workdir: Path):
     """Test that schema migration is idempotent and can run multiple times safely."""
     db_path = workdir / "test.db"
@@ -322,6 +331,7 @@ def test_backward_compatibility_cli(workdir: Path):
     assert "compat_queue" in out
 
 
+@pytest.mark.sqlite_only
 def test_peek_does_not_claim(workdir: Path):
     """Test that peek operations do not mark messages as claimed."""
     db_path = workdir / "test.db"
@@ -356,6 +366,7 @@ def test_peek_does_not_claim(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_vacuum_with_mixed_queues(workdir: Path):
     """Test vacuum behavior with multiple queues having claimed and unclaimed messages."""
     db_path = workdir / "test.db"
@@ -409,6 +420,7 @@ def test_vacuum_with_mixed_queues(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_vacuum_with_no_claimed_messages(workdir: Path):
     """Test vacuum operation when there are no claimed messages."""
     db_path = workdir / "test.db"
@@ -430,6 +442,7 @@ def test_vacuum_with_no_claimed_messages(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_vacuum_lock_prevents_concurrent_vacuum(workdir: Path):
     """Test that vacuum lock prevents concurrent vacuum operations."""
     db_path = workdir / "test.db"
@@ -466,6 +479,7 @@ def test_vacuum_lock_prevents_concurrent_vacuum(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_partial_index_on_claimed_column(workdir: Path):
     """Test that partial index is created on claimed column for performance."""
     db_path = workdir / "test.db"
@@ -492,6 +506,7 @@ def test_partial_index_on_claimed_column(workdir: Path):
     conn.close()
 
 
+@pytest.mark.sqlite_only
 def test_all_flag_with_mixed_claimed_unclaimed(workdir: Path):
     """Test --all flag behavior with mix of claimed and unclaimed messages."""
     db_path = workdir / "test.db"

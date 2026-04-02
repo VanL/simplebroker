@@ -9,6 +9,7 @@ import time
 import warnings
 import weakref
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
@@ -19,14 +20,17 @@ from typing import (
     cast,
 )
 
-from ._backends import get_configured_backend
+from ._backend_plugins import (
+    BackendPlugin,
+    get_backend_plugin,
+    resolve_runner_backend_plugin,
+)
 from ._constants import (
     ALIAS_PREFIX,
     LOGICAL_COUNTER_BITS,
     MAX_MESSAGE_SIZE,
     MAX_QUEUE_NAME_LENGTH,
     PEEK_BATCH_SIZE,
-    SCHEMA_VERSION,
     SIMPLEBROKER_MAGIC,
     load_config,
 )
@@ -35,78 +39,8 @@ from ._exceptions import (
     OperationalError,
 )
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner
-from ._sql import (
-    CHECK_PENDING_MESSAGES as SQL_CHECK_PENDING_MESSAGES,
-)
-from ._sql import (
-    CHECK_PENDING_MESSAGES_SINCE as SQL_CHECK_PENDING_MESSAGES_SINCE,
-)
-from ._sql import (
-    CHECK_QUEUE_EXISTS as SQL_SELECT_EXISTS_MESSAGES_BY_QUEUE,
-)
-from ._sql import (
-    COUNT_CLAIMED_MESSAGES as SQL_SELECT_COUNT_CLAIMED_MESSAGES,
-)
-from ._sql import (
-    DELETE_ALIAS as SQL_DELETE_ALIAS,
-)
-from ._sql import (
-    DELETE_ALL_MESSAGES as SQL_DELETE_ALL_MESSAGES,
-)
-from ._sql import (
-    DELETE_QUEUE_MESSAGES as SQL_DELETE_MESSAGES_BY_QUEUE,
-)
-from ._sql import (
-    GET_ALIAS_VERSION as SQL_SELECT_ALIAS_VERSION,
-)
-from ._sql import (
-    GET_DISTINCT_QUEUES as SQL_SELECT_DISTINCT_QUEUES,
-)
-from ._sql import (
-    GET_LAST_TS as SQL_SELECT_LAST_TS,
-)
-from ._sql import (
-    GET_MAX_MESSAGE_TS as SQL_SELECT_MAX_TS,
-)
-from ._sql import (
-    GET_OVERALL_STATS as SQL_SELECT_OVERALL_STATS,
-)
-from ._sql import (
-    GET_QUEUE_STATS as SQL_SELECT_QUEUES_STATS,
-)
-from ._sql import (
-    GET_TOTAL_MESSAGE_COUNT as SQL_SELECT_TOTAL_MESSAGE_COUNT,
-)
-from ._sql import (
-    GET_VACUUM_STATS as SQL_SELECT_STATS_CLAIMED_TOTAL,
-)
-from ._sql import (
-    INSERT_ALIAS as SQL_INSERT_ALIAS,
-)
-from ._sql import (
-    INSERT_MESSAGE as SQL_INSERT_MESSAGE,
-)
-from ._sql import (
-    LIST_QUEUES_UNCLAIMED as SQL_SELECT_QUEUES_UNCLAIMED,
-)
-from ._sql import (
-    SELECT_ALIASES as SQL_SELECT_ALIASES,
-)
-from ._sql import (
-    SELECT_ALIASES_FOR_TARGET as SQL_SELECT_ALIASES_FOR_TARGET,
-)
-from ._sql import (
-    SELECT_META_ALL as SQL_SELECT_META_ALL,
-)
-from ._sql import (
-    UPDATE_ALIAS_VERSION as SQL_UPDATE_ALIAS_VERSION,
-)
-from ._sql import (
-    UPDATE_LAST_TS as SQL_UPDATE_META_LAST_TS,
-)
-from ._sql import (
-    build_retrieve_query,
-)
+from ._sql import RetrieveQuerySpec
+from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
 from .helpers import _execute_with_retry, interruptible_sleep
 
@@ -115,12 +49,19 @@ T = TypeVar("T")
 
 # Load configuration once at module level
 _config = load_config()
-db_backend = get_configured_backend(_config)
 
 logger = logging.getLogger(__name__)
 
 # Module constants
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
+
+
+def _resolve_backend_plugin(
+    runner: SQLRunner,
+    explicit_plugin: BackendPlugin | None = None,
+) -> BackendPlugin:
+    """Resolve the backend plugin for a runner instance."""
+    return resolve_runner_backend_plugin(runner, explicit_plugin)
 
 
 class _BorrowedRunner:
@@ -155,6 +96,10 @@ class _BorrowedRunner:
 
     def is_setup_complete(self, phase: SetupPhase) -> bool:
         return self._runner.is_setup_complete(phase)
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate backend-specific runner attributes transparently."""
+        return getattr(self._runner, name)
 
 
 # Cache for queue name validation
@@ -215,17 +160,38 @@ class DBConnection:
     resources are released.
     """
 
-    def __init__(self, db_path: str, runner: SQLRunner | None = None):
+    def __init__(
+        self,
+        db_path: str | ResolvedTarget,
+        runner: SQLRunner | None = None,
+        *,
+        config: dict[str, Any] = _config,
+    ):
         """Initialize the connection manager.
 
         Args:
             db_path: Path to the SQLite database
             runner: Optional custom SQLRunner implementation
         """
-        self.db_path = db_path
+        self._config = config
+        self._resolved_target = db_path if isinstance(db_path, ResolvedTarget) else None
+        self.db_path = (
+            self._resolved_target.target
+            if self._resolved_target is not None
+            else str(db_path)
+        )
         self._external_runner = runner is not None
         self._runner: SQLRunner | None = (
             _BorrowedRunner(runner) if runner is not None else None
+        )
+        self._backend_plugin = (
+            self._resolved_target.plugin
+            if self._resolved_target is not None
+            else (
+                _resolve_backend_plugin(runner)
+                if runner is not None
+                else get_backend_plugin("sqlite")
+            )
         )
         self._core = None
         self._thread_local = threading.local()
@@ -237,7 +203,34 @@ class DBConnection:
 
         # If we have an external runner, create a borrowed core immediately.
         if self._runner:
-            self._core = BrokerCore(self._runner)
+            self._core = BrokerCore(
+                self._runner,
+                config=self._config,
+                backend_plugin=self._backend_plugin,
+            )
+
+    def _create_managed_connection(self) -> "BrokerCore | BrokerDB":
+        """Create one owned connection/core for the current thread."""
+        if (
+            self._resolved_target is None
+            or self._resolved_target.backend_name == "sqlite"
+        ):
+            connection = BrokerDB(self.db_path)
+            connection.set_stop_event(self._stop_event)
+            return connection
+
+        runner = self._backend_plugin.create_runner(
+            self._resolved_target.target,
+            backend_options=self._resolved_target.backend_options,
+            config=self._config,
+        )
+        core = BrokerCore(
+            runner,
+            config=self._config,
+            backend_plugin=self._backend_plugin,
+        )
+        core.set_stop_event(self._stop_event)
+        return core
 
     def get_connection(
         self, *, config: dict[str, Any] = _config
@@ -269,8 +262,7 @@ class DBConnection:
                 # For persistent connections in single-threaded use:
                 # Create one BrokerDB per thread, but cache it within the thread
                 # This avoids reconnection overhead within a thread
-                connection = BrokerDB(self.db_path)
-                connection.set_stop_event(self._stop_event)
+                connection = self._create_managed_connection()
 
                 # Register the connection for cleanup tracking
                 with self._registry_lock:
@@ -307,10 +299,24 @@ class DBConnection:
             BrokerCore instance
         """
         if self._core is None:
-            if self._runner is None:
-                self._runner = SQLiteRunner(self.db_path)
-            assert self._runner is not None
-            self._core = BrokerCore(self._runner)
+            if (
+                self._resolved_target is None
+                or self._resolved_target.backend_name == "sqlite"
+            ):
+                self._core = BrokerDB(self.db_path)
+            else:
+                if self._runner is None:
+                    self._runner = self._backend_plugin.create_runner(
+                        self._resolved_target.target,
+                        backend_options=self._resolved_target.backend_options,
+                        config=self._config,
+                    )
+                assert self._runner is not None
+                self._core = BrokerCore(
+                    self._runner,
+                    config=self._config,
+                    backend_plugin=self._backend_plugin,
+                )
         return self._core
 
     def cleanup(self, *, config: dict[str, Any] = _config) -> None:
@@ -395,6 +401,19 @@ class DBConnection:
             pass  # Ignore errors in destructor
 
 
+@contextmanager
+def open_broker(
+    db_target: str | ResolvedTarget,
+    runner: SQLRunner | None = None,
+    *,
+    config: dict[str, Any] = _config,
+) -> Iterator["BrokerCore | BrokerDB"]:
+    """Open a backend-agnostic broker connection for the lifetime of a context."""
+
+    with DBConnection(db_target, runner, config=config) as connection:
+        yield connection.get_connection()
+
+
 class BrokerCore:
     """Core database operations for SimpleBroker.
 
@@ -411,7 +430,13 @@ class BrokerCore:
     its own BrokerCore instance.
     """
 
-    def __init__(self, runner: SQLRunner, *, config: dict[str, Any] = _config):
+    def __init__(
+        self,
+        runner: SQLRunner,
+        *,
+        config: dict[str, Any] = _config,
+        backend_plugin: BackendPlugin | None = None,
+    ):
         """Initialize with a SQL runner.
 
         Args:
@@ -430,6 +455,8 @@ class BrokerCore:
 
         # SQL runner for all database operations
         self._runner = runner
+        self._backend_plugin = _resolve_backend_plugin(runner, backend_plugin)
+        self._sql = self._backend_plugin.sql
 
         # Stop event to allow interruptible retries
         self._stop_event = threading.Event()
@@ -441,12 +468,13 @@ class BrokerCore:
         # Setup database (must be done before creating TimestampGenerator)
         self._setup_database()
         self._verify_database_magic()
-        self._ensure_schema_v2()
-        self._ensure_schema_v3()
-        self._ensure_schema_v4()
+        self._migrate_schema()
 
         # Timestamp generator (created after database setup so meta table exists)
-        self._timestamp_gen = TimestampGenerator(self._runner)
+        self._timestamp_gen = TimestampGenerator(
+            self._runner,
+            backend_plugin=self._backend_plugin,
+        )
 
         # Alias cache state
         self._alias_cache: dict[str, str] = {}
@@ -470,7 +498,7 @@ class BrokerCore:
     def _setup_database(self) -> None:
         """Set up database with optimized settings and schema."""
         with self._lock:
-            db_backend.initialize_database(
+            self._backend_plugin.initialize_database(
                 self._runner,
                 run_with_retry=self._run_with_retry,
             )
@@ -480,33 +508,24 @@ class BrokerCore:
         with self._lock:
             try:
                 # Check if meta table exists
-                if not db_backend.meta_table_exists(self._runner):
+                if not self._backend_plugin.meta_table_exists(self._runner):
                     # New database, no verification needed
                     return
 
                 # Check magic string
-                rows = list(
-                    self._runner.run(
-                        "SELECT value FROM meta WHERE key = 'magic'", fetch=True
-                    )
-                )
-                if rows and rows[0][0] != SIMPLEBROKER_MAGIC:
+                magic = self._backend_plugin.read_magic(self._runner)
+                if magic is not None and magic != SIMPLEBROKER_MAGIC:
                     raise RuntimeError(
                         f"Database magic string mismatch. Expected '{SIMPLEBROKER_MAGIC}', "
-                        f"found '{rows[0][0]}'. This database may not be a SimpleBroker database."
+                        f"found '{magic}'. This database may not be a SimpleBroker database."
                     )
 
                 # Check schema version
-                rows = list(
-                    self._runner.run(
-                        "SELECT value FROM meta WHERE key = 'schema_version'",
-                        fetch=True,
-                    )
-                )
-                if rows and rows[0][0] > SCHEMA_VERSION:
+                schema_version = self._backend_plugin.read_schema_version(self._runner)
+                if schema_version > self._backend_plugin.schema_version:
                     raise RuntimeError(
-                        f"Database schema version {rows[0][0]} is newer than supported version "
-                        f"{SCHEMA_VERSION}. Please upgrade SimpleBroker."
+                        f"Database schema version {schema_version} is newer than supported version "
+                        f"{self._backend_plugin.schema_version}. Please upgrade SimpleBroker."
                     )
             except OperationalError:
                 # If we can't read meta table, it might be corrupted
@@ -514,44 +533,16 @@ class BrokerCore:
 
     def _read_schema_version_locked(self) -> int:
         """Read schema version (expects caller to hold self._lock)."""
-        rows = list(
-            self._runner.run(
-                "SELECT value FROM meta WHERE key = 'schema_version'",
-                fetch=True,
-            )
-        )
-        return int(rows[0][0]) if rows and rows[0][0] is not None else 1
+        return self._backend_plugin.read_schema_version(self._runner)
 
     def _write_schema_version_locked(self, version: int) -> None:
         """Update schema version (expects caller to hold self._lock)."""
-        self._runner.run(
-            "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (version,),
-        )
+        self._backend_plugin.write_schema_version(self._runner, version)
 
-    def _ensure_schema_v2(self) -> None:
-        """Migrate to schema with claimed column."""
+    def _migrate_schema(self) -> None:
+        """Apply any backend-defined schema migrations."""
         with self._lock:
-            db_backend.ensure_schema_v2(
-                self._runner,
-                current_version=self._read_schema_version_locked(),
-                write_schema_version=self._write_schema_version_locked,
-            )
-
-    def _ensure_schema_v3(self) -> None:
-        """Add unique constraint to timestamp column."""
-        with self._lock:
-            db_backend.ensure_schema_v3(
-                self._runner,
-                current_version=self._read_schema_version_locked(),
-                write_schema_version=self._write_schema_version_locked,
-            )
-
-    def _ensure_schema_v4(self) -> None:
-        """Add queue alias support (schema version 4)."""
-        with self._lock:
-            db_backend.ensure_schema_v4(
+            self._backend_plugin.migrate_schema(
                 self._runner,
                 current_version=self._read_schema_version_locked(),
                 write_schema_version=self._write_schema_version_locked,
@@ -696,15 +687,11 @@ class BrokerCore:
                 return  # Success!
 
             except IntegrityError as e:
-                error_msg = str(e)
-                # Check for both direct timestamp conflicts and generator exhaustion
-                is_ts_conflict = (
-                    "UNIQUE constraint failed: messages.ts" in error_msg
-                    or "unable to generate unique timestamp (exhausted retries)"
-                    in error_msg
-                )
-                if not is_ts_conflict:
-                    raise  # Not a timestamp conflict, re-raise
+                # The only INSERT in _do_write_with_ts_retry targets the
+                # messages table whose only unique constraints are the PK
+                # (auto-assigned) and the ts column.  Any IntegrityError here
+                # is therefore a timestamp conflict — regardless of backend
+                # error message wording (SQLite vs Postgres).
 
                 # Track conflict for metrics
                 self._ts_conflict_count += 1
@@ -805,7 +792,7 @@ class BrokerCore:
             self._runner.begin_immediate()
             try:
                 self._runner.run(
-                    SQL_INSERT_MESSAGE,
+                    self._sql.INSERT_MESSAGE,
                     (queue, message, timestamp),
                 )
                 self._runner.commit()
@@ -813,50 +800,32 @@ class BrokerCore:
                 self._runner.rollback()
                 raise
 
-    def _build_where_clause(
+    def _build_retrieve_spec(
         self,
         queue: str,
+        limit: int,
+        *,
+        offset: int = 0,
+        target_queue: str | None = None,
         exact_timestamp: int | None = None,
         since_timestamp: int | None = None,
         require_unclaimed: bool = True,
-    ) -> tuple[list[str], list[Any]]:
-        """Build WHERE clause and parameters for message queries.
-
-        Args:
-            queue: Queue name to filter on
-            exact_timestamp: If provided, filter for exact timestamp match
-            since_timestamp: If provided, filter for messages after this timestamp
-            require_unclaimed: If True (default), only consider unclaimed messages
-
-        Returns:
-            tuple of (where_conditions list, params list)
-        """
-        if exact_timestamp is not None:
-            # Optimize for unique index on ts column
-            where_conditions = ["ts = ?", "queue = ?"]
-            params = [exact_timestamp, queue]
-            if require_unclaimed:
-                where_conditions.append("claimed = 0")
-        else:
-            # Normal ordering for queue-based queries
-            where_conditions = ["queue = ?"]
-            params = [queue]
-            if require_unclaimed:
-                where_conditions.append("claimed = 0")
-
-            if since_timestamp is not None:
-                where_conditions.append("ts > ?")
-                params.append(since_timestamp)
-
-        return where_conditions, params
+    ) -> RetrieveQuerySpec:
+        """Build the backend-neutral retrieve-query specification."""
+        return RetrieveQuerySpec(
+            queue=queue,
+            limit=limit,
+            offset=offset,
+            exact_timestamp=exact_timestamp,
+            since_timestamp=since_timestamp,
+            require_unclaimed=require_unclaimed,
+            target_queue=target_queue,
+        )
 
     def _execute_peek_operation(
         self,
         query: str,
-        params: list[Any],
-        limit: int,
-        offset: int = 0,
-        target_queue: str | None = None,
+        params: tuple[object, ...],
     ) -> list[tuple[str, int]]:
         """Execute a peek operation without transaction.
 
@@ -871,30 +840,24 @@ class BrokerCore:
             list of (message_body, timestamp) tuples
         """
         with self._lock:
-            if target_queue:
-                # Move operation needs target queue as first parameter
-                query_params = tuple([target_queue] + params + [limit, offset])
-            else:
-                query_params = tuple(params + [limit, offset])
-
-            results = self._runner.run(query, query_params, fetch=True)
+            results = self._runner.run(query, params, fetch=True)
             return list(results) if results else []
 
     def _execute_transactional_operation(
         self,
+        queue: str,
+        operation: Literal["claim", "move"],
         query: str,
-        params: list[Any],
-        limit: int,
-        target_queue: str | None,
+        params: tuple[object, ...],
         commit_before_yield: bool,
     ) -> list[tuple[str, int]]:
         """Execute a claim or move operation with transaction.
 
         Args:
+            queue: Source queue name
+            operation: Transactional retrieve operation
             query: SQL query to execute
             params: Query parameters
-            limit: Maximum number of messages
-            target_queue: Target queue for move operations
             commit_before_yield: If True, commit before returning (exactly-once)
 
         Returns:
@@ -906,13 +869,12 @@ class BrokerCore:
             should_commit = False
 
             try:
-                if target_queue:
-                    # Move needs target queue as first parameter
-                    query_params = tuple([target_queue] + params + [limit])
-                else:
-                    query_params = tuple(params + [limit])
-
-                results = self._runner.run(query, query_params, fetch=True)
+                self._backend_plugin.prepare_queue_operation(
+                    self._runner,
+                    operation=operation,
+                    queue=queue,
+                )
+                results = self._runner.run(query, params, fetch=True)
                 results_list = list(results) if results else []
 
                 if results_list and commit_before_yield:
@@ -961,22 +923,27 @@ class BrokerCore:
         elif target_queue is not None:
             raise ValueError("target_queue is only valid for move operation")
 
-        where_conditions, params = self._build_where_clause(
-            queue, exact_timestamp, since_timestamp, require_unclaimed
+        spec = self._build_retrieve_spec(
+            queue,
+            limit,
+            target_queue=target_queue,
+            exact_timestamp=exact_timestamp,
+            since_timestamp=since_timestamp,
+            require_unclaimed=require_unclaimed,
         )
-        query = build_retrieve_query(operation, where_conditions)
+        query, params = self._sql.build_retrieve_query(operation, spec)
 
         while True:
             with self._lock:
                 self._run_with_retry(self._runner.begin_immediate)
                 transaction_open = True
                 try:
-                    if target_queue:
-                        query_params = tuple([target_queue] + params + [limit])
-                    else:
-                        query_params = tuple(params + [limit])
-
-                    results = self._runner.run(query, query_params, fetch=True)
+                    self._backend_plugin.prepare_queue_operation(
+                        self._runner,
+                        operation=operation,
+                        queue=queue,
+                    )
+                    results = self._runner.run(query, params, fetch=True)
                     results_list = list(results) if results else []
                     if not results_list:
                         self._runner.rollback()
@@ -1049,23 +1016,24 @@ class BrokerCore:
         if target_queue:
             self._validate_queue_name(target_queue)
 
-        # Build WHERE clause
-        where_conditions, params = self._build_where_clause(
-            queue, exact_timestamp, since_timestamp, require_unclaimed
+        spec = self._build_retrieve_spec(
+            queue,
+            limit,
+            offset=offset,
+            target_queue=target_queue,
+            exact_timestamp=exact_timestamp,
+            since_timestamp=since_timestamp,
+            require_unclaimed=require_unclaimed,
         )
-
-        # Build query using safe builder
-        query = build_retrieve_query(operation, where_conditions)
+        query, params = self._sql.build_retrieve_query(operation, spec)
 
         # Execute based on operation type
         if operation == "peek":
-            return self._execute_peek_operation(
-                query, params, limit, offset, target_queue
-            )
+            return self._execute_peek_operation(query, params)
         else:
             # claim or move operations need transaction
             return self._execute_transactional_operation(
-                query, params, limit, target_queue, commit_before_yield
+                queue, operation, query, params, commit_before_yield
             )
 
     def claim_one(
@@ -1568,15 +1536,14 @@ class BrokerCore:
                 self._runner.begin_immediate()
 
                 # Get current values for logging
-                rows = list(self._runner.run(SQL_SELECT_LAST_TS, fetch=True))
-                old_last_ts = rows[0][0] if rows and rows[0][0] is not None else 0
+                old_last_ts = self._backend_plugin.read_last_ts(self._runner)
 
-                rows = list(self._runner.run(SQL_SELECT_MAX_TS, fetch=True))
+                rows = list(self._runner.run(self._sql.GET_MAX_MESSAGE_TS, fetch=True))
                 max_msg_ts = rows[0][0] if rows and rows[0][0] is not None else 0
 
                 # Only resync if actually inconsistent
                 if max_msg_ts > old_last_ts:
-                    self._runner.run(SQL_UPDATE_META_LAST_TS, (max_msg_ts,))
+                    self._backend_plugin.write_last_ts(self._runner, int(max_msg_ts))
                     self._runner.commit()
 
                     # Decode timestamps for logging
@@ -1635,7 +1602,9 @@ class BrokerCore:
 
         def _do_list() -> list[tuple[str, int]]:
             with self._lock:
-                return list(self._runner.run(SQL_SELECT_QUEUES_UNCLAIMED, fetch=True))
+                return list(
+                    self._runner.run(self._sql.LIST_QUEUES_UNCLAIMED, fetch=True)
+                )
 
         # Execute with retry logic
         return self._run_with_retry(_do_list)
@@ -1653,7 +1622,7 @@ class BrokerCore:
 
         def _do_stats() -> list[tuple[str, int, int]]:
             with self._lock:
-                return list(self._runner.run(SQL_SELECT_QUEUES_STATS, fetch=True))
+                return list(self._runner.run(self._sql.GET_QUEUE_STATS, fetch=True))
 
         # Execute with retry logic
         return self._run_with_retry(_do_stats)
@@ -1664,7 +1633,7 @@ class BrokerCore:
 
         def _do_stats() -> tuple[int, int]:
             with self._lock:
-                rows = list(self._runner.run(SQL_SELECT_OVERALL_STATS, fetch=True))
+                rows = list(self._runner.run(self._sql.GET_OVERALL_STATS, fetch=True))
                 claimed = int(rows[0][0]) if rows and rows[0][0] is not None else 0
                 total = int(rows[0][1]) if rows and rows[0][1] is not None else 0
                 return claimed, total
@@ -1678,7 +1647,7 @@ class BrokerCore:
         def _do_count() -> int:
             with self._lock:
                 rows = list(
-                    self._runner.run(SQL_SELECT_COUNT_CLAIMED_MESSAGES, fetch=True)
+                    self._runner.run(self._sql.COUNT_CLAIMED_MESSAGES, fetch=True)
                 )
                 return int(rows[0][0]) if rows else 0
 
@@ -1703,12 +1672,11 @@ class BrokerCore:
         def _do_status() -> tuple[int, int]:
             with self._lock:
                 total_rows = list(
-                    self._runner.run(SQL_SELECT_TOTAL_MESSAGE_COUNT, fetch=True)
+                    self._runner.run(self._sql.GET_TOTAL_MESSAGE_COUNT, fetch=True)
                 )
-                last_ts_row = list(self._runner.run(SQL_SELECT_LAST_TS, fetch=True))
 
                 total_messages = int(total_rows[0][0]) if total_rows else 0
-                last_timestamp = int(last_ts_row[0][0]) if last_ts_row else 0
+                last_timestamp = self._backend_plugin.read_last_ts(self._runner)
                 return total_messages, last_timestamp
 
         total_messages, last_timestamp = self._run_with_retry(_do_status)
@@ -1716,9 +1684,7 @@ class BrokerCore:
         return {
             "total_messages": total_messages,
             "last_timestamp": last_timestamp,
-            "db_size": db_backend.database_size_bytes(
-                getattr(self._runner, "_db_path", None)
-            ),
+            "db_size": self._backend_plugin.database_size_bytes(self._runner),
         }
 
     def delete(self, queue: str | None = None) -> int:
@@ -1741,16 +1707,9 @@ class BrokerCore:
 
         def _do_delete() -> int:
             with self._lock:
-                if queue is None:
-                    # Purge all messages
-                    deleted_count = db_backend.delete_and_count_changes(
-                        self._runner, SQL_DELETE_ALL_MESSAGES
-                    )
-                else:
-                    # Purge specific queue
-                    deleted_count = db_backend.delete_and_count_changes(
-                        self._runner, SQL_DELETE_MESSAGES_BY_QUEUE, (queue,)
-                    )
+                deleted_count = self._backend_plugin.delete_messages(
+                    self._runner, queue=queue
+                )
                 self._runner.commit()
                 return deleted_count
 
@@ -1779,12 +1738,12 @@ class BrokerCore:
         def _do_broadcast() -> None:
             nonlocal queue_count
             with self._lock:
-                # Use BEGIN IMMEDIATE to ensure we see all committed changes and
-                # prevent other connections from writing during our transaction
                 self._runner.begin_immediate()
                 try:
+                    self._backend_plugin.prepare_broadcast(self._runner)
+
                     # Get all unique queues first
-                    rows = self._runner.run(SQL_SELECT_DISTINCT_QUEUES, fetch=True)
+                    rows = self._runner.run(self._sql.GET_DISTINCT_QUEUES, fetch=True)
                     queues = [row[0] for row in rows]
 
                     if pattern:
@@ -1805,7 +1764,7 @@ class BrokerCore:
                     # Insert message to each queue with pre-generated timestamp
                     for queue, timestamp in queue_timestamps:
                         self._runner.run(
-                            SQL_INSERT_MESSAGE,
+                            self._sql.INSERT_MESSAGE,
                             (queue, message, timestamp),
                         )
 
@@ -1824,7 +1783,7 @@ class BrokerCore:
         """Check if vacuum needed (fast approximation)."""
         with self._lock:
             # Use a single table scan with conditional aggregation for better performance
-            rows = list(self._runner.run(SQL_SELECT_STATS_CLAIMED_TOTAL, fetch=True))
+            rows = list(self._runner.run(self._sql.GET_VACUUM_STATS, fetch=True))
             stats = rows[0] if rows else (0, 0)
 
             claimed_count = stats[0] or 0  # Handle NULL case
@@ -1843,68 +1802,12 @@ class BrokerCore:
     def _vacuum_claimed_messages(
         self, *, compact: bool = False, config: dict[str, Any] = _config
     ) -> None:
-        """Delete claimed messages in batches.
-
-        Args:
-            compact: If True, also run SQLite VACUUM to reclaim disk space
-        """
-        # Skip vacuum if no db_path available (extensible runners)
-        if not hasattr(self, "db_path"):
-            # For non-SQLite runners, vacuum is a no-op
-            # Custom runners are responsible for their own cleanup/vacuum mechanisms
-            return
-
-        # Use file-based lock to prevent concurrent vacuums
-        vacuum_lock_path = self.db_path.with_suffix(".vacuum.lock")
-        lock_acquired = False
-
-        # Check for stale lock file (older than 5 minutes)
-        stale_lock_timeout = int(
-            config["BROKER_VACUUM_LOCK_TIMEOUT"]
-        )  # 5 minutes default
-        if vacuum_lock_path.exists():
-            try:
-                lock_age = time.time() - vacuum_lock_path.stat().st_mtime
-                if lock_age > stale_lock_timeout:
-                    # Remove stale lock file
-                    vacuum_lock_path.unlink(missing_ok=True)
-                    warnings.warn(
-                        f"Removed stale vacuum lock file (age: {lock_age:.1f}s)",
-                        RuntimeWarning,
-                        stacklevel=2,
-                    )
-            except OSError:
-                # If we can't stat or remove the file, proceed anyway
-                pass
-
-        try:
-            # Try to acquire exclusive lock
-            # Use open with write mode and exclusive create flag
-            lock_fd = os.open(
-                str(vacuum_lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode=0o600
-            )
-            try:
-                # Write PID to lock file for debugging
-                os.write(lock_fd, f"{os.getpid()}\n".encode())
-                lock_acquired = True
-
-                self._do_vacuum_without_lock(compact=compact)
-            finally:
-                os.close(lock_fd)
-        except FileExistsError:
-            # Another process is vacuuming
-            pass
-        except OSError as e:
-            # Handle other OS errors (permissions, etc.)
-            warnings.warn(
-                f"Could not acquire vacuum lock: {e}",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        finally:
-            # Only clean up lock file if we created it
-            if lock_acquired:
-                vacuum_lock_path.unlink(missing_ok=True)
+        """Run backend-defined vacuum/compaction work."""
+        self._backend_plugin.vacuum(
+            self._runner,
+            compact=compact,
+            config=config,
+        )
 
     def queue_exists_and_has_messages(self, queue: str) -> bool:
         """Check if a queue exists and has messages.
@@ -1925,9 +1828,7 @@ class BrokerCore:
         def _do_check() -> bool:
             with self._lock:
                 rows = list(
-                    self._runner.run(
-                        SQL_SELECT_EXISTS_MESSAGES_BY_QUEUE, (queue,), fetch=True
-                    )
+                    self._runner.run(self._sql.CHECK_QUEUE_EXISTS, (queue,), fetch=True)
                 )
                 return bool(rows[0][0]) if rows else False
 
@@ -1960,11 +1861,11 @@ class BrokerCore:
                 params: tuple[Any, ...]
                 if since_timestamp is not None:
                     # Check for unclaimed messages after the specified timestamp
-                    query = SQL_CHECK_PENDING_MESSAGES_SINCE
+                    query = self._sql.CHECK_PENDING_MESSAGES_SINCE
                     params = (queue, since_timestamp)
                 else:
                     # Check for any unclaimed messages
-                    query = SQL_CHECK_PENDING_MESSAGES
+                    query = self._sql.CHECK_PENDING_MESSAGES
                     params = (queue,)
 
                 rows = list(self._runner.run(query, params, fetch=True))
@@ -1984,58 +1885,7 @@ class BrokerCore:
             The data version changes whenever the database file is modified.
         """
         with self._lock:
-            return db_backend.get_data_version(self._runner)
-
-    def _do_vacuum_without_lock(
-        self, *, compact: bool = False, config: dict[str, Any] = _config
-    ) -> None:
-        """Perform the actual vacuum operation without file locking.
-
-        Args:
-            compact: If True, also run SQLite VACUUM to reclaim disk space
-        """
-        batch_size = config["BROKER_VACUUM_BATCH_SIZE"]
-        had_claimed_messages = False
-
-        # Use separate transaction per batch
-        while True:
-            with self._lock:
-                self._runner.begin_immediate()
-                try:
-                    if not db_backend.has_claimed_messages(self._runner):
-                        self._runner.rollback()
-                        break
-
-                    # We have claimed messages to delete
-                    had_claimed_messages = True
-
-                    db_backend.delete_claimed_batch(
-                        self._runner,
-                        batch_size=batch_size,
-                    )
-                    self._runner.commit()
-                except Exception:
-                    self._runner.rollback()
-                    raise
-
-            # Brief pause between batches to allow other operations
-            # Note: Using time.sleep here for a very short pause (1ms) during vacuum
-            # This is a background maintenance operation without stop event
-            time.sleep(0.001)
-
-        # After deleting claimed messages, reclaim space
-        if compact:
-            # Full vacuum with compact flag
-            with self._lock:
-                db_backend.compact_database(self._runner)
-        elif had_claimed_messages:
-            # Automatic vacuum: check if auto_vacuum is INCREMENTAL and run incremental vacuum
-            with self._lock:
-                try:
-                    db_backend.maybe_run_incremental_vacuum(self._runner)
-                except Exception:
-                    # Incremental vacuum is best-effort, don't fail if it doesn't work
-                    pass
+            return self._backend_plugin.get_data_version(self._runner)
 
     def vacuum(self, compact: bool = False) -> None:
         """Manually trigger vacuum of claimed messages.
@@ -2049,6 +1899,146 @@ class BrokerCore:
         self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("vacuum")
         self._vacuum_claimed_messages(compact=compact)
+
+    def _load_aliases_locked(self) -> None:
+        """Refresh alias cache. Caller must hold self._lock."""
+        rows = list(self._runner.run(self._sql.SELECT_ALIASES, fetch=True))
+        self._alias_cache = dict(rows)
+        self._alias_cache_version = self._current_alias_version_locked()
+
+    def _current_alias_version_locked(self) -> int:
+        return self._backend_plugin.read_alias_version(self._runner)
+
+    def _refresh_alias_cache_if_needed_locked(self) -> None:
+        if self._alias_cache_version < 0:
+            self._load_aliases_locked()
+            return
+
+        current_version = self._current_alias_version_locked()
+        if current_version != self._alias_cache_version:
+            self._load_aliases_locked()
+
+    def get_alias_version(self) -> int:
+        with self._lock:
+            self._refresh_alias_cache_if_needed_locked()
+            return self._alias_cache_version
+
+    def resolve_alias(self, alias: str) -> str | None:
+        with self._lock:
+            self._refresh_alias_cache_if_needed_locked()
+            return self._alias_cache.get(alias)
+
+    def canonicalize_queue(self, queue: str) -> str:
+        with self._lock:
+            self._refresh_alias_cache_if_needed_locked()
+            target = self._alias_cache.get(queue)
+            return target if target is not None else queue
+
+    def has_alias(self, alias: str) -> bool:
+        with self._lock:
+            self._refresh_alias_cache_if_needed_locked()
+            return alias in self._alias_cache
+
+    def list_aliases(self) -> list[tuple[str, str]]:
+        with self._lock:
+            self._load_aliases_locked()
+            return sorted(self._alias_cache.items())
+
+    def aliases_for_target(self, target: str) -> list[str]:
+        with self._lock:
+            rows = list(
+                self._runner.run(
+                    self._sql.SELECT_ALIASES_FOR_TARGET, (target,), fetch=True
+                )
+            )
+            return sorted(alias for (alias,) in rows)
+
+    def get_meta(self) -> dict[str, int | str]:
+        with self._lock:
+            return dict(self._backend_plugin.select_meta_items(self._runner))
+
+    def _increment_alias_version_locked(self) -> None:
+        new_version = time.time_ns()
+        self._backend_plugin.write_alias_version(self._runner, new_version)
+        self._alias_cache_version = new_version
+
+    def _validate_alias_target(self, alias: str, target: str) -> None:
+        if alias == target:
+            raise ValueError("Alias and target must differ")
+        if not alias:
+            raise ValueError("Alias name cannot be empty")
+        if alias.startswith(ALIAS_PREFIX):
+            raise ValueError("Alias names should not include the '@' prefix")
+        if target.startswith(ALIAS_PREFIX):
+            raise ValueError("Target names should not include the '@' prefix")
+        if not target:
+            raise ValueError("Alias target cannot be empty")
+
+    def add_alias(self, alias: str, target: str) -> None:
+        self._assert_no_reentrant_mutation_during_batch("add_alias")
+        should_warn = self.queue_exists_and_has_messages(alias)
+
+        with self._lock:
+            self._validate_alias_target(alias, target)
+
+            if self._alias_cache_version < 0:
+                self._load_aliases_locked()
+
+            if alias in self._alias_cache:
+                raise ValueError(f"Alias '{alias}' already exists")
+
+            if target in self._alias_cache:
+                raise ValueError("Cannot target another alias")
+
+            if should_warn:
+                warnings.warn(
+                    (
+                        f"Queue '{alias}' already exists with messages. "
+                        f"The alias @{alias} will redirect to '{target}' while "
+                        f"the queue {alias} remains accessible directly."
+                    ),
+                    RuntimeWarning,
+                    stacklevel=3,
+                )
+
+            visited = set()
+            to_visit = [target]
+            while to_visit:
+                current = to_visit.pop()
+                if current == alias:
+                    raise ValueError("Alias cycle detected")
+                if current in visited:
+                    continue
+                visited.add(current)
+                next_target = self._alias_cache.get(current)
+                if next_target is not None:
+                    to_visit.append(next_target)
+
+            self._runner.begin_immediate()
+            try:
+                self._runner.run(self._sql.INSERT_ALIAS, (alias, target))
+                self._increment_alias_version_locked()
+                self._load_aliases_locked()
+                self._runner.commit()
+            except Exception:
+                self._runner.rollback()
+                raise
+
+    def remove_alias(self, alias: str) -> None:
+        self._assert_no_reentrant_mutation_during_batch("remove_alias")
+        with self._lock:
+            if self._alias_cache_version < 0:
+                self._load_aliases_locked()
+
+            self._runner.begin_immediate()
+            try:
+                self._runner.run(self._sql.DELETE_ALIAS, (alias,))
+                self._increment_alias_version_locked()
+                self._load_aliases_locked()
+                self._runner.commit()
+            except Exception:
+                self._runner.rollback()
+                raise
 
     def close(self) -> None:
         """Close the database connection."""
@@ -2194,13 +2184,12 @@ class BrokerDB(BrokerCore):
     # ~
     def _load_aliases_locked(self) -> None:
         """Refresh alias cache. Caller must hold self._lock."""
-        rows = list(self._runner.run(SQL_SELECT_ALIASES, fetch=True))
+        rows = list(self._runner.run(self._sql.SELECT_ALIASES, fetch=True))
         self._alias_cache = dict(rows)
         self._alias_cache_version = self._current_alias_version_locked()
 
     def _current_alias_version_locked(self) -> int:
-        rows = list(self._runner.run(SQL_SELECT_ALIAS_VERSION, fetch=True))
-        return int(rows[0][0]) if rows and rows[0][0] is not None else 0
+        return self._backend_plugin.read_alias_version(self._runner)
 
     def _refresh_alias_cache_if_needed_locked(self) -> None:
         if self._alias_cache_version < 0:
@@ -2240,30 +2229,19 @@ class BrokerDB(BrokerCore):
     def aliases_for_target(self, target: str) -> list[str]:
         with self._lock:
             rows = list(
-                self._runner.run(SQL_SELECT_ALIASES_FOR_TARGET, (target,), fetch=True)
+                self._runner.run(
+                    self._sql.SELECT_ALIASES_FOR_TARGET, (target,), fetch=True
+                )
             )
             return sorted(alias for (alias,) in rows)
 
     def get_meta(self) -> dict[str, int | str]:
         with self._lock:
-            rows = list(self._runner.run(SQL_SELECT_META_ALL, fetch=True))
-            meta: dict[str, int | str] = {}
-            for key, value in rows:
-                if isinstance(value, int):
-                    meta[key] = value
-                    continue
-                if isinstance(value, str):
-                    try:
-                        meta[key] = int(value)
-                    except ValueError:
-                        meta[key] = value
-                    continue
-                meta[key] = str(value)
-            return meta
+            return dict(self._backend_plugin.select_meta_items(self._runner))
 
     def _increment_alias_version_locked(self) -> None:
         new_version = time.time_ns()
-        self._runner.run(SQL_UPDATE_ALIAS_VERSION, (new_version,))
+        self._backend_plugin.write_alias_version(self._runner, new_version)
         self._alias_cache_version = new_version
 
     def _validate_alias_target(self, alias: str, target: str) -> None:
@@ -2320,7 +2298,7 @@ class BrokerDB(BrokerCore):
 
             self._runner.begin_immediate()
             try:
-                self._runner.run(SQL_INSERT_ALIAS, (alias, target))
+                self._runner.run(self._sql.INSERT_ALIAS, (alias, target))
                 self._increment_alias_version_locked()
                 self._load_aliases_locked()
                 self._runner.commit()
@@ -2336,7 +2314,7 @@ class BrokerDB(BrokerCore):
 
             self._runner.begin_immediate()
             try:
-                self._runner.run(SQL_DELETE_ALIAS, (alias,))
+                self._runner.run(self._sql.DELETE_ALIAS, (alias,))
                 self._increment_alias_version_locked()
                 self._load_aliases_locked()
                 self._runner.commit()

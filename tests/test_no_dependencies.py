@@ -17,6 +17,8 @@ except ImportError:
     # Python < 3.11
     pass
 
+pytestmark = [pytest.mark.shared]
+
 
 @pytest.mark.skipif(tomllib is None, reason="tomllib not available in Python < 3.11")
 def test_pyproject_has_no_dependencies():

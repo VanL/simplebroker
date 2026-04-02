@@ -1,6 +1,9 @@
 """Test global options can appear anywhere in command line."""
 
+import os
 from pathlib import Path
+
+import pytest
 
 from .conftest import run_cli
 
@@ -37,6 +40,7 @@ def test_global_options_between_args(workdir: Path):
     assert "q3: 1" in stdout
 
 
+@pytest.mark.sqlite_only
 def test_multiple_global_options_mixed(workdir: Path):
     """Test multiple global options in various positions."""
     # Mix global options before and after subcommand
@@ -77,6 +81,9 @@ def test_cleanup_flag_anywhere(workdir: Path):
     assert code == 0
 
     # Verify database was removed (new write should create fresh db)
+    # On PG, --cleanup drops the schema; re-init so list can work.
+    if os.environ.get("BROKER_TEST_BACKEND") == "postgres":
+        run_cli("init", cwd=workdir)
     code, stdout, stderr = run_cli("list", cwd=workdir)
     assert code == 0
     assert stdout.strip() == ""  # No queues

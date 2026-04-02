@@ -77,6 +77,32 @@ def meta_table_exists(runner: SQLRunner) -> bool:
     return bool(rows and rows[0][0])
 
 
+def migrate_schema(
+    runner: SQLRunner,
+    *,
+    current_version: int,
+    write_schema_version: Callable[[int], None],
+) -> None:
+    """Apply any missing SQLite schema migrations in order."""
+    ensure_schema_v2(
+        runner,
+        current_version=current_version,
+        write_schema_version=write_schema_version,
+    )
+    version_after_v2 = max(current_version, 2) if current_version >= 2 else 2
+    ensure_schema_v3(
+        runner,
+        current_version=version_after_v2,
+        write_schema_version=write_schema_version,
+    )
+    version_after_v3 = max(current_version, 3) if current_version >= 3 else 3
+    ensure_schema_v4(
+        runner,
+        current_version=version_after_v3,
+        write_schema_version=write_schema_version,
+    )
+
+
 def messages_has_claimed_column(runner: SQLRunner) -> bool:
     """Return whether ``messages.claimed`` exists."""
     rows = list(runner.run(CHECK_CLAIMED_COLUMN, fetch=True))

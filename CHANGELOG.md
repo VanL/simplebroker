@@ -5,6 +5,23 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-04-01
+### Added
+- Pluggable backend system with `BackendPlugin` protocol and entry-point registration.
+- `BackendSQLNamespace` contract with import-time validation (`ensure_backend_sql_namespace`).
+- `ResolvedTarget` and `serialize_broker_target`/`deserialize_broker_target` for backend-agnostic target resolution.
+- `.simplebroker.toml` project configuration for multi-backend support.
+- Postgres backend extension (`simplebroker-pg` 1.0.0) with advisory lock serialization, LISTEN/NOTIFY watcher wakeups, typed singleton meta table, and connection pooling via `psycopg_pool`.
+- Backend-agnostic test infrastructure (`broker_factory`, `broker_target`/`broker`/`queue_factory` fixtures) — 543 of 831 tests now run on both SQLite and Postgres.
+
+### Fixed
+- Timestamp conflict detection in `BrokerCore.write()` no longer depends on SQLite-specific error message text.
+- `initialize_target` on Postgres rejects any pre-existing schema that isn't ABSENT or OWNED.
+
+### Changed
+- Backend plugin runner protocols use public `schema`/`dsn` properties instead of private attribute casts.
+- Test container for Postgres runs with `max_connections=300` to support concurrency test workloads.
+
 ## [2.9.0] - 2026-03-30
 ### Changed
 - Refactored SQLite-specific internals into dedicated internal backend modules under `simplebroker._backends.sqlite` and moved built-in SQL definitions into `simplebroker._sql.sqlite`.

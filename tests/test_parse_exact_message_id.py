@@ -1,6 +1,10 @@
 """Unit tests for parse_exact_message_id function."""
 
+import pytest
+
 from simplebroker.commands import parse_exact_message_id
+
+pytestmark = [pytest.mark.shared]
 
 
 def test_valid_19_digit_timestamps():

@@ -44,6 +44,15 @@ except ImportError:
 # ADVANCED: Import SimpleBroker internals for custom extension
 # Note: These are internal APIs - most users should use the public API instead:
 #   from simplebroker import Queue, QueueWatcher
+# ADVANCED: Import database constants for low-level operations
+# For standard usage, these constants are handled internally by the Queue class
+from simplebroker._constants import (
+    LOGICAL_COUNTER_BITS,
+    MAX_LOGICAL_COUNTER,
+    MAX_MESSAGE_SIZE,
+    SCHEMA_VERSION,
+    SIMPLEBROKER_MAGIC,
+)
 from simplebroker._exceptions import DataError, IntegrityError, OperationalError
 from simplebroker._sql import (
     CHECK_CLAIMED_COLUMN as SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED,
@@ -87,16 +96,6 @@ from simplebroker._sql import (
 )
 from simplebroker._sql import (
     LIST_QUEUES_UNCLAIMED as SQL_SELECT_QUEUES_UNCLAIMED,
-)
-
-# ADVANCED: Import database constants for low-level operations
-# For standard usage, these constants are handled internally by the Queue class
-from simplebroker.db import (
-    LOGICAL_COUNTER_BITS,
-    MAX_LOGICAL_COUNTER,
-    MAX_MESSAGE_SIZE,
-    SCHEMA_VERSION,
-    SIMPLEBROKER_MAGIC,
 )
 
 

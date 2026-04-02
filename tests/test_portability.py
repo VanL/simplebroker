@@ -4,7 +4,11 @@ import unittest.mock
 import warnings
 from pathlib import Path
 
+import pytest
+
 from simplebroker.db import BrokerDB
+
+pytestmark = [pytest.mark.sqlite_only]
 
 
 def test_chmod_windows_compatibility(tmp_path):

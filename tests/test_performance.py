@@ -316,13 +316,14 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
         f"Reading {SMALL_BATCH_READ_LIMIT} messages took too long: {elapsed:.2f}s (timeout: {timeout}s)"
     )
 
-    # Due to at-least-once semantics, some messages may be re-delivered
-    # To read 250 messages with default batch size of 100, 3 complete batches (300 messages) are committed.
+    # Due to at-least-once semantics, unfinished batches are rolled back and may be
+    # re-delivered. Reading 250 messages with the default batch size of 100 commits
+    # the first two batches (200 messages) and rolls back the in-flight third batch.
     q2 = Queue("test_queue2", db_path=str(db_path))
     try:
         remaining = list(q2.read(all_messages=True))
-        # Should have 200 messages remaining (500 - 300 committed)
-        assert len(remaining) == SMALL_BATCH_COUNT - 300
+        assert len(remaining) == SMALL_BATCH_COUNT - 200
+        assert remaining[:5] == [f"batch{i:03d}" for i in range(200, 205)]
     finally:
         q2.close()
 

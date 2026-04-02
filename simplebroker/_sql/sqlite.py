@@ -4,6 +4,10 @@ This module contains the built-in SQLite SQL used by SimpleBroker's database
 operations. It is intentionally SQLite-specific.
 """
 
+from __future__ import annotations
+
+from ._query_spec import RetrieveOperation, RetrieveQuerySpec
+
 # ============================================================================
 # TABLE CREATION
 # ============================================================================
@@ -440,29 +444,51 @@ def build_move_by_id_query(where_conditions: list[str]) -> str:
         """
 
 
+def _build_where_clause(spec: RetrieveQuerySpec) -> tuple[list[str], list[object]]:
+    """Build SQLite WHERE conditions and parameters for retrieve operations."""
+    if spec.exact_timestamp is not None:
+        where_conditions = ["ts = ?", "queue = ?"]
+        params: list[object] = [spec.exact_timestamp, spec.queue]
+        if spec.require_unclaimed:
+            where_conditions.append("claimed = 0")
+        return where_conditions, params
+
+    where_conditions = ["queue = ?"]
+    params = [spec.queue]
+    if spec.require_unclaimed:
+        where_conditions.append("claimed = 0")
+    if spec.since_timestamp is not None:
+        where_conditions.append("ts > ?")
+        params.append(spec.since_timestamp)
+    return where_conditions, params
+
+
 def build_retrieve_query(
-    operation: str,
-    where_conditions: list[str],
-) -> str:
-    """Build safe retrieve query for peek, claim, or move operations.
-
-    Args:
-        operation: One of "peek", "claim", or "move"
-        where_conditions: list of SQL WHERE conditions (pre-validated)
-
-    Returns:
-        SQL query string with placeholders
-    """
+    operation: RetrieveOperation,
+    spec: RetrieveQuerySpec,
+) -> tuple[str, tuple[object, ...]]:
+    """Build a SQLite retrieve query and its parameter tuple."""
+    where_conditions, params = _build_where_clause(spec)
     where_clause = " AND ".join(where_conditions)
 
     if operation == "peek":
-        return RETRIEVE_PEEK.format(where_clause=where_clause)
-    elif operation == "claim":
-        return RETRIEVE_CLAIM.format(where_clause=where_clause)
-    elif operation == "move":
-        return RETRIEVE_MOVE.format(where_clause=where_clause)
-    else:
-        raise ValueError(f"Invalid operation: {operation}")
+        return (
+            RETRIEVE_PEEK.format(where_clause=where_clause),
+            tuple(params + [spec.limit, spec.offset]),
+        )
+    if operation == "claim":
+        return (
+            RETRIEVE_CLAIM.format(where_clause=where_clause),
+            tuple(params + [spec.limit]),
+        )
+    if operation == "move":
+        if spec.target_queue is None:
+            raise ValueError("Move retrieve query requires target_queue")
+        return (
+            RETRIEVE_MOVE.format(where_clause=where_clause),
+            tuple([spec.target_queue] + params + [spec.limit]),
+        )
+    raise ValueError(f"Invalid operation: {operation}")
 
 
 # ~

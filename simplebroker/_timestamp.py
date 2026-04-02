@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from ._backend_plugins import BackendPlugin, resolve_runner_backend_plugin
 from ._constants import (
     LOGICAL_COUNTER_MASK,
     MAX_ITERATIONS,
@@ -38,8 +39,14 @@ class TimestampGenerator:
     high concurrency.
     """
 
-    def __init__(self, runner: "SQLRunner"):
+    def __init__(
+        self,
+        runner: "SQLRunner",
+        *,
+        backend_plugin: BackendPlugin | None = None,
+    ):
         self._runner = runner
+        self._backend_plugin = resolve_runner_backend_plugin(runner, backend_plugin)
         self._lock = threading.Lock()
         self._initialized = False
         self._last_ts = 0
@@ -52,14 +59,7 @@ class TimestampGenerator:
             return
 
         # Load last timestamp from meta table
-        result = self._runner.run(
-            "SELECT value FROM meta WHERE key = 'last_ts'", fetch=True
-        )
-        result_list = list(result)
-        if result_list:
-            self._last_ts = result_list[0][0]
-        else:
-            self._last_ts = 0
+        self._last_ts = self._backend_plugin.read_last_ts(self._runner)
 
         self._initialized = True
 
@@ -215,19 +215,10 @@ class TimestampGenerator:
         """
 
         def _op() -> bool:
-            rows = self._runner.run(
-                """
-                UPDATE meta
-                SET    value = ?
-                WHERE  key   = 'last_ts'
-                  AND  value < ?
-                RETURNING value
-                """,
-                (new_ts, new_ts),
-                fetch=True,
+            return self._backend_plugin.advance_last_ts(
+                self._runner,
+                new_ts=new_ts,
             )
-            # rows is non-empty if the UPDATE happened
-            return bool(list(rows))
 
         try:
             return _execute_with_retry(_op, max_retries=15, retry_delay=0.002)
@@ -238,10 +229,7 @@ class TimestampGenerator:
     # 3. lightweight read helper when we lost the race
     # -----------------------------------------------------------------
     def _peek_last_ts(self) -> int | None:
-        rows = list(
-            self._runner.run("SELECT value FROM meta WHERE key='last_ts'", fetch=True)
-        )
-        return rows[0][0] if rows else None
+        return self._backend_plugin.read_last_ts(self._runner)
 
     @staticmethod
     def validate(timestamp_str: str, exact: bool = False) -> int:
