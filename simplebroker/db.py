@@ -356,17 +356,27 @@ class DBConnection:
             self._core = None
             return
 
-        # Clean up runner/core if we own it
-        if not self._external_runner:
-            if self._runner:
-                try:
-                    self._runner.close()
-                except Exception as e:
-                    if config["BROKER_LOGGING_ENABLED"]:
-                        logger.warning(f"Error closing runner: {e}")
-                finally:
-                    self._runner = None
-                    self._core = None
+        # get_core() may lazily create an owned BrokerDB/BrokerCore without
+        # populating self._runner, so always close the owned core explicitly.
+        owned_core = self._core
+        owned_runner = self._runner
+        self._core = None
+        self._runner = None
+
+        if owned_core is not None:
+            try:
+                owned_core.close()
+            except Exception as e:
+                if config["BROKER_LOGGING_ENABLED"]:
+                    logger.warning(f"Error closing owned core: {e}")
+            return
+
+        if owned_runner is not None:
+            try:
+                owned_runner.close()
+            except Exception as e:
+                if config["BROKER_LOGGING_ENABLED"]:
+                    logger.warning(f"Error closing runner: {e}")
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Set the stop event used for interruptible retries."""
