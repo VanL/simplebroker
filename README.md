@@ -1365,6 +1365,18 @@ uv run mypy simplebroker
 4. Update documentation
 5. Run linting and tests before submitting PRs
 
+### Releases
+
+Pushing a tag creates a GitHub release with built artifacts:
+
+```bash
+# Release simplebroker
+git tag v3.1.0 && git push origin v3.1.0
+
+# Release simplebroker-pg
+git tag simplebroker_pg/v1.0.1 && git push origin simplebroker_pg/v1.0.1
+```
+
 ## License
 
 MIT © Van Lindberg
