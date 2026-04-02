@@ -18,7 +18,7 @@ import pytest
 from simplebroker._exceptions import OperationalError
 from simplebroker.watcher import QueueWatcher
 
-from .helper_scripts.broker_factory import make_broker
+from .helper_scripts.broker_factory import active_backend, make_broker
 from .helper_scripts.timing import (
     get_performance_threshold,
     scale_timeout_for_ci,
@@ -516,13 +516,15 @@ def test_concurrent_pre_checks(broker_target) -> None:
                 total_pre_check_errors = sum(
                     w.pre_check_operational_errors for w in watchers
                 )
+                # Postgres has higher per-query latency than SQLite
+                is_pg = active_backend() == "postgres"
                 avg_threshold = get_performance_threshold(
                     "WATCHER_PRECHECK_AVG_SECONDS",
-                    0.005 if os.environ.get("CI") else 0.003,
+                    0.015 if is_pg else (0.005 if os.environ.get("CI") else 0.003),
                 )
                 p99_threshold = get_performance_threshold(
                     "WATCHER_PRECHECK_P99_SECONDS",
-                    0.04 if os.environ.get("CI") else 0.025,
+                    0.1 if is_pg else (0.04 if os.environ.get("CI") else 0.025),
                 )
 
                 # Even under xdist saturation, the steady-state pre-check path
