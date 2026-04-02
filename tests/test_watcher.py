@@ -645,19 +645,15 @@ class TestQueueWatcher(WatcherTestBase):
 
         def run_watcher():
             nonlocal watcher_ref
-            db = make_broker(broker_target)
-            try:
-                watcher = QueueWatcher(
-                    "test_queue",
-                    lambda m, t: None,
-                    db=db,
-                )
-                watcher_ref = watcher
-                watcher_created.set()  # Signal that watcher is created
-                watcher.run_forever()
-                run_completed.set()
-            finally:
-                db.close()
+            watcher = QueueWatcher(
+                "test_queue",
+                lambda m, t: None,
+                db=broker_target,
+            )
+            watcher_ref = watcher
+            watcher_created.set()  # Signal that watcher is created
+            watcher.run_forever()
+            run_completed.set()
 
         thread = threading.Thread(target=run_watcher)
         thread.start()

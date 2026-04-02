@@ -285,8 +285,14 @@ class BaseWatcher(ABC):
                     db_path = str(db.db_path)
                 elif isinstance(db, ResolvedTarget):
                     db_path = db
-                else:
+                elif isinstance(db, (str, Path)):
                     db_path = str(db)
+                else:
+                    raise TypeError(
+                        f"Watcher db= must be a path, ResolvedTarget, or BrokerDB, "
+                        f"not {type(db).__name__}. Use db=broker_target instead of "
+                        f"db=broker_core_instance."
+                    )
             else:
                 # Use default database
                 db_path = DEFAULT_DB_NAME
