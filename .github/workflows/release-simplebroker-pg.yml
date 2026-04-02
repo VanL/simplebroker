@@ -1,0 +1,36 @@
+name: Release simplebroker-pg
+
+on:
+  push:
+    tags:
+      - "simplebroker_pg/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build extensions/simplebroker_pg
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#simplebroker_pg/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "simplebroker-pg ${{ steps.version.outputs.version }}"
+          files: extensions/simplebroker_pg/dist/*
+          generate_release_notes: true
