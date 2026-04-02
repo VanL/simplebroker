@@ -16,7 +16,14 @@ backend plugin hook.
 ## Installation
 
 ```bash
-uv pip install -e "./extensions/simplebroker_pg[dev]"
+# Add to an existing pipx-installed simplebroker (recommended)
+pipx inject simplebroker simplebroker-pg
+
+# Or install with uv to use as a library
+uv add simplebroker-pg
+
+# Or with pip
+pip install simplebroker-pg
 ```
 
 ## Python Usage
@@ -51,9 +58,9 @@ schema = "simplebroker_app"
 Then use the normal CLI from any child directory with project scope enabled:
 
 ```bash
-BROKER_PROJECT_SCOPE=1 python -m simplebroker.cli init
-BROKER_PROJECT_SCOPE=1 python -m simplebroker.cli write jobs hello
-BROKER_PROJECT_SCOPE=1 python -m simplebroker.cli read jobs
+broker init
+broker write jobs hello
+broker read jobs
 ```
 
 You can also run entirely from environment variables without a project config:
@@ -63,7 +70,7 @@ BROKER_BACKEND=postgres \
 BROKER_BACKEND_TARGET='postgresql://postgres@127.0.0.1:54329/simplebroker_test' \
 BROKER_BACKEND_SCHEMA='simplebroker_app' \
 BROKER_BACKEND_PASSWORD='postgres' \
-python -m simplebroker.cli init
+broker init
 ```
 
 Notes:
