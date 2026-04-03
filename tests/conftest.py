@@ -494,22 +494,39 @@ def run_cli(
     if timeout is None:
         timeout = scale_timeout_for_ci(12.0 if sys.platform == "win32" else 6.0)
 
-    completed = run_func(
-        cmd,
-        cwd=cwd,
-        input=stdin,
-        text=True,  # -> str instead of bytes
-        capture_output=True,
-        timeout=timeout,
-        encoding="utf-8",  # Ensure UTF-8 encoding on all platforms
-        errors="replace",  # Replace invalid characters instead of failing
-        env=full_env,  # Pass environment with UTF-8 encoding
-    )
+    run_kwargs: dict[str, Any] = {
+        "cwd": cwd,
+        "capture_output": True,
+        "timeout": timeout,
+        "env": full_env,
+    }
+
+    if stdin is None:
+        run_kwargs.update(
+            {
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+            }
+        )
+    else:
+        # Feed raw bytes so black-box stdin tests are not affected by the
+        # platform's text-mode newline translation, especially on Windows.
+        run_kwargs["input"] = stdin.encode("utf-8")
+
+    completed = run_func(cmd, **run_kwargs)
+
+    if stdin is None:
+        stdout = completed.stdout
+        stderr = completed.stderr
+    else:
+        stdout = completed.stdout.decode("utf-8", errors="replace")
+        stderr = completed.stderr.decode("utf-8", errors="replace")
 
     return (
         completed.returncode,
-        completed.stdout.strip(),
-        completed.stderr.strip(),
+        stdout.strip(),
+        stderr.strip(),
     )
 
 
