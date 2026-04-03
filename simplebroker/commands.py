@@ -177,19 +177,25 @@ def _read_from_stdin(max_bytes: int = MAX_MESSAGE_SIZE) -> str:
     return b"".join(chunks).decode("utf-8")
 
 
-def _get_message_content(message: str) -> str:
+def _get_message_content(message: str | None) -> str:
     """Get message content from argument or stdin, with size validation.
 
     Args:
-        message: Message string or "-" to read from stdin
+        message: Message string, None to read piped stdin, or "-" to read stdin
 
     Returns:
         The message content
 
     Raises:
-        ValueError: If message exceeds size limit
+        ValueError: If message exceeds size limit or no interactive message was given
     """
     if message == "-":
+        return _read_from_stdin()
+    if message is None:
+        if sys.stdin.isatty():
+            raise ValueError(
+                "message is required when stdin is a terminal; pass a message or pipe input"
+            )
         return _read_from_stdin()
 
     # Check message size
@@ -343,13 +349,13 @@ def _process_queue_fetch(
     return EXIT_SUCCESS
 
 
-def cmd_write(db_path: DBTarget, queue_name: str, message: str) -> int:
+def cmd_write(db_path: DBTarget, queue_name: str, message: str | None) -> int:
     """Write message to queue using Queue API.
 
     Args:
         db_path: Path to database file
         queue_name: Name of the queue
-        message: Message content or "-" for stdin
+        message: Message content, None to read piped stdin, or "-" for stdin
 
     Returns:
         Exit code
@@ -695,12 +701,14 @@ def cmd_move(
                 return EXIT_SUCCESS
 
 
-def cmd_broadcast(db_path: DBTarget, message: str, pattern: str | None = None) -> int:
+def cmd_broadcast(
+    db_path: DBTarget, message: str | None, pattern: str | None = None
+) -> int:
     """Send message to all queues.
 
     Args:
         db_path: Path to database file
-        message: Message content or "-" for stdin
+        message: Message content, None to read piped stdin, or "-" for stdin
         pattern: Optional fnmatch-style pattern limiting target queues
 
     Returns:

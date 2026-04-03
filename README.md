@@ -119,6 +119,7 @@ $ broker read myqueue
 Hello, World!
 
 # Write from stdin
+$ echo "another message" | broker write myqueue
 $ echo "another message" | broker write myqueue -
 
 # Read all messages at once
@@ -164,7 +165,7 @@ $ broker --cleanup
 
 | Command | Description |
 |---------|-------------|
-| `write <queue> <message\|->` | Add message to queue (use `-` for stdin) |
+| `write <queue> [message\|-]` | Add message to queue (omit or use `-` for stdin) |
 | `read <queue> [options]` | Remove and return message(s) |
 | `peek <queue> [options]` | Return message(s) without removing |
 | `move <source> <dest> [options]` | Atomically transfer messages between queues |

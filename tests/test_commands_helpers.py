@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import json
+import types
 from collections.abc import Iterator
 
 import pytest
 
+import simplebroker.commands as commands
 from simplebroker._constants import EXIT_ERROR, EXIT_QUEUE_EMPTY, EXIT_SUCCESS
-from simplebroker.commands import _process_queue_fetch, _resolve_timestamp_filters
+from simplebroker.commands import (
+    _get_message_content,
+    _process_queue_fetch,
+    _resolve_timestamp_filters,
+)
 
 pytestmark = [pytest.mark.shared]
 
@@ -42,6 +48,28 @@ class TestResolveTimestampFilters:
         assert error == EXIT_QUEUE_EMPTY
         assert since_ts is None and exact_ts is None
         assert capsys.readouterr().err == ""
+
+
+class TestGetMessageContent:
+    def test_reads_from_stdin_when_message_omitted_and_stdin_is_piped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            commands.sys, "stdin", types.SimpleNamespace(isatty=lambda: False)
+        )
+        monkeypatch.setattr(commands, "_read_from_stdin", lambda: "from stdin")
+
+        assert _get_message_content(None) == "from stdin"
+
+    def test_rejects_omitted_message_when_stdin_is_tty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            commands.sys, "stdin", types.SimpleNamespace(isatty=lambda: True)
+        )
+
+        with pytest.raises(ValueError, match="message is required"):
+            _get_message_content(None)
 
 
 class TestProcessQueueFetch:

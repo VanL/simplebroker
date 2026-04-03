@@ -47,6 +47,16 @@ def test_write_from_stdin(workdir):
     assert out == "special chars: !@#$%^&*()"
 
 
+def test_write_from_implicit_stdin(workdir):
+    """T2b: Write from stdin when message argument is omitted."""
+    rc, _, _ = run_cli("write", "q4", cwd=workdir, stdin="line1\nline2")
+    assert rc == 0
+
+    rc, out, _ = run_cli("read", "q4", cwd=workdir)
+    assert rc == 0
+    assert out == "line1\nline2"
+
+
 def test_read_all_fifo(workdir):
     """T3: --all returns messages in FIFO order."""
     # Write multiple messages

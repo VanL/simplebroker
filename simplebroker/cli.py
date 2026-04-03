@@ -155,7 +155,11 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     # Write command
     write_parser = subparsers.add_parser("write", help="write message to queue")
     write_parser.add_argument("queue", help="queue name")
-    write_parser.add_argument("message", help="message content ('-' for stdin)")
+    write_parser.add_argument(
+        "message",
+        nargs="?",
+        help="message content (omit or use '-' for stdin)",
+    )
 
     # Read command
     read_parser = subparsers.add_parser("read", help="read and remove message")

@@ -440,14 +440,13 @@ def test_pre_check_with_peek_mode(broker_target) -> None:
         # Add a message
         broker.write("test_queue", "test_message")
 
-        # Let it run for a bit
-        time.sleep(0.5)
-
-        # In peek mode with timestamp tracking, we should see exactly one peek
-        # The watcher updates its timestamp after successful dispatch to avoid
-        # reprocessing the same message
-        with peek_lock:
-            assert peek_count == 1  # Should peek exactly once due to timestamp tracking
+        # Wait for the asynchronous watcher thread to observe the message.
+        # A fixed sleep is flaky under suite-wide CPU contention.
+        assert wait_for_condition(
+            lambda: peek_count == 1,
+            timeout=scale_timeout_for_ci(2.0),
+            interval=0.01,
+        )
 
         # Message should still be in queue (use non-destructive peek)
         check_db = make_broker(broker_target)
