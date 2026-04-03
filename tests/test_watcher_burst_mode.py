@@ -141,7 +141,7 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
         processed_messages = []
 
         def handler(msg, ts) -> None:
-            processed_messages.append((msg, time.time()))
+            processed_messages.append((msg, time.monotonic()))
 
         watcher = InstrumentedQueueWatcher("test_queue", handler, db=broker_target)
         strategy = watcher._strategy
@@ -160,20 +160,23 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
         wait_for_condition(
             has_backed_off,
             timeout=2.0,
+            interval=0.01,
             message="Watcher should back off when no messages available",
         )
 
         # Record polling state before message
         delay_count_before = len(strategy.delay_history)
 
-        # Add a message and record when
-        message_time = time.time()
+        # Record from the completed enqueue so the latency check measures
+        # watcher responsiveness rather than producer-side write time.
         broker.write("test_queue", "test message")
+        message_time = time.monotonic()
 
         # Wait for message processing
         wait_for_condition(
             lambda: len(processed_messages) > 0,
             timeout=1.0,
+            interval=0.01,
             message="Message should be processed",
         )
 
@@ -190,12 +193,16 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
         wait_for_condition(
             burst_mode_resumed,
             timeout=1.0,
+            interval=0.01,
             message="Should resume burst mode after finding message",
         )
 
         # Verify message was processed quickly after being written
         process_latency = processed_messages[0][1] - message_time
-        assert process_latency < 0.1, (
+        # Windows timer granularity and CI scheduling can stretch a single
+        # polling interval even when burst mode resumes correctly.
+        latency_budget = 0.25 if sys.platform == "win32" else 0.1
+        assert process_latency < latency_budget, (
             f"Message should be processed quickly, took {process_latency:.3f}s"
         )
 

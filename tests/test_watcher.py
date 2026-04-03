@@ -714,7 +714,13 @@ class TestQueueWatcher(WatcherTestBase):
         )
         thread = initial_watcher.run_in_thread()
         try:
-            time.sleep(0.1)
+            assert initial_collector.wait_for_messages(
+                2,
+                timeout=scale_timeout_for_ci(2.0),
+            ), (
+                "Initial peek watcher should collect both seed messages before "
+                "the timestamp boundary is chosen"
+            )
         finally:
             initial_watcher.stop()
             thread.join(timeout=2.0)
@@ -743,7 +749,10 @@ class TestQueueWatcher(WatcherTestBase):
         # Start watcher and let it process messages
         thread = watcher.run_in_thread()
         try:
-            time.sleep(0.1)  # Give it time to process
+            assert collector.wait_for_messages(
+                1,
+                timeout=scale_timeout_for_ci(2.0),
+            ), "Peek watcher should collect the post-since message"
         finally:
             # Stop watcher
             watcher.stop()
