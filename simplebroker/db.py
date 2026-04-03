@@ -475,10 +475,15 @@ class BrokerCore:
         self._write_count = 0
         self._vacuum_interval = config["BROKER_AUTO_VACUUM_INTERVAL"]
 
+        # Ensure backend-wide connection setup (for example SQLite WAL mode)
+        # runs for all core paths, not only BrokerDB.
+        self._runner.setup(SetupPhase.CONNECTION)
+
         # Setup database (must be done before creating TimestampGenerator)
         self._setup_database()
         self._verify_database_magic()
         self._migrate_schema()
+        self._runner.setup(SetupPhase.OPTIMIZATION)
 
         # Timestamp generator (created after database setup so meta table exists)
         self._timestamp_gen = TimestampGenerator(
@@ -2136,19 +2141,11 @@ class BrokerDB(BrokerCore):
         # Create SQLite runner
         self._runner = SQLiteRunner(str(self.db_path))
 
-        # Phase 1: Critical connection setup (WAL mode, etc)
-        # This must happen before any database operations
-        self._runner.setup(SetupPhase.CONNECTION)
-
-        # Store conn reference internally for compatibility
-        self._conn = self._runner._conn
-
         # Initialize parent (will create schema)
         super().__init__(self._runner)
 
-        # Phase 2: Performance optimizations (can be done after schema)
-        # This applies to all future connections
-        self._runner.setup(SetupPhase.OPTIMIZATION)
+        # Store conn reference internally for compatibility
+        self._conn = self._runner._conn
 
         # Set restrictive permissions if new database
         if not existing_db:

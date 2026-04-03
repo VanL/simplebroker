@@ -4,7 +4,8 @@ import sqlite3
 
 import pytest
 
-from simplebroker.db import BrokerDB
+from simplebroker._runner import SQLiteRunner
+from simplebroker.db import BrokerCore, BrokerDB
 
 
 def test_default_pragma_settings(tmp_path) -> None:
@@ -37,6 +38,17 @@ def test_default_pragma_settings(tmp_path) -> None:
                 fetch=True,
             )
             assert len(result) == 0
+
+
+def test_brokercore_initializes_wal_mode(tmp_path) -> None:
+    """BrokerCore should run SQLite connection-phase setup, including WAL mode."""
+    db_path = tmp_path / "test.db"
+    runner = SQLiteRunner(str(db_path))
+
+    with BrokerCore(runner) as db:
+        db.write("test_queue", "message")
+        result = runner.run("PRAGMA journal_mode", fetch=True)
+        assert result[0][0].lower() == "wal"
 
 
 def test_custom_cache_size(tmp_path, monkeypatch) -> None:
