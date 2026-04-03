@@ -18,7 +18,11 @@ import pytest
 from simplebroker.watcher import QueueWatcher
 
 from .helper_scripts.broker_factory import make_broker
-from .helper_scripts.timing import wait_for_condition, wait_for_count
+from .helper_scripts.timing import (
+    scale_timeout_for_ci,
+    wait_for_condition,
+    wait_for_count,
+)
 
 pytestmark = [pytest.mark.shared]
 
@@ -205,11 +209,12 @@ def test_metrics_collection_basic(broker_target) -> None:
         assert wait_for_count(
             lambda: metrics.get_stats()["messages_processed"],
             expected_count=10,
-            timeout=2.0,
+            timeout=scale_timeout_for_ci(2.0),
+            interval=0.05,
         )
 
         watcher.stop()
-        thread.join(timeout=1.0)
+        thread.join(timeout=scale_timeout_for_ci(1.0))
 
         # Check metrics
         stats = metrics.get_stats()
@@ -249,11 +254,11 @@ def test_metrics_efficiency_tracking(broker_target) -> None:
         thread1 = watcher1.run_in_thread()
         assert wait_for_condition(
             lambda: metrics1.get_stats()["total_wake_ups"] > 0,
-            timeout=2.0,
+            timeout=scale_timeout_for_ci(2.0),
             interval=0.05,
         )
         watcher1.stop()
-        thread1.join(timeout=1.0)
+        thread1.join(timeout=scale_timeout_for_ci(1.0))
 
         metrics1.get_stats()
         # Note: Not asserting on efficiency as it depends on implementation
@@ -277,11 +282,12 @@ def test_metrics_efficiency_tracking(broker_target) -> None:
         assert wait_for_count(
             lambda: metrics2.get_stats()["messages_processed"],
             expected_count=20,
-            timeout=2.0,
+            timeout=scale_timeout_for_ci(2.0),
+            interval=0.05,
         )
 
         watcher2.stop()
-        thread2.join(timeout=1.0)
+        thread2.join(timeout=scale_timeout_for_ci(1.0))
 
         stats2 = metrics2.get_stats()
         assert stats2["messages_processed"] == 20
@@ -322,12 +328,12 @@ def test_metrics_logging(broker_target) -> None:
 
                 assert wait_for_condition(
                     lambda: mock_log.call_count >= 1,
-                    timeout=2.0,
+                    timeout=scale_timeout_for_ci(2.0),
                     interval=0.05,
                 )
             finally:
                 watcher.stop()
-                thread.join(timeout=1.0)
+                thread.join(timeout=scale_timeout_for_ci(1.0))
 
             # Check that stats were logged
             assert mock_log.call_count >= 1
@@ -384,7 +390,8 @@ def test_metrics_aggregation(broker_target) -> None:
             assert wait_for_count(
                 lambda: global_metrics.get_stats()["messages_processed"],
                 expected_count=num_watchers * 10,
-                timeout=3.0,
+                timeout=scale_timeout_for_ci(3.0),
+                interval=0.05,
                 at_least=True,
             )
 
@@ -399,7 +406,7 @@ def test_metrics_aggregation(broker_target) -> None:
             for w in watchers:
                 w.stop()
             for t in threads:
-                t.join(timeout=1.0)
+                t.join(timeout=scale_timeout_for_ci(1.0))
     finally:
         broker.close()
 
