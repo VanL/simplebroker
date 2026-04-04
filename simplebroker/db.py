@@ -8,7 +8,7 @@ import threading
 import time
 import warnings
 import weakref
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from fnmatch import fnmatchcase
 from functools import lru_cache
@@ -62,6 +62,14 @@ def _resolve_backend_plugin(
 ) -> BackendPlugin:
     """Resolve the backend plugin for a runner instance."""
     return resolve_runner_backend_plugin(runner, explicit_plugin)
+
+
+def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Overlay caller-provided config values onto the default config snapshot."""
+    merged = dict(_config)
+    if config is not None:
+        merged.update(config)
+    return merged
 
 
 class _BorrowedRunner:
@@ -173,7 +181,7 @@ class DBConnection:
             db_path: Path to the SQLite database
             runner: Optional custom SQLRunner implementation
         """
-        self._config = config
+        self._config = _merge_config(config)
         self._resolved_target = db_path if isinstance(db_path, ResolvedTarget) else None
         self.db_path = (
             self._resolved_target.target
@@ -452,6 +460,8 @@ class BrokerCore:
         Args:
             runner: SQL runner instance for database operations
         """
+        config = _merge_config(config)
+
         # Re-entrant lock allows same-thread read-only re-entry from generator
         # callbacks. Mutating re-entry during an open at-least-once batch is
         # guarded explicitly because SQLite cannot nest write transactions on
