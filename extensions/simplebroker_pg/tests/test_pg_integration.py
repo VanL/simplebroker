@@ -39,6 +39,7 @@ def _run_cli(
     *args: str,
     cwd: Path,
     env: dict[str, str] | None = None,
+    timeout: float | None = None,
 ) -> tuple[int, str, str]:
     full_env = os.environ.copy()
     if env:
@@ -60,6 +61,7 @@ def _run_cli(
         encoding="utf-8",
         errors="replace",
         check=False,
+        timeout=timeout,
     )
     return completed.returncode, completed.stdout.strip(), completed.stderr.strip()
 
@@ -152,6 +154,35 @@ def test_postgres_cli_env_selected_backend_roundtrip(tmp_path: Path) -> None:
 
     code, stdout, stderr = _run_cli("--cleanup", cwd=project_root, env=env)
     assert code == 0, stderr
+
+
+def test_postgres_cli_env_selected_backend_init_exits_cleanly(tmp_path: Path) -> None:
+    """Env-selected Postgres init should not leave pool workers alive at exit."""
+
+    schema = _schema_name()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    env = {
+        "BROKER_BACKEND": "postgres",
+        "BROKER_BACKEND_TARGET": _require_test_dsn(),
+        "BROKER_BACKEND_SCHEMA": schema,
+    }
+
+    try:
+        code, stdout, stderr = _run_cli(
+            "init",
+            cwd=project_root,
+            env=env,
+            timeout=10.0,
+        )
+        assert code == 0, stderr
+        assert "Initialized SimpleBroker target:" in stdout
+    finally:
+        get_backend_plugin().cleanup_target(
+            _require_test_dsn(),
+            backend_options={"schema": schema},
+        )
 
 
 def test_postgres_owned_runner_subprocess_exits_cleanly(tmp_path: Path) -> None:

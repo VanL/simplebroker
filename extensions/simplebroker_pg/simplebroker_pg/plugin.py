@@ -278,12 +278,20 @@ class PostgresBackendPlugin:
             )
 
         runner = self.create_runner(target, backend_options=backend_options)
+        core: Any | None = None
         try:
             from simplebroker.db import BrokerCore
 
-            BrokerCore(runner, backend_plugin=cast(BackendPlugin, self)).close()
+            core = BrokerCore(runner, backend_plugin=cast(BackendPlugin, self))
         finally:
-            runner.close()
+            if core is not None:
+                core.shutdown()
+            else:
+                shutdown = getattr(runner, "shutdown", None)
+                if callable(shutdown):
+                    shutdown()
+                else:
+                    runner.close()
 
     def validate_target(
         self,
