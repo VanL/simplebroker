@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ._backend_plugins import BackendPlugin, get_backend_plugin
-from ._constants import load_config
+from ._constants import load_config, resolve_config
 from ._project_config import (
     PROJECT_CONFIG_FILENAME,
     find_project_config,
@@ -21,7 +21,7 @@ BrokerTarget = ResolvedTarget
 
 
 def _config_dict(config: dict[str, Any] | None) -> dict[str, Any]:
-    return dict(load_config()) if config is None else dict(config)
+    return dict(load_config()) if config is None else resolve_config(config)
 
 
 def _root_from_relative_target(target_path: Path, relative_target: Path) -> Path:

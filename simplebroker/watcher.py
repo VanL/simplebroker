@@ -88,6 +88,7 @@ from ._constants import (
     MAX_MESSAGE_SIZE,
     MAX_TOTAL_RETRY_TIME,
     load_config,
+    resolve_config,
 )
 from ._exceptions import OperationalError
 from ._targets import ResolvedTarget
@@ -217,7 +218,7 @@ def config_aware_default_error_handler(
     Returns:
         True to continue processing (don't stop the watcher)
     """
-    if config["BROKER_LOGGING_ENABLED"]:
+    if resolve_config(config)["BROKER_LOGGING_ENABLED"]:
         return default_error_handler(exc, message, timestamp)
     return True
 
@@ -278,6 +279,7 @@ class BaseWatcher(ABC):
         if isinstance(queue, Queue):
             self._queue_obj = queue
         else:
+            resolved_config = resolve_config(config)
             # Create Queue object with persistent=True by default for watchers
             db_path: str | ResolvedTarget
             if db is not None:
@@ -298,8 +300,9 @@ class BaseWatcher(ABC):
                 db_path = DEFAULT_DB_NAME
 
             self._queue_obj = Queue(
-                str(queue), db_path=db_path, persistent=True, config=config
+                str(queue), db_path=db_path, persistent=True, config=resolved_config
             )
+            config = resolved_config
 
         # Event to signal the watcher to stop
         self._stop_event = stop_event or threading.Event()
@@ -309,7 +312,7 @@ class BaseWatcher(ABC):
             self._queue_obj.set_stop_event(self._stop_event)
 
         # Store configuration
-        self._config = config
+        self._config = resolve_config(config)
 
         # Weak reference to the thread running this watcher (for cleanup warnings)
         self._thread: weakref.ref[threading.Thread] | None = None

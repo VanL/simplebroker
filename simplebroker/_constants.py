@@ -27,6 +27,7 @@ import os
 import platform
 import re
 import warnings
+from collections.abc import Mapping
 from pathlib import PurePath
 from typing import Any, Final
 
@@ -34,7 +35,7 @@ from typing import Any, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "3.1.1"
+__version__: Final[str] = "3.1.2"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
@@ -423,6 +424,102 @@ def _parse_bool(value: str) -> bool:
     if not value:
         return False
     return value.lower().strip() in ("1", "true", "yes", "on")
+
+
+def _parse_strict_one_bool(value: Any) -> bool:
+    """Return True only for canonical truthy override values.
+
+    This matches the environment parsing contract used by flags that only accept
+    ``"1"`` from environment variables while still accepting typed booleans from
+    callers that build override dictionaries directly.
+    """
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value == 1
+    return str(value) == "1"
+
+
+def _parse_debug_flag(value: Any) -> bool:
+    """Mirror ``bool(os.environ.get(...))`` while accepting typed booleans."""
+
+    if isinstance(value, bool):
+        return value
+    return bool(value)
+
+
+def _parse_vacuum_threshold(value: Any) -> float:
+    """Normalize vacuum threshold overrides to the canonical fractional form."""
+
+    if isinstance(value, str):
+        return float(value) / 100
+
+    numeric = float(value)
+    if numeric > 1:
+        return numeric / 100
+    return numeric
+
+
+_CONFIG_NORMALIZERS: Final[dict[str, Any]] = {
+    "BROKER_BUSY_TIMEOUT": int,
+    "BROKER_CACHE_MB": int,
+    "BROKER_SYNC_MODE": lambda value: str(value).upper(),
+    "BROKER_WAL_AUTOCHECKPOINT": int,
+    "BROKER_MAX_MESSAGE_SIZE": int,
+    "BROKER_READ_COMMIT_INTERVAL": int,
+    "BROKER_GENERATOR_BATCH_SIZE": int,
+    "BROKER_AUTO_VACUUM": int,
+    "BROKER_AUTO_VACUUM_INTERVAL": int,
+    "BROKER_VACUUM_THRESHOLD": _parse_vacuum_threshold,
+    "BROKER_VACUUM_BATCH_SIZE": int,
+    "BROKER_VACUUM_LOCK_TIMEOUT": int,
+    "BROKER_SKIP_IDLE_CHECK": _parse_strict_one_bool,
+    "BROKER_JITTER_FACTOR": float,
+    "BROKER_INITIAL_CHECKS": int,
+    "BROKER_MAX_INTERVAL": float,
+    "BROKER_BURST_SLEEP": float,
+    "BROKER_DEBUG": _parse_debug_flag,
+    "BROKER_LOGGING_ENABLED": _parse_strict_one_bool,
+    "BROKER_DEFAULT_DB_LOCATION": str,
+    "BROKER_DEFAULT_DB_NAME": str,
+    "BROKER_PROJECT_SCOPE": lambda value: (
+        value if isinstance(value, bool) else _parse_bool(str(value))
+    ),
+    "BROKER_BACKEND": str,
+    "BROKER_BACKEND_HOST": str,
+    "BROKER_BACKEND_PORT": int,
+    "BROKER_BACKEND_USER": str,
+    "BROKER_BACKEND_PASSWORD": str,
+    "BROKER_BACKEND_DATABASE": str,
+    "BROKER_BACKEND_SCHEMA": str,
+    "BROKER_BACKEND_TARGET": str,
+}
+"""Canonical coercion rules for config overrides."""
+
+
+def resolve_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Return a complete typed config with optional caller overrides applied.
+
+    This is the public config-contract helper for library callers. It starts
+    from the environment-derived configuration and then applies any provided
+    overrides using the same coercion rules as environment parsing wherever
+    practical. Missing keys inherit the canonical defaults from
+    :func:`load_config`.
+    """
+
+    config = load_config()
+    if overrides is None:
+        return config
+
+    for key, value in overrides.items():
+        normalizer = _CONFIG_NORMALIZERS.get(key)
+        config[key] = normalizer(value) if normalizer is not None else value
+
+    if config["BROKER_SYNC_MODE"] not in ("FULL", "NORMAL", "OFF"):
+        config["BROKER_SYNC_MODE"] = "FULL"
+
+    return config
 
 
 def load_config() -> dict[str, Any]:

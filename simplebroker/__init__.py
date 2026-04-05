@@ -2,7 +2,7 @@
 
 # Import main components
 # Import BrokerDB for backward compatibility (but don't export it)
-from ._constants import __version__
+from ._constants import __version__, resolve_config
 from .db import BrokerDB as _BrokerDB  # noqa: F401
 from .db import open_broker
 from .project import (
@@ -26,6 +26,7 @@ __all__ = [
     "broker_root",
     "deserialize_broker_target",
     "open_broker",
+    "resolve_config",
     "resolve_broker_target",
     "serialize_broker_target",
     "target_for_directory",

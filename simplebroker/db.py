@@ -33,6 +33,7 @@ from ._constants import (
     PEEK_BATCH_SIZE,
     SIMPLEBROKER_MAGIC,
     load_config,
+    resolve_config,
 )
 from ._exceptions import (
     IntegrityError,
@@ -66,10 +67,17 @@ def _resolve_backend_plugin(
 
 def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Overlay caller-provided config values onto the default config snapshot."""
-    merged = dict(_config)
-    if config is not None:
-        merged.update(config)
-    return merged
+    return resolve_config(config)
+
+
+def _close_owned_runner(runner: SQLRunner) -> None:
+    """Close an owned runner, preferring a full shutdown when supported."""
+
+    shutdown = getattr(runner, "shutdown", None)
+    if callable(shutdown):
+        shutdown()
+        return
+    runner.close()
 
 
 class _BorrowedRunner:
@@ -365,7 +373,7 @@ class DBConnection:
             return
 
         # get_core() may lazily create an owned BrokerDB/BrokerCore without
-        # populating self._runner, so always close the owned core explicitly.
+        # populating self._runner, so always shut down the owned core explicitly.
         owned_core = self._core
         owned_runner = self._runner
         self._core = None
@@ -373,7 +381,7 @@ class DBConnection:
 
         if owned_core is not None:
             try:
-                owned_core.close()
+                owned_core.shutdown()
             except Exception as e:
                 if config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing owned core: {e}")
@@ -381,7 +389,7 @@ class DBConnection:
 
         if owned_runner is not None:
             try:
-                owned_runner.close()
+                _close_owned_runner(owned_runner)
             except Exception as e:
                 if config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing runner: {e}")
@@ -2066,13 +2074,28 @@ class BrokerCore:
                 raise
 
     def close(self) -> None:
-        """Close the database connection."""
+        """Close this handle's active connection state.
+
+        This releases the current thread's connection and performs any
+        backend-specific local cleanup, but it does not assume ownership of the
+        runner itself. Owners that created the underlying runner should call
+        :meth:`shutdown` instead.
+        """
         with self._lock:
             # Clean up any marker files (especially for mocked paths in tests)
             if hasattr(self._runner, "cleanup_marker_files"):
                 self._runner.cleanup_marker_files()
             self._runner.close()
             # Force garbage collection to release any lingering references on Windows
+            gc.collect()
+
+    def shutdown(self) -> None:
+        """Shut down the underlying runner when this core owns it."""
+        with self._lock:
+            # Reuse close() for local handle cleanup before taking down the runner.
+            if hasattr(self._runner, "cleanup_marker_files"):
+                self._runner.cleanup_marker_files()
+            _close_owned_runner(self._runner)
             gc.collect()
 
     def __enter__(self) -> "BrokerCore":

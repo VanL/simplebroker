@@ -12,7 +12,7 @@ from contextlib import contextmanager
 from typing import Any, Literal, Union, cast
 
 from ._backend_plugins import ActivityWaiter, BackendAwareRunner, get_backend_plugin
-from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config
+from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
 from ._runner import SQLRunner
 from ._targets import ResolvedTarget
 from .db import BrokerCore, BrokerDB, DBConnection
@@ -91,7 +91,7 @@ class Queue:
         self._db_path = db_path
         self._persistent = persistent
         self._runner = runner
-        self._config = config or _config
+        self._config = _config if config is None else resolve_config(config)
         self._stop_event: threading.Event | None = None
 
         # Create DBConnection for persistent queues and injected-runner queues.

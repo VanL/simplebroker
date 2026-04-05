@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from psycopg import conninfo as pg_conninfo
-from simplebroker_pg import PostgresRunner
+from simplebroker_pg import PostgresRunner, get_backend_plugin
 
 from simplebroker import Queue
 
@@ -152,6 +152,52 @@ def test_postgres_cli_env_selected_backend_roundtrip(tmp_path: Path) -> None:
 
     code, stdout, stderr = _run_cli("--cleanup", cwd=project_root, env=env)
     assert code == 0, stderr
+
+
+def test_postgres_owned_runner_subprocess_exits_cleanly(tmp_path: Path) -> None:
+    """Owned Postgres runners should shut down their pool threads on process exit."""
+
+    schema = _schema_name()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "BROKER_BACKEND": "postgres",
+            "BROKER_BACKEND_TARGET": _require_test_dsn(),
+            "BROKER_BACKEND_SCHEMA": schema,
+        }
+    )
+
+    script = """
+from pathlib import Path
+
+from simplebroker import Queue, target_for_directory
+
+target = target_for_directory(Path.cwd())
+with Queue("jobs", db_path=target) as queue:
+    queue.write("hello")
+"""
+
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=project_root,
+            text=True,
+            capture_output=True,
+            env=env,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=10,
+        )
+        assert completed.returncode == 0, completed.stderr
+    finally:
+        get_backend_plugin().cleanup_target(
+            _require_test_dsn(),
+            backend_options={"schema": schema},
+        )
 
 
 def test_postgres_cli_password_env_merges_into_target(tmp_path: Path) -> None:
