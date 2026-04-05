@@ -347,12 +347,9 @@ class DBConnection:
         with self._registry_lock:
             # Create a list copy to avoid modification during iteration
             connections_to_close = list(self._connection_registry)
-        if (
-            current_thread_connection is not None
-            and not any(
-                connection is current_thread_connection
-                for connection in connections_to_close
-            )
+        if current_thread_connection is not None and not any(
+            connection is current_thread_connection
+            for connection in connections_to_close
         ):
             connections_to_close.append(current_thread_connection)
         if hasattr(self._thread_local, "db"):
