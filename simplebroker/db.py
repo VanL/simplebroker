@@ -341,15 +341,22 @@ class DBConnection:
         Closes thread-local connections and releases resources.
         Safe to call multiple times.
         """
-        # Drop the current thread-local reference early so cleanup can safely
-        # shut down managed connections without leaving stale handles behind.
-        if hasattr(self._thread_local, "db"):
-            delattr(self._thread_local, "db")
+        current_thread_connection = getattr(self._thread_local, "db", None)
 
         # Clean up ALL registered connections (cross-thread cleanup)
         with self._registry_lock:
             # Create a list copy to avoid modification during iteration
             connections_to_close = list(self._connection_registry)
+        if (
+            current_thread_connection is not None
+            and not any(
+                connection is current_thread_connection
+                for connection in connections_to_close
+            )
+        ):
+            connections_to_close.append(current_thread_connection)
+        if hasattr(self._thread_local, "db"):
+            delattr(self._thread_local, "db")
 
         # Close connections outside the lock to avoid deadlocks
         for connection in connections_to_close:
