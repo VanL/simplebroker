@@ -341,15 +341,10 @@ class DBConnection:
         Closes thread-local connections and releases resources.
         Safe to call multiple times.
         """
-        # Clean up thread-local connection in current thread
+        # Drop the current thread-local reference early so cleanup can safely
+        # shut down managed connections without leaving stale handles behind.
         if hasattr(self._thread_local, "db"):
-            try:
-                self._thread_local.db.close()
-            except Exception as e:
-                if config["BROKER_LOGGING_ENABLED"]:
-                    logger.warning(f"Error closing thread-local database: {e}")
-            finally:
-                delattr(self._thread_local, "db")
+            delattr(self._thread_local, "db")
 
         # Clean up ALL registered connections (cross-thread cleanup)
         with self._registry_lock:
@@ -359,7 +354,10 @@ class DBConnection:
         # Close connections outside the lock to avoid deadlocks
         for connection in connections_to_close:
             try:
-                connection.close()
+                if not self._external_runner and hasattr(connection, "shutdown"):
+                    connection.shutdown()
+                else:
+                    connection.close()
             except Exception as e:
                 if config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing registered connection: {e}")
@@ -380,6 +378,8 @@ class DBConnection:
         self._runner = None
 
         if owned_core is not None:
+            if any(connection is owned_core for connection in connections_to_close):
+                return
             try:
                 owned_core.shutdown()
             except Exception as e:
