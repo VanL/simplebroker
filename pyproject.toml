@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simplebroker"
-version = "3.1.3"
+version = "3.1.4"
 description = "A lightweight message queue backed by SQLite"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,6 +33,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
+    "build>=1.2",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-xdist>=3.0",
@@ -41,6 +42,9 @@ dev = [
     "psycopg-pool>=3.1,<4",
     "ruff>=0.1.0",
     "pytest-timeout>=2.4.0",
+]
+pg = [
+    "simplebroker-pg>=1.0.4,<2",
 ]
 
 [project.scripts]
@@ -52,6 +56,9 @@ Homepage = "https://github.com/VanL/simplebroker"
 Documentation = "https://github.com/VanL/simplebroker#readme"
 Repository = "https://github.com/VanL/simplebroker.git"
 Issues = "https://github.com/VanL/simplebroker/issues"
+
+[tool.uv.sources]
+simplebroker-pg = { path = "./extensions/simplebroker_pg", editable = true }
 
 [tool.hatch.build]
 include = [

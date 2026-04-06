@@ -43,7 +43,7 @@ def _requested_backend_plugin(name: str) -> BackendPlugin:
         if name == "postgres":
             raise RuntimeError(
                 "Requested backend 'postgres' is not available. "
-                "Install simplebroker-pg."
+                "Install simplebroker-pg or simplebroker[pg]."
             ) from exc
         raise RuntimeError(f"Requested backend '{name}' is not available.") from exc
 

@@ -94,11 +94,16 @@ SimpleBroker is a zero-configuration, no-dependency message queue that runs anyw
 # Use pipx for global installation (recommended)
 pipx install simplebroker
 
+# Or install with optional Postgres support
+pipx install "simplebroker[pg]"
+
 # Or install with uv to use as a library
 uv add simplebroker
+uv add "simplebroker[pg]"
 
 # Or with pip
 pip install simplebroker
+pip install "simplebroker[pg]"
 ```
 
 The CLI is available as both `broker` and `simplebroker`.
@@ -1321,7 +1326,16 @@ the Python standard library.
 
 If you need a different backend, use an external plugin package through the
 public extension seam. This repository includes a sibling Postgres package for
-that purpose:
+that purpose. `simplebroker[pg]` is a convenience extra that installs the
+external `simplebroker-pg` plugin package for you.
+
+For end users:
+
+```bash
+uv add "simplebroker[pg]"
+```
+
+For local development against the sibling extension in this repository:
 
 ```bash
 uv pip install -e "./extensions/simplebroker_pg[dev]"
@@ -1370,6 +1384,7 @@ uv sync --all-extras
 uv run pytest              # Fast tests only
 uv run pytest -m ""        # All tests including slow ones
 uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
+uv run ./bin/packaging-smoke --python 3.10
 
 # Lint and format
 uv run ruff check --fix simplebroker tests
@@ -1395,6 +1410,10 @@ git tag v3.1.0 && git push origin v3.1.0
 # Release simplebroker-pg
 git tag simplebroker_pg/v1.0.1 && git push origin simplebroker_pg/v1.0.1
 ```
+
+When changing the root `pg` extra, release `simplebroker-pg` first, wait for
+that version to be available on PyPI, then release `simplebroker` with the
+updated extra bound.
 
 ## License
 

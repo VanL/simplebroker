@@ -8,6 +8,7 @@ backend plugin hook.
 
 ## Requirements
 
+- Python 3.10+
 - PostgreSQL
 - A dedicated schema for SimpleBroker tables
 
@@ -16,15 +17,24 @@ backend plugin hook.
 ## Installation
 
 ```bash
+# Fresh install through SimpleBroker's convenience extra
+pipx install "simplebroker[pg]"
+
 # Add to an existing pipx-installed simplebroker (recommended)
 pipx inject simplebroker simplebroker-pg
 
-# Or install with uv to use as a library
+# Or install through the convenience extra in a project
+uv add "simplebroker[pg]"
+
+# Or install the extension directly with uv
 uv add simplebroker-pg
 
-# Or with pip
+# Or install the extension directly with pip
 pip install simplebroker-pg
 ```
+
+`simplebroker[pg]` still installs this package as a separate distribution.
+Postgres support is not built into the default `simplebroker` install.
 
 ## Python Usage
 

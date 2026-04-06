@@ -183,16 +183,16 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "2.9.0"
+version = "3.1.3"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/05/31/a36b03d3e5fe2523df30191c288ef6dfd54e0c387d3bdf20f71a5cbb8f6f/simplebroker-2.9.0.tar.gz", hash = "sha256:89907517070732d8c30f7ee3b78218f444e4a5b22444fda6bfa684454cd42be1", size = 115234, upload-time = "2026-03-30T23:28:35.912Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e6/90/75a91a7dfff6c0ff303de35c7ee9fd73eb39243b53f687e9698c91107ad7/simplebroker-3.1.3.tar.gz", hash = "sha256:b13269012d69714324170bbafefe29c0aae8e59f97e42c9be32e4f391a2d0367", size = 127616, upload-time = "2026-04-05T14:30:03.701Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/e6/e682df2a1a61bda7d9d14b40681472951f55722f9ee2279bfef77979f735/simplebroker-2.9.0-py3-none-any.whl", hash = "sha256:9640e020065c95c1ed6a5f4f5c06730047fcb88a51a14983d8388082dd45d10a", size = 128596, upload-time = "2026-03-30T23:28:37.157Z" },
+    { url = "https://files.pythonhosted.org/packages/15/03/1ba2acd8634e46f4fca6b330d2e06dabacfbd567e1cb62c8adbccfe9d8b1/simplebroker-3.1.3-py3-none-any.whl", hash = "sha256:e52c9824a8156c7486eae469aef3f451a1abb90dd7ded6c95604e68fda2fc8d0", size = 144601, upload-time = "2026-04-05T14:30:02.27Z" },
 ]
 
 [[package]]
 name = "simplebroker-pg"
-version = "0.1.0"
+version = "1.0.4"
 source = { editable = "." }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
@@ -212,7 +212,7 @@ requires-dist = [
     { name = "psycopg-pool", specifier = ">=3.1,<4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
-    { name = "simplebroker", specifier = ">=2.9.0" },
+    { name = "simplebroker", specifier = ">=3.0.0,<4" },
 ]
 provides-extras = ["dev"]
 

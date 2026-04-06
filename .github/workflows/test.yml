@@ -36,7 +36,11 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-        cache-dependency-glob: "pyproject.toml"
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_pg/pyproject.toml
+          extensions/simplebroker_pg/uv.lock
 
     - name: Install dependencies
       run: |
@@ -65,6 +69,11 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_pg/pyproject.toml
+          extensions/simplebroker_pg/uv.lock
 
     - name: Install dependencies
       run: |
@@ -72,15 +81,43 @@ jobs:
 
     - name: Run linting with ruff
       run: |
-        ruff check simplebroker 
+        ruff check simplebroker
 
     - name: Check formatting with ruff
       run: |
-        ruff format --check simplebroker 
+        ruff format --check simplebroker
 
     - name: Type check with mypy
       run: |
         mypy simplebroker --config-file pyproject.toml
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.10"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_pg/pyproject.toml
+          extensions/simplebroker_pg/uv.lock
+
+    - name: Install build tools
+      run: |
+        python -m pip install build
+
+    - name: Run packaging smoke
+      run: |
+        uv run ./bin/packaging-smoke --python 3.10
 
   coverage:
     runs-on: ubuntu-latest
@@ -96,6 +133,11 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_pg/pyproject.toml
+          extensions/simplebroker_pg/uv.lock
 
     - name: Install dependencies
       run: |
@@ -115,4 +157,4 @@ jobs:
         name: codecov-umbrella
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
-        slug: VanL/simplebroker 
+        slug: VanL/simplebroker

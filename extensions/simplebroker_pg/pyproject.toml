@@ -4,16 +4,16 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simplebroker-pg"
-version = "1.0.3"
+version = "1.0.4"
 description = "Postgres backend plugin for SimpleBroker"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Van Lindberg", email = "van.lindberg@gmail.com"},
 ]
 dependencies = [
-    "simplebroker>=3.0.0",
+    "simplebroker>=3.0.0,<4",
     "psycopg[binary]>=3,<4",
     "psycopg-pool>=3.1,<4",
 ]

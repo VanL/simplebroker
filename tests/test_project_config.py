@@ -252,7 +252,10 @@ def test_resolve_target_missing_postgres_plugin_has_install_hint(
 
     with pytest.raises(
         RuntimeError,
-        match="Requested backend 'postgres' is not available. Install simplebroker-pg.",
+        match=(
+            r"Requested backend 'postgres' is not available\. "
+            r"Install simplebroker-pg or simplebroker\[pg\]\."
+        ),
     ):
         target_for_directory(tmp_path, config=config)
 
