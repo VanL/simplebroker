@@ -9,6 +9,7 @@ from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import IntegrityError
 
 from ._constants import POSTGRES_SCHEMA_VERSION
+from .runner import PostgresRunner, RunnerMetaState
 from .validation import quote_ident
 
 if TYPE_CHECKING:
@@ -68,16 +69,41 @@ CREATE INDEX IF NOT EXISTS idx_aliases_target
 ON aliases (target)
 """
 
-INSERT_META_ROW = """
-INSERT INTO meta (singleton, magic, schema_version, last_ts, alias_version)
-VALUES (TRUE, ?, ?, 0, 0)
-ON CONFLICT (singleton) DO NOTHING
+ENSURE_META_ROW = """
+WITH inserted AS (
+    INSERT INTO meta (singleton, magic, schema_version, last_ts, alias_version)
+    VALUES (TRUE, ?, ?, 0, 0)
+    ON CONFLICT (singleton) DO NOTHING
+    RETURNING magic, schema_version, last_ts, alias_version
+)
+SELECT magic, schema_version, last_ts, alias_version
+FROM inserted
+UNION ALL
+SELECT magic, schema_version, last_ts, alias_version
+FROM meta
+WHERE singleton = TRUE
+  AND NOT EXISTS (SELECT 1 FROM inserted)
 """
 
 
 def create_schema_if_needed(runner: SQLRunner, schema: str) -> None:
     """Create the managed schema if it does not exist."""
     runner.run(f"CREATE SCHEMA IF NOT EXISTS {quote_ident(schema)}")
+
+
+def _bootstrap_schema_sql(schema: str) -> str:
+    quoted_schema = quote_ident(schema)
+    return f"""
+CREATE SCHEMA IF NOT EXISTS {quoted_schema};
+{CREATE_MESSAGES_TABLE};
+{CREATE_META_TABLE};
+{CREATE_ALIASES_TABLE};
+{CREATE_QUEUE_ORDER_INDEX};
+{CREATE_UNCLAIMED_INDEX};
+{CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX};
+{CREATE_TS_UNIQUE_INDEX};
+{CREATE_ALIAS_TARGET_INDEX};
+"""
 
 
 def initialize_database(
@@ -87,29 +113,39 @@ def initialize_database(
     run_with_retry: Callable[[Callable[[], Any]], Any],
 ) -> None:
     """Initialize broker tables and metadata inside the managed schema."""
+    if isinstance(runner, PostgresRunner) and runner.is_schema_bootstrapped():
+        return
 
-    def run_sql(statement: str, params: tuple[object, ...] = ()) -> None:
-        run_with_retry(lambda: runner.run(statement, params))
+    run_with_retry(lambda: runner.run(_bootstrap_schema_sql(schema)))
 
-    create_schema_if_needed(runner, schema)
-
-    for statement in (
-        CREATE_MESSAGES_TABLE,
-        CREATE_META_TABLE,
-        CREATE_ALIASES_TABLE,
-        CREATE_QUEUE_ORDER_INDEX,
-        CREATE_UNCLAIMED_INDEX,
-        CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX,
-        CREATE_TS_UNIQUE_INDEX,
-        CREATE_ALIAS_TARGET_INDEX,
-    ):
-        run_sql(statement)
-
-    run_sql(INSERT_META_ROW, (SIMPLEBROKER_MAGIC, POSTGRES_SCHEMA_VERSION))
+    rows = list(
+        run_with_retry(
+            lambda: runner.run(
+                ENSURE_META_ROW,
+                (SIMPLEBROKER_MAGIC, POSTGRES_SCHEMA_VERSION),
+                fetch=True,
+            )
+        )
+    )
+    if rows and isinstance(runner, PostgresRunner):
+        runner.prime_meta_cache(
+            RunnerMetaState(
+                magic=str(rows[0][0]),
+                schema_version=int(rows[0][1]),
+                last_ts=int(rows[0][2]),
+                alias_version=int(rows[0][3]),
+            )
+        )
+    elif isinstance(runner, PostgresRunner):
+        runner.mark_schema_bootstrapped()
 
 
 def meta_table_exists(runner: SQLRunner) -> bool:
     """Return whether the broker meta table exists in the current schema."""
+    checker = getattr(runner, "is_schema_bootstrapped", None)
+    if callable(checker) and checker():
+        return True
+
     rows = list(
         runner.run(
             "SELECT EXISTS(SELECT 1 FROM information_schema.tables "

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Never
+
 import psycopg
 import pytest
 from psycopg import conninfo as pg_conninfo
@@ -236,7 +238,7 @@ def test_init_backend_env_schema_overrides_toml(
 def test_connect_wraps_auth_errors_as_connection_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def raise_auth_error(*args, **kwargs):
+    def raise_auth_error(*args: object, **kwargs: object) -> Never:
         raise psycopg.OperationalError("password authentication failed")
 
     monkeypatch.setattr("simplebroker_pg.validation.psycopg.connect", raise_auth_error)

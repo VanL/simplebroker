@@ -203,18 +203,20 @@ def build_retrieve_query(
     if operation == "claim":
         return (
             f"""
-            WITH selected AS (
+            WITH selected AS MATERIALIZED (
                 SELECT order_id
                 FROM messages
                 WHERE {where_clause}
                 ORDER BY order_id
                 LIMIT ?
+                FOR UPDATE
             ),
             updated AS (
-                UPDATE messages
+                UPDATE messages AS m
                 SET claimed = TRUE
-                WHERE order_id IN (SELECT order_id FROM selected)
-                RETURNING order_id, body, ts
+                FROM selected
+                WHERE m.order_id = selected.order_id
+                RETURNING m.order_id, m.body, m.ts
             )
             SELECT updated.body, updated.ts
             FROM updated
@@ -233,19 +235,21 @@ def build_retrieve_query(
             WITH target_queue AS (
                 SELECT ? AS queue_name
             ),
-            selected AS (
+            selected AS MATERIALIZED (
                 SELECT order_id
                 FROM messages
                 WHERE {where_clause}
                 ORDER BY order_id
                 LIMIT ?
+                FOR UPDATE
             ),
             updated AS (
-                UPDATE messages
+                UPDATE messages AS m
                 SET queue = (SELECT queue_name FROM target_queue),
                     claimed = FALSE
-                WHERE order_id IN (SELECT order_id FROM selected)
-                RETURNING order_id, body, ts
+                FROM selected
+                WHERE m.order_id = selected.order_id
+                RETURNING m.order_id, m.body, m.ts
             ),
             notified AS (
                 SELECT pg_notify(

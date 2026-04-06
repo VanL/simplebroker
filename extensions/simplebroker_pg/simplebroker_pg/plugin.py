@@ -19,7 +19,7 @@ from simplebroker._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 from . import _sql as pg_sql
 from ._constants import POSTGRES_SCHEMA_VERSION
 from ._identifiers import stable_lock_key
-from .runner import PostgresActivityWaiter, PostgresRunner
+from .runner import PostgresActivityWaiter, PostgresRunner, RunnerMetaState
 from .schema import initialize_database, meta_table_exists, migrate_schema
 from .validation import (
     SchemaState,
@@ -48,6 +48,27 @@ class _DsnAwareRunner(SQLRunner, Protocol):
     def schema(self) -> str: ...
 
 
+class _MetaCachingRunner(SQLRunner, Protocol):
+    """Runner protocol exposing optional cached Postgres metadata."""
+
+    def get_meta_cache(self) -> RunnerMetaState | None: ...
+
+    def prime_meta_cache(self, state: RunnerMetaState) -> None: ...
+
+    def update_meta_cache(
+        self,
+        *,
+        magic: str | None = None,
+        schema_version: int | None = None,
+        last_ts: int | None = None,
+        alias_version: int | None = None,
+    ) -> None: ...
+
+    def invalidate_meta_cache(self) -> None: ...
+
+    def is_schema_bootstrapped(self) -> bool: ...
+
+
 @dataclass(frozen=True, slots=True)
 class VerifiedPostgresEnv:
     """Normalized Postgres backend configuration derived from env/toml."""
@@ -60,6 +81,97 @@ class VerifiedPostgresEnv:
     database: str | None
     target: str | None
     schema: str
+
+
+def _cached_meta(runner: SQLRunner) -> RunnerMetaState | None:
+    getter = getattr(runner, "get_meta_cache", None)
+    if callable(getter):
+        return cast(_MetaCachingRunner, runner).get_meta_cache()
+    return None
+
+
+def _prime_meta(runner: SQLRunner, state: RunnerMetaState) -> None:
+    setter = getattr(runner, "prime_meta_cache", None)
+    if callable(setter):
+        cast(_MetaCachingRunner, runner).prime_meta_cache(state)
+
+
+def _update_meta(
+    runner: SQLRunner,
+    *,
+    magic: str | None = None,
+    schema_version: int | None = None,
+    last_ts: int | None = None,
+    alias_version: int | None = None,
+) -> None:
+    updater = getattr(runner, "update_meta_cache", None)
+    if callable(updater):
+        cast(_MetaCachingRunner, runner).update_meta_cache(
+            magic=magic,
+            schema_version=schema_version,
+            last_ts=last_ts,
+            alias_version=alias_version,
+        )
+
+
+def _load_meta_state(runner: SQLRunner) -> RunnerMetaState | None:
+    cached = _cached_meta(runner)
+    if cached is not None:
+        return cached
+
+    rows = list(
+        runner.run(
+            """
+            SELECT magic, schema_version, last_ts, alias_version
+            FROM meta
+            WHERE singleton = TRUE
+            """,
+            fetch=True,
+        )
+    )
+    if not rows:
+        return None
+
+    state = RunnerMetaState(
+        magic=str(rows[0][0]),
+        schema_version=int(rows[0][1]),
+        last_ts=int(rows[0][2]),
+        alias_version=int(rows[0][3]),
+    )
+    _prime_meta(runner, state)
+    return state
+
+
+def _load_live_meta_state(runner: SQLRunner) -> RunnerMetaState | None:
+    rows = list(
+        runner.run(
+            """
+            SELECT magic, schema_version, last_ts, alias_version
+            FROM meta
+            WHERE singleton = TRUE
+            """,
+            fetch=True,
+        )
+    )
+    if not rows:
+        return None
+
+    state = RunnerMetaState(
+        magic=str(rows[0][0]),
+        schema_version=int(rows[0][1]),
+        last_ts=int(rows[0][2]),
+        alias_version=int(rows[0][3]),
+    )
+    _prime_meta(
+        runner,
+        RunnerMetaState(
+            magic=state.magic,
+            schema_version=state.schema_version,
+            last_ts=0,
+            alias_version=0,
+        ),
+    )
+    return state
 
 
 def _require_text(value: object, *, name: str) -> str:
@@ -400,36 +512,25 @@ class PostgresBackendPlugin:
         return int(rows[0][0]) if rows else 0
 
     def read_magic(self, runner: SQLRunner) -> str | None:
-        rows = list(
-            runner.run(
-                "SELECT magic FROM meta WHERE singleton = TRUE",
-                fetch=True,
-            )
-        )
-        if not rows or rows[0][0] is None:
+        state = _load_meta_state(runner)
+        if state is None:
             return None
-        return str(rows[0][0])
+        return state.magic
 
     def read_schema_version(self, runner: SQLRunner) -> int:
-        rows = list(
-            runner.run(
-                "SELECT schema_version FROM meta WHERE singleton = TRUE",
-                fetch=True,
-            )
-        )
-        return int(rows[0][0]) if rows and rows[0][0] is not None else 1
+        state = _load_meta_state(runner)
+        return state.schema_version if state is not None else 1
 
     def write_schema_version(self, runner: SQLRunner, version: int) -> None:
         runner.run(
             "UPDATE meta SET schema_version = ? WHERE singleton = TRUE",
             (version,),
         )
+        _update_meta(runner, schema_version=version)
 
     def read_last_ts(self, runner: SQLRunner) -> int:
-        rows = list(
-            runner.run("SELECT last_ts FROM meta WHERE singleton = TRUE", fetch=True)
-        )
-        return int(rows[0][0]) if rows and rows[0][0] is not None else 0
+        state = _load_live_meta_state(runner)
+        return state.last_ts if state is not None else 0
 
     def advance_last_ts(self, runner: SQLRunner, *, new_ts: int) -> bool:
         rows = list(
@@ -451,12 +552,8 @@ class PostgresBackendPlugin:
         runner.run("UPDATE meta SET last_ts = ? WHERE singleton = TRUE", (ts,))
 
     def read_alias_version(self, runner: SQLRunner) -> int:
-        rows = list(
-            runner.run(
-                "SELECT alias_version FROM meta WHERE singleton = TRUE", fetch=True
-            )
-        )
-        return int(rows[0][0]) if rows and rows[0][0] is not None else 0
+        state = _load_live_meta_state(runner)
+        return state.alias_version if state is not None else 0
 
     def write_alias_version(self, runner: SQLRunner, version: int) -> None:
         runner.run(
@@ -465,24 +562,14 @@ class PostgresBackendPlugin:
         )
 
     def select_meta_items(self, runner: SQLRunner) -> list[tuple[str, int | str]]:
-        rows = list(
-            runner.run(
-                """
-                SELECT magic, schema_version, last_ts, alias_version
-                FROM meta
-                WHERE singleton = TRUE
-                """,
-                fetch=True,
-            )
-        )
-        if not rows:
+        state = _load_live_meta_state(runner)
+        if state is None:
             return []
-        magic, schema_version, last_ts, alias_version = rows[0]
         return [
-            ("magic", str(magic)),
-            ("schema_version", int(schema_version)),
-            ("last_ts", int(last_ts)),
-            ("alias_version", int(alias_version)),
+            ("magic", state.magic),
+            ("schema_version", state.schema_version),
+            ("last_ts", state.last_ts),
+            ("alias_version", state.alias_version),
         ]
 
     def database_size_bytes(self, runner: SQLRunner) -> int:
@@ -501,7 +588,12 @@ class PostgresBackendPlugin:
         operation: str,
         queue: str,
     ) -> None:
-        del operation
+        # claim/move serialize through row locking in the main retrieve query,
+        # which avoids an extra round-trip for a separate advisory lock call.
+        if operation in {"claim", "move"}:
+            del runner, queue
+            return
+
         runner.run(
             "SELECT pg_advisory_xact_lock(?)",
             (stable_lock_key("queue", queue),),
