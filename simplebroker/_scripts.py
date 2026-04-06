@@ -162,6 +162,148 @@ def _build_test_env(*, dsn: str, include_backend_marker: bool) -> dict[str, str]
     return env
 
 
+def _merge_marker_expressions(base: str, extra: str | None) -> str:
+    """Combine marker expressions while preserving the base filter."""
+
+    if not extra:
+        return base
+    return f"({base}) and ({extra})"
+
+
+def _append_marker_expression(
+    current: str | None,
+    extra: str,
+) -> str:
+    """Accumulate multiple user-supplied marker expressions."""
+
+    if not current:
+        return extra
+    return f"({current}) and ({extra})"
+
+
+def _classify_pytest_target(arg: str) -> str | None:
+    """Map a pytest path or node id to the shared or extension suite."""
+
+    if arg.startswith("-"):
+        return None
+
+    path_part = arg.split("::", 1)[0]
+    if not path_part:
+        return None
+
+    candidate = Path(path_part)
+    if not candidate.is_absolute():
+        candidate = (ROOT / candidate).resolve()
+
+    try:
+        relative = candidate.relative_to(ROOT).as_posix()
+    except ValueError:
+        return None
+
+    if relative == "tests" or relative.startswith("tests/"):
+        return "shared"
+    if relative == "extensions/simplebroker_pg/tests" or relative.startswith(
+        "extensions/simplebroker_pg/tests/"
+    ):
+        return "extension"
+    return None
+
+
+def _extract_pytest_runner_overrides(
+    pytest_args: list[str],
+) -> tuple[list[str], str | None, str | None, str | None]:
+    """Extract pytest args that need to be merged with runner defaults."""
+
+    remaining: list[str] = []
+    marker_expr: str | None = None
+    numprocesses: str | None = None
+    dist: str | None = None
+
+    index = 0
+    while index < len(pytest_args):
+        arg = pytest_args[index]
+
+        if arg == "--":
+            index += 1
+            continue
+        if arg == "-m":
+            if index + 1 >= len(pytest_args):
+                raise SystemExit("pytest-pg: -m requires an argument")
+            marker_expr = _append_marker_expression(marker_expr, pytest_args[index + 1])
+            index += 2
+            continue
+        if arg.startswith("-m") and arg != "-m":
+            value = arg[2:]
+            marker_expr = _append_marker_expression(marker_expr, value)
+            index += 1
+            continue
+        if arg == "-n":
+            if index + 1 >= len(pytest_args):
+                raise SystemExit("pytest-pg: -n requires an argument")
+            numprocesses = pytest_args[index + 1]
+            index += 2
+            continue
+        if arg.startswith("-n") and arg != "-n":
+            numprocesses = arg[2:]
+            index += 1
+            continue
+        if arg == "--dist":
+            if index + 1 >= len(pytest_args):
+                raise SystemExit("pytest-pg: --dist requires an argument")
+            dist = pytest_args[index + 1]
+            index += 2
+            continue
+        if arg.startswith("--dist="):
+            dist = arg.split("=", 1)[1]
+            index += 1
+            continue
+
+        remaining.append(arg)
+        index += 1
+
+    return remaining, marker_expr, numprocesses, dist
+
+
+def _route_pytest_args(
+    pytest_args: list[str],
+) -> tuple[list[str], list[str], bool, bool, str | None, str | None, str | None]:
+    """Split passthrough pytest args between core and extension suites."""
+
+    filtered_args, marker_expr, numprocesses, dist = _extract_pytest_runner_overrides(
+        pytest_args
+    )
+
+    shared_args: list[str] = []
+    extension_args: list[str] = []
+    shared_selected = False
+    extension_selected = False
+
+    for arg in filtered_args:
+        target = _classify_pytest_target(arg)
+        if target == "shared":
+            shared_selected = True
+            shared_args.append(arg)
+            continue
+        if target == "extension":
+            extension_selected = True
+            extension_args.append(arg)
+            continue
+
+        shared_args.append(arg)
+        extension_args.append(arg)
+
+    has_explicit_targets = shared_selected or extension_selected
+    return (
+        shared_args,
+        extension_args,
+        not has_explicit_targets or shared_selected,
+        not has_explicit_targets or extension_selected,
+        marker_expr,
+        numprocesses,
+        dist,
+    )
+
+
 def pytest_pg_main() -> int:
     """Run the Postgres-backed SimpleBroker test suites with Docker setup."""
 
@@ -181,7 +323,7 @@ def pytest_pg_main() -> int:
         action="store_true",
         help="Leave the temporary Postgres container running for debugging.",
     )
-    args = parser.parse_args()
+    args, pytest_args = parser.parse_known_args()
 
     if shutil.which("docker") is None:
         print("docker is required to run PG-backed tests", file=sys.stderr)
@@ -191,6 +333,19 @@ def pytest_pg_main() -> int:
         return 1
 
     shared_marker = "shared and not slow" if args.fast else "shared"
+    (
+        shared_pytest_args,
+        extension_pytest_args,
+        run_shared_suite,
+        run_extension_suite,
+        extra_marker_expr,
+        numprocesses,
+        dist_mode,
+    ) = _route_pytest_args(pytest_args)
+    shared_marker = _merge_marker_expressions(shared_marker, extra_marker_expr)
+    extension_marker = _merge_marker_expressions("pg_only", extra_marker_expr)
+    numprocesses = numprocesses or "auto"
+    dist_mode = dist_mode or "loadgroup"
     container_name: str | None = None
 
     try:
@@ -200,49 +355,51 @@ def pytest_pg_main() -> int:
         shared_env = _build_test_env(dsn=dsn, include_backend_marker=True)
         extension_env = _build_test_env(dsn=dsn, include_backend_marker=False)
 
-        _run(
-            [
-                "uv",
-                "run",
-                "--extra",
-                "dev",
-                "--with-editable",
-                ".",
-                "--with-editable",
-                "./extensions/simplebroker_pg[dev]",
-                "pytest",
-                "tests",
-                "-m",
-                shared_marker,
-                "-n",
-                "auto",
-                "--dist",
-                "loadgroup",
-            ],
-            env=shared_env,
-        )
+        if run_shared_suite:
+            _run(
+                [
+                    "uv",
+                    "run",
+                    "--extra",
+                    "dev",
+                    "--with-editable",
+                    ".",
+                    "--with-editable",
+                    "./extensions/simplebroker_pg[dev]",
+                    "pytest",
+                    *(shared_pytest_args or ["tests"]),
+                    "-m",
+                    shared_marker,
+                    "-n",
+                    numprocesses,
+                    "--dist",
+                    dist_mode,
+                ],
+                env=shared_env,
+            )
 
-        _run(
-            [
-                "uv",
-                "run",
-                "--extra",
-                "dev",
-                "--with-editable",
-                ".",
-                "--with-editable",
-                "./extensions/simplebroker_pg[dev]",
-                "pytest",
-                "extensions/simplebroker_pg/tests",
-                "-m",
-                "pg_only",
-                "-n",
-                "auto",
-                "--dist",
-                "loadgroup",
-            ],
-            env=extension_env,
-        )
+        if run_extension_suite:
+            _run(
+                [
+                    "uv",
+                    "run",
+                    "--extra",
+                    "dev",
+                    "--with-editable",
+                    ".",
+                    "--with-editable",
+                    "./extensions/simplebroker_pg[dev]",
+                    "pytest",
+                    *(extension_pytest_args or ["extensions/simplebroker_pg/tests"]),
+                    "-m",
+                    extension_marker,
+                    "-n",
+                    numprocesses,
+                    "--dist",
+                    dist_mode,
+                ],
+                env=extension_env,
+            )
         return 0
     except subprocess.CalledProcessError as exc:
         return exc.returncode or 1

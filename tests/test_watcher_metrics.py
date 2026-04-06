@@ -19,6 +19,7 @@ from simplebroker.watcher import QueueWatcher
 
 from .helper_scripts.broker_factory import make_broker
 from .helper_scripts.timing import (
+    get_performance_threshold,
     scale_timeout_for_ci,
     wait_for_condition,
     wait_for_count,
@@ -226,7 +227,15 @@ def test_metrics_collection_basic(broker_target) -> None:
 
         # Check timing metrics
         assert "pre_check_time_us_avg" in stats
-        assert stats["pre_check_time_us_avg"] < 1000  # < 1ms
+        pre_check_threshold_seconds = get_performance_threshold(
+            "WATCHER_METRICS_PRECHECK_AVG_SECONDS",
+            0.003
+            if broker_target.backend_name == "postgres"
+            else (0.0015 if os.environ.get("CI") else 0.001),
+        )
+        assert stats["pre_check_time_us_avg"] < (
+            pre_check_threshold_seconds * 1_000_000
+        )
         assert "handler_time_ms_avg" in stats
         assert stats["handler_time_ms_avg"] > 5  # Should reflect sleep
     finally:
