@@ -264,6 +264,48 @@ class TestSQLiteRunnerErrorHandling:
                 # Restore write permissions for cleanup
                 DatabaseErrorInjector.restore_writable(db_path)
 
+    @pytest.mark.sqlite_only
+    def test_cleanup_marker_files_preserves_shared_setup_sidecars(self, tmp_path):
+        """Per-handle cleanup must not delete cross-process setup coordination files."""
+        db_path = tmp_path / "test.db"
+        runner = SQLiteRunner(str(db_path))
+
+        sidecars = [
+            db_path.with_suffix(".connection.lock"),
+            db_path.with_suffix(".connection.done"),
+            db_path.with_suffix(".optimization.lock"),
+            db_path.with_suffix(".optimization.done"),
+        ]
+        for path in sidecars:
+            path.touch()
+        runner._created_files.update(sidecars)
+
+        runner.cleanup_marker_files()
+
+        assert all(path.exists() for path in sidecars)
+        assert runner._created_files == set()
+
+    @pytest.mark.sqlite_only
+    def test_cleanup_marker_files_still_cleans_mock_sidecars(self, tmp_path):
+        """Mock-path tests still need sidecar cleanup for synthetic DB names."""
+        db_path = tmp_path / "MockBroker.db"
+        runner = SQLiteRunner(str(db_path))
+
+        sidecars = [
+            db_path.with_suffix(".connection.lock"),
+            db_path.with_suffix(".connection.done"),
+            db_path.with_suffix(".optimization.lock"),
+            db_path.with_suffix(".optimization.done"),
+        ]
+        for path in sidecars:
+            path.touch()
+        runner._created_files.update(sidecars)
+
+        runner.cleanup_marker_files()
+
+        assert all(not path.exists() for path in sidecars)
+        assert runner._created_files == set()
+
     def test_corrupted_database_detection(self):
         """Test handling of corrupted database."""
         with tempfile.TemporaryDirectory() as tmpdir:

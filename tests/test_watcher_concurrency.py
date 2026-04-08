@@ -13,6 +13,7 @@ pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueWatcher
 
 from .helper_scripts.broker_factory import make_broker
+from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 from .helper_scripts.watcher_base import WatcherTestBase
 
 pytestmark = [pytest.mark.shared]
@@ -357,6 +358,10 @@ class TestMixedMode(WatcherTestBase):
         peek_lock = threading.Lock()
         read_lock = threading.Lock()
 
+        def read_count() -> int:
+            with read_lock:
+                return len(read_messages)
+
         def peek_handler(msg: str, ts: int):
             with peek_lock:
                 peek_messages.append(msg)
@@ -401,8 +406,12 @@ class TestMixedMode(WatcherTestBase):
             finally:
                 db.close()
 
-            # Let them process
-            time.sleep(1.0)
+            # Wait for the consuming watcher to actually drain the queue.
+            assert wait_for_condition(
+                lambda: read_count() == 10,
+                timeout=scale_timeout_for_ci(3.0),
+                interval=0.05,
+            ), f"Timed out waiting for 10 consumed messages, got {read_count()}"
 
         finally:
             # Cleanup all resources
@@ -431,6 +440,15 @@ class TestMixedMode(WatcherTestBase):
         # All messages should be read (consumed)
         assert len(read_messages) == 10
         assert set(read_messages) == {f"msg_{i}" for i in range(10)}
+
+        db = make_broker(broker_target)
+        try:
+            stats = {
+                name: unclaimed for name, unclaimed, _total in db.get_queue_stats()
+            }
+            assert stats.get("mixed", 0) == 0
+        finally:
+            db.close()
 
         # Peek might have seen some/all messages
         # Can't guarantee exact behavior due to race conditions

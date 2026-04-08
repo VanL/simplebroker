@@ -1384,6 +1384,7 @@ uv sync --all-extras
 uv run pytest              # Fast tests only
 uv run pytest -m ""        # All tests including slow ones
 uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
+uv run ./bin/pytest-pg -q tests/test_watcher_metrics.py -k basic
 uv run ./bin/packaging-smoke --python 3.10
 
 # Lint and format

@@ -601,16 +601,39 @@ class SQLiteRunner:
     def cleanup_marker_files(self) -> None:
         """Clean up any marker files created during setup.
 
-        This is particularly useful for tests that use mocked paths.
+        Shared setup coordination files must outlive any one BrokerDB/Queue
+        handle. Weft and other callers create many short-lived handles against
+        the same database; if one handle unlinks a shared ``.lock`` or
+        ``.done`` sidecar while another process is still using it, the next
+        opener can bypass the intended cross-process serialization. Keep those
+        files for real databases, but preserve the mock-path cleanup behavior
+        that older tests rely on.
         """
         for file_path in self._created_files:
             try:
+                if not self._should_cleanup_tracked_file(file_path):
+                    continue
                 if file_path.exists():
                     file_path.unlink()
             except (OSError, ValueError, TypeError):
                 # Ignore errors during cleanup
                 pass
         self._created_files.clear()
+
+    def _should_cleanup_tracked_file(self, file_path: Path) -> bool:
+        """Return whether this runner should unlink a tracked file on cleanup."""
+        # Mock-path tests intentionally exercise path cleanup using synthetic
+        # database names. Preserve that behavior for those scenarios.
+        if "Mock" in self._db_path:
+            return True
+
+        shared_sidecar_suffixes = {
+            ".connection.lock",
+            ".optimization.lock",
+            ".connection.done",
+            ".optimization.done",
+        }
+        return "".join(file_path.suffixes[-2:]) not in shared_sidecar_suffixes
 
     def __enter__(self) -> Self:
         """Enter context manager."""
