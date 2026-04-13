@@ -29,7 +29,7 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#simplebroker_pg/}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: "simplebroker-pg ${{ steps.version.outputs.version }}"
           files: extensions/simplebroker_pg/dist/*
