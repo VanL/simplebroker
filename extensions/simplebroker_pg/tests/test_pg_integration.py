@@ -98,7 +98,7 @@ def test_postgres_cli_project_config_roundtrip(tmp_path: Path) -> None:
     nested = project_root / "app" / "src"
     nested.mkdir(parents=True)
 
-    config_path = project_root / ".simplebroker.toml"
+    config_path = project_root / ".broker.toml"
     config_path.write_text(
         "\n".join(
             [

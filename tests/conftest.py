@@ -214,7 +214,7 @@ def pg_worker_tmpdir(
     pg_worker_dsn: str | None,
     pg_worker_schema: str | None,
 ) -> Path | None:
-    """Single tmpdir per worker with a .simplebroker.toml pointing at the worker schema."""
+    """Single tmpdir per worker with a .broker.toml pointing at the worker schema."""
     if pg_worker_dsn is None or pg_worker_schema is None:
         return None
     root = tmp_path_factory.mktemp("pg_worker")

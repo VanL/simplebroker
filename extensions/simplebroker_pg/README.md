@@ -54,7 +54,7 @@ print(queue.read())
 
 ## CLI Usage
 
-Create `.simplebroker.toml` in the project root:
+Create `.broker.toml` in the project root:
 
 ```toml
 version = 1
@@ -89,7 +89,7 @@ Notes:
 - `BROKER_BACKEND_HOST`, `BROKER_BACKEND_PORT`, `BROKER_BACKEND_USER`,
   `BROKER_BACKEND_PASSWORD`, and `BROKER_BACKEND_DATABASE` are only used when there is no
   target from env or toml.
-- `BROKER_BACKEND_PASSWORD` is never written to `.simplebroker.toml`.
+- `BROKER_BACKEND_PASSWORD` is never written to `.broker.toml`.
 - The Postgres database must already exist. `broker init` creates the managed schema/tables
   inside that database; it does not create the database itself.
 - Missing backend/plugin errors are distinct from target/auth errors. Invalid schema names,

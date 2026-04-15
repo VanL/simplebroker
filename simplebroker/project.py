@@ -97,7 +97,7 @@ def resolve_broker_target(
     """Discover or synthesize a SimpleBroker target from a directory.
 
     Resolution order:
-    1. Upward `.simplebroker.toml` search
+    1. Upward `.broker.toml` search
     2. Legacy upward sqlite database discovery using `BROKER_DEFAULT_DB_NAME`
     3. Env-selected non-sqlite backend synthesis
 
@@ -150,7 +150,7 @@ def target_for_directory(
 ) -> BrokerTarget:
     """Return the broker target rooted at an explicit directory.
 
-    If `directory/.simplebroker.toml` exists, it defines the target. Otherwise,
+    If `directory/.broker.toml` exists, it defines the target. Otherwise,
     a selected non-sqlite backend is synthesized from env/config, or the
     configured default sqlite target path is resolved relative to `directory`.
     """

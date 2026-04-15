@@ -10,7 +10,7 @@ from ._backend_plugins import get_backend_plugin
 from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH
 from ._targets import ResolvedTarget
 
-PROJECT_CONFIG_FILENAME = ".simplebroker.toml"
+PROJECT_CONFIG_FILENAME = ".broker.toml"
 SUPPORTED_PROJECT_CONFIG_VERSION = 1
 _SECTION_RE = re.compile(r"^\[(?P<section>[A-Za-z0-9_]+)\]$")
 
@@ -36,7 +36,7 @@ def _parse_value(raw_value: str) -> Any:
     """Parse a restricted subset of TOML values used by SimpleBroker."""
     value = raw_value.strip()
     if not value:
-        raise ValueError("Empty value is not allowed in .simplebroker.toml")
+        raise ValueError("Empty value is not allowed in .broker.toml")
 
     if value.startswith('"') and value.endswith('"'):
         return bytes(value[1:-1], "utf-8").decode("unicode_escape")
@@ -54,7 +54,7 @@ def _parse_value(raw_value: str) -> Any:
 
 
 def _parse_project_config_text(text: str) -> dict[str, Any]:
-    """Parse the supported .simplebroker.toml subset into a dictionary."""
+    """Parse the supported .broker.toml subset into a dictionary."""
     parsed: dict[str, Any] = {}
     section: str | None = None
 
@@ -71,7 +71,7 @@ def _parse_project_config_text(text: str) -> dict[str, Any]:
 
         if "=" not in line:
             raise ValueError(
-                f"Invalid .simplebroker.toml line {line_number}: {raw_line!r}"
+                f"Invalid .broker.toml line {line_number}: {raw_line!r}"
             )
 
         key, raw_value = line.split("=", 1)
@@ -92,7 +92,7 @@ def _parse_project_config_text(text: str) -> dict[str, Any]:
 
 
 def load_project_config(config_path: Path) -> dict[str, Any]:
-    """Load and validate a .simplebroker.toml file."""
+    """Load and validate a .broker.toml file."""
     data = _parse_project_config_text(config_path.read_text(encoding="utf-8"))
 
     version = data.get("version")
@@ -101,19 +101,19 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
 
     if version != SUPPORTED_PROJECT_CONFIG_VERSION:
         raise ValueError(
-            "Unsupported .simplebroker.toml version "
+            "Unsupported .broker.toml version "
             f"{version!r}; expected {SUPPORTED_PROJECT_CONFIG_VERSION}"
         )
     if not isinstance(backend, str) or not backend:
-        raise ValueError(".simplebroker.toml requires a non-empty string 'backend'")
+        raise ValueError(".broker.toml requires a non-empty string 'backend'")
     if not isinstance(target, str) or not target:
-        raise ValueError(".simplebroker.toml requires a non-empty string 'target'")
+        raise ValueError(".broker.toml requires a non-empty string 'target'")
 
     backend_options = data.get("backend_options", {})
     if backend_options is None:
         backend_options = {}
     if not isinstance(backend_options, dict):
-        raise ValueError("'backend_options' must be a table in .simplebroker.toml")
+        raise ValueError("'backend_options' must be a table in .broker.toml")
 
     return {
         "version": version,
@@ -128,7 +128,7 @@ def find_project_config(
     *,
     max_depth: int = MAX_PROJECT_TRAVERSAL_DEPTH,
 ) -> Path | None:
-    """Search upward for .simplebroker.toml."""
+    """Search upward for .broker.toml."""
     current_dir = starting_dir.resolve()
     depth = 0
 

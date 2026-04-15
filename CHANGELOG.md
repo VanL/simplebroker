@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pluggable backend system with `BackendPlugin` protocol and entry-point registration.
 - `BackendSQLNamespace` contract with import-time validation (`ensure_backend_sql_namespace`).
 - `ResolvedTarget` and `serialize_broker_target`/`deserialize_broker_target` for backend-agnostic target resolution.
-- `.simplebroker.toml` project configuration for multi-backend support.
+- `.broker.toml` project configuration for multi-backend support.
 - Postgres backend extension (`simplebroker-pg` 1.0.0) with advisory lock serialization, LISTEN/NOTIFY watcher wakeups, typed singleton meta table, and connection pooling via `psycopg_pool`.
 - Backend-agnostic test infrastructure (`broker_factory`, `broker_target`/`broker`/`queue_factory` fixtures) — 543 of 831 tests now run on both SQLite and Postgres.
 

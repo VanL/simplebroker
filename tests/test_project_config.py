@@ -1,4 +1,4 @@
-"""Tests for .simplebroker.toml project configuration."""
+"""Tests for .broker.toml project configuration."""
 
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def _project_backend_config(*, sqlite_target: str) -> tuple[str, str, dict[str, 
 @pytest.mark.sqlite_only
 def test_load_project_config_and_resolve_relative_sqlite_target(tmp_path) -> None:
     """Relative sqlite targets should resolve from the config file directory."""
-    config_path = tmp_path / ".simplebroker.toml"
+    config_path = tmp_path / ".broker.toml"
     _write_project_config(config_path, backend="sqlite", target="data/queue.db")
 
     config_data = load_project_config(config_path)
@@ -80,7 +80,7 @@ def test_project_config_preferred_over_legacy_project_database(workdir: Path) ->
         sqlite_target="data/config.db"
     )
     _write_project_config(
-        project_root / ".simplebroker.toml",
+        project_root / ".broker.toml",
         backend=backend,
         target=target,
         backend_options=backend_options,
@@ -126,7 +126,7 @@ def test_project_config_roundtrip_from_nested_directory(workdir: Path) -> None:
         sqlite_target="var/app.db"
     )
     _write_project_config(
-        project_root / ".simplebroker.toml",
+        project_root / ".broker.toml",
         backend=backend,
         target=target,
         backend_options=backend_options,
@@ -266,7 +266,7 @@ def test_toml_overrides_env_backend_in_public_helpers(
     """A direct project config should win over BROKER_BACKEND env selection."""
     monkeypatch.setenv("BROKER_BACKEND", "postgres")
     _write_project_config(
-        tmp_path / ".simplebroker.toml", backend="sqlite", target="x.db"
+        tmp_path / ".broker.toml", backend="sqlite", target="x.db"
     )
 
     target = target_for_directory(tmp_path, config=load_config())

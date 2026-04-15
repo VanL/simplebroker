@@ -1355,7 +1355,7 @@ runner = PostgresRunner(
 queue = Queue("jobs", runner=runner, persistent=True)
 ```
 
-CLI/project usage is selected through a `.simplebroker.toml` file in the project
+CLI/project usage is selected through a `.broker.toml` file in the project
 root:
 
 ```toml
