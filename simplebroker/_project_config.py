@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from ._backend_plugins import get_backend_plugin
-from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH
+from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH, load_config, resolve_config
 from ._targets import ResolvedTarget
 
 PROJECT_CONFIG_FILENAME = ".broker.toml"
@@ -70,9 +71,7 @@ def _parse_project_config_text(text: str) -> dict[str, Any]:
             continue
 
         if "=" not in line:
-            raise ValueError(
-                f"Invalid .broker.toml line {line_number}: {raw_line!r}"
-            )
+            raise ValueError(f"Invalid .broker.toml line {line_number}: {raw_line!r}")
 
         key, raw_value = line.split("=", 1)
         key = key.strip()
@@ -144,8 +143,17 @@ def find_project_config(
     return None
 
 
-def resolve_project_target(config_path: Path) -> ResolvedTarget:
-    """Resolve a project config into an internal target object."""
+def resolve_project_target(
+    config_path: Path,
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> ResolvedTarget:
+    """Resolve a project config into an internal target object.
+
+    The project file owns backend selection and target-shaping fields for the
+    resolved target. Ambient env/config is only supplemental for backend data
+    the project file should not store, such as passwords.
+    """
     config_data = load_project_config(config_path)
     backend_name = config_data["backend"]
     plugin = get_backend_plugin(backend_name)
@@ -155,10 +163,14 @@ def resolve_project_target(config_path: Path) -> ResolvedTarget:
     if backend_name == "sqlite":
         target = str((config_path.parent / target).expanduser().resolve())
     else:
-        from ._constants import load_config
-
+        config_dict = (
+            dict(load_config()) if config is None else resolve_config(dict(config))
+        )
+        # Project config owns the target. Backends receive it through the TOML
+        # arguments rather than through ambient BROKER_BACKEND_TARGET.
+        config_dict["BROKER_BACKEND_TARGET"] = ""
         resolved = plugin.init_backend(
-            load_config(),
+            config_dict,
             toml_target=target,
             toml_options=backend_options,
         )

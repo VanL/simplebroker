@@ -89,6 +89,30 @@ def _sqlite_target(
     )
 
 
+def _discover_legacy_sqlite_target(
+    start_dir: Path, *, config: Mapping[str, Any]
+) -> BrokerTarget | None:
+    """Discover an existing legacy SQLite project target rooted above start_dir."""
+
+    default_target = Path(str(config["BROKER_DEFAULT_DB_NAME"]))
+    if default_target.is_absolute():
+        absolute_target = default_target.resolve(strict=False)
+        if _is_valid_sqlite_db(absolute_target):
+            return _sqlite_target(
+                absolute_target,
+                root=absolute_target.parent,
+                used_project_scope=True,
+            )
+        return None
+
+    discovered = _find_project_database(str(default_target), start_dir)
+    if discovered is None:
+        return None
+
+    root = _root_from_relative_target(discovered, default_target)
+    return _sqlite_target(discovered, root=root, used_project_scope=True)
+
+
 def resolve_broker_target(
     starting_dir: str | Path | None = None,
     *,
@@ -114,7 +138,11 @@ def resolve_broker_target(
 
     config_path = find_project_config(start_dir)
     if config_path is not None:
-        return resolve_project_target(config_path)
+        return resolve_project_target(config_path, config=config_dict)
+
+    legacy_sqlite_target = _discover_legacy_sqlite_target(start_dir, config=config_dict)
+    if legacy_sqlite_target is not None:
+        return legacy_sqlite_target
 
     configured_target = _configured_backend_target(
         start_dir,
@@ -123,24 +151,7 @@ def resolve_broker_target(
     )
     if configured_target is not None:
         return configured_target
-
-    default_target = Path(str(config_dict["BROKER_DEFAULT_DB_NAME"]))
-    if default_target.is_absolute():
-        absolute_target = default_target.resolve(strict=False)
-        if _is_valid_sqlite_db(absolute_target):
-            return _sqlite_target(
-                absolute_target,
-                root=absolute_target.parent,
-                used_project_scope=True,
-            )
-        return None
-
-    discovered = _find_project_database(str(default_target), start_dir)
-    if discovered is None:
-        return None
-
-    root = _root_from_relative_target(discovered, default_target)
-    return _sqlite_target(discovered, root=root, used_project_scope=True)
+    return None
 
 
 def target_for_directory(
@@ -160,7 +171,7 @@ def target_for_directory(
 
     config_path = root / PROJECT_CONFIG_FILENAME
     if config_path.is_file():
-        return resolve_project_target(config_path)
+        return resolve_project_target(config_path, config=config_dict)
 
     configured_target = _configured_backend_target(
         root,

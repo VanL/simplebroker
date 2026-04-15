@@ -165,7 +165,7 @@ def test_init_backend_toml_target_used_as_fallback() -> None:
     assert result["target"] == "postgresql://toml@tomlhost/tomldb"
 
 
-def test_init_backend_env_target_overrides_toml_target() -> None:
+def test_init_backend_toml_target_overrides_env_target() -> None:
     plugin = PostgresBackendPlugin()
     config = {
         "BROKER_BACKEND_TARGET": "postgresql://env@envhost/envdb",
@@ -177,7 +177,7 @@ def test_init_backend_env_target_overrides_toml_target() -> None:
         toml_target="postgresql://toml@tomlhost/tomldb",
     )
 
-    assert result["target"] == "postgresql://env@envhost/envdb"
+    assert result["target"] == "postgresql://toml@tomlhost/tomldb"
 
 
 def test_init_backend_individual_env_parts_do_not_rewrite_toml_target(
@@ -199,10 +199,7 @@ def test_init_backend_individual_env_parts_do_not_rewrite_toml_target(
     assert result["target"] == "postgresql://toml@tomlhost/tomldb"
 
 
-def test_init_backend_toml_schema_preserved_when_env_not_set(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("BROKER_BACKEND_SCHEMA", raising=False)
+def test_init_backend_toml_schema_preserved_when_env_not_set() -> None:
     plugin = PostgresBackendPlugin()
     config = {
         "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
@@ -217,10 +214,7 @@ def test_init_backend_toml_schema_preserved_when_env_not_set(
     assert result["backend_options"]["schema"] == "from_toml"
 
 
-def test_init_backend_env_schema_overrides_toml(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("BROKER_BACKEND_SCHEMA", "from_env")
+def test_init_backend_toml_schema_overrides_env() -> None:
     plugin = PostgresBackendPlugin()
     config = {
         "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
@@ -232,7 +226,25 @@ def test_init_backend_env_schema_overrides_toml(
         toml_options={"schema": "from_toml"},
     )
 
-    assert result["backend_options"]["schema"] == "from_env"
+    assert result["backend_options"]["schema"] == "from_toml"
+
+
+def test_init_backend_toml_target_uses_default_schema_when_toml_schema_missing() -> (
+    None
+):
+    plugin = PostgresBackendPlugin()
+    config = {
+        "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
+        "BROKER_BACKEND_SCHEMA": "from_env",
+    }
+
+    result = plugin.init_backend(
+        config,
+        toml_target="postgresql://toml@tomlhost/tomldb",
+    )
+
+    assert result["target"] == "postgresql://toml@tomlhost/tomldb"
+    assert result["backend_options"]["schema"] == "simplebroker_pg_v1"
 
 
 def test_connect_wraps_auth_errors_as_connection_errors(

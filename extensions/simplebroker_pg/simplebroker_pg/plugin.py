@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -246,22 +245,40 @@ def verify_env(
     toml_target: str = "",
     toml_options: Mapping[str, Any] | None = None,
 ) -> VerifiedPostgresEnv:
-    """Validate and normalize Postgres config before it is used."""
+    """Validate and normalize Postgres config before it is used.
+
+    When a project-scoped `.broker.toml` target is provided, that file owns the
+    backend target and schema. Env/config still provides supplemental values
+    such as passwords.
+    """
 
     toml_opts = dict(toml_options) if toml_options else {}
-
-    if "BROKER_BACKEND_SCHEMA" in os.environ:
-        schema_source: object = os.environ["BROKER_BACKEND_SCHEMA"]
-    elif "schema" in toml_opts:
-        schema_source = toml_opts["schema"]
-    else:
-        schema_source = config.get("BROKER_BACKEND_SCHEMA", "simplebroker_pg_v1")
-    schema = require_schema_name({"schema": schema_source})
-
+    cleaned_toml_target = _optional_text(toml_target, name="toml target")
     password = _password_text(
         config.get("BROKER_BACKEND_PASSWORD", ""),
         name="BROKER_BACKEND_PASSWORD",
     )
+
+    if "schema" in toml_opts:
+        schema_source: object = toml_opts["schema"]
+    elif cleaned_toml_target:
+        schema_source = "simplebroker_pg_v1"
+    else:
+        schema_source = config.get("BROKER_BACKEND_SCHEMA", "simplebroker_pg_v1")
+    schema = require_schema_name({"schema": schema_source})
+
+    if cleaned_toml_target:
+        return VerifiedPostgresEnv(
+            target_mode="toml_target",
+            host=None,
+            port=None,
+            user=None,
+            password=password or None,
+            database=None,
+            target=_validated_target(cleaned_toml_target, password=password or None),
+            schema=schema,
+        )
+
     env_target = _optional_text(
         config.get("BROKER_BACKEND_TARGET", ""),
         name="BROKER_BACKEND_TARGET",
@@ -275,19 +292,6 @@ def verify_env(
             password=password or None,
             database=None,
             target=_validated_target(env_target, password=password or None),
-            schema=schema,
-        )
-
-    cleaned_toml_target = _optional_text(toml_target, name="toml target")
-    if cleaned_toml_target:
-        return VerifiedPostgresEnv(
-            target_mode="toml_target",
-            host=None,
-            port=None,
-            user=None,
-            password=password or None,
-            database=None,
-            target=_validated_target(cleaned_toml_target, password=password or None),
             schema=schema,
         )
 

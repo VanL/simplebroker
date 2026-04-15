@@ -10,6 +10,7 @@ import pytest
 
 from simplebroker._constants import load_config
 from simplebroker._project_config import load_project_config, resolve_project_target
+from simplebroker._targets import ResolvedTarget
 from simplebroker.db import BrokerDB
 from simplebroker.project import (
     broker_root,
@@ -184,6 +185,43 @@ def test_public_resolve_broker_target_discovers_upward_sqlite_project(
 
 
 @pytest.mark.sqlite_only
+def test_public_resolve_broker_target_prefers_legacy_sqlite_over_env_backend(
+    workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy sqlite discovery should beat ambient backend env during discovery."""
+
+    project_root = workdir / "project"
+    nested = project_root / "deep" / "child"
+    nested.mkdir(parents=True)
+
+    db_path = project_root / ".broker.db"
+    with BrokerDB(str(db_path)) as db:
+        db.write("tasks", "payload")
+
+    def unexpected_backend(*args: object, **kwargs: object) -> ResolvedTarget | None:
+        raise AssertionError(
+            "env backend synthesis should not run before sqlite discovery"
+        )
+
+    monkeypatch.setattr(
+        "simplebroker.project._configured_backend_target", unexpected_backend
+    )
+
+    resolved = resolve_broker_target(
+        nested,
+        config={
+            "BROKER_BACKEND": "postgres",
+            "BROKER_DEFAULT_DB_NAME": ".broker.db",
+        },
+    )
+
+    assert resolved is not None
+    assert resolved.backend_name == "sqlite"
+    assert resolved.target_path == db_path.resolve()
+    assert resolved.project_root == project_root.resolve()
+
+
+@pytest.mark.sqlite_only
 def test_public_target_for_directory_builds_default_sqlite_target(
     tmp_path: Path,
 ) -> None:
@@ -260,15 +298,120 @@ def test_resolve_target_missing_postgres_plugin_has_install_hint(
         target_for_directory(tmp_path, config=config)
 
 
+def test_resolve_project_target_prefers_project_values_over_env_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Project configs should pass their own target fields ahead of env state."""
+
+    config_path = tmp_path / ".broker.toml"
+    _write_project_config(
+        config_path,
+        backend="postgres",
+        target="postgresql://toml@tomlhost/tomldb",
+        backend_options={"schema": "from_toml"},
+    )
+    monkeypatch.setenv("BROKER_BACKEND_TARGET", "postgresql://env@envhost/envdb")
+    monkeypatch.setenv("BROKER_BACKEND_PASSWORD", "secret")
+
+    seen: dict[str, object] = {}
+
+    class DummyPlugin:
+        def init_backend(  # type: ignore[no-untyped-def]
+            self,
+            config,
+            *,
+            toml_target="",
+            toml_options=None,
+        ):
+            seen["config"] = dict(config)
+            seen["toml_target"] = toml_target
+            seen["toml_options"] = dict(toml_options or {})
+            return {
+                "target": toml_target,
+                "backend_options": dict(toml_options or {}),
+            }
+
+    monkeypatch.setattr(
+        "simplebroker._project_config.get_backend_plugin",
+        lambda name="postgres": DummyPlugin(),
+    )
+
+    resolved = resolve_project_target(config_path)
+
+    assert resolved.backend_name == "postgres"
+    assert resolved.target == "postgresql://toml@tomlhost/tomldb"
+    assert resolved.backend_options == {"schema": "from_toml"}
+    assert seen["toml_target"] == "postgresql://toml@tomlhost/tomldb"
+    assert seen["toml_options"] == {"schema": "from_toml"}
+    assert isinstance(seen["config"], dict)
+    config_dict = seen["config"]
+    assert isinstance(config_dict, dict)
+    assert config_dict["BROKER_BACKEND_TARGET"] == ""
+    assert config_dict["BROKER_BACKEND_PASSWORD"] == "secret"
+
+
 def test_toml_overrides_env_backend_in_public_helpers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A direct project config should win over BROKER_BACKEND env selection."""
     monkeypatch.setenv("BROKER_BACKEND", "postgres")
-    _write_project_config(
-        tmp_path / ".broker.toml", backend="sqlite", target="x.db"
-    )
+    _write_project_config(tmp_path / ".broker.toml", backend="sqlite", target="x.db")
 
     target = target_for_directory(tmp_path, config=load_config())
 
     assert target.backend_name == "sqlite"
+
+
+@pytest.mark.sqlite_only
+def test_cli_project_scope_prefers_legacy_sqlite_over_env_backend(
+    workdir: Path,
+) -> None:
+    """CLI project scope should keep using the discovered sqlite project."""
+
+    project_root = workdir / "project"
+    nested = project_root / "src"
+    nested.mkdir(parents=True)
+
+    code, stdout, stderr = run_cli("init", cwd=project_root)
+    assert code == 0, stderr
+
+    env = {
+        "BROKER_PROJECT_SCOPE": "1",
+        "BROKER_BACKEND": "postgres",
+    }
+    code, stdout, stderr = run_cli("write", "jobs", "hello", cwd=nested, env=env)
+    assert code == 0, stderr
+
+    code, stdout, stderr = run_cli("read", "jobs", cwd=nested, env=env)
+    assert code == 0, stderr
+    assert stdout == "hello"
+
+
+@pytest.mark.sqlite_only
+def test_cli_explicit_file_beats_env_backend_selection(workdir: Path) -> None:
+    """An explicit sqlite file should beat ambient backend env selection."""
+
+    env = {"BROKER_BACKEND": "postgres"}
+
+    code, stdout, stderr = run_cli(
+        "-f",
+        "explicit.db",
+        "write",
+        "jobs",
+        "hello",
+        cwd=workdir,
+        env=env,
+    )
+    assert code == 0, stderr
+    assert (workdir / "explicit.db").exists()
+
+    code, stdout, stderr = run_cli(
+        "-f",
+        "explicit.db",
+        "read",
+        "jobs",
+        cwd=workdir,
+        env=env,
+    )
+    assert code == 0, stderr
+    assert stdout == "hello"

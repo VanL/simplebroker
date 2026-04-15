@@ -1012,7 +1012,10 @@ Now project scoping searches for `.project/queue.db` instead of `.broker.db`.
 - **Environment separation**: `dev-queue.db` vs `prod-queue.db`
 - **Using config directories**: `.config/broker.db` vs `.broker.db`
 
-**Note:** If no project database is found during the upward search, SimpleBroker will error out and ask you to run `broker init` to create one.
+**Note:** If no legacy project database is found during the upward search,
+SimpleBroker next checks for a project-scoped `.broker.toml` or an
+env-selected non-SQLite backend. If none applies, it errors out and asks you
+to run `broker init`.
 
 ### Error Behavior When No Project Database Found
 
@@ -1049,7 +1052,10 @@ broker init
 broker init --force
 ```
 
-**Important:** `broker init` always creates the database in the current working directory and does not accept `-d` or `-f` flags. It only respects `BROKER_DEFAULT_DB_NAME` for custom filenames.
+**Important:** `broker init` does not accept `-d` or `-f` flags. In legacy
+SQLite mode it initializes the current directory and respects
+`BROKER_DEFAULT_DB_NAME` for custom filenames. When project scope finds a
+`.broker.toml`, `broker init` initializes that project target instead.
 
 **Directory structure examples:**
 ```bash
@@ -1076,17 +1082,25 @@ pipeline/
 
 ### Precedence Rules
 
-Database path resolution follows strict precedence rules:
+SimpleBroker resolves the active broker target in this order:
 
-1. **Explicit CLI flags** (`-f`, `-d`) - Always override all other settings
-2. **Project scoping** (`BROKER_PROJECT_SCOPE=true`) - Git-like upward search, errors if not found
-3. **Global scope** (`BROKER_DEFAULT_DB_LOCATION`) - Used when project scoping disabled
-4. **Built-in defaults** - Current directory + `.broker.db`
+1. **Explicit CLI SQLite file selection** (`-f`, or `-d/-f`) for non-`init`
+   commands
+2. **Project config** (`.broker.toml`) discovered upward from the working
+   directory when project scope is enabled
+3. **Legacy project SQLite discovery** using `BROKER_DEFAULT_DB_NAME` when
+   project scope is enabled
+4. **Env-selected non-SQLite backend** using `BROKER_BACKEND=...`
+5. **SQLite defaults** from `BROKER_DEFAULT_DB_LOCATION`, the current
+   directory, and `BROKER_DEFAULT_DB_NAME`
 
-**Environment variable interactions:**
-- `BROKER_DEFAULT_DB_NAME` applies to all scoping modes
-- `BROKER_DEFAULT_DB_LOCATION` ignored when `BROKER_PROJECT_SCOPE=true`
-- `BROKER_PROJECT_SCOPE=true` takes precedence over global scope settings
+**Notes:**
+- `BROKER_DEFAULT_DB_NAME` affects legacy SQLite discovery and default SQLite
+  targets. It does not override `.broker.toml`.
+- `BROKER_DEFAULT_DB_LOCATION` is only part of the SQLite default path.
+- When `.broker.toml` provides backend target fields, the project file is
+  authoritative. Env remains appropriate for secrets such as
+  `BROKER_BACKEND_PASSWORD`.
 
 **Examples:**
 
@@ -1108,12 +1122,18 @@ cd /home/user/myproject/subdir
 broker write test "msg"
 # Uses: /home/user/myproject/.config/project.db
 
-# 4. Project scoping enabled but no database found (errors out)
+# 4. Project scope can also discover a .broker.toml before env backends
+# (assuming /home/user/myproject/.broker.toml exists)
+cd /home/user/myproject/subdir
+broker write test "msg"
+# Uses the project target from /home/user/myproject/.broker.toml
+
+# 5. Project scoping enabled but no project config or database found (errors out)
 cd /tmp/isolated
 broker write test "msg"
 # Error: No SimpleBroker database found. Run 'broker init' to create one.
 
-# 5. Built-in defaults (no project scoping)
+# 6. Built-in defaults (no project scoping)
 unset BROKER_PROJECT_SCOPE BROKER_DEFAULT_DB_NAME
 broker write test "msg"
 # Uses: /tmp/isolated/.broker.db
@@ -1366,6 +1386,10 @@ target = "postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test"
 [backend_options]
 schema = "simplebroker_app"
 ```
+
+When `.broker.toml` is present, it owns the backend target and target-shaping
+options for that project. Env is still the right place for supplemental secret
+material such as `BROKER_BACKEND_PASSWORD`.
 </details>
 
 ## Development & Contributing

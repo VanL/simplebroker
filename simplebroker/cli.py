@@ -16,7 +16,6 @@ from ._constants import (
     load_config,
 )
 from ._exceptions import DatabaseError
-from ._project_config import find_project_config, resolve_project_target
 from ._targets import ResolvedTarget
 from .helpers import (
     _find_project_database,
@@ -29,7 +28,7 @@ from .helpers import (
     _validate_working_directory,
     ensure_compound_db_path,
 )
-from .project import _configured_backend_target
+from .project import _configured_backend_target, resolve_broker_target
 
 # Cache the parser for better startup performance
 _PARSER_CACHE = None
@@ -117,6 +116,17 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
             setattr(namespace, self.dest, Path(values))
             namespace._dir_explicitly_provided = True
 
+    class FileAction(argparse.Action):
+        def __call__(
+            self,
+            parser: argparse.ArgumentParser,
+            namespace: argparse.Namespace,
+            values: Any,
+            option_string: str | None = None,
+        ) -> None:
+            setattr(namespace, self.dest, values)
+            namespace._file_explicitly_provided = True
+
     parser.add_argument(
         "-d",
         "--dir",
@@ -127,6 +137,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     parser.add_argument(
         "-f",
         "--file",
+        action=FileAction,
         default=default_file,
         help=f"database filename or absolute path (default: {default_file})",
     )
@@ -471,7 +482,7 @@ def _resolve_database_path(
         where used_project_scope indicates if path came from upward search
 
     Precedence Order:
-        1. Explicit CLI flags (-f absolute path, or -d/-f combination)
+        1. Explicit CLI file selection (-f absolute path or explicit relative -f)
         2. Project scope search (if BROKER_PROJECT_SCOPE=true)
         3. Environment variable defaults
         4. Built-in defaults (cwd + .broker.db)
@@ -501,6 +512,10 @@ def _resolve_database_path(
                 pass
 
         return file_path, False
+
+    file_explicitly_provided = getattr(args, "_file_explicitly_provided", False)
+    if file_explicitly_provided:
+        return args.dir / file_path, False
 
     # 2. Project scope search
     # Determine working dir and filename with env defaults
@@ -555,10 +570,18 @@ def _resolve_target(
     """Resolve the backend target for the current CLI invocation."""
     root = Path(args.dir).expanduser().resolve()
 
+    if args.command != "init" and getattr(args, "_file_explicitly_provided", False):
+        db_path, used_project_scope = _resolve_database_path(args, config=config)
+        return _build_sqlite_target(
+            db_path,
+            used_project_scope=used_project_scope,
+            legacy_sqlite_path_mode=True,
+        )
+
     if config["BROKER_PROJECT_SCOPE"]:
-        config_path = find_project_config(root)
-        if config_path is not None:
-            return resolve_project_target(config_path)
+        discovered_target = resolve_broker_target(root, config=config)
+        if discovered_target is not None:
+            return discovered_target
 
     configured_target = _configured_backend_target(
         root,

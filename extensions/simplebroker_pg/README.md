@@ -85,11 +85,14 @@ broker init
 
 Notes:
 
-- `BROKER_BACKEND_TARGET` overrides the whole target string.
+- In env-only backend configuration, `BROKER_BACKEND_TARGET` overrides the
+  host/port/user/database parts.
 - `BROKER_BACKEND_HOST`, `BROKER_BACKEND_PORT`, `BROKER_BACKEND_USER`,
-  `BROKER_BACKEND_PASSWORD`, and `BROKER_BACKEND_DATABASE` are only used when there is no
-  target from env or toml.
-- `BROKER_BACKEND_PASSWORD` is never written to `.broker.toml`.
+  `BROKER_BACKEND_PASSWORD`, and `BROKER_BACKEND_DATABASE` are only used when
+  there is no target from project config or env.
+- When `.broker.toml` provides the target or schema, the project file wins.
+  `BROKER_BACKEND_PASSWORD` can still be supplied from env and is never
+  written to `.broker.toml`.
 - The Postgres database must already exist. `broker init` creates the managed schema/tables
   inside that database; it does not create the database itself.
 - Missing backend/plugin errors are distinct from target/auth errors. Invalid schema names,
