@@ -17,7 +17,7 @@ from email.parser import BytesParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-POSTGRES_IMAGE = os.environ.get("SIMPLEBROKER_PG_TEST_IMAGE", "postgres:17")
+POSTGRES_IMAGE = os.environ.get("SIMPLEBROKER_PG_TEST_IMAGE", "postgres:18")
 POSTGRES_DB = os.environ.get("SIMPLEBROKER_PG_TEST_DB", "simplebroker_test")
 POSTGRES_USER = os.environ.get("SIMPLEBROKER_PG_TEST_USER", "postgres")
 POSTGRES_PASSWORD = os.environ.get("SIMPLEBROKER_PG_TEST_PASSWORD", "postgres")
