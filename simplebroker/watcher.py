@@ -1155,6 +1155,9 @@ class PollingStrategy:
     def _check_data_version(self) -> bool:
         """Check PRAGMA data_version for changes."""
         try:
+            if self._stop_event.is_set():
+                return False
+
             if self._data_version_provider is None:
                 return False
 
@@ -1167,21 +1170,11 @@ class PollingStrategy:
                 # Treat the first observed version as a cache-sync point.
                 # Otherwise a write that lands before the first poll can be
                 # processed before queue.last_ts is refreshed.
-                if self._data_change_callback is not None:
-                    try:
-                        self._data_change_callback()
-                    except Exception:
-                        # Swallow callback exceptions so polling continues
-                        logger.exception("data_version change callback failed")
+                self._run_data_change_callback()
                 return False
             if version != self._data_version:
                 self._data_version = version
-                if self._data_change_callback is not None:
-                    try:
-                        self._data_change_callback()
-                    except Exception:
-                        # Swallow callback exceptions so polling continues
-                        logger.exception("data_version change callback failed")
+                self._run_data_change_callback()
                 return True  # Change detected!
 
             return False
@@ -1195,6 +1188,19 @@ class PollingStrategy:
                 ) from None
             # Fallback to regular polling if PRAGMA fails
             return False
+
+    def _run_data_change_callback(self) -> None:
+        """Run cache-sync callback while suppressing expected shutdown noise."""
+        if self._data_change_callback is None or self._stop_event.is_set():
+            return
+
+        try:
+            self._data_change_callback()
+        except Exception:
+            if self._stop_event.is_set():
+                return
+            # Swallow callback exceptions so polling continues.
+            logger.exception("data_version change callback failed")
 
 
 class QueueWatcher(BaseWatcher):

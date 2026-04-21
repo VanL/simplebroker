@@ -859,6 +859,53 @@ class TestPollingStrategy:
         assert strategy._check_data_version() is False
         assert callback_calls == [2]
 
+    def test_data_version_callback_failure_logs_when_running(self, caplog):
+        """Unexpected cache-sync failures should still be visible."""
+        from simplebroker.watcher import PollingStrategy
+
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
+
+        def version_provider():
+            return 2
+
+        def on_data_version_change():
+            raise RuntimeError("boom")
+
+        strategy.start(
+            version_provider,
+            on_data_version_change=on_data_version_change,
+        )
+
+        with caplog.at_level(logging.ERROR, logger="simplebroker.watcher"):
+            assert strategy._check_data_version() is False
+
+        assert "data_version change callback failed" in caplog.text
+
+    def test_data_version_callback_failure_during_stop_is_quiet(self, caplog):
+        """Connection interrupts during watcher shutdown should not produce stderr."""
+        from simplebroker.watcher import PollingStrategy
+
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
+
+        def version_provider():
+            return 2
+
+        def on_data_version_change():
+            stop_event.set()
+            raise RuntimeError("Connection interrupted")
+
+        strategy.start(
+            version_provider,
+            on_data_version_change=on_data_version_change,
+        )
+
+        with caplog.at_level(logging.ERROR, logger="simplebroker.watcher"):
+            assert strategy._check_data_version() is False
+
+        assert "data_version change callback failed" not in caplog.text
+
     @pytest.mark.sqlite_only
     def test_polling_with_data_version(self, tmp_path):
         """Test that polling uses PRAGMA data_version for efficient change detection."""
