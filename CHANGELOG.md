@@ -5,6 +5,10 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.9] - 2026-04-23
+### Fixed
+- Fixed resolution of the broker.toml file for the pg backend to use the same rules as broker.b
+
 ## [3.1.5] - 2026-04-08
 ### Fixed
 - Addressed a race in concurrent lock file handling under high load

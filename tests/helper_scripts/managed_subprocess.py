@@ -7,10 +7,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from queue import Empty, Queue
-from typing import IO
+from typing import IO, Any
 
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -19,15 +20,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 class OutputReader(threading.Thread):
     """Non-blocking reader for subprocess output streams."""
 
-    def __init__(self, stream: IO, text_mode: bool = True):
+    def __init__(self, stream: IO[Any], text_mode: bool = True) -> None:
         super().__init__(daemon=True)
         self.stream = stream
         self.text_mode = text_mode
-        self.queue = Queue()
-        self.lines = []
+        self.queue: Queue[str | bytes] = Queue()
+        self.lines: list[str | bytes] = []
         self._stop_event = threading.Event()
 
-    def run(self):
+    def run(self) -> None:
         """Read lines from stream until EOF or stop event."""
         try:
             while not self._stop_event.is_set():
@@ -63,11 +64,11 @@ class OutputReader(threading.Thread):
                 # Stream already closed
                 pass
 
-    def stop(self):
+    def stop(self) -> None:
         """Signal the reader to stop."""
         self._stop_event.set()
 
-    def get_output(self, timeout: float = 0.1) -> str:
+    def get_output(self, timeout: float = 0.1) -> str | bytes:
         """Get all accumulated output."""
         # Drain any remaining items from queue
         while True:
@@ -78,22 +79,29 @@ class OutputReader(threading.Thread):
                 break
 
         if self.text_mode:
-            return "".join(self.lines)
-        else:
-            return b"".join(self.lines)
+            return "".join(
+                line if isinstance(line, str) else line.decode(errors="replace")
+                for line in self.lines
+            )
+        return b"".join(
+            line if isinstance(line, bytes) else line.encode() for line in self.lines
+        )
 
 
 class ManagedProcess:
     """Wrapper around subprocess.Popen with enhanced functionality."""
 
     def __init__(
-        self, popen: subprocess.Popen, capture_output: bool = True, text: bool = True
-    ):
+        self,
+        popen: subprocess.Popen[Any],
+        capture_output: bool = True,
+        text: bool = True,
+    ) -> None:
         self.proc = popen
         self.capture_output = capture_output
         self.text = text
-        self._stdout_reader = None
-        self._stderr_reader = None
+        self._stdout_reader: OutputReader | None = None
+        self._stderr_reader: OutputReader | None = None
 
         if capture_output and popen.stdout:
             self._stdout_reader = OutputReader(popen.stdout, text)
@@ -129,13 +137,15 @@ class ManagedProcess:
 
         while time.monotonic() - start_time < timeout:
             output = reader.get_output()
+            if isinstance(output, bytes):
+                output = output.decode(errors="replace")
             if pattern in output:
                 return True
             time.sleep(0.1)
 
         return False
 
-    def terminate(self):
+    def terminate(self) -> None:
         """Initiate graceful termination."""
         if self.proc.poll() is None:
             if sys.platform == "win32":
@@ -144,7 +154,7 @@ class ManagedProcess:
                 # Try SIGTERM first on POSIX
                 self.proc.terminate()
 
-    def cleanup_readers(self):
+    def cleanup_readers(self) -> None:
         """Stop and cleanup output readers."""
         if self._stdout_reader:
             self._stdout_reader.stop()
@@ -175,8 +185,8 @@ def managed_subprocess(
     text: bool = True,  # Text mode vs binary mode
     encoding: str = "utf-8",
     # Additional Popen kwargs
-    **popen_kwargs,
-) -> ManagedProcess:
+    **popen_kwargs: Any,
+) -> Iterator[ManagedProcess]:
     """
     Context manager for safely running subprocesses with automatic cleanup.
 
@@ -203,7 +213,9 @@ def managed_subprocess(
     """
     # Normalize command
     if isinstance(cmd, str):
-        cmd = cmd.split()
+        cmd_args = cmd.split()
+    else:
+        cmd_args = cmd
 
     full_env = os.environ.copy()
     if env:
@@ -222,7 +234,7 @@ def managed_subprocess(
     stderr_pipe = subprocess.PIPE if capture_output else None
 
     # Merge popen_kwargs
-    popen_args = {
+    popen_args: dict[str, Any] = {
         "cwd": cwd,
         "env": full_env,
         "stdin": stdin_pipe,
@@ -236,8 +248,8 @@ def managed_subprocess(
     # Remove None values
     popen_args = {k: v for k, v in popen_args.items() if v is not None}
 
-    proc = None
-    managed = None
+    proc: subprocess.Popen[Any] | None = None
+    managed: ManagedProcess | None = None
 
     try:
         # Start process
@@ -245,7 +257,7 @@ def managed_subprocess(
             # Create new process group on POSIX for better cleanup
             popen_args["preexec_fn"] = os.setsid
 
-        proc = subprocess.Popen(cmd, **popen_args)
+        proc = subprocess.Popen(cmd_args, **popen_args)
         managed = ManagedProcess(proc, capture_output, text)
 
         # Send stdin if provided
@@ -335,7 +347,7 @@ def managed_subprocess(
 
 
 # Convenience function for quick subprocess runs
-def run_subprocess(cmd: str | list[str], **kwargs) -> tuple[int, str, str]:
+def run_subprocess(cmd: str | list[str], **kwargs: Any) -> tuple[int, str, str]:
     """
     Run a subprocess and return (returncode, stdout, stderr).
 
@@ -345,4 +357,10 @@ def run_subprocess(cmd: str | list[str], **kwargs) -> tuple[int, str, str]:
     with managed_subprocess(cmd, **kwargs) as proc:
         # Wait for completion
         proc.proc.wait()
-        return proc.proc.returncode, proc.stdout, proc.stderr
+        stdout = proc.stdout
+        stderr = proc.stderr
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        return proc.proc.returncode, stdout, stderr

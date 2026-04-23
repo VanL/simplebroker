@@ -3,6 +3,7 @@
 import platform
 import tempfile
 from pathlib import Path
+from typing import Any
 
 
 def create_platform_absolute_path(
@@ -153,7 +154,7 @@ def create_absolute_test_path(relative_path: str = "test") -> str:
     return str(temp_base / "simplebroker_test" / relative_path)
 
 
-def skip_if_platform(platform_name: str, reason: str = "Platform-specific test"):
+def skip_if_platform(platform_name: str, reason: str = "Platform-specific test") -> Any:
     """Decorator to skip tests on specific platforms.
 
     Args:
@@ -173,7 +174,9 @@ def skip_if_platform(platform_name: str, reason: str = "Platform-specific test")
     return pytest.mark.skipif(platform.system() == platform_name, reason=reason)
 
 
-def run_only_on_platform(platform_name: str, reason: str = "Platform-specific test"):
+def run_only_on_platform(
+    platform_name: str, reason: str = "Platform-specific test"
+) -> Any:
     """Decorator to run tests only on specific platforms.
 
     Args:

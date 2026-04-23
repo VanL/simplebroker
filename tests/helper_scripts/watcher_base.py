@@ -2,9 +2,10 @@
 
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -60,8 +61,8 @@ class WatcherTestBase:
         broker: BrokerDB | str | Path,
         queue: str,
         handler: Callable[[str, int], None],
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> Iterator[QueueWatcher]:
         """Context manager for safe watcher testing.
 
         Ensures watcher is always stopped, even if test fails.
@@ -99,8 +100,8 @@ class WatcherTestBase:
         source_queue: str,
         dest_queue: str,
         handler: Callable[[str, int], None],
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> Iterator[QueueMoveWatcher]:
         """Context manager for safe move watcher testing.
 
         Args:
@@ -135,7 +136,7 @@ class WatcherTestBase:
     def run_watcher_until_messages(
         self,
         watcher: QueueWatcher | QueueMoveWatcher,
-        collector,  # MessageCollector instance
+        collector: Any,  # MessageCollector instance
         expected_count: int,
         timeout: float = 5.0,
     ) -> threading.Thread:
@@ -168,19 +169,19 @@ class WatcherTestBase:
 
     def assert_watcher_stops_quickly(
         self, watcher: QueueWatcher | QueueMoveWatcher, max_stop_time: float = 0.5
-    ):
+    ) -> None:
         """Assert that watcher stops within expected time.
 
         Args:
             watcher: The watcher to stop
             max_stop_time: Maximum acceptable stop time
         """
-        start_time = time.monotonic()()
+        start_time = time.monotonic()
         watcher.stop()
 
         # If watcher was running in thread, wait for it
         # (In real test, we'd track the thread)
-        stop_time = time.time() - start_time
+        stop_time = time.monotonic() - start_time
 
         assert stop_time < max_stop_time, (
             f"Watcher took {stop_time:.2f}s to stop, expected < {max_stop_time}s"

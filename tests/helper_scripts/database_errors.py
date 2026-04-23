@@ -78,7 +78,7 @@ class DatabaseErrorInjector:
         lock_acquired = threading.Event()
         stop_event = threading.Event()
 
-        def hold_lock():
+        def hold_lock() -> None:
             conn = sqlite3.connect(db_path, timeout=0.1)
             try:
                 conn.execute("BEGIN EXCLUSIVE")
@@ -214,7 +214,7 @@ class DatabaseErrorInjector:
 
         stop_event = threading.Event()
 
-        def busy_writer():
+        def busy_writer() -> None:
             conn = sqlite3.connect(db_path)
             counter = 0
             while not stop_event.is_set():

@@ -912,7 +912,13 @@ The harness measures end-to-end CLI behavior for repeated single-message
 - `BROKER_DEFAULT_DB_NAME` - name of the broker database file (default: .broker.db)
 - Corresponds to the -f/--file command line argument
 - Can be a compound path including a single directory (e.g., ".subdirectory/broker.db")
-- Applies to all scopes 
+- Applies to all scopes
+
+**Project Config Naming:**
+- `BROKER_PROJECT_CONFIG_NAME` - project config filename (default: .broker.toml)
+- `BROKER_PROJECT_CONFIG_PATH` - optional directory prefix for project config discovery
+- Relative prefixes are searched under each candidate project directory
+- Use these to namespace embedded consumers away from standalone SimpleBroker config
 
 Example configurations:
 ```bash
@@ -1012,10 +1018,27 @@ Now project scoping searches for `.project/queue.db` instead of `.broker.db`.
 - **Environment separation**: `dev-queue.db` vs `prod-queue.db`
 - **Using config directories**: `.config/broker.db` vs `.broker.db`
 
-**Note:** If no legacy project database is found during the upward search,
-SimpleBroker next checks for a project-scoped `.broker.toml` or an
-env-selected non-SQLite backend. If none applies, it errors out and asks you
-to run `broker init`.
+### Project Config Names
+
+Project config discovery can be namespaced independently from standalone
+SimpleBroker by setting a config name, a config path prefix, or both:
+
+```bash
+export BROKER_PROJECT_SCOPE=true
+export BROKER_PROJECT_CONFIG_PATH=.weft
+export BROKER_PROJECT_CONFIG_NAME=broker.toml
+```
+
+Now project scoping searches upward for `.weft/broker.toml` instead of
+`.broker.toml`. An equivalent compact form is:
+
+```bash
+export BROKER_PROJECT_CONFIG_NAME=.weft/broker.toml
+```
+
+This follows the same single-directory rule as `BROKER_DEFAULT_DB_NAME`.
+`BROKER_PROJECT_CONFIG_PATH` may also be an absolute directory when one fixed
+config location should be used.
 
 ### Error Behavior When No Project Database Found
 
@@ -1055,7 +1078,8 @@ broker init --force
 **Important:** `broker init` does not accept `-d` or `-f` flags. In legacy
 SQLite mode it initializes the current directory and respects
 `BROKER_DEFAULT_DB_NAME` for custom filenames. When project scope finds a
-`.broker.toml`, `broker init` initializes that project target instead.
+configured project TOML file, `broker init` initializes that project target
+instead.
 
 **Directory structure examples:**
 ```bash
@@ -1086,8 +1110,9 @@ SimpleBroker resolves the active broker target in this order:
 
 1. **Explicit CLI SQLite file selection** (`-f`, or `-d/-f`) for non-`init`
    commands
-2. **Project config** (`.broker.toml`) discovered upward from the working
-   directory when project scope is enabled
+2. **Project config** discovered upward from the working directory when project
+   scope is enabled, using `BROKER_PROJECT_CONFIG_PATH` and
+   `BROKER_PROJECT_CONFIG_NAME`
 3. **Legacy project SQLite discovery** using `BROKER_DEFAULT_DB_NAME` when
    project scope is enabled
 4. **Env-selected non-SQLite backend** using `BROKER_BACKEND=...`
@@ -1096,9 +1121,11 @@ SimpleBroker resolves the active broker target in this order:
 
 **Notes:**
 - `BROKER_DEFAULT_DB_NAME` affects legacy SQLite discovery and default SQLite
-  targets. It does not override `.broker.toml`.
+  targets. It does not override project config.
+- `BROKER_PROJECT_CONFIG_NAME` and `BROKER_PROJECT_CONFIG_PATH` affect project
+  config discovery and explicit-root project config resolution.
 - `BROKER_DEFAULT_DB_LOCATION` is only part of the SQLite default path.
-- When `.broker.toml` provides backend target fields, the project file is
+- When project TOML provides backend target fields, the project file is
   authoritative. Env remains appropriate for secrets such as
   `BROKER_BACKEND_PASSWORD`.
 

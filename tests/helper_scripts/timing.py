@@ -86,11 +86,11 @@ def wait_for_count(
     """
     if at_least:
 
-        def condition():
+        def condition() -> bool:
             return count_fn() >= expected_count
     else:
 
-        def condition():
+        def condition() -> bool:
             return count_fn() == expected_count
 
     return wait_for_condition(condition, timeout=timeout, interval=interval)
@@ -98,7 +98,7 @@ def wait_for_count(
 
 def retry_on_exception(
     func: Callable[[], T],
-    exception_types: type | tuple = Exception,
+    exception_types: type[BaseException] | tuple[type[BaseException], ...] = Exception,
     max_attempts: int = 3,
     delay: float = 0.5,
     backoff_factor: float = 2.0,
@@ -120,7 +120,7 @@ def retry_on_exception(
 
     """
     current_delay = delay
-    last_exception = None
+    last_exception: BaseException | None = None
 
     for attempt in range(max_attempts):
         try:
@@ -131,6 +131,7 @@ def retry_on_exception(
                 time.sleep(current_delay)
                 current_delay *= backoff_factor
 
+    assert last_exception is not None
     raise last_exception
 
 

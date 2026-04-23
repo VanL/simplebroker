@@ -35,7 +35,7 @@ from typing import Any, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "3.1.8"
+__version__: Final[str] = "3.1.9"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
@@ -54,6 +54,9 @@ ALIAS_PREFIX: Final[str] = "@"
 
 DEFAULT_DB_NAME: Final[str] = ".broker.db"
 """Default database filename created in current directory if not specified."""
+
+DEFAULT_PROJECT_CONFIG_NAME: Final[str] = ".broker.toml"
+"""Default project configuration filename."""
 
 SIMPLEBROKER_MAGIC: Final[str] = "simplebroker-v1"
 """Magic string stored in database to verify it's a SimpleBroker database."""
@@ -483,6 +486,8 @@ _CONFIG_NORMALIZERS: Final[dict[str, Any]] = {
     "BROKER_LOGGING_ENABLED": _parse_strict_one_bool,
     "BROKER_DEFAULT_DB_LOCATION": str,
     "BROKER_DEFAULT_DB_NAME": str,
+    "BROKER_PROJECT_CONFIG_PATH": str,
+    "BROKER_PROJECT_CONFIG_NAME": str,
     "BROKER_PROJECT_SCOPE": lambda value: (
         value if isinstance(value, bool) else _parse_bool(str(value))
     ),
@@ -634,6 +639,18 @@ def load_config() -> dict[str, Any]:
                 Can be a compound path (e.g. "subdir/.broker.db"), but
                 SimpleBroker will
 
+            BROKER_PROJECT_CONFIG_PATH (str): Optional directory prefix for
+                project config discovery.
+                Default: "" (search directly in each candidate project directory)
+                Relative values are resolved beneath each candidate project
+                directory. Absolute values point at one configured directory.
+
+            BROKER_PROJECT_CONFIG_NAME (str): Project config filename.
+                Default: ".broker.toml"
+                Used for project config discovery and explicit-root resolution.
+                Can be a compound path (e.g. ".weft/broker.toml") with one
+                directory level.
+
             BROKER_PROJECT_SCOPE (bool): Enable git-like upward database search.
                 Default: False
                 Set to "1", "true", "yes", or "on" to enable.
@@ -720,6 +737,10 @@ def load_config() -> dict[str, Any]:
         "BROKER_DEFAULT_DB_NAME": os.environ.get(
             "BROKER_DEFAULT_DB_NAME", DEFAULT_DB_NAME
         ),
+        "BROKER_PROJECT_CONFIG_PATH": os.environ.get("BROKER_PROJECT_CONFIG_PATH", ""),
+        "BROKER_PROJECT_CONFIG_NAME": os.environ.get(
+            "BROKER_PROJECT_CONFIG_NAME", DEFAULT_PROJECT_CONFIG_NAME
+        ),
         "BROKER_PROJECT_SCOPE": _parse_bool(
             os.environ.get("BROKER_PROJECT_SCOPE", "0")
         ),
@@ -789,6 +810,70 @@ def load_config() -> dict[str, Any]:
                 f"Database name must not contain nested directories: {db_name}. "
                 f"Only single directory level is supported (e.g., 'dir/name.db')"
             )
+
+    # Validate project config path/name format. This mirrors default DB naming:
+    # a relative name may include one directory level, and an optional path prefix
+    # may namespace discovery under each candidate project directory.
+    project_config_path = config["BROKER_PROJECT_CONFIG_PATH"]
+    if isinstance(project_config_path, str) and project_config_path:
+        try:
+            _validate_safe_path_components(
+                project_config_path, "BROKER_PROJECT_CONFIG_PATH"
+            )
+        except ValueError as e:
+            raise ValueError(
+                f"BROKER_PROJECT_CONFIG_PATH validation failed: {e}"
+            ) from e
+
+        from pathlib import PurePath
+
+        if not os.path.isabs(project_config_path):
+            parts = list(PurePath(project_config_path.replace("\\", "/")).parts)
+            if len(parts) > 1:
+                raise ValueError(
+                    "BROKER_PROJECT_CONFIG_PATH must be an absolute path or a "
+                    f"single relative directory: {project_config_path}"
+                )
+
+    project_config_name = config["BROKER_PROJECT_CONFIG_NAME"]
+    if isinstance(project_config_name, str) and project_config_name:
+        from pathlib import PurePath
+
+        try:
+            _validate_safe_path_components(
+                project_config_name, "BROKER_PROJECT_CONFIG_NAME"
+            )
+        except ValueError as e:
+            raise ValueError(
+                f"BROKER_PROJECT_CONFIG_NAME validation failed: {e}"
+            ) from e
+
+        if os.path.isabs(project_config_name):
+            raise ValueError(
+                "BROKER_PROJECT_CONFIG_NAME must be a relative path, not "
+                f"absolute: {project_config_name}. Use BROKER_PROJECT_CONFIG_PATH "
+                "to specify the directory instead."
+            )
+
+        parts = list(PurePath(project_config_name.replace("\\", "/")).parts)
+        if len(parts) > 2:
+            raise ValueError(
+                f"Project config name must not contain nested directories: {project_config_name}. "
+                "Only single directory level is supported (e.g., 'dir/broker.toml')"
+            )
+
+        if (
+            isinstance(project_config_path, str)
+            and project_config_path
+            and not os.path.isabs(project_config_path)
+        ):
+            path_parts = list(PurePath(project_config_path.replace("\\", "/")).parts)
+            if len(path_parts) + len(parts) > 2:
+                raise ValueError(
+                    "BROKER_PROJECT_CONFIG_PATH and BROKER_PROJECT_CONFIG_NAME "
+                    "must not combine into nested directories. Only single "
+                    "directory level is supported (e.g., 'dir/broker.toml')"
+                )
 
     return config
 

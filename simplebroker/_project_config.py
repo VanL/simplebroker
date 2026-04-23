@@ -8,10 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from ._backend_plugins import get_backend_plugin
-from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH, load_config, resolve_config
+from ._constants import (
+    DEFAULT_PROJECT_CONFIG_NAME,
+    MAX_PROJECT_TRAVERSAL_DEPTH,
+    load_config,
+    resolve_config,
+)
 from ._targets import ResolvedTarget
 
-PROJECT_CONFIG_FILENAME = ".broker.toml"
+PROJECT_CONFIG_FILENAME = DEFAULT_PROJECT_CONFIG_NAME
 SUPPORTED_PROJECT_CONFIG_VERSION = 1
 _SECTION_RE = re.compile(r"^\[(?P<section>[A-Za-z0-9_]+)\]$")
 
@@ -122,17 +127,52 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
     }
 
 
+def _config_dict(config: Mapping[str, Any] | None) -> dict[str, Any]:
+    return dict(load_config()) if config is None else resolve_config(config)
+
+
+def project_config_path_for_directory(
+    directory: Path,
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> Path:
+    """Return the configured project config path rooted at a directory."""
+
+    config_dict = _config_dict(config)
+    config_path_prefix = str(config_dict.get("BROKER_PROJECT_CONFIG_PATH", ""))
+    config_name = str(
+        config_dict.get("BROKER_PROJECT_CONFIG_NAME", PROJECT_CONFIG_FILENAME)
+    )
+    root = directory.resolve()
+
+    if config_path_prefix:
+        prefix = Path(config_path_prefix).expanduser()
+        if prefix.is_absolute():
+            return (prefix / config_name).resolve(strict=False)
+        return (root / prefix / config_name).resolve(strict=False)
+
+    return (root / config_name).resolve(strict=False)
+
+
 def find_project_config(
     starting_dir: Path,
     *,
+    config: Mapping[str, Any] | None = None,
     max_depth: int = MAX_PROJECT_TRAVERSAL_DEPTH,
 ) -> Path | None:
-    """Search upward for .broker.toml."""
+    """Search upward for the configured project TOML file."""
+    config_dict = _config_dict(config)
+    config_path_prefix = str(config_dict.get("BROKER_PROJECT_CONFIG_PATH", ""))
+
+    if config_path_prefix and Path(config_path_prefix).expanduser().is_absolute():
+        candidate = project_config_path_for_directory(starting_dir, config=config_dict)
+        return candidate if candidate.is_file() else None
+
     current_dir = starting_dir.resolve()
     depth = 0
 
     while depth < max_depth:
-        candidate = current_dir / PROJECT_CONFIG_FILENAME
+        candidate = project_config_path_for_directory(current_dir, config=config_dict)
         if candidate.is_file():
             return candidate
         if current_dir.parent == current_dir:
@@ -193,5 +233,6 @@ __all__ = [
     "SUPPORTED_PROJECT_CONFIG_VERSION",
     "find_project_config",
     "load_project_config",
+    "project_config_path_for_directory",
     "resolve_project_target",
 ]

@@ -10,8 +10,8 @@ from typing import Any, cast
 from ._backend_plugins import BackendPlugin, get_backend_plugin
 from ._constants import load_config, resolve_config
 from ._project_config import (
-    PROJECT_CONFIG_FILENAME,
     find_project_config,
+    project_config_path_for_directory,
     resolve_project_target,
 )
 from ._targets import ResolvedTarget
@@ -121,7 +121,7 @@ def resolve_broker_target(
     """Discover or synthesize a SimpleBroker target from a directory.
 
     Resolution order:
-    1. Upward `.broker.toml` search
+    1. Upward project config search using `BROKER_PROJECT_CONFIG_*`
     2. Legacy upward sqlite database discovery using `BROKER_DEFAULT_DB_NAME`
     3. Env-selected non-sqlite backend synthesis
 
@@ -136,7 +136,7 @@ def resolve_broker_target(
         else Path(starting_dir).expanduser().resolve()
     )
 
-    config_path = find_project_config(start_dir)
+    config_path = find_project_config(start_dir, config=config_dict)
     if config_path is not None:
         return resolve_project_target(config_path, config=config_dict)
 
@@ -161,7 +161,7 @@ def target_for_directory(
 ) -> BrokerTarget:
     """Return the broker target rooted at an explicit directory.
 
-    If `directory/.broker.toml` exists, it defines the target. Otherwise,
+    If the configured project TOML exists under `directory`, it defines the target. Otherwise,
     a selected non-sqlite backend is synthesized from env/config, or the
     configured default sqlite target path is resolved relative to `directory`.
     """
@@ -169,7 +169,7 @@ def target_for_directory(
     config_dict = _config_dict(config)
     root = Path(directory).expanduser().resolve()
 
-    config_path = root / PROJECT_CONFIG_FILENAME
+    config_path = project_config_path_for_directory(root, config=config_dict)
     if config_path.is_file():
         return resolve_project_target(config_path, config=config_dict)
 

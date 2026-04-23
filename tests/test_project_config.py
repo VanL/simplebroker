@@ -9,7 +9,12 @@ from pathlib import Path
 import pytest
 
 from simplebroker._constants import load_config
-from simplebroker._project_config import load_project_config, resolve_project_target
+from simplebroker._project_config import (
+    find_project_config,
+    load_project_config,
+    project_config_path_for_directory,
+    resolve_project_target,
+)
 from simplebroker._targets import ResolvedTarget
 from simplebroker.db import BrokerDB
 from simplebroker.project import (
@@ -53,7 +58,9 @@ def _project_backend_config(*, sqlite_target: str) -> tuple[str, str, dict[str, 
 
 
 @pytest.mark.sqlite_only
-def test_load_project_config_and_resolve_relative_sqlite_target(tmp_path) -> None:
+def test_load_project_config_and_resolve_relative_sqlite_target(
+    tmp_path: Path,
+) -> None:
     """Relative sqlite targets should resolve from the config file directory."""
     config_path = tmp_path / ".broker.toml"
     _write_project_config(config_path, backend="sqlite", target="data/queue.db")
@@ -283,7 +290,7 @@ def test_resolve_target_missing_postgres_plugin_has_install_hint(
     monkeypatch.setenv("BROKER_BACKEND", "postgres")
     config = load_config()
 
-    def raise_unknown(name: str):
+    def raise_unknown(name: str) -> None:
         raise RuntimeError(f"Unknown backend plugin: {name}")
 
     monkeypatch.setattr("simplebroker.project.get_backend_plugin", raise_unknown)
@@ -360,6 +367,66 @@ def test_toml_overrides_env_backend_in_public_helpers(
     target = target_for_directory(tmp_path, config=load_config())
 
     assert target.backend_name == "sqlite"
+
+
+@pytest.mark.sqlite_only
+def test_project_config_discovery_uses_configured_path_and_name(
+    tmp_path: Path,
+) -> None:
+    """Project TOML discovery should be namespaceable like SQLite DB discovery."""
+
+    project_root = tmp_path / "project"
+    nested = project_root / "src" / "tasks"
+    nested.mkdir(parents=True)
+
+    _write_project_config(
+        project_root / ".broker.toml",
+        backend="sqlite",
+        target="root.db",
+    )
+    namespaced_config = project_root / ".weft" / "broker.toml"
+    namespaced_config.parent.mkdir()
+    _write_project_config(
+        namespaced_config,
+        backend="sqlite",
+        target="weft.db",
+    )
+
+    config = {
+        "BROKER_PROJECT_SCOPE": True,
+        "BROKER_PROJECT_CONFIG_PATH": ".weft",
+        "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+    }
+
+    discovered = find_project_config(nested, config=config)
+    target = resolve_broker_target(nested, config=config)
+
+    assert discovered == namespaced_config.resolve()
+    assert target is not None
+    assert target.config_path == namespaced_config.resolve()
+    assert target.target_path == (project_root / ".weft" / "weft.db").resolve()
+
+
+@pytest.mark.sqlite_only
+def test_target_for_directory_uses_configured_project_config_location(
+    tmp_path: Path,
+) -> None:
+    """Explicit-root resolution should check the configured TOML location."""
+
+    config = {
+        "BROKER_PROJECT_CONFIG_PATH": ".weft",
+        "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+        "BROKER_DEFAULT_DB_NAME": ".weft/broker.db",
+    }
+    config_path = project_config_path_for_directory(tmp_path, config=config)
+    config_path.parent.mkdir()
+    _write_project_config(config_path, backend="sqlite", target="pg-owned.db")
+
+    target = target_for_directory(tmp_path, config=config)
+
+    assert config_path == (tmp_path / ".weft" / "broker.toml").resolve()
+    assert target.config_path == config_path
+    assert target.target_path == (tmp_path / ".weft" / "pg-owned.db").resolve()
 
 
 @pytest.mark.sqlite_only

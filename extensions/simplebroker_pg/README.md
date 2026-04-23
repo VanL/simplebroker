@@ -54,7 +54,8 @@ print(queue.read())
 
 ## CLI Usage
 
-Create `.broker.toml` in the project root:
+Create `.broker.toml` in the project root, or use the configured
+`BROKER_PROJECT_CONFIG_PATH` / `BROKER_PROJECT_CONFIG_NAME` location:
 
 ```toml
 version = 1
@@ -90,9 +91,9 @@ Notes:
 - `BROKER_BACKEND_HOST`, `BROKER_BACKEND_PORT`, `BROKER_BACKEND_USER`,
   `BROKER_BACKEND_PASSWORD`, and `BROKER_BACKEND_DATABASE` are only used when
   there is no target from project config or env.
-- When `.broker.toml` provides the target or schema, the project file wins.
+- When project TOML provides the target or schema, the project file wins.
   `BROKER_BACKEND_PASSWORD` can still be supplied from env and is never
-  written to `.broker.toml`.
+  written to project TOML.
 - The Postgres database must already exist. `broker init` creates the managed schema/tables
   inside that database; it does not create the database itself.
 - Missing backend/plugin errors are distinct from target/auth errors. Invalid schema names,

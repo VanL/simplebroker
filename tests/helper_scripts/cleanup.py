@@ -5,6 +5,8 @@ import logging
 import threading
 import time
 import weakref
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -14,16 +16,16 @@ logger = logging.getLogger(__name__)
 class WatcherTracker:
     """Track all watcher instances created during tests."""
 
-    def __init__(self):
-        self._watchers: set[weakref.ref] = set()
+    def __init__(self) -> None:
+        self._watchers: set[weakref.ReferenceType[Any]] = set()
         self._lock = threading.Lock()
 
-    def register(self, watcher):
+    def register(self, watcher: Any) -> None:
         """Register a watcher instance."""
         with self._lock:
             self._watchers.add(weakref.ref(watcher))
 
-    def stop_all(self, timeout: float = 5.0):
+    def stop_all(self, timeout: float = 5.0) -> None:
         """Stop all registered watchers."""
         with self._lock:
             # Get all live watchers
@@ -69,7 +71,7 @@ _watcher_tracker = WatcherTracker()
 
 
 @pytest.fixture(autouse=True)
-def cleanup_watchers():
+def cleanup_watchers() -> Iterator[None]:
     """Automatically clean up watchers after each test."""
     yield
 
@@ -98,13 +100,13 @@ def cleanup_watchers():
             logger.warning(f"  - {thread.name} (daemon={thread.daemon})")
 
 
-def register_watcher(watcher):
+def register_watcher(watcher: Any) -> None:
     """Register a watcher for automatic cleanup."""
     _watcher_tracker.register(watcher)
 
 
 @pytest.fixture(autouse=True, scope="session")
-def cleanup_at_exit():
+def cleanup_at_exit() -> Iterator[None]:
     """Final cleanup at test session end."""
     yield
 

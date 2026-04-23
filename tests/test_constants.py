@@ -8,6 +8,7 @@ import pytest
 from simplebroker._constants import (
     # Database
     DEFAULT_DB_NAME,
+    DEFAULT_PROJECT_CONFIG_NAME,
     EXIT_QUEUE_EMPTY,
     # Exit codes
     EXIT_SUCCESS,
@@ -87,9 +88,11 @@ class TestConstants:
     def test_database_constants(self) -> None:
         """Test database-related constants."""
         assert DEFAULT_DB_NAME == ".broker.db"
+        assert DEFAULT_PROJECT_CONFIG_NAME == ".broker.toml"
         assert SIMPLEBROKER_MAGIC == "simplebroker-v1"
         assert SCHEMA_VERSION >= 1
         assert isinstance(DEFAULT_DB_NAME, str)
+        assert isinstance(DEFAULT_PROJECT_CONFIG_NAME, str)
         assert isinstance(SIMPLEBROKER_MAGIC, str)
         assert isinstance(SCHEMA_VERSION, int)
 
@@ -201,6 +204,8 @@ class TestLoadConfig:
             # Project scoping (new)
             assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
             assert config["BROKER_DEFAULT_DB_NAME"] == DEFAULT_DB_NAME
+            assert config["BROKER_PROJECT_CONFIG_PATH"] == ""
+            assert config["BROKER_PROJECT_CONFIG_NAME"] == DEFAULT_PROJECT_CONFIG_NAME
             assert config["BROKER_PROJECT_SCOPE"] is False
 
             # Backend selection
@@ -419,6 +424,8 @@ class TestLoadConfig:
             # Project scoping
             "BROKER_DEFAULT_DB_LOCATION",
             "BROKER_DEFAULT_DB_NAME",
+            "BROKER_PROJECT_CONFIG_PATH",
+            "BROKER_PROJECT_CONFIG_NAME",
             "BROKER_PROJECT_SCOPE",
             # Backend selection
             "BROKER_BACKEND",
@@ -461,6 +468,8 @@ class TestLoadConfig:
             env_vars = {
                 "BROKER_DEFAULT_DB_LOCATION": test_path,
                 "BROKER_DEFAULT_DB_NAME": "custom.db",
+                "BROKER_PROJECT_CONFIG_PATH": ".weft",
+                "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
                 "BROKER_PROJECT_SCOPE": "1",
             }
 
@@ -469,6 +478,8 @@ class TestLoadConfig:
 
                 assert config["BROKER_DEFAULT_DB_LOCATION"] == test_path
                 assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
+                assert config["BROKER_PROJECT_CONFIG_PATH"] == ".weft"
+                assert config["BROKER_PROJECT_CONFIG_NAME"] == "broker.toml"
                 assert config["BROKER_PROJECT_SCOPE"] is True
 
     def test_project_scope_boolean_parsing(self) -> None:
@@ -649,5 +660,60 @@ class TestConfigValidation:
             with pytest.raises(
                 ValueError,
                 match="BROKER_DEFAULT_DB_NAME validation failed.*dangerous character",
+            ):
+                load_config()
+
+    def test_broker_project_config_name_valid_compound_path(self) -> None:
+        """Test that valid project config compound paths are accepted."""
+        with patch.dict(
+            os.environ, {"BROKER_PROJECT_CONFIG_NAME": ".weft/broker.toml"}
+        ):
+            config = load_config()
+            assert config["BROKER_PROJECT_CONFIG_NAME"] == ".weft/broker.toml"
+
+    def test_broker_project_config_name_absolute_path_raises_error(self) -> None:
+        """Test that absolute paths in BROKER_PROJECT_CONFIG_NAME raise an error."""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            test_path = str(Path(temp_dir) / "broker.toml")
+
+            with patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_NAME": test_path}):
+                with pytest.raises(
+                    ValueError,
+                    match="BROKER_PROJECT_CONFIG_NAME must be a relative path",
+                ):
+                    load_config()
+
+    def test_broker_project_config_path_accepts_relative_directory(self) -> None:
+        """Test that project config path can namespace discovery under a project."""
+        with patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_PATH": ".weft"}):
+            config = load_config()
+            assert config["BROKER_PROJECT_CONFIG_PATH"] == ".weft"
+
+    def test_broker_project_config_path_nested_relative_path_raises_error(
+        self,
+    ) -> None:
+        """Test that relative config path prefixes are limited to one directory."""
+        with patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_PATH": ".weft/config"}):
+            with pytest.raises(
+                ValueError,
+                match="BROKER_PROJECT_CONFIG_PATH must be an absolute path",
+            ):
+                load_config()
+
+    def test_broker_project_config_combined_nested_path_raises_error(self) -> None:
+        """Test that path and name cannot combine into nested directories."""
+        with patch.dict(
+            os.environ,
+            {
+                "BROKER_PROJECT_CONFIG_PATH": ".weft",
+                "BROKER_PROJECT_CONFIG_NAME": "config/broker.toml",
+            },
+        ):
+            with pytest.raises(
+                ValueError,
+                match="must not combine into nested directories",
             ):
                 load_config()

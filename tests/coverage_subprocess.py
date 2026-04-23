@@ -7,9 +7,12 @@ when COVERAGE_PROCESS_START is set.
 import os
 import subprocess
 import sys
+from typing import Any
 
 
-def run_with_coverage(cmd, **kwargs):
+def run_with_coverage(
+    cmd: list[str], **kwargs: Any
+) -> subprocess.CompletedProcess[Any]:
     """Run a subprocess with coverage tracking enabled.
 
     When COVERAGE_PROCESS_START is set, this injects coverage initialization

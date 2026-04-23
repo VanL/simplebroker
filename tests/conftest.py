@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable, Iterator
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -20,7 +21,11 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from simplebroker import Queue
-from simplebroker._project_config import PROJECT_CONFIG_FILENAME, find_project_config
+from simplebroker._project_config import (
+    PROJECT_CONFIG_FILENAME,
+    find_project_config,
+    project_config_path_for_directory,
+)
 from simplebroker._targets import ResolvedTarget
 
 from .helper_scripts.broker_factory import (
@@ -43,15 +48,18 @@ from .helper_scripts.timing import scale_timeout_for_ci
 # Import watcher patching
 from .helper_scripts.watcher_patch import patch_watchers
 
+RunSubprocess = Callable[..., subprocess.CompletedProcess[Any]]
+run_with_coverage: RunSubprocess | None
+
 # Import coverage subprocess helper if coverage is active
 if os.environ.get("COVERAGE_PROCESS_START"):
-    from .coverage_subprocess import run_with_coverage
+    from .coverage_subprocess import run_with_coverage as _run_with_coverage
+
+    run_with_coverage = _run_with_coverage
 else:
     run_with_coverage = None
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from simplebroker._backend_plugins import BackendPlugin
 
 
@@ -118,7 +126,8 @@ def _ensure_postgres_project_config(
     schema = os.environ.get("SIMPLEBROKER_PG_TEST_SCHEMA") or _postgres_schema_name(
         config_root
     )
-    config_path = config_root / PROJECT_CONFIG_FILENAME
+    config_path = project_config_path_for_directory(config_root)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
         "\n".join(
             [
@@ -163,7 +172,16 @@ def _cleanup_postgres_projects(root: Path) -> None:
 
     plugin = get_backend_plugin(POSTGRES_TEST_BACKEND)
     cleaned_schemas: set[str] = set()
-    for config_path in root.rglob(PROJECT_CONFIG_FILENAME):
+    config_filenames = {
+        PROJECT_CONFIG_FILENAME,
+        project_config_path_for_directory(root).name,
+    }
+    config_paths = {
+        config_path
+        for filename in config_filenames
+        for config_path in root.rglob(filename)
+    }
+    for config_path in config_paths:
         try:
             config = load_project_config(config_path)
         except Exception:
@@ -262,7 +280,7 @@ def pg_worker_runner(
         yield None
         return
 
-    from simplebroker_pg import PostgresRunner
+    from simplebroker_pg import PostgresRunner  # type: ignore[import-untyped]
 
     runner = PostgresRunner(pg_worker_dsn, schema=pg_worker_schema)
     _ensure_pg_schema_initialized(runner, pg_worker_plugin)
@@ -311,7 +329,7 @@ def _reset_pg_tables(runner: Any, plugin: Any) -> None:
     If the tables are missing (e.g. a prior test ran ``--cleanup`` which drops
     the schema), re-initialize the full schema first.
     """
-    from simplebroker_pg._constants import POSTGRES_SCHEMA_VERSION
+    from simplebroker_pg import _constants as pg_constants
 
     from simplebroker._constants import SIMPLEBROKER_MAGIC
     from simplebroker._exceptions import OperationalError
@@ -328,7 +346,7 @@ def _reset_pg_tables(runner: Any, plugin: Any) -> None:
     runner.run(
         "INSERT INTO meta (singleton, magic, schema_version, last_ts, alias_version) "
         "VALUES (TRUE, ?, ?, 0, 0)",
-        (SIMPLEBROKER_MAGIC, POSTGRES_SCHEMA_VERSION),
+        (SIMPLEBROKER_MAGIC, pg_constants.POSTGRES_SCHEMA_VERSION),
     )
 
 
@@ -342,8 +360,8 @@ def broker_target(
     tmp_path: Path,
     pg_worker_dsn: str | None,
     pg_worker_schema: str | None,
-    pg_worker_runner,
-    pg_worker_plugin,
+    pg_worker_runner: Any,
+    pg_worker_plugin: BackendPlugin | None,
 ) -> ResolvedTarget:
     """Backend-agnostic resolved target for the active backend."""
     if _test_backend_name() == POSTGRES_TEST_BACKEND:
@@ -361,7 +379,7 @@ def broker_target(
 
 
 @pytest.fixture
-def broker(broker_target: ResolvedTarget) -> Iterator:
+def broker(broker_target: ResolvedTarget) -> Iterator[Any]:
     """Backend-agnostic BrokerCore instance."""
     core = make_broker(broker_target)
     try:
@@ -371,13 +389,13 @@ def broker(broker_target: ResolvedTarget) -> Iterator:
 
 
 @pytest.fixture
-def queue_factory(broker_target: ResolvedTarget):
+def queue_factory(broker_target: ResolvedTarget) -> Iterator[Callable[..., Queue]]:
     """Factory that creates Queue instances bound to the active backend.
 
     Returns a callable: ``queue_factory("queue_name")`` -> ``Queue``.
     All queues created are closed automatically at teardown.
     """
-    created: list = []
+    created: list[Queue] = []
 
     def _factory(name: str, *, persistent: bool = True) -> Queue:
         q = make_queue(name, broker_target, persistent=persistent)
@@ -399,10 +417,10 @@ def queue_factory(broker_target: ResolvedTarget):
 @pytest.fixture
 def workdir(
     tmp_path: Path,
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     pg_worker_tmpdir: Path | None,
-    pg_worker_runner,
-    pg_worker_plugin,
+    pg_worker_runner: Any,
+    pg_worker_plugin: BackendPlugin | None,
 ) -> Iterator[Path]:
     """
     Per-test temporary working directory.
@@ -444,7 +462,7 @@ def build_cli_env(env: dict[str, str] | None = None) -> dict[str, str]:
 
 
 def run_cli(
-    *args,
+    *args: object,
     cwd: Path,
     stdin: str | None = None,
     timeout: float | None = None,
@@ -489,7 +507,7 @@ def run_cli(
         full_env.setdefault("BROKER_PROJECT_SCOPE", "1")
 
     # Use coverage-wrapped subprocess if available, otherwise normal subprocess
-    run_func = run_with_coverage if run_with_coverage else subprocess.run
+    run_func = subprocess.run if run_with_coverage is None else run_with_coverage
 
     if timeout is None:
         timeout = scale_timeout_for_ci(12.0 if sys.platform == "win32" else 6.0)
