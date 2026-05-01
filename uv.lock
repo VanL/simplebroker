@@ -596,7 +596,7 @@ provides-extras = ["dev", "pg"]
 
 [[package]]
 name = "simplebroker-pg"
-version = "1.0.5"
+version = "1.0.6"
 source = { editable = "extensions/simplebroker_pg" }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
