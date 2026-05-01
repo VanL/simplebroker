@@ -83,6 +83,20 @@ MIN_BULK_MOVE_RATE = 500  # messages/second
 MIN_SINCE_QUERY_RATE = 2000  # messages/second
 
 
+@pytest.fixture(autouse=True)
+def require_serial_performance_run(request: pytest.FixtureRequest):
+    """Wall-clock performance tests are only meaningful without xdist fan-out."""
+    workerinput = getattr(request.config, "workerinput", None)
+    if workerinput is None:
+        return
+
+    worker_count = int(workerinput.get("workercount", 1))
+    if worker_count > 1:
+        pytest.skip(
+            "Performance tests require a single pytest worker; run with -n 0 or -n 1."
+        )
+
+
 def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
     """Get timeout for a test based on baseline time and buffer.
 
@@ -101,10 +115,11 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
 
     base_time = BASELINE_TIMES[baseline_key]
 
-    # Adjust for machine performance
-    # If machine is slower (ratio < 1.0), allow more time
-    # If machine is faster (ratio > 1.0), require less time
-    timeout = base_time / CURRENT_MACHINE_PERFORMANCE * (1 + PERF_BUFFER_PERCENT)
+    # Adjust for slower machines, but do not tighten budgets on faster machines.
+    # The calibration workload is not identical to every benchmark here, and
+    # sub-100ms tests are too sensitive to scheduler noise for stricter budgets.
+    effective_performance = min(CURRENT_MACHINE_PERFORMANCE, 1.0)
+    timeout = base_time / effective_performance * (1 + PERF_BUFFER_PERCENT)
 
     # Platform-specific adjustments
     if platform_specific and sys.platform == "win32":
