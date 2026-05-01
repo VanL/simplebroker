@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from simplebroker._constants import SIMPLEBROKER_MAGIC
-from simplebroker._exceptions import IntegrityError
+from simplebroker._exceptions import IntegrityError, OperationalError
 
 from ._constants import POSTGRES_SCHEMA_VERSION
 from .runner import PostgresRunner, RunnerMetaState
@@ -86,6 +86,41 @@ WHERE singleton = TRUE
 """
 
 
+def _missing_bootstrap_object(exc: OperationalError) -> bool:
+    """Return whether an initialization read failed because schema objects are absent."""
+    message = str(exc).lower()
+    return "relation" in message and "meta" in message and "does not exist" in message
+
+
+def _read_existing_meta_state(runner: SQLRunner) -> RunnerMetaState | None:
+    """Read initialized broker metadata without running catalog DDL."""
+    try:
+        rows = list(
+            runner.run(
+                """
+                SELECT magic, schema_version, last_ts, alias_version
+                FROM meta
+                WHERE singleton = TRUE
+                """,
+                fetch=True,
+            )
+        )
+    except OperationalError as exc:
+        if _missing_bootstrap_object(exc):
+            return None
+        raise
+
+    if not rows:
+        return None
+
+    return RunnerMetaState(
+        magic=str(rows[0][0]),
+        schema_version=int(rows[0][1]),
+        last_ts=int(rows[0][2]),
+        alias_version=int(rows[0][3]),
+    )
+
+
 def create_schema_if_needed(runner: SQLRunner, schema: str) -> None:
     """Create the managed schema if it does not exist."""
     runner.run(f"CREATE SCHEMA IF NOT EXISTS {quote_ident(schema)}")
@@ -115,6 +150,12 @@ def initialize_database(
     """Initialize broker tables and metadata inside the managed schema."""
     if isinstance(runner, PostgresRunner) and runner.is_schema_bootstrapped():
         return
+
+    if isinstance(runner, PostgresRunner):
+        existing_state = run_with_retry(lambda: _read_existing_meta_state(runner))
+        if existing_state is not None:
+            runner.prime_meta_cache(existing_state)
+            return
 
     run_with_retry(lambda: runner.run(_bootstrap_schema_sql(schema)))
 

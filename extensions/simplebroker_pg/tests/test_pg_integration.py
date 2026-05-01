@@ -13,6 +13,7 @@ from psycopg import conninfo as pg_conninfo
 from simplebroker_pg import PostgresRunner, get_backend_plugin
 
 from simplebroker import Queue
+from simplebroker.db import BrokerCore
 
 TEST_DSN = os.environ.get("SIMPLEBROKER_PG_TEST_DSN")
 pytestmark = [
@@ -89,6 +90,48 @@ def test_postgres_runner_roundtrip() -> None:
             backend_options={"schema": schema},
         )
         runner.close()
+
+
+def test_postgres_runner_skips_schema_ddl_after_bootstrap() -> None:
+    """New runners should avoid catalog DDL once broker metadata exists."""
+    schema = _schema_name()
+    dsn = _require_test_dsn()
+    plugin = get_backend_plugin()
+    first_runner = PostgresRunner(dsn, schema=schema)
+    second_runner = PostgresRunner(dsn, schema=schema)
+    seen_sql: list[str] = []
+
+    try:
+        first_core = BrokerCore(first_runner, backend_plugin=plugin)
+        first_core.close()
+
+        original_run = second_runner.run
+
+        def tracked_run(sql, params=(), *, fetch=False):  # type: ignore[no-untyped-def]
+            seen_sql.append(sql)
+            return original_run(sql, params, fetch=fetch)
+
+        second_runner.run = tracked_run  # type: ignore[method-assign]
+
+        second_core = BrokerCore(second_runner, backend_plugin=plugin)
+        second_core.close()
+    finally:
+        first_runner.shutdown()
+        second_runner.shutdown()
+        plugin.cleanup_target(
+            dsn,
+            backend_options={"schema": schema},
+        )
+
+    ddl_statements = [
+        sql
+        for sql in seen_sql
+        if any(
+            marker in sql.upper()
+            for marker in ("CREATE SCHEMA", "CREATE TABLE", "CREATE INDEX")
+        )
+    ]
+    assert ddl_statements == []
 
 
 def test_postgres_cli_project_config_roundtrip(tmp_path: Path) -> None:
