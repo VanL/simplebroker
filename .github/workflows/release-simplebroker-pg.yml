@@ -9,7 +9,178 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        exclude:
+          # macOS runners are expensive, so only test on latest Python
+          - os: macos-latest
+            python-version: "3.10"
+          - os: macos-latest
+            python-version: "3.11"
+          - os: macos-latest
+            python-version: "3.12"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            extensions/simplebroker_pg/pyproject.toml
+            extensions/simplebroker_pg/uv.lock
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: Run tests with pytest
+        run: |
+          pytest -v --tb=short -m "not slow" --override-ini="addopts=-ra -q --strict-markers"
+
+      - name: Test CLI installation
+        run: |
+          broker --version
+          simplebroker --version
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            extensions/simplebroker_pg/pyproject.toml
+            extensions/simplebroker_pg/uv.lock
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: Run linting with ruff
+        run: |
+          ruff check simplebroker tests bin
+
+      - name: Check formatting with ruff
+        run: |
+          ruff format --check simplebroker tests bin
+
+      - name: Type check with mypy
+        run: |
+          mypy simplebroker bin/release.py --config-file pyproject.toml
+
+  packaging:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            extensions/simplebroker_pg/pyproject.toml
+            extensions/simplebroker_pg/uv.lock
+
+      - name: Install build tools
+        run: |
+          python -m pip install build
+
+      - name: Run packaging smoke
+        run: |
+          uv run ./bin/packaging-smoke --python 3.10
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            extensions/simplebroker_pg/pyproject.toml
+            extensions/simplebroker_pg/uv.lock
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]"
+
+      - name: Run tests with coverage
+        env:
+          PYTEST_ADDOPTS: -ra -q --strict-markers -n auto --dist loadgroup
+        run: |
+          uv run pytest --cov=simplebroker --cov-report=term-missing --cov-report=xml -m "not slow"
+
+  test-pg:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+            extensions/simplebroker_pg/pyproject.toml
+            extensions/simplebroker_pg/uv.lock
+
+      - name: Run PG-backed test suites
+        run: |
+          uv run ./bin/pytest-pg
+
   release:
+    needs: [test, lint, packaging, coverage, test-pg]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
