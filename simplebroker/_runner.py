@@ -12,7 +12,7 @@ import os
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
@@ -46,7 +46,7 @@ else:
     Self = TypeVar("Self", bound="SQLiteRunner")  # type: ignore[misc]
 
 from ._backends import get_configured_backend
-from ._constants import ConnectionPhase, load_config
+from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config
 from ._exceptions import DataError, IntegrityError, OperationalError
 from .helpers import _execute_with_retry
 
@@ -59,6 +59,7 @@ class SetupPhase(Enum):
     """Generic setup phases that any SQL implementation might have."""
 
     CONNECTION = ConnectionPhase.CONNECTION
+    SCHEMA = ConnectionPhase.SCHEMA
     OPTIMIZATION = ConnectionPhase.OPTIMIZATION
 
 
@@ -361,27 +362,43 @@ class SQLiteRunner:
         Python standard library on Windows).
 
         """
+        self.run_exclusive_setup(
+            phase, lambda: self._execute_builtin_setup_phase(phase)
+        )
+
+    def run_exclusive_setup(
+        self,
+        phase: SetupPhase,
+        operation: Callable[[], None],
+    ) -> bool:
+        """Run a setup operation once under the phase's cross-process lock.
+
+        Returns True when this runner executed *operation*, or False when the
+        phase had already been completed by this or another process.
+        """
+        if phase == SetupPhase.CONNECTION and not self._database_file_exists():
+            self._discard_stale_completion_markers()
+
         # Quick check without lock
         if phase in self._completed_phases:
-            return
+            return False
 
         # Fast-path: check if another process already completed this phase
         if self._is_phase_already_completed(phase):
             with self._setup_lock:
                 self._completed_phases.add(phase)
-            return
+            return False
 
         # Get lock path for this phase
         lock_path = self._get_lock_path(phase)
         if lock_path is None:
-            return  # Invalid path, skip setup
+            return False  # Invalid path, skip setup
 
         # Acquire lock with timeout
         lock_file = self._acquire_lock_with_timeout(lock_path, timeout=10.0)
 
         try:
-            # Execute setup under lock
-            self._execute_setup_under_lock(phase)
+            return self._execute_setup_under_lock(phase, operation)
         finally:
             # Release lock
             self._release_lock(lock_file, lock_path)
@@ -498,30 +515,40 @@ class SQLiteRunner:
         except FileExistsError:
             return None
 
-    def _execute_setup_under_lock(self, phase: SetupPhase) -> None:
+    def _execute_setup_under_lock(
+        self,
+        phase: SetupPhase,
+        operation: Callable[[], None],
+    ) -> bool:
         """Execute the setup phase with thread synchronization."""
         with self._setup_lock:
             if phase in self._completed_phases:
-                return
+                return False
 
             # Check if another process already completed this phase
             if self._is_phase_already_completed(phase):
                 self._completed_phases.add(phase)
-                return
+                return False
 
-            # Execute the phase
-            if phase == SetupPhase.CONNECTION:
-                self._setup_connection_phase()
-            elif phase == SetupPhase.OPTIMIZATION:
-                self._setup_optimization_phase()
+            operation()
 
             # Mark as complete
             self._mark_phase_complete(phase)
+            return True
+
+    def _execute_builtin_setup_phase(self, phase: SetupPhase) -> None:
+        """Execute a built-in SQLite setup phase."""
+        if phase == SetupPhase.CONNECTION:
+            self._setup_connection_phase()
+        elif phase == SetupPhase.OPTIMIZATION:
+            self._setup_optimization_phase()
 
     def _is_phase_already_completed(self, phase: SetupPhase) -> bool:
         """Check if another process already completed this phase."""
         try:
-            marker_path = Path(self._db_path).with_suffix(f".{phase.value}.done")
+            if not self._database_file_exists():
+                return False
+            marker_path = self._get_marker_path(phase)
             return marker_path.exists()
         except (ValueError, OSError, TypeError):
             return False
@@ -530,7 +557,7 @@ class SQLiteRunner:
         """Mark a phase as complete by creating a marker file."""
         self._completed_phases.add(phase)
         try:
-            marker_path = Path(self._db_path).with_suffix(f".{phase.value}.done")
+            marker_path = self._get_marker_path(phase)
             # Create marker file - only set permissions if it doesn't exist
             if not marker_path.exists():
                 marker_path.touch(mode=0o600)
@@ -541,6 +568,37 @@ class SQLiteRunner:
             self._created_files.add(marker_path)
         except (ValueError, OSError, TypeError):
             # Invalid path, but phase is complete in memory
+            pass
+
+    def _get_marker_path(self, phase: SetupPhase) -> Path:
+        """Get marker file path for the given setup phase."""
+        suffix = (
+            f".schema-v{SCHEMA_VERSION}.done"
+            if phase == SetupPhase.SCHEMA
+            else f".{phase.value}.done"
+        )
+        return Path(self._db_path).with_suffix(suffix)
+
+    def _database_file_exists(self) -> bool:
+        """Return whether the database file currently exists."""
+        try:
+            return Path(self._db_path).exists()
+        except (ValueError, OSError, TypeError):
+            return False
+
+    def _discard_stale_completion_markers(self) -> None:
+        """Remove completion markers left behind after database deletion."""
+        try:
+            db_path = Path(self._db_path)
+            marker_paths = [
+                db_path.with_suffix(".connection.done"),
+                db_path.with_suffix(".optimization.done"),
+            ]
+            marker_paths.extend(db_path.parent.glob(f"{db_path.stem}.schema-v*.done"))
+            for marker_path in marker_paths:
+                with contextlib.suppress(OSError):
+                    marker_path.unlink()
+        except (ValueError, OSError, TypeError):
             pass
 
     def _release_lock(self, lock_file: Any | None, lock_path: Path) -> None:
@@ -587,7 +645,7 @@ class SQLiteRunner:
 
         # Check for marker file from another process
         try:
-            marker_path = Path(self._db_path).with_suffix(f".{phase.value}.done")
+            marker_path = self._get_marker_path(phase)
             if marker_path.exists():
                 with self._setup_lock:
                     self._completed_phases.add(phase)
@@ -630,10 +688,16 @@ class SQLiteRunner:
         shared_sidecar_suffixes = {
             ".connection.lock",
             ".optimization.lock",
+            ".schema.lock",
             ".connection.done",
             ".optimization.done",
         }
-        return "".join(file_path.suffixes[-2:]) not in shared_sidecar_suffixes
+        suffix_key = "".join(file_path.suffixes[-2:])
+        if suffix_key in shared_sidecar_suffixes:
+            return False
+        if suffix_key.startswith(".schema-v") and suffix_key.endswith(".done"):
+            return False
+        return True
 
     def __enter__(self) -> Self:
         """Enter context manager."""

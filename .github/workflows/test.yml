@@ -81,15 +81,15 @@ jobs:
 
     - name: Run linting with ruff
       run: |
-        ruff check simplebroker
+        ruff check simplebroker tests bin
 
     - name: Check formatting with ruff
       run: |
-        ruff format --check simplebroker
+        ruff format --check simplebroker tests bin
 
     - name: Type check with mypy
       run: |
-        mypy simplebroker --config-file pyproject.toml
+        mypy simplebroker bin/release.py --config-file pyproject.toml
 
   packaging:
     runs-on: ubuntu-latest

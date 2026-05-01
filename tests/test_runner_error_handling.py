@@ -1,5 +1,6 @@
 """Test error handling in _runner.py to increase coverage."""
 
+import concurrent.futures as cf
 import os
 import sqlite3
 import tempfile
@@ -8,10 +9,44 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import IntegrityError, OperationalError
 from simplebroker._runner import SetupPhase, SQLiteRunner
 
 from .helper_scripts.database_errors import DatabaseErrorInjector
+
+
+def _run_schema_setup_probe(args: tuple[str, str, int]) -> None:
+    """Open one BrokerDB while recording schema bootstrap entry/exit."""
+    import time
+
+    db_path, log_path, child_id = args
+
+    from simplebroker._backends.sqlite.plugin import SQLiteBackendPlugin
+    from simplebroker.db import BrokerDB
+
+    original_initialize_database = SQLiteBackendPlugin.initialize_database
+
+    def tracked_initialize_database(self, runner, *, run_with_retry):  # type: ignore[no-untyped-def]
+        with Path(log_path).open("a", encoding="utf-8") as log:
+            log.write(f"enter {child_id} {time.time():.9f}\n")
+            log.flush()
+        time.sleep(0.25)
+        try:
+            return original_initialize_database(
+                self,
+                runner,
+                run_with_retry=run_with_retry,
+            )
+        finally:
+            with Path(log_path).open("a", encoding="utf-8") as log:
+                log.write(f"exit {child_id} {time.time():.9f}\n")
+                log.flush()
+
+    SQLiteBackendPlugin.initialize_database = tracked_initialize_database
+
+    with BrokerDB(db_path) as db:
+        db.write("schema_probe", str(child_id))
 
 
 class TestSQLiteRunnerErrorHandling:
@@ -273,6 +308,8 @@ class TestSQLiteRunnerErrorHandling:
         sidecars = [
             db_path.with_suffix(".connection.lock"),
             db_path.with_suffix(".connection.done"),
+            db_path.with_suffix(".schema.lock"),
+            db_path.with_suffix(f".schema-v{SCHEMA_VERSION}.done"),
             db_path.with_suffix(".optimization.lock"),
             db_path.with_suffix(".optimization.done"),
         ]
@@ -284,6 +321,35 @@ class TestSQLiteRunnerErrorHandling:
 
         assert all(path.exists() for path in sidecars)
         assert runner._created_files == set()
+
+    @pytest.mark.sqlite_only
+    def test_schema_setup_is_serialized_across_processes(self, tmp_path):
+        """Only one process should run schema bootstrap for a fresh database."""
+        db_path = tmp_path / "test.db"
+        log_path = tmp_path / "schema-setup.log"
+
+        with cf.ProcessPoolExecutor(max_workers=8) as pool:
+            list(
+                pool.map(
+                    _run_schema_setup_probe,
+                    [(str(db_path), str(log_path), child_id) for child_id in range(8)],
+                )
+            )
+
+        active_children: set[str] = set()
+        max_active = 0
+        enter_count = 0
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            kind, child_id, _timestamp = line.split()
+            if kind == "enter":
+                enter_count += 1
+                active_children.add(child_id)
+                max_active = max(max_active, len(active_children))
+            elif kind == "exit":
+                active_children.discard(child_id)
+
+        assert enter_count == 1
+        assert max_active == 1
 
     @pytest.mark.sqlite_only
     def test_cleanup_marker_files_still_cleans_mock_sidecars(self, tmp_path):

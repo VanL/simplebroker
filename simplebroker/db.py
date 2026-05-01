@@ -502,9 +502,7 @@ class BrokerCore:
         self._runner.setup(SetupPhase.CONNECTION)
 
         # Setup database (must be done before creating TimestampGenerator)
-        self._setup_database()
-        self._verify_database_magic()
-        self._migrate_schema()
+        self._setup_schema()
         self._runner.setup(SetupPhase.OPTIMIZATION)
 
         # Timestamp generator (created after database setup so meta table exists)
@@ -539,6 +537,25 @@ class BrokerCore:
                 self._runner,
                 run_with_retry=self._run_with_retry,
             )
+
+    def _setup_schema(self) -> None:
+        """Set up and migrate schema with backend-specific coordination."""
+
+        def operation() -> None:
+            self._setup_database()
+            self._verify_database_magic()
+            self._migrate_schema()
+
+        run_exclusive_setup = getattr(self._runner, "run_exclusive_setup", None)
+        if callable(run_exclusive_setup):
+            schema_was_initialized = bool(
+                run_exclusive_setup(SetupPhase.SCHEMA, operation)
+            )
+            if not schema_was_initialized:
+                self._verify_database_magic()
+            return
+
+        operation()
 
     def _verify_database_magic(self) -> None:
         """Verify database magic string and schema version for existing databases."""

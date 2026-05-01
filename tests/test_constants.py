@@ -152,8 +152,10 @@ class TestConstants:
     def test_connection_phase_constants(self) -> None:
         """Test database connection phase constants."""
         assert hasattr(ConnectionPhase, "CONNECTION")
+        assert hasattr(ConnectionPhase, "SCHEMA")
         assert hasattr(ConnectionPhase, "OPTIMIZATION")
         assert ConnectionPhase.CONNECTION == "connection"
+        assert ConnectionPhase.SCHEMA == "schema"
         assert ConnectionPhase.OPTIMIZATION == "optimization"
 
     def test_project_scoping_constants(self) -> None:

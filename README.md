@@ -1439,9 +1439,9 @@ uv run ./bin/pytest-pg -q tests/test_watcher_metrics.py -k basic
 uv run ./bin/packaging-smoke --python 3.10
 
 # Lint and format
-uv run ruff check --fix simplebroker tests
-uv run ruff format simplebroker tests
-uv run mypy simplebroker
+uv run ruff check --fix simplebroker tests bin
+uv run ruff format simplebroker tests bin
+uv run mypy simplebroker bin/release.py
 ```
 
 **Contributing guidelines:**
@@ -1453,15 +1453,23 @@ uv run mypy simplebroker
 
 ### Releases
 
-Pushing a tag creates a GitHub release with built artifacts:
+Use the repo-local release helper instead of pushing release tags by hand:
 
 ```bash
 # Release simplebroker
-git tag v3.1.0 && git push origin v3.1.0
+python bin/release.py --version 3.1.10
 
 # Release simplebroker-pg
-git tag simplebroker_pg/v1.0.1 && git push origin simplebroker_pg/v1.0.1
+python bin/release.py pg --version 1.0.6
+
+# Preview the checks, version files, commit, and tag action
+python bin/release.py --dry-run
 ```
+
+The helper checks the target version against GitHub Releases and PyPI, runs the
+release checks, updates version files when needed, commits release-file changes,
+pushes the branch, and then pushes the release tag. Pushing the tag creates a
+GitHub release with built artifacts.
 
 When changing the root `pg` extra, release `simplebroker-pg` first, wait for
 that version to be available on PyPI, then release `simplebroker` with the

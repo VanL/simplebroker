@@ -173,6 +173,9 @@ class ConnectionPhase:
     CONNECTION = "connection"
     """Basic connectivity and critical settings (e.g., enabling WAL mode)."""
 
+    SCHEMA = "schema"
+    """Schema bootstrap and migrations."""
+
     OPTIMIZATION = "optimization"
     """Performance settings (cache size, synchronous mode, etc.)."""
 
