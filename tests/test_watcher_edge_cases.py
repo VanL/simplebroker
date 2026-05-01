@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+import simplebroker.watcher as watcher_module
 from simplebroker._exceptions import OperationalError
 from simplebroker.helpers import interruptible_sleep
 from simplebroker.watcher import (
@@ -239,10 +240,22 @@ class TestWatcherEdgeCases(WatcherTestBase):
             finally:
                 db.close()
 
-    def test_watcher_retry_with_exponential_backoff(self, broker_target) -> None:
+    def test_watcher_retry_with_exponential_backoff(
+        self, broker_target, monkeypatch
+    ) -> None:
         """Test watcher retry logic with exponential backoff."""
-        attempt_times = []
+        retry_sleeps = []
         drain_count = 0
+
+        def fake_interruptible_sleep(wait_time, stop_event) -> bool:
+            retry_sleeps.append(wait_time)
+            return not stop_event.is_set()
+
+        monkeypatch.setattr(
+            watcher_module,
+            "interruptible_sleep",
+            fake_interruptible_sleep,
+        )
 
         with self.create_test_watcher(
             broker_target,
@@ -254,7 +267,6 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
             def failing_drain() -> None:
                 nonlocal drain_count
-                attempt_times.append(time.time())
                 drain_count += 1
                 if drain_count < 3:
                     msg = "Drain failed"
@@ -270,19 +282,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
             # Verify retries happened with exponential backoff
             assert drain_count >= 3
-            assert len(attempt_times) >= 3
-
-            # Check that delays increased (exponential backoff)
-            # Note: actual delays will be affected by interruptible_sleep
-            if len(attempt_times) > 1:
-                first_delay = attempt_times[1] - attempt_times[0]
-                second_delay = (
-                    attempt_times[2] - attempt_times[1] if len(attempt_times) > 2 else 0
-                )
-
-                # Second delay should be longer (exponential backoff)
-                if second_delay > 0:
-                    assert second_delay > first_delay * 1.5  # Allow some variance
+            assert retry_sleeps[:2] == [2, 4]
 
     def test_watcher_max_retries_exceeded(self, broker_target) -> None:
         """Test that watcher fails after max retries."""
