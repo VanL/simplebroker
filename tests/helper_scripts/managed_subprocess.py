@@ -154,6 +154,58 @@ class ManagedProcess:
                 # Try SIGTERM first on POSIX
                 self.proc.terminate()
 
+    def interrupt(self) -> None:
+        """Send an interrupt signal using terminal-like process-group semantics."""
+        if self.proc.poll() is not None:
+            return
+
+        if sys.platform == "win32":
+            self.proc.terminate()
+            return
+
+        try:
+            os.killpg(self.proc.pid, signal.SIGINT)
+        except ProcessLookupError:
+            return
+        except OSError:
+            self.proc.send_signal(signal.SIGINT)
+
+    def wait_after_interrupt(
+        self,
+        *,
+        timeout: float,
+        terminate_timeout: float = 2.0,
+        kill_timeout: float = 1.0,
+    ) -> int:
+        """Interrupt the process, then escalate if it does not exit."""
+        self.interrupt()
+        try:
+            return int(self.proc.wait(timeout=timeout))
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Process %s did not exit after interrupt; terminating", self.proc.pid
+            )
+
+        self.terminate()
+        try:
+            return int(self.proc.wait(timeout=terminate_timeout))
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Process %s did not exit after terminate; killing", self.proc.pid
+            )
+
+        if self.proc.poll() is None:
+            if sys.platform != "win32":
+                try:
+                    os.killpg(self.proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    self.proc.kill()
+            else:
+                self.proc.kill()
+        return int(self.proc.wait(timeout=kill_timeout))
+
     def cleanup_readers(self) -> None:
         """Stop and cleanup output readers."""
         if self._stdout_reader:
