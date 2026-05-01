@@ -127,8 +127,13 @@ class TestWorkerPool(WatcherTestBase):
             finally:
                 db.close()
 
-            # Let workers process
-            time.sleep(2.0)  # Give enough time for all messages
+            wait_for_queue_drain(
+                broker_target,
+                "tasks",
+                collectors,
+                num_messages,
+                timeout=scale_timeout_for_ci(10.0, ci_factor=3.0),
+            )
 
         finally:
             # Ensure all workers are cleaned up

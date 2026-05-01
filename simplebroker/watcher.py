@@ -540,9 +540,7 @@ class BaseWatcher(ABC):
 
     def _perform_stop(self, join: bool, timeout: float) -> None:
         """Internal method to perform the actual stop operations."""
-        if self._stop_event.is_set():
-            join = False  # someone else already did the join
-        else:
+        if not self._stop_event.is_set():
             self._stop_event.set()
             # Notify strategy to wake up wait_for_activity
             if hasattr(self._strategy, "notify_activity"):
@@ -570,8 +568,8 @@ class BaseWatcher(ABC):
             if hasattr(self._strategy, "close"):
                 self._strategy.close()
 
-        # detach finalizer if it exists - resources are already released
-        if hasattr(self, "_finalizer"):
+        # Detach finalizer only once resources are actually released.
+        if should_cleanup and hasattr(self, "_finalizer"):
             self._finalizer.detach()
 
     def _cleanup_thread_local(self) -> None:

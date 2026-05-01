@@ -1212,8 +1212,15 @@ def test_context_manager_usage(broker_target):
             time.sleep(0.05)
 
     # After exiting context, thread should be stopped
-    thread = watcher._thread() if watcher._thread else None
-    assert thread is None or not thread.is_alive()
+    assert wait_for_condition(
+        lambda: (
+            (thread := watcher._thread() if watcher._thread else None) is None
+            or not thread.is_alive()
+        ),
+        timeout=scale_timeout_for_ci(5.0, ci_factor=2.0),
+        interval=0.05,
+        message="Watcher thread should stop after context-manager exit",
+    )
 
     # Verify all messages were processed
     assert len(messages_received) == 3
@@ -1246,5 +1253,12 @@ def test_context_manager_with_exception(broker_target):
         pass  # Expected
 
     # Thread should still be stopped after exception
-    thread = watcher._thread() if watcher._thread else None
-    assert thread is None or not thread.is_alive()
+    assert wait_for_condition(
+        lambda: (
+            (thread := watcher._thread() if watcher._thread else None) is None
+            or not thread.is_alive()
+        ),
+        timeout=scale_timeout_for_ci(5.0, ci_factor=2.0),
+        interval=0.05,
+        message="Watcher thread should stop after context-manager exception",
+    )

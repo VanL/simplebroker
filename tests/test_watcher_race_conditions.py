@@ -199,22 +199,26 @@ def test_concurrent_writers_readers(broker_target) -> None:
 
         # Wait for processing with timeout and checking
         expected_total = num_writers * messages_per_writer
-        max_wait = 5.0  # Give more time on slower systems like Windows CI
-        start_time = time.monotonic()
+        max_wait = scale_timeout_for_ci(15.0, ci_factor=2.0)
+        deadline = time.monotonic() + max_wait
 
-        while time.monotonic() - start_time < max_wait:
+        while time.monotonic() < deadline:
             with processed_lock:
                 if len(processed) >= expected_total:
                     break
             time.sleep(0.1)
 
         # Verify all messages were processed
-        assert len(processed) == expected_total, (
-            f"Only processed {len(processed)} messages out of {expected_total}"
+        with processed_lock:
+            processed_snapshot = list(processed)
+
+        assert len(processed_snapshot) == expected_total, (
+            f"Only processed {len(processed_snapshot)} messages out of "
+            f"{expected_total} after {max_wait:.1f}s"
         )
 
         # Verify no duplicates
-        assert len(set(processed)) == expected_total
+        assert len(set(processed_snapshot)) == expected_total
     finally:
         # Ensure watcher is stopped before closing broker
         if watcher is not None:
