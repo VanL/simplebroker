@@ -1468,8 +1468,9 @@ python bin/release.py --dry-run
 
 The helper checks the target version against GitHub Releases and PyPI, runs the
 release checks, updates version files when needed, commits release-file changes,
-pushes the branch, and then pushes the release tag. Pushing the tag creates a
-GitHub release with built artifacts.
+pushes the branch, and then pushes the release tag. The tag workflow reruns the
+required release checks and only creates the GitHub release with built artifacts
+after those checks pass.
 
 When changing the root `pg` extra, release `simplebroker-pg` first, wait for
 that version to be available on PyPI, then release `simplebroker` with the
