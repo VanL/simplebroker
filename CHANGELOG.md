@@ -5,6 +5,13 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-05-01
+### Added
+- Added the repo-local `bin/release.py` helper for core and `simplebroker-pg` releases, including version validation, release-state checks, preflight commands, and tag planning.
+
+### Fixed
+- Serialized SQLite schema bootstrap across processes with a versioned setup marker, preventing high-concurrency xdist/worker runs from entering schema creation or migration for the same fresh database at the same time.
+
 ## [3.1.9] - 2026-04-23
 ### Fixed
 - Fixed resolution of the broker.toml file for the pg backend to use the same rules as broker.b
