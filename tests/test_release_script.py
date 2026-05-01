@@ -110,6 +110,73 @@ def test_write_version_files_updates_pyproject_and_constant(tmp_path: Path) -> N
     assert '__version__: Final[str] = "3.1.10"' in constants.read_text(encoding="utf-8")
 
 
+def test_sync_root_pg_extra_dependency_uses_local_pg_version(tmp_path: Path) -> None:
+    root_pyproject = tmp_path / "pyproject.toml"
+    pg_pyproject = tmp_path / "pg-pyproject.toml"
+    root_pyproject.write_text(
+        """[project.optional-dependencies]
+pg = [
+    "simplebroker-pg>=1.0.4,<2",
+]
+""",
+        encoding="utf-8",
+    )
+    pg_pyproject.write_text('[project]\nversion = "1.0.6"\n', encoding="utf-8")
+
+    updated_version = release.sync_root_pg_extra_dependency(
+        root_pyproject_path=root_pyproject,
+        pg_pyproject_path=pg_pyproject,
+    )
+
+    assert updated_version == "1.0.6"
+    assert '"simplebroker-pg>=1.0.6,<2"' in root_pyproject.read_text(encoding="utf-8")
+
+
+def test_sync_root_pg_extra_dependency_noops_when_current(tmp_path: Path) -> None:
+    root_pyproject = tmp_path / "pyproject.toml"
+    pg_pyproject = tmp_path / "pg-pyproject.toml"
+    root_text = """[project.optional-dependencies]
+pg = [
+    "simplebroker-pg>=1.0.6,<2",
+]
+"""
+    root_pyproject.write_text(root_text, encoding="utf-8")
+    pg_pyproject.write_text('[project]\nversion = "1.0.6"\n', encoding="utf-8")
+
+    updated_version = release.sync_root_pg_extra_dependency(
+        root_pyproject_path=root_pyproject,
+        pg_pyproject_path=pg_pyproject,
+    )
+
+    assert updated_version is None
+    assert root_pyproject.read_text(encoding="utf-8") == root_text
+
+
+def test_require_published_pg_baseline_accepts_published_version(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def version_exists(package_name: str, version: str) -> bool:
+        calls.append((package_name, version))
+        return True
+
+    monkeypatch.setattr(release, "pypi_version_exists", version_exists)
+
+    release.require_published_pg_baseline("1.0.6")
+
+    assert calls == [("simplebroker-pg", "1.0.6")]
+
+
+def test_require_published_pg_baseline_rejects_unpublished_version(monkeypatch) -> None:
+    monkeypatch.setattr(
+        release,
+        "pypi_version_exists",
+        lambda package_name, version: False,
+    )
+
+    with pytest.raises(RuntimeError, match="Release simplebroker-pg first"):
+        release.require_published_pg_baseline("1.0.6")
+
+
 def test_plan_tag_action_for_new_or_matching_tags() -> None:
     head = "a" * 40
 

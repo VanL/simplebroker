@@ -37,6 +37,9 @@ PYPROJECT_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(
 CONSTANTS_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(
     r'(?m)^__version__:\s*Final\[str\]\s*=\s*"([^"]+)"$'
 )
+PG_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r'(?m)^(\s*)"simplebroker-pg>=([^",]+),<2",(\s*)$'
+)
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
 
 BASE_PRECHECK_COMMANDS: Final[tuple[tuple[str, ...], ...]] = (
@@ -288,6 +291,62 @@ def write_target_version(target: ReleaseTarget, version: str) -> None:
         label=_display_path(target.pyproject_path),
     )
     target.pyproject_path.write_text(updated_pyproject, encoding="utf-8")
+
+
+def read_pg_extension_version(
+    *, pg_pyproject_path: Path = PG_EXTENSION_PYPROJECT_PATH
+) -> str:
+    """Read the local simplebroker-pg package version."""
+
+    return _extract_version(
+        pg_pyproject_path,
+        PYPROJECT_VERSION_PATTERN,
+        label=_display_path(pg_pyproject_path),
+    )
+
+
+def require_published_pg_baseline(pg_version: str) -> None:
+    """Require the core package's PG baseline to exist on PyPI."""
+
+    if pypi_version_exists(PG_RELEASE_TARGET.package_name, pg_version):
+        return
+
+    raise RuntimeError(
+        f"simplebroker[pg] baseline simplebroker-pg {pg_version} is not published "
+        "on PyPI. Release simplebroker-pg first, then retry the core release."
+    )
+
+
+def sync_root_pg_extra_dependency(
+    *,
+    root_pyproject_path: Path = PYPROJECT_PATH,
+    pg_pyproject_path: Path = PG_EXTENSION_PYPROJECT_PATH,
+) -> str | None:
+    """Set simplebroker[pg] to require the local simplebroker-pg version."""
+
+    pg_version = read_pg_extension_version(pg_pyproject_path=pg_pyproject_path)
+    root_pyproject_text = root_pyproject_path.read_text(encoding="utf-8")
+
+    def replace_dependency(match: re.Match[str]) -> str:
+        indent, current_version, trailing = match.groups()
+        if current_version == pg_version:
+            return match.group(0)
+        return f'{indent}"simplebroker-pg>={pg_version},<2",{trailing}'
+
+    updated_text, count = PG_EXTRA_DEPENDENCY_PATTERN.subn(
+        replace_dependency,
+        root_pyproject_text,
+        count=1,
+    )
+    if count != 1:
+        raise RuntimeError(
+            "Expected one simplebroker-pg dependency in root pyproject.toml"
+        )
+    if updated_text == root_pyproject_text:
+        return None
+
+    root_pyproject_path.write_text(updated_text, encoding="utf-8")
+    return pg_version
 
 
 def _format_command(command: tuple[str, ...]) -> str:
@@ -885,6 +944,16 @@ def main(argv: list[str] | None = None) -> int:
                 f"dry-run: current {target.display_name} version {target_version} "
                 "is unpublished; would reuse existing version files"
             )
+        if target.key == ROOT_RELEASE_TARGET.key:
+            pg_version = read_target_version(PG_RELEASE_TARGET)
+            print(
+                "dry-run: would ensure simplebroker[pg] requires "
+                f"simplebroker-pg>={pg_version},<2"
+            )
+            print(
+                "dry-run: would require simplebroker-pg "
+                f"{pg_version} to be published on PyPI first"
+            )
         for step in build_postupdate_steps(target):
             run_command(step.command, cwd=step.cwd, dry_run=True)
         if version_changed:
@@ -916,6 +985,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.publish:
         _print_publish_note()
 
+    if target.key == ROOT_RELEASE_TARGET.key:
+        require_published_pg_baseline(read_pg_extension_version())
+
     if not args.skip_checks:
         for command in build_precheck_commands():
             run_command(command, env_overrides=PRECHECK_ENV_OVERRIDES)
@@ -935,6 +1007,16 @@ def main(argv: list[str] | None = None) -> int:
             f"Reusing current unpublished {target.display_name} version "
             f"{target_version}; version files unchanged"
         )
+
+    if target.key == ROOT_RELEASE_TARGET.key:
+        pg_dependency_version = sync_root_pg_extra_dependency()
+        if pg_dependency_version is None:
+            print("simplebroker[pg] baseline already matches simplebroker-pg")
+        else:
+            print(
+                "Updated simplebroker[pg] baseline: "
+                f"simplebroker-pg>={pg_dependency_version},<2"
+            )
 
     for step in build_postupdate_steps(target):
         run_command(step.command, cwd=step.cwd)

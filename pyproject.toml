@@ -44,7 +44,7 @@ dev = [
     "pytest-timeout>=2.4.0",
 ]
 pg = [
-    "simplebroker-pg>=1.0.4,<2",
+    "simplebroker-pg>=1.0.6,<2",
 ]
 
 [project.scripts]
