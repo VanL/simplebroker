@@ -50,6 +50,24 @@ class CustomArgumentParser(argparse.ArgumentParser):
         raise ArgumentParserError(message)
 
 
+def _validate_early_command_args(args: argparse.Namespace) -> int | None:
+    """Validate command arguments that should fail before backend inspection."""
+    if getattr(args, "command", None) not in {"read", "peek"}:
+        return None
+
+    since_str = getattr(args, "since", None)
+    if since_str is None:
+        return None
+
+    try:
+        commands._validate_timestamp(since_str)
+    except ValueError as e:
+        print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+
+    return None
+
+
 def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
     """Add shared arguments for read and peek commands."""
     parser.add_argument("queue", help="queue name")
@@ -766,6 +784,10 @@ def main(*, config: dict[str, Any] = _config) -> int:
     if not args.command:
         parser.print_help()
         return EXIT_SUCCESS
+
+    early_error = _validate_early_command_args(args)
+    if early_error is not None:
+        return early_error
 
     # Validate and construct database path
     try:
