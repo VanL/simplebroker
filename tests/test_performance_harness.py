@@ -30,8 +30,17 @@ def test_get_timeout_expands_budget_on_slower_machines(monkeypatch):
     )
 
 
-def test_get_timeout_uses_named_calibration_when_configured(monkeypatch):
-    """Write-heavy benchmarks should scale against write-path calibration."""
+@pytest.mark.parametrize(
+    ("baseline_key", "calibration_key"),
+    [
+        ("basic_write_50", "write_test"),
+        ("validation_cached", "validation_test"),
+    ],
+)
+def test_get_timeout_uses_named_calibration_when_configured(
+    monkeypatch, baseline_key: str, calibration_key: str
+):
+    """Benchmarks can scale against the relevant calibration path."""
     from tests import performance_calibration
 
     monkeypatch.setattr(
@@ -40,16 +49,18 @@ def test_get_timeout_uses_named_calibration_when_configured(monkeypatch):
         (
             1.0,
             {
-                "write_test": performance_calibration.REFERENCE_BASELINES["write_test"]
+                calibration_key: performance_calibration.REFERENCE_BASELINES[
+                    calibration_key
+                ]
                 * 2
             },
         ),
     )
 
-    timeout = performance.get_timeout("basic_write_50", platform_specific=False)
+    timeout = performance.get_timeout(baseline_key, platform_specific=False)
 
     assert timeout == pytest.approx(
-        performance.BASELINE_TIMES["basic_write_50"]
+        performance.BASELINE_TIMES[baseline_key]
         / 0.5
         * (1 + performance.PERF_BUFFER_PERCENT)
     )
