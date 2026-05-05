@@ -7,12 +7,19 @@ queues without managing the underlying database connection.
 import logging
 import threading
 import weakref
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Union, cast
 
-from ._backend_plugins import ActivityWaiter, BackendAwareRunner, get_backend_plugin
+from ._backend_plugins import (
+    ActivityWaiter,
+    BackendAwareRunner,
+    BackendPlugin,
+    MultiQueueActivityWaiterHook,
+    get_backend_plugin,
+)
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
 from ._runner import SQLRunner
 from ._targets import ResolvedTarget
@@ -23,6 +30,64 @@ logger = logging.getLogger(__name__)
 
 # Load configuration once at module level
 _config = load_config()
+
+_FrozenValue = (
+    tuple[tuple[str, "_FrozenValue"], ...]
+    | tuple["_FrozenValue", ...]
+    | str
+    | int
+    | float
+    | bool
+    | None
+)
+
+
+@dataclass(frozen=True)
+class _ActivityWaiterIdentity:
+    plugin: BackendPlugin
+    backend_name: str
+    target_key: str | None
+    backend_options_key: _FrozenValue
+    runner_id: int | None
+    target_arg: str | None
+    backend_options_arg: dict[str, Any] | None
+    runner_arg: SQLRunner | None
+
+    @property
+    def compatibility_key(self) -> tuple[str, str | None, _FrozenValue, int | None]:
+        return (
+            self.backend_name,
+            self.target_key,
+            self.backend_options_key,
+            self.runner_id,
+        )
+
+
+def _freeze_for_waiter_identity(value: Any) -> _FrozenValue:
+    """Freeze common option structures for backend identity comparison."""
+
+    if isinstance(value, Mapping):
+        return tuple(
+            (str(key), _freeze_for_waiter_identity(item))
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_for_waiter_identity(item) for item in value)
+    if isinstance(value, set):
+        return tuple(
+            sorted((_freeze_for_waiter_identity(item) for item in value), key=repr)
+        )
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return repr(value)
+
+
+def _normalize_sqlite_waiter_target(target: str) -> str:
+    path = Path(target).expanduser()
+    try:
+        return str(path.resolve())
+    except (OSError, ValueError):
+        return str(path)
 
 
 def _default_target_from_config(config: dict[str, Any]) -> ResolvedTarget:
@@ -888,32 +953,74 @@ class Queue:
         if self._activity_waiter is not None:
             return self._activity_waiter
 
-        plugin = get_backend_plugin("sqlite")
-        target: str | None = None
-        backend_options: dict[str, Any] | None = None
-        runner: SQLRunner | None = None
+        identity = self._activity_waiter_identity()
 
-        if self._runner is not None:
-            runner = self._runner
-            if isinstance(self._runner, BackendAwareRunner):
-                plugin = self._runner.backend_plugin
-        elif isinstance(self._db_path, ResolvedTarget):
-            plugin = self._db_path.plugin
-            target = self._db_path.target
-            backend_options = dict(self._db_path.backend_options)
-        else:
-            target = str(self._db_path)
-
-        waiter = plugin.create_activity_waiter(
-            target=target,
-            backend_options=backend_options,
-            runner=runner,
+        waiter = identity.plugin.create_activity_waiter(
+            target=identity.target_arg,
+            backend_options=identity.backend_options_arg,
+            runner=identity.runner_arg,
             queue_name=self.name,
             stop_event=stop_event,
         )
         if waiter is not None:
             self._activity_waiter = waiter
         return waiter
+
+    def _activity_waiter_identity(self) -> _ActivityWaiterIdentity:
+        """Return backend identity and hook arguments for activity waiters."""
+
+        if self._runner is not None:
+            if isinstance(self._runner, BackendAwareRunner):
+                plugin = self._runner.backend_plugin
+                backend_name = plugin.name
+            elif isinstance(self._db_path, ResolvedTarget):
+                plugin = self._db_path.plugin
+                backend_name = self._db_path.backend_name
+            else:
+                plugin = get_backend_plugin("sqlite")
+                backend_name = "sqlite"
+            return _ActivityWaiterIdentity(
+                plugin=plugin,
+                backend_name=backend_name,
+                target_key=None,
+                backend_options_key=None,
+                runner_id=id(self._runner),
+                target_arg=None,
+                backend_options_arg=None,
+                runner_arg=self._runner,
+            )
+
+        if isinstance(self._db_path, ResolvedTarget):
+            plugin = self._db_path.plugin
+            target = self._db_path.target
+            target_key = (
+                _normalize_sqlite_waiter_target(target)
+                if self._db_path.backend_name == "sqlite"
+                else target
+            )
+            backend_options = dict(self._db_path.backend_options)
+            return _ActivityWaiterIdentity(
+                plugin=plugin,
+                backend_name=self._db_path.backend_name,
+                target_key=f"resolved:{target_key}",
+                backend_options_key=_freeze_for_waiter_identity(backend_options),
+                runner_id=None,
+                target_arg=target,
+                backend_options_arg=backend_options,
+                runner_arg=None,
+            )
+
+        target = str(self._db_path)
+        return _ActivityWaiterIdentity(
+            plugin=get_backend_plugin("sqlite"),
+            backend_name="sqlite",
+            target_key=f"plain:{_normalize_sqlite_waiter_target(target)}",
+            backend_options_key=_freeze_for_waiter_identity({}),
+            runner_id=None,
+            target_arg=target,
+            backend_options_arg=None,
+            runner_arg=None,
+        )
 
     def stream_messages(
         self,
@@ -1069,6 +1176,45 @@ class Queue:
         self._finalizer = weakref.finalize(
             self, cleanup, self.conn, self._config, "_watcher_conn"
         )
+
+
+def create_activity_waiter_for_queues(
+    queues: Sequence[Queue],
+    *,
+    stop_event: threading.Event,
+) -> ActivityWaiter | None:
+    """Create one backend-native waiter for activity across multiple queues."""
+
+    queue_list = list(queues)
+    if not queue_list:
+        raise ValueError("queues cannot be empty")
+
+    identities = [queue._activity_waiter_identity() for queue in queue_list]
+    first_identity = identities[0]
+    first_key = first_identity.compatibility_key
+    for identity in identities[1:]:
+        if identity.compatibility_key != first_key:
+            raise ValueError("queues cannot safely share one activity waiter")
+
+    queue_names = tuple(dict.fromkeys(queue.name for queue in queue_list))
+    create_waiter = getattr(
+        first_identity.plugin,
+        "create_activity_waiter_for_queues",
+        None,
+    )
+    if create_waiter is None:
+        return None
+    if not callable(create_waiter):
+        raise TypeError("backend create_activity_waiter_for_queues must be callable")
+
+    hook = cast(MultiQueueActivityWaiterHook, create_waiter)
+    return hook(
+        target=first_identity.target_arg,
+        backend_options=first_identity.backend_options_arg,
+        runner=first_identity.runner_arg,
+        queue_names=queue_names,
+        stop_event=stop_event,
+    )
 
 
 # ~

@@ -5,9 +5,16 @@ from __future__ import annotations
 import threading
 from typing import Any, cast
 
+import pytest
+import simplebroker_pg.runner as pg_runner_module
+from psycopg import OperationalError as PsycopgOperationalError
+from psycopg_pool import PoolClosed
 from simplebroker_pg import PostgresRunner
 
+from simplebroker._exceptions import OperationalError
 from simplebroker._runner import SetupPhase
+
+pytestmark = [pytest.mark.pg_only]
 
 
 class FakePool:
@@ -64,3 +71,99 @@ def test_run_exclusive_setup_runs_operation_once_per_phase() -> None:
     assert runner.run_exclusive_setup(SetupPhase.SCHEMA, operation) is True
     assert runner.run_exclusive_setup(SetupPhase.SCHEMA, operation) is False
     assert calls == 1
+
+
+def test_release_thread_connection_returns_real_pool_connection(
+    pg_runner: PostgresRunner,
+) -> None:
+    conn = pg_runner._get_thread_conn()
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1")
+        assert cur.fetchone() == (1,)
+    assert hasattr(pg_runner._thread_local, "conn")
+
+    pg_runner.release_thread_connection()
+
+    assert not hasattr(pg_runner._thread_local, "conn")
+    assert list(pg_runner.run("SELECT 1", fetch=True)) == [(1,)]
+
+
+def test_close_closes_real_pool(pg_runner: PostgresRunner) -> None:
+    assert list(pg_runner.run("SELECT 1", fetch=True)) == [(1,)]
+
+    pg_runner.close()
+
+    with pytest.raises(PoolClosed):
+        list(pg_runner.run("SELECT 1", fetch=True))
+
+
+def test_shared_activity_registry_is_pid_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeListener:
+        instances: list[FakeListener] = []
+
+        def __init__(self, dsn: str, *, schema: str) -> None:
+            self.dsn = dsn
+            self.schema = schema
+            self.close_calls = 0
+            self.instances.append(self)
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    current_pid = 1001
+
+    monkeypatch.setattr(pg_runner_module, "_SharedActivityListener", FakeListener)
+    monkeypatch.setattr(pg_runner_module.os, "getpid", lambda: current_pid)
+
+    registry = pg_runner_module._SharedActivityRegistry()
+
+    parent_first = cast(FakeListener, registry.acquire("dsn", schema="schema"))
+    parent_second = cast(FakeListener, registry.acquire("dsn", schema="schema"))
+    assert parent_first is parent_second
+    assert len(FakeListener.instances) == 1
+
+    current_pid = 1002
+    child_listener = cast(FakeListener, registry.acquire("dsn", schema="schema"))
+    assert child_listener is not parent_first
+    assert len(FakeListener.instances) == 2
+
+    registry.release("dsn", schema="schema")
+    assert child_listener.close_calls == 1
+    assert parent_first.close_calls == 0
+
+    current_pid = 1001
+    registry.release("dsn", schema="schema")
+    assert parent_first.close_calls == 0
+    registry.release("dsn", schema="schema")
+    assert parent_first.close_calls == 1
+
+
+def test_activity_listener_startup_error_raises_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_connect(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise PsycopgOperationalError("bad dsn")
+
+    monkeypatch.setattr(pg_runner_module.psycopg, "connect", fail_connect)
+
+    with pytest.raises(OperationalError, match="bad dsn"):
+        pg_runner_module._SharedActivityListener("bad", schema="schema")
+
+
+def test_activity_listener_startup_timeout_raises_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def never_ready(self: Any) -> None:
+        del self
+
+    monkeypatch.setattr(pg_runner_module._SharedActivityListener, "_run", never_ready)
+
+    with pytest.raises(OperationalError, match="did not start"):
+        pg_runner_module._SharedActivityListener(
+            "dsn",
+            schema="schema",
+            startup_timeout=0.01,
+        )

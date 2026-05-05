@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import quote
@@ -18,7 +18,12 @@ from simplebroker._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 from . import _sql as pg_sql
 from ._constants import POSTGRES_SCHEMA_VERSION
 from ._identifiers import stable_lock_key
-from .runner import PostgresActivityWaiter, PostgresRunner, RunnerMetaState
+from .runner import (
+    PostgresActivityWaiter,
+    PostgresMultiQueueActivityWaiter,
+    PostgresRunner,
+    RunnerMetaState,
+)
 from .schema import initialize_database, meta_table_exists, migrate_schema
 from .validation import (
     SchemaState,
@@ -697,6 +702,42 @@ class PostgresBackendPlugin:
             dsn,
             schema=schema,
             queue_name=queue_name,
+            stop_event=stop_event,
+        )
+
+    def create_activity_waiter_for_queues(
+        self,
+        *,
+        target: str | None,
+        backend_options: Mapping[str, Any] | None = None,
+        runner: SQLRunner | None = None,
+        queue_names: Sequence[str],
+        stop_event: Any,
+    ) -> ActivityWaiter | None:
+        if not isinstance(stop_event, threading.Event):
+            raise TypeError("Postgres activity waiter requires a threading.Event")
+
+        queue_names_tuple = tuple(queue_names)
+        if not queue_names_tuple:
+            raise ValueError("queue_names cannot be empty")
+
+        if runner is not None:
+            if not isinstance(runner, PostgresRunner):
+                dsn = cast(_DsnAwareRunner, runner).dsn
+                schema = cast(_DsnAwareRunner, runner).schema
+            else:
+                dsn = runner.dsn
+                schema = runner.schema
+        else:
+            if target is None:
+                return None
+            dsn = target
+            schema = require_schema_name(backend_options)
+
+        return PostgresMultiQueueActivityWaiter(
+            dsn,
+            schema=schema,
+            queue_names=queue_names_tuple,
             stop_event=stop_event,
         )
 

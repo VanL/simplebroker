@@ -1413,6 +1413,28 @@ For Postgres this prevents the number of queue handles in one process from
 allocating one runner or pool each. Backends may still create separate physical
 connections per thread or per pool checkout.
 
+Advanced watcher integrations can ask SimpleBroker for one native wake waiter
+across several queues:
+
+```python
+from threading import Event
+
+from simplebroker import Queue, create_activity_waiter_for_queues
+
+stop_event = Event()
+queues = [
+    Queue("jobs.high", persistent=True),
+    Queue("jobs.low", persistent=True),
+]
+waiter = create_activity_waiter_for_queues(queues, stop_event=stop_event)
+```
+
+The return value is `ActivityWaiter | None`. `None` means the backend has no
+efficient multi-queue wake path and the caller should keep polling. A returned
+waiter is only a wake hint: `wait(timeout)` means some watched queue may have
+changed, not that a message is guaranteed to be available. Close the returned
+waiter from the caller's watcher lifecycle; it is not owned by any one `Queue`.
+
 An explicitly injected `runner=` remains caller-owned. Reuse the same runner
 object yourself when you want several queues to share an injected backend.
 For `PostgresRunner`, call `runner.close()` or `runner.shutdown()` when you are

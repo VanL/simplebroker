@@ -8,9 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [3.3.0] - 2026-05-05
 ### Added
 - Added an internal phase-lock coordinator that serializes ordered setup phases with advisory lock files, durable xattr completion hints, and a status-file fallback for filesystems without usable xattrs.
+- Added `create_activity_waiter_for_queues(...)` and top-level `ActivityWaiter` exports for integrations that need one backend-native wake hint across several queues, with polling remaining the fallback when a backend has no efficient hook.
+- Added PostgreSQL multi-queue activity waiter support using the existing process-local shared LISTEN/NOTIFY listener instead of one listener connection per watched queue.
 
 ### Changed
 - Persistent queue handles for the same resolved backend target now share process-local backend session state, preventing backend runner or pool allocation from scaling with same-process queue count while preserving thread and process isolation.
+- Backend plugins can opt into the multi-queue activity waiter hook without changing the required `BackendPlugin` protocol surface.
 
 ## [3.2.0] - 2026-05-01
 ### Added

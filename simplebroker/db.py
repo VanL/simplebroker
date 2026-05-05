@@ -68,9 +68,15 @@ QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
 def _resolve_backend_plugin(
     runner: SQLRunner,
     explicit_plugin: BackendPlugin | None = None,
+    *,
+    fallback_plugin: BackendPlugin | None = None,
 ) -> BackendPlugin:
     """Resolve the backend plugin for a runner instance."""
-    return resolve_runner_backend_plugin(runner, explicit_plugin)
+    return resolve_runner_backend_plugin(
+        runner,
+        explicit_plugin,
+        fallback_plugin=fallback_plugin,
+    )
 
 
 def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -81,8 +87,9 @@ def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
 class _BorrowedRunner:
     """Delegate SQLRunner operations without taking ownership of close()."""
 
-    def __init__(self, runner: SQLRunner):
+    def __init__(self, runner: SQLRunner, *, backend_plugin: BackendPlugin):
         self._runner = runner
+        self._backend_plugin = backend_plugin
 
     def run(
         self,
@@ -113,7 +120,7 @@ class _BorrowedRunner:
 
     @property
     def backend_plugin(self) -> BackendPlugin:
-        return _resolve_backend_plugin(self._runner)
+        return self._backend_plugin
 
     def __getattr__(self, name: str) -> Any:
         """Delegate backend-specific runner attributes transparently."""
@@ -204,17 +211,26 @@ class DBConnection:
         )
         self._external_runner = runner is not None
         self._share_in_process = bool(share_in_process and runner is None)
-        self._runner: SQLRunner | None = (
-            _BorrowedRunner(runner) if runner is not None else None
-        )
         self._backend_plugin = (
-            _resolve_backend_plugin(runner)
+            _resolve_backend_plugin(
+                runner,
+                fallback_plugin=(
+                    self._resolved_target.plugin
+                    if self._resolved_target is not None
+                    else None
+                ),
+            )
             if runner is not None
             else (
                 self._resolved_target.plugin
                 if self._resolved_target is not None
                 else get_backend_plugin("sqlite")
             )
+        )
+        self._runner: SQLRunner | None = (
+            _BorrowedRunner(runner, backend_plugin=self._backend_plugin)
+            if runner is not None
+            else None
         )
         self._core = None
         self._thread_local = threading.local()

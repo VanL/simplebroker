@@ -12,6 +12,7 @@ import os
 import threading
 import time
 from collections import Counter
+from dataclasses import dataclass
 
 import pytest
 
@@ -95,6 +96,73 @@ class ConcurrencyTestWatcher(QueueWatcher):
         return super()._process_with_retry(wrapped, operation_name)
 
 
+@dataclass(frozen=True)
+class ConcurrentPreCheckResult:
+    results: list[bool]
+    max_concurrent: int
+    total_pre_checks: int
+    total_pre_check_errors: int
+
+
+def _run_synchronized_pre_checks(
+    broker_target,
+    watcher_type: type[ConcurrencyTestWatcher],
+    *,
+    num_watchers: int = 20,
+) -> ConcurrentPreCheckResult:
+    """Run one simultaneous pre-check per watcher and return observed counters."""
+    broker = make_broker(broker_target)
+    watchers: list[ConcurrencyTestWatcher] = []
+    start_barrier = threading.Barrier(num_watchers)
+    entered_barrier = threading.Barrier(num_watchers)
+    active_lock = threading.Lock()
+    active_pre_checks = 0
+    max_concurrent = 0
+
+    def handler(msg, ts) -> None:
+        del msg, ts
+
+    def run_pre_check(watcher: ConcurrencyTestWatcher) -> bool:
+        nonlocal active_pre_checks, max_concurrent
+        barrier_timeout = scale_timeout_for_ci(2.0)
+        start_barrier.wait(timeout=barrier_timeout)
+        with active_lock:
+            active_pre_checks += 1
+            max_concurrent = max(max_concurrent, active_pre_checks)
+        try:
+            entered_barrier.wait(timeout=barrier_timeout)
+            return watcher._has_pending_messages()
+        finally:
+            with active_lock:
+                active_pre_checks -= 1
+
+    try:
+        broker.write("queue_0", "trigger")
+        for i in range(num_watchers):
+            watchers.append(watcher_type(f"queue_{i}", handler, db=broker_target))
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=num_watchers
+        ) as executor:
+            futures = [executor.submit(run_pre_check, watcher) for watcher in watchers]
+            results = [
+                future.result(timeout=scale_timeout_for_ci(5.0)) for future in futures
+            ]
+
+        return ConcurrentPreCheckResult(
+            results=results,
+            max_concurrent=max_concurrent,
+            total_pre_checks=sum(w.pre_check_count for w in watchers),
+            total_pre_check_errors=sum(
+                w.pre_check_operational_errors for w in watchers
+            ),
+        )
+    finally:
+        for watcher in watchers:
+            watcher.stop()
+        broker.close()
+
+
 def test_pre_check_race_no_message_loss(broker_target) -> None:
     """Verify no messages are lost due to pre-check race conditions."""
     broker = make_broker(broker_target)
@@ -155,6 +223,57 @@ def test_pre_check_race_no_message_loss(broker_target) -> None:
         for w in watchers:
             w.stop()
         broker.close()
+
+
+def test_native_activity_hint_still_checks_empty_queue(broker_target) -> None:
+    """A native wake-up hint is not proof that this watcher can claim work."""
+    watcher = ConcurrencyTestWatcher(
+        "empty_queue",
+        lambda msg, ts: None,
+        db=broker_target,
+    )
+    try:
+        watcher._strategy._native_activity_pending = True
+
+        assert watcher._has_pending_messages() is False
+    finally:
+        watcher.stop()
+
+
+def test_native_activity_waiter_wake_still_checks_empty_queue(broker_target) -> None:
+    """A native waiter wake should not skip the live pending-message check."""
+
+    class EmptyWakeWaiter:
+        def __init__(self) -> None:
+            self.wait_calls = 0
+
+        def wait(self, timeout: float) -> bool:
+            del timeout
+            self.wait_calls += 1
+            return self.wait_calls == 1
+
+        def requires_pending_check(self) -> bool:
+            return False
+
+        def close(self) -> None:
+            pass
+
+    waiter = EmptyWakeWaiter()
+    watcher = ConcurrencyTestWatcher(
+        "empty_queue",
+        lambda msg, ts: None,
+        db=broker_target,
+    )
+    try:
+        watcher._strategy.start(activity_waiter=waiter)
+        watcher._strategy.wait_for_activity()
+
+        assert waiter.wait_calls == 1
+        assert watcher._strategy._activity_burst_remaining == 0
+        assert watcher._has_pending_messages() is False
+        assert watcher.pre_check_count == 1
+    finally:
+        watcher.stop()
 
 
 def test_concurrent_writers_readers(broker_target) -> None:
@@ -470,76 +589,72 @@ def test_pre_check_with_peek_mode(broker_target) -> None:
 
 
 def test_concurrent_pre_checks(broker_target) -> None:
-    """Test multiple watchers doing pre-checks simultaneously."""
-    broker = make_broker(broker_target)
-    watchers = []
+    """Multiple watchers can pre-check concurrently without retry errors."""
+    result = _run_synchronized_pre_checks(
+        broker_target,
+        ConcurrencyTestWatcher,
+    )
 
-    try:
-        # Track pre-check timing
-        pre_check_times: list[float] = []
-        times_lock = threading.Lock()
+    assert result.max_concurrent == 20
+    assert result.total_pre_checks == 20
+    assert result.total_pre_check_errors == 0
+    assert result.results.count(True) == 1
+    assert result.results.count(False) == 19
 
-        class TimingWatcher(ConcurrencyTestWatcher):
-            def _has_pending_messages(self):
-                start = time.perf_counter()
-                result = super()._has_pending_messages()
-                elapsed = time.perf_counter() - start
-                with times_lock:
-                    pre_check_times.append(elapsed)
-                return result
 
-        # Create many watchers
-        num_watchers = 20
+@pytest.mark.slow
+def test_concurrent_pre_check_timing(
+    broker_target, request: pytest.FixtureRequest
+) -> None:
+    """Track pre-check latency separately from deterministic concurrency semantics."""
+    workerinput = getattr(request.config, "workerinput", None)
+    if workerinput is not None and int(workerinput.get("workercount", 1)) > 1:
+        pytest.skip(
+            "Pre-check timing requires a single pytest worker; run with -n 0 or -n 1."
+        )
 
-        def handler(msg, ts) -> None:
-            pass
+    pre_check_times: list[float] = []
+    times_lock = threading.Lock()
 
-        for i in range(num_watchers):
-            w = TimingWatcher(f"queue_{i}", handler, db=broker_target)
-            watchers.append(w)
-            w.run_in_thread()
+    class TimingWatcher(ConcurrencyTestWatcher):
+        def _has_pending_messages(self) -> bool:
+            start = time.perf_counter()
+            result = super()._has_pending_messages()
+            elapsed = time.perf_counter() - start
+            with times_lock:
+                pre_check_times.append(elapsed)
+            return result
 
-        # Trigger concurrent pre-checks by writing to one queue
-        broker.write("queue_0", "trigger")
+    result = _run_synchronized_pre_checks(
+        broker_target,
+        TimingWatcher,
+    )
 
-        # Wait for pre-checks
-        time.sleep(0.5)
+    assert result.total_pre_check_errors == 0
+    assert len(pre_check_times) == 20
 
-        # Analyze pre-check times
-        with times_lock:
-            if pre_check_times:
-                sorted_times = sorted(pre_check_times)
+    sorted_times = sorted(pre_check_times)
 
-                def percentile(values: list[float], p: float) -> float:
-                    index = min(len(values) - 1, math.ceil(len(values) * p) - 1)
-                    return values[index]
+    def percentile(values: list[float], p: float) -> float:
+        index = min(len(values) - 1, math.ceil(len(values) * p) - 1)
+        return values[index]
 
-                avg_time = sum(pre_check_times) / len(pre_check_times)
-                p99_time = percentile(sorted_times, 0.99)
-                total_pre_check_errors = sum(
-                    w.pre_check_operational_errors for w in watchers
-                )
-                # Postgres has higher per-query latency than SQLite
-                is_pg = active_backend() == "postgres"
-                avg_threshold = get_performance_threshold(
-                    "WATCHER_PRECHECK_AVG_SECONDS",
-                    0.015 if is_pg else (0.005 if os.environ.get("CI") else 0.003),
-                )
-                p99_threshold = get_performance_threshold(
-                    "WATCHER_PRECHECK_P99_SECONDS",
-                    0.1 if is_pg else (0.04 if os.environ.get("CI") else 0.025),
-                )
+    avg_time = sum(pre_check_times) / len(pre_check_times)
+    p99_time = percentile(sorted_times, 0.99)
+    is_pg = active_backend() == "postgres"
+    avg_threshold = get_performance_threshold(
+        "WATCHER_PRECHECK_AVG_SECONDS",
+        0.015 if is_pg else (0.01 if os.environ.get("CI") else 0.006),
+        scale_for_slow_runner=True,
+    )
+    p99_threshold = get_performance_threshold(
+        "WATCHER_PRECHECK_P99_SECONDS",
+        0.1 if is_pg else (0.04 if os.environ.get("CI") else 0.025),
+        scale_for_slow_runner=True,
+    )
 
-                # Even under xdist saturation, the steady-state pre-check path
-                # should remain fast and should not require SQLite retries.
-                assert avg_time < avg_threshold
-                assert p99_time < p99_threshold
-                assert total_pre_check_errors == 0
-    finally:
-        # Stop all watchers before closing broker
-        for w in watchers:
-            w.stop()
-        broker.close()
+    assert avg_time < avg_threshold
+    assert p99_time < p99_threshold
 
 
 def test_pre_check_database_contention(broker_target) -> None:

@@ -15,6 +15,7 @@ def test_ext_imports():
         DataError,
         IntegrityError,
         MessageError,
+        MultiQueueActivityWaiterHook,
         OperationalError,
         QueueNameError,
         SetupPhase,
@@ -33,6 +34,7 @@ def test_ext_imports():
     assert DataError is not None
     assert IntegrityError is not None
     assert MessageError is not None
+    assert MultiQueueActivityWaiterHook is not None
     assert OperationalError is not None
     assert QueueNameError is not None
     assert SetupPhase is not None
@@ -54,6 +56,7 @@ def test_ext_all_exports():
         "BackendPlugin",
         "ActivityWaiter",
         "BackendAwareRunner",
+        "MultiQueueActivityWaiterHook",
         "get_backend_plugin",
         "TimestampGenerator",
         "BrokerError",

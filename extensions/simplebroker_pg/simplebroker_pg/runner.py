@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import threading
 import time
-from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Any, cast
@@ -35,6 +34,15 @@ class RunnerMetaState:
     schema_version: int
     last_ts: int
     alias_version: int
+
+
+@dataclass(slots=True)
+class _FanInWaiterEntry:
+    """Listener-local fan-in waiter registration."""
+
+    condition: threading.Condition
+    queue_names: tuple[str, ...]
+    queue_set: set[str]
 
 
 def _adapt_sql(sql: str) -> str:
@@ -88,15 +96,18 @@ class _SharedActivityListener:
         dsn: str,
         *,
         schema: str,
+        startup_timeout: float = 5.0,
     ) -> None:
         self._dsn = dsn
         self._channel = activity_channel_name(schema)
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
-        self._conditions: defaultdict[str, threading.Condition] = defaultdict(
-            lambda: threading.Condition(self._lock)
-        )
-        self._versions: defaultdict[str, int] = defaultdict(int)
+        self._conditions: dict[str, threading.Condition] = {}
+        self._versions: dict[str, int] = {}
+        self._queue_refcounts: dict[str, int] = {}
+        self._fan_in_entries: dict[int, _FanInWaiterEntry] = {}
+        self._next_fan_in_id = 0
+        self._wildcard_version = 0
         self._ready = threading.Event()
         self._conn: psycopg.Connection[Any] | None = None
         self._error: Exception | None = None
@@ -106,7 +117,14 @@ class _SharedActivityListener:
             daemon=True,
         )
         self._thread.start()
-        self._ready.wait(timeout=5.0)
+        if not self._ready.wait(timeout=startup_timeout):
+            self.close()
+            raise OperationalError("Postgres activity listener did not start")
+        if self._error is not None:
+            self.close()
+            if isinstance(self._error, psycopg.Error):
+                raise _translate_error(self._error) from self._error
+            raise OperationalError(str(self._error)) from self._error
 
     def _run(self) -> None:
         try:
@@ -119,12 +137,18 @@ class _SharedActivityListener:
             while not self._stop_event.is_set():
                 for notify in conn.notifies(timeout=0.1, stop_after=1):
                     with self._lock:
-                        self._versions[notify.payload] += 1
                         if notify.payload == "*":
+                            self._wildcard_version += 1
                             for condition in self._conditions.values():
                                 condition.notify_all()
-                        else:
+                            for entry in self._fan_in_entries.values():
+                                entry.condition.notify_all()
+                        elif notify.payload in self._queue_refcounts:
+                            self._versions[notify.payload] += 1
                             self._conditions[notify.payload].notify_all()
+                            for entry in self._fan_in_entries.values():
+                                if notify.payload in entry.queue_set:
+                                    entry.condition.notify_all()
                     break
         except Exception as exc:
             if not self._stop_event.is_set():
@@ -133,6 +157,8 @@ class _SharedActivityListener:
                 with self._lock:
                     for condition in self._conditions.values():
                         condition.notify_all()
+                    for entry in self._fan_in_entries.values():
+                        entry.condition.notify_all()
         finally:
             self._ready.set()
             if self._conn is not None:
@@ -140,6 +166,63 @@ class _SharedActivityListener:
                     self._conn.close()
                 except Exception:
                     pass
+
+    def register_queue(self, queue_name: str) -> tuple[int, int]:
+        """Register a waiter queue and return its current notification versions."""
+        with self._lock:
+            refcount = self._queue_refcounts.get(queue_name, 0)
+            self._queue_refcounts[queue_name] = refcount + 1
+            if refcount == 0:
+                self._conditions[queue_name] = threading.Condition(self._lock)
+                self._versions[queue_name] = 0
+            return self._versions[queue_name], self._wildcard_version
+
+    def unregister_queue(self, queue_name: str) -> None:
+        """Release a waiter queue registration."""
+        with self._lock:
+            refcount = self._queue_refcounts.get(queue_name)
+            if refcount is None:
+                return
+            if refcount > 1:
+                self._queue_refcounts[queue_name] = refcount - 1
+                return
+            condition = self._conditions.pop(queue_name, None)
+            self._versions.pop(queue_name, None)
+            del self._queue_refcounts[queue_name]
+            if condition is not None:
+                condition.notify_all()
+
+    def register_queue_set(
+        self, queue_names: tuple[str, ...]
+    ) -> tuple[int, dict[str, int], int]:
+        """Register one fan-in waiter over multiple queues."""
+        with self._lock:
+            fan_in_id = self._next_fan_in_id
+            self._next_fan_in_id += 1
+            entry = _FanInWaiterEntry(
+                condition=threading.Condition(self._lock),
+                queue_names=queue_names,
+                queue_set=set(queue_names),
+            )
+            self._fan_in_entries[fan_in_id] = entry
+
+            versions: dict[str, int] = {}
+            for queue_name in queue_names:
+                queue_version, _ = self.register_queue(queue_name)
+                versions[queue_name] = queue_version
+            return fan_in_id, versions, self._wildcard_version
+
+    def unregister_queue_set(self, fan_in_id: int) -> None:
+        """Release one fan-in waiter registration."""
+        with self._lock:
+            entry = self._fan_in_entries.pop(fan_in_id, None)
+            if entry is None:
+                return
+            entry.condition.notify_all()
+            queue_names = entry.queue_names
+
+        for queue_name in queue_names:
+            self.unregister_queue(queue_name)
 
     def wait(
         self,
@@ -152,13 +235,15 @@ class _SharedActivityListener:
     ) -> tuple[bool, int, int]:
         deadline = time.monotonic() + max(timeout, 0.0)
         with self._lock:
-            condition = self._conditions[queue_name]
+            condition = self._conditions.get(queue_name)
+            if condition is None:
+                return False, last_queue_version, self._wildcard_version
 
             while not stop_event.is_set() and not self._stop_event.is_set():
                 if self._error is not None:
                     raise self._error
-                queue_version = self._versions[queue_name]
-                wildcard_version = self._versions["*"]
+                queue_version = self._versions.get(queue_name, last_queue_version)
+                wildcard_version = self._wildcard_version
                 if (
                     queue_version != last_queue_version
                     or wildcard_version != last_wildcard_version
@@ -170,7 +255,66 @@ class _SharedActivityListener:
                     return False, queue_version, wildcard_version
                 condition.wait(timeout=remaining)
         with self._lock:
-            return False, self._versions[queue_name], self._versions["*"]
+            return (
+                False,
+                self._versions.get(queue_name, last_queue_version),
+                self._wildcard_version,
+            )
+
+    def wait_any(
+        self,
+        *,
+        fan_in_id: int,
+        stop_event: threading.Event,
+        timeout: float,
+        last_queue_versions: dict[str, int],
+        last_wildcard_version: int,
+    ) -> tuple[bool, dict[str, int], int]:
+        deadline = time.monotonic() + max(timeout, 0.0)
+        with self._lock:
+            entry = self._fan_in_entries.get(fan_in_id)
+            if entry is None:
+                return False, dict(last_queue_versions), self._wildcard_version
+
+            while not stop_event.is_set() and not self._stop_event.is_set():
+                if self._error is not None:
+                    raise self._error
+                queue_versions = {
+                    queue_name: self._versions.get(
+                        queue_name, last_queue_versions.get(queue_name, 0)
+                    )
+                    for queue_name in entry.queue_names
+                }
+                wildcard_version = self._wildcard_version
+                if (
+                    any(
+                        queue_versions[queue_name]
+                        != last_queue_versions.get(queue_name, 0)
+                        for queue_name in entry.queue_names
+                    )
+                    or wildcard_version != last_wildcard_version
+                ):
+                    return True, queue_versions, wildcard_version
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False, queue_versions, wildcard_version
+                entry.condition.wait(timeout=remaining)
+
+        with self._lock:
+            entry = self._fan_in_entries.get(fan_in_id)
+            if entry is None:
+                return False, dict(last_queue_versions), self._wildcard_version
+            return (
+                False,
+                {
+                    queue_name: self._versions.get(
+                        queue_name, last_queue_versions.get(queue_name, 0)
+                    )
+                    for queue_name in entry.queue_names
+                },
+                self._wildcard_version,
+            )
 
     def close(self) -> None:
         self._stop_event.set()
@@ -182,6 +326,8 @@ class _SharedActivityListener:
         with self._lock:
             for condition in self._conditions.values():
                 condition.notify_all()
+            for entry in self._fan_in_entries.values():
+                entry.condition.notify_all()
         self._thread.join(timeout=1.0)
 
 
@@ -190,10 +336,12 @@ class _SharedActivityRegistry:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._listeners: dict[tuple[str, str], tuple[_SharedActivityListener, int]] = {}
+        self._listeners: dict[
+            tuple[int, str, str], tuple[_SharedActivityListener, int]
+        ] = {}
 
     def acquire(self, dsn: str, *, schema: str) -> _SharedActivityListener:
-        key = (dsn, schema)
+        key = (os.getpid(), dsn, schema)
         with self._lock:
             entry = self._listeners.get(key)
             if entry is not None:
@@ -206,7 +354,7 @@ class _SharedActivityRegistry:
             return listener
 
     def release(self, dsn: str, *, schema: str) -> None:
-        key = (dsn, schema)
+        key = (os.getpid(), dsn, schema)
         listener: _SharedActivityListener | None = None
         with self._lock:
             entry = self._listeners.get(key)
@@ -241,8 +389,9 @@ class PostgresActivityWaiter:
         self._stop_event = stop_event
         self._listener = _activity_registry.acquire(dsn, schema=schema)
         self._closed = False
-        self._last_queue_version = 0
-        self._last_wildcard_version = 0
+        self._last_queue_version, self._last_wildcard_version = (
+            self._listener.register_queue(queue_name)
+        )
 
     def wait(self, timeout: float) -> bool:
         """Wait for a relevant queue notification until timeout expires."""
@@ -277,6 +426,76 @@ class PostgresActivityWaiter:
         if self._closed:
             return
         self._closed = True
+        self._listener.unregister_queue(self._queue_name)
+        _activity_registry.release(self._dsn, schema=self._schema)
+
+
+class PostgresMultiQueueActivityWaiter:
+    """LISTEN/NOTIFY-backed fan-in waiter for multiple pg queues."""
+
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        schema: str,
+        queue_names: tuple[str, ...],
+        stop_event: threading.Event,
+    ) -> None:
+        if not queue_names:
+            raise ValueError("queue_names cannot be empty")
+        self._dsn = dsn
+        self._schema = schema
+        self._queue_names = queue_names
+        self._stop_event = stop_event
+        self._listener = _activity_registry.acquire(dsn, schema=schema)
+        self._closed = False
+        (
+            self._fan_in_id,
+            self._last_queue_versions,
+            self._last_wildcard_version,
+        ) = self._listener.register_queue_set(queue_names)
+
+    def wait(self, timeout: float) -> bool:
+        """Wait for any watched queue notification until timeout expires."""
+        try:
+            previous_queue_versions = dict(self._last_queue_versions)
+            previous_wildcard_version = self._last_wildcard_version
+            changed, queue_versions, wildcard_version = self._listener.wait_any(
+                fan_in_id=self._fan_in_id,
+                stop_event=self._stop_event,
+                timeout=timeout,
+                last_queue_versions=self._last_queue_versions,
+                last_wildcard_version=self._last_wildcard_version,
+            )
+            if changed:
+                next_queue_versions: dict[str, int] = {}
+                for queue_name in self._queue_names:
+                    previous_queue_version = previous_queue_versions.get(queue_name, 0)
+                    queue_version = queue_versions.get(
+                        queue_name, previous_queue_version
+                    )
+                    if queue_version > previous_queue_version:
+                        next_queue_versions[queue_name] = previous_queue_version + 1
+                    else:
+                        next_queue_versions[queue_name] = queue_version
+                self._last_queue_versions = next_queue_versions
+
+                if wildcard_version > previous_wildcard_version:
+                    self._last_wildcard_version = previous_wildcard_version + 1
+                else:
+                    self._last_wildcard_version = wildcard_version
+            else:
+                self._last_queue_versions = queue_versions
+                self._last_wildcard_version = wildcard_version
+            return changed
+        except psycopg.Error as exc:
+            raise _translate_error(exc) from exc
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._listener.unregister_queue_set(self._fan_in_id)
         _activity_registry.release(self._dsn, schema=self._schema)
 
 

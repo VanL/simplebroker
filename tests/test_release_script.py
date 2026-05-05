@@ -152,6 +152,17 @@ pg = [
     assert root_pyproject.read_text(encoding="utf-8") == root_text
 
 
+def test_pg_extension_requires_current_core_lifecycle_version() -> None:
+    pg_pyproject = (
+        Path(__file__).resolve().parents[1]
+        / "extensions"
+        / "simplebroker_pg"
+        / "pyproject.toml"
+    )
+
+    assert '"simplebroker>=3.3.0,<4"' in pg_pyproject.read_text(encoding="utf-8")
+
+
 def test_require_published_pg_baseline_accepts_published_version(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
 

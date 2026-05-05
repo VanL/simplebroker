@@ -1107,9 +1107,6 @@ class PollingStrategy:
                 wait_timeout = max(delay, self._burst_sleep)
                 if self._activity_waiter.wait(wait_timeout):
                     self._native_activity_pending = True
-                    self._check_count = 0
-                    self._activity_burst_remaining = self._initial_checks * 10
-                    self._record_immediate_burst_delays(count=2)
                     return
                 self._check_count += 1
                 if time.monotonic() >= self._next_native_idle_poll_at:
@@ -1166,7 +1163,7 @@ class PollingStrategy:
         return True
 
     def consume_native_activity_hint(self) -> bool:
-        """Return and clear a backend-native activity hint."""
+        """Return and clear whether a backend-native activity hint was seen."""
         if not self._native_activity_pending:
             return False
         self._native_activity_pending = False
@@ -1434,8 +1431,7 @@ class QueueWatcher(BaseWatcher):
         if self._strategy.consume_local_activity_hint():
             return True
 
-        if self._strategy.consume_native_activity_hint():
-            return True
+        self._strategy.consume_native_activity_hint()
 
         def check_func() -> bool:
             return self._queue_obj.has_pending(
@@ -1468,8 +1464,6 @@ class QueueWatcher(BaseWatcher):
         by this watcher. They remain available for other consumers or for
         manual removal after successful processing.
         """
-        self._pending_messages_precheck_confirmed = False
-
         # Process messages based on mode using Queue API
         found_messages = False
         if self._peek:

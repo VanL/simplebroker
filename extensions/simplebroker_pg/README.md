@@ -56,6 +56,18 @@ finally:
     runner.close()
 ```
 
+## Multi-Queue Activity Waiters
+
+Postgres supports `simplebroker.create_activity_waiter_for_queues(...)` with
+one process-local shared LISTEN/NOTIFY listener per DSN and schema. The waiter
+wakes when any watched queue receives activity, ignores unrelated queue
+notifications, and returns the same `ActivityWaiter | None` shape as the core
+API.
+
+Wakeups are hints. After `wait(timeout)` returns `True`, callers should still
+drain queues through normal SimpleBroker reads or moves. Close the multi-queue
+waiter explicitly when the watcher lifecycle ends.
+
 ## CLI Usage
 
 Create `.broker.toml` in the project root, or use the configured

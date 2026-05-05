@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from importlib import metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
@@ -170,6 +170,20 @@ class ActivityWaiter(Protocol):
     def close(self) -> None: ...
 
 
+class MultiQueueActivityWaiterHook(Protocol):
+    """Optional backend hook for creating one waiter across many queues."""
+
+    def __call__(
+        self,
+        *,
+        target: str | None,
+        backend_options: Mapping[str, Any] | None = None,
+        runner: SQLRunner | None = None,
+        queue_names: Sequence[str],
+        stop_event: Any,
+    ) -> ActivityWaiter | None: ...
+
+
 @runtime_checkable
 class BackendAwareRunner(Protocol):
     """Additive runner protocol for backend-aware custom runners."""
@@ -181,6 +195,8 @@ class BackendAwareRunner(Protocol):
 def resolve_runner_backend_plugin(
     runner: SQLRunner,
     explicit_plugin: BackendPlugin | None = None,
+    *,
+    fallback_plugin: BackendPlugin | None = None,
 ) -> BackendPlugin:
     """Resolve the backend plugin for a runner instance."""
 
@@ -189,7 +205,9 @@ def resolve_runner_backend_plugin(
         if isinstance(runner, BackendAwareRunner):
             plugin = runner.backend_plugin
         else:
-            plugin = get_backend_plugin(DEFAULT_BACKEND_NAME)
+            plugin = fallback_plugin
+    if plugin is None:
+        plugin = get_backend_plugin(DEFAULT_BACKEND_NAME)
     ensure_backend_sql_namespace(plugin.sql)
     return plugin
 
@@ -263,6 +281,7 @@ __all__ = [
     "BackendAwareRunner",
     "BackendPlugin",
     "DEFAULT_BACKEND_NAME",
+    "MultiQueueActivityWaiterHook",
     "get_backend_plugin",
     "resolve_runner_backend_plugin",
     "target_parent_directory",

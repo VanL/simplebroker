@@ -136,12 +136,20 @@ def retry_on_exception(
 
 
 # Performance threshold configuration
-def get_performance_threshold(name: str, default: float) -> float:
+def get_performance_threshold(
+    name: str,
+    default: float,
+    *,
+    scale_for_slow_runner: bool = False,
+) -> float:
     """Get performance threshold from environment or default.
 
     Args:
         name: Name of the threshold (used in env var)
         default: Default value if not set
+        scale_for_slow_runner: Relax the default threshold using the same
+            machine calibration model as the performance suite. Environment
+            overrides remain exact.
 
     Returns:
         Threshold value
@@ -158,6 +166,16 @@ def get_performance_threshold(name: str, default: float) -> float:
             return float(env_value)
         except ValueError:
             pass
+    if scale_for_slow_runner:
+        try:
+            from tests.performance_calibration import get_machine_performance_ratio
+
+            performance_ratio = get_machine_performance_ratio()
+        except Exception:
+            performance_ratio = 1.0
+        effective_performance = min(performance_ratio, 1.0)
+        if effective_performance > 0:
+            return default / effective_performance
     return default
 
 

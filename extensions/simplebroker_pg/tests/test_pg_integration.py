@@ -6,8 +6,10 @@ import contextlib
 import os
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 from psycopg import conninfo as pg_conninfo
@@ -15,6 +17,8 @@ from simplebroker_pg import PostgresRunner, get_backend_plugin
 from simplebroker_pg.validation import connect
 
 from simplebroker import Queue
+from simplebroker._runner import SetupPhase
+from simplebroker._targets import ResolvedTarget
 from simplebroker.db import BrokerCore
 
 TEST_DSN = os.environ.get("SIMPLEBROKER_PG_TEST_DSN")
@@ -173,6 +177,68 @@ def test_postgres_runner_skips_schema_ddl_after_bootstrap() -> None:
         )
     ]
     assert ddl_statements == []
+
+
+def test_wrapped_postgres_runner_with_resolved_target_uses_pg_waiter() -> None:
+    """A non-backend-aware wrapper should still use the Postgres target plugin."""
+
+    class WrappedRunner:
+        def __init__(self, runner: PostgresRunner) -> None:
+            self._runner = runner
+
+        def run(
+            self,
+            sql: str,
+            params: tuple[Any, ...] = (),
+            *,
+            fetch: bool = False,
+        ) -> Any:
+            return self._runner.run(sql, params, fetch=fetch)
+
+        def begin_immediate(self) -> None:
+            self._runner.begin_immediate()
+
+        def commit(self) -> None:
+            self._runner.commit()
+
+        def rollback(self) -> None:
+            self._runner.rollback()
+
+        def close(self) -> None:
+            self._runner.close()
+
+        def setup(self, phase: SetupPhase) -> None:
+            self._runner.setup(phase)
+
+        def is_setup_complete(self, phase: SetupPhase) -> bool:
+            return self._runner.is_setup_complete(phase)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._runner, name)
+
+    schema = _schema_name()
+    dsn = _require_test_dsn()
+    plugin = get_backend_plugin()
+    runner = PostgresRunner(dsn, schema=schema)
+    wrapped_runner = WrappedRunner(runner)
+    target = ResolvedTarget(
+        "postgres",
+        dsn,
+        backend_options={"schema": schema},
+    )
+    queue = Queue("jobs", db_path=target, runner=wrapped_runner, persistent=True)
+
+    try:
+        waiter = queue.create_activity_waiter(stop_event=threading.Event())
+        assert waiter is not None
+        assert waiter.__class__.__name__ == "PostgresActivityWaiter"
+
+        queue.write("hello")
+        assert queue.read() == "hello"
+    finally:
+        queue.close()
+        runner.shutdown()
+        plugin.cleanup_target(dsn, backend_options={"schema": schema})
 
 
 def test_postgres_cli_project_config_roundtrip(tmp_path: Path) -> None:

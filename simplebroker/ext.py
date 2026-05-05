@@ -8,6 +8,7 @@ from ._backend_plugins import (
     ActivityWaiter,
     BackendAwareRunner,
     BackendPlugin,
+    MultiQueueActivityWaiterHook,
     get_backend_plugin,
 )
 from ._exceptions import (
@@ -30,6 +31,7 @@ __all__ = [
     "BackendPlugin",
     "ActivityWaiter",
     "BackendAwareRunner",
+    "MultiQueueActivityWaiterHook",
     "get_backend_plugin",
     "TimestampGenerator",
     # Exceptions
