@@ -171,6 +171,9 @@ def test_pg_extension_requires_current_core_lifecycle_version() -> None:
         assert '"simplebroker>=3.2.0,<4"' in pg_text
         return
 
+    assert f'"simplebroker-pg>={pg_version},<2"' in root_pyproject.read_text(
+        encoding="utf-8"
+    )
     assert '"simplebroker>=3.3.0,<4"' in pg_text
 
 
