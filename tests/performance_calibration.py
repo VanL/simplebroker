@@ -129,16 +129,27 @@ def calibrate_machine_performance() -> tuple[float, dict[str, float]]:
     return performance_ratio, measurements
 
 
-# Cache the performance ratio (calculated once per test session)
-_cached_performance_ratio = None
+# Cache calibration results (calculated once per test session)
+_cached_calibration: tuple[float, dict[str, float]] | None = None
 
 
 def get_machine_performance_ratio() -> float:
     """Get cached machine performance ratio, calculating if needed."""
-    global _cached_performance_ratio
-    if _cached_performance_ratio is None:
-        _cached_performance_ratio, _ = calibrate_machine_performance()
-    return _cached_performance_ratio
+    global _cached_calibration
+    if _cached_calibration is None:
+        _cached_calibration = calibrate_machine_performance()
+    return _cached_calibration[0]
+
+
+def get_calibration_ratio(name: str) -> float:
+    """Get one named calibration ratio relative to the reference baseline."""
+    global _cached_calibration
+    if _cached_calibration is None:
+        _cached_calibration = calibrate_machine_performance()
+
+    _, measurements = _cached_calibration
+    measurement = measurements[name]
+    return REFERENCE_BASELINES[name] / measurement
 
 
 if __name__ == "__main__":

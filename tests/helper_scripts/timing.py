@@ -136,11 +136,28 @@ def retry_on_exception(
 
 
 # Performance threshold configuration
+def _machine_performance_ratio(calibration_name: str | None = None) -> float:
+    """Return the calibrated machine performance ratio, or neutral on failure."""
+
+    try:
+        from tests.performance_calibration import (
+            get_calibration_ratio,
+            get_machine_performance_ratio,
+        )
+
+        if calibration_name is not None:
+            return get_calibration_ratio(calibration_name)
+        return get_machine_performance_ratio()
+    except Exception:
+        return 1.0
+
+
 def get_performance_threshold(
     name: str,
     default: float,
     *,
     scale_for_slow_runner: bool = False,
+    calibration_name: str | None = None,
 ) -> float:
     """Get performance threshold from environment or default.
 
@@ -150,6 +167,8 @@ def get_performance_threshold(
         scale_for_slow_runner: Relax the default threshold using the same
             machine calibration model as the performance suite. Environment
             overrides remain exact.
+        calibration_name: Optional named calibration ratio to use when the
+            threshold maps to a specific workload.
 
     Returns:
         Threshold value
@@ -167,12 +186,7 @@ def get_performance_threshold(
         except ValueError:
             pass
     if scale_for_slow_runner:
-        try:
-            from tests.performance_calibration import get_machine_performance_ratio
-
-            performance_ratio = get_machine_performance_ratio()
-        except Exception:
-            performance_ratio = 1.0
+        performance_ratio = _machine_performance_ratio(calibration_name)
         effective_performance = min(performance_ratio, 1.0)
         if effective_performance > 0:
             return default / effective_performance
