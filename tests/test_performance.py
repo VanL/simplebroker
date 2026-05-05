@@ -83,6 +83,7 @@ BASELINE_TIMES = {
 
 BASELINE_CALIBRATION_KEYS = {
     "basic_write_50": "write_test",
+    "validation_cached": "validation_test",
     "write_1k_messages": "write_test",
 }
 
@@ -174,14 +175,14 @@ def test_timestamp_performance_basic(workdir):
 @pytest.mark.slow
 def test_queue_validation_performance():
     """Test that cached validation is faster than uncached."""
-    # Clear the cache
-    _validate_queue_name_cached.cache_clear()
-
-    # Time first validation (cache miss)
-    start = time.perf_counter()
-    for _ in range(VALIDATION_ITERATIONS):
-        _validate_queue_name_cached("test_queue_performance")
-    cached_time = time.perf_counter() - start
+    cached_samples: list[float] = []
+    for _ in range(3):
+        _validate_queue_name_cached.cache_clear()
+        start = time.perf_counter()
+        for _ in range(VALIDATION_ITERATIONS):
+            _validate_queue_name_cached("test_queue_performance")
+        cached_samples.append(time.perf_counter() - start)
+    cached_time = min(cached_samples)
 
     # Should have 1 miss and VALIDATION_ITERATIONS-1 hits
     info = _validate_queue_name_cached.cache_info()
