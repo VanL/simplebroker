@@ -9,6 +9,7 @@ import threading
 import weakref
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Literal, Union, cast
 
 from ._backend_plugins import ActivityWaiter, BackendAwareRunner, get_backend_plugin
@@ -16,11 +17,24 @@ from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_c
 from ._runner import SQLRunner
 from ._targets import ResolvedTarget
 from .db import BrokerCore, BrokerDB, DBConnection
+from .project import target_for_directory
 
 logger = logging.getLogger(__name__)
 
 # Load configuration once at module level
 _config = load_config()
+
+
+def _default_target_from_config(config: dict[str, Any]) -> ResolvedTarget:
+    """Resolve the implicit Queue target from caller-provided configuration."""
+
+    root = (
+        Path(str(config["BROKER_DEFAULT_DB_LOCATION"]))
+        if config.get("BROKER_DEFAULT_DB_LOCATION")
+        and config.get("BROKER_BACKEND", "sqlite") == "sqlite"
+        else Path.cwd()
+    )
+    return target_for_directory(root, config=config)
 
 
 class Queue:
@@ -30,12 +44,16 @@ class Queue:
     By default, uses ephemeral connections (created per operation) for
     maximum safety and minimal lock contention. Set persistent=True for
     performance-critical scenarios where connection overhead matters.
+    Persistent Queue handles for the same resolved backend target share
+    process-local backend session state. Backends may still create separate
+    physical connections per thread or per pool checkout.
 
     Args:
         name: The name of the queue
-        db_path: Path to the SQLite database (uses DEFAULT_DB_NAME)
-        persistent: If True, maintain a persistent connection.
-                   If False (default), use ephemeral connections.
+        db_path: Path or target for the broker database. ``None`` or ``""``
+            resolves the target from configuration.
+        persistent: If True, use process-local persistent session state for the
+            resolved target. If False (default), use ephemeral connections.
         runner: Optional custom SQLRunner implementation for extensions
 
     Examples:
@@ -71,16 +89,17 @@ class Queue:
         self,
         name: str,
         *,
-        db_path: str | ResolvedTarget = DEFAULT_DB_NAME,
+        db_path: str | ResolvedTarget | None = None,
         persistent: bool = False,
         runner: SQLRunner | None = None,
-        config: dict[str, Any] | None = _config,
+        config: dict[str, Any] | None = None,
     ):
         """Initialize a Queue instance.
 
         Args:
             name: The name of the queue
-            db_path: Path to the SQLite database (uses DEFAULT_DB_NAME)
+            db_path: Path or target for the broker database. ``None`` or ``""``
+                resolves the target from configuration.
             persistent: If True, maintain a persistent connection.
                        If False (default), use ephemeral connections.
             runner: Optional custom SQLRunner implementation for extensions.
@@ -88,17 +107,30 @@ class Queue:
                     lifetime of this Queue object.
         """
         self.name = name
-        self._db_path = db_path
         self._persistent = persistent
         self._runner = runner
-        self._config = _config if config is None else resolve_config(config)
+        self._config = resolve_config(config)
+        self._uses_config_default_target = db_path is None or db_path == ""
+        if self._uses_config_default_target:
+            resolved_db_path: str | ResolvedTarget = _default_target_from_config(
+                self._config
+            )
+        else:
+            assert db_path is not None
+            resolved_db_path = db_path
+        self._db_path: str | ResolvedTarget = resolved_db_path
         self._stop_event: threading.Event | None = None
 
         # Create DBConnection for persistent queues and injected-runner queues.
         # The built-in no-runner path keeps its current "get in, get out"
         # semantics only when persistent=False.
         if persistent or runner is not None:
-            self.conn = DBConnection(self._db_path, runner, config=self._config)
+            self.conn = DBConnection(
+                self._db_path,
+                runner,
+                config=self._config,
+                share_in_process=persistent and runner is None,
+            )
         else:
             self.conn = None
 
@@ -119,9 +151,9 @@ class Queue:
     def get_connection(self) -> Iterator[BrokerCore | BrokerDB]:
         """Get connection for operations - handles both persistent and ephemeral modes.
 
-        This context manager consolidates the connection logic. It yields either the
-        shared queue-lifetime connection object or creates a new built-in SQLite
-        connection on the fly for the no-runner ephemeral path.
+        This context manager consolidates the connection logic. It yields a
+        persistent queue connection/session lease when available, or creates a
+        new connection on the fly for the no-runner ephemeral path.
 
         Yields:
             BrokerCore or BrokerDB: Connection object for database operations
@@ -129,7 +161,10 @@ class Queue:
         if self.conn is not None:
             assert self.conn is not None  # Type guard for mypy
             self.conn.set_stop_event(self._stop_event)
-            yield self.conn.get_connection()
+            try:
+                yield self.conn.get_connection()
+            finally:
+                self.conn.release_connection_after_use()
         else:
             with DBConnection(self._db_path, self._runner, config=self._config) as conn:
                 conn.set_stop_event(self._stop_event)
@@ -808,7 +843,7 @@ class Queue:
             if isinstance(self._db_path, ResolvedTarget)
             else self._db_path
         )
-        if db_repr != DEFAULT_DB_NAME:
+        if not self._uses_config_default_target and db_repr != DEFAULT_DB_NAME:
             parts.append(f"db_path='{db_repr}'")
         if self._persistent:
             parts.append("persistent=True")
@@ -980,9 +1015,10 @@ class Queue:
                 yield result  # type: ignore[misc]
 
     def cleanup_connections(self) -> None:
-        """Clean up all database connections.
+        """Clean up active database handles without releasing the queue lease.
 
-        Delegates to DBConnection for proper cleanup.
+        Watchers use this during stop/error recovery. The queue remains usable
+        afterward; call close() to release persistent session ownership.
         """
         if self.conn:
             self.conn.cleanup()
@@ -997,7 +1033,8 @@ class Queue:
         """Close the queue and release resources.
 
         This is called automatically when using the queue as a context manager.
-        In ephemeral mode, this is a no-op as connections are closed after each operation.
+        In ephemeral mode, this is a no-op as connections are closed after each
+        operation.
         """
         if self._activity_waiter is not None:
             self._activity_waiter.close()
@@ -1005,7 +1042,7 @@ class Queue:
         if self.conn:
             if hasattr(self, "_finalizer"):
                 self._finalizer.detach()
-            self.conn.cleanup()
+            self.conn.close()
 
     # ========== Persistent Mode Helpers ==========
 
@@ -1022,7 +1059,7 @@ class Queue:
                 config = _config
             try:
                 if conn:
-                    conn.cleanup()
+                    conn.close()
                 # Note: watcher_conn cleanup happens in cleanup_connections
             except Exception as e:
                 if config.get("BROKER_LOGGING_ENABLED", True):

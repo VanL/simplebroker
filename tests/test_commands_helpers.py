@@ -57,7 +57,7 @@ class TestGetMessageContent:
         monkeypatch.setattr(
             commands.sys, "stdin", types.SimpleNamespace(isatty=lambda: False)
         )
-        monkeypatch.setattr(commands, "_read_from_stdin", lambda: "from stdin")
+        monkeypatch.setattr(commands, "_read_from_stdin", lambda *_args: "from stdin")
 
         assert _get_message_content(None) == "from stdin"
 
@@ -70,6 +70,10 @@ class TestGetMessageContent:
 
         with pytest.raises(ValueError, match="message is required"):
             _get_message_content(None)
+
+    def test_uses_configured_message_size_limit(self) -> None:
+        with pytest.raises(ValueError, match="maximum size of 3 bytes"):
+            _get_message_content("toolong", config={"BROKER_MAX_MESSAGE_SIZE": 3})
 
 
 class TestProcessQueueFetch:

@@ -46,7 +46,7 @@ def test_ensure_core_lazy_initialization():
 
 
 def test_cleanup_finalizer_function():
-    """Test the cleanup function in _install_finalizer."""
+    """Test the finalizer releases the queue connection."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
 
@@ -61,22 +61,22 @@ def test_cleanup_finalizer_function():
             core = queue.conn.get_core()
             assert core is not None
 
-            # Mock the cleanup method on the connection
-            original_cleanup = queue.conn.cleanup
-            queue.conn.cleanup = Mock(side_effect=original_cleanup)
+            # Mock the close method on the connection
+            original_close = queue.conn.close
+            queue.conn.close = Mock(side_effect=original_close)
 
             # Call the finalizer function directly (simulating object destruction)
             queue._finalizer()
 
-            # Verify cleanup was called
-            queue.conn.cleanup.assert_called_once()
+            # Verify release was called
+            queue.conn.close.assert_called_once()
         finally:
             # Force garbage collection for Windows
             ensure_windows_cleanup()
 
 
 def test_cleanup_finalizer_with_exception():
-    """Test that cleanup handles exceptions gracefully."""
+    """Test that finalizer release handles exceptions gracefully."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
 
@@ -88,8 +88,8 @@ def test_cleanup_finalizer_with_exception():
             config={"BROKER_LOGGING_ENABLED": True},
         )
 
-        # Mock the connection cleanup to raise an exception
-        queue.conn.cleanup = Mock(side_effect=Exception("Test exception"))
+        # Mock the connection close to raise an exception
+        queue.conn.close = Mock(side_effect=Exception("Test exception"))
 
         # Patch the logger to verify warning is logged
         with patch("simplebroker.sbqueue.logger") as mock_logger:

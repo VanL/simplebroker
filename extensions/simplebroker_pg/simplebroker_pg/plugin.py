@@ -606,6 +606,13 @@ class PostgresBackendPlugin:
     def prepare_broadcast(self, runner: SQLRunner) -> None:
         runner.run(pg_sql.LOCK_BROADCAST_SCOPE)
 
+    def prepare_alias_mutation(self, runner: SQLRunner) -> None:
+        schema_name = cast(_SchemaAwareRunner, runner).schema
+        runner.run(
+            "SELECT pg_advisory_xact_lock(?)",
+            (stable_lock_key("aliases", schema_name),),
+        )
+
     def vacuum(
         self,
         runner: SQLRunner,

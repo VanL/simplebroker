@@ -48,8 +48,12 @@ runner = PostgresRunner(
 )
 
 queue = Queue("jobs", runner=runner, persistent=True)
-queue.write("hello")
-print(queue.read())
+try:
+    queue.write("hello")
+    print(queue.read())
+finally:
+    queue.close()
+    runner.close()
 ```
 
 ## CLI Usage

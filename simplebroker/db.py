@@ -14,6 +14,7 @@ from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
 from typing import (
+    TYPE_CHECKING,
     Any,
     Literal,
     TypeVar,
@@ -25,10 +26,13 @@ from ._backend_plugins import (
     get_backend_plugin,
     resolve_runner_backend_plugin,
 )
+from ._broker_session import (
+    acquire_process_broker_session,
+    release_process_broker_session,
+)
 from ._constants import (
     ALIAS_PREFIX,
     LOGICAL_COUNTER_BITS,
-    MAX_MESSAGE_SIZE,
     MAX_QUEUE_NAME_LENGTH,
     PEEK_BATCH_SIZE,
     SIMPLEBROKER_MAGIC,
@@ -40,10 +44,14 @@ from ._exceptions import (
     OperationalError,
 )
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner
+from ._runner_lifecycle import close_owned_runner
 from ._sql import RetrieveQuerySpec
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
 from .helpers import _execute_with_retry, interruptible_sleep
+
+if TYPE_CHECKING:
+    from ._broker_session import _ProcessBrokerSession, _SessionKey
 
 # Type variable for generic return types
 T = TypeVar("T")
@@ -68,16 +76,6 @@ def _resolve_backend_plugin(
 def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Overlay caller-provided config values onto the default config snapshot."""
     return resolve_config(config)
-
-
-def _close_owned_runner(runner: SQLRunner) -> None:
-    """Close an owned runner, preferring a full shutdown when supported."""
-
-    shutdown = getattr(runner, "shutdown", None)
-    if callable(shutdown):
-        shutdown()
-        return
-    runner.close()
 
 
 class _BorrowedRunner:
@@ -170,10 +168,10 @@ MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1
 class DBConnection:
     """Robust database connection manager with retry logic and thread-local storage.
 
-    This class encapsulates all the connection management complexity, providing
-    a consistent interface for both persistent and ephemeral connections.
-    It uses the same robust path for all modes - the only difference is when
-    resources are released.
+    This class encapsulates connection management for private and shared queue
+    paths. In process-shared mode, it is a lease on process-local backend
+    session state for one resolved target. Backends may still create separate
+    physical connections per thread or pool checkout.
     """
 
     def __init__(
@@ -182,14 +180,18 @@ class DBConnection:
         runner: SQLRunner | None = None,
         *,
         config: dict[str, Any] = _config,
+        share_in_process: bool = False,
     ):
         """Initialize the connection manager.
 
         Args:
-            db_path: Path to the SQLite database
+            db_path: Path or resolved backend target
             runner: Optional custom SQLRunner implementation
+            share_in_process: If True and runner is None, use a process-local
+                backend session shared with other same-target persistent queues.
         """
         self._config = _merge_config(config)
+        self._db_path_arg = db_path
         self._resolved_target = db_path if isinstance(db_path, ResolvedTarget) else None
         self.db_path = (
             self._resolved_target.target
@@ -197,6 +199,7 @@ class DBConnection:
             else str(db_path)
         )
         self._external_runner = runner is not None
+        self._share_in_process = bool(share_in_process and runner is None)
         self._runner: SQLRunner | None = (
             _BorrowedRunner(runner) if runner is not None else None
         )
@@ -212,10 +215,19 @@ class DBConnection:
         self._core = None
         self._thread_local = threading.local()
         self._stop_event = threading.Event()
+        self._shared_key: _SessionKey | None = None
+        self._shared_session: _ProcessBrokerSession | None = None
+        self._shared_released = False
 
         # Connection registry for tracking all created connections
         self._connection_registry: weakref.WeakSet[Any] = weakref.WeakSet()
         self._registry_lock = threading.Lock()
+
+        if self._share_in_process:
+            self._shared_key, self._shared_session = acquire_process_broker_session(
+                self._db_path_arg,
+                config=self._config,
+            )
 
         # If we have an external runner, create a borrowed core immediately.
         if self._runner:
@@ -231,7 +243,7 @@ class DBConnection:
             self._resolved_target is None
             or self._resolved_target.backend_name == "sqlite"
         ):
-            connection = BrokerDB(self.db_path)
+            connection = BrokerDB(self.db_path, config=self._config)
             connection.set_stop_event(self._stop_event)
             return connection
 
@@ -262,6 +274,9 @@ class DBConnection:
         Raises:
             RuntimeError: If connection cannot be established after retries
         """
+        if self._share_in_process:
+            return self._get_shared_connection(config=config)
+
         if self._external_runner:
             core = self.get_core()
             core.set_stop_event(self._stop_event)
@@ -306,6 +321,44 @@ class DBConnection:
 
         raise RuntimeError("Failed to establish database connection")
 
+    def _ensure_shared_session(self) -> "_ProcessBrokerSession":
+        if self._shared_session is None or self._shared_released:
+            self._shared_key, self._shared_session = acquire_process_broker_session(
+                self._db_path_arg,
+                config=self._config,
+            )
+            self._shared_released = False
+        assert self._shared_session is not None
+        return self._shared_session
+
+    def _get_shared_connection(
+        self, *, config: dict[str, Any] = _config
+    ) -> "BrokerCore | BrokerDB":
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                session = self._ensure_shared_session()
+                return session.get_connection(self._stop_event)
+            except Exception as e:
+                if attempt >= max_retries - 1:
+                    if config["BROKER_LOGGING_ENABLED"]:
+                        logger.exception(
+                            f"Failed to get database connection after {max_retries} retries: {e}"
+                        )
+                    raise RuntimeError(f"Failed to get database connection: {e}") from e
+
+                wait_time = 2 ** (attempt + 1)
+                if config["BROKER_LOGGING_ENABLED"]:
+                    logger.debug(
+                        f"Database connection error (retry {attempt + 1}/{max_retries}): {e}. "
+                        f"Retrying in {wait_time} seconds..."
+                    )
+
+                if not interruptible_sleep(wait_time, self._stop_event):
+                    raise RuntimeError("Connection interrupted") from None
+
+        raise RuntimeError("Failed to establish database connection")
+
     def get_core(self) -> "BrokerCore":
         """Get or create the BrokerCore instance.
 
@@ -314,12 +367,15 @@ class DBConnection:
         Returns:
             BrokerCore instance
         """
+        if self._share_in_process:
+            return self.get_connection()
+
         if self._core is None:
             if (
                 self._resolved_target is None
                 or self._resolved_target.backend_name == "sqlite"
             ):
-                self._core = BrokerDB(self.db_path)
+                self._core = BrokerDB(self.db_path, config=self._config)
             else:
                 if self._runner is None:
                     self._runner = self._backend_plugin.create_runner(
@@ -336,11 +392,17 @@ class DBConnection:
         return self._core
 
     def cleanup(self, *, config: dict[str, Any] = _config) -> None:
-        """Clean up all connections and resources.
+        """Clean up active handles without releasing a shared session lease.
 
-        Closes thread-local connections and releases resources.
-        Safe to call multiple times.
+        For private connections this releases owned resources. For process-shared
+        connections this only recycles the current thread's active handle; close()
+        releases the queue/session lease.
         """
+        if self._share_in_process:
+            if self._shared_session is not None and not self._shared_released:
+                self._shared_session.cleanup_current_thread()
+            return
+
         current_thread_connection = getattr(self._thread_local, "db", None)
 
         # Clean up ALL registered connections (cross-thread cleanup)
@@ -393,10 +455,20 @@ class DBConnection:
 
         if owned_runner is not None:
             try:
-                _close_owned_runner(owned_runner)
+                close_owned_runner(owned_runner)
             except Exception as e:
                 if config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing runner: {e}")
+
+    def release_connection_after_use(self) -> None:
+        """Release transient pooled resources after one queue operation."""
+
+        if (
+            self._share_in_process
+            and self._shared_session is not None
+            and not self._shared_released
+        ):
+            self._shared_session.release_current_thread_connection()
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Set the stop event used for interruptible retries."""
@@ -415,18 +487,31 @@ class DBConnection:
         if self._core is not None:
             self._core.set_stop_event(self._stop_event)
 
+    def close(self) -> None:
+        """Release this connection manager's owned resources or shared lease."""
+
+        if self._share_in_process:
+            if self._shared_key is not None and not self._shared_released:
+                release_process_broker_session(self._shared_key)
+                self._shared_released = True
+                self._shared_session = None
+                self._shared_key = None
+            return
+
+        self.cleanup()
+
     def __enter__(self) -> "DBConnection":
         """Enter context manager."""
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Exit context manager and cleanup."""
-        self.cleanup()
+        """Exit context manager and release resources."""
+        self.close()
 
     def __del__(self) -> None:
         """Destructor ensures cleanup."""
         try:
-            self.cleanup()
+            self.close()
         except Exception:
             pass  # Ignore errors in destructor
 
@@ -473,6 +558,8 @@ class BrokerCore:
             runner: SQL runner instance for database operations
         """
         config = _merge_config(config)
+        self._config = config
+        self._max_message_size = int(config["BROKER_MAX_MESSAGE_SIZE"])
 
         # Re-entrant lock allows same-thread read-only re-entry from generator
         # callbacks. Mutating re-entry during an open at-least-once batch is
@@ -699,6 +786,14 @@ class BrokerCore:
         logical_counter = ts & ((1 << 12) - 1)
         return physical_us, logical_counter
 
+    def _validate_message_size(self, message: str) -> None:
+        message_size = len(message.encode("utf-8"))
+        if message_size > self._max_message_size:
+            raise ValueError(
+                f"Message size ({message_size} bytes) exceeds maximum allowed size "
+                f"({self._max_message_size} bytes). Adjust BROKER_MAX_MESSAGE_SIZE if needed."
+            )
+
     def write(self, queue: str, message: str) -> None:
         """Write a message to a queue with resilience against timestamp conflicts.
 
@@ -715,13 +810,7 @@ class BrokerCore:
         self._validate_queue_name(queue)
         self._assert_no_reentrant_mutation_during_batch("write")
 
-        # Check message size
-        message_size = len(message.encode("utf-8"))
-        if message_size > MAX_MESSAGE_SIZE:
-            raise ValueError(
-                f"Message size ({message_size} bytes) exceeds maximum allowed size "
-                f"({MAX_MESSAGE_SIZE} bytes). Adjust BROKER_MAX_MESSAGE_SIZE if needed."
-            )
+        self._validate_message_size(message)
 
         # Constants
         MAX_TS_RETRIES = 3
@@ -1785,6 +1874,7 @@ class BrokerCore:
         """
         self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("broadcast")
+        self._validate_message_size(message)
 
         # Variable to store the count
         queue_count = 0
@@ -2028,6 +2118,27 @@ class BrokerCore:
         if not target:
             raise ValueError("Alias target cannot be empty")
 
+    def _validate_alias_invariants_locked(self, alias: str, target: str) -> None:
+        """Validate alias graph invariants against freshly loaded state."""
+        if alias in self._alias_cache:
+            raise ValueError(f"Alias '{alias}' already exists")
+
+        if target in self._alias_cache:
+            raise ValueError("Cannot target another alias")
+
+        visited = set()
+        to_visit = [target]
+        while to_visit:
+            current = to_visit.pop()
+            if current == alias:
+                raise ValueError("Alias cycle detected")
+            if current in visited:
+                continue
+            visited.add(current)
+            next_target = self._alias_cache.get(current)
+            if next_target is not None:
+                to_visit.append(next_target)
+
     def add_alias(self, alias: str, target: str) -> None:
         self._assert_no_reentrant_mutation_during_batch("add_alias")
         should_warn = self.queue_exists_and_has_messages(alias)
@@ -2035,41 +2146,26 @@ class BrokerCore:
         with self._lock:
             self._validate_alias_target(alias, target)
 
-            if self._alias_cache_version < 0:
-                self._load_aliases_locked()
-
-            if alias in self._alias_cache:
-                raise ValueError(f"Alias '{alias}' already exists")
-
-            if target in self._alias_cache:
-                raise ValueError("Cannot target another alias")
-
-            if should_warn:
-                warnings.warn(
-                    (
-                        f"Queue '{alias}' already exists with messages. "
-                        f"The alias @{alias} will redirect to '{target}' while "
-                        f"the queue {alias} remains accessible directly."
-                    ),
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-
-            visited = set()
-            to_visit = [target]
-            while to_visit:
-                current = to_visit.pop()
-                if current == alias:
-                    raise ValueError("Alias cycle detected")
-                if current in visited:
-                    continue
-                visited.add(current)
-                next_target = self._alias_cache.get(current)
-                if next_target is not None:
-                    to_visit.append(next_target)
-
             self._runner.begin_immediate()
             try:
+                prepare_alias_mutation = getattr(
+                    self._backend_plugin, "prepare_alias_mutation", None
+                )
+                if callable(prepare_alias_mutation):
+                    prepare_alias_mutation(self._runner)
+                self._load_aliases_locked()
+                self._validate_alias_invariants_locked(alias, target)
+
+                if should_warn:
+                    warnings.warn(
+                        (
+                            f"Queue '{alias}' already exists with messages. "
+                            f"The alias @{alias} will redirect to '{target}' while "
+                            f"the queue {alias} remains accessible directly."
+                        ),
+                        RuntimeWarning,
+                        stacklevel=3,
+                    )
                 self._runner.run(self._sql.INSERT_ALIAS, (alias, target))
                 self._increment_alias_version_locked()
                 self._load_aliases_locked()
@@ -2106,7 +2202,13 @@ class BrokerCore:
             # Clean up any marker files (especially for mocked paths in tests)
             if hasattr(self._runner, "cleanup_marker_files"):
                 self._runner.cleanup_marker_files()
-            self._runner.close()
+            release_thread_connection = getattr(
+                self._runner, "release_thread_connection", None
+            )
+            if callable(release_thread_connection):
+                release_thread_connection()
+            else:
+                self._runner.close()
             # Force garbage collection to release any lingering references on Windows
             gc.collect()
 
@@ -2116,7 +2218,7 @@ class BrokerCore:
             # Reuse close() for local handle cleanup before taking down the runner.
             if hasattr(self._runner, "cleanup_marker_files"):
                 self._runner.cleanup_marker_files()
-            _close_owned_runner(self._runner)
+            close_owned_runner(self._runner)
             gc.collect()
 
     def __enter__(self) -> "BrokerCore":
@@ -2171,7 +2273,7 @@ class BrokerDB(BrokerCore):
     its own BrokerDB instance.
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, *, config: dict[str, Any] = _config):
         """Initialize database connection and create schema.
 
         Args:
@@ -2196,7 +2298,7 @@ class BrokerDB(BrokerCore):
         self._runner = SQLiteRunner(str(self.db_path))
 
         # Initialize parent (will create schema)
-        super().__init__(self._runner)
+        super().__init__(self._runner, config=config)
 
         # Store conn reference internally for compatibility
         self._conn = self._runner._conn
@@ -2318,54 +2420,7 @@ class BrokerDB(BrokerCore):
             raise ValueError("Alias target cannot be empty")
 
     def add_alias(self, alias: str, target: str) -> None:
-        self._assert_no_reentrant_mutation_during_batch("add_alias")
-        should_warn = self.queue_exists_and_has_messages(alias)
-
-        with self._lock:
-            self._validate_alias_target(alias, target)
-
-            if self._alias_cache_version < 0:
-                self._load_aliases_locked()
-
-            if alias in self._alias_cache:
-                raise ValueError(f"Alias '{alias}' already exists")
-
-            if target in self._alias_cache:
-                raise ValueError("Cannot target another alias")
-
-            if should_warn:
-                warnings.warn(
-                    (
-                        f"Queue '{alias}' already exists with messages. "
-                        f"The alias @{alias} will redirect to '{target}' while "
-                        f"the queue {alias} remains accessible directly."
-                    ),
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-
-            visited = set()
-            to_visit = [target]
-            while to_visit:
-                current = to_visit.pop()
-                if current == alias:
-                    raise ValueError("Alias cycle detected")
-                if current in visited:
-                    continue
-                visited.add(current)
-                next_target = self._alias_cache.get(current)
-                if next_target is not None:
-                    to_visit.append(next_target)
-
-            self._runner.begin_immediate()
-            try:
-                self._runner.run(self._sql.INSERT_ALIAS, (alias, target))
-                self._increment_alias_version_locked()
-                self._load_aliases_locked()
-                self._runner.commit()
-            except Exception:
-                self._runner.rollback()
-                raise
+        super().add_alias(alias, target)
 
     def remove_alias(self, alias: str) -> None:
         self._assert_no_reentrant_mutation_during_batch("remove_alias")

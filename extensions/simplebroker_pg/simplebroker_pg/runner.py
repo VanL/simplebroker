@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Any, cast
 
@@ -153,11 +153,10 @@ class PostgresRunner:
 
         def configure(conn: psycopg.Connection[Any]) -> None:
             conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(f"SET search_path TO {quote_ident(self._schema)}, public")
 
-        pool_dsn = conninfo.make_conninfo(
-            self._dsn,
-            options=f"-csearch_path={self._schema},public",
-        )
+        pool_dsn = conninfo.make_conninfo(self._dsn)
 
         pool = ConnectionPool(
             pool_dsn,
@@ -256,15 +255,13 @@ class PostgresRunner:
         except psycopg.Error as exc:
             raise _translate_error(exc) from exc
 
-    def close(self) -> None:
-        """Return the current thread's connection to the pool.
-
-        This does NOT shut down the pool — the runner remains usable by
-        other threads or by later calls on the same thread.  Call
-        :meth:`shutdown` to permanently close the pool and all its
-        connections.
-        """
+    def release_thread_connection(self) -> None:
+        """Return the current thread's connection to the pool."""
         self._return_thread_conn()
+
+    def close(self) -> None:
+        """Permanently close the connection pool and all connections."""
+        self.shutdown()
 
     def shutdown(self) -> None:
         """Permanently close the connection pool and all connections."""
@@ -283,6 +280,19 @@ class PostgresRunner:
     def setup(self, phase: SetupPhase) -> None:
         with self._setup_lock:
             self._completed_phases.add(phase)
+
+    def run_exclusive_setup(
+        self,
+        phase: SetupPhase,
+        operation: Callable[[], None],
+    ) -> bool:
+        """Run a setup operation once for this runner instance."""
+        with self._setup_lock:
+            if phase in self._completed_phases:
+                return False
+            operation()
+            self._completed_phases.add(phase)
+            return True
 
     def is_setup_complete(self, phase: SetupPhase) -> bool:
         return phase in self._completed_phases

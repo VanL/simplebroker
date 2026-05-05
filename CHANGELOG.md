@@ -5,6 +5,13 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-05-05
+### Added
+- Added an internal phase-lock coordinator that serializes ordered setup phases with advisory lock files, durable xattr completion hints, and a status-file fallback for filesystems without usable xattrs.
+
+### Changed
+- Persistent queue handles for the same resolved backend target now share process-local backend session state, preventing backend runner or pool allocation from scaling with same-process queue count while preserving thread and process isolation.
+
 ## [3.2.0] - 2026-05-01
 ### Added
 - Added the repo-local `bin/release.py` helper for core and `simplebroker-pg` releases, including version validation, release-state checks, preflight commands, and tag planning.

@@ -105,6 +105,25 @@ def test_alias_persistent_cache_refresh(broker_target: ResolvedTarget) -> None:
         db1.close()
 
 
+def test_alias_add_revalidates_against_live_state(
+    broker_target: ResolvedTarget,
+) -> None:
+    db1 = make_broker(broker_target)
+    db2 = make_broker(broker_target)
+    try:
+        assert db1.resolve_alias("a") is None
+
+        db2.add_alias("b", "a")
+
+        with pytest.raises(ValueError):
+            db1.add_alias("a", "b")
+
+        assert dict(db1.list_aliases()) == {"b": "a"}
+    finally:
+        db1.close()
+        db2.close()
+
+
 def test_alias_add_warns_on_existing_queue(broker) -> None:
     broker.write("existing", "message")
     with pytest.warns(RuntimeWarning, match=r"Queue 'existing' already exists"):

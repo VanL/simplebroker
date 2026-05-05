@@ -7,14 +7,15 @@ import warnings
 from collections.abc import Callable, Iterator
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from ._constants import (
     ALIAS_PREFIX,
     EXIT_ERROR,
     EXIT_QUEUE_EMPTY,
     EXIT_SUCCESS,
-    MAX_MESSAGE_SIZE,
+    load_config,
+    resolve_config,
 )
 from ._exceptions import TimestampError
 from ._targets import ResolvedTarget
@@ -25,6 +26,7 @@ from .sbqueue import Queue
 from .watcher import QueueMoveWatcher, QueueWatcher
 
 DBTarget = str | ResolvedTarget
+_config = load_config()
 
 
 def _target_string(db_target: DBTarget) -> str:
@@ -143,7 +145,7 @@ def _validate_timestamp(timestamp_str: str) -> int:
         raise ValueError(str(e)) from None
 
 
-def _read_from_stdin(max_bytes: int = MAX_MESSAGE_SIZE) -> str:
+def _read_from_stdin(max_bytes: int | None = None) -> str:
     """Read from stdin with streaming size enforcement.
 
     Prevents memory exhaustion by checking size limits during read,
@@ -158,6 +160,9 @@ def _read_from_stdin(max_bytes: int = MAX_MESSAGE_SIZE) -> str:
     Raises:
         ValueError: If input exceeds max_bytes
     """
+    if max_bytes is None:
+        max_bytes = int(_config["BROKER_MAX_MESSAGE_SIZE"])
+
     chunks = []
     total_bytes = 0
 
@@ -177,7 +182,9 @@ def _read_from_stdin(max_bytes: int = MAX_MESSAGE_SIZE) -> str:
     return b"".join(chunks).decode("utf-8")
 
 
-def _get_message_content(message: str | None) -> str:
+def _get_message_content(
+    message: str | None, *, config: dict[str, Any] = _config
+) -> str:
     """Get message content from argument or stdin, with size validation.
 
     Args:
@@ -189,19 +196,22 @@ def _get_message_content(message: str | None) -> str:
     Raises:
         ValueError: If message exceeds size limit or no interactive message was given
     """
+    resolved_config = resolve_config(config)
+    max_message_size = int(resolved_config["BROKER_MAX_MESSAGE_SIZE"])
+
     if message == "-":
-        return _read_from_stdin()
+        return _read_from_stdin(max_message_size)
     if message is None:
         if sys.stdin.isatty():
             raise ValueError(
                 "message is required when stdin is a terminal; pass a message or pipe input"
             )
-        return _read_from_stdin()
+        return _read_from_stdin(max_message_size)
 
     # Check message size
     message_bytes = len(message.encode("utf-8"))
-    if message_bytes > MAX_MESSAGE_SIZE:
-        raise ValueError(f"Message exceeds maximum size of {MAX_MESSAGE_SIZE} bytes")
+    if message_bytes > max_message_size:
+        raise ValueError(f"Message exceeds maximum size of {max_message_size} bytes")
 
     return message
 
@@ -349,7 +359,13 @@ def _process_queue_fetch(
     return EXIT_SUCCESS
 
 
-def cmd_write(db_path: DBTarget, queue_name: str, message: str | None) -> int:
+def cmd_write(
+    db_path: DBTarget,
+    queue_name: str,
+    message: str | None,
+    *,
+    config: dict[str, Any] = _config,
+) -> int:
     """Write message to queue using Queue API.
 
     Args:
@@ -360,9 +376,10 @@ def cmd_write(db_path: DBTarget, queue_name: str, message: str | None) -> int:
     Returns:
         Exit code
     """
-    content = _get_message_content(message)
+    resolved_config = resolve_config(config)
+    content = _get_message_content(message, config=resolved_config)
     canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
-    with Queue(canonical_queue, db_path=db_path) as queue:
+    with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
         queue.write(content)
     return EXIT_SUCCESS
 
@@ -702,7 +719,11 @@ def cmd_move(
 
 
 def cmd_broadcast(
-    db_path: DBTarget, message: str | None, pattern: str | None = None
+    db_path: DBTarget,
+    message: str | None,
+    pattern: str | None = None,
+    *,
+    config: dict[str, Any] = _config,
 ) -> int:
     """Send message to all queues.
 
@@ -714,10 +735,11 @@ def cmd_broadcast(
     Returns:
         Exit code
     """
-    content = _get_message_content(message)
+    resolved_config = resolve_config(config)
+    content = _get_message_content(message, config=resolved_config)
 
     # Broadcast is a cross-queue operation, use DBConnection
-    with DBConnection(db_path) as conn:
+    with DBConnection(db_path, config=resolved_config) as conn:
         db = cast(BrokerDB, conn.get_connection())
         queue_count = db.broadcast(content, pattern=pattern)
 

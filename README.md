@@ -249,7 +249,7 @@ Messages can contain any characters including newlines, control characters, and 
 - **Shell injection risks** - When piping output to shell commands, malicious message content could execute unintended commands
 - **Special characters** - Messages containing newlines or other special characters can break shell pipelines that expect single-line output
 - **Queue names** - Limited to alphanumeric + underscore/hyphen/period (cannot start with hyphen or period)
-- **Message size** - Limited to 10MB
+- **Message size** - Limited to 10MB by default; override with `BROKER_MAX_MESSAGE_SIZE`
 
 **Always use `--json` for safe handling** - see examples below.
 
@@ -1359,7 +1359,7 @@ This optimization is transparent - messages are still delivered exactly once.
 <summary>Security Considerations</summary>
 
 - **Queue names**: Validated (alphanumeric + underscore + hyphen + period only)
-- **Message size**: Limited to 10MB
+- **Message size**: Limited to 10MB by default; override with `BROKER_MAX_MESSAGE_SIZE`
 - **Database files**: Created with 0600 permissions (user-only)
 - **SQL injection**: Prevented via parameterized queries
 - **Message content**: Not validated - can contain any text including shell metacharacters
@@ -1400,7 +1400,23 @@ runner = PostgresRunner(
 )
 
 queue = Queue("jobs", runner=runner, persistent=True)
+try:
+    queue.write("hello")
+finally:
+    queue.close()
+    runner.close()
 ```
+
+When persistent queues resolve their backend from a path or project config, handles
+for the same resolved backend target share process-local backend session state.
+For Postgres this prevents the number of queue handles in one process from
+allocating one runner or pool each. Backends may still create separate physical
+connections per thread or per pool checkout.
+
+An explicitly injected `runner=` remains caller-owned. Reuse the same runner
+object yourself when you want several queues to share an injected backend.
+For `PostgresRunner`, call `runner.close()` or `runner.shutdown()` when you are
+done with the explicitly created runner so its connection pool is closed.
 
 CLI/project usage is selected through a `.broker.toml` file in the project
 root:

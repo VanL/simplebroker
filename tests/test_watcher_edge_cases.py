@@ -115,7 +115,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             # Verify error handler was called
             assert len(errors) == 1
             assert isinstance(errors[0][0], ValueError)
-            assert "exceeds 10MB limit" in str(errors[0][0])
+            assert "byte limit" in str(errors[0][0])
             assert errors[0][1].endswith("...")  # Truncated message
         finally:
             broker.close()

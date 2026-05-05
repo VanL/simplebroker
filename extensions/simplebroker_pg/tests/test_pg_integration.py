@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 from psycopg import conninfo as pg_conninfo
 from simplebroker_pg import PostgresRunner, get_backend_plugin
+from simplebroker_pg.validation import connect
 
 from simplebroker import Queue
 from simplebroker.db import BrokerCore
@@ -92,6 +94,45 @@ def test_postgres_runner_roundtrip() -> None:
         runner.close()
 
 
+def test_postgres_runner_quotes_mixed_case_search_path() -> None:
+    """Mixed-case schemas must remain the active schema for unqualified SQL."""
+    schema = _schema_name("SbTest")
+    dsn = _require_test_dsn()
+    plugin = get_backend_plugin()
+    runner = PostgresRunner(dsn, schema=schema)
+    core: BrokerCore | None = None
+
+    try:
+        core = BrokerCore(runner, backend_plugin=plugin)
+        current_schema = list(runner.run("SELECT current_schema()", fetch=True))[0][0]
+        assert current_schema == schema
+
+        core.write("jobs", "hello")
+        assert core.read("jobs") == "hello"
+
+        with connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = %s
+                    ORDER BY table_name
+                    """,
+                    (schema,),
+                )
+                assert {row[0] for row in cur.fetchall()} >= {
+                    "aliases",
+                    "messages",
+                    "meta",
+                }
+    finally:
+        if core is not None:
+            core.close()
+        runner.close()
+        plugin.cleanup_target(dsn, backend_options={"schema": schema})
+
+
 def test_postgres_runner_skips_schema_ddl_after_bootstrap() -> None:
     """New runners should avoid catalog DDL once broker metadata exists."""
     schema = _schema_name()
@@ -171,6 +212,70 @@ def test_postgres_cli_project_config_roundtrip(tmp_path: Path) -> None:
 
     code, stdout, stderr = _run_cli("--cleanup", cwd=nested, env=env)
     assert code == 0, stderr
+
+
+def test_postgres_project_persistent_queues_share_plugin_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-target persistent Queue handles should allocate one pg runner."""
+    schema = _schema_name()
+    dsn = _require_test_dsn()
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    config_path = project_root / ".broker.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "postgres"',
+                f'target = "{dsn}"',
+                "",
+                "[backend_options]",
+                f'schema = "{schema}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    plugin = get_backend_plugin()
+    original_create_runner = plugin.create_runner
+    create_runner_calls = 0
+    runner_ids: list[int] = []
+
+    def tracked_create_runner(target, *, backend_options=None, config=None):  # type: ignore[no-untyped-def]
+        nonlocal create_runner_calls
+        create_runner_calls += 1
+        runner = original_create_runner(
+            target,
+            backend_options=backend_options,
+            config=config,
+        )
+        runner_ids.append(id(runner))
+        return runner
+
+    monkeypatch.setattr(plugin, "create_runner", tracked_create_runner)
+    monkeypatch.chdir(project_root)
+
+    try:
+        with contextlib.ExitStack() as stack:
+            queues = [
+                stack.enter_context(Queue(name, persistent=True))
+                for name in ("alpha", "beta", "gamma")
+            ]
+            for index, queue in enumerate(queues):
+                queue.write(f"message-{index}")
+            for index, queue in enumerate(queues):
+                assert queue.read() == f"message-{index}"
+    finally:
+        get_backend_plugin().cleanup_target(
+            dsn,
+            backend_options={"schema": schema},
+        )
+
+    assert create_runner_calls == 1
+    assert len(set(runner_ids)) == 1
 
 
 def test_postgres_cli_env_selected_backend_roundtrip(tmp_path: Path) -> None:

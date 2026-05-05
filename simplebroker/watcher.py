@@ -84,8 +84,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 # For Python 3.8 compatibility, we avoid using Self type
 # and use string forward references instead
 from ._constants import (
-    DEFAULT_DB_NAME,
-    MAX_MESSAGE_SIZE,
     MAX_TOTAL_RETRY_TIME,
     load_config,
     resolve_config,
@@ -280,8 +278,9 @@ class BaseWatcher(ABC):
             self._queue_obj = queue
         else:
             resolved_config = resolve_config(config)
-            # Create Queue object with persistent=True by default for watchers
-            db_path: str | ResolvedTarget
+            # Create Queue object with persistent=True by default for watchers.
+            # ``None`` means Queue should resolve the target from config.
+            db_path: str | ResolvedTarget | None
             if db is not None:
                 if isinstance(db, BrokerDB):
                     db_path = str(db.db_path)
@@ -296,8 +295,7 @@ class BaseWatcher(ABC):
                         f"db=broker_core_instance."
                     )
             else:
-                # Use default database
-                db_path = DEFAULT_DB_NAME
+                db_path = None
 
             self._queue_obj = Queue(
                 str(queue), db_path=db_path, persistent=True, config=resolved_config
@@ -823,7 +821,7 @@ class BaseWatcher(ABC):
         """Dispatch a message to the handler with error handling and size validation.
 
         This method provides standardized message dispatch logic including:
-        - Message size validation (10MB limit)
+        - Message size validation (`BROKER_MAX_MESSAGE_SIZE`)
         - Safe handler invocation with error handling
         - Consistent error reporting
 
@@ -836,11 +834,17 @@ class BaseWatcher(ABC):
             If the message exceeds the size limit, it will be truncated for error reporting
             but the original oversized message will be discarded.
         """
-        # Validate message size (10MB limit)
+        resolved_config = resolve_config(config)
+        max_message_size = int(resolved_config["BROKER_MAX_MESSAGE_SIZE"])
+
+        # Validate message size.
         message_size = len(message.encode("utf-8"))
-        if message_size > MAX_MESSAGE_SIZE:
-            error_msg = f"Message size ({message_size} bytes) exceeds {MAX_MESSAGE_SIZE // (1024 * 1024)}MB limit"
-            if config["BROKER_LOGGING_ENABLED"]:
+        if message_size > max_message_size:
+            error_msg = (
+                f"Message size ({message_size} bytes) exceeds "
+                f"{max_message_size} byte limit"
+            )
+            if resolved_config["BROKER_LOGGING_ENABLED"]:
                 logger.error(error_msg)
             # Use error handler if available
             if self._error_handler:
@@ -849,14 +853,14 @@ class BaseWatcher(ABC):
                     message[:1000] + "...",
                     timestamp,
                     self._error_handler,
-                    config=config,
+                    config=resolved_config,
                 )
             return
 
         # Dispatch message using safe handler method if error handler is available
         if self._error_handler:
             self._safe_call_handler(
-                message, timestamp, self._error_handler, config=config
+                message, timestamp, self._error_handler, config=resolved_config
             )
         elif self._handler:
             # Direct call if no error handler (legacy support)
@@ -1313,7 +1317,7 @@ class QueueWatcher(BaseWatcher):
         self._batch_processing = batch_processing
 
         # Two-phase detection configuration
-        self._skip_idle_check = config["BROKER_SKIP_IDLE_CHECK"]
+        self._skip_idle_check = self._config["BROKER_SKIP_IDLE_CHECK"]
 
     def _has_pending_messages(self) -> bool:
         """Fast check if queue has unclaimed messages.
