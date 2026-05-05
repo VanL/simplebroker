@@ -2315,7 +2315,7 @@ class BrokerDB(BrokerCore):
         existing_db = self.db_path.exists()
 
         # Create SQLite runner
-        self._runner = SQLiteRunner(str(self.db_path))
+        self._runner = SQLiteRunner(str(self.db_path), config=config)
 
         # Initialize parent (will create schema)
         super().__init__(self._runner, config=config)

@@ -13,7 +13,7 @@ import os
 import sqlite3
 import sys
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
@@ -27,7 +27,7 @@ else:
     Self = TypeVar("Self", bound="SQLiteRunner")  # type: ignore[misc]
 
 from ._backends import get_configured_backend
-from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config
+from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config, resolve_config
 from ._exceptions import DataError, IntegrityError, OperationalError
 from ._phaselock import Phase, PhaseLockService, PhaseLockTimeout, PhaseLockUnavailable
 from .helpers import _execute_with_retry
@@ -127,9 +127,12 @@ class SQLiteRunner:
 
     _instance_counter = itertools.count()  # Unique instance ID for debugging
 
-    def __init__(self, db_path: str) -> None:
+    def __init__(
+        self, db_path: str, *, config: Mapping[str, Any] | None = None
+    ) -> None:
         self.instance_id = next(self._instance_counter)
         self._db_path = db_path
+        self._config = resolve_config(config)
         self._thread_local = threading.local()
         # Store PID to detect fork
         self._pid = os.getpid()
@@ -216,13 +219,11 @@ class SQLiteRunner:
 
         return cast("sqlite3.Connection", self._thread_local.conn)
 
-    def _apply_connection_settings(
-        self, conn: sqlite3.Connection, *, config: dict[str, Any] = _config
-    ) -> None:
+    def _apply_connection_settings(self, conn: sqlite3.Connection) -> None:
         """Apply per-connection settings that don't require exclusive locks."""
         db_backend.apply_connection_settings(
             conn,
-            config=config,
+            config=self._config,
             optimization_complete=SetupPhase.OPTIMIZATION in self._completed_phases,
         )
         if SetupPhase.OPTIMIZATION in self._completed_phases:
@@ -231,7 +232,10 @@ class SQLiteRunner:
     def _setup_connection_phase(self) -> None:
         """Setup critical connection settings including WAL mode."""
         _execute_with_retry(
-            lambda: db_backend.setup_connection_phase(self._db_path, config=_config),
+            lambda: db_backend.setup_connection_phase(
+                self._db_path,
+                config=self._config,
+            ),
             max_retries=30,
             retry_delay=0.1,
         )
@@ -244,11 +248,9 @@ class SQLiteRunner:
             self._apply_optimization_settings(self._thread_local.conn)
             self._thread_local.optimization_applied = True
 
-    def _apply_optimization_settings(
-        self, conn: sqlite3.Connection, *, config: dict[str, Any] = _config
-    ) -> None:
+    def _apply_optimization_settings(self, conn: sqlite3.Connection) -> None:
         """Apply optimization settings to a connection."""
-        db_backend.apply_optimization_settings(conn, config=config)
+        db_backend.apply_optimization_settings(conn, config=self._config)
 
     def run(
         self,

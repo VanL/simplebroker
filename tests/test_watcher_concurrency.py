@@ -1,8 +1,10 @@
 """Concurrency tests for the watcher feature."""
 
 import json
+import sys
 import threading
 import time
+import traceback
 import warnings
 
 import pytest
@@ -555,46 +557,86 @@ class TestMixedMode(WatcherTestBase):
         warnings.filterwarnings(
             "ignore", message="Timestamp conflict persisted", category=RuntimeWarning
         )
+        test_config = {"BROKER_BUSY_TIMEOUT": 100}
 
         read_messages = []
         lock = threading.Lock()
+        writer_errors: list[tuple[int, str]] = []
+        writer_errors_lock = threading.Lock()
 
         def handler(msg: str, ts: int):
             with lock:
                 read_messages.append(msg)
+
+        def writer_stack(thread: threading.Thread) -> str:
+            if thread.ident is None:
+                return f"{thread.name}: no thread id"
+            frame = sys._current_frames().get(thread.ident)
+            if frame is None:
+                return f"{thread.name}: no Python stack frame"
+            return f"{thread.name}:\n{''.join(traceback.format_stack(frame))}"
 
         # Start watcher
         with self.create_test_watcher(
             broker_target,
             "concurrent",
             handler,
+            config=test_config,
         ) as watcher:
             watcher_thread = watcher.run_in_thread()
 
             # Start concurrent writers
             def writer_func(writer_id: int):
-                db = make_broker(broker_target)
                 try:
-                    for i in range(20):
-                        db.write("concurrent", f"w{writer_id}_m{i}")
-                        time.sleep(0.01)
-                finally:
-                    db.close()
+                    db = make_broker(broker_target, config=test_config)
+                    try:
+                        for i in range(20):
+                            db.write("concurrent", f"w{writer_id}_m{i}")
+                            time.sleep(0.01)
+                    finally:
+                        db.close()
+                except Exception:
+                    with writer_errors_lock:
+                        writer_errors.append((writer_id, traceback.format_exc()))
 
             writer_threads = []
             for i in range(3):
-                t = threading.Thread(target=writer_func, args=(i,))
+                t = threading.Thread(
+                    target=writer_func,
+                    args=(i,),
+                    name=f"concurrent-writer-{i}",
+                )
                 t.start()
                 writer_threads.append(t)
 
-            # Wait for writers with timeout
+            # Keep SQLite's own wait short in this lock-contention test. The
+            # deadline still covers SimpleBroker's retry backoff budget and
+            # fails with thread stacks if a writer is genuinely stuck.
+            writer_deadline = time.monotonic() + scale_timeout_for_ci(45.0)
             for t in writer_threads:
-                t.join(timeout=10.0)
-                assert not t.is_alive(), "Writer thread didn't complete"
+                t.join(timeout=max(0.0, writer_deadline - time.monotonic()))
+
+            alive_writers = [t for t in writer_threads if t.is_alive()]
+            if alive_writers:
+                with lock:
+                    read_count = len(read_messages)
+                stacks = "\n".join(writer_stack(t) for t in alive_writers)
+                pytest.fail(
+                    "Writer thread didn't complete; "
+                    f"read_messages={read_count}; "
+                    f"alive={[t.name for t in alive_writers]}\n{stacks}"
+                )
+
+            if writer_errors:
+                error_text = "\n".join(
+                    f"writer {writer_id}:\n{error}"
+                    for writer_id, error in writer_errors
+                )
+                pytest.fail(f"Writer thread failed:\n{error_text}")
 
             # Wait for the watcher to process all messages
             start_time = time.monotonic()
-            while time.monotonic() - start_time < 5.0:  # 5 second timeout
+            while time.monotonic() - start_time < scale_timeout_for_ci(5.0):
                 with lock:
                     if len(read_messages) >= 60:
                         break
@@ -602,7 +644,7 @@ class TestMixedMode(WatcherTestBase):
 
             # Stop watcher with timeout
             watcher.stop()
-            watcher_thread.join(timeout=2.0)
+            watcher_thread.join(timeout=scale_timeout_for_ci(2.0))
             assert not watcher_thread.is_alive(), "Watcher didn't stop cleanly"
 
         # Should have all 60 messages

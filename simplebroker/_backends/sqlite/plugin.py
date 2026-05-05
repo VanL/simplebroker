@@ -61,10 +61,10 @@ class SQLiteBackendPlugin:
         backend_options: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> SQLiteRunner:
-        del backend_options, config
+        del backend_options
         from ..._runner import SQLiteRunner
 
-        return SQLiteRunner(target)
+        return SQLiteRunner(target, config=config)
 
     def initialize_target(
         self,

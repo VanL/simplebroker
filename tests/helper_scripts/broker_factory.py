@@ -66,6 +66,7 @@ def make_broker(
     runner = plugin.create_runner(
         target.target,
         backend_options=target.backend_options,
+        config=config,
     )
     kwargs: dict[str, Any] = {"backend_plugin": plugin}
     if config is not None:
