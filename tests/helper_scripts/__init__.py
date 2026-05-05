@@ -64,6 +64,7 @@ from .timestamp_validation import validate_timestamp
 from .timing import (
     get_performance_threshold,
     retry_on_exception,
+    scale_timeout_for_calibration,
     scale_timeout_for_ci,
     wait_for_condition,
     wait_for_count,
@@ -119,6 +120,7 @@ __all__ = [
     # Timing utilities
     "get_performance_threshold",
     "retry_on_exception",
+    "scale_timeout_for_calibration",
     "scale_timeout_for_ci",
     "wait_for_condition",
     "wait_for_count",

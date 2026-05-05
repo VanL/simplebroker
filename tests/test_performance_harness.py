@@ -3,6 +3,7 @@
 import pytest
 
 from tests import test_performance as performance
+from tests.helper_scripts import timing
 
 
 def test_get_timeout_does_not_tighten_budget_on_faster_machines(monkeypatch):
@@ -84,4 +85,22 @@ def test_calibration_ratio_uses_named_measurement(monkeypatch):
 
     assert performance_calibration.get_calibration_ratio("write_test") == pytest.approx(
         0.5
+    )
+
+
+def test_scale_timeout_for_calibration_relaxes_slow_runner(monkeypatch):
+    """Named calibration timeout scaling should only relax slow runners."""
+    monkeypatch.setattr(timing, "_machine_performance_ratio", lambda _name: 0.5)
+
+    assert timing.scale_timeout_for_calibration(20.0, "write_test") == pytest.approx(
+        40.0
+    )
+
+
+def test_scale_timeout_for_calibration_does_not_tighten_fast_runner(monkeypatch):
+    """Fast calibration ratios should not shorten subprocess safety timeouts."""
+    monkeypatch.setattr(timing, "_machine_performance_ratio", lambda _name: 2.0)
+
+    assert timing.scale_timeout_for_calibration(20.0, "write_test") == pytest.approx(
+        20.0
     )

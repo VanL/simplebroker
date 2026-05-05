@@ -16,6 +16,7 @@ import pytest
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
+from .helper_scripts.timing import scale_timeout_for_calibration
 
 
 def test_delete_safety_no_args(workdir):
@@ -94,33 +95,36 @@ def test_message_size_utf8_bytes(workdir):
     # Each emoji is 4 bytes in UTF-8
     emoji = "🎉"
 
-    # Create message just under 10MB in bytes but much smaller in char count
-    # Use stdin to avoid command line length limits
-    # 2,621,440 emojis * 4 bytes = 10,485,760 bytes (just under 10MB)
+    # Create message just under 10MB in bytes but much smaller in char count.
+    # Use stdin to avoid command line length limits and exercise the real
+    # streaming validation path.
+    # 2,621,440 emojis * 4 bytes = 10,485,760 bytes (exactly 10MiB)
     big_message = emoji * 2_621_440
+    timeout = scale_timeout_for_calibration(20.0, "write_test")
 
-    # This should work (just under 10MB in bytes)
+    # This should work because it is exactly at the byte limit.
     rc, _, _ = run_cli(
         "write",
         "test",
         "-",
         cwd=workdir,
         stdin=big_message,
-        timeout=20,
+        timeout=timeout,
     )
     assert rc == 0
 
-    # Add one more emoji to exceed 10MB
+    # Add one more emoji to exceed the byte limit while still being far smaller
+    # in character count.
     too_big_message = big_message + emoji
 
-    # This should fail (exceeds 10MB in bytes)
+    # This should fail because validation counts UTF-8 bytes, not characters.
     rc, _, err = run_cli(
         "write",
         "test",
         "-",
         cwd=workdir,
         stdin=too_big_message,
-        timeout=20,
+        timeout=timeout,
     )
     assert rc == 1
     assert "exceeds maximum size" in err

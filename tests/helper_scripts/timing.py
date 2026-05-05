@@ -193,6 +193,16 @@ def get_performance_threshold(
     return default
 
 
+def scale_timeout_for_calibration(timeout: float, calibration_name: str) -> float:
+    """Relax a timeout using one named performance calibration ratio."""
+
+    performance_ratio = _machine_performance_ratio(calibration_name)
+    effective_performance = min(performance_ratio, 1.0)
+    if effective_performance <= 0:
+        return timeout
+    return timeout / effective_performance
+
+
 def scale_timeout_for_ci(timeout: float, ci_factor: float = 2.0) -> float:
     """Scale timeout for CI environment.
 
