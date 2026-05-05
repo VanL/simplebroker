@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from simplebroker import Queue
+from simplebroker._constants import SCHEMA_VERSION
+from simplebroker._phaselock import PhaseLockService
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
@@ -19,9 +21,12 @@ def test_queue_uses_configured_default_db_name_when_db_path_omitted(
     queue.generate_timestamp()
 
     assert (tmp_path / ".weft" / "broker.db").is_file()
-    assert (tmp_path / ".weft" / "broker.schema-v4.done").is_file()
+    assert PhaseLockService(tmp_path / ".weft" / "broker.db").has_phase(
+        f"schema-v{SCHEMA_VERSION}"
+    )
     assert not (tmp_path / ".broker.db").exists()
-    assert not (tmp_path / ".broker.schema-v4.done").exists()
+    assert not list((tmp_path / ".weft").glob("*.done"))
+    assert not list(tmp_path.glob("*.done"))
 
 
 def test_queue_empty_db_path_uses_configured_default(
@@ -78,7 +83,10 @@ def test_queue_explicit_db_path_overrides_config_default(
     queue.generate_timestamp()
 
     assert (tmp_path / "explicit.db").is_file()
-    assert (tmp_path / "explicit.schema-v4.done").is_file()
+    assert PhaseLockService(tmp_path / "explicit.db").has_phase(
+        f"schema-v{SCHEMA_VERSION}"
+    )
+    assert not list(tmp_path.glob("*.done"))
     assert not (tmp_path / ".weft" / "broker.db").exists()
 
 

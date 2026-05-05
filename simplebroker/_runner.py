@@ -7,35 +7,16 @@ its core philosophy and performance characteristics.
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import os
 import sqlite3
+import sys
 import threading
-import time
 from collections.abc import Callable, Iterable
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
-
-# Platform-specific imports for file locking
-try:
-    import fcntl
-
-    HAS_FCNTL = True
-except ImportError:
-    HAS_FCNTL = False
-    fcntl = None  # type: ignore[assignment]
-
-try:
-    import msvcrt
-
-    HAS_MSVCRT = True
-except ImportError:
-    HAS_MSVCRT = False
-    msvcrt = None  # type: ignore[assignment]
-
-import contextlib
-import sys
 
 # Self was added to typing in Python 3.11
 if sys.version_info >= (3, 11):
@@ -48,6 +29,7 @@ else:
 from ._backends import get_configured_backend
 from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config
 from ._exceptions import DataError, IntegrityError, OperationalError
+from ._phaselock import Phase, PhaseLockService, PhaseLockTimeout, PhaseLockUnavailable
 from .helpers import _execute_with_retry
 
 # Load config once at module level
@@ -349,17 +331,8 @@ class SQLiteRunner:
         Args:
             phase: The setup phase to execute
 
-        File Locking Strategy:
-            - Unix/Linux/macOS: Uses fcntl for truly atomic file locking
-            - Windows with msvcrt: Uses Windows locking API for proper exclusive locks
-            - Windows without msvcrt: Falls back to open(path, 'x') which has a race
-              condition between checking file existence and creating it. This is a
-              check-then-act operation that could allow multiple processes to think
-              they have the lock if they check at the same time.
-
-        The Windows fallback is less robust but better than no locking. Production
-        Windows deployments should ensure msvcrt is available (it's part of the
-        Python standard library on Windows).
+        Setup coordination is delegated to PhaseLockService. That keeps all
+        completion markers and advisory lock behavior on one code path.
 
         """
         self.run_exclusive_setup(
@@ -379,162 +352,55 @@ class SQLiteRunner:
         if phase == SetupPhase.CONNECTION and not self._database_file_exists():
             self._discard_stale_completion_markers()
 
-        # Quick check without lock
         if phase in self._completed_phases:
             return False
 
-        # Fast-path: check if another process already completed this phase
-        if self._is_phase_already_completed(phase):
+        service = self._phase_lock_service()
+        phase_name = self._phase_marker_name(phase)
+        if service.has_phase(phase_name):
             with self._setup_lock:
                 self._completed_phases.add(phase)
             return False
 
-        # Get lock path for this phase
-        lock_path = self._get_lock_path(phase)
-        if lock_path is None:
-            return False  # Invalid path, skip setup
+        ran = False
 
-        # Acquire lock with timeout
-        lock_file = self._acquire_lock_with_timeout(lock_path, timeout=10.0)
-
-        try:
-            return self._execute_setup_under_lock(phase, operation)
-        finally:
-            # Release lock
-            self._release_lock(lock_file, lock_path)
-
-    def _get_lock_path(self, phase: SetupPhase) -> Path | None:
-        """Get lock file path for the given phase."""
-        try:
-            lock_path = Path(self._db_path).with_suffix(f".{phase.value}.lock")
-            # Ensure parent directory exists
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            # Track for cleanup
-            self._created_files.add(lock_path)
-            return lock_path
-        except (ValueError, OSError, TypeError):
-            # Handle invalid paths (e.g., from mocked tests)
-            return None
-
-    def _acquire_lock_with_timeout(
-        self,
-        lock_path: Path,
-        timeout: float,
-    ) -> Any | None:
-        """Acquire file lock with platform-specific method and timeout."""
-        start_time = time.monotonic()
-        lock_file = None
-
-        while time.monotonic() - start_time < timeout:
-            lock_file = self._try_acquire_lock(lock_path)
-            if lock_file is not None:
-                return lock_file
-
-            # Note: Using time.sleep here instead of interruptible_sleep because:
-            # 1. This is low-level database setup code without a stop event
-            # 2. The wait is very short (50ms) for file lock acquisition
-            # 3. This runs during initialization, not in long-running threads
-            time.sleep(0.05)
-
-        msg = f"Timeout waiting for setup lock: {lock_path.name}"
-        raise OperationalError(msg)
-
-    def _try_acquire_lock(self, lock_path: Path) -> Any | None:
-        """Try to acquire lock once using appropriate platform method."""
-        # Try Unix fcntl first
-        if HAS_FCNTL:
-            lock_file = self._try_fcntl_lock(lock_path)
-            if lock_file is not None:
-                return lock_file
-
-        # Try Windows msvcrt
-        if HAS_MSVCRT:
-            lock_file = self._try_msvcrt_lock(lock_path)
-            if lock_file is not None:
-                return lock_file
-
-        # Fallback to exclusive file creation
-        return self._try_exclusive_create_lock(lock_path)
-
-    def _try_fcntl_lock(self, lock_path: Path) -> Any | None:
-        """Try to acquire lock using fcntl (Unix/Linux/macOS)."""
-        if not HAS_FCNTL:
-            return None
-
-        try:
-            lock_file = open(lock_path, "w")
-            try:
-                os.chmod(lock_path, 0o600)
-            except OSError:
-                pass  # Don't fail on permission issues
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return lock_file
-        except OSError:
-            if "lock_file" in locals():
-                lock_file.close()
-            return None
-
-    def _try_msvcrt_lock(self, lock_path: Path) -> Any | None:
-        """Try to acquire lock using msvcrt (Windows)."""
-        if not HAS_MSVCRT:
-            return None
-
-        try:
-            lock_file = open(lock_path, "a+b")
-            lock_file.seek(0)
-            try:
-                os.chmod(lock_path, 0o600)
-            except OSError:
-                pass  # Windows may not support chmod
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
-            return lock_file
-        except OSError:
-            if "lock_file" in locals():
-                lock_file.close()
-            return None
-
-    def _try_exclusive_create_lock(self, lock_path: Path) -> Any | None:
-        """Fallback lock using exclusive file creation (less robust)."""
-        if lock_path.exists():
-            # Check if lock is stale (older than 10 seconds)
-            try:
-                if time.time() - lock_path.stat().st_mtime > 10.0:
-                    lock_path.unlink()  # Remove stale lock
-            except OSError:
-                pass  # Another process might have removed it
-            return None
-
-        try:
-            # WARNING: Race condition exists here between check and creation
-            lock_file = open(lock_path, "x")
-            try:
-                os.chmod(lock_path, 0o600)
-            except OSError:
-                pass  # Some systems may not support chmod
-            return lock_file
-        except FileExistsError:
-            return None
-
-    def _execute_setup_under_lock(
-        self,
-        phase: SetupPhase,
-        operation: Callable[[], None],
-    ) -> bool:
-        """Execute the setup phase with thread synchronization."""
-        with self._setup_lock:
-            if phase in self._completed_phases:
-                return False
-
-            # Check if another process already completed this phase
-            if self._is_phase_already_completed(phase):
+        def guarded_operation() -> None:
+            nonlocal ran
+            with self._setup_lock:
+                if phase in self._completed_phases:
+                    return
+                operation()
                 self._completed_phases.add(phase)
-                return False
+                ran = True
 
-            operation()
+        try:
+            result = service.run_phases((Phase(phase_name, guarded_operation),))
+        except (PhaseLockTimeout, PhaseLockUnavailable) as exc:
+            raise OperationalError(str(exc)) from exc
 
-            # Mark as complete
-            self._mark_phase_complete(phase)
-            return True
+        self._created_files.add(result.lock_path)
+        self._created_files.update(result.status_paths)
+
+        if phase_name in result.skipped:
+            with self._setup_lock:
+                self._completed_phases.add(phase)
+
+        return ran
+
+    def _phase_lock_service(self) -> PhaseLockService:
+        return PhaseLockService(
+            self._db_path,
+            namespace="user.simplebroker",
+            lock_suffix=".setup.lock",
+            status_suffix=".setup.status",
+            timeout=10.0,
+            retry_delay=0.05,
+        )
+
+    def _phase_marker_name(self, phase: SetupPhase) -> str:
+        if phase == SetupPhase.SCHEMA:
+            return f"schema-v{SCHEMA_VERSION}"
+        return str(phase.value)
 
     def _execute_builtin_setup_phase(self, phase: SetupPhase) -> None:
         """Execute a built-in SQLite setup phase."""
@@ -542,42 +408,6 @@ class SQLiteRunner:
             self._setup_connection_phase()
         elif phase == SetupPhase.OPTIMIZATION:
             self._setup_optimization_phase()
-
-    def _is_phase_already_completed(self, phase: SetupPhase) -> bool:
-        """Check if another process already completed this phase."""
-        try:
-            if not self._database_file_exists():
-                return False
-            marker_path = self._get_marker_path(phase)
-            return marker_path.exists()
-        except (ValueError, OSError, TypeError):
-            return False
-
-    def _mark_phase_complete(self, phase: SetupPhase) -> None:
-        """Mark a phase as complete by creating a marker file."""
-        self._completed_phases.add(phase)
-        try:
-            marker_path = self._get_marker_path(phase)
-            # Create marker file - only set permissions if it doesn't exist
-            if not marker_path.exists():
-                marker_path.touch(mode=0o600)
-            else:
-                # File exists, just touch it to update timestamp
-                marker_path.touch()
-            # Track for cleanup
-            self._created_files.add(marker_path)
-        except (ValueError, OSError, TypeError):
-            # Invalid path, but phase is complete in memory
-            pass
-
-    def _get_marker_path(self, phase: SetupPhase) -> Path:
-        """Get marker file path for the given setup phase."""
-        suffix = (
-            f".schema-v{SCHEMA_VERSION}.done"
-            if phase == SetupPhase.SCHEMA
-            else f".{phase.value}.done"
-        )
-        return Path(self._db_path).with_suffix(suffix)
 
     def _database_file_exists(self) -> bool:
         """Return whether the database file currently exists."""
@@ -587,48 +417,9 @@ class SQLiteRunner:
             return False
 
     def _discard_stale_completion_markers(self) -> None:
-        """Remove completion markers left behind after database deletion."""
-        try:
-            db_path = Path(self._db_path)
-            marker_paths = [
-                db_path.with_suffix(".connection.done"),
-                db_path.with_suffix(".optimization.done"),
-            ]
-            marker_paths.extend(db_path.parent.glob(f"{db_path.stem}.schema-v*.done"))
-            for marker_path in marker_paths:
-                with contextlib.suppress(OSError):
-                    marker_path.unlink()
-        except (ValueError, OSError, TypeError):
-            pass
-
-    def _release_lock(self, lock_file: Any | None, lock_path: Path) -> None:
-        """Release the lock file using appropriate method."""
-        if lock_file is None:
-            return
-
-        # Try fcntl unlock
-        if HAS_FCNTL:
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            except (OSError, AttributeError):
-                pass
-
-        # Try msvcrt unlock
-        if HAS_MSVCRT:
-            try:
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
-            except (OSError, AttributeError):
-                pass
-
-        # Close the file
-        with contextlib.suppress(Exception):
-            lock_file.close()
-
-        # Only unlink lock file if we're not using msvcrt
-        # (msvcrt needs the file to exist for other processes to lock)
-        if not HAS_MSVCRT:
-            with contextlib.suppress(OSError):
-                lock_path.unlink()
+        """Remove fallback completion markers left behind after database deletion."""
+        with contextlib.suppress(ValueError, OSError, TypeError):
+            self._phase_lock_service().discard_status_markers()
 
     def is_setup_complete(self, phase: SetupPhase) -> bool:
         """Check if a setup phase has been completed.
@@ -643,16 +434,12 @@ class SQLiteRunner:
         if phase in self._completed_phases:
             return True
 
-        # Check for marker file from another process
-        try:
-            marker_path = self._get_marker_path(phase)
-            if marker_path.exists():
+        with contextlib.suppress(ValueError, OSError, TypeError):
+            service = self._phase_lock_service()
+            if service.has_phase(self._phase_marker_name(phase)):
                 with self._setup_lock:
                     self._completed_phases.add(phase)
                 return True
-        except (ValueError, OSError, TypeError):
-            # Invalid path
-            pass
 
         return False
 
@@ -661,11 +448,11 @@ class SQLiteRunner:
 
         Shared setup coordination files must outlive any one BrokerDB/Queue
         handle. Weft and other callers create many short-lived handles against
-        the same database; if one handle unlinks a shared ``.lock`` or
-        ``.done`` sidecar while another process is still using it, the next
-        opener can bypass the intended cross-process serialization. Keep those
-        files for real databases, but preserve the mock-path cleanup behavior
-        that older tests rely on.
+        the same database; if one handle unlinks a shared setup lock or status
+        sidecar while another process is still using it, the next opener can
+        bypass the intended cross-process serialization. Keep those files for
+        real databases, but preserve the mock-path cleanup behavior that older
+        tests rely on.
         """
         for file_path in self._created_files:
             try:
@@ -685,18 +472,14 @@ class SQLiteRunner:
         if "Mock" in self._db_path:
             return True
 
-        shared_sidecar_suffixes = {
-            ".connection.lock",
-            ".optimization.lock",
-            ".schema.lock",
-            ".connection.done",
-            ".optimization.done",
-        }
-        suffix_key = "".join(file_path.suffixes[-2:])
-        if suffix_key in shared_sidecar_suffixes:
-            return False
-        if suffix_key.startswith(".schema-v") and suffix_key.endswith(".done"):
-            return False
+        with contextlib.suppress(ValueError, OSError, TypeError):
+            service = self._phase_lock_service()
+            if file_path == service.lock_path:
+                return False
+            status_prefix = f"{service.status_base_path.name}."
+            if file_path.name.startswith(status_prefix):
+                return False
+
         return True
 
     def __enter__(self) -> Self:

@@ -656,7 +656,11 @@ class SQLiteConnectionManager:
         if phase in self._completed_phases:
             return
 
-        lock_path = self._get_lock_path(phase)
+        if self._is_phase_complete(phase):
+            self._completed_phases.add(phase)
+            return
+
+        lock_path = self._get_setup_lock_path()
         if not lock_path:
             return
 
@@ -667,10 +671,10 @@ class SQLiteConnectionManager:
         finally:
             self._release_lock(lock_file, lock_path)
 
-    def _get_lock_path(self, phase: SetupPhase) -> Path | None:
-        """Get lock file path for setup phase."""
+    def _get_setup_lock_path(self) -> Path | None:
+        """Get the shared setup lock file path."""
         try:
-            lock_path = Path(self._db_path).with_suffix(f".{phase.value}.lock")
+            lock_path = Path(self._db_path).with_suffix(".setup.lock")
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             self._created_files.add(lock_path)
             return lock_path
@@ -722,11 +726,6 @@ class SQLiteConnectionManager:
 
         # Fallback to exclusive create
         if lock_path.exists():
-            try:
-                if time.time() - lock_path.stat().st_mtime > 10.0:
-                    lock_path.unlink()  # Remove stale lock
-            except OSError:
-                pass
             return None
 
         try:
@@ -790,8 +789,7 @@ class SQLiteConnectionManager:
     def _is_phase_complete(self, phase: SetupPhase) -> bool:
         """Check if setup phase is already complete."""
         try:
-            marker_path = Path(self._db_path).with_suffix(f".{phase.value}.done")
-            return marker_path.exists()
+            return self._get_phase_status_path(phase).exists()
         except (ValueError, OSError, TypeError):
             return False
 
@@ -799,14 +797,21 @@ class SQLiteConnectionManager:
         """Mark setup phase as complete."""
         self._completed_phases.add(phase)
         try:
-            marker_path = Path(self._db_path).with_suffix(f".{phase.value}.done")
-            if not marker_path.exists():
-                marker_path.touch(mode=0o600)
+            status_path = self._get_phase_status_path(phase)
+            if not status_path.exists():
+                status_path.touch(mode=0o600)
             else:
-                marker_path.touch()
-            self._created_files.add(marker_path)
+                status_path.touch()
+            self._created_files.add(status_path)
         except (ValueError, OSError, TypeError):
             pass
+
+    def _get_phase_status_path(self, phase: SetupPhase) -> Path:
+        """Get the completion status path for a setup phase."""
+        db_path = Path(self._db_path)
+        return db_path.with_suffix(".setup.status").with_name(
+            f"{db_path.stem}.setup.status.{phase.value}"
+        )
 
     def _release_lock(self, lock_file: Any, lock_path: Path) -> None:
         """Release file lock."""
@@ -830,7 +835,7 @@ class SQLiteConnectionManager:
         with contextlib.suppress(Exception):
             lock_file.close()
 
-        if not HAS_MSVCRT:
+        if not HAS_FCNTL and not HAS_MSVCRT:
             with contextlib.suppress(OSError):
                 lock_path.unlink()
 

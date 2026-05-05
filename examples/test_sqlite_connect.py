@@ -66,16 +66,10 @@ def temp_db_path():
     except OSError:
         pass
     # Clean up associated files
-    for suffix in [
-        ".connection.lock",
-        ".optimization.lock",
-        ".connection.done",
-        ".optimization.done",
-    ]:
-        try:
-            os.unlink(path + suffix)
-        except OSError:
-            pass
+    db_path = Path(path)
+    (db_path.with_suffix(".setup.lock")).unlink(missing_ok=True)
+    for status_path in db_path.parent.glob(f"{db_path.stem}.setup.status.*"):
+        status_path.unlink(missing_ok=True)
 
 
 @pytest.fixture

@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -124,7 +125,7 @@ def test_real_xattr_runtime_marks_and_skips_completed_phases(tmp_path: Path) -> 
     assert second.completed == ()
     assert second.skipped == ("connection-v1", "schema-v4")
     assert calls == ["connection", "schema"]
-    assert not service.lock_path.exists()
+    assert service.lock_path.exists()
 
 
 def test_real_xattr_runtime_resumes_from_last_marked_phase(tmp_path: Path) -> None:
@@ -162,7 +163,7 @@ def test_real_xattr_runtime_resumes_from_last_marked_phase(tmp_path: Path) -> No
     assert result.completed == ("schema-v4",)
     assert result.skipped == ("connection-v1",)
     assert calls == ["connection", "schema-failed", "schema"]
-    assert not service.lock_path.exists()
+    assert service.lock_path.exists()
 
 
 def test_failure_while_lock_held_leaves_partial_xattrs_and_blocks_contenders(
@@ -245,10 +246,10 @@ def test_failure_while_lock_held_leaves_partial_xattrs_and_blocks_contenders(
     assert result.completed == ("schema-v4",)
     assert result.skipped == ("connection-v1",)
     assert calls == ["schema"]
-    assert not service.lock_path.exists()
+    assert service.lock_path.exists()
 
 
-def test_no_xattr_fallback_keeps_one_status_file_and_no_done_files(
+def test_no_xattr_fallback_keeps_per_phase_status_files_and_no_done_files(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "broker.db"
@@ -266,12 +267,17 @@ def test_no_xattr_fallback_keeps_one_status_file_and_no_done_files(
 
     assert first.completed == ("connection-v1", "schema-v4")
     assert first.xattrs_available is False
-    assert first.status_path == tmp_path / "broker.setup.status.schema-v4"
+    expected_status_paths = (
+        tmp_path / "broker.setup.status.connection-v1",
+        tmp_path / "broker.setup.status.schema-v4",
+    )
+    assert first.status_paths == expected_status_paths
     assert second.completed == ()
     assert second.skipped == ("connection-v1", "schema-v4")
+    assert second.status_paths == expected_status_paths
     assert calls == ["connection", "schema"]
-    assert not service.lock_path.exists()
-    assert list(tmp_path.glob("*.status.*")) == [first.status_path]
+    assert service.lock_path.exists()
+    assert sorted(tmp_path.glob("*.status.*")) == sorted(expected_status_paths)
     assert not list(tmp_path.glob("*.done"))
 
 
@@ -330,10 +336,14 @@ def test_no_xattr_status_marker_resumes_from_last_completed_phase(
     assert result.completed == ("schema-v4", "optimization-v1")
     assert result.skipped == ("connection-v1",)
     assert calls == ["connection", "schema-failed", "schema", "optimization"]
-    assert list(tmp_path.glob("*.status.*")) == [
-        tmp_path / "broker.setup.status.optimization-v1"
-    ]
-    assert not service.lock_path.exists()
+    assert sorted(tmp_path.glob("*.status.*")) == sorted(
+        [
+            tmp_path / "broker.setup.status.connection-v1",
+            tmp_path / "broker.setup.status.schema-v4",
+            tmp_path / "broker.setup.status.optimization-v1",
+        ]
+    )
+    assert service.lock_path.exists()
 
 
 def test_no_xattr_failure_while_lock_held_leaves_partial_status_marker(
@@ -424,13 +434,16 @@ def test_no_xattr_failure_while_lock_held_leaves_partial_status_marker(
     assert result.completed == ("schema-v4",)
     assert result.skipped == ("connection-v1",)
     assert calls == ["schema"]
-    assert list(tmp_path.glob("*.status.*")) == [
-        tmp_path / "broker.setup.status.schema-v4"
-    ]
-    assert not service.lock_path.exists()
+    assert sorted(tmp_path.glob("*.status.*")) == sorted(
+        [
+            tmp_path / "broker.setup.status.connection-v1",
+            tmp_path / "broker.setup.status.schema-v4",
+        ]
+    )
+    assert service.lock_path.exists()
 
 
-def test_no_xattr_status_marker_cleans_older_status_files(tmp_path: Path) -> None:
+def test_no_xattr_status_marker_keeps_completed_status_files(tmp_path: Path) -> None:
     target = tmp_path / "broker.db"
     target.touch()
     service = PhaseLockService(target, use_xattrs=False)
@@ -449,9 +462,100 @@ def test_no_xattr_status_marker_cleans_older_status_files(tmp_path: Path) -> Non
     assert result.completed == ("optimization-v1",)
     assert result.skipped == ("connection-v1", "schema-v4")
     assert calls == ["optimization"]
-    assert list(tmp_path.glob("*.status.*")) == [
-        tmp_path / "broker.setup.status.optimization-v1"
-    ]
+    assert sorted(tmp_path.glob("*.status.*")) == sorted(
+        [
+            tmp_path / "broker.setup.status.connection-v1",
+            tmp_path / "broker.setup.status.schema-v4",
+            tmp_path / "broker.setup.status.optimization-v1",
+        ]
+    )
+
+
+def test_no_xattr_waiter_skips_when_phase_marked_while_lock_is_held(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(
+        target,
+        timeout=1.0,
+        retry_delay=0.01,
+        use_xattrs=False,
+    )
+    calls: list[str] = []
+
+    def mark_phase_after_waiter_blocks() -> None:
+        time.sleep(0.05)
+        service.status_path_for_phase("connection-v1").touch(mode=0o600)
+
+    with _subprocess_holding_phase_lock(target):
+        marker = threading.Thread(target=mark_phase_after_waiter_blocks)
+        marker.start()
+        start = time.monotonic()
+        result = service.run_phases(
+            (Phase("connection-v1", lambda: calls.append("ran")),)
+        )
+        elapsed = time.monotonic() - start
+        marker.join(timeout=1.0)
+
+    assert result.completed == ()
+    assert result.skipped == ("connection-v1",)
+    assert calls == []
+    assert elapsed < 0.5
+    assert not marker.is_alive()
+
+
+def test_process_local_lock_serializes_threads(tmp_path: Path) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    first_service = PhaseLockService(
+        target,
+        timeout=1.0,
+        retry_delay=0.01,
+        use_xattrs=False,
+    )
+    second_service = PhaseLockService(
+        target,
+        timeout=1.0,
+        retry_delay=0.01,
+        use_xattrs=False,
+    )
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    calls: list[str] = []
+    results: dict[str, object] = {}
+
+    def first_action() -> None:
+        calls.append("first")
+        first_entered.set()
+        assert release_first.wait(timeout=1.0)
+
+    def run_first() -> None:
+        first_service.run_phases((Phase("connection-v1", first_action),))
+
+    def run_second() -> None:
+        results["second"] = second_service.run_phases(
+            (Phase("connection-v1", lambda: calls.append("second")),)
+        )
+
+    first = threading.Thread(target=run_first)
+    first.start()
+    assert first_entered.wait(timeout=1.0)
+
+    second = threading.Thread(target=run_second)
+    second.start()
+    time.sleep(0.05)
+    assert second.is_alive()
+
+    release_first.set()
+    first.join(timeout=1.0)
+    second.join(timeout=1.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert calls == ["first"]
+    assert results["second"].completed == ()
+    assert results["second"].skipped == ("connection-v1",)
 
 
 def test_lock_timeout_when_another_process_holds_lock(tmp_path: Path) -> None:
@@ -461,11 +565,15 @@ def test_lock_timeout_when_another_process_holds_lock(tmp_path: Path) -> None:
     calls: list[str] = []
 
     with _subprocess_holding_phase_lock(target):
-        with pytest.raises(PhaseLockTimeout):
+        with pytest.raises(PhaseLockTimeout) as exc_info:
             service.run_phases((Phase("connection-v1", lambda: calls.append("ran")),))
 
     assert calls == []
     assert service.lock_path.exists()
+    message = str(exc_info.value)
+    assert "timeout=0.150s" in message
+    assert "target=" in message
+    assert "missing=['connection-v1']" in message
 
 
 def test_lock_context_releases_after_exception(tmp_path: Path) -> None:

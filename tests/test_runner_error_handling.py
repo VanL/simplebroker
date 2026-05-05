@@ -11,6 +11,7 @@ import pytest
 
 from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import IntegrityError, OperationalError
+from simplebroker._phaselock import PhaseLockService
 from simplebroker._runner import SetupPhase, SQLiteRunner
 
 from .helper_scripts.database_errors import DatabaseErrorInjector
@@ -304,14 +305,13 @@ class TestSQLiteRunnerErrorHandling:
         """Per-handle cleanup must not delete cross-process setup coordination files."""
         db_path = tmp_path / "test.db"
         runner = SQLiteRunner(str(db_path))
+        service = PhaseLockService(db_path)
 
         sidecars = [
-            db_path.with_suffix(".connection.lock"),
-            db_path.with_suffix(".connection.done"),
-            db_path.with_suffix(".schema.lock"),
-            db_path.with_suffix(f".schema-v{SCHEMA_VERSION}.done"),
-            db_path.with_suffix(".optimization.lock"),
-            db_path.with_suffix(".optimization.done"),
+            service.lock_path,
+            service.status_path_for_phase("connection"),
+            service.status_path_for_phase(f"schema-v{SCHEMA_VERSION}"),
+            service.status_path_for_phase("optimization"),
         ]
         for path in sidecars:
             path.touch()
@@ -356,12 +356,12 @@ class TestSQLiteRunnerErrorHandling:
         """Mock-path tests still need sidecar cleanup for synthetic DB names."""
         db_path = tmp_path / "MockBroker.db"
         runner = SQLiteRunner(str(db_path))
+        service = PhaseLockService(db_path)
 
         sidecars = [
-            db_path.with_suffix(".connection.lock"),
-            db_path.with_suffix(".connection.done"),
-            db_path.with_suffix(".optimization.lock"),
-            db_path.with_suffix(".optimization.done"),
+            service.lock_path,
+            service.status_path_for_phase("connection"),
+            service.status_path_for_phase("optimization"),
         ]
         for path in sidecars:
             path.touch()

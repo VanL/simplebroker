@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from simplebroker._exceptions import OperationalError
+from simplebroker._phaselock import PhaseLockService
 from simplebroker._runner import SetupPhase, SQLiteRunner
 
 
@@ -51,10 +52,13 @@ class TestSQLiteRunnerValidation:
             # Clean up
             runner.close()
             Path(empty_db_path).unlink(missing_ok=True)
-            # Also clean up any marker files
-            for suffix in [".connection.done", ".connection.lock"]:
-                marker_file = Path(empty_db_path).with_suffix(suffix)
-                marker_file.unlink(missing_ok=True)
+            # Also clean up setup coordination files.
+            service = PhaseLockService(empty_db_path)
+            service.lock_path.unlink(missing_ok=True)
+            for status_path in service.status_base_path.parent.glob(
+                f"{service.status_base_path.name}.*"
+            ):
+                status_path.unlink(missing_ok=True)
 
     def test_validation_with_nonexistent_file(self, tmp_path):
         """Test that SQLiteRunner handles nonexistent files correctly."""
