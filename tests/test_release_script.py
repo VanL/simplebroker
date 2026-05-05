@@ -161,15 +161,7 @@ def test_pg_extension_requires_current_core_lifecycle_version() -> None:
         / "pyproject.toml"
     )
     pg_text = pg_pyproject.read_text(encoding="utf-8")
-    root_version = release.read_current_version()
     pg_version = release.read_pg_extension_version(pg_pyproject_path=pg_pyproject)
-
-    if (root_version, pg_version) == ("3.3.0", "1.0.9"):
-        assert '"simplebroker-pg>=1.0.9,<2"' in root_pyproject.read_text(
-            encoding="utf-8"
-        )
-        assert '"simplebroker>=3.2.0,<4"' in pg_text
-        return
 
     assert f'"simplebroker-pg>={pg_version},<2"' in root_pyproject.read_text(
         encoding="utf-8"
