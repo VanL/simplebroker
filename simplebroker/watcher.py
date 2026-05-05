@@ -88,7 +88,7 @@ from ._constants import (
     load_config,
     resolve_config,
 )
-from ._exceptions import OperationalError
+from ._exceptions import OperationalError, StopException
 from ._targets import ResolvedTarget
 from .db import BrokerDB
 from .helpers import interruptible_sleep
@@ -410,7 +410,10 @@ class BaseWatcher(ABC):
 
         for attempt in range(max_retries):
             try:
+                self._check_stop()
                 return process_func()
+            except StopException:
+                raise _StopLoop from None
             except OperationalError as e:
                 if attempt >= max_retries - 1:
                     if config["BROKER_LOGGING_ENABLED"]:
@@ -712,9 +715,12 @@ class BaseWatcher(ABC):
             self._check_retry_timeout(start_time, retry_count)
 
             try:
+                self._check_stop()
+
                 # Initialize strategy with data version getter
                 if hasattr(self._strategy, "start"):
                     queue = self._get_queue_for_data_version()
+                    self._check_stop()
 
                     # Capture queue in closure to avoid B023 warning
                     def data_version_getter(q: Queue = queue) -> int | None:
@@ -725,6 +731,7 @@ class BaseWatcher(ABC):
                         queue.refresh_last_ts()
                     except Exception:
                         logger.debug("Initial last_ts refresh failed", exc_info=True)
+                    self._check_stop()
 
                     def on_data_version_change(q: Queue = queue) -> None:
                         q.refresh_last_ts()
@@ -732,19 +739,23 @@ class BaseWatcher(ABC):
                     activity_waiter = queue.create_activity_waiter(
                         stop_event=self._stop_event
                     )
+                    self._check_stop()
 
                     self._strategy.start(
                         data_version_getter,
                         on_data_version_change=on_data_version_change,
                         activity_waiter=activity_waiter,
                     )
+                    self._check_stop()
 
                 # Initial drain of existing messages
                 self._in_initial_drain = True
                 try:
+                    self._check_stop()
                     self._drain_queue()
                 finally:
                     self._in_initial_drain = False
+                self._check_stop()
 
                 # Main processing loop
                 self._process_messages()

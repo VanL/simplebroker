@@ -42,6 +42,7 @@ from ._constants import (
 from ._exceptions import (
     IntegrityError,
     OperationalError,
+    StopException,
 )
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner
 from ._runner_lifecycle import close_owned_runner
@@ -294,6 +295,9 @@ class DBConnection:
         Raises:
             RuntimeError: If connection cannot be established after retries
         """
+        if self._stop_event.is_set():
+            raise RuntimeError("Connection interrupted")
+
         if self._share_in_process:
             return self._get_shared_connection(config=config)
 
@@ -354,6 +358,9 @@ class DBConnection:
     def _get_shared_connection(
         self, *, config: dict[str, Any] = _config
     ) -> "BrokerCore | BrokerDB":
+        if self._stop_event.is_set():
+            raise RuntimeError("Connection interrupted")
+
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -635,7 +642,13 @@ class BrokerCore:
         """Wrapper around _execute_with_retry that honors the stop event."""
 
         kwargs.setdefault("stop_event", self._stop_event)
-        return _execute_with_retry(operation, **kwargs)
+
+        def stop_checked_operation() -> T:
+            if self._stop_event.is_set():
+                raise StopException("Operation interrupted by stop event")
+            return operation()
+
+        return _execute_with_retry(stop_checked_operation, **kwargs)
 
     def _setup_database(self) -> None:
         """Set up database with optimized settings and schema."""

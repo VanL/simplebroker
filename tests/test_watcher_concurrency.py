@@ -711,9 +711,39 @@ class TestEdgeCases(WatcherTestBase):
 
             thread = watcher.run_in_thread()
             time.sleep(0.01)
-            watcher.stop()
-            thread.join(timeout=2.0)
-            assert not thread.is_alive()
+            watcher.stop(join=False)
+            thread.join(timeout=scale_timeout_for_ci(2.0))
+            if thread.is_alive():
+                frame = sys._current_frames().get(thread.ident)
+                stack = (
+                    "".join(traceback.format_stack(frame))
+                    if frame is not None
+                    else "no Python stack frame"
+                )
+                pytest.fail(f"Watcher did not stop cleanly:\n{stack}")
+
+    def test_stop_during_startup_skips_initial_drain(self, broker_target, monkeypatch):
+        """Stop requests during startup should not begin a new initial drain."""
+        watcher = QueueWatcher(
+            "stop_during_startup",
+            lambda m, t: None,
+            db=broker_target,
+        )
+        drain_called = threading.Event()
+
+        def stop_during_strategy_start(*args, **kwargs):
+            del args, kwargs
+            watcher.stop(join=False)
+
+        def record_drain():
+            drain_called.set()
+
+        monkeypatch.setattr(watcher._strategy, "start", stop_during_strategy_start)
+        monkeypatch.setattr(watcher, "_drain_queue", record_drain)
+
+        watcher.run_forever()
+
+        assert not drain_called.is_set()
 
     def test_queue_name_validation(self, broker_target):
         """Test that watcher respects queue name validation."""
