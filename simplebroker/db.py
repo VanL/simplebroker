@@ -296,7 +296,7 @@ class DBConnection:
             RuntimeError: If connection cannot be established after retries
         """
         if self._stop_event.is_set():
-            raise RuntimeError("Connection interrupted")
+            raise StopException("Connection interrupted")
 
         if self._share_in_process:
             return self._get_shared_connection(config=config)
@@ -341,7 +341,7 @@ class DBConnection:
                     )
 
                 if not interruptible_sleep(wait_time, self._stop_event):
-                    raise RuntimeError("Connection interrupted") from None
+                    raise StopException("Connection interrupted") from None
 
         raise RuntimeError("Failed to establish database connection")
 
@@ -359,7 +359,7 @@ class DBConnection:
         self, *, config: dict[str, Any] = _config
     ) -> "BrokerCore | BrokerDB":
         if self._stop_event.is_set():
-            raise RuntimeError("Connection interrupted")
+            raise StopException("Connection interrupted")
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -382,7 +382,7 @@ class DBConnection:
                     )
 
                 if not interruptible_sleep(wait_time, self._stop_event):
-                    raise RuntimeError("Connection interrupted") from None
+                    raise StopException("Connection interrupted") from None
 
         raise RuntimeError("Failed to establish database connection")
 

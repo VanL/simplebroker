@@ -763,7 +763,7 @@ class BaseWatcher(ABC):
                 # If we get here, we exited normally
                 break
 
-            except _StopLoop:
+            except (StopException, _StopLoop):
                 # Normal shutdown
                 break
             except KeyboardInterrupt:
