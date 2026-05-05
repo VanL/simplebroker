@@ -659,10 +659,16 @@ def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
             "message_4",
         ]
 
-        # Verify burst mode was maintained during message processing
-        new_delays = strategy.delay_history[delays_before:]
-        zero_count = sum(1 for d in new_delays if d == 0)
-        assert zero_count > 5, "Should maintain burst mode while processing messages"
+        # Verify burst mode was maintained after message processing. Native
+        # activity backends may reach the assertion immediately after the
+        # fourth handler call, before the next burst polls have been recorded.
+        wait_for_condition(
+            lambda: (
+                sum(1 for d in strategy.delay_history[delays_before:] if d == 0) > 5
+            ),
+            timeout=1.0,
+            message="Should maintain burst mode while processing messages",
+        )
 
         # Verify messages are still in queue (peek doesn't remove them)
         # Use peek_many to get all messages, which doesn't remove them
