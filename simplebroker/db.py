@@ -2349,8 +2349,13 @@ class BrokerDB(BrokerCore):
         # Create SQLite runner
         self._runner = SQLiteRunner(str(self.db_path), config=config)
 
-        # Initialize parent (will create schema)
-        super().__init__(self._runner, config=config, stop_event=stop_event)
+        # Initialize parent (will create schema). If startup is interrupted,
+        # close the runner because the BrokerDB instance will not reach close().
+        try:
+            super().__init__(self._runner, config=config, stop_event=stop_event)
+        except Exception:
+            self._runner.close()
+            raise
 
         # Store conn reference internally for compatibility
         self._conn = self._runner._conn
