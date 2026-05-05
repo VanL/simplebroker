@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Any, cast
@@ -79,6 +80,150 @@ def _invalidates_bootstrap(exc: psycopg.Error) -> bool:
     return sqlstate in {"3F000", "42P01"}
 
 
+class _SharedActivityListener:
+    """Process-local LISTEN worker shared by pg watchers for one schema."""
+
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        schema: str,
+    ) -> None:
+        self._dsn = dsn
+        self._channel = activity_channel_name(schema)
+        self._stop_event = threading.Event()
+        self._lock = threading.RLock()
+        self._conditions: defaultdict[str, threading.Condition] = defaultdict(
+            lambda: threading.Condition(self._lock)
+        )
+        self._versions: defaultdict[str, int] = defaultdict(int)
+        self._ready = threading.Event()
+        self._conn: psycopg.Connection[Any] | None = None
+        self._error: Exception | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"simplebroker-pg-listener-{self._channel}",
+            daemon=True,
+        )
+        self._thread.start()
+        self._ready.wait(timeout=5.0)
+
+    def _run(self) -> None:
+        try:
+            conn = psycopg.connect(self._dsn, autocommit=True)
+            self._conn = conn
+            with conn.cursor() as cur:
+                cur.execute(f"LISTEN {quote_ident(self._channel)}")
+            self._ready.set()
+
+            while not self._stop_event.is_set():
+                for notify in conn.notifies(timeout=0.1, stop_after=1):
+                    with self._lock:
+                        self._versions[notify.payload] += 1
+                        if notify.payload == "*":
+                            for condition in self._conditions.values():
+                                condition.notify_all()
+                        else:
+                            self._conditions[notify.payload].notify_all()
+                    break
+        except Exception as exc:
+            if not self._stop_event.is_set():
+                self._error = exc
+                self._ready.set()
+                with self._lock:
+                    for condition in self._conditions.values():
+                        condition.notify_all()
+        finally:
+            self._ready.set()
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+
+    def wait(
+        self,
+        *,
+        queue_name: str,
+        stop_event: threading.Event,
+        timeout: float,
+        last_queue_version: int,
+        last_wildcard_version: int,
+    ) -> tuple[bool, int, int]:
+        deadline = time.monotonic() + max(timeout, 0.0)
+        with self._lock:
+            condition = self._conditions[queue_name]
+
+            while not stop_event.is_set() and not self._stop_event.is_set():
+                if self._error is not None:
+                    raise self._error
+                queue_version = self._versions[queue_name]
+                wildcard_version = self._versions["*"]
+                if (
+                    queue_version != last_queue_version
+                    or wildcard_version != last_wildcard_version
+                ):
+                    return True, queue_version, wildcard_version
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False, queue_version, wildcard_version
+                condition.wait(timeout=remaining)
+        with self._lock:
+            return False, self._versions[queue_name], self._versions["*"]
+
+    def close(self) -> None:
+        self._stop_event.set()
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+        with self._lock:
+            for condition in self._conditions.values():
+                condition.notify_all()
+        self._thread.join(timeout=1.0)
+
+
+class _SharedActivityRegistry:
+    """Reference-counted process-local listener registry."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._listeners: dict[tuple[str, str], tuple[_SharedActivityListener, int]] = {}
+
+    def acquire(self, dsn: str, *, schema: str) -> _SharedActivityListener:
+        key = (dsn, schema)
+        with self._lock:
+            entry = self._listeners.get(key)
+            if entry is not None:
+                listener, refcount = entry
+                self._listeners[key] = (listener, refcount + 1)
+                return listener
+
+            listener = _SharedActivityListener(dsn, schema=schema)
+            self._listeners[key] = (listener, 1)
+            return listener
+
+    def release(self, dsn: str, *, schema: str) -> None:
+        key = (dsn, schema)
+        listener: _SharedActivityListener | None = None
+        with self._lock:
+            entry = self._listeners.get(key)
+            if entry is None:
+                return
+            current_listener, refcount = entry
+            if refcount > 1:
+                self._listeners[key] = (current_listener, refcount - 1)
+                return
+            listener = current_listener
+            del self._listeners[key]
+        listener.close()
+
+
+_activity_registry = _SharedActivityRegistry()
+
+
 class PostgresActivityWaiter:
     """LISTEN/NOTIFY-backed wake-up waiter for pg watchers."""
 
@@ -90,38 +235,49 @@ class PostgresActivityWaiter:
         queue_name: str,
         stop_event: threading.Event,
     ) -> None:
+        self._dsn = dsn
+        self._schema = schema
         self._queue_name = queue_name
         self._stop_event = stop_event
-        self._conn = psycopg.connect(dsn, autocommit=True)
-        self._channel = activity_channel_name(schema)
-        with self._conn.cursor() as cur:
-            cur.execute(f"LISTEN {quote_ident(self._channel)}")
+        self._listener = _activity_registry.acquire(dsn, schema=schema)
+        self._closed = False
+        self._last_queue_version = 0
+        self._last_wildcard_version = 0
 
     def wait(self, timeout: float) -> bool:
         """Wait for a relevant queue notification until timeout expires."""
-        deadline = time.monotonic() + max(timeout, 0.0)
+        try:
+            previous_queue_version = self._last_queue_version
+            previous_wildcard_version = self._last_wildcard_version
+            changed, queue_version, wildcard_version = self._listener.wait(
+                queue_name=self._queue_name,
+                stop_event=self._stop_event,
+                timeout=timeout,
+                last_queue_version=self._last_queue_version,
+                last_wildcard_version=self._last_wildcard_version,
+            )
+            if changed:
+                if queue_version > previous_queue_version:
+                    self._last_queue_version = previous_queue_version + 1
+                else:
+                    self._last_queue_version = queue_version
 
-        while not self._stop_event.is_set():
-            remaining = max(0.0, deadline - time.monotonic())
-            if remaining <= 0:
-                return False
-            try:
-                received = False
-                for notify in self._conn.notifies(timeout=remaining, stop_after=1):
-                    received = True
-                    if notify.payload in {self._queue_name, "*"}:
-                        return True
-                if not received:
-                    return False
-            except psycopg.Error as exc:
-                raise _translate_error(exc) from exc
-        return False
+                if wildcard_version > previous_wildcard_version:
+                    self._last_wildcard_version = previous_wildcard_version + 1
+                else:
+                    self._last_wildcard_version = wildcard_version
+            else:
+                self._last_queue_version = queue_version
+                self._last_wildcard_version = wildcard_version
+            return changed
+        except psycopg.Error as exc:
+            raise _translate_error(exc) from exc
 
     def close(self) -> None:
-        try:
-            self._conn.close()
-        except Exception:
-            pass
+        if self._closed:
+            return
+        self._closed = True
+        _activity_registry.release(self._dsn, schema=self._schema)
 
 
 class PostgresRunner:
@@ -209,10 +365,15 @@ class PostgresRunner:
         conn = getattr(self._thread_local, "conn", None)
         if conn is not None:
             delattr(self._thread_local, "conn")
+            if hasattr(self._thread_local, "in_transaction"):
+                delattr(self._thread_local, "in_transaction")
             try:
                 self._pool.putconn(conn)
             except Exception:
                 pass  # Pool may already be closed during teardown
+
+    def _in_transaction(self) -> bool:
+        return bool(getattr(self._thread_local, "in_transaction", False))
 
     def run(
         self,
@@ -233,13 +394,18 @@ class PostgresRunner:
             if _invalidates_bootstrap(exc):
                 self.invalidate_bootstrap_state()
             raise _translate_error(exc) from exc
+        finally:
+            if not self._in_transaction():
+                self._return_thread_conn()
 
     def begin_immediate(self) -> None:
         conn = self._get_thread_conn()
         try:
             with conn.cursor() as cur:
                 cur.execute("BEGIN")
+            self._thread_local.in_transaction = True
         except psycopg.Error as exc:
+            self._return_thread_conn()
             raise _translate_error(exc) from exc
 
     def commit(self) -> None:
@@ -247,6 +413,8 @@ class PostgresRunner:
             self._get_thread_conn().commit()
         except psycopg.Error as exc:
             raise _translate_error(exc) from exc
+        finally:
+            self._return_thread_conn()
 
     def rollback(self) -> None:
         try:
@@ -254,6 +422,8 @@ class PostgresRunner:
             self.invalidate_meta_cache()
         except psycopg.Error as exc:
             raise _translate_error(exc) from exc
+        finally:
+            self._return_thread_conn()
 
     def release_thread_connection(self) -> None:
         """Return the current thread's connection to the pool."""

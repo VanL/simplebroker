@@ -111,6 +111,10 @@ class _BorrowedRunner:
     def is_setup_complete(self, phase: SetupPhase) -> bool:
         return self._runner.is_setup_complete(phase)
 
+    @property
+    def backend_plugin(self) -> BackendPlugin:
+        return _resolve_backend_plugin(self._runner)
+
     def __getattr__(self, name: str) -> Any:
         """Delegate backend-specific runner attributes transparently."""
         return getattr(self._runner, name)
@@ -204,11 +208,11 @@ class DBConnection:
             _BorrowedRunner(runner) if runner is not None else None
         )
         self._backend_plugin = (
-            self._resolved_target.plugin
-            if self._resolved_target is not None
+            _resolve_backend_plugin(runner)
+            if runner is not None
             else (
-                _resolve_backend_plugin(runner)
-                if runner is not None
+                self._resolved_target.plugin
+                if self._resolved_target is not None
                 else get_backend_plugin("sqlite")
             )
         )

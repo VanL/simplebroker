@@ -893,14 +893,14 @@ class Queue:
         backend_options: dict[str, Any] | None = None
         runner: SQLRunner | None = None
 
-        if isinstance(self._db_path, ResolvedTarget):
-            plugin = self._db_path.plugin
-            target = self._db_path.target
-            backend_options = dict(self._db_path.backend_options)
-        elif self._runner is not None:
+        if self._runner is not None:
             runner = self._runner
             if isinstance(self._runner, BackendAwareRunner):
                 plugin = self._runner.backend_plugin
+        elif isinstance(self._db_path, ResolvedTarget):
+            plugin = self._db_path.plugin
+            target = self._db_path.target
+            backend_options = dict(self._db_path.backend_options)
         else:
             target = str(self._db_path)
 

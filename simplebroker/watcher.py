@@ -326,6 +326,7 @@ class BaseWatcher(ABC):
 
         # Create or use provided polling strategy
         self._strategy = polling_strategy or self._create_strategy()
+        self._pending_messages_precheck_confirmed = False
 
         # Initialize handler attributes (will be set by subclasses if not already set)
         if not hasattr(self, "_handler"):
@@ -644,12 +645,16 @@ class BaseWatcher(ABC):
                 if not self._has_pending_messages():  # Remove the None argument
                     # No messages for this queue, skip drain
                     continue
+                self._pending_messages_precheck_confirmed = True
 
             # Always try to drain the queue first; this guarantees
             # that a stop request does not prevent us from
             # finishing already-visible work, so connections can
             # be closed and no messages get lost.
-            self._drain_queue()
+            try:
+                self._drain_queue()
+            finally:
+                self._pending_messages_precheck_confirmed = False
 
     def _handle_retry(
         self,
@@ -735,7 +740,11 @@ class BaseWatcher(ABC):
                     )
 
                 # Initial drain of existing messages
-                self._drain_queue()
+                self._in_initial_drain = True
+                try:
+                    self._drain_queue()
+                finally:
+                    self._in_initial_drain = False
 
                 # Main processing loop
                 self._process_messages()
@@ -1063,52 +1072,114 @@ class PollingStrategy:
         self._activity_waiter: ActivityWaiter | None = None
         self._pragma_failures = 0
         self._jitter_factor = jitter_factor
+        self._native_activity_pending = False
+        self._local_activity_pending = False
+        self._local_activity_pending_for_drain = False
+        self._local_activity_empty_check = False
+        self._activity_burst_remaining = 0
+        self._native_idle_poll_interval = max(1.0, self._max_interval * 10)
+        self._next_native_idle_poll_at = time.monotonic()
+        self._schedule_next_native_idle_poll(initial=True)
 
     def wait_for_activity(self) -> None:
         """Wait for activity with optimized polling."""
-        # Check data version first for immediate activity detection
-        if self._data_version_provider and self._check_data_version():
-            # Don't reset here - let notify_activity handle it when messages are actually processed
-            # Also don't increment check count since we detected activity
-            return
-
-        # Calculate delay based on check count
-        delay = self._get_delay()
-
-        if self._activity_waiter is not None:
-            wait_timeout = max(delay, self._burst_sleep)
-            if self._activity_waiter.wait(wait_timeout):
+        while not self._stop_event.is_set():
+            if self._local_activity_pending:
+                self._local_activity_pending = False
+                if self._activity_burst_remaining > 0:
+                    self._record_immediate_burst_delays()
                 return
+
+            # Check data version first for immediate activity detection
+            if (
+                self._activity_waiter is None
+                and self._data_version_provider
+                and self._check_data_version()
+            ):
+                # Don't reset here - let notify_activity handle it when messages are actually processed
+                # Also don't increment check count since we detected activity
+                return
+
+            # Calculate delay based on check count
+            delay = self._get_delay()
+
+            if self._activity_waiter is not None:
+                wait_timeout = max(delay, self._burst_sleep)
+                if self._activity_waiter.wait(wait_timeout):
+                    self._native_activity_pending = True
+                    self._check_count = 0
+                    self._activity_burst_remaining = self._initial_checks * 10
+                    self._record_immediate_burst_delays(count=2)
+                    return
+                self._check_count += 1
+                if time.monotonic() >= self._next_native_idle_poll_at:
+                    self._schedule_next_native_idle_poll()
+                    return
+                continue
+
+            if delay == 0:
+                # Micro-sleep to prevent CPU spinning while maintaining responsiveness
+                interruptible_sleep(self._burst_sleep, self._stop_event)
+            else:
+                # Use shorter timeout chunks so backoff stays responsive to writes.
+                chunk_timeout = min(delay, 0.02)
+                remaining = delay
+                while remaining > 0 and not self._stop_event.is_set():
+                    wait_time = min(remaining, chunk_timeout)
+                    if self._stop_event.wait(timeout=wait_time):
+                        break
+                    remaining -= wait_time
+                    # Re-check data_version only between chunks so writes that land
+                    # mid-backoff do not wait for the full polling interval.
+                    if (
+                        remaining > 0
+                        and self._data_version_provider
+                        and self._check_data_version()
+                    ):
+                        return
+
+            # Only increment if we actually waited (no activity detected)
             self._check_count += 1
             return
-
-        if delay == 0:
-            # Micro-sleep to prevent CPU spinning while maintaining responsiveness
-            interruptible_sleep(self._burst_sleep, self._stop_event)
-        else:
-            # Use shorter timeout chunks so backoff stays responsive to writes.
-            chunk_timeout = min(delay, 0.02)
-            remaining = delay
-            while remaining > 0 and not self._stop_event.is_set():
-                wait_time = min(remaining, chunk_timeout)
-                if self._stop_event.wait(timeout=wait_time):
-                    break
-                remaining -= wait_time
-                # Re-check data_version only between chunks so writes that land
-                # mid-backoff do not wait for the full polling interval.
-                if (
-                    remaining > 0
-                    and self._data_version_provider
-                    and self._check_data_version()
-                ):
-                    return
-
-        # Only increment if we actually waited (no activity detected)
-        self._check_count += 1
 
     def notify_activity(self) -> None:
         """Reset check count on activity."""
         self._check_count = 0
+        self._local_activity_pending = True
+        self._local_activity_pending_for_drain = True
+        burst_multiplier = 10 if self._activity_waiter is not None else 1
+        self._activity_burst_remaining = self._initial_checks * burst_multiplier
+        self._schedule_next_native_idle_poll()
+
+    def consume_local_activity_hint(self) -> bool:
+        """Return and clear a same-watcher backlog hint."""
+        if not self._local_activity_pending_for_drain:
+            return False
+        self._local_activity_pending_for_drain = False
+        return True
+
+    def consume_local_empty_check_hint(self) -> bool:
+        """Return and clear a same-watcher no-drain hint."""
+        if not self._local_activity_empty_check:
+            return False
+        self._local_activity_empty_check = False
+        return True
+
+    def consume_native_activity_hint(self) -> bool:
+        """Return and clear a backend-native activity hint."""
+        if not self._native_activity_pending:
+            return False
+        self._native_activity_pending = False
+        return True
+
+    def mark_local_activity_as_empty_check(self) -> None:
+        """Turn a local wake into a cheap precheck that does not drain."""
+        self._local_activity_pending_for_drain = False
+        self._local_activity_empty_check = True
+
+    def uses_native_activity(self) -> bool:
+        """Return whether this strategy is backed by a native activity waiter."""
+        return self._activity_waiter is not None
 
     def start(
         self,
@@ -1124,6 +1195,8 @@ class PollingStrategy:
         self._data_version = None
         self._data_change_callback = on_data_version_change
         self._activity_waiter = activity_waiter
+        self._activity_burst_remaining = 0
+        self._schedule_next_native_idle_poll(initial=True)
 
     def close(self) -> None:
         """Release any backend-native waiter owned by this strategy."""
@@ -1147,12 +1220,37 @@ class PollingStrategy:
 
     def _calculate_base_delay(self) -> float:
         """Calculate base delay without jitter."""
+        if self._activity_waiter is not None:
+            if self._activity_burst_remaining > 0:
+                self._activity_burst_remaining -= 1
+                return 0
+            progress = max(1, self._check_count - self._initial_checks) / 100
+            return min(progress * self._max_interval, self._max_interval)
+
         if self._check_count < self._initial_checks:
             # First 100 checks: no delay (burst handling)
             return 0
         # Gradual increase to max_interval
         progress = (self._check_count - self._initial_checks) / 100
         return min(progress * self._max_interval, self._max_interval)
+
+    def _record_immediate_burst_delays(self, *, count: int = 1) -> None:
+        """Record immediate activity observations without sleeping."""
+        for _ in range(count):
+            if self._activity_burst_remaining <= 0:
+                return
+            self._get_delay()
+
+    def _schedule_next_native_idle_poll(self, *, initial: bool = False) -> None:
+        """Stagger slow fallback polls for notification-backed waiters."""
+        interval = self._native_idle_poll_interval
+        if initial:
+            interval = max(5.0, interval * 5)
+        jittered_interval = random.uniform(
+            interval,
+            interval * 2,
+        )
+        self._next_native_idle_poll_at = time.monotonic() + jittered_interval
 
     def _check_data_version(self) -> bool:
         """Check PRAGMA data_version for changes."""
@@ -1315,6 +1413,8 @@ class QueueWatcher(BaseWatcher):
         self._peek = peek
         self._last_seen_ts = since_timestamp if since_timestamp is not None else 0
         self._batch_processing = batch_processing
+        self._native_startup_backlog_mode = False
+        self._pending_found_by_db_check = False
 
         # Two-phase detection configuration
         self._skip_idle_check = self._config["BROKER_SKIP_IDLE_CHECK"]
@@ -1324,13 +1424,28 @@ class QueueWatcher(BaseWatcher):
 
         Uses the Queue's has_pending method with retry logic for operational error handling.
         """
+        if self._pending_messages_precheck_confirmed:
+            self._pending_messages_precheck_confirmed = False
+            return True
+
+        if self._strategy.consume_local_empty_check_hint():
+            return False
+
+        if self._strategy.consume_local_activity_hint():
+            return True
+
+        if self._strategy.consume_native_activity_hint():
+            return True
 
         def check_func() -> bool:
             return self._queue_obj.has_pending(
                 self._last_seen_ts if self._last_seen_ts > 0 else None
             )
 
-        return bool(self._process_with_retry(check_func, "pending_messages_check"))
+        result = bool(self._process_with_retry(check_func, "pending_messages_check"))
+        if result:
+            self._pending_found_by_db_check = True
+        return result
 
     def _drain_queue(self) -> None:
         """Process all currently available messages with DB error handling.
@@ -1353,6 +1468,8 @@ class QueueWatcher(BaseWatcher):
         by this watcher. They remain available for other consumers or for
         manual removal after successful processing.
         """
+        self._pending_messages_precheck_confirmed = False
+
         # Process messages based on mode using Queue API
         found_messages = False
         if self._peek:
@@ -1362,7 +1479,26 @@ class QueueWatcher(BaseWatcher):
 
         # Notify strategy if we found messages
         if found_messages:
+            if (
+                not self._peek
+                and self._strategy.uses_native_activity()
+                and (
+                    getattr(self, "_in_initial_drain", False)
+                    or self._pending_found_by_db_check
+                )
+            ):
+                self._native_startup_backlog_mode = True
             self._strategy.notify_activity()
+            if (
+                not self._peek
+                and self._strategy.uses_native_activity()
+                and not getattr(self, "_in_initial_drain", False)
+                and not self._native_startup_backlog_mode
+            ):
+                self._strategy.mark_local_activity_as_empty_check()
+        elif self._native_startup_backlog_mode:
+            self._native_startup_backlog_mode = False
+        self._pending_found_by_db_check = False
 
     def _drain_peek_mode(self) -> bool:
         """Process messages in peek mode (doesn't remove from queue)."""
@@ -1372,9 +1508,9 @@ class QueueWatcher(BaseWatcher):
 
     def _drain_consume_mode(self) -> bool:
         """Process messages in consume mode (removes from queue)."""
-        if not self._batch_processing:
-            return self._process_single_message()
-        return self._process_batch_messages()
+        if self._batch_processing:
+            return self._process_batch_messages()
+        return self._process_single_message()
 
     def _process_peek_messages(self) -> bool:
         """Process messages without removing them from queue."""

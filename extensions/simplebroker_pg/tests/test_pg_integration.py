@@ -108,7 +108,7 @@ def test_postgres_runner_quotes_mixed_case_search_path() -> None:
         assert current_schema == schema
 
         core.write("jobs", "hello")
-        assert core.read("jobs") == "hello"
+        assert core.claim_one("jobs", with_timestamps=False) == "hello"
 
         with connect(dsn) as conn:
             with conn.cursor() as cur:

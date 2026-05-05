@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from typing import Any, cast
 
 from simplebroker_pg import PostgresRunner
 
@@ -22,12 +23,12 @@ class FakePool:
 
 
 def _runner_with_thread_connection() -> tuple[PostgresRunner, FakePool]:
-    runner = object.__new__(PostgresRunner)
+    runner = cast(Any, object.__new__(PostgresRunner))
     pool = FakePool()
     runner._pool = pool
     runner._thread_local = threading.local()
     runner._thread_local.conn = object()
-    return runner, pool
+    return cast(PostgresRunner, runner), pool
 
 
 def test_release_thread_connection_returns_connection_without_closing_pool() -> None:
