@@ -140,18 +140,18 @@ class _ProcessBrokerSession:
 
             core = getattr(self._thread_local, "core", None)
             if core is None:
-                core = self._create_core()
+                core = self._create_core(stop_event)
                 self._thread_local.core = core
                 self._cores.add(core)
 
             core.set_stop_event(stop_event)
             return core
 
-    def _create_core(self) -> BrokerCore | BrokerDB:
+    def _create_core(self, stop_event: threading.Event | None) -> BrokerCore | BrokerDB:
         if self._backend_name == "sqlite":
             from .db import BrokerDB
 
-            return BrokerDB(self._target, config=self._config)
+            return BrokerDB(self._target, config=self._config, stop_event=stop_event)
 
         from .db import BrokerCore
 
@@ -165,6 +165,7 @@ class _ProcessBrokerSession:
             self._runner,
             config=self._config,
             backend_plugin=self._backend_plugin,
+            stop_event=stop_event,
         )
 
     def cleanup_current_thread(self) -> None:

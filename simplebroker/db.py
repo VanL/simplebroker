@@ -256,6 +256,7 @@ class DBConnection:
                 self._runner,
                 config=self._config,
                 backend_plugin=self._backend_plugin,
+                stop_event=self._stop_event,
             )
 
     def _create_managed_connection(self) -> "BrokerCore | BrokerDB":
@@ -264,7 +265,11 @@ class DBConnection:
             self._resolved_target is None
             or self._resolved_target.backend_name == "sqlite"
         ):
-            connection = BrokerDB(self.db_path, config=self._config)
+            connection = BrokerDB(
+                self.db_path,
+                config=self._config,
+                stop_event=self._stop_event,
+            )
             connection.set_stop_event(self._stop_event)
             return connection
 
@@ -277,6 +282,7 @@ class DBConnection:
             runner,
             config=self._config,
             backend_plugin=self._backend_plugin,
+            stop_event=self._stop_event,
         )
         core.set_stop_event(self._stop_event)
         return core
@@ -402,7 +408,11 @@ class DBConnection:
                 self._resolved_target is None
                 or self._resolved_target.backend_name == "sqlite"
             ):
-                self._core = BrokerDB(self.db_path, config=self._config)
+                self._core = BrokerDB(
+                    self.db_path,
+                    config=self._config,
+                    stop_event=self._stop_event,
+                )
             else:
                 if self._runner is None:
                     self._runner = self._backend_plugin.create_runner(
@@ -415,6 +425,7 @@ class DBConnection:
                     self._runner,
                     config=self._config,
                     backend_plugin=self._backend_plugin,
+                    stop_event=self._stop_event,
                 )
         return self._core
 
@@ -578,6 +589,7 @@ class BrokerCore:
         *,
         config: dict[str, Any] = _config,
         backend_plugin: BackendPlugin | None = None,
+        stop_event: threading.Event | None = None,
     ):
         """Initialize with a SQL runner.
 
@@ -604,8 +616,9 @@ class BrokerCore:
         self._backend_plugin = _resolve_backend_plugin(runner, backend_plugin)
         self._sql = self._backend_plugin.sql
 
-        # Stop event to allow interruptible retries
-        self._stop_event = threading.Event()
+        # Stop event to allow interruptible retries, including setup work run
+        # during construction.
+        self._stop_event = stop_event or threading.Event()
 
         # Write counter for vacuum scheduling
         self._write_count = 0
@@ -2306,7 +2319,13 @@ class BrokerDB(BrokerCore):
     its own BrokerDB instance.
     """
 
-    def __init__(self, db_path: str, *, config: dict[str, Any] = _config):
+    def __init__(
+        self,
+        db_path: str,
+        *,
+        config: dict[str, Any] = _config,
+        stop_event: threading.Event | None = None,
+    ):
         """Initialize database connection and create schema.
 
         Args:
@@ -2331,7 +2350,7 @@ class BrokerDB(BrokerCore):
         self._runner = SQLiteRunner(str(self.db_path), config=config)
 
         # Initialize parent (will create schema)
-        super().__init__(self._runner, config=config)
+        super().__init__(self._runner, config=config, stop_event=stop_event)
 
         # Store conn reference internally for compatibility
         self._conn = self._runner._conn
