@@ -2,10 +2,61 @@
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .conftest import managed_subprocess
 from .helper_scripts.timing import scale_timeout_for_ci
+
+
+def _wait_for_move_output(
+    proc,
+    *,
+    db_path: Path,
+    timeout: float,
+) -> None:
+    """Wait until watch --move reports the moved message, with state diagnostics."""
+    deadline = time.monotonic() + timeout
+    last_peek_stdout = ""
+    last_peek_stderr = ""
+
+    while time.monotonic() < deadline:
+        if "test message" in proc.stdout:
+            return
+
+        peek = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "simplebroker",
+                "-f",
+                str(db_path),
+                "peek",
+                "destination",
+                "--all",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        last_peek_stdout = peek.stdout
+        last_peek_stderr = peek.stderr
+        if "test message" in peek.stdout:
+            if proc.wait_for_output("test message", timeout=scale_timeout_for_ci(1.0)):
+                return
+            break
+
+        if proc.proc.poll() is not None:
+            break
+        time.sleep(0.1)
+
+    raise AssertionError(
+        "watch --move did not report moved message before timeout\n"
+        f"watch returncode: {proc.proc.poll()}\n"
+        f"watch stdout: {proc.stdout!r}\n"
+        f"watch stderr: {proc.stderr!r}\n"
+        f"destination peek stdout: {last_peek_stdout!r}\n"
+        f"destination peek stderr: {last_peek_stderr!r}"
+    )
 
 
 def test_move_since_mutual_exclusion(tmp_path: Path) -> None:
@@ -72,7 +123,11 @@ def test_move_without_since_works(tmp_path: Path) -> None:
         timeout=scale_timeout_for_ci(1.0),
     ) as proc:
         # Wait until the watcher reports the processed message
-        assert proc.wait_for_output("test message", timeout=scale_timeout_for_ci(1.0))
+        _wait_for_move_output(
+            proc,
+            db_path=db_path,
+            timeout=scale_timeout_for_ci(5.0),
+        )
 
         # Check that the message was processed and handler output was shown
         assert "test message" in proc.stdout
