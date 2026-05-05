@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from .conftest import managed_subprocess
+from .helper_scripts.timing import scale_timeout_for_ci
 
 
 def test_move_since_mutual_exclusion(tmp_path: Path) -> None:
@@ -68,10 +69,10 @@ def test_move_without_since_works(tmp_path: Path) -> None:
             "--move",
             "destination",
         ],
-        timeout=1.0,  # Short timeout since it processes immediately
+        timeout=scale_timeout_for_ci(1.0),
     ) as proc:
         # Wait until the watcher reports the processed message
-        assert proc.wait_for_output("test message", timeout=1.0)
+        assert proc.wait_for_output("test message", timeout=scale_timeout_for_ci(1.0))
 
         # Check that the message was processed and handler output was shown
         assert "test message" in proc.stdout
@@ -127,7 +128,7 @@ def test_watch_with_since_without_move_works(tmp_path: Path) -> None:
             "0",  # From beginning
             "--peek",
         ],
-        timeout=1.0,  # Short timeout
+        timeout=scale_timeout_for_ci(1.0),
     ) as proc:
         # Give it time to process
         import time
