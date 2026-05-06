@@ -596,7 +596,7 @@ provides-extras = ["dev", "pg"]
 
 [[package]]
 name = "simplebroker-pg"
-version = "1.1.0"
+version = "1.1.1"
 source = { editable = "extensions/simplebroker_pg" }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
@@ -610,7 +610,7 @@ requires-dist = [
     { name = "psycopg-pool", specifier = ">=3.1,<4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
-    { name = "simplebroker", specifier = ">=3.3.0,<4" },
+    { name = "simplebroker", specifier = ">=3.3.4,<4" },
 ]
 provides-extras = ["dev"]
 
