@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from .conftest import run_cli
+from .conftest import _reset_pg_tables, run_cli
 
 # Test data for timestamp validation
 VALID_TIMESTAMPS = [
@@ -158,6 +158,26 @@ def test_since_empty_queue(workdir):
 
     rc, out, _ = run_cli("peek", "empty_queue", "--since", "1000", cwd=workdir)
     assert rc == 2  # EXIT_QUEUE_EMPTY
+
+
+def test_since_empty_queue_after_postgres_schema_reset(
+    workdir, pg_worker_runner, pg_worker_plugin
+):
+    """Postgres reset must recreate a schema dropped by a prior cleanup."""
+    if pg_worker_runner is None or pg_worker_plugin is None:
+        pytest.skip("Postgres-only schema reset regression")
+
+    rc, _, err = run_cli("write", "schema_reset_queue", "message", cwd=workdir)
+    assert rc == 0, err
+
+    rc, _, err = run_cli("--cleanup", cwd=workdir)
+    assert rc == 0, err
+
+    _reset_pg_tables(pg_worker_runner, pg_worker_plugin)
+
+    rc, out, err = run_cli("read", "empty_queue", "--since", "0", cwd=workdir)
+    assert rc == 2, err
+    assert out == ""
 
 
 def test_since_no_matches(workdir):

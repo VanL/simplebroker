@@ -516,7 +516,7 @@ class PostgresRunner:
         self._pool_max_size = pool_max_size
         self._pool = self._create_pool()
         self._thread_local = threading.local()
-        self._setup_lock = threading.Lock()
+        self._setup_lock = threading.RLock()
         self._completed_phases: set[SetupPhase] = set()
         self._meta_cache_lock = threading.Lock()
         self._meta_cache: RunnerMetaState | None = None
@@ -714,6 +714,8 @@ class PostgresRunner:
 
     def invalidate_bootstrap_state(self) -> None:
         """Discard all cached bootstrap state after missing-object errors."""
+        with self._setup_lock:
+            self._completed_phases.discard(SetupPhase.SCHEMA)
         with self._meta_cache_lock:
             self._meta_cache = None
             self._schema_bootstrapped = False
