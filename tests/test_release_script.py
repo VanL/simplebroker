@@ -161,12 +161,13 @@ def test_pg_extension_requires_current_core_lifecycle_version() -> None:
         / "pyproject.toml"
     )
     pg_text = pg_pyproject.read_text(encoding="utf-8")
+    root_version = release.read_current_version(pyproject_path=root_pyproject)
     pg_version = release.read_pg_extension_version(pg_pyproject_path=pg_pyproject)
 
     assert f'"simplebroker-pg>={pg_version},<2"' in root_pyproject.read_text(
         encoding="utf-8"
     )
-    assert '"simplebroker>=3.3.0,<4"' in pg_text
+    assert f'"simplebroker>={root_version},<4"' in pg_text
 
 
 def test_require_published_pg_baseline_accepts_published_version(monkeypatch) -> None:
