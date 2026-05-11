@@ -27,6 +27,9 @@ dev = [
 [project.entry-points."simplebroker.backends"]
 postgres = "simplebroker_pg.plugin:get_backend_plugin"
 
+[tool.uv.sources]
+simplebroker = { path = "../..", editable = true }
+
 [tool.hatch.build]
 include = [
     "simplebroker_pg/**/*.py",

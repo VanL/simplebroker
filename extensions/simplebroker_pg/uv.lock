@@ -183,16 +183,27 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "3.3.4"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/cb/fb/a9862792309e6d0b3d4747f45be020725fbc41dee6659a76b61cccec86e5/simplebroker-3.3.4.tar.gz", hash = "sha256:0aa891a916ca0e176f9c33770fd4e1cb1890fa9aeddb62c8a67b975afd3d668e", size = 146578, upload-time = "2026-05-05T23:19:52.124Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f4/3e/987f23b99403170045c7242145afc231c5d3ce805994430ae2893204a2c6/simplebroker-3.3.4-py3-none-any.whl", hash = "sha256:6e5b17bc6b6f74853ea22b89fbe6993c654ca61fc7d0e78a60f7d81762319cf6", size = 165240, upload-time = "2026-05-05T23:19:53.498Z" },
+version = "3.3.5"
+source = { editable = "../../" }
+
+[package.metadata]
+requires-dist = [
+    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3,<4" },
+    { name = "psycopg-pool", marker = "extra == 'dev'", specifier = ">=3.1,<4" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
+    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "simplebroker-pg", marker = "extra == 'pg'", editable = "." },
 ]
+provides-extras = ["dev", "pg"]
 
 [[package]]
 name = "simplebroker-pg"
-version = "1.1.1"
+version = "1.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
@@ -212,7 +223,7 @@ requires-dist = [
     { name = "psycopg-pool", specifier = ">=3.1,<4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
-    { name = "simplebroker", specifier = ">=3.3.4,<4" },
+    { name = "simplebroker", editable = "../../" },
 ]
 provides-extras = ["dev"]
 
