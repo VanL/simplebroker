@@ -4,6 +4,7 @@ import gc
 import tempfile
 import threading
 import time
+import warnings
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -253,6 +254,73 @@ class TestQueueConnectionManager:
 
                 # Short sleep for Windows file handle finalization
                 time.sleep(0.2)
+
+    def test_persistent_queue_cross_thread_close_does_not_warn(self, tmp_path):
+        """Persistent queues should close cleanly from a different thread."""
+        queue = Queue("test", db_path=str(tmp_path / "test.db"), persistent=True)
+        queue.write("hello")
+        assert list(queue.peek_generator()) == ["hello"]
+
+        caught_warnings = []
+        caught_errors = []
+
+        def close_queue():
+            try:
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always", ResourceWarning)
+                    queue.close()
+                    gc.collect()
+                    caught_warnings.extend(caught)
+            except BaseException as exc:  # pragma: no cover - asserted in parent
+                caught_errors.append(exc)
+
+        thread = threading.Thread(target=close_queue)
+        thread.start()
+        thread.join(timeout=5.0)
+
+        assert not thread.is_alive(), "close thread did not finish"
+        assert not caught_errors
+        resource_warnings = [
+            warning
+            for warning in caught_warnings
+            if issubclass(warning.category, ResourceWarning)
+        ]
+        assert resource_warnings == []
+
+    def test_persistent_queue_close_cleans_worker_thread_connections(self, tmp_path):
+        """Closing a persistent queue cleans connections created by workers."""
+        queue = Queue("test", db_path=str(tmp_path / "test.db"), persistent=True)
+        caught_errors = []
+        errors_lock = threading.Lock()
+
+        def use_queue(index):
+            try:
+                queue.write(f"message-{index}")
+                assert list(queue.peek_generator())
+            except BaseException as exc:  # pragma: no cover - asserted in parent
+                with errors_lock:
+                    caught_errors.append(exc)
+
+        threads = [threading.Thread(target=use_queue, args=(i,)) for i in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5.0)
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert not caught_errors
+
+        with warnings.catch_warnings(record=True) as caught_warnings:
+            warnings.simplefilter("always", ResourceWarning)
+            queue.close()
+            gc.collect()
+
+        resource_warnings = [
+            warning
+            for warning in caught_warnings
+            if issubclass(warning.category, ResourceWarning)
+        ]
+        assert resource_warnings == []
 
     def test_connection_type_consistency(self):
         """Test that both modes return BrokerDB for consistency."""

@@ -8,7 +8,6 @@ __pycache__/
 *.so
 .Python
 .code
-.claude
 .codex
 docs/
 build/
@@ -74,7 +73,13 @@ Thumbs.db
 *.log
 
 # Multi-agent
-.claude
+.claude/*
+!.claude/
+!.claude/skills/
+!.claude/skills/**
+!.agents/
+!.agents/skills/
+!.agents/skills/**
 .mcp.json
 agent_history/
 .broker.db

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import itertools
+import logging
 import os
 import sqlite3
 import sys
@@ -35,6 +36,7 @@ from .helpers import _execute_with_retry
 # Load config once at module level
 _config = load_config()
 db_backend = get_configured_backend(_config)
+logger = logging.getLogger(__name__)
 
 
 class SetupPhase(Enum):
@@ -193,6 +195,10 @@ class SQLiteRunner:
             self._thread_local.conn = sqlite3.connect(
                 self._db_path,
                 isolation_level=None,
+                # SQLiteRunner owns these internal connections. Disable
+                # sqlite's same-thread restriction so session cleanup can close
+                # worker-thread connections after queue operations return.
+                check_same_thread=False,
             )
 
             # Track the new connection for centralized cleanup
@@ -312,20 +318,34 @@ class SQLiteRunner:
 
     def close(self) -> None:
         """Close all connections created by this runner and release resources."""
-        # Close ALL connections created by this runner instance across all threads
-        # This is critical for preventing resource leaks and file locking issues on Windows
+        # Close ALL connections created by this runner instance across all threads.
+        # Keep failed closes tracked so cleanup does not drop the last reference.
         with self._connections_lock:
-            for conn in self._all_connections:
-                try:
-                    conn.close()
-                except Exception:
-                    pass  # Ignore errors during cleanup
-            self._all_connections.clear()
+            connections = list(self._all_connections)
+
+        closed_connections = []
+        for conn in connections:
+            if self._close_tracked_connection(conn):
+                closed_connections.append(conn)
+
+        with self._connections_lock:
+            for conn in closed_connections:
+                self._all_connections.discard(conn)
 
         # Also clean up the current thread's local storage for good hygiene
         if hasattr(self._thread_local, "conn"):
             with contextlib.suppress(Exception):
                 delattr(self._thread_local, "conn")
+
+    def _close_tracked_connection(self, conn: sqlite3.Connection) -> bool:
+        """Close one tracked connection, returning whether close succeeded."""
+        try:
+            conn.close()
+        except Exception as exc:
+            if self._config["BROKER_LOGGING_ENABLED"]:
+                logger.warning("Error closing SQLite connection: %s", exc)
+            return False
+        return True
 
     def setup(self, phase: SetupPhase) -> None:
         """Run specific setup phase in an idempotent manner.

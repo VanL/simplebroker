@@ -241,6 +241,9 @@ class TestSQLiteRunnerErrorHandling:
             # Verify connection was attempted to be closed
             mock_conn.close.assert_called_once()
 
+            with runner._connections_lock:
+                assert mock_conn in runner._all_connections
+
             # Verify thread local was cleaned up
             assert not hasattr(runner._thread_local, "conn")
 
