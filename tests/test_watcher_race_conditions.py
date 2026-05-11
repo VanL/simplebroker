@@ -714,8 +714,12 @@ def test_pre_check_database_contention(broker_target) -> None:
         total_pre_checks = sum(w.pre_check_count for w in watchers)
         total_drains = sum(w.drain_count for w in watchers)
 
-        # Pre-checks should prevent most empty drains
-        assert total_pre_checks > total_drains
+        # Initial startup drains are intentionally not pre-checked. After
+        # startup, every drain should be gated by a pre-check, and pre-checks
+        # should keep drain amplification far below "every watcher drains for
+        # every write" behavior.
+        assert total_pre_checks >= total_drains - num_watchers
+        assert total_drains < (total_processed * num_watchers) / 2
     finally:
         # Stop all watchers before closing broker
         for w in watchers:
