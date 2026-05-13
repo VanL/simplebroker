@@ -141,6 +141,10 @@ $ broker move errors retry --all
 $ broker list
 myqueue: 3
 processed: 1
+$ broker stats myqueue
+myqueue: 3
+$ broker exists myqueue
+$ broker list --prefix jobs. --stats
 
 # Broadcast to all queues
 $ broker broadcast "System maintenance at 5pm"
@@ -174,7 +178,9 @@ $ broker --cleanup
 | `read <queue> [options]` | Remove and return message(s) |
 | `peek <queue> [options]` | Return message(s) without removing |
 | `move <source> <dest> [options]` | Atomically transfer messages between queues |
-| `list [--stats]` | Show queues and message counts |
+| `exists <queue> [--json]` | Check whether a queue has any messages, including claimed rows |
+| `stats <queue> [--json]` | Show pending, claimed, and total counts for one queue |
+| `list [--stats] [--prefix PREFIX \| --pattern GLOB] [--json]` | Show queues and message counts |
 | `delete <queue> [-m <id>]` | Delete a queue immediately, or claim a specific message by ID for later vacuum |
 | `delete --all` | Delete all queues immediately |
 | `broadcast <message\|->` | Send message to all existing queues |
@@ -225,6 +231,17 @@ $ broker alias remove task1.outbox
 - `--peek` - Monitor without consuming
 - `--move <dest>` - Continuously drain to destination queue
 - `--quiet` - Suppress startup message
+
+**Queue metadata options:**
+- `stats <queue>` reports counts for exactly one queue without scanning all queues.
+- `exists <queue>` exits `0` when the queue has any row and `2` when it has none.
+- `list --prefix <prefix>` uses a literal queue-name prefix.
+- `list --pattern <glob>` uses fnmatch-style matching.
+- `--json` on `exists`, `stats`, or `list` emits JSON suitable for scripts.
+
+Queues are implicit: a queue exists when at least one message row exists for
+that name, including claimed rows. After vacuum removes claimed rows, a
+claimed-only queue no longer exists.
 
 **Timestamp formats for `--since`:**
 - ISO 8601: `2024-01-15T14:30:00Z` or `2024-01-15` (midnight UTC)
@@ -587,6 +604,8 @@ import logging
 # Basic usage
 with Queue("tasks") as q:
     q.write("process order 123")
+    print(q.exists())
+    print(q.stats())
     message = q.read()  # Returns: "process order 123"
 
 # Safe peek-and-acknowledge pattern (recommended for critical data)
@@ -616,6 +635,41 @@ def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
 
 # Use peek=True for safe mode - messages aren't removed until explicitly acknowledged
 ```
+
+### Queue metadata
+
+Use targeted metadata APIs when you need queue existence or counts without
+listing every queue:
+
+```python
+from simplebroker import Queue, QueueStats
+from simplebroker.db import DBConnection
+
+queue = Queue("tasks")
+
+if queue.exists():
+    stats: QueueStats = queue.stats()
+    print(stats.pending, stats.claimed, stats.total)
+
+with DBConnection("myapp.db") as conn:
+    db = conn.get_connection()
+
+    # Exact queue lookup: backed by WHERE queue = ?
+    stats = db.get_queue_stat("tasks")
+    print(f"{stats.queue}: {stats.pending} pending")
+
+    # Prefix lookup: backed by a queue-name range query
+    for stats in db.list_queue_stats(prefix="jobs."):
+        print(f"{stats.queue}: {stats.pending}/{stats.total}")
+
+    # Pattern lookup: uses the literal prefix as a SQL prefilter when possible
+    for stats in db.list_queue_stats(pattern="jobs.*"):
+        print(stats.queue)
+```
+
+`QueueStats.pending` is the unclaimed count. `QueueStats.claimed` is the count
+of messages already read or deleted but not yet vacuumed. `QueueStats.exists`
+is true when `total > 0`.
 
 ### Generating timestamps without writing
 
@@ -776,9 +830,11 @@ with DBConnection("myapp.db") as conn:
     db = conn.get_connection()
     
     # Perform cross-queue operations
-    queues = db.get_queue_stats()
-    for queue_name, stats in queues.items():
-        print(f"{queue_name}: {stats['pending']} pending")
+    stats = db.get_queue_stat("tasks")
+    print(f"{stats.queue}: {stats.pending} pending")
+
+    for stats in db.list_queue_stats(prefix="jobs."):
+        print(f"{stats.queue}: {stats.pending} pending")
     
     # Broadcast to all queues
     db.broadcast("System maintenance at 5pm")

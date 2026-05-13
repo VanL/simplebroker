@@ -238,6 +238,27 @@ GROUP BY queue
 ORDER BY queue
 """
 
+# Get statistics for one queue
+GET_QUEUE_STAT = """
+SELECT
+    COALESCE(SUM(CASE WHEN claimed = 0 THEN 1 ELSE 0 END), 0) as unclaimed,
+    COUNT(*) as total
+FROM messages
+WHERE queue = ?
+"""
+
+# Get queue statistics for a literal queue-name prefix
+LIST_QUEUE_STATS_PREFIX = """
+SELECT
+    queue,
+    SUM(CASE WHEN claimed = 0 THEN 1 ELSE 0 END) as unclaimed,
+    COUNT(*) as total
+FROM messages
+WHERE queue >= ? AND queue < ?
+GROUP BY queue
+ORDER BY queue
+"""
+
 # Get distinct queues for broadcast
 GET_DISTINCT_QUEUES = """
 SELECT DISTINCT queue FROM messages ORDER BY queue

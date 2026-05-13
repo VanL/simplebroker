@@ -5,7 +5,6 @@ import sys
 import time
 import warnings
 from collections.abc import Callable, Iterator
-from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,6 +21,7 @@ from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
 from .db import BrokerDB, DBConnection
 from .helpers import _is_valid_sqlite_db
+from .metadata import QueueStats
 from .sbqueue import Queue
 from .watcher import QueueMoveWatcher, QueueWatcher
 
@@ -470,7 +470,11 @@ def cmd_peek(
 
 
 def cmd_list(
-    db_path: DBTarget, show_stats: bool = False, pattern: str | None = None
+    db_path: DBTarget,
+    show_stats: bool = False,
+    pattern: str | None = None,
+    prefix: str | None = None,
+    json_output: bool = False,
 ) -> int:
     """list all queues with counts.
 
@@ -487,35 +491,73 @@ def cmd_list(
     with DBConnection(db_path) as conn:
         db = cast(BrokerDB, conn.get_connection())
 
-        # Get full queue stats including claimed messages
-        queue_stats = db.get_queue_stats()
-
-        if pattern:
-            queue_stats = [
-                (queue_name, unclaimed, total)
-                for queue_name, unclaimed, total in queue_stats
-                if fnmatchcase(queue_name, pattern)
-            ]
+        queue_stats = db.list_queue_stats(prefix=prefix, pattern=pattern)
 
         # Filter to only show queues with unclaimed messages when not showing stats
         if not show_stats:
-            queue_stats = [(q, u, t) for q, u, t in queue_stats if u > 0]
+            queue_stats = [stats for stats in queue_stats if stats.pending > 0]
 
         # Show each queue with unclaimed count (and total if different)
-        for queue_name, unclaimed, total in queue_stats:
-            if show_stats and unclaimed != total:
+        for stats in queue_stats:
+            if json_output:
+                print(json.dumps(_queue_stats_payload(stats)))
+            elif show_stats and stats.pending != stats.total:
                 print(
-                    f"{queue_name}: {unclaimed} ({total} total, {total - unclaimed} claimed)"
+                    f"{stats.queue}: {stats.pending} "
+                    f"({stats.total} total, {stats.claimed} claimed)"
                 )
             else:
-                print(f"{queue_name}: {unclaimed}")
+                print(f"{stats.queue}: {stats.pending}")
 
         # Only show overall claimed message stats if --stats flag is used
-        if show_stats:
+        if show_stats and not json_output:
             total_claimed, total_messages = db.get_overall_stats()
 
             if total_claimed > 0:
                 print(f"\nTotal claimed messages: {total_claimed}/{total_messages}")
+
+    return EXIT_SUCCESS
+
+
+def _queue_stats_payload(stats: QueueStats) -> dict[str, object]:
+    return {
+        "queue": stats.queue,
+        "pending": stats.pending,
+        "claimed": stats.claimed,
+        "total": stats.total,
+        "exists": stats.exists,
+    }
+
+
+def cmd_exists(db_path: DBTarget, queue_name: str, *, json_output: bool = False) -> int:
+    """Check whether a queue exists."""
+    canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
+    with DBConnection(db_path) as conn:
+        db = cast(BrokerDB, conn.get_connection())
+        exists = db.queue_exists(canonical_queue)
+
+    if json_output:
+        print(json.dumps({"queue": canonical_queue, "exists": exists}))
+
+    return EXIT_SUCCESS if exists else EXIT_QUEUE_EMPTY
+
+
+def cmd_stats(db_path: DBTarget, queue_name: str, *, json_output: bool = False) -> int:
+    """Show counts for one queue."""
+    canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
+    with DBConnection(db_path) as conn:
+        db = cast(BrokerDB, conn.get_connection())
+        stats = db.get_queue_stat(canonical_queue)
+
+    if json_output:
+        print(json.dumps(_queue_stats_payload(stats)))
+    elif stats.pending != stats.total:
+        print(
+            f"{stats.queue}: {stats.pending} "
+            f"({stats.total} total, {stats.claimed} claimed)"
+        )
+    else:
+        print(f"{stats.queue}: {stats.pending}")
 
     return EXIT_SUCCESS
 
@@ -1009,6 +1051,8 @@ __all__ = [
     "cmd_write",
     "cmd_read",
     "cmd_peek",
+    "cmd_exists",
+    "cmd_stats",
     "cmd_list",
     "cmd_delete",
     "cmd_move",

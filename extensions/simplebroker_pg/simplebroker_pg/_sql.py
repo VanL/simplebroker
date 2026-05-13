@@ -67,6 +67,23 @@ FROM messages
 GROUP BY queue
 ORDER BY queue
 """
+GET_QUEUE_STAT = """
+SELECT
+    COALESCE(SUM(CASE WHEN NOT claimed THEN 1 ELSE 0 END), 0) AS unclaimed_count,
+    COUNT(*) AS total_count
+FROM messages
+WHERE queue = ?
+"""
+LIST_QUEUE_STATS_PREFIX = """
+SELECT
+    queue,
+    SUM(CASE WHEN NOT claimed THEN 1 ELSE 0 END) AS unclaimed_count,
+    COUNT(*) AS total_count
+FROM messages
+WHERE queue COLLATE "C" >= ? AND queue COLLATE "C" < ?
+GROUP BY queue
+ORDER BY queue
+"""
 GET_TOTAL_MESSAGE_COUNT = "SELECT COUNT(*) FROM messages"
 GET_VACUUM_STATS = """
 SELECT

@@ -6,6 +6,7 @@ from ._backend_plugins import ActivityWaiter
 from ._constants import __version__, resolve_config
 from .db import BrokerDB as _BrokerDB  # noqa: F401
 from .db import open_broker
+from .metadata import QueueStats
 from .project import (
     BrokerTarget,
     broker_root,
@@ -22,6 +23,7 @@ __all__ = [
     "BrokerTarget",
     "ActivityWaiter",
     "Queue",
+    "QueueStats",
     "QueueWatcher",
     "QueueMoveWatcher",
     "__version__",

@@ -5,6 +5,12 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-05-13
+### Added
+- Added targeted queue metadata APIs: `Queue.exists()`, `Queue.stats()`, `BrokerCore.queue_exists()`, `BrokerCore.get_queue_stat()`, and `BrokerCore.list_queue_stats(...)`.
+- Added CLI metadata commands and filters: `broker exists`, `broker stats`, and `broker list --prefix ... --json`.
+- Added required backend SQL namespace entries for exact queue stats and prefix-filtered queue stats. No schema migration is required.
+
 ## [3.3.0] - 2026-05-05
 ### Added
 - Added an internal phase-lock coordinator that serializes ordered setup phases with advisory lock files, durable xattr completion hints, and a status-file fallback for filesystems without usable xattrs.

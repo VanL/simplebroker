@@ -205,11 +205,29 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         action="store_true",
         help="show statistics including claimed messages",
     )
-    list_parser.add_argument(
+    list_filter_group = list_parser.add_mutually_exclusive_group()
+    list_filter_group.add_argument(
+        "--prefix",
+        help="only show queues starting with this literal prefix",
+    )
+    list_filter_group.add_argument(
         "-p",
         "--pattern",
         help="only show queues matching this fnmatch-style glob",
     )
+    list_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="output in line-delimited JSON (ndjson) format",
+    )
+
+    exists_parser = subparsers.add_parser("exists", help="check whether a queue exists")
+    exists_parser.add_argument("queue", help="queue name")
+    exists_parser.add_argument("--json", action="store_true", help="output JSON")
+
+    stats_parser = subparsers.add_parser("stats", help="show counts for one queue")
+    stats_parser.add_argument("queue", help="queue name")
+    stats_parser.add_argument("--json", action="store_true", help="output JSON")
 
     # Purge command
     delete_parser = subparsers.add_parser("delete", help="remove messages")
@@ -406,6 +424,8 @@ class ArgumentProcessor:
             "write",
             "read",
             "peek",
+            "exists",
+            "stats",
             "list",
             "delete",
             "move",
@@ -837,6 +857,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
             if db_path.exists() and args.command in (
                 "read",
                 "peek",
+                "exists",
                 "move",
                 "list",
                 "stats",
@@ -918,7 +939,26 @@ def main(*, config: dict[str, Any] = _config) -> int:
         elif args.command == "list":
             show_stats = getattr(args, "stats", False)
             pattern = getattr(args, "pattern", None)
-            return commands.cmd_list(resolved_target, show_stats, pattern=pattern)
+            prefix = getattr(args, "prefix", None)
+            return commands.cmd_list(
+                resolved_target,
+                show_stats,
+                pattern=pattern,
+                prefix=prefix,
+                json_output=getattr(args, "json", False),
+            )
+        elif args.command == "exists":
+            return commands.cmd_exists(
+                resolved_target,
+                args.queue,
+                json_output=getattr(args, "json", False),
+            )
+        elif args.command == "stats":
+            return commands.cmd_stats(
+                resolved_target,
+                args.queue,
+                json_output=getattr(args, "json", False),
+            )
         elif args.command == "delete":
             # argparse mutual exclusion ensures exactly one of queue or --all is provided
             queue = None if args.all else args.queue

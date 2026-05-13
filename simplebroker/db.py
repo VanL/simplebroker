@@ -50,6 +50,7 @@ from ._sql import RetrieveQuerySpec
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
 from .helpers import _execute_with_retry, interruptible_sleep
+from .metadata import QueueStats
 
 if TYPE_CHECKING:
     from ._broker_session import _ProcessBrokerSession, _SessionKey
@@ -154,6 +155,42 @@ def _validate_queue_name_cached(queue: str) -> str | None:
         )
 
     return None
+
+
+def _validate_queue_prefix(prefix: str) -> None:
+    """Validate a literal queue-name prefix."""
+    if prefix == "":
+        return
+
+    if len(prefix) > MAX_QUEUE_NAME_LENGTH:
+        raise ValueError(
+            f"Invalid queue prefix: exceeds {MAX_QUEUE_NAME_LENGTH} characters"
+        )
+
+    if prefix[0] in ".-" or not re.fullmatch(r"[a-zA-Z0-9_.-]*", prefix):
+        raise ValueError(
+            "Invalid queue prefix: must contain only letters, numbers, periods, "
+            "underscores, and hyphens. Cannot begin with a hyphen or a period"
+        )
+
+
+def _prefix_upper_bound(prefix: str) -> str:
+    """Return the exclusive upper bound for all strings starting with prefix."""
+    if prefix == "":
+        raise ValueError("Cannot compute an upper bound for an empty prefix")
+    return f"{prefix[:-1]}{chr(ord(prefix[-1]) + 1)}"
+
+
+def _literal_prefix_from_fnmatch(pattern: str) -> str:
+    """Return the literal prefix before the first fnmatch metacharacter."""
+    metachar_indexes = [
+        index
+        for index in (pattern.find("*"), pattern.find("?"), pattern.find("["))
+        if index != -1
+    ]
+    if not metachar_indexes:
+        return pattern
+    return pattern[: min(metachar_indexes)]
 
 
 # Hybrid timestamp constants
@@ -1798,6 +1835,18 @@ class BrokerCore:
         # Execute with retry logic
         return self._run_with_retry(_do_list)
 
+    @staticmethod
+    def _queue_stats_from_row(row: tuple[Any, ...]) -> QueueStats:
+        queue = str(row[0])
+        pending = int(row[1] or 0)
+        total = int(row[2] or 0)
+        return QueueStats(
+            queue=queue,
+            pending=pending,
+            claimed=total - pending,
+            total=total,
+        )
+
     def get_queue_stats(self) -> list[tuple[str, int, int]]:
         """Get all queues with both unclaimed and total message counts.
 
@@ -1814,6 +1863,87 @@ class BrokerCore:
                 return list(self._runner.run(self._sql.GET_QUEUE_STATS, fetch=True))
 
         # Execute with retry logic
+        return self._run_with_retry(_do_stats)
+
+    def queue_exists(self, queue: str) -> bool:
+        """Check whether a queue has any messages, including claimed rows."""
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+
+        def _do_check() -> bool:
+            with self._lock:
+                rows = list(
+                    self._runner.run(self._sql.CHECK_QUEUE_EXISTS, (queue,), fetch=True)
+                )
+                return bool(rows[0][0]) if rows else False
+
+        return self._run_with_retry(_do_check)
+
+    def get_queue_stat(self, queue: str) -> QueueStats:
+        """Get pending, claimed, and total counts for one queue."""
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+
+        def _do_stats() -> QueueStats:
+            with self._lock:
+                rows = list(
+                    self._runner.run(self._sql.GET_QUEUE_STAT, (queue,), fetch=True)
+                )
+                if not rows:
+                    return QueueStats(queue=queue, pending=0, claimed=0, total=0)
+                pending = int(rows[0][0] or 0)
+                total = int(rows[0][1] or 0)
+                return QueueStats(
+                    queue=queue,
+                    pending=pending,
+                    claimed=total - pending,
+                    total=total,
+                )
+
+        return self._run_with_retry(_do_stats)
+
+    def list_queue_stats(
+        self,
+        *,
+        prefix: str | None = None,
+        pattern: str | None = None,
+    ) -> list[QueueStats]:
+        """List queue stats, optionally filtered by prefix or fnmatch pattern."""
+        self._check_fork_safety()
+        if prefix is not None and pattern is not None:
+            raise ValueError("prefix and pattern cannot be used together")
+
+        def _do_stats() -> list[QueueStats]:
+            with self._lock:
+                rows: list[tuple[Any, ...]]
+                sql_prefix = prefix
+
+                if pattern is not None:
+                    literal_prefix = _literal_prefix_from_fnmatch(pattern)
+                    sql_prefix = literal_prefix or None
+
+                if sql_prefix is not None:
+                    _validate_queue_prefix(sql_prefix)
+
+                if sql_prefix:
+                    bounds = (sql_prefix, _prefix_upper_bound(sql_prefix))
+                    rows = list(
+                        self._runner.run(
+                            self._sql.LIST_QUEUE_STATS_PREFIX, bounds, fetch=True
+                        )
+                    )
+                else:
+                    rows = list(self._runner.run(self._sql.GET_QUEUE_STATS, fetch=True))
+
+                stats = [self._queue_stats_from_row(row) for row in rows]
+
+                if prefix is not None:
+                    stats = [item for item in stats if item.queue.startswith(prefix)]
+                if pattern is not None:
+                    stats = [item for item in stats if fnmatchcase(item.queue, pattern)]
+
+                return stats
+
         return self._run_with_retry(_do_stats)
 
     def get_overall_stats(self) -> tuple[int, int]:

@@ -24,6 +24,7 @@ from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_c
 from ._runner import SQLRunner
 from ._targets import ResolvedTarget
 from .db import BrokerCore, BrokerDB, DBConnection
+from .metadata import QueueStats
 from .project import target_for_directory
 
 logger = logging.getLogger(__name__)
@@ -930,6 +931,16 @@ class Queue:
         """
         with self.get_connection() as connection:
             return connection.has_pending_messages(self.name, since_timestamp)
+
+    def exists(self) -> bool:
+        """Return whether this queue has any messages, including claimed rows."""
+        with self.get_connection() as connection:
+            return connection.queue_exists(self.name)
+
+    def stats(self) -> QueueStats:
+        """Return pending, claimed, and total counts for this queue."""
+        with self.get_connection() as connection:
+            return connection.get_queue_stat(self.name)
 
     def get_data_version(self) -> int | None:
         """Get the database data version for change detection.
