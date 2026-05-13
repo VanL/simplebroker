@@ -111,7 +111,7 @@ def test_other_valid_timestamp_formats_rejected(workdir: Path):
     # Write a message to ensure queue exists
     run_cli("write", "test_queue", "message1", cwd=workdir)
 
-    # These are all valid timestamps for --since, but NOT for -m/--message
+    # These are all valid timestamps for --after, but NOT for -m/--message
     invalid_for_message_flag = [
         "2024-01-15",  # ISO date
         "2024-01-15T14:30:00Z",  # ISO datetime
@@ -555,8 +555,8 @@ def test_read_by_timestamp_affects_peek_all(workdir: Path):
     assert "message2" not in messages
 
 
-def test_read_by_timestamp_affects_read_since(workdir: Path):
-    """Test that message read by timestamp doesn't appear in read --since."""
+def test_read_by_timestamp_affects_read_after(workdir: Path):
+    """Test that message read by timestamp doesn't appear in read --after."""
     # Write messages
     for i in range(5):
         run_cli("write", "test_queue", f"message{i}", cwd=workdir)
@@ -571,9 +571,9 @@ def test_read_by_timestamp_affects_read_since(workdir: Path):
     rc, out, err = run_cli("read", "test_queue", "-m", ts_message3, cwd=workdir)
     assert rc == 0
 
-    # Read all messages since message0
+    # Read all messages after message0
     rc, out, err = run_cli(
-        "read", "test_queue", "--all", "--since", ts_message0, cwd=workdir
+        "read", "test_queue", "--all", "--after", ts_message0, cwd=workdir
     )
     assert rc == 0
     messages = out.strip().split("\n")
@@ -617,11 +617,11 @@ def test_mutual_exclusivity_with_all(workdir: Path):
     assert "cannot be used with --all" in err or "not allowed with argument" in err
 
 
-def test_mutual_exclusivity_with_since(workdir: Path):
-    """Test that --message cannot be used with --since."""
+def test_mutual_exclusivity_with_after(workdir: Path):
+    """Test that --message cannot be used with --after."""
     # This should be caught at argument parsing level
     rc, out, err = run_cli(
-        "read", "test_queue", "-m", "1234567890123456789", "--since", "0", cwd=workdir
+        "read", "test_queue", "-m", "1234567890123456789", "--after", "0", cwd=workdir
     )
     assert rc != 0
     assert "cannot be used with" in err or "not allowed with argument" in err

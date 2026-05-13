@@ -1034,7 +1034,8 @@ class BrokerCore:
         offset: int = 0,
         target_queue: str | None = None,
         exact_timestamp: int | None = None,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         require_unclaimed: bool = True,
     ) -> RetrieveQuerySpec:
         """Build the backend-neutral retrieve-query specification."""
@@ -1043,7 +1044,8 @@ class BrokerCore:
             limit=limit,
             offset=offset,
             exact_timestamp=exact_timestamp,
-            since_timestamp=since_timestamp,
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
             require_unclaimed=require_unclaimed,
             target_queue=target_queue,
         )
@@ -1130,7 +1132,8 @@ class BrokerCore:
         with_timestamps: bool,
         limit: int,
         target_queue: str | None = None,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
         require_unclaimed: bool = True,
     ) -> Iterator[tuple[str, int] | str]:
@@ -1154,7 +1157,8 @@ class BrokerCore:
             limit,
             target_queue=target_queue,
             exact_timestamp=exact_timestamp,
-            since_timestamp=since_timestamp,
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
             require_unclaimed=require_unclaimed,
         )
         query, params = self._sql.build_retrieve_query(operation, spec)
@@ -1205,7 +1209,8 @@ class BrokerCore:
         limit: int = 1,
         offset: int = 0,
         exact_timestamp: int | None = None,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         commit_before_yield: bool = True,
         require_unclaimed: bool = True,
     ) -> list[tuple[str, int]]:
@@ -1219,7 +1224,8 @@ class BrokerCore:
             target_queue: Destination queue (required for move)
             limit: Maximum number of messages to retrieve
             exact_timestamp: Retrieve specific message by timestamp
-            since_timestamp: Only retrieve messages after this timestamp
+            after_timestamp: Only retrieve messages after this timestamp
+            before_timestamp: Only retrieve messages before this timestamp
             commit_before_yield: If True, commit before returning (exactly-once)
             require_unclaimed: If True (default), only consider unclaimed messages
 
@@ -1248,7 +1254,8 @@ class BrokerCore:
             offset=offset,
             target_queue=target_queue,
             exact_timestamp=exact_timestamp,
-            since_timestamp=since_timestamp,
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
             require_unclaimed=require_unclaimed,
         )
         query, params = self._sql.build_retrieve_query(operation, spec)
@@ -1328,7 +1335,8 @@ class BrokerCore:
         *,
         with_timestamps: bool = True,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
     ) -> list[tuple[str, int]] | list[str]:
         """Claim and return multiple messages from a queue.
 
@@ -1341,7 +1349,8 @@ class BrokerCore:
                 ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
                 as exactly-once. Use ``claim_generator()`` for retryable batch
                 processing.
-            since_timestamp: If provided, only claim messages after this timestamp
+            after_timestamp: If provided, only claim messages after this timestamp
+            before_timestamp: If provided, only claim messages before this timestamp
 
         Returns:
             list of (message_body, timestamp) tuples if with_timestamps=True,
@@ -1362,7 +1371,8 @@ class BrokerCore:
             queue,
             operation="claim",
             limit=limit,
-            since_timestamp=since_timestamp,
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
             commit_before_yield=True,
         )
 
@@ -1378,7 +1388,8 @@ class BrokerCore:
         with_timestamps: bool = True,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
         batch_size: int | None = None,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
         config: dict[str, Any] = _config,
     ) -> Iterator[tuple[str, int] | str]:
@@ -1390,7 +1401,8 @@ class BrokerCore:
             delivery_guarantee: Delivery semantics (default: exactly_once)
                 - exactly_once: Process one message at a time (safer, slower)
                 - at_least_once: Commit each batch only after it is fully yielded
-            since_timestamp: If provided, only claim messages after this timestamp
+            after_timestamp: If provided, only claim messages after this timestamp
+            before_timestamp: If provided, only claim messages before this timestamp
             exact_timestamp: If provided, only claim message with this exact timestamp
 
         Yields:
@@ -1408,7 +1420,8 @@ class BrokerCore:
                     queue,
                     operation="claim",
                     limit=1,
-                    since_timestamp=since_timestamp,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
                     exact_timestamp=exact_timestamp,
                     commit_before_yield=True,
                 )
@@ -1430,7 +1443,8 @@ class BrokerCore:
                 operation="claim",
                 with_timestamps=with_timestamps,
                 limit=effective_batch_size,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
             )
 
@@ -1475,7 +1489,8 @@ class BrokerCore:
         limit: int = PEEK_BATCH_SIZE,
         *,
         with_timestamps: bool = True,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
     ) -> list[tuple[str, int]] | list[str]:
         """Peek at multiple messages from a queue without claiming them.
 
@@ -1485,7 +1500,8 @@ class BrokerCore:
             queue: Name of the queue
             limit: Maximum number of messages to peek at (default: 1000)
             with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
-            since_timestamp: If provided, only peek at messages after this timestamp
+            after_timestamp: If provided, only peek at messages after this timestamp
+            before_timestamp: If provided, only peek at messages before this timestamp
 
         Returns:
             list of (message_body, timestamp) tuples if with_timestamps=True,
@@ -1499,7 +1515,11 @@ class BrokerCore:
             raise ValueError("limit must be at least 1")
 
         results = self._retrieve(
-            queue, operation="peek", limit=limit, since_timestamp=since_timestamp
+            queue,
+            operation="peek",
+            limit=limit,
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
         )
 
         if with_timestamps:
@@ -1513,7 +1533,8 @@ class BrokerCore:
         *,
         with_timestamps: bool = True,
         batch_size: int | None = None,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
     ) -> Iterator[tuple[str, int] | str]:
         """Generator that peeks at messages in a queue without claiming them.
@@ -1522,7 +1543,8 @@ class BrokerCore:
             queue: Name of the queue
             with_timestamps: If True, yield (body, timestamp) tuples; if False, yield just bodies
             batch_size: Batch size for pagination (uses configured default if None)
-            since_timestamp: If provided, only peek at messages after this timestamp
+            after_timestamp: If provided, only peek at messages after this timestamp
+            before_timestamp: If provided, only peek at messages before this timestamp
             exact_timestamp: If provided, only peek at message with this exact timestamp
 
         Yields:
@@ -1542,7 +1564,8 @@ class BrokerCore:
                 operation="peek",
                 limit=effective_batch_size,
                 offset=offset,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
             )
 
@@ -1621,7 +1644,8 @@ class BrokerCore:
         *,
         with_timestamps: bool = True,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         require_unclaimed: bool = True,
     ) -> list[tuple[str, int]] | list[str]:
         """Move multiple messages from source queue to target queue.
@@ -1638,7 +1662,8 @@ class BrokerCore:
                 ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
                 as exactly-once. Use ``move_generator()`` for retryable batch
                 processing.
-            since_timestamp: If provided, only move messages after this timestamp
+            after_timestamp: If provided, only move messages after this timestamp
+            before_timestamp: If provided, only move messages before this timestamp
             require_unclaimed: If True (default), only move unclaimed messages
 
         Returns:
@@ -1663,7 +1688,8 @@ class BrokerCore:
             operation="move",
             target_queue=target_queue,
             limit=limit,
-            since_timestamp=since_timestamp,
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
             commit_before_yield=True,
             require_unclaimed=require_unclaimed,
         )
@@ -1681,7 +1707,8 @@ class BrokerCore:
         with_timestamps: bool = True,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
         batch_size: int | None = None,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
         config: dict[str, Any] = _config,
     ) -> Iterator[tuple[str, int] | str]:
@@ -1695,7 +1722,8 @@ class BrokerCore:
                 - exactly_once: Process one message at a time (safer, slower)
                 - at_least_once: Commit each batch only after it is fully yielded
             batch_size: Batch size for at_least_once mode (uses configured default if None)
-            since_timestamp: If provided, only move messages after this timestamp
+            after_timestamp: If provided, only move messages after this timestamp
+            before_timestamp: If provided, only move messages before this timestamp
             exact_timestamp: If provided, move only message with this timestamp
 
         Yields:
@@ -1717,7 +1745,8 @@ class BrokerCore:
                     operation="move",
                     target_queue=target_queue,
                     limit=1,
-                    since_timestamp=since_timestamp,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
                     exact_timestamp=exact_timestamp,
                     commit_before_yield=True,
                 )
@@ -1740,7 +1769,8 @@ class BrokerCore:
                 with_timestamps=with_timestamps,
                 limit=effective_batch_size,
                 target_queue=target_queue,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
             )
 
@@ -2156,13 +2186,13 @@ class BrokerCore:
         return self._run_with_retry(_do_check)
 
     def has_pending_messages(
-        self, queue: str, since_timestamp: int | None = None
+        self, queue: str, after_timestamp: int | None = None
     ) -> bool:
         """Check if there are any unclaimed messages in the specified queue.
 
         Args:
             queue: Name of the queue to check
-            since_timestamp: Optional timestamp to check for messages after (exclusive)
+            after_timestamp: Optional timestamp to check for messages after (exclusive)
 
         Returns:
             True if there are unclaimed messages, False otherwise
@@ -2179,10 +2209,10 @@ class BrokerCore:
             """Inner function to execute the check with retry logic."""
             with self._lock:
                 params: tuple[Any, ...]
-                if since_timestamp is not None:
+                if after_timestamp is not None:
                     # Check for unclaimed messages after the specified timestamp
-                    query = self._sql.CHECK_PENDING_MESSAGES_SINCE
-                    params = (queue, since_timestamp)
+                    query = self._sql.CHECK_PENDING_MESSAGES_AFTER
+                    params = (queue, after_timestamp)
                 else:
                     # Check for any unclaimed messages
                     query = self._sql.CHECK_PENDING_MESSAGES

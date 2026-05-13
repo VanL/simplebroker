@@ -640,7 +640,7 @@ class AsyncBrokerCore:
         all_messages: bool = False,
         exact_timestamp: int | None = None,
         commit_interval: int = 1,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
     ) -> AsyncIterator[str]:
         """Stream messages from a queue."""
         await self._ensure_initialized()
@@ -654,9 +654,9 @@ class AsyncBrokerCore:
         else:
             where_conditions = ["queue = ?", "claimed = 0"]
             params = [queue]
-            if since_timestamp is not None:
+            if after_timestamp is not None:
                 where_conditions.append("ts > ?")
-                params.append(since_timestamp)
+                params.append(after_timestamp)
 
         if peek:
             # Peek mode - no locking needed

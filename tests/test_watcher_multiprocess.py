@@ -87,12 +87,17 @@ def shutdown_test_process(
         processed_before_stop = []
         processed_after_stop = []
         stop_requested = False
+        reported_processed = False
 
         def handler(msg, ts) -> None:
+            nonlocal reported_processed
             if stop_requested:
                 processed_after_stop.append(msg)
             else:
                 processed_before_stop.append(msg)
+                if not reported_processed:
+                    reported_processed = True
+                    result_queue.put(("processed", process_id, msg))
 
         watcher = QueueWatcher(queue_name, handler, db=db_path)
         thread = watcher.run_in_thread()
@@ -492,15 +497,39 @@ def test_multiprocess_graceful_shutdown() -> None:
                 p.start()
                 processes.append(p)
 
-            # Wait for ready
-            ready_count = 0
-            while ready_count < num_processes:
-                msg_type, proc_id, data = result_queue.get(timeout=5.0)
-                if msg_type == "ready":
-                    ready_count += 1
+            # Wait until each child has both started and processed real work.
+            ready_processes = set()
+            processed_processes = set()
+            errors = []
+            deadline = time.monotonic() + 10
 
-            # Let them process some messages
-            time.sleep(0.5)
+            while (
+                len(ready_processes) < num_processes
+                or len(processed_processes) < num_processes
+            ) and time.monotonic() < deadline:
+                try:
+                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+
+                if msg_type == "ready":
+                    ready_processes.add(proc_id)
+                elif msg_type == "processed":
+                    processed_processes.add(proc_id)
+                elif msg_type == "error":
+                    errors.append((proc_id, data))
+
+            if errors:
+                raise AssertionError(f"Process errors occurred: {errors}")
+
+            assert ready_processes == set(range(num_processes)), (
+                "Processes did not become ready before shutdown: "
+                f"ready={sorted(ready_processes)}"
+            )
+            assert processed_processes == set(range(num_processes)), (
+                "Processes did not process messages before shutdown: "
+                f"processed={sorted(processed_processes)}"
+            )
 
             # Send stop signals
             for control_queue in control_queues:
@@ -508,17 +537,14 @@ def test_multiprocess_graceful_shutdown() -> None:
 
             # Collect shutdown stats with robust error handling
             shutdown_stats = {}
-            errors = []
             timeout_start = time.monotonic()
-            messages_received = 0
 
             while (
-                messages_received < num_processes
+                len(shutdown_stats) + len(errors) < num_processes
                 and time.monotonic() - timeout_start < 10
             ):
                 try:
                     msg_type, proc_id, data = result_queue.get(timeout=1.0)
-                    messages_received += 1
 
                     if msg_type == "shutdown_stats":
                         shutdown_stats[proc_id] = data
@@ -536,7 +562,7 @@ def test_multiprocess_graceful_shutdown() -> None:
                 assert i in shutdown_stats, f"Missing shutdown stats for process {i}"
                 stats = shutdown_stats[i]
                 assert stats["before_stop"] > 0  # Processed some messages
-                assert stats["after_stop"] == 0  # No processing after stop
+                assert stats["after_stop"] == 0  # No processing after stop() returned
                 assert not stats["thread_alive"]  # Thread stopped cleanly
         finally:
             # Ensure all processes are cleaned up

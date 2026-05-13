@@ -197,7 +197,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 db = BrokerDB(str(db_path))
             except Exception:
                 # If database is too corrupted to open, use mock for this specific test
-                # since we're testing the retry logic, not the corruption itself
+                # after we're testing the retry logic, not the corruption itself
                 stop_event = threading.Event()
                 strategy = PollingStrategy(stop_event)
 

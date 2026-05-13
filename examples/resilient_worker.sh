@@ -29,7 +29,7 @@ echo "Starting from checkpoint: $last_checkpoint"
 # Main processing loop using peek-and-ack pattern
 while true; do
     # Find one message to process using peek mode
-    message_data=$(broker peek "$QUEUE" --json --since "$last_checkpoint" 2>/dev/null)
+    message_data=$(broker peek "$QUEUE" --json --after "$last_checkpoint" 2>/dev/null)
     
     if [ -z "$message_data" ]; then
         echo "No new messages, sleeping..."

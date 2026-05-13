@@ -1,5 +1,5 @@
 """
-Test broadcast with --since flag integration.
+Test broadcast with --after flag integration.
 
 Tests how broadcast messages interact with checkpoint-based consumption.
 """
@@ -15,7 +15,7 @@ def _queue_has_broadcast(workdir, queue_name, checkpoint):
         "peek",
         queue_name,
         "--all",
-        "--since",
+        "--after",
         str(checkpoint + 1),
         cwd=workdir,
     )
@@ -31,7 +31,7 @@ def _has_expected_messages(workdir, queue_name, expected_count):
     return len(lines) >= expected_count
 
 
-def test_broadcast_with_since_filtering(workdir):
+def test_broadcast_with_after_filtering(workdir):
     """Test that broadcast messages can be filtered by timestamp."""
     # Create multiple queues
     queues = ["queue1", "queue2", "queue3"]
@@ -82,7 +82,7 @@ def test_broadcast_checkpoint_based_workers(workdir):
     # Each worker should see remaining tasks plus broadcast when resuming from checkpoint
     for q in worker_queues:
         rc, out, _ = run_cli(
-            "peek", q, "--all", "--json", "--since", str(checkpoints[q]), cwd=workdir
+            "peek", q, "--all", "--json", "--after", str(checkpoints[q]), cwd=workdir
         )
         assert rc == 0
 
@@ -134,7 +134,7 @@ def test_broadcast_ordering_with_timestamps(workdir):
 
 
 def test_broadcast_empty_queue_behavior(workdir):
-    """Test broadcast behavior with empty queues and --since."""
+    """Test broadcast behavior with empty queues and --after."""
     # Create and immediately empty a queue
     run_cli("write", "ephemeral", "temp", cwd=workdir)
     rc, out, _ = run_cli("read", "ephemeral", "--timestamps", cwd=workdir)

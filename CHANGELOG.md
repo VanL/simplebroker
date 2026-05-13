@@ -5,6 +5,13 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-05-13
+### Added
+- Added `--before <timestamp>` for `read`, `peek`, and `move`, using the same timestamp formats as `--since` and strict `ts < timestamp` filtering.
+- Added `before_timestamp` range filtering to the public `Queue` and `BrokerCore` read, peek, move, and stream APIs.
+### Changed
+- Moved --since to --after to mirror --before
+
 ## [3.4.0] - 2026-05-13
 ### Added
 - Added targeted queue metadata APIs: `Queue.exists()`, `Queue.stats()`, `BrokerCore.queue_exists()`, `BrokerCore.get_queue_stat()`, and `BrokerCore.list_queue_stats(...)`.

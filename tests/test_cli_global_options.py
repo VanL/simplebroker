@@ -29,7 +29,7 @@ def test_global_options_between_args(workdir: Path):
     assert code == 0
     assert stdout == ""
 
-    # Test --dir is not needed since we're using workdir fixture
+    # Test --dir is not needed after we're using workdir fixture
     code, stdout, stderr = run_cli("write", "q3", "msg3", cwd=workdir)
     assert code == 0
 

@@ -258,31 +258,42 @@ def _output_message(
 
 
 def _resolve_timestamp_filters(
-    since_str: str | None,
+    after_str: str | None,
+    before_str: str | None,
     message_id_str: str | None,
-) -> tuple[int | None, int | None, int | None]:
-    """Parse shared --since / --message-id filters for read-like commands.
+) -> tuple[int | None, int | None, int | None, int | None]:
+    """Parse shared --after / --before / --message-id filters.
 
-    Returns (error_code, since_timestamp, exact_timestamp). error_code is non-None when
-    the caller should abort and return the provided exit code.
+    Returns (error_code, after_timestamp, before_timestamp, exact_timestamp).
+    error_code is non-None when the caller should abort and return the provided
+    exit code.
     """
 
-    since_timestamp = None
-    if since_str is not None:
+    after_timestamp = None
+    if after_str is not None:
         try:
-            since_timestamp = _validate_timestamp(since_str)
+            after_timestamp = _validate_timestamp(after_str)
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
             sys.stderr.flush()
-            return EXIT_ERROR, None, None
+            return EXIT_ERROR, None, None, None
+
+    before_timestamp = None
+    if before_str is not None:
+        try:
+            before_timestamp = _validate_timestamp(before_str)
+        except ValueError as e:
+            print(f"simplebroker: error: {e}", file=sys.stderr)
+            sys.stderr.flush()
+            return EXIT_ERROR, None, None, None
 
     exact_timestamp = None
     if message_id_str is not None:
         exact_timestamp = parse_exact_message_id(message_id_str)
         if exact_timestamp is None:
-            return EXIT_QUEUE_EMPTY, None, None
+            return EXIT_QUEUE_EMPTY, None, None, None
 
-    return None, since_timestamp, exact_timestamp
+    return None, after_timestamp, before_timestamp, exact_timestamp
 
 
 FetchOneFn = Callable[..., str | tuple[str, int] | None]
@@ -295,7 +306,8 @@ def _process_queue_fetch(
     fetch_generator: FetchGeneratorFn,
     exact_timestamp: int | None,
     all_messages: bool,
-    since_timestamp: int | None,
+    after_timestamp: int | None,
+    before_timestamp: int | None,
     json_output: bool,
     show_timestamps: bool,
 ) -> int:
@@ -323,7 +335,11 @@ def _process_queue_fetch(
 
         generator = cast(
             Iterator[tuple[str, int]],
-            fetch_generator(with_timestamps=True, since_timestamp=since_timestamp),
+            fetch_generator(
+                with_timestamps=True,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
+            ),
         )
 
         for message, timestamp in generator:
@@ -334,10 +350,14 @@ def _process_queue_fetch(
 
         return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
 
-    if since_timestamp is not None:
+    if after_timestamp is not None or before_timestamp is not None:
         gen = cast(
             Iterator[tuple[str, int]],
-            fetch_generator(with_timestamps=True, since_timestamp=since_timestamp),
+            fetch_generator(
+                with_timestamps=True,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
+            ),
         )
         try:
             message, timestamp = next(gen)
@@ -390,8 +410,9 @@ def cmd_read(
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
-    since_str: str | None = None,
+    after_str: str | None = None,
     message_id_str: str | None = None,
+    before_str: str | None = None,
 ) -> int:
     """Read and remove message(s) from queue using Queue API.
 
@@ -401,14 +422,15 @@ def cmd_read(
         all_messages: If True, read all messages
         json_output: If True, output as JSON
         show_timestamps: If True, include timestamps
-        since_str: Timestamp string for filtering
+        after_str: Timestamp string for filtering
         message_id_str: Specific message ID to read
+        before_str: Timestamp string for upper-bound filtering
 
     Returns:
         Exit code
     """
-    error_code, since_timestamp, exact_timestamp = _resolve_timestamp_filters(
-        since_str, message_id_str
+    error_code, after_timestamp, before_timestamp, exact_timestamp = (
+        _resolve_timestamp_filters(after_str, before_str, message_id_str)
     )
     if error_code is not None:
         return error_code
@@ -421,7 +443,8 @@ def cmd_read(
             fetch_generator=queue.read_generator,
             exact_timestamp=exact_timestamp,
             all_messages=all_messages,
-            since_timestamp=since_timestamp,
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
             json_output=json_output,
             show_timestamps=show_timestamps,
         )
@@ -433,8 +456,9 @@ def cmd_peek(
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
-    since_str: str | None = None,
+    after_str: str | None = None,
     message_id_str: str | None = None,
+    before_str: str | None = None,
 ) -> int:
     """Peek at message(s) without removing them using Queue API.
 
@@ -444,14 +468,15 @@ def cmd_peek(
         all_messages: If True, peek at all messages
         json_output: If True, output as JSON
         show_timestamps: If True, include timestamps
-        since_str: Timestamp string for filtering
+        after_str: Timestamp string for filtering
         message_id_str: Specific message ID to peek at
+        before_str: Timestamp string for upper-bound filtering
 
     Returns:
         Exit code
     """
-    error_code, since_timestamp, exact_timestamp = _resolve_timestamp_filters(
-        since_str, message_id_str
+    error_code, after_timestamp, before_timestamp, exact_timestamp = (
+        _resolve_timestamp_filters(after_str, before_str, message_id_str)
     )
     if error_code is not None:
         return error_code
@@ -463,7 +488,8 @@ def cmd_peek(
             fetch_generator=queue.peek_generator,
             exact_timestamp=exact_timestamp,
             all_messages=all_messages,
-            since_timestamp=since_timestamp,
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
             json_output=json_output,
             show_timestamps=show_timestamps,
         )
@@ -636,7 +662,8 @@ def cmd_move(
     json_output: bool = False,
     show_timestamps: bool = False,
     message_id_str: str | None = None,
-    since_str: str | None = None,
+    after_str: str | None = None,
+    before_str: str | None = None,
 ) -> int:
     """Move message(s) between queues using Queue API.
 
@@ -648,7 +675,8 @@ def cmd_move(
         json_output: If True, output as JSON
         show_timestamps: If True, include timestamps
         message_id_str: Specific message ID to move
-        since_str: Timestamp string for filtering
+        after_str: Timestamp string for filtering
+        before_str: Timestamp string for upper-bound filtering
 
     Returns:
         Exit code
@@ -665,22 +693,11 @@ def cmd_move(
         sys.stderr.flush()
         return EXIT_ERROR
 
-    # Validate timestamp if provided
-    since_timestamp = None
-    if since_str is not None:
-        try:
-            since_timestamp = _validate_timestamp(since_str)
-        except ValueError as e:
-            print(f"simplebroker: error: {e}", file=sys.stderr)
-            sys.stderr.flush()
-            return EXIT_ERROR
-
-    # Validate exact timestamp if provided
-    exact_timestamp = None
-    if message_id_str is not None:
-        exact_timestamp = parse_exact_message_id(message_id_str)
-        if exact_timestamp is None:
-            return EXIT_QUEUE_EMPTY
+    error_code, after_timestamp, before_timestamp, exact_timestamp = (
+        _resolve_timestamp_filters(after_str, before_str, message_id_str)
+    )
+    if error_code is not None:
+        return error_code
 
     # Create source queue instance
     with Queue(canonical_source, db_path=db_path) as queue:
@@ -709,7 +726,8 @@ def cmd_move(
                     limit=1000000,  # Large limit to capture all messages
                     with_timestamps=True,
                     delivery_guarantee="exactly_once",
-                    since_timestamp=since_timestamp,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
                 )
 
                 # Output each moved message
@@ -733,12 +751,13 @@ def cmd_move(
 
         else:
             # Move single message
-            if since_timestamp is not None:
-                # Use generator for since_timestamp support
+            if after_timestamp is not None or before_timestamp is not None:
+                # Use generator for range-filter support
                 gen = queue.move_generator(
                     canonical_dest,
                     with_timestamps=True,
-                    since_timestamp=since_timestamp,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
                 )
                 try:
                     result = next(gen)
@@ -829,7 +848,7 @@ def cmd_watch(
     peek: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
-    since_str: str | None = None,
+    after_str: str | None = None,
     quiet: bool = False,
     move_to: str | None = None,
 ) -> int:
@@ -841,7 +860,7 @@ def cmd_watch(
         peek: If True, don't consume messages
         json_output: If True, output as JSON
         show_timestamps: If True, include timestamps
-        since_str: Timestamp string for filtering
+        after_str: Timestamp string for filtering
         quiet: If True, suppress startup message
         move_to: Destination queue for move mode
 
@@ -850,20 +869,20 @@ def cmd_watch(
     """
 
     # Check for incompatible options
-    if move_to and since_str:
+    if move_to and after_str:
         print(
             "simplebroker: error: --move drains ALL messages from source queue, "
-            "incompatible with --since filtering",
+            "incompatible with --after filtering",
             file=sys.stderr,
         )
         sys.stderr.flush()
         return EXIT_ERROR
 
     # Validate timestamp if provided
-    since_timestamp = None
-    if since_str is not None:
+    after_timestamp = None
+    if after_str is not None:
         try:
-            since_timestamp = _validate_timestamp(since_str)
+            after_timestamp = _validate_timestamp(after_str)
         except ValueError as e:
             print(f"simplebroker: error: {e}", file=sys.stderr)
             sys.stderr.flush()
@@ -914,7 +933,7 @@ def cmd_watch(
                 handle_message,
                 db=db_path,
                 peek=peek,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
             )
 
         # Start watching (blocks until interrupted)

@@ -104,8 +104,8 @@ class TestBatchOperations:
         dest_messages = broker.peek_many("dest_queue", limit=10, with_timestamps=False)
         assert len(dest_messages) == 3
 
-    def test_batch_with_since_timestamp(self, broker):
-        """Test batch operations with since_timestamp filter."""
+    def test_batch_with_after_timestamp(self, broker):
+        """Test batch operations with after_timestamp filter."""
         broker.write("test_queue", "old_message1")
         broker.write("test_queue", "old_message2")
 
@@ -121,7 +121,7 @@ class TestBatchOperations:
         broker.write("test_queue", "new_message2")
 
         new_messages = broker.claim_many(
-            "test_queue", limit=10, since_timestamp=cutoff_ts, with_timestamps=False
+            "test_queue", limit=10, after_timestamp=cutoff_ts, with_timestamps=False
         )
         assert len(new_messages) == 2
         assert new_messages == ["new_message1", "new_message2"]
@@ -129,6 +129,25 @@ class TestBatchOperations:
         remaining = broker.peek_many("test_queue", limit=10, with_timestamps=False)
         assert len(remaining) == 2
         assert remaining == ["old_message1", "old_message2"]
+
+    def test_batch_with_before_timestamp(self, broker):
+        """Test batch operations with before_timestamp filter."""
+        broker.write("test_queue", "old_message1")
+        broker.write("test_queue", "old_message2")
+        broker.write("test_queue", "new_message1")
+
+        messages_with_ts = list(
+            broker.peek_generator("test_queue", with_timestamps=True)
+        )
+        new_ts = messages_with_ts[2][1]
+
+        old_messages = broker.claim_many(
+            "test_queue", limit=10, before_timestamp=new_ts, with_timestamps=False
+        )
+        assert old_messages == ["old_message1", "old_message2"]
+
+        remaining = broker.peek_many("test_queue", limit=10, with_timestamps=False)
+        assert remaining == ["new_message1"]
 
     def test_limit_validation(self, broker):
         """Test that invalid limits are rejected."""

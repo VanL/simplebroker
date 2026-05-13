@@ -99,17 +99,17 @@ def test_queue_move_single_message(queue_factory):
     assert len(messages) == 2
 
 
-def test_queue_move_since_timestamp(queue_factory):
+def test_queue_move_after_timestamp(queue_factory):
     """Test moving messages newer than a timestamp."""
-    # Test basic functionality - since_timestamp=0 should move all
+    # Test basic functionality - after_timestamp=0 should move all
     src = queue_factory("source")
 
     src.write("message1")
     src.write("message2")
     src.write("message3")
 
-    # Move all messages (since timestamp 0) - need to use all_messages=True with since_timestamp
-    moved = list(src.move("destination", since_timestamp=0, all_messages=True))
+    # Move all messages (after timestamp 0) - need to use all_messages=True with after_timestamp
+    moved = list(src.move("destination", after_timestamp=0, all_messages=True))
     assert len(moved) == 3
 
     # Verify source is empty
@@ -134,9 +134,9 @@ def test_queue_move_validation(queue_factory):
     with pytest.raises(ValueError, match="cannot be used with"):
         q.move("other", message_id=123, all_messages=True)
 
-    # Cannot use message_id with since_timestamp
+    # Cannot use message_id with after_timestamp
     with pytest.raises(ValueError, match="cannot be used with"):
-        q.move("other", message_id=123, since_timestamp=456)
+        q.move("other", message_id=123, after_timestamp=456)
 
 
 def test_queue_move_with_queue_instance(queue_factory):

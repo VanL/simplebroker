@@ -42,7 +42,7 @@ def test_non_digit_characters():
 
 def test_other_timestamp_formats_rejected():
     """Test that other valid timestamp formats are rejected."""
-    # These are valid for --since but not for -m/--message
+    # These are valid for --after but not for -m/--message
     assert parse_exact_message_id("2024-01-15") is None
     assert parse_exact_message_id("2024-01-15T14:30:00Z") is None
     assert parse_exact_message_id("1705329000") is None  # Unix seconds

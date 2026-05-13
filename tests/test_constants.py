@@ -594,7 +594,7 @@ class TestConfigValidation:
             test_path = "C:\\temp\\broker.db"
         else:
             # On Unix systems, test with a UNC path that would be absolute on Windows
-            # but skip this test since os.path.isabs behavior is platform-specific
+            # but skip this test after os.path.isabs behavior is platform-specific
             pytest.skip("Windows absolute path test only relevant on Windows")
 
         with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": test_path}):

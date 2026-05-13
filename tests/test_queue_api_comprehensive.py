@@ -89,8 +89,8 @@ class TestQueueReadMethods:
             )
         assert len(messages) == 5
 
-    def test_read_many_since_timestamp(self, queue_factory):
-        """Test read_many with since_timestamp filter."""
+    def test_read_many_after_timestamp(self, queue_factory):
+        """Test read_many with after_timestamp filter."""
         q = queue_factory("test")
 
         q.write("old1")
@@ -105,12 +105,29 @@ class TestQueueReadMethods:
         q.write("new2")
 
         # Read only new messages
-        new_messages = q.read_many(10, since_timestamp=cutoff_ts, with_timestamps=False)
+        new_messages = q.read_many(10, after_timestamp=cutoff_ts, with_timestamps=False)
         assert new_messages == ["new1", "new2"]
 
         # Old messages still there
         remaining = list(q.peek_generator(with_timestamps=False))
         assert remaining == ["old1", "old2"]
+
+    def test_read_many_before_timestamp(self, queue_factory):
+        """Test read_many with before_timestamp filter."""
+        q = queue_factory("test")
+
+        q.write("old1")
+        q.write("old2")
+        q.write("new1")
+
+        messages = list(q.peek_generator(with_timestamps=True))
+        new_ts = messages[2][1]
+
+        old_messages = q.read_many(10, before_timestamp=new_ts, with_timestamps=False)
+        assert old_messages == ["old1", "old2"]
+
+        remaining = list(q.peek_generator(with_timestamps=False))
+        assert remaining == ["new1"]
 
     def test_read_generator_basic(self, queue_factory):
         """Test read_generator method."""
@@ -143,9 +160,9 @@ class TestQueueReadMethods:
         messages = list(q.peek_generator(with_timestamps=True))
         cutoff_ts = messages[4][1]  # After message4
 
-        # Read with since_timestamp
+        # Read with after_timestamp
         new_messages = list(
-            q.read_generator(since_timestamp=cutoff_ts, with_timestamps=False)
+            q.read_generator(after_timestamp=cutoff_ts, with_timestamps=False)
         )
         assert new_messages == [f"message{i}" for i in range(5, 10)]
 
@@ -158,6 +175,22 @@ class TestQueueReadMethods:
             q.read_generator(exact_timestamp=target_ts, with_timestamps=False)
         )
         assert result == ["message2"]
+
+    def test_read_all_with_before_timestamp(self, queue_factory):
+        """Test high-level read(all_messages=True) with before_timestamp."""
+        q = queue_factory("test")
+
+        q.write("old1")
+        q.write("old2")
+        q.write("new1")
+        new_ts = list(q.peek_generator(with_timestamps=True))[2][1]
+
+        result = q.read(
+            all_messages=True, before_timestamp=new_ts, with_timestamps=False
+        )
+
+        assert list(result) == ["old1", "old2"]
+        assert list(q.peek_generator(with_timestamps=False)) == ["new1"]
 
 
 class TestQueuePeekMethods:
@@ -218,8 +251,8 @@ class TestQueuePeekMethods:
         messages = q.peek_many(10, with_timestamps=False)
         assert len(messages) == 5
 
-    def test_peek_many_since_timestamp(self, queue_factory):
-        """Test peek_many with since_timestamp filter."""
+    def test_peek_many_after_timestamp(self, queue_factory):
+        """Test peek_many with after_timestamp filter."""
         q = queue_factory("test")
 
         q.write("old1")
@@ -234,8 +267,26 @@ class TestQueuePeekMethods:
         q.write("new2")
 
         # Peek only new messages
-        new_messages = q.peek_many(10, since_timestamp=cutoff_ts, with_timestamps=False)
+        new_messages = q.peek_many(10, after_timestamp=cutoff_ts, with_timestamps=False)
         assert new_messages == ["new1", "new2"]
+
+    def test_peek_many_before_timestamp(self, queue_factory):
+        """Test peek_many with before_timestamp filter."""
+        q = queue_factory("test")
+
+        q.write("old1")
+        q.write("old2")
+        q.write("new1")
+        new_ts = list(q.peek_generator(with_timestamps=True))[2][1]
+
+        old_messages = q.peek_many(10, before_timestamp=new_ts, with_timestamps=False)
+
+        assert old_messages == ["old1", "old2"]
+        assert list(q.peek_generator(with_timestamps=False)) == [
+            "old1",
+            "old2",
+            "new1",
+        ]
 
     def test_peek_generator_basic(self, queue_factory):
         """Test peek_generator method."""
@@ -254,6 +305,20 @@ class TestQueuePeekMethods:
         # All still there
         messages2 = list(q.peek_generator(with_timestamps=False))
         assert messages2 == messages
+
+    def test_peek_generator_before_timestamp(self, queue_factory):
+        """Test peek_generator with before_timestamp filter."""
+        q = queue_factory("test")
+
+        for message in ("old1", "old2", "new1"):
+            q.write(message)
+        new_ts = list(q.peek_generator(with_timestamps=True))[2][1]
+
+        messages = list(
+            q.peek_generator(before_timestamp=new_ts, with_timestamps=False)
+        )
+
+        assert messages == ["old1", "old2"]
 
 
 class TestQueueMoveMethods:
@@ -388,6 +453,25 @@ class TestQueueLastTimestampCaching:
         messages = list(dest.peek_generator(with_timestamps=False))
         assert messages == ["message0", "message1", "message2"]
 
+    def test_move_many_before_timestamp(self, queue_factory):
+        """Test move_many with before_timestamp filter."""
+        source = queue_factory("source")
+
+        source.write("old1")
+        source.write("old2")
+        source.write("new1")
+        new_ts = list(source.peek_generator(with_timestamps=True))[2][1]
+
+        moved = source.move_many(
+            "dest", 10, before_timestamp=new_ts, with_timestamps=False
+        )
+
+        assert moved == ["old1", "old2"]
+        assert list(source.peek_generator(with_timestamps=False)) == ["new1"]
+
+        dest = queue_factory("dest")
+        assert list(dest.peek_generator(with_timestamps=False)) == ["old1", "old2"]
+
     def test_move_many_delivery_guarantees(self, queue_factory):
         """Test move_many deprecates at-least-once on materialized batches."""
         source = queue_factory("source")
@@ -435,6 +519,19 @@ class TestQueueLastTimestampCaching:
         messages = list(dest.peek_generator(with_timestamps=False))
         assert messages == ["message0", "message1", "message2"]
 
+    def test_conflicting_message_id_and_before_timestamp(self, queue_factory):
+        """Test message_id cannot be combined with before_timestamp."""
+        q = queue_factory("source")
+
+        with pytest.raises(ValueError, match="before_timestamp"):
+            q.read(message_id=123, before_timestamp=456)
+
+        with pytest.raises(ValueError, match="before_timestamp"):
+            q.peek(message_id=123, before_timestamp=456)
+
+        with pytest.raises(ValueError, match="before_timestamp"):
+            q.move("dest", message_id=123, before_timestamp=456)
+
 
 class TestQueueHelperMethods:
     """Test helper methods in the Queue API."""
@@ -454,8 +551,8 @@ class TestQueueHelperMethods:
         q.read_one()
         assert q.has_pending() is False
 
-    def test_has_pending_since_timestamp(self, queue_factory):
-        """Test has_pending with since_timestamp."""
+    def test_has_pending_after_timestamp(self, queue_factory):
+        """Test has_pending with after_timestamp."""
         q = queue_factory("test")
 
         q.write("old1")
@@ -466,11 +563,11 @@ class TestQueueHelperMethods:
         cutoff_ts = messages[-1][1]
 
         # No messages after cutoff
-        assert q.has_pending(since_timestamp=cutoff_ts) is False
+        assert q.has_pending(after_timestamp=cutoff_ts) is False
 
         # Add new message
         q.write("new1")
-        assert q.has_pending(since_timestamp=cutoff_ts) is True
+        assert q.has_pending(after_timestamp=cutoff_ts) is True
 
     def test_get_data_version(self, queue_factory):
         """Test get_data_version method."""
@@ -542,10 +639,25 @@ class TestQueueHelperMethods:
 
         # Stream only new messages
         messages = []
-        for msg, _ts in q.stream_messages(peek=True, since_timestamp=cutoff_ts):
+        for msg, _ts in q.stream_messages(peek=True, after_timestamp=cutoff_ts):
             messages.append(msg)
 
         assert messages == ["new1", "new2"]
+
+    def test_stream_messages_with_before_timestamp(self, queue_factory):
+        """Test stream_messages with before_timestamp filter."""
+        q = queue_factory("test")
+
+        q.write("old1")
+        q.write("old2")
+        q.write("new1")
+        new_ts = list(q.peek_generator(with_timestamps=True))[2][1]
+
+        messages = [
+            msg for msg, _ts in q.stream_messages(peek=True, before_timestamp=new_ts)
+        ]
+
+        assert messages == ["old1", "old2"]
 
     def test_stream_messages_peek_single_message_mode(self, queue_factory):
         """Test stream_messages respects all_messages=False in peek mode."""

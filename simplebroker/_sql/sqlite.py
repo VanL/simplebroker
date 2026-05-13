@@ -178,8 +178,8 @@ CHECK_PENDING_MESSAGES = (
     "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 LIMIT 1)"
 )
 
-# Check for pending messages since a timestamp
-CHECK_PENDING_MESSAGES_SINCE = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 AND ts > ? LIMIT 1)"
+# Check for pending messages after a timestamp
+CHECK_PENDING_MESSAGES_AFTER = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 AND ts > ? LIMIT 1)"
 
 # Get data version (SQLite only)
 GET_DATA_VERSION = "PRAGMA data_version"
@@ -478,9 +478,12 @@ def _build_where_clause(spec: RetrieveQuerySpec) -> tuple[list[str], list[object
     params = [spec.queue]
     if spec.require_unclaimed:
         where_conditions.append("claimed = 0")
-    if spec.since_timestamp is not None:
+    if spec.after_timestamp is not None:
         where_conditions.append("ts > ?")
-        params.append(spec.since_timestamp)
+        params.append(spec.after_timestamp)
+    if spec.before_timestamp is not None:
+        where_conditions.append("ts < ?")
+        params.append(spec.before_timestamp)
     return where_conditions, params
 
 

@@ -22,7 +22,7 @@ class TestSQLBuilders:
                 limit=5,
                 offset=2,
                 exact_timestamp=None,
-                since_timestamp=None,
+                after_timestamp=None,
                 require_unclaimed=True,
                 target_queue=None,
             ),
@@ -43,7 +43,7 @@ class TestSQLBuilders:
                 limit=1,
                 offset=0,
                 exact_timestamp=None,
-                since_timestamp=123,
+                after_timestamp=123,
                 require_unclaimed=True,
                 target_queue=None,
             ),
@@ -59,7 +59,7 @@ class TestSQLBuilders:
                 limit=1,
                 offset=0,
                 exact_timestamp=999,
-                since_timestamp=None,
+                after_timestamp=None,
                 require_unclaimed=True,
                 target_queue=None,
             ),
@@ -77,7 +77,7 @@ class TestSQLBuilders:
                 limit=2,
                 offset=0,
                 exact_timestamp=None,
-                since_timestamp=None,
+                after_timestamp=None,
                 require_unclaimed=True,
                 target_queue=None,
             ),
@@ -100,7 +100,7 @@ class TestSQLBuilders:
                 limit=2,
                 offset=0,
                 exact_timestamp=None,
-                since_timestamp=123,
+                after_timestamp=123,
                 require_unclaimed=True,
                 target_queue=None,
             ),
@@ -118,7 +118,7 @@ class TestSQLBuilders:
                 limit=3,
                 offset=0,
                 exact_timestamp=None,
-                since_timestamp=None,
+                after_timestamp=None,
                 require_unclaimed=True,
                 target_queue="done",
             ),
@@ -141,7 +141,7 @@ class TestSQLBuilders:
                 limit=1,
                 offset=0,
                 exact_timestamp=None,
-                since_timestamp=123,
+                after_timestamp=123,
                 require_unclaimed=False,
                 target_queue="done",
             ),
@@ -160,7 +160,7 @@ class TestSQLBuilders:
                     limit=1,
                     offset=0,
                     exact_timestamp=None,
-                    since_timestamp=None,
+                    after_timestamp=None,
                     require_unclaimed=True,
                     target_queue=None,
                 ),
@@ -276,8 +276,8 @@ class TestRetrieveMethod:
                 assert results[0][0] == "message2"
                 assert results[0][1] == target_ts
 
-    def test_retrieve_with_since_timestamp(self):
-        """Test _retrieve with since_timestamp filter."""
+    def test_retrieve_with_after_timestamp(self):
+        """Test _retrieve with after_timestamp filter."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
@@ -296,7 +296,7 @@ class TestRetrieveMethod:
 
                 # Retrieve only new messages
                 results = db._retrieve(
-                    "test_queue", operation="peek", since_timestamp=cutoff_ts, limit=10
+                    "test_queue", operation="peek", after_timestamp=cutoff_ts, limit=10
                 )
 
                 assert len(results) == 2
@@ -425,7 +425,7 @@ class TestBuildRetrieveSpec:
                     limit=10,
                     offset=0,
                     exact_timestamp=None,
-                    since_timestamp=None,
+                    after_timestamp=None,
                     require_unclaimed=True,
                     target_queue=None,
                 )
@@ -441,7 +441,7 @@ class TestBuildRetrieveSpec:
                     limit=1,
                     offset=0,
                     exact_timestamp=67890,
-                    since_timestamp=None,
+                    after_timestamp=None,
                     require_unclaimed=False,
                     target_queue=None,
                 )
@@ -451,14 +451,14 @@ class TestBuildRetrieveSpec:
                     5,
                     offset=2,
                     target_queue="dest",
-                    since_timestamp=12345,
+                    after_timestamp=12345,
                 )
                 assert spec == RetrieveQuerySpec(
                     queue="test_queue",
                     limit=5,
                     offset=2,
                     exact_timestamp=None,
-                    since_timestamp=12345,
+                    after_timestamp=12345,
                     require_unclaimed=True,
                     target_queue="dest",
                 )

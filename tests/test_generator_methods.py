@@ -120,8 +120,8 @@ class TestGeneratorMethods:
 
         assert messages == ["message1", "message2"]
 
-    def test_generator_with_since_timestamp(self, broker):
-        """Test generators with since_timestamp filter."""
+    def test_generator_with_after_timestamp(self, broker):
+        """Test generators with after_timestamp filter."""
         broker.write("test_queue", "old_message1")
         broker.write("test_queue", "old_message2")
 
@@ -138,7 +138,7 @@ class TestGeneratorMethods:
 
         new_messages = list(
             broker.claim_generator(
-                "test_queue", with_timestamps=False, since_timestamp=cutoff_ts
+                "test_queue", with_timestamps=False, after_timestamp=cutoff_ts
             )
         )
 

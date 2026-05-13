@@ -32,7 +32,7 @@ class TimestampGenerator:
     """Thread-safe hybrid timestamp generator with validation.
 
     Generates 64-bit timestamps with:
-    - 52 bits: microseconds since epoch
+    - 52 bits: microseconds after epoch
     - 12 bits: monotonic counter for ordering within same microsecond
 
     This ensures unique, monotonically increasing timestamps even under
@@ -70,7 +70,7 @@ class TimestampGenerator:
         bottom bits and using them for the logical counter, rather than shifting.
 
         Args:
-            physical_ns: Physical time in nanoseconds since epoch
+            physical_ns: Physical time in nanoseconds after epoch
             logical: Logical counter (0 to MAX_LOGICAL_COUNTER)
 
         Returns:
@@ -339,17 +339,17 @@ class TimestampGenerator:
 
             if unit == "s":
                 # Unix seconds to nanoseconds
-                ns_since_epoch = int(val * 1_000_000_000)
+                ns_after_epoch = int(val * 1_000_000_000)
             elif unit == "ms":
                 # Unix milliseconds to nanoseconds
-                ns_since_epoch = int(val * 1_000_000)
+                ns_after_epoch = int(val * 1_000_000)
             elif unit == "ns":
                 # Already in nanoseconds
-                ns_since_epoch = int(val)
+                ns_after_epoch = int(val)
 
             # Clear bottom bits for counter (hybrid timestamp format)
             time_mask = ~LOGICAL_COUNTER_MASK
-            hybrid_ts = ns_since_epoch & time_mask
+            hybrid_ts = ns_after_epoch & time_mask
             if hybrid_ts >= SQLITE_MAX_INT64:
                 raise TimestampError("Invalid timestamp: too far in future")
             return hybrid_ts
@@ -437,11 +437,11 @@ class TimestampGenerator:
 
             dt = dt.astimezone(timezone.utc)
 
-        # Convert to nanoseconds since epoch
-        ns_since_epoch = int(dt.timestamp() * 1_000_000_000)
+        # Convert to nanoseconds after epoch
+        ns_after_epoch = int(dt.timestamp() * 1_000_000_000)
         # Clear bottom bits for counter (hybrid timestamp format)
         time_mask = ~LOGICAL_COUNTER_MASK
-        hybrid_ts = ns_since_epoch & time_mask
+        hybrid_ts = ns_after_epoch & time_mask
         # Ensure it fits in SQLite's signed 64-bit integer
         if hybrid_ts >= SQLITE_MAX_INT64:
             raise ValueError("Invalid timestamp: too far in future")
@@ -474,27 +474,27 @@ class TimestampGenerator:
             if integer_digits > 16:  # Likely nanoseconds
                 # Already in nanoseconds
                 if "." in timestamp_str:
-                    ns_since_epoch = int(unix_ts)
+                    ns_after_epoch = int(unix_ts)
                 else:
-                    ns_since_epoch = int(timestamp_str)
+                    ns_after_epoch = int(timestamp_str)
             elif integer_digits > 11:  # Likely milliseconds
                 # Convert milliseconds to nanoseconds
                 if "." in timestamp_str:
-                    ns_since_epoch = int(unix_ts * 1_000_000)
+                    ns_after_epoch = int(unix_ts * 1_000_000)
                 else:
-                    ns_since_epoch = int(timestamp_str) * 1_000_000
+                    ns_after_epoch = int(timestamp_str) * 1_000_000
             else:  # Likely seconds
                 # Convert seconds to nanoseconds
                 if "." in timestamp_str:
                     # Preserve fractional seconds
-                    ns_since_epoch = int(unix_ts * 1_000_000_000)
+                    ns_after_epoch = int(unix_ts * 1_000_000_000)
                 else:
                     # Pure integer - multiply without float conversion
-                    ns_since_epoch = int(timestamp_str) * 1_000_000_000
+                    ns_after_epoch = int(timestamp_str) * 1_000_000_000
 
             # Clear bottom bits for counter (hybrid timestamp format)
             time_mask = ~LOGICAL_COUNTER_MASK
-            hybrid_ts = ns_since_epoch & time_mask
+            hybrid_ts = ns_after_epoch & time_mask
             # Ensure it fits in signed 64-bit integer
             if hybrid_ts >= SQLITE_MAX_INT64:
                 raise ValueError("Invalid timestamp: too far in future")

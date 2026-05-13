@@ -5,7 +5,7 @@ def validate_timestamp(ts: int) -> None:
     """Validate that a timestamp meets SimpleBroker specifications.
 
     Timestamps are 64-bit hybrid values with:
-    - Top 52 bits: nanoseconds since epoch (with bottom 12 bits cleared)
+    - Top 52 bits: nanoseconds after epoch (with bottom 12 bits cleared)
     - Bottom 12 bits: logical counter for ordering within same time base
 
     This produces 19-digit timestamps.

@@ -245,7 +245,7 @@ batch_retry_dlq() {
     # Or selectively retry recent failures only
     echo "Retrying only recent failures (last hour)..."
     local one_hour_ago=$(date -d '1 hour ago' +%s 2>/dev/null || date -v -1H +%s)
-    broker move "$DLQ_NAME" tasks --since "${one_hour_ago}s"
+    broker move "$DLQ_NAME" tasks --after "${one_hour_ago}s"
 }
 
 # Monitor DLQ size and alert

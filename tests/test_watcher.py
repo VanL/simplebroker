@@ -698,8 +698,8 @@ class TestQueueWatcher(WatcherTestBase):
         # Should be stopped
         assert strategy._stop_event.is_set()
 
-    def test_since_parameter_in_peek_mode(self, broker, broker_target):
-        """Test that peek mode respects message ordering and 'since' tracking."""
+    def test_after_parameter_in_peek_mode(self, broker, broker_target):
+        """Test that peek mode respects message ordering and 'after' tracking."""
         # Add messages and capture their timestamps
         broker.write("test_queue", "msg1")
         broker.write("test_queue", "msg2")
@@ -736,14 +736,14 @@ class TestQueueWatcher(WatcherTestBase):
         # Create collector for the actual test
         collector = MessageCollector()
 
-        # Create watcher with since_timestamp set to ts_msg2
+        # Create watcher with after_timestamp set to ts_msg2
         # Should only see msg3 (messages after ts_msg2)
         watcher = QueueWatcher(
             "test_queue",
             collector.handler,
             db=broker_target,
             peek=True,
-            since_timestamp=ts_msg2,
+            after_timestamp=ts_msg2,
         )
 
         # Start watcher and let it process messages
@@ -752,7 +752,7 @@ class TestQueueWatcher(WatcherTestBase):
             assert collector.wait_for_messages(
                 1,
                 timeout=scale_timeout_for_ci(2.0),
-            ), "Peek watcher should collect the post-since message"
+            ), "Peek watcher should collect the post-after message"
         finally:
             # Stop watcher
             watcher.stop()
@@ -764,8 +764,8 @@ class TestQueueWatcher(WatcherTestBase):
         assert messages[0][0] == "msg3"
         assert messages[0][1] > ts_msg2
 
-    def test_since_timestamp_database_filtering(self, broker, broker_target):
-        """Test that since_timestamp filters at database level, not in Python."""
+    def test_after_timestamp_database_filtering(self, broker, broker_target):
+        """Test that after_timestamp filters at database level, not in Python."""
         # Add first batch of messages
         for i in range(50):
             broker.write("test_queue", f"msg{i:03d}")
@@ -801,13 +801,13 @@ class TestQueueWatcher(WatcherTestBase):
         # Create collector for actual test
         collector = MessageCollector()
 
-        # Create watcher with since_timestamp
+        # Create watcher with after_timestamp
         watcher = QueueWatcher(
             "test_queue",
             collector.handler,
             db=broker_target,
             peek=True,
-            since_timestamp=ts_mid,
+            after_timestamp=ts_mid,
         )
 
         # Start watcher and let it process messages
@@ -995,7 +995,7 @@ class TestErrorScenarios(WatcherTestBase):
         self, broker, broker_target, capsys, caplog
     ):
         """Test default behavior when handler fails and no error_handler."""
-        # Enable logging for this test since it's testing logging behavior
+        # Enable logging for this test after it's testing logging behavior
         test_config = load_config()
         test_config["BROKER_LOGGING_ENABLED"] = True
 
@@ -1023,7 +1023,7 @@ class TestErrorScenarios(WatcherTestBase):
 
     def test_error_handler_exception(self, broker, broker_target, capsys, caplog):
         """Test when error_handler itself raises exception."""
-        # Enable logging for this test since it's testing logging behavior
+        # Enable logging for this test after it's testing logging behavior
         test_config = load_config()
         test_config["BROKER_LOGGING_ENABLED"] = True
 

@@ -101,7 +101,7 @@ TIMESTAMP_EXACT_NUM_DIGITS: Final[int] = 19
 """Exact number of digits required for message ID timestamps in string form."""
 
 PHYSICAL_TIME_BITS: Final[int] = 52
-"""Number of bits used for microseconds since epoch (supports until ~2113)."""
+"""Number of bits used for microseconds after epoch (supports until ~2113)."""
 
 LOGICAL_COUNTER_BITS: Final[int] = 12
 """Number of bits used for the monotonic counter to handle sub-microsecond events."""

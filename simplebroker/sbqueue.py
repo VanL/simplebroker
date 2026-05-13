@@ -321,7 +321,8 @@ class Queue:
         *,
         all_messages: bool = False,
         with_timestamps: bool = False,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         message_id: int | None = None,
     ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None:
         """Read and remove message(s) from the queue (CLI-mirroring method).
@@ -332,7 +333,8 @@ class Queue:
         Args:
             all_messages: If True, read all messages as a generator
             with_timestamps: If True, include timestamps in results
-            since_timestamp: Only read messages newer than this timestamp
+            after_timestamp: Only read messages newer than this timestamp
+            before_timestamp: Only read messages older than this timestamp
             message_id: Read specific message by ID (cannot be used with other filters)
 
         Returns:
@@ -346,9 +348,11 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
-        if message_id is not None and (all_messages or since_timestamp):
+        has_range_filter = after_timestamp is not None or before_timestamp is not None
+        if message_id is not None and (all_messages or has_range_filter):
             raise ValueError(
-                "message_id cannot be used with all_messages or since_timestamp"
+                "message_id cannot be used with all_messages, after_timestamp, "
+                "or before_timestamp"
             )
 
         if message_id is not None:
@@ -359,14 +363,18 @@ class Queue:
         elif all_messages:
             # Return generator for all messages
             return self.read_generator(
-                with_timestamps=with_timestamps, since_timestamp=since_timestamp
+                with_timestamps=with_timestamps,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
             )
         else:
             # Read single message
-            if since_timestamp is not None:
-                # Need to use generator with limit 1 for since_timestamp support
+            if has_range_filter:
+                # Need to use generator with limit 1 for range-filter support
                 gen = self.read_generator(
-                    with_timestamps=with_timestamps, since_timestamp=since_timestamp
+                    with_timestamps=with_timestamps,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
                 )
                 try:
                     return next(gen)
@@ -410,7 +418,8 @@ class Queue:
         *,
         with_timestamps: bool = False,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
     ) -> list[str] | list[tuple[str, int]]:
         """Read and remove multiple messages from the queue.
 
@@ -422,7 +431,8 @@ class Queue:
                 ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
                 as exactly-once. Use ``read_generator()`` for retryable batch
                 processing.
-            since_timestamp: Only read messages newer than this timestamp
+            after_timestamp: Only read messages newer than this timestamp
+            before_timestamp: Only read messages older than this timestamp
 
         Returns:
             list of messages or list of (message, timestamp) tuples if with_timestamps=True
@@ -438,7 +448,8 @@ class Queue:
                 limit,
                 with_timestamps=with_timestamps,
                 delivery_guarantee=delivery_guarantee,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
             )
 
     def read_generator(
@@ -446,7 +457,8 @@ class Queue:
         *,
         with_timestamps: bool = False,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
     ) -> Iterator[str | tuple[str, int]]:
         """Generator that reads and removes messages from the queue.
@@ -458,7 +470,8 @@ class Queue:
             delivery_guarantee: Delivery semantics
                 - exactly_once: Process one message at a time (safer, slower)
                 - at_least_once: Commit each batch after it is fully yielded
-            since_timestamp: Only read messages newer than this timestamp
+            after_timestamp: Only read messages newer than this timestamp
+            before_timestamp: Only read messages older than this timestamp
             exact_timestamp: Only read message with this exact timestamp
 
         Yields:
@@ -473,7 +486,8 @@ class Queue:
                 self.name,
                 with_timestamps=with_timestamps,
                 delivery_guarantee=delivery_guarantee,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
             )
 
@@ -482,7 +496,8 @@ class Queue:
         *,
         all_messages: bool = False,
         with_timestamps: bool = False,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         message_id: int | None = None,
     ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None:
         """View message(s) without removing them from the queue (CLI-mirroring method).
@@ -493,7 +508,8 @@ class Queue:
         Args:
             all_messages: If True, peek at all messages as a generator
             with_timestamps: If True, include timestamps in results
-            since_timestamp: Only peek at messages newer than this timestamp
+            after_timestamp: Only peek at messages newer than this timestamp
+            before_timestamp: Only peek at messages older than this timestamp
             message_id: Peek at specific message by ID (cannot be used with other filters)
 
         Returns:
@@ -507,9 +523,11 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
-        if message_id is not None and (all_messages or since_timestamp):
+        has_range_filter = after_timestamp is not None or before_timestamp is not None
+        if message_id is not None and (all_messages or has_range_filter):
             raise ValueError(
-                "message_id cannot be used with all_messages or since_timestamp"
+                "message_id cannot be used with all_messages, after_timestamp, "
+                "or before_timestamp"
             )
 
         if message_id is not None:
@@ -520,14 +538,18 @@ class Queue:
         elif all_messages:
             # Return generator for all messages
             return self.peek_generator(
-                with_timestamps=with_timestamps, since_timestamp=since_timestamp
+                with_timestamps=with_timestamps,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
             )
         else:
             # Peek at single message
-            if since_timestamp is not None:
-                # Need to use generator with limit 1 for since_timestamp support
+            if has_range_filter:
+                # Need to use generator with limit 1 for range-filter support
                 gen = self.peek_generator(
-                    with_timestamps=with_timestamps, since_timestamp=since_timestamp
+                    with_timestamps=with_timestamps,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
                 )
                 try:
                     return next(gen)
@@ -567,14 +589,16 @@ class Queue:
         limit: int = PEEK_BATCH_SIZE,
         *,
         with_timestamps: bool = False,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
     ) -> list[str] | list[tuple[str, int]]:
         """Peek at multiple messages without removing them from the queue.
 
         Args:
             limit: Maximum number of messages to peek at (default: 1000)
             with_timestamps: If True, return list of (message, timestamp) tuples
-            since_timestamp: Only peek at messages newer than this timestamp
+            after_timestamp: Only peek at messages newer than this timestamp
+            before_timestamp: Only peek at messages older than this timestamp
 
         Returns:
             list of messages or list of (message, timestamp) tuples if with_timestamps=True
@@ -589,14 +613,16 @@ class Queue:
                 self.name,
                 limit,
                 with_timestamps=with_timestamps,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
             )
 
     def peek_generator(
         self,
         *,
         with_timestamps: bool = False,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
     ) -> Iterator[str | tuple[str, int]]:
         """Generator that peeks at messages without removing them from the queue.
@@ -605,7 +631,8 @@ class Queue:
 
         Args:
             with_timestamps: If True, yield (message, timestamp) tuples
-            since_timestamp: Only peek at messages newer than this timestamp
+            after_timestamp: Only peek at messages newer than this timestamp
+            before_timestamp: Only peek at messages older than this timestamp
             exact_timestamp: Only peek at message with this exact timestamp
 
         Yields:
@@ -619,7 +646,8 @@ class Queue:
             yield from connection.peek_generator(
                 self.name,
                 with_timestamps=with_timestamps,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
             )
 
@@ -628,7 +656,8 @@ class Queue:
         destination: Union[str, "Queue"],
         *,
         message_id: int | None = None,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         all_messages: bool = False,
     ) -> dict[str, Any] | None | list[dict[str, Any]] | Iterator[dict[str, Any]]:
         """Move messages from this queue to another (CLI-mirroring method).
@@ -639,7 +668,8 @@ class Queue:
         Args:
             destination: Target queue (name or Queue instance).
             message_id: If provided, move only this specific message.
-            since_timestamp: If provided, only move messages newer than this timestamp.
+            after_timestamp: If provided, only move messages newer than this timestamp.
+            before_timestamp: If provided, only move messages older than this timestamp.
             all_messages: If True, move all messages. Cannot be used with message_id.
 
         Returns:
@@ -662,9 +692,11 @@ class Queue:
             raise ValueError("Source and destination queues cannot be the same")
 
         # Check for conflicting options
-        if message_id is not None and (all_messages or since_timestamp is not None):
+        has_range_filter = after_timestamp is not None or before_timestamp is not None
+        if message_id is not None and (all_messages or has_range_filter):
             raise ValueError(
-                "message_id cannot be used with all_messages or since_timestamp"
+                "message_id cannot be used with all_messages, after_timestamp, "
+                "or before_timestamp"
             )
 
         if message_id is not None:
@@ -682,7 +714,10 @@ class Queue:
             # Return generator for all messages
             def dict_generator() -> Iterator[dict[str, Any]]:
                 for result in self.move_generator(
-                    dest_name, with_timestamps=True, since_timestamp=since_timestamp
+                    dest_name,
+                    with_timestamps=True,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
                 ):
                     msg, ts = cast(tuple[str, int], result)
                     yield {"message": msg, "timestamp": ts}
@@ -690,10 +725,13 @@ class Queue:
             return dict_generator()
         else:
             # Move single message
-            if since_timestamp is not None:
-                # Use generator with single iteration for since_timestamp support
+            if has_range_filter:
+                # Use generator with single iteration for range-filter support
                 gen = self.move_generator(
-                    dest_name, with_timestamps=True, since_timestamp=since_timestamp
+                    dest_name,
+                    with_timestamps=True,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
                 )
                 try:
                     result = next(gen)
@@ -757,7 +795,8 @@ class Queue:
         *,
         with_timestamps: bool = False,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         require_unclaimed: bool = True,
     ) -> list[str] | list[tuple[str, int]]:
         """Move multiple messages from this queue to another.
@@ -773,7 +812,8 @@ class Queue:
                 ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
                 as exactly-once. Use ``move_generator()`` for retryable batch
                 processing.
-            since_timestamp: Only move messages newer than this timestamp
+            after_timestamp: Only move messages newer than this timestamp
+            before_timestamp: Only move messages older than this timestamp
             require_unclaimed: If True (default), only move unclaimed messages
 
         Returns:
@@ -795,7 +835,8 @@ class Queue:
                 limit,
                 with_timestamps=with_timestamps,
                 delivery_guarantee=delivery_guarantee,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
                 require_unclaimed=require_unclaimed,
             )
 
@@ -805,7 +846,8 @@ class Queue:
         *,
         with_timestamps: bool = False,
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
     ) -> Iterator[str | tuple[str, int]]:
         """Generator that moves messages from this queue to another.
@@ -816,7 +858,8 @@ class Queue:
             delivery_guarantee: Delivery semantics
                 - exactly_once: Process one message at a time (safer, slower)
                 - at_least_once: Commit each batch after it is fully yielded
-            since_timestamp: Only move messages newer than this timestamp
+            after_timestamp: Only move messages newer than this timestamp
+            before_timestamp: Only move messages older than this timestamp
             exact_timestamp: Only move message with this exact timestamp
 
         Yields:
@@ -837,7 +880,8 @@ class Queue:
                 dest_name,
                 with_timestamps=with_timestamps,
                 delivery_guarantee=delivery_guarantee,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
             )
 
@@ -916,11 +960,11 @@ class Queue:
 
         return f"Queue({', '.join(parts)})"
 
-    def has_pending(self, since_timestamp: int | None = None) -> bool:
+    def has_pending(self, after_timestamp: int | None = None) -> bool:
         """Check if this queue has pending (unclaimed) messages.
 
         Args:
-            since_timestamp: If provided, only check for messages newer than this timestamp.
+            after_timestamp: If provided, only check for messages newer than this timestamp.
 
         Returns:
             True if there are unclaimed messages, False otherwise.
@@ -930,7 +974,7 @@ class Queue:
             OperationalError: If the database is locked/busy
         """
         with self.get_connection() as connection:
-            return connection.has_pending_messages(self.name, since_timestamp)
+            return connection.has_pending_messages(self.name, after_timestamp)
 
     def exists(self) -> bool:
         """Return whether this queue has any messages, including claimed rows."""
@@ -1038,7 +1082,8 @@ class Queue:
         *,
         peek: bool = False,
         all_messages: bool = True,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
         batch_processing: bool = False,
         commit_interval: int = 1,
     ) -> Iterator[tuple[str, int]]:
@@ -1051,7 +1096,8 @@ class Queue:
             peek: If True, don't remove messages from queue
             all_messages: If True, stream all available messages. If False, yield at
                          most one message.
-            since_timestamp: Only retrieve messages newer than this timestamp
+            after_timestamp: Only retrieve messages newer than this timestamp
+            before_timestamp: Only retrieve messages older than this timestamp
             batch_processing: If True and peek=False, allow at-least-once batch
                              processing. If False, consume one message at a time.
             commit_interval: Batch size for at-least-once processing when
@@ -1067,18 +1113,20 @@ class Queue:
         with self.get_connection() as connection:
             if peek:
                 if all_messages:
-                    # Type assertion since we know with_timestamps=True yields tuple[str, int]
+                    # Type assertion after we know with_timestamps=True yields tuple[str, int]
                     for result in connection.peek_generator(
                         self.name,
                         with_timestamps=True,
-                        since_timestamp=since_timestamp,
+                        after_timestamp=after_timestamp,
+                        before_timestamp=before_timestamp,
                     ):
                         yield result  # type: ignore[misc]
                 else:
                     generator = connection.peek_generator(
                         self.name,
                         with_timestamps=True,
-                        since_timestamp=since_timestamp,
+                        after_timestamp=after_timestamp,
+                        before_timestamp=before_timestamp,
                     )
                     try:
                         result = next(generator)
@@ -1098,7 +1146,8 @@ class Queue:
                     self.name,
                     with_timestamps=True,
                     delivery_guarantee="exactly_once",
-                    since_timestamp=since_timestamp,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
                 )
                 try:
                     result = next(generator)
@@ -1122,13 +1171,14 @@ class Queue:
                 commit_interval if delivery_guarantee == "at_least_once" else None
             )
 
-            # Type assertion since we know with_timestamps=True yields tuple[str, int]
+            # Type assertion after we know with_timestamps=True yields tuple[str, int]
             for result in connection.claim_generator(
                 self.name,
                 with_timestamps=True,
                 delivery_guarantee=delivery_guarantee,
                 batch_size=batch_size,
-                since_timestamp=since_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
             ):
                 yield result  # type: ignore[misc]
 

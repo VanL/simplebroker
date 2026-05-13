@@ -16,6 +16,7 @@ class RetrieveQuerySpec:
     limit: int
     offset: int = 0
     exact_timestamp: int | None = None
-    since_timestamp: int | None = None
+    after_timestamp: int | None = None
+    before_timestamp: int | None = None
     require_unclaimed: bool = True
     target_queue: str | None = None

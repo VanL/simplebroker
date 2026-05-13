@@ -10,6 +10,12 @@ from .conftest import run_cli
 from .helper_scripts.timestamp_validation import validate_timestamp
 
 
+def _peek_json(cwd, queue: str) -> list[dict[str, object]]:
+    rc, out, err = run_cli("peek", queue, "--all", "--json", cwd=cwd)
+    assert rc == 0, err
+    return [json.loads(line) for line in out.strip().splitlines()]
+
+
 class TestBasicFunctionality:
     """Test basic move operations."""
 
@@ -84,8 +90,8 @@ class TestBasicFunctionality:
         assert rc == 0
         assert out == "\n".join(messages)
 
-    def test_filtered_move_with_since_flag(self, workdir):
-        """Test filtered moves with --since flag."""
+    def test_filtered_move_with_after_flag(self, workdir):
+        """Test filtered moves with --after flag."""
         # Write messages with known timestamps
         run_cli("write", "source", "old1", cwd=workdir)
         time.sleep(0.001)  # Ensure different timestamps
@@ -102,16 +108,16 @@ class TestBasicFunctionality:
         run_cli("write", "source", "new1", cwd=workdir)
         run_cli("write", "source", "new2", cwd=workdir)
 
-        # Move single message with --since (without --all)
+        # Move single message with --after (without --all)
         rc, out, _ = run_cli(
-            "move", "source", "dest", "--since", str(cutoff_ts), cwd=workdir
+            "move", "source", "dest", "--after", str(cutoff_ts), cwd=workdir
         )
         assert rc == 0
         assert out == "new1"
 
         # Move all remaining messages newer than cutoff
         rc, out, _ = run_cli(
-            "move", "source", "dest", "--all", "--since", str(cutoff_ts), cwd=workdir
+            "move", "source", "dest", "--all", "--after", str(cutoff_ts), cwd=workdir
         )
         assert rc == 0
         assert out == "new2"
@@ -120,6 +126,115 @@ class TestBasicFunctionality:
         rc, out, _ = run_cli("read", "source", "--all", cwd=workdir)
         assert rc == 0
         assert out == "old1\nold2"
+
+    def test_single_move_with_before_flag(self, workdir):
+        """Test moving one message older than a timestamp."""
+        run_cli("write", "source", "old1", cwd=workdir)
+        run_cli("write", "source", "old2", cwd=workdir)
+        run_cli("write", "source", "new1", cwd=workdir)
+        messages = _peek_json(workdir, "source")
+        new1_ts = messages[2]["timestamp"]
+        run_cli("write", "source", "new2", cwd=workdir)
+
+        rc, out, err = run_cli(
+            "move", "source", "dest", "--before", str(new1_ts), cwd=workdir
+        )
+        assert rc == 0, err
+        assert out == "old1"
+
+        rc, out, err = run_cli("peek", "source", "--all", cwd=workdir)
+        assert rc == 0, err
+        assert out == "old2\nnew1\nnew2"
+
+        rc, out, err = run_cli("peek", "dest", "--all", cwd=workdir)
+        assert rc == 0, err
+        assert out == "old1"
+
+    def test_bulk_move_with_before_flag(self, workdir):
+        """Test moving all messages older than a timestamp."""
+        run_cli("write", "source", "old1", cwd=workdir)
+        run_cli("write", "source", "old2", cwd=workdir)
+        run_cli("write", "source", "new1", cwd=workdir)
+        new1_ts = _peek_json(workdir, "source")[2]["timestamp"]
+
+        rc, out, err = run_cli(
+            "move", "source", "dest", "--all", "--before", str(new1_ts), cwd=workdir
+        )
+        assert rc == 0, err
+        assert out == "old1\nold2"
+
+        rc, out, err = run_cli("peek", "source", "--all", cwd=workdir)
+        assert rc == 0, err
+        assert out == "new1"
+
+        rc, out, err = run_cli("peek", "dest", "--all", cwd=workdir)
+        assert rc == 0, err
+        assert out == "old1\nold2"
+
+    def test_move_before_exact_boundary_is_exclusive(self, workdir):
+        """Test strict < comparison for move --before."""
+        run_cli("write", "source", "message", cwd=workdir)
+        ts = _peek_json(workdir, "source")[0]["timestamp"]
+
+        rc, out, err = run_cli(
+            "move", "source", "dest", "--before", str(ts), cwd=workdir
+        )
+        assert rc == 2, err
+        assert out == ""
+
+        rc, out, err = run_cli("peek", "source", cwd=workdir)
+        assert rc == 0, err
+        assert out == "message"
+
+        rc, out, err = run_cli(
+            "move", "source", "dest", "--before", str(ts + 1), cwd=workdir
+        )
+        assert rc == 0, err
+        assert out == "message"
+
+    def test_move_after_and_before_form_open_interval(self, workdir):
+        """Test moving messages inside an open timestamp interval."""
+        for message in ("m1", "m2", "m3"):
+            run_cli("write", "source", message, cwd=workdir)
+        messages = _peek_json(workdir, "source")
+        ts1 = messages[0]["timestamp"]
+        ts3 = messages[2]["timestamp"]
+
+        rc, out, err = run_cli(
+            "move",
+            "source",
+            "dest",
+            "--all",
+            "--after",
+            str(ts1),
+            "--before",
+            str(ts3),
+            cwd=workdir,
+        )
+        assert rc == 0, err
+        assert out == "m2"
+
+        rc, out, err = run_cli("peek", "source", "--all", cwd=workdir)
+        assert rc == 0, err
+        assert out == "m1\nm3"
+
+    def test_message_move_cannot_be_combined_with_before(self, workdir):
+        """Test --message and --before are mutually exclusive for move."""
+        run_cli("write", "source", "message", cwd=workdir)
+
+        rc, _out, err = run_cli(
+            "move",
+            "source",
+            "dest",
+            "--message",
+            "1234567890123456789",
+            "--before",
+            "1234567890123456790",
+            cwd=workdir,
+        )
+
+        assert rc == 1
+        assert "--before" in err
 
     def test_non_existent_destination_created(self, workdir):
         """Test that non-existent destination queue is created implicitly."""
@@ -138,9 +253,9 @@ class TestBasicFunctionality:
 
 
 class TestTimestampFormats:
-    """Test various timestamp formats for --since flag."""
+    """Test various timestamp formats for --after flag."""
 
-    def test_since_unix_timestamp_formats(self, workdir):
+    def test_after_unix_timestamp_formats(self, workdir):
         """Test Unix timestamp formats with explicit suffixes."""
         # Write messages
         for i in range(5):
@@ -154,10 +269,10 @@ class TestTimestampFormats:
 
         # Convert native timestamp to different formats
         # Timestamps are now: microseconds << 12
-        us_since_epoch = middle_ts >> 12
-        unix_seconds = us_since_epoch // 1_000_000
-        unix_millis = us_since_epoch // 1_000
-        unix_nanos = us_since_epoch * 1_000
+        us_after_epoch = middle_ts >> 12
+        unix_seconds = us_after_epoch // 1_000_000
+        unix_millis = us_after_epoch // 1_000
+        unix_nanos = us_after_epoch * 1_000
 
         # Test with explicit suffixes
         test_cases = [
@@ -168,14 +283,14 @@ class TestTimestampFormats:
 
         for ts_str, desc in test_cases:
             rc, out, err = run_cli(
-                "peek", "ts_queue", "--all", "--since", ts_str, cwd=workdir
+                "peek", "ts_queue", "--all", "--after", ts_str, cwd=workdir
             )
             assert rc == 0, f"Failed for {desc}: {err}"
             messages = out.strip().split("\n")
             # Should get messages after the middle one
             assert len(messages) >= 2, f"Expected messages for {desc}, got: {out}"
 
-    def test_since_iso_date_formats(self, workdir):
+    def test_after_iso_date_formats(self, workdir):
         """Test ISO 8601 date and datetime formats."""
         # Write a message
         run_cli("write", "iso_queue", "test message", cwd=workdir)
@@ -190,7 +305,7 @@ class TestTimestampFormats:
             "move",
             "iso_queue",
             "dest1",
-            "--since",
+            "--after",
             yesterday.strftime("%Y-%m-%d"),
             cwd=workdir,
         )
@@ -205,14 +320,14 @@ class TestTimestampFormats:
             "move",
             "iso_queue",
             "dest2",
-            "--since",
+            "--after",
             tomorrow.strftime("%Y-%m-%d"),
             cwd=workdir,
         )
         assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
         assert out == ""
 
-    def test_since_mixed_timestamp_formats(self, workdir):
+    def test_after_mixed_timestamp_formats(self, workdir):
         """Test that different timestamp formats work correctly."""
         # Write messages
         for i in range(10):
@@ -225,8 +340,8 @@ class TestTimestampFormats:
         native_ts = messages[5]["timestamp"]
 
         # Convert to different formats
-        us_since_epoch = native_ts >> 12
-        unix_seconds = us_since_epoch // 1_000_000
+        us_after_epoch = native_ts >> 12
+        unix_seconds = us_after_epoch // 1_000_000
         dt = datetime.datetime.fromtimestamp(unix_seconds, datetime.timezone.utc)
 
         # Test each format
@@ -240,7 +355,7 @@ class TestTimestampFormats:
             # Create unique destination for each test
             dest = f"dest_{name}"
             rc, out, _ = run_cli(
-                "move", "mixed_queue", dest, "--all", "--since", fmt, cwd=workdir
+                "move", "mixed_queue", dest, "--all", "--after", fmt, cwd=workdir
             )
             assert rc == 0
 
@@ -332,8 +447,8 @@ class TestErrorCases:
             or "Source and destination queues cannot be the same" in out
         )
 
-    def test_since_no_matches_returns_exit_code_2(self, workdir):
-        """Test that --since with no matches returns exit code 2."""
+    def test_after_no_matches_returns_exit_code_2(self, workdir):
+        """Test that --after with no matches returns exit code 2."""
         # Write old messages
         run_cli("write", "source", "old1", cwd=workdir)
         run_cli("write", "source", "old2", cwd=workdir)
@@ -342,38 +457,38 @@ class TestErrorCases:
         future_ts = int(time.time() * 1_000_000) << 12
         future_ts += 1000000000  # Add some buffer
 
-        # Move with --since future timestamp (without --all)
+        # Move with --after future timestamp (without --all)
         rc, out, _ = run_cli(
-            "move", "source", "dest", "--since", str(future_ts), cwd=workdir
+            "move", "source", "dest", "--after", str(future_ts), cwd=workdir
         )
         assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match
         assert out == ""
 
-        # Move with --all --since future timestamp
+        # Move with --all --after future timestamp
         rc, out, _ = run_cli(
-            "move", "source", "dest", "--all", "--since", str(future_ts), cwd=workdir
+            "move", "source", "dest", "--all", "--after", str(future_ts), cwd=workdir
         )
         assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match
         assert out == ""
 
-    def test_since_exact_boundary(self, workdir):
-        """Test strict > comparison (not >=) for --since."""
+    def test_after_exact_boundary(self, workdir):
+        """Test strict > comparison (not >=) for --after."""
         # Write a message and get its timestamp
         run_cli("write", "boundary_queue", "test_message", cwd=workdir)
         rc, out, _ = run_cli("peek", "boundary_queue", "--json", cwd=workdir)
         assert rc == 0
         ts = json.loads(out)["timestamp"]
 
-        # Move with --since equal to the message timestamp -> expect empty
+        # Move with --after equal to the message timestamp -> expect empty
         rc, out, _ = run_cli(
-            "move", "boundary_queue", "dest", "--since", str(ts), cwd=workdir
+            "move", "boundary_queue", "dest", "--after", str(ts), cwd=workdir
         )
         assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match (strict > comparison)
         assert out == ""
 
-        # Move with --since one less than timestamp -> expect message
+        # Move with --after one less than timestamp -> expect message
         rc, out, _ = run_cli(
-            "move", "boundary_queue", "dest", "--since", str(ts - 1), cwd=workdir
+            "move", "boundary_queue", "dest", "--after", str(ts - 1), cwd=workdir
         )
         assert rc == 0
         assert out == "test_message"
@@ -805,8 +920,8 @@ class TestMutualExclusivity:
             or "error" in err.lower()
         )
 
-    def test_since_works_with_and_without_all(self, workdir):
-        """Test that --since can be used with or without --all."""
+    def test_after_works_with_and_without_all(self, workdir):
+        """Test that --after can be used with or without --all."""
         # Write messages
         for i in range(5):
             run_cli("write", "source", f"msg{i}", cwd=workdir)
@@ -818,16 +933,16 @@ class TestMutualExclusivity:
         messages = [json.loads(line) for line in out.strip().split("\n")]
         middle_ts = messages[2]["timestamp"]
 
-        # Test --since without --all (should work)
+        # Test --after without --all (should work)
         rc, out, _ = run_cli(
-            "move", "source", "dest1", "--since", str(middle_ts), cwd=workdir
+            "move", "source", "dest1", "--after", str(middle_ts), cwd=workdir
         )
         assert rc == 0
         assert out == "msg3"  # First message after middle_ts
 
-        # Test --since with --all (should work)
+        # Test --after with --all (should work)
         rc, out, _ = run_cli(
-            "move", "source", "dest2", "--all", "--since", str(middle_ts), cwd=workdir
+            "move", "source", "dest2", "--all", "--after", str(middle_ts), cwd=workdir
         )
         assert rc == 0
         assert out == "msg4"  # Remaining message after middle_ts
@@ -957,8 +1072,8 @@ class TestAtomicity:
         rc, out, _ = run_cli("peek", "source", cwd=workdir)
         assert rc == 2  # Empty
 
-    def test_move_with_since_and_claimed_messages(self, workdir):
-        """Test --since filter with mix of claimed and unclaimed messages."""
+    def test_move_with_after_and_claimed_messages(self, workdir):
+        """Test --after filter with mix of claimed and unclaimed messages."""
         # Write messages
         for i in range(10):
             run_cli("write", "source", f"msg{i}", cwd=workdir)
@@ -975,7 +1090,7 @@ class TestAtomicity:
 
         # Move all messages after cutoff - should skip claimed ones
         rc, out, _ = run_cli(
-            "move", "source", "dest", "--all", "--since", str(cutoff_ts), cwd=workdir
+            "move", "source", "dest", "--all", "--after", str(cutoff_ts), cwd=workdir
         )
         assert rc == 0
 
@@ -1015,6 +1130,6 @@ class TestCommandLineValidation:
         help_text = err if err else out
         assert "move" in help_text.lower()
         assert "--all" in help_text
-        assert "--since" in help_text
+        assert "--after" in help_text
         assert "-m" in help_text or "--message" in help_text
         assert "--json" in help_text

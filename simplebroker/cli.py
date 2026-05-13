@@ -55,15 +55,19 @@ def _validate_early_command_args(args: argparse.Namespace) -> int | None:
     if getattr(args, "command", None) not in {"read", "peek"}:
         return None
 
-    since_str = getattr(args, "since", None)
-    if since_str is None:
-        return None
+    timestamp_filters = [
+        getattr(args, "after", None),
+        getattr(args, "before", None),
+    ]
 
-    try:
-        commands._validate_timestamp(since_str)
-    except ValueError as e:
-        print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
-        return EXIT_ERROR
+    for timestamp_filter in timestamp_filters:
+        if timestamp_filter is None:
+            continue
+        try:
+            commands._validate_timestamp(timestamp_filter)
+        except ValueError as e:
+            print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+            return EXIT_ERROR
 
     return None
 
@@ -92,12 +96,18 @@ def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
         help="operate on specific message by timestamp/ID",
     )
     parser.add_argument(
-        "--since",
+        "--after",
         type=str,
         metavar="TIMESTAMP",
         help="return messages after timestamp (supports: ISO date '2024-01-15', "
         "Unix time '1705329000' or '1705329000s', milliseconds '1705329000000ms', "
         "or native hybrid timestamp)",
+    )
+    parser.add_argument(
+        "--before",
+        type=str,
+        metavar="TIMESTAMP",
+        help="return messages before timestamp (supports same formats as --after)",
     )
 
 
@@ -266,12 +276,18 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         help="move all messages from source to destination",
     )
 
-    # --since can be used with or without --all
+    # --after can be used with or without --all
     move_parser.add_argument(
-        "--since",
+        "--after",
         type=str,
         metavar="TIMESTAMP",
         help="only move messages newer than timestamp",
+    )
+    move_parser.add_argument(
+        "--before",
+        type=str,
+        metavar="TIMESTAMP",
+        help="only move messages older than timestamp",
     )
     move_parser.add_argument(
         "--json",
@@ -342,7 +358,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         "--move",
         type=str,
         metavar="QUEUE",
-        help="drain ALL messages to another queue (incompatible with --since)",
+        help="drain ALL messages to another queue (incompatible with --after)",
     )
 
     watch_parser.add_argument(
@@ -357,7 +373,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         help="include timestamps in output",
     )
     watch_parser.add_argument(
-        "--since",
+        "--after",
         type=str,
         metavar="TIMESTAMP",
         help="watch for messages after timestamp",
@@ -887,7 +903,8 @@ def main(*, config: dict[str, Any] = _config) -> int:
         if args.command == "write":
             return commands.cmd_write(resolved_target, args.queue, args.message)
         elif args.command == "read":
-            since_str = getattr(args, "since", None)
+            after_str = getattr(args, "after", None)
+            before_str = getattr(args, "before", None)
             message_id_str = getattr(args, "message_id", None)
 
             # Validate message_id format early (fail fast)
@@ -899,20 +916,24 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
 
                 # Check mutual exclusivity
-                if args.all or since_str:
-                    parser.error("--message cannot be used with --all or --since")
+                if args.all or after_str or before_str:
+                    parser.error(
+                        "--message cannot be used with --all, --after, or --before"
+                    )
 
             return commands.cmd_read(
                 resolved_target,
                 args.queue,
-                args.all,
-                args.json,
-                args.timestamps,
-                since_str,
-                message_id_str,
+                all_messages=args.all,
+                json_output=args.json,
+                show_timestamps=args.timestamps,
+                after_str=after_str,
+                message_id_str=message_id_str,
+                before_str=before_str,
             )
         elif args.command == "peek":
-            since_str = getattr(args, "since", None)
+            after_str = getattr(args, "after", None)
+            before_str = getattr(args, "before", None)
             message_id_str = getattr(args, "message_id", None)
 
             # Validate message_id format early (fail fast)
@@ -924,17 +945,20 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
 
                 # Check mutual exclusivity
-                if args.all or since_str:
-                    parser.error("--message cannot be used with --all or --since")
+                if args.all or after_str or before_str:
+                    parser.error(
+                        "--message cannot be used with --all, --after, or --before"
+                    )
 
             return commands.cmd_peek(
                 resolved_target,
                 args.queue,
-                args.all,
-                args.json,
-                args.timestamps,
-                since_str,
-                message_id_str,
+                all_messages=args.all,
+                json_output=args.json,
+                show_timestamps=args.timestamps,
+                after_str=after_str,
+                message_id_str=message_id_str,
+                before_str=before_str,
             )
         elif args.command == "list":
             show_stats = getattr(args, "stats", False)
@@ -983,7 +1007,8 @@ def main(*, config: dict[str, Any] = _config) -> int:
             json_output = getattr(args, "json", False)
             show_timestamps = getattr(args, "timestamps", False)
             message_id_str = getattr(args, "message_id", None)
-            since_str = getattr(args, "since", None)
+            after_str = getattr(args, "after", None)
+            before_str = getattr(args, "before", None)
 
             # Validate message_id format early (fail fast)
             if message_id_str is not None:
@@ -994,8 +1019,8 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
 
                 # Check mutual exclusivity
-                if since_str:
-                    parser.error("--message cannot be used with --since")
+                if after_str or before_str:
+                    parser.error("--message cannot be used with --after or --before")
 
             return commands.cmd_move(
                 resolved_target,
@@ -1005,7 +1030,8 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 json_output=json_output,
                 show_timestamps=show_timestamps,
                 message_id_str=message_id_str,
-                since_str=since_str,
+                after_str=after_str,
+                before_str=before_str,
             )
         elif args.command == "broadcast":
             return commands.cmd_broadcast(
@@ -1034,7 +1060,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
 
             parser.error("unknown alias subcommand")
         elif args.command == "watch":
-            since_str = getattr(args, "since", None)
+            after_str = getattr(args, "after", None)
             move_to = getattr(args, "move", None)
             return commands.cmd_watch(
                 resolved_target,
@@ -1042,7 +1068,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 args.peek,
                 args.json,
                 args.timestamps,
-                since_str,
+                after_str,
                 args.quiet,
                 move_to,
             )

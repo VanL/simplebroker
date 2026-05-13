@@ -105,7 +105,7 @@ migrate_by_time() {
     fi
     
     # Move messages older than cutoff
-    broker move "$source" "$dest" --all --since "${cutoff_ts}s"
+    broker move "$source" "$dest" --all --after "${cutoff_ts}s"
     
     echo "Migration complete"
 }

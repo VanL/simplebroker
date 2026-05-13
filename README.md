@@ -225,7 +225,8 @@ $ broker alias remove task1.outbox
 - `--json` - Output as line-delimited JSON (includes timestamps)
 - `-t, --timestamps` - Include timestamps in output
 - `-m <id>` - Target specific message by its 19-digit timestamp ID
-- `--since <timestamp>` - Process messages newer than timestamp
+- `--after <timestamp>` - Process messages newer than timestamp
+- `--before <timestamp>` - Process messages older than timestamp (`read`, `peek`, and `move`; not `watch`)
 
 **Watch options:**
 - `--peek` - Monitor without consuming
@@ -243,7 +244,7 @@ Queues are implicit: a queue exists when at least one message row exists for
 that name, including claimed rows. After vacuum removes claimed rows, a
 claimed-only queue no longer exists.
 
-**Timestamp formats for `--since`:**
+**Timestamp formats for `--after` and `--before`:**
 - ISO 8601: `2024-01-15T14:30:00Z` or `2024-01-15` (midnight UTC)
 - Unix seconds: `1705329000` or `1705329000s`
 - Unix milliseconds: `1705329000000ms`
@@ -251,8 +252,11 @@ claimed-only queue no longer exists.
 
 **Best practice:** Heuristics are used to distinguish between different values for interactive use, but explicit suffixes (s/ms/ns) are recommended for clarity if referring to particular times. 
 
+`--after` and `--before` use strict open bounds. Combined together, they select
+messages where `after_timestamp < message_timestamp < before_timestamp`.
+
 ### Exit Codes
-- `0` - Success (returns 0 even when no messages match filters like `--since`)
+- `0` - Success
 - `1` - General error (e.g., database access error, invalid arguments)
 - `2` - Queue empty, no matching messages, or invalid message ID format (only when queue is actually empty, no messages match the criteria, or the provided message ID has an invalid format)
 
@@ -308,7 +312,7 @@ Timestamps are:
 - **Meaningful** - Can extract creation time from the ID
 
 The format:
-- High 52 bits: microseconds since Unix epoch
+- High 52 bits: microseconds after Unix epoch
 - Low 12 bits: logical counter for sub-microsecond ordering
 - Similar to Twitter's Snowflake IDs or UUID7
 
@@ -336,7 +340,7 @@ Retrying in 5 seconds...
 
 ### Checkpoint-based Processing
 
-Use `--since` for resumable processing:
+Use `--after` for resumable processing:
 
 ```bash
 # Save checkpoint after processing
@@ -344,10 +348,13 @@ $ result=$(broker read tasks --json)
 $ checkpoint=$(echo "$result" | jq '.timestamp')
 
 # Resume from checkpoint
-$ broker read tasks --all --since "$checkpoint"
+$ broker read tasks --all --after "$checkpoint"
 
 # Or use human-readable timestamps
-$ broker read tasks --all --since "2024-01-15T14:30:00Z"
+$ broker read tasks --all --after "2024-01-15T14:30:00Z"
+
+# Process a bounded open interval
+$ broker peek tasks --all --after "$start" --before "$end"
 ```
 
 ## Common Patterns
@@ -490,7 +497,7 @@ echo "Starting from checkpoint: $last_checkpoint"
 
 while true; do
     # Check if there are messages newer than our checkpoint
-    if ! broker peek "$QUEUE" --json --since "$last_checkpoint" >/dev/null 2>&1; then
+    if ! broker peek "$QUEUE" --json --after "$last_checkpoint" >/dev/null 2>&1; then
         echo "No new messages, sleeping..."
         sleep 5
         continue
@@ -502,7 +509,7 @@ while true; do
     processed=0
     while [ $processed -lt $BATCH_SIZE ]; do
         # Read exactly one message newer than checkpoint
-        message_data=$(broker read "$QUEUE" --json --since "$last_checkpoint" 2>/dev/null)
+        message_data=$(broker read "$QUEUE" --json --after "$last_checkpoint" 2>/dev/null)
         
         # Check if we got a message
         if [ -z "$message_data" ]; then
@@ -589,7 +596,7 @@ $ broker watch source_queue --move dest_queue
 Key characteristics:
 - **Drains entire queue**: Moves ALL messages from source to destination
 - **Atomic operation**: Each message is atomically moved before being displayed
-- **No filtering**: Incompatible with `--since` (would leave messages stranded)
+- **No filtering**: Incompatible with timestamp filters such as `--after` and `--before` (would leave messages stranded)
 - **Concurrent safe**: Multiple move watchers can run safely without data loss
 
 ## Python API
@@ -626,7 +633,7 @@ def process_message(message: str, timestamp: int):
 def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
     """Log error and optionally move to dead-letter queue."""
     logging.error(f"Failed to process message {timestamp}: {exception}")
-    # Message remains in queue for retry since we're using peek=True
+    # Message remains in queue for retry after we're using peek=True
     
     # Optional: After N retries, move to dead-letter queue
     # Queue("errors").write(f"{timestamp}:{message}:{exception}")

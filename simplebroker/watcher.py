@@ -1108,7 +1108,7 @@ class PollingStrategy:
                 and self._check_data_version()
             ):
                 # Don't reset here - let notify_activity handle it when messages are actually processed
-                # Also don't increment check count since we detected activity
+                # Also don't increment check count after we detected activity
                 return
 
             # Calculate delay based on check count
@@ -1355,7 +1355,7 @@ class QueueWatcher(BaseWatcher):
         db: BrokerDB | str | Path | ResolvedTarget | None = None,
         stop_event: threading.Event | None = None,
         peek: bool = False,
-        since_timestamp: int | None = None,
+        after_timestamp: int | None = None,
         batch_processing: bool = False,
         polling_strategy: PollingStrategy | None = None,
         error_handler: Callable[
@@ -1371,7 +1371,7 @@ class QueueWatcher(BaseWatcher):
             db: Database instance or path (uses default if None)
             stop_event: Event to signal shutdown
             peek: If True, don't consume messages (default False)
-            since_timestamp: Only process messages newer than this timestamp
+            after_timestamp: Only process messages newer than this timestamp
             batch_processing: Process all messages at once vs one-by-one
             polling_strategy: Custom polling strategy (uses default if None)
             error_handler: Handler for exceptions from main handler
@@ -1419,7 +1419,7 @@ class QueueWatcher(BaseWatcher):
         self._queue = self._queue_name  # Backward compatibility
         # Store watcher configuration
         self._peek = peek
-        self._last_seen_ts = since_timestamp if since_timestamp is not None else 0
+        self._last_seen_ts = after_timestamp if after_timestamp is not None else 0
         self._batch_processing = batch_processing
         self._native_startup_backlog_mode = False
         self._pending_found_by_db_check = False
@@ -1524,7 +1524,7 @@ class QueueWatcher(BaseWatcher):
         for body, ts in self._queue_obj.stream_messages(
             peek=True,
             all_messages=self._batch_processing,
-            since_timestamp=self._last_seen_ts,
+            after_timestamp=self._last_seen_ts,
             commit_interval=1,
         ):
             if self._try_dispatch_message(body, ts):

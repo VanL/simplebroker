@@ -52,7 +52,7 @@ class TestCompoundDbNameIntegration:
 
     def test_deep_compound_structure_raises_error(self) -> None:
         """Test that deeply nested compound database structure raises errors."""
-        # Test the validation function directly since module-level config
+        # Test the validation function directly after module-level config
         # caching makes environment variable testing difficult
         with pytest.raises(
             ValueError, match="Database name must not contain nested directories"

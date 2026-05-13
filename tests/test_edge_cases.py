@@ -328,13 +328,13 @@ def test_timestamp_overflow_protection(workdir: Path) -> None:
     max_safe_ms = 2_251_799_813_685  # Safe value for ms input
     overflow_ms = 10_000_000_000_000  # 10 trillion ms - will overflow
 
-    # Test via CLI with --since flag
+    # Test via CLI with --after flag
     # This should fail gracefully
     rc, out, err = run_cli(
         "read",
         "test_queue",
         "--all",
-        f"--since={overflow_ms}ms",
+        f"--after={overflow_ms}ms",
         cwd=workdir,
     )
     assert rc == 1  # Should fail
@@ -345,11 +345,11 @@ def test_timestamp_overflow_protection(workdir: Path) -> None:
         "read",
         "test_queue",
         "--all",
-        f"--since={max_safe_ms}ms",
+        f"--after={max_safe_ms}ms",
         cwd=workdir,
     )
     # Should succeed - queue exists but no messages match filter
     # Note: rc could be 0 (no messages match filter) or 2 (queue empty after filter)
-    # Both are valid since the queue exists
+    # Both are valid after the queue exists
     assert rc in [0, 2], f"Expected exit code 0 or 2, got {rc}"
     assert out == ""  # No messages returned

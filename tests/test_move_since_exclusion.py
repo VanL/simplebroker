@@ -1,4 +1,4 @@
-"""Test that --move and --since are mutually exclusive."""
+"""Test that --move and --after are mutually exclusive."""
 
 import subprocess
 import sys
@@ -59,11 +59,11 @@ def _wait_for_move_output(
     )
 
 
-def test_move_since_mutual_exclusion(tmp_path: Path) -> None:
-    """Test that --move and --since cannot be used together."""
+def test_move_after_mutual_exclusion(tmp_path: Path) -> None:
+    """Test that --move and --after cannot be used together."""
     db_path = tmp_path / "test.db"
 
-    # Try to use both --move and --since together
+    # Try to use both --move and --after together
     result = subprocess.run(
         [
             sys.executable,
@@ -75,7 +75,7 @@ def test_move_since_mutual_exclusion(tmp_path: Path) -> None:
             "source",
             "--move",
             "destination",
-            "--since",
+            "--after",
             "2024-01-01",
         ],
         capture_output=True,
@@ -84,12 +84,12 @@ def test_move_since_mutual_exclusion(tmp_path: Path) -> None:
 
     # Should fail with error
     assert result.returncode == 1
-    assert "incompatible with --since" in result.stderr.lower()
+    assert "incompatible with --after" in result.stderr.lower()
     assert "--move drains all messages" in result.stderr.lower()
 
 
-def test_move_without_since_works(tmp_path: Path) -> None:
-    """Test that --move works without --since."""
+def test_move_without_after_works(tmp_path: Path) -> None:
+    """Test that --move works without --after."""
     db_path = tmp_path / "test.db"
 
     # First write a message
@@ -150,8 +150,8 @@ def test_move_without_since_works(tmp_path: Path) -> None:
     assert "test message" in result.stdout
 
 
-def test_watch_with_since_without_move_works(tmp_path: Path) -> None:
-    """Test that watch with --since works when not using --move."""
+def test_watch_with_after_without_move_works(tmp_path: Path) -> None:
+    """Test that watch with --after works when not using --move."""
     db_path = tmp_path / "test.db"
 
     # Write a message
@@ -169,7 +169,7 @@ def test_watch_with_since_without_move_works(tmp_path: Path) -> None:
         check=True,
     )
 
-    # Start watch with --since in background
+    # Start watch with --after in background
     with managed_subprocess(
         [
             sys.executable,
@@ -179,7 +179,7 @@ def test_watch_with_since_without_move_works(tmp_path: Path) -> None:
             str(db_path),
             "watch",
             "source",
-            "--since",
+            "--after",
             "0",  # From beginning
             "--peek",
         ],
@@ -190,7 +190,7 @@ def test_watch_with_since_without_move_works(tmp_path: Path) -> None:
 
         time.sleep(0.5)
 
-        # In peek mode with --since, it should show existing messages
+        # In peek mode with --after, it should show existing messages
         # Check if message was displayed
         if "test message" not in proc.stdout:
             # Some versions might need different handling

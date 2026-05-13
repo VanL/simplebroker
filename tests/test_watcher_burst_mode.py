@@ -88,7 +88,7 @@ class InstrumentedQueueWatcher(QueueWatcher):
         if not self._has_pending_messages_enabled:
             return True
 
-        # Use the Queue object's has_pending method with proper since_timestamp
+        # Use the Queue object's has_pending method with proper after_timestamp
         if hasattr(self, "_queue_obj") and self._queue_obj:
             return self._queue_obj.has_pending(
                 self._last_seen_ts if self._last_seen_ts > 0 else None
@@ -543,7 +543,7 @@ def test_polling_jitter(broker_target) -> None:
         unique_delays = set(all_delays)
 
         # With jitter and multiple watchers, we should see variety
-        # But since we're using random.uniform, we might get some repeated values
+        # But after we're using random.uniform, we might get some repeated values
         # Require at least 2 unique values as absolute minimum
         assert len(unique_delays) >= 2, (
             f"Delays should vary due to jitter: got only {len(unique_delays)} unique values from {len(all_delays)} samples"
@@ -638,7 +638,7 @@ def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
             message="Should peek first message",
         )
 
-        # In peek mode with since_timestamp, same message won't be peeked again
+        # In peek mode with after_timestamp, same message won't be peeked again
         # Add more messages to verify continued burst mode
         for i in range(2, 5):
             broker.write("test_queue", f"message_{i}")

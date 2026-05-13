@@ -37,7 +37,7 @@ def test_same_queue_claim_waits_instead_of_skipping(
                 limit=1,
                 offset=0,
                 exact_timestamp=None,
-                since_timestamp=None,
+                after_timestamp=None,
                 require_unclaimed=True,
                 target_queue=None,
             ),

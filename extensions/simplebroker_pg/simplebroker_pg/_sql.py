@@ -13,7 +13,7 @@ SELECT EXISTS(
 )
 """
 
-CHECK_PENDING_MESSAGES_SINCE = """
+CHECK_PENDING_MESSAGES_AFTER = """
 SELECT EXISTS(
     SELECT 1
     FROM messages
@@ -190,9 +190,12 @@ def _build_where_clause(spec: RetrieveQuerySpec) -> tuple[list[str], list[object
     params = [spec.queue]
     if spec.require_unclaimed:
         where_conditions.append("claimed = FALSE")
-    if spec.since_timestamp is not None:
+    if spec.after_timestamp is not None:
         where_conditions.append("ts > ?")
-        params.append(spec.since_timestamp)
+        params.append(spec.after_timestamp)
+    if spec.before_timestamp is not None:
+        where_conditions.append("ts < ?")
+        params.append(spec.before_timestamp)
     return where_conditions, params
 
 

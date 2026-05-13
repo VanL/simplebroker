@@ -44,9 +44,9 @@ LARGE_BATCH_CLAIM_COUNT = 5000
 LARGE_BATCH_READ_LIMIT = 100
 SMALL_BATCH_COUNT = 500
 SMALL_BATCH_READ_LIMIT = 250
-SINCE_LARGE_QUEUE_COUNT = 5000
-SINCE_BATCH_SIZE = 100
-SINCE_QUERY_SAMPLES = 5
+AFTER_LARGE_QUEUE_COUNT = 5000
+AFTER_BATCH_SIZE = 100
+AFTER_QUERY_SAMPLES = 5
 TIMESTAMP_LOOKUP_COUNT = 1000
 CONCURRENT_OPS_BASE_COUNT = 100
 CONCURRENT_OPS_COUNT = 20
@@ -73,7 +73,7 @@ BASELINE_TIMES = {
     "bulk_move_5k": 5.0,  # Estimated: 5x the 1k move time
     "large_batch_claim_rollback": 0.3,  # Reading 100 of 5000 messages (increased for CI reliability)
     "at_least_once_rollback": 0.2,  # Reading 250 of 500 messages (increased for CI reliability)
-    "since_query_2000_msgs": 1.0,  # Estimated based on query performance
+    "after_query_2000_msgs": 1.0,  # Estimated based on query performance
     "timestamp_lookup": 0.1,  # Estimated based on index lookup
     "concurrent_mixed_ops": 2.5,  # Estimated for mixed operations
     "move_1k_messages": 0.093,  # Moving 1000 messages individually
@@ -91,7 +91,7 @@ BASELINE_CALIBRATION_KEYS = {
 
 # Minimum performance thresholds (messages per second)
 MIN_BULK_MOVE_RATE = 500  # messages/second
-MIN_SINCE_QUERY_RATE = 2000  # messages/second
+MIN_AFTER_QUERY_RATE = 2000  # messages/second
 
 
 def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
@@ -358,8 +358,8 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
 
 
 @pytest.mark.slow
-def test_since_large_queue_performance(workdir):
-    """Test --since performance on large message queue."""
+def test_after_large_queue_performance(workdir):
+    """Test --after performance on large message queue."""
     queue_name = "large_queue"
     message_count = 5000
     db_path = workdir / "test.db"
@@ -394,23 +394,23 @@ def test_since_large_queue_performance(workdir):
             ),  # No messages (last message's timestamp)
         ]
 
-        for since_ts, expected_count in test_points:
+        for after_ts, expected_count in test_points:
             elapsed_samples = []
-            for _ in range(SINCE_QUERY_SAMPLES):
+            for _ in range(AFTER_QUERY_SAMPLES):
                 # Time the query using Queue API instead of CLI.
                 start = time.monotonic()
-                if since_ts == 0:
+                if after_ts == 0:
                     # Get all messages using generator (now properly paginated)
                     results = list(q.peek_generator())
                 else:
-                    # Get messages since timestamp
-                    results = list(q.peek_generator(since_timestamp=since_ts))
+                    # Get messages after timestamp
+                    results = list(q.peek_generator(after_timestamp=after_ts))
                 elapsed_samples.append(time.monotonic() - start)
 
                 actual_count = len(results)
                 if expected_count > 0:
                     assert actual_count == expected_count, (
-                        f"Expected {expected_count} messages for since={since_ts}, "
+                        f"Expected {expected_count} messages for after={after_ts}, "
                         f"got {actual_count}"
                     )
                 else:

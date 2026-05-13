@@ -159,7 +159,7 @@ class TestFilesystemBoundaryDetection:
             # Directly test with actual paths to avoid complex mocking
             actual_normal_path = Path("/tmp/test/path")  # Use a real path structure
             if actual_normal_path.parent != actual_normal_path:  # Not root
-                # This should not be a boundary since it's not root or home
+                # This should not be a boundary after it's not root or home
                 result = _is_filesystem_root(actual_normal_path)
                 # The result depends on whether this path exists and is home
                 # Let's just verify the function doesn't crash

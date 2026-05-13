@@ -1,5 +1,5 @@
 """
-Test resilient worker patterns with --since flag.
+Test resilient worker patterns with --after flag.
 
 Tests the checkpoint-based consumption pattern for building robust workers.
 """
@@ -40,7 +40,7 @@ def test_resilient_worker_checkpoint_recovery(workdir):
         "--all",
         "--json",
         "--timestamps",
-        "--since",
+        "--after",
         str(checkpoint),
         cwd=workdir,
     )
@@ -74,7 +74,7 @@ def test_batch_processing_with_checkpoint(workdir):
             "--all",
             "--json",
             "--timestamps",
-            "--since",
+            "--after",
             str(checkpoint),
             cwd=workdir,
         )
@@ -130,7 +130,7 @@ def test_worker_failure_retry(workdir):
 
     # Try to process from checkpoint (includes bad_message)
     rc, out, _ = run_cli(
-        "peek", queue_name, "--all", "--json", "--since", str(checkpoint), cwd=workdir
+        "peek", queue_name, "--all", "--json", "--after", str(checkpoint), cwd=workdir
     )
     next_batch = [json.loads(line) for line in out.strip().split("\n")]
 
@@ -139,7 +139,7 @@ def test_worker_failure_retry(workdir):
 
     # On retry, we get the same messages again
     rc, out, _ = run_cli(
-        "peek", queue_name, "--all", "--json", "--since", str(checkpoint), cwd=workdir
+        "peek", queue_name, "--all", "--json", "--after", str(checkpoint), cwd=workdir
     )
     retry_batch = [json.loads(line) for line in out.strip().split("\n")]
 
@@ -213,7 +213,7 @@ def test_checkpoint_with_empty_queue_recovery(workdir):
 
     # Check from checkpoint - should be empty
     rc, _, _ = run_cli(
-        "peek", queue_name, "--all", "--since", str(checkpoint), cwd=workdir
+        "peek", queue_name, "--all", "--after", str(checkpoint), cwd=workdir
     )
     assert rc == 2
 
@@ -223,7 +223,7 @@ def test_checkpoint_with_empty_queue_recovery(workdir):
 
     # Check from checkpoint - should see only new messages
     rc, out, _ = run_cli(
-        "peek", queue_name, "--all", "--json", "--since", str(checkpoint), cwd=workdir
+        "peek", queue_name, "--all", "--json", "--after", str(checkpoint), cwd=workdir
     )
     assert rc == 0
 
