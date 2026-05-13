@@ -7,7 +7,10 @@ when COVERAGE_PROCESS_START is set.
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_with_coverage(
@@ -22,7 +25,11 @@ def run_with_coverage(
     if os.environ.get("COVERAGE_PROCESS_START") and cmd[0] == sys.executable:
         # Ensure environment is passed to subprocess
         env = kwargs.get("env", os.environ.copy())
-        env["COVERAGE_PROCESS_START"] = os.environ["COVERAGE_PROCESS_START"]
+        coverage_config = Path(os.environ["COVERAGE_PROCESS_START"])
+        if not coverage_config.is_absolute():
+            coverage_config = PROJECT_ROOT / coverage_config
+        env["COVERAGE_PROCESS_START"] = str(coverage_config)
+        env.setdefault("COVERAGE_FILE", str(PROJECT_ROOT / ".coverage"))
         kwargs["env"] = env
 
         # For Python subprocesses, inject coverage startup code

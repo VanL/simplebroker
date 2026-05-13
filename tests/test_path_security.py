@@ -4,6 +4,7 @@ import platform
 
 import pytest
 
+from simplebroker import _constants
 from simplebroker.helpers import _validate_safe_path_components
 
 
@@ -167,6 +168,29 @@ class TestValidateSafePathComponents:
             with pytest.raises(ValueError, match="dangerous character"):
                 _validate_safe_path_components(path, "Test path")
 
+    def test_windows_colon_rules_without_windows_runner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test Windows drive-letter and ADS-style colon handling deterministically."""
+        monkeypatch.setattr(_constants.platform, "system", lambda: "Windows")
+
+        valid_drive_paths = [
+            "C:\\temp\\test.db",
+            "D:\\data\\broker.db",
+            "Z:/project/database.db",
+        ]
+        for path in valid_drive_paths:
+            _validate_safe_path_components(path, "Test path")
+
+        invalid_colon_paths = [
+            "test:file.db",
+            "C:\\test:dir\\file.db",
+            "temp\\file:name.db",
+        ]
+        for path in invalid_colon_paths:
+            with pytest.raises(ValueError, match="dangerous character ':'"):
+                _validate_safe_path_components(path, "Test path")
+
     def test_windows_reserved_names_rejection(self) -> None:
         """Test that Windows reserved names are rejected on Windows."""
         if platform.system() != "Windows":
@@ -204,6 +228,28 @@ class TestValidateSafePathComponents:
             for case_name in [name, name.lower(), name.capitalize()]:
                 # Test as filename and with extension
                 for path in [case_name, f"{case_name}.db", f"subdir/{case_name}.db"]:
+                    with pytest.raises(ValueError, match="Windows reserved name"):
+                        _validate_safe_path_components(path, "Test path")
+
+    def test_windows_reserved_names_without_windows_runner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test Windows device-name rejection without relying on Windows CI."""
+        monkeypatch.setattr(_constants.platform, "system", lambda: "Windows")
+
+        reserved_names = [
+            "CON",
+            "PRN",
+            "AUX",
+            "NUL",
+            "COM1",
+            "COM9",
+            "LPT1",
+            "LPT9",
+        ]
+        for name in reserved_names:
+            for case_name in (name, name.lower(), name.capitalize()):
+                for path in (case_name, f"{case_name}.db", f"subdir/{case_name}.db"):
                     with pytest.raises(ValueError, match="Windows reserved name"):
                         _validate_safe_path_components(path, "Test path")
 

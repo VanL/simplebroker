@@ -56,6 +56,7 @@ def test_alias_list_with_target(workdir: Path) -> None:
     assert out == "No aliases found for 'missing'"
 
 
+@pytest.mark.sqlite_only
 def test_cmd_alias_add_remove_direct(workdir: Path) -> None:
     db_path = workdir / "test.db"
 
@@ -80,6 +81,7 @@ def test_cmd_alias_add_remove_direct(workdir: Path) -> None:
     assert "alias 'queue' does not exist" in err
 
 
+@pytest.mark.sqlite_only
 def test_resolve_alias_name_direct(workdir: Path) -> None:
     db_path = workdir / "direct.db"
     with BrokerDB(str(db_path)) as db:
@@ -134,6 +136,7 @@ def test_alias_resolution_for_delete(workdir: Path) -> None:
     assert out == ""
 
 
+@pytest.mark.sqlite_only
 def test_cmd_watch_resolves_aliases(
     monkeypatch: pytest.MonkeyPatch, workdir: Path
 ) -> None:
