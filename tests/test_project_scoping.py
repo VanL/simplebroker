@@ -15,6 +15,7 @@ are reclaimed to prevent test failures on Windows.
 import os
 import platform
 import tempfile
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -212,7 +213,7 @@ class TestDatabaseValidation:
         tmp_path, cleanup_func = temp_db_cleanup
 
         db_path = tmp_path / ".broker.db"
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('magic', 'wrong-magic')"
@@ -646,7 +647,7 @@ class TestSecurityEdgeCases:
         import sqlite3
 
         fake_db = tmp_path / ".broker.db"
-        with sqlite3.connect(str(fake_db)) as conn:
+        with closing(sqlite3.connect(str(fake_db))) as conn:
             conn.execute("CREATE TABLE test (id INTEGER)")
             conn.commit()
 

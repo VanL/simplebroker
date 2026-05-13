@@ -50,7 +50,7 @@ jobs:
 
       - name: Run tests with pytest
         run: |
-          pytest -v --tb=short -m "not slow" --override-ini="addopts=-ra -q --strict-markers"
+          pytest -v --tb=short -m "not slow" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup"
 
       - name: Test CLI installation
         run: |

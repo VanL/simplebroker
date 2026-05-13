@@ -16,6 +16,7 @@ to ensure comprehensive coverage while maintaining readability and maintainabili
 
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -49,7 +50,7 @@ class TestInitCommand:
         assert _is_valid_sqlite_db(db_path) is True
 
         # Verify database has correct structure
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
             )
@@ -90,7 +91,7 @@ class TestInitCommand:
         assert result == EXIT_SUCCESS
 
         # Verify existing data is preserved
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM messages WHERE queue = 'test_queue'"
             )
@@ -116,7 +117,7 @@ class TestInitCommand:
         db_path = tmp_path / ".broker.db"
 
         # Create a SQLite database with wrong schema
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             conn.execute("CREATE TABLE other_app (id INTEGER PRIMARY KEY)")
             conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
             conn.execute("INSERT INTO meta (key, value) VALUES ('magic', 'wrong-app')")
@@ -374,7 +375,7 @@ class TestInitCommand:
         assert result == EXIT_SUCCESS
 
         # Verify complete schema
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             # Check that all required tables exist
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
@@ -409,7 +410,7 @@ class TestInitCommand:
         assert result == EXIT_SUCCESS
 
         # Check that WAL mode is enabled
-        with sqlite3.connect(str(db_path)) as conn:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             cursor = conn.execute("PRAGMA journal_mode")
             journal_mode = cursor.fetchone()[0]
             # Should be WAL mode (the DBConnection sets this up)
@@ -471,20 +472,20 @@ class TestInitCommand:
 
         # Test with SQLite database but no meta table
         sqlite_no_meta = tmp_path / "no_meta.db"
-        with sqlite3.connect(str(sqlite_no_meta)) as conn:
+        with closing(sqlite3.connect(str(sqlite_no_meta))) as conn:
             conn.execute("CREATE TABLE test (id INTEGER)")
         assert _is_valid_sqlite_db(sqlite_no_meta) is False
 
         # Test with meta table but no magic key
         sqlite_no_magic = tmp_path / "no_magic.db"
-        with sqlite3.connect(str(sqlite_no_magic)) as conn:
+        with closing(sqlite3.connect(str(sqlite_no_magic))) as conn:
             conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
             conn.execute("INSERT INTO meta (key, value) VALUES ('other', 'value')")
         assert _is_valid_sqlite_db(sqlite_no_magic) is False
 
         # Test with wrong magic value
         sqlite_wrong_magic = tmp_path / "wrong_magic.db"
-        with sqlite3.connect(str(sqlite_wrong_magic)) as conn:
+        with closing(sqlite3.connect(str(sqlite_wrong_magic))) as conn:
             conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('magic', 'wrong-value')"
