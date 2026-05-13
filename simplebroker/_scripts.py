@@ -6,6 +6,7 @@ import argparse
 import os
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -77,13 +78,35 @@ def _cleanup_container(container_name: str) -> None:
     )
 
 
+def _host_port_accepts_connections(
+    port: str,
+    *,
+    timeout_seconds: float = 1.0,
+) -> tuple[bool, str]:
+    """Return whether the host can connect to Docker's published Postgres port."""
+
+    try:
+        port_number = int(port)
+    except ValueError as exc:
+        return False, f"invalid published port {port!r}: {exc}"
+
+    try:
+        with socket.create_connection(
+            ("127.0.0.1", port_number),
+            timeout=timeout_seconds,
+        ):
+            return True, ""
+    except OSError as exc:
+        return False, str(exc)
+
+
 def _wait_for_postgres(container_name: str, *, timeout_seconds: float = 60.0) -> str:
     """Wait for the Postgres container to accept connections and return its host port."""
 
-    deadline = time.time() + timeout_seconds
+    deadline = time.monotonic() + timeout_seconds
     last_error = "container did not start"
 
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         port = _docker_port(container_name)
         if port is None:
             last_error = "waiting for published port"
@@ -109,7 +132,14 @@ def _wait_for_postgres(container_name: str, *, timeout_seconds: float = 60.0) ->
             errors="replace",
         )
         if result.returncode == 0:
-            return port
+            host_ready, host_error = _host_port_accepts_connections(port)
+            if host_ready:
+                return port
+            last_error = (
+                f"waiting for host connection to 127.0.0.1:{port}: {host_error}"
+            )
+            time.sleep(1.0)
+            continue
 
         last_error = (
             result.stderr.strip() or result.stdout.strip() or "pg_isready failed"
@@ -160,6 +190,46 @@ def _build_test_env(*, dsn: str, include_backend_marker: bool) -> dict[str, str]
     if include_backend_marker:
         env["BROKER_TEST_BACKEND"] = "postgres"
     return env
+
+
+def _pg_test_uv_command(*args: str) -> list[str]:
+    """Build a uv command with the dependencies used by PG-backed tests."""
+
+    return [
+        "uv",
+        "run",
+        "--extra",
+        "dev",
+        "--with-editable",
+        ".",
+        "--with-editable",
+        "./extensions/simplebroker_pg[dev]",
+        *args,
+    ]
+
+
+def _verify_postgres_test_dsn(dsn: str) -> None:
+    """Verify the test runner can connect to the exact host DSN before pytest."""
+
+    env = _build_test_env(dsn=dsn, include_backend_marker=False)
+    _run(
+        _pg_test_uv_command(
+            "python",
+            "-c",
+            (
+                "import os\n"
+                "import psycopg\n"
+                "with psycopg.connect(\n"
+                "    os.environ['SIMPLEBROKER_PG_TEST_DSN'],\n"
+                "    connect_timeout=5,\n"
+                ") as conn:\n"
+                "    with conn.cursor() as cur:\n"
+                "        cur.execute('SELECT 1')\n"
+                "        assert cur.fetchone() == (1,)\n"
+            ),
+        ),
+        env=env,
+    )
 
 
 def _merge_marker_expressions(base: str, extra: str | None) -> str:
@@ -351,21 +421,14 @@ def pytest_pg_main() -> int:
     try:
         container_name, dsn = _start_postgres_container()
         print(f"Postgres test DSN: {dsn}", flush=True)
+        _verify_postgres_test_dsn(dsn)
 
         shared_env = _build_test_env(dsn=dsn, include_backend_marker=True)
         extension_env = _build_test_env(dsn=dsn, include_backend_marker=False)
 
         if run_shared_suite:
             _run(
-                [
-                    "uv",
-                    "run",
-                    "--extra",
-                    "dev",
-                    "--with-editable",
-                    ".",
-                    "--with-editable",
-                    "./extensions/simplebroker_pg[dev]",
+                _pg_test_uv_command(
                     "pytest",
                     *(shared_pytest_args or ["tests"]),
                     "-m",
@@ -374,21 +437,13 @@ def pytest_pg_main() -> int:
                     numprocesses,
                     "--dist",
                     dist_mode,
-                ],
+                ),
                 env=shared_env,
             )
 
         if run_extension_suite:
             _run(
-                [
-                    "uv",
-                    "run",
-                    "--extra",
-                    "dev",
-                    "--with-editable",
-                    ".",
-                    "--with-editable",
-                    "./extensions/simplebroker_pg[dev]",
+                _pg_test_uv_command(
                     "pytest",
                     *(extension_pytest_args or ["extensions/simplebroker_pg/tests"]),
                     "-m",
@@ -397,7 +452,7 @@ def pytest_pg_main() -> int:
                     numprocesses,
                     "--dist",
                     dist_mode,
-                ],
+                ),
                 env=extension_env,
             )
         return 0

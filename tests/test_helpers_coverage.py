@@ -9,6 +9,7 @@ import pytest
 from simplebroker import helpers
 from simplebroker._exceptions import OperationalError, StopException
 from simplebroker.helpers import (
+    _create_compound_db_directories,
     _execute_with_retry,
     _find_project_database,
     _is_compound_db_name,
@@ -171,6 +172,35 @@ def test_compound_database_path_creation_and_validation(tmp_path: Path) -> None:
         ensure_compound_db_path(tmp_path, "too/deep/broker.db")
 
 
+def test_create_compound_db_directories_noops_for_simple_names(
+    tmp_path: Path,
+) -> None:
+    _create_compound_db_directories(tmp_path, "broker.db")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_create_compound_db_directories_creates_parent_directory(
+    tmp_path: Path,
+) -> None:
+    _create_compound_db_directories(tmp_path, "state/broker.db")
+
+    assert (tmp_path / "state").is_dir()
+
+
+def test_create_compound_db_directories_wraps_mkdir_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def raise_permission_error(self: Path, *args, **kwargs) -> None:
+        raise PermissionError("blocked")
+
+    monkeypatch.setattr(Path, "mkdir", raise_permission_error)
+
+    with pytest.raises(ValueError, match="Cannot create intermediate directories"):
+        _create_compound_db_directories(tmp_path, "state/broker.db")
+
+
 def test_validate_database_parent_directory_rejects_missing_parent(
     tmp_path: Path,
 ) -> None:
@@ -222,3 +252,70 @@ def test_resolve_symlinks_safely_wraps_resolution_errors(
 
     with pytest.raises(RuntimeError, match="Failed to resolve symlinks"):
         _resolve_symlinks_safely(Path("broker.db"))
+
+
+def test_resolve_symlinks_safely_resolves_absolute_unfinished_symlink(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.db"
+
+    class FakeSymlink:
+        parent = tmp_path
+
+        def resolve(self):
+            return self
+
+        def is_symlink(self) -> bool:
+            return True
+
+        def readlink(self) -> Path:
+            return target
+
+    resolved = _resolve_symlinks_safely(FakeSymlink())  # type: ignore[arg-type]
+
+    assert resolved == target.resolve()
+
+
+def test_resolve_symlinks_safely_resolves_relative_unfinished_symlink(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "target.db"
+
+    class FakeParent:
+        def __truediv__(self, child: Path) -> Path:
+            assert child == Path("target.db")
+            return target
+
+    class FakeSymlink:
+        parent = FakeParent()
+
+        def resolve(self):
+            return self
+
+        def is_symlink(self) -> bool:
+            return True
+
+        def readlink(self) -> Path:
+            return Path("target.db")
+
+    resolved = _resolve_symlinks_safely(FakeSymlink())  # type: ignore[arg-type]
+
+    assert resolved == target.resolve()
+
+
+def test_resolve_symlinks_safely_returns_partial_path_on_inner_read_error() -> None:
+    class BrokenSymlink:
+        parent = Path(".")
+
+        def resolve(self):
+            return self
+
+        def is_symlink(self) -> bool:
+            return True
+
+        def readlink(self) -> Path:
+            raise OSError("cannot read link")
+
+    link = BrokenSymlink()
+
+    assert _resolve_symlinks_safely(link) is link  # type: ignore[arg-type]
