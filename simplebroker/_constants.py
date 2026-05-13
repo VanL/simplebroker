@@ -35,7 +35,7 @@ from typing import Any, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "3.4.2"
+__version__: Final[str] = "3.5.0"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
