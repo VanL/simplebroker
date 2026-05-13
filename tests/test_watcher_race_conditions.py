@@ -663,20 +663,28 @@ def test_pre_check_database_contention(broker_target) -> None:
 
     try:
         processed_counts = {}
+        processed_total = 0
+        expected_messages = 100
+        all_processed = threading.Event()
+        writer_errors: list[BaseException] = []
 
         # Create watchers
         num_watchers = 10
+        queue_names = [f"queue_{i}" for i in range(num_watchers)]
 
         processed_lock = threading.Lock()
 
-        for i in range(num_watchers):
-            queue = f"queue_{i}"
+        for queue in queue_names:
             processed_counts[queue] = 0
 
             def make_handler(q):
                 def handler(msg, ts) -> None:
+                    nonlocal processed_total
                     with processed_lock:
                         processed_counts[q] += 1
+                        processed_total += 1
+                        if processed_total >= expected_messages:
+                            all_processed.set()
 
                 return handler
 
@@ -686,29 +694,39 @@ def test_pre_check_database_contention(broker_target) -> None:
 
         # Function to create write contention
         def create_contention() -> None:
-            for _ in range(100):
-                # Write to random queues
-                import random
+            try:
+                for message_idx in range(expected_messages):
+                    queue = queue_names[message_idx % num_watchers]
+                    broker.write(queue, f"contention_message_{message_idx}")
+                    if message_idx % num_watchers == num_watchers - 1:
+                        time.sleep(0)
+            except BaseException as exc:
+                writer_errors.append(exc)
+                all_processed.set()
 
-                queue_idx = random.randint(0, num_watchers - 1)
-                broker.write(f"queue_{queue_idx}", "contention_message")
-                time.sleep(0.001)
+        def processing_snapshot() -> tuple[int, dict[str, int]]:
+            with processed_lock:
+                return processed_total, dict(processed_counts)
 
         # Run contention in background
         contention_thread = threading.Thread(target=create_contention)
         contention_thread.start()
 
-        # Let it run
-        contention_thread.join()
-        assert wait_for_condition(
-            lambda: sum(processed_counts.values()) >= 100,
-            timeout=3.0,
-            interval=0.05,
+        contention_thread.join(timeout=scale_timeout_for_ci(10.0))
+        assert not contention_thread.is_alive(), "Writer thread did not complete"
+        if writer_errors:
+            raise AssertionError("Writer thread failed") from writer_errors[0]
+
+        assert all_processed.wait(timeout=scale_timeout_for_ci(5.0)), (
+            "Timed out waiting for watcher processing under contention: "
+            f"processed={processing_snapshot()}"
         )
 
         # Verify all watchers still functioned under contention
-        total_processed = sum(processed_counts.values())
-        assert total_processed == 100  # All messages should be processed
+        total_processed, final_counts = processing_snapshot()
+        assert total_processed == expected_messages, (
+            f"All messages should be processed exactly once: counts={final_counts}"
+        )
 
         # Check pre-check efficiency
         total_pre_checks = sum(w.pre_check_count for w in watchers)
