@@ -15,6 +15,8 @@ import pytest
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
+from .helper_scripts.timing import scale_timeout_for_ci
+
 
 def watcher_process(
     db_path: str,
@@ -53,11 +55,11 @@ def watcher_process(
 
         watcher = ProcessWatcher(queue_name, handler, db=db_path)
 
-        # Signal ready
-        result_queue.put(("ready", process_id, None))
-
         # Run until stop signal
         thread = watcher.run_in_thread()
+
+        # Signal ready after the watcher thread has actually been started.
+        result_queue.put(("ready", process_id, None))
 
         while True:
             try:
@@ -296,6 +298,44 @@ def test_multiprocess_separate_queues() -> None:
         processes = []
 
         try:
+
+            def process_diagnostics() -> list[tuple[int, int | None, int | None, bool]]:
+                return [
+                    (i, p.pid, p.exitcode, p.is_alive())
+                    for i, p in enumerate(processes)
+                ]
+
+            errors: list[tuple[int, str]] = []
+            process_message_counts = dict.fromkeys(range(num_processes), 0)
+
+            def collect_until_counts(
+                targets: dict[int, int], *, timeout: float
+            ) -> None:
+                deadline = time.monotonic() + scale_timeout_for_ci(timeout)
+                while time.monotonic() < deadline:
+                    if all(
+                        process_message_counts[i] >= target
+                        for i, target in targets.items()
+                    ):
+                        return
+
+                    try:
+                        msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+
+                    if msg_type == "message":
+                        process_message_counts[proc_id] += 1
+                    elif msg_type == "error":
+                        errors.append((proc_id, data))
+                        break
+
+                raise AssertionError(
+                    "Timed out waiting for watcher processes to consume messages: "
+                    f"targets={targets}, counts={process_message_counts}, "
+                    f"errors={errors}, processes={process_diagnostics()}"
+                )
+
             # Start processes, each watching its own queue
             for i in range(num_processes):
                 control_queue = multiprocessing.Queue()
@@ -309,34 +349,45 @@ def test_multiprocess_separate_queues() -> None:
                 processes.append(p)
 
             # Wait for ready
-            ready_count = 0
-            while ready_count < num_processes:
-                msg_type, proc_id, data = result_queue.get(timeout=5.0)
-                if msg_type == "ready":
-                    ready_count += 1
-
-            # Write messages to each queue
-            for i in range(num_processes):
-                for j in range(messages_per_queue):
-                    broker.write(f"queue_{i}", f"queue_{i}_msg_{j}")
-
-            # Collect results
-            process_message_counts = dict.fromkeys(range(num_processes), 0)
-            timeout_start = time.monotonic()
-            expected_total = num_processes * messages_per_queue
-            total_collected = 0
-
+            ready_processes = set()
+            ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
             while (
-                total_collected < expected_total
-                and time.monotonic() - timeout_start < 10
+                len(ready_processes) < num_processes
+                and time.monotonic() < ready_deadline
             ):
                 try:
                     msg_type, proc_id, data = result_queue.get(timeout=0.1)
-                    if msg_type == "message":
-                        process_message_counts[proc_id] += 1
-                        total_collected += 1
                 except queue.Empty:
                     continue
+
+                if msg_type == "ready":
+                    ready_processes.add(proc_id)
+                elif msg_type == "error":
+                    errors.append((proc_id, data))
+                    break
+
+            if errors or len(ready_processes) != num_processes:
+                raise AssertionError(
+                    "Timed out waiting for watcher processes to start: "
+                    f"ready={sorted(ready_processes)}, errors={errors}, "
+                    f"processes={process_diagnostics()}"
+                )
+
+            # Prove each watcher can consume from its own queue before the bulk phase.
+            for i in range(num_processes):
+                broker.write(f"queue_{i}", f"queue_{i}_probe")
+            collect_until_counts(dict.fromkeys(range(num_processes), 1), timeout=10.0)
+
+            # Write messages to each queue
+            for i in range(num_processes):
+                for j in range(1, messages_per_queue):
+                    broker.write(f"queue_{i}", f"queue_{i}_msg_{j}")
+
+            # Collect results
+            collect_until_counts(
+                dict.fromkeys(range(num_processes), messages_per_queue),
+                timeout=10.0,
+            )
 
             # Each process should have processed exactly its queue's messages
             for i in range(num_processes):
