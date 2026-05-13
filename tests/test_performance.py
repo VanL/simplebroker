@@ -48,6 +48,7 @@ AFTER_LARGE_QUEUE_COUNT = 5000
 AFTER_BATCH_SIZE = 100
 AFTER_QUERY_SAMPLES = 5
 TIMESTAMP_LOOKUP_COUNT = 1000
+TIMESTAMP_LOOKUP_SAMPLE_COUNT = 5
 CONCURRENT_OPS_BASE_COUNT = 100
 CONCURRENT_OPS_COUNT = 20
 MOVE_LARGE_BATCH_COUNT = 1000
@@ -440,32 +441,59 @@ def test_timestamp_lookup_performance(workdir: Path):
     db_path = workdir / "test.db"
 
     # Create queue with many messages using Queue API
-    num_messages = 1000
+    num_messages = TIMESTAMP_LOOKUP_COUNT
     with Queue("perf_queue", db_path=str(db_path), persistent=True) as q:
         for i in range(num_messages):
             q.write(f"msg_{i}")
 
-    # Get middle message timestamp
-    with Queue("perf_queue", db_path=str(db_path)) as q:
+    with Queue("perf_queue", db_path=str(db_path), persistent=True) as q:
         messages_with_ts = q.peek_many(limit=num_messages, with_timestamps=True)
-    middle_ts = str(messages_with_ts[num_messages // 2][1])
+        sample_start = num_messages // 2
+        sample_indices = range(
+            sample_start,
+            sample_start + TIMESTAMP_LOOKUP_SAMPLE_COUNT,
+        )
+        timestamp_samples = [
+            (index, int(messages_with_ts[index][1])) for index in sample_indices
+        ]
 
-    # Time timestamp-based read using Queue API instead of CLI
-    start = time.monotonic()
-    with Queue("perf_queue", db_path=str(db_path)) as q:
-        result = q.read_one(exact_timestamp=int(middle_ts))
-    ts_read_time = time.monotonic() - start
-    assert result is not None
+        # The performance contract is indexed lookup by timestamp, not a noisy
+        # comparison between two one-shot queue-open timings.
+        conn = sqlite3.connect(str(db_path))
+        try:
+            plan_rows = conn.execute(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT id FROM messages
+                WHERE ts = ? AND queue = ? AND claimed = 0
+                ORDER BY id
+                LIMIT ?
+                """,
+                (timestamp_samples[0][1], "perf_queue", 1),
+            ).fetchall()
+        finally:
+            conn.close()
+        query_plan = " | ".join(str(row[-1]) for row in plan_rows)
+        assert "ts=?" in query_plan
+        assert "SCAN messages" not in query_plan
 
-    # Time normal FIFO read using Queue API
-    start = time.monotonic()
-    with Queue("perf_queue", db_path=str(db_path)) as q:
-        result = q.read_one()
-    fifo_read_time = time.monotonic() - start
-    assert result is not None
+        # Warm the persistent queue path before timing.
+        warm_result = q.peek_one(exact_timestamp=timestamp_samples[0][1])
+        assert warm_result is not None
 
-    # Timestamp read should be comparable to FIFO read (within 2x)
-    assert ts_read_time < fifo_read_time * 2
+        elapsed_samples = []
+        for index, timestamp in timestamp_samples:
+            start = time.monotonic()
+            result = q.read_one(exact_timestamp=timestamp)
+            elapsed_samples.append(time.monotonic() - start)
+            assert result == f"msg_{index}"
+
+    elapsed = min(elapsed_samples)
+    timeout = get_timeout("timestamp_lookup")
+    assert elapsed < timeout, (
+        f"Timestamp lookup took {elapsed:.3f}s, expected < {timeout:.3f}s; "
+        f"samples={[round(sample, 3) for sample in elapsed_samples]}"
+    )
 
 
 @pytest.mark.slow

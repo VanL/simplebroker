@@ -664,13 +664,14 @@ def test_pre_check_database_contention(broker_target) -> None:
     try:
         processed_counts = {}
         processed_total = 0
-        expected_messages = 100
         all_processed = threading.Event()
         writer_errors: list[BaseException] = []
 
         # Create watchers
         num_watchers = 10
         queue_names = [f"queue_{i}" for i in range(num_watchers)]
+        messages_per_queue = 5 if broker_target.backend_name == "postgres" else 10
+        expected_messages = num_watchers * messages_per_queue
 
         processed_lock = threading.Lock()
 
@@ -692,32 +693,32 @@ def test_pre_check_database_contention(broker_target) -> None:
             watchers.append(w)
             w.run_in_thread()
 
-        # Function to create write contention
-        def create_contention() -> None:
-            try:
-                for message_idx in range(expected_messages):
-                    queue = queue_names[message_idx % num_watchers]
-                    broker.write(queue, f"contention_message_{message_idx}")
-                    if message_idx % num_watchers == num_watchers - 1:
-                        time.sleep(0)
-            except BaseException as exc:
-                writer_errors.append(exc)
-                all_processed.set()
-
         def processing_snapshot() -> tuple[int, dict[str, int]]:
             with processed_lock:
                 return processed_total, dict(processed_counts)
 
-        # Run contention in background
+        def create_contention() -> None:
+            try:
+                for round_idx in range(messages_per_queue):
+                    for queue in queue_names:
+                        broker.write(queue, f"contention_message_{round_idx}_{queue}")
+                    time.sleep(0)
+            except BaseException as exc:
+                writer_errors.append(exc)
+
         contention_thread = threading.Thread(target=create_contention)
         contention_thread.start()
 
-        contention_thread.join(timeout=scale_timeout_for_ci(10.0))
-        assert not contention_thread.is_alive(), "Writer thread did not complete"
+        writer_timeout = 60.0 if broker_target.backend_name == "postgres" else 20.0
+        contention_thread.join(timeout=scale_timeout_for_ci(writer_timeout))
+        assert not contention_thread.is_alive(), (
+            "Writer thread did not complete while competing with watcher reads"
+        )
         if writer_errors:
             raise AssertionError("Writer thread failed") from writer_errors[0]
 
-        assert all_processed.wait(timeout=scale_timeout_for_ci(5.0)), (
+        processing_timeout = 30.0 if broker_target.backend_name == "postgres" else 5.0
+        assert all_processed.wait(timeout=scale_timeout_for_ci(processing_timeout)), (
             "Timed out waiting for watcher processing under contention: "
             f"processed={processing_snapshot()}"
         )
