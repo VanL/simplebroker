@@ -92,7 +92,10 @@ markers = [
 [tool.mypy]
 python_version = "3.14"
 exclude = [
+    "^examples/",
     "^extensions/simplebroker_redis/",
+    "^extensions/simplebroker_pg/tests/",
+    "^tests/",
 ]
 no_namespace_packages = true
 warn_return_any = true
