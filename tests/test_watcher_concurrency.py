@@ -216,6 +216,7 @@ class TestWorkerPool(WatcherTestBase):
 
         processed = []
         processed_lock = threading.Lock()
+        all_processed = threading.Event()
 
         def slow_handler(msg: str, ts: int):
             """Handler with variable processing time."""
@@ -223,6 +224,12 @@ class TestWorkerPool(WatcherTestBase):
             time.sleep(data["work_time"])
             with processed_lock:
                 processed.append(data["id"])
+                if len(processed) >= num_messages:
+                    all_processed.set()
+
+        def processed_snapshot() -> list[int]:
+            with processed_lock:
+                return list(processed)
 
         # Create 3 workers
         workers = []
@@ -236,8 +243,10 @@ class TestWorkerPool(WatcherTestBase):
                 thread = watcher.run_in_thread()
                 workers.append((watcher, thread))
 
-            # Process for a while
-            time.sleep(2.0)
+            assert all_processed.wait(timeout=scale_timeout_for_ci(10.0)), (
+                "Timed out waiting for worker pool to process messages: "
+                f"processed={processed_snapshot()}"
+            )
 
         finally:
             # Ensure all workers are cleaned up
@@ -254,8 +263,9 @@ class TestWorkerPool(WatcherTestBase):
                     pass  # Ignore join errors during cleanup
 
         # Should have processed all messages
-        assert len(processed) == num_messages
-        assert set(processed) == set(range(num_messages))
+        snapshot = processed_snapshot()
+        assert len(snapshot) == num_messages
+        assert set(snapshot) == set(range(num_messages))
 
     def test_worker_joins_late(self, broker_target):
         """Test worker joining after others have started."""

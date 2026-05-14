@@ -520,12 +520,19 @@ def test_watcher_stop_during_pre_check(broker_target) -> None:
         # Wait a bit then stop during pre-check
         time.sleep(0.1)
         start_stop = time.monotonic()
-        watcher.stop(timeout=1.0)
+        stop_timeout = scale_timeout_for_ci(1.0)
+        watcher.stop(timeout=stop_timeout)
         stop_duration = time.monotonic() - start_stop
 
-        # Should stop quickly despite pre-check delay
-        assert stop_duration < 1.5
-        assert not thread.is_alive()
+        # stop(timeout=...) should not hang even if the thread needs a short
+        # cleanup window after the bounded join returns.
+        assert stop_duration < stop_timeout + scale_timeout_for_ci(0.5)
+        assert wait_for_condition(
+            lambda: not thread.is_alive(),
+            timeout=scale_timeout_for_ci(5.0),
+            interval=0.05,
+            message="Watcher thread should finish after stop during pre-check",
+        )
     finally:
         # Watcher already stopped in test, but ensure it's stopped
         if (

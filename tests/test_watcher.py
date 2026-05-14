@@ -1182,9 +1182,18 @@ class TestErrorScenarios(WatcherTestBase):
 def test_context_manager_usage(broker_target):
     """Test that QueueWatcher works properly as a context manager."""
     messages_received = []
+    all_messages_received = threading.Event()
+    messages_lock = threading.Lock()
 
     def handler(msg: str, ts: int):
-        messages_received.append((msg, ts))
+        with messages_lock:
+            messages_received.append((msg, ts))
+            if len(messages_received) == 3:
+                all_messages_received.set()
+
+    def messages_snapshot() -> list[tuple[str, int]]:
+        with messages_lock:
+            return list(messages_received)
 
     # Add messages to the queue
     db = make_broker(broker_target)
@@ -1206,10 +1215,10 @@ def test_context_manager_usage(broker_target):
         assert thread is not None
         assert thread.is_alive()
 
-        # Wait for messages to be processed
-        start_time = time.monotonic()
-        while len(messages_received) < 3 and time.monotonic() - start_time < 2.0:
-            time.sleep(0.05)
+        assert all_messages_received.wait(timeout=scale_timeout_for_ci(5.0)), (
+            "Timed out waiting for context-manager watcher to process messages: "
+            f"received={messages_snapshot()}"
+        )
 
     # After exiting context, thread should be stopped
     assert wait_for_condition(
@@ -1223,8 +1232,9 @@ def test_context_manager_usage(broker_target):
     )
 
     # Verify all messages were processed
-    assert len(messages_received) == 3
-    assert [msg for msg, _ in messages_received] == ["message1", "message2", "message3"]
+    snapshot = messages_snapshot()
+    assert len(snapshot) == 3
+    assert [msg for msg, _ in snapshot] == ["message1", "message2", "message3"]
 
     # Verify queue is empty (consumed mode)
     db = make_broker(broker_target)
