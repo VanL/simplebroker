@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import tarfile
 import zipfile
 from email.message import Message
@@ -265,10 +267,91 @@ def test_verify_postgres_test_dsn_runs_select_one(
     ]
     assert cmd[8:10] == ["python", "-c"]
     assert "SELECT 1" in cmd[10]
+    assert "psycopg.OperationalError" in cmd[10]
     assert env is not None
     assert env["SIMPLEBROKER_PG_TEST_DSN"] == "postgresql://example/test"
+    assert env["SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT"] == "60.000000"
     assert "BROKER_TEST_BACKEND" not in env
     assert capture_output is False
+
+
+def test_verify_postgres_test_dsn_script_retries_transient_connection_failure(
+    tmp_path: Path,
+) -> None:
+    attempts_path = tmp_path / "attempts.txt"
+    fake_psycopg = tmp_path / "psycopg.py"
+    fake_psycopg.write_text(
+        """
+import os
+
+
+class OperationalError(Exception):
+    pass
+
+
+_attempts = 0
+
+
+class _Cursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, query):
+        assert query == "SELECT 1"
+
+    def fetchone(self):
+        return (1,)
+
+
+class _Connection:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        return _Cursor()
+
+
+def connect(dsn, connect_timeout):
+    global _attempts
+    _attempts += 1
+    with open(os.environ["FAKE_PG_ATTEMPTS"], "a", encoding="utf-8") as handle:
+        handle.write(f"{_attempts}\\n")
+    if _attempts == 1:
+        raise OperationalError("server closed the connection unexpectedly")
+    assert dsn == "postgresql://example/test"
+    assert connect_timeout == 5
+    return _Connection()
+""",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONPATH": str(tmp_path),
+            "FAKE_PG_ATTEMPTS": str(attempts_path),
+            "SIMPLEBROKER_PG_TEST_DSN": "postgresql://example/test",
+            "SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT": "1",
+            "SIMPLEBROKER_PG_TEST_DSN_RETRY_INTERVAL": "0.01",
+        }
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", _scripts._POSTGRES_DSN_VERIFY_SCRIPT],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert result.returncode == 0
+    assert attempts_path.read_text(encoding="utf-8").splitlines() == ["1", "2"]
 
 
 def test_pytest_pg_main_preflights_dsn_before_pytest(

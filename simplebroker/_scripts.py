@@ -211,25 +211,51 @@ def _pg_test_uv_command(*args: str) -> list[str]:
     ]
 
 
-def _verify_postgres_test_dsn(dsn: str) -> None:
+_POSTGRES_DSN_VERIFY_SCRIPT = r"""
+import os
+import sys
+import time
+
+import psycopg
+
+dsn = os.environ["SIMPLEBROKER_PG_TEST_DSN"]
+deadline = time.monotonic() + float(
+    os.environ.get("SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT", "60")
+)
+retry_interval = float(
+    os.environ.get("SIMPLEBROKER_PG_TEST_DSN_RETRY_INTERVAL", "0.5")
+)
+last_error = "connection not attempted"
+
+while True:
+    try:
+        with psycopg.connect(dsn, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                assert cur.fetchone() == (1,)
+        break
+    except psycopg.OperationalError as exc:
+        last_error = f"{type(exc).__name__}: {exc}"
+        if time.monotonic() >= deadline:
+            print(
+                f"Postgres test DSN was not ready: {last_error}",
+                file=sys.stderr,
+            )
+            raise
+        time.sleep(retry_interval)
+"""
+
+
+def _verify_postgres_test_dsn(dsn: str, *, timeout_seconds: float = 60.0) -> None:
     """Verify the test runner can connect to the exact host DSN before pytest."""
 
     env = _build_test_env(dsn=dsn, include_backend_marker=False)
+    env["SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT"] = f"{timeout_seconds:.6f}"
     _run(
         _pg_test_uv_command(
             "python",
             "-c",
-            (
-                "import os\n"
-                "import psycopg\n"
-                "with psycopg.connect(\n"
-                "    os.environ['SIMPLEBROKER_PG_TEST_DSN'],\n"
-                "    connect_timeout=5,\n"
-                ") as conn:\n"
-                "    with conn.cursor() as cur:\n"
-                "        cur.execute('SELECT 1')\n"
-                "        assert cur.fetchone() == (1,)\n"
-            ),
+            _POSTGRES_DSN_VERIFY_SCRIPT,
         ),
         env=env,
     )
