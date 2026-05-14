@@ -766,11 +766,33 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:
             message="Should return to burst mode after message",
         )
 
-        # Phase 4: Continuous activity should maintain burst mode
+        # Phase 4: Continuous activity should maintain burst mode. First add
+        # one message and wait until the watcher has actually woken back into
+        # burst mode; native activity backends can legitimately record a few
+        # backed-off waits before the first wake arrives.
+        first_activity_delay_count = len(strategy.delay_history)
+        broker.write("test_queue", "message_0")
+
+        wait_for_condition(
+            lambda: len(processed_messages) == 2,
+            timeout=2.0,
+            message="First continuous activity message should be processed",
+        )
+
+        def first_activity_burst_started():
+            new_delays = strategy.delay_history[first_activity_delay_count:]
+            return sum(1 for d in new_delays if d == 0) >= 3
+
+        wait_for_condition(
+            first_activity_burst_started,
+            timeout=1.0,
+            message="Continuous activity should restart burst mode",
+        )
+
         start_count = len(strategy.delay_history)
 
-        # Add messages continuously
-        for i in range(5):
+        # Add remaining messages continuously
+        for i in range(1, 5):
             broker.write("test_queue", f"message_{i}")
             time.sleep(0.02)  # Small delay between messages
 
