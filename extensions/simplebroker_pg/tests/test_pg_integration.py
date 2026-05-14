@@ -391,7 +391,8 @@ def test_postgres_cli_env_selected_backend_init_exits_cleanly(tmp_path: Path) ->
             timeout=10.0,
         )
         assert code == 0, stderr
-        assert "Initialized SimpleBroker target:" in stdout
+        assert stdout == ""
+        assert "Initialized SimpleBroker target:" in stderr
     finally:
         get_backend_plugin().cleanup_target(
             _require_test_dsn(),

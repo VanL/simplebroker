@@ -15,7 +15,7 @@ import pytest
 from simplebroker.watcher import PollingStrategy, QueueWatcher
 
 from .helper_scripts.broker_factory import make_broker
-from .helper_scripts.timing import wait_for_condition
+from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 
 pytestmark = [pytest.mark.shared]
 
@@ -331,10 +331,27 @@ def test_burst_mode_with_batch_processing(no_jitter, broker_target) -> None:
     broker = make_broker(broker_target)
     watcher = None
     try:
+        expected_messages = {f"message_{i}" for i in range(10)}
         processed = []
+        processed_seen: set[str] = set()
+        processed_lock = threading.Lock()
+        all_processed = threading.Event()
 
         def handler(msg, ts) -> None:
-            processed.append(msg)
+            with processed_lock:
+                processed.append(msg)
+                processed_seen.add(msg)
+                if expected_messages <= processed_seen:
+                    all_processed.set()
+
+        def processed_snapshot() -> list[str]:
+            with processed_lock:
+                return list(processed)
+
+        # Queue the batch before starting the watcher so startup timing does not
+        # decide whether CI sees a full batch.
+        for i in range(10):
+            broker.write("test_queue", f"message_{i}")
 
         watcher = InstrumentedQueueWatcher(
             "test_queue",
@@ -344,20 +361,20 @@ def test_burst_mode_with_batch_processing(no_jitter, broker_target) -> None:
         )
 
         watcher.run_in_thread()
-        time.sleep(0.2)
 
-        # Add multiple messages
-        for i in range(10):
-            broker.write("test_queue", f"message_{i}")
-
-        assert wait_for_condition(
-            lambda: len(processed) >= 10,
-            timeout=2.0,
-            interval=0.05,
-        )
+        if not all_processed.wait(timeout=scale_timeout_for_ci(10.0)):
+            snapshot = processed_snapshot()
+            raise AssertionError(
+                "Timed out waiting for batch watcher to process messages: "
+                f"processed={snapshot}, missing={sorted(expected_messages - set(snapshot))}, "
+                f"message_count={getattr(watcher, '_message_count', 0)}"
+            )
 
         # Should process all messages
-        assert len(processed) == 10
+        snapshot = processed_snapshot()
+
+        assert len(snapshot) == 10
+        assert set(snapshot) == expected_messages
         # With batch processing, counter resets after processing the batch
         # Verify we processed messages efficiently
         assert watcher._message_count == 10
