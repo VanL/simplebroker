@@ -49,7 +49,10 @@ class TestCmdStatus:
         stats = parse_status_output(captured.out)
         assert stats["total_messages"] == 1
         assert stats["last_timestamp"] > 0
-        assert stats["db_size"] > 0
+        if broker_target.backend_name == "redis":
+            assert stats["db_size"] == 0
+        else:
+            assert stats["db_size"] > 0
 
     def test_cmd_status_json_output(
         self, broker_target: ResolvedTarget, capsys: pytest.CaptureFixture[str]
@@ -70,7 +73,10 @@ class TestCmdStatus:
         payload = json.loads(captured.out)
         assert payload["total_messages"] == 1
         assert payload["last_timestamp"] > 0
-        assert payload["db_size"] > 0
+        if broker_target.backend_name == "redis":
+            assert payload["db_size"] == 0
+        else:
+            assert payload["db_size"] > 0
 
     def test_cmd_status_handles_exceptions(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

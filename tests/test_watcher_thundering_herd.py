@@ -310,15 +310,8 @@ def test_pre_check_with_timestamp_filtering(broker_target) -> None:
         timestamps = []
         for i in range(5):
             broker.write("test_queue", f"message_{i}")
-            # Get the timestamp from the database
-            rows = list(
-                broker._runner.run(
-                    "SELECT ts FROM messages WHERE queue = ? ORDER BY ts DESC LIMIT 1",
-                    ("test_queue",),
-                    fetch=True,
-                ),
-            )
-            timestamps.append(rows[0][0])
+            rows = list(broker.peek_generator("test_queue", with_timestamps=True))
+            timestamps.append(rows[-1][1])
             time.sleep(0.01)  # Ensure different timestamps
 
         handler_calls = []

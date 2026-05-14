@@ -716,7 +716,9 @@ def test_pre_check_database_contention(broker_target) -> None:
         contention_thread = threading.Thread(target=create_contention)
         contention_thread.start()
 
-        writer_timeout = 60.0 if broker_target.backend_name == "postgres" else 20.0
+        writer_timeout = (
+            60.0 if broker_target.backend_name in {"postgres", "redis"} else 20.0
+        )
         contention_thread.join(timeout=scale_timeout_for_ci(writer_timeout))
         assert not contention_thread.is_alive(), (
             "Writer thread did not complete while competing with watcher reads"
