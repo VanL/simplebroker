@@ -191,6 +191,7 @@ def test_move_json_argument_error_is_json(workdir):
     }
 
 
+@pytest.mark.sqlite_only
 def test_list_json_database_validation_error_is_json(workdir):
     """Pre-dispatch validation errors honor a command's local --json flag."""
     db_path = workdir / ".broker.db"
