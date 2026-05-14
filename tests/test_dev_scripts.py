@@ -266,8 +266,7 @@ def test_verify_postgres_test_dsn_runs_select_one(
         "./extensions/simplebroker_pg[dev]",
     ]
     assert cmd[8:10] == ["python", "-c"]
-    assert "SELECT 1" in cmd[10]
-    assert "psycopg.OperationalError" in cmd[10]
+    assert cmd[10] == _scripts._POSTGRES_DSN_VERIFY_COMMAND
     assert env is not None
     assert env["SIMPLEBROKER_PG_TEST_DSN"] == "postgresql://example/test"
     assert env["SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT"] == "60.000000"
@@ -342,7 +341,7 @@ def connect(dsn, connect_timeout):
     )
 
     result = subprocess.run(
-        [sys.executable, "-c", _scripts._POSTGRES_DSN_VERIFY_SCRIPT],
+        [sys.executable, "-c", _scripts._POSTGRES_DSN_VERIFY_COMMAND],
         env=env,
         check=False,
         capture_output=True,

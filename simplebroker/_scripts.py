@@ -211,39 +211,42 @@ def _pg_test_uv_command(*args: str) -> list[str]:
     ]
 
 
-_POSTGRES_DSN_VERIFY_SCRIPT = r"""
-import os
-import sys
-import time
-
-import psycopg
-
-dsn = os.environ["SIMPLEBROKER_PG_TEST_DSN"]
-deadline = time.monotonic() + float(
-    os.environ.get("SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT", "60")
+_POSTGRES_DSN_VERIFY_COMMAND = (
+    "from simplebroker._scripts import _verify_postgres_test_dsn_from_env; "
+    "_verify_postgres_test_dsn_from_env()"
 )
-retry_interval = float(
-    os.environ.get("SIMPLEBROKER_PG_TEST_DSN_RETRY_INTERVAL", "0.5")
-)
-last_error = "connection not attempted"
 
-while True:
-    try:
-        with psycopg.connect(dsn, connect_timeout=5) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                assert cur.fetchone() == (1,)
-        break
-    except psycopg.OperationalError as exc:
-        last_error = f"{type(exc).__name__}: {exc}"
-        if time.monotonic() >= deadline:
-            print(
-                f"Postgres test DSN was not ready: {last_error}",
-                file=sys.stderr,
-            )
-            raise
-        time.sleep(retry_interval)
-"""
+
+def _verify_postgres_test_dsn_from_env() -> None:
+    """Verify the PG test DSN from the current process environment."""
+
+    import psycopg
+
+    dsn = os.environ["SIMPLEBROKER_PG_TEST_DSN"]
+    deadline = time.monotonic() + float(
+        os.environ.get("SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT", "60")
+    )
+    retry_interval = float(
+        os.environ.get("SIMPLEBROKER_PG_TEST_DSN_RETRY_INTERVAL", "0.5")
+    )
+    last_error = "connection not attempted"
+
+    while True:
+        try:
+            with psycopg.connect(dsn, connect_timeout=5) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    assert cur.fetchone() == (1,)
+            return
+        except psycopg.OperationalError as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            if time.monotonic() >= deadline:
+                print(
+                    f"Postgres test DSN was not ready: {last_error}",
+                    file=sys.stderr,
+                )
+                raise
+            time.sleep(retry_interval)
 
 
 def _verify_postgres_test_dsn(dsn: str, *, timeout_seconds: float = 60.0) -> None:
@@ -255,7 +258,7 @@ def _verify_postgres_test_dsn(dsn: str, *, timeout_seconds: float = 60.0) -> Non
         _pg_test_uv_command(
             "python",
             "-c",
-            _POSTGRES_DSN_VERIFY_SCRIPT,
+            _POSTGRES_DSN_VERIFY_COMMAND,
         ),
         env=env,
     )
