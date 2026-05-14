@@ -136,9 +136,15 @@ def test_activity_waiter_ignores_inactive_queue_notifications(
         waiter = jobs_wait.create_activity_waiter(stop_event=stop_event)
         assert waiter is not None
 
-        noise_writer.write("noise")
-        jobs_writer.write("match")
+        def delayed_match() -> None:
+            noise_writer.write("noise")
+            time.sleep(0.1)
+            jobs_writer.write("match")
+
+        thread = threading.Thread(target=delayed_match, daemon=True)
+        thread.start()
         assert waiter.wait(1.5) is True
+        thread.join(timeout=2.0)
 
         conditions, versions, refcounts = _listener_state(waiter)
         assert conditions == {"jobs"}

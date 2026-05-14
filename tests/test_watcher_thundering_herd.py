@@ -141,8 +141,11 @@ def test_thundering_herd_mitigation(broker_target) -> None:
             watchers.append(w)
             w.run_in_thread()
 
-        # Let watchers initialize
-        time.sleep(0.2)
+        assert wait_for_condition(
+            lambda: all(w._in_main_loop for w in watchers),
+            timeout=5.0 if broker_target.backend_name == "redis" else 2.0,
+            message="Waiting for watchers to enter main loop",
+        )
 
         # Write to only queue_0
         broker.write("queue_0", "test message")
