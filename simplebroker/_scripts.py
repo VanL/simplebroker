@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import shlex
 import shutil
@@ -17,6 +18,7 @@ import zipfile
 from email.message import Message
 from email.parser import BytesParser
 from pathlib import Path
+from typing import Any, cast
 
 from ._targets import redact_backend_target
 
@@ -220,7 +222,7 @@ _POSTGRES_DSN_VERIFY_COMMAND = (
 def _verify_postgres_test_dsn_from_env() -> None:
     """Verify the PG test DSN from the current process environment."""
 
-    import psycopg
+    psycopg = cast(Any, importlib.import_module("psycopg"))
 
     dsn = os.environ["SIMPLEBROKER_PG_TEST_DSN"]
     deadline = time.monotonic() + float(
