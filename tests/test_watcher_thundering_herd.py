@@ -14,7 +14,11 @@ import pytest
 from simplebroker.watcher import QueueWatcher
 
 from .helper_scripts.broker_factory import make_broker
-from .helper_scripts.timing import wait_for_condition, wait_for_count
+from .helper_scripts.timing import (
+    scale_timeout_for_ci,
+    wait_for_condition,
+    wait_for_count,
+)
 
 pytestmark = [pytest.mark.shared]
 
@@ -67,6 +71,7 @@ class InstrumentedQueueWatcher(QueueWatcher):
         super().__init__(*args, **kwargs)
         self.metrics = metrics or WatcherMetrics(self._queue)
         self._in_main_loop = False
+        self.main_loop_ready = threading.Event()
 
     def _has_pending_messages(self) -> bool:
         """Override to track pre-check calls and wake-ups."""
@@ -109,6 +114,30 @@ class InstrumentedQueueWatcher(QueueWatcher):
         # Then mark that we've done the initial drain and are now in main loop
         if not self._in_main_loop:
             self._in_main_loop = True
+            self.main_loop_ready.set()
+
+
+def _watcher_startup_timeout(broker_target) -> float:
+    """Return a startup timeout for tests whose invariant begins after readiness."""
+
+    base_timeout = 10.0 if broker_target.backend_name in {"postgres", "redis"} else 5.0
+    return scale_timeout_for_ci(base_timeout)
+
+
+def _ready_watcher_count(watchers: list[InstrumentedQueueWatcher]) -> int:
+    return sum(1 for watcher in watchers if watcher.main_loop_ready.is_set())
+
+
+def _wait_for_watchers_in_main_loop(
+    watchers: list[InstrumentedQueueWatcher],
+    broker_target,
+) -> bool:
+    return wait_for_condition(
+        lambda: _ready_watcher_count(watchers) == len(watchers),
+        timeout=_watcher_startup_timeout(broker_target),
+        interval=0.05,
+        message="Waiting for watchers to enter main loop",
+    )
 
 
 def test_thundering_herd_mitigation(broker_target) -> None:
@@ -141,10 +170,9 @@ def test_thundering_herd_mitigation(broker_target) -> None:
             watchers.append(w)
             w.run_in_thread()
 
-        assert wait_for_condition(
-            lambda: all(w._in_main_loop for w in watchers),
-            timeout=5.0 if broker_target.backend_name == "redis" else 2.0,
-            message="Waiting for watchers to enter main loop",
+        assert _wait_for_watchers_in_main_loop(watchers, broker_target), (
+            f"Only {_ready_watcher_count(watchers)}/{len(watchers)} watchers "
+            "entered the main loop"
         )
 
         # Write to only queue_0
@@ -233,7 +261,10 @@ def test_thundering_herd_with_multiple_active_queues(broker_target) -> None:
             watchers.append(w)
             w.run_in_thread()
 
-        time.sleep(0.2)
+        assert _wait_for_watchers_in_main_loop(watchers, broker_target), (
+            f"Only {_ready_watcher_count(watchers)}/{len(watchers)} watchers "
+            "entered the main loop"
+        )
 
         # Write to 5 queues
         active_queues = ["queue_0", "queue_5", "queue_10", "queue_15", "queue_19"]
@@ -433,7 +464,10 @@ def test_concurrent_pre_check_safety(broker_target) -> None:
             watchers.append(w)
             w.run_in_thread()
 
-        time.sleep(0.2)
+        assert _wait_for_watchers_in_main_loop(watchers, broker_target), (
+            f"Only {_ready_watcher_count(watchers)}/{len(watchers)} watchers "
+            "entered the main loop"
+        )
 
         # Rapidly add messages
         expected_messages = []
