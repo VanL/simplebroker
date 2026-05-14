@@ -14,7 +14,7 @@ import os
 import sqlite3
 import sys
 import threading
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
@@ -29,9 +29,12 @@ else:
 
 from ._backends import get_configured_backend
 from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config, resolve_config
-from ._exceptions import DataError, IntegrityError, OperationalError
+from ._exceptions import DatabaseError, DataError, IntegrityError, OperationalError
 from ._phaselock import Phase, PhaseLockService, PhaseLockTimeout, PhaseLockUnavailable
-from .helpers import _execute_with_retry
+from .helpers import (
+    execute_setup_with_retry,
+    setup_busy_timeout_ms,
+)
 
 # Load config once at module level
 _config = load_config()
@@ -224,6 +227,11 @@ class SQLiteRunner:
 
             # Apply per-connection settings
             self._apply_connection_settings(self._thread_local.conn)
+            if getattr(self._thread_local, "setup_busy_timeout", False):
+                self._apply_busy_timeout(
+                    self._thread_local.conn,
+                    setup_busy_timeout_ms(self._config),
+                )
         # Check if optimization phase was completed after connection was created
         elif SetupPhase.OPTIMIZATION in self._completed_phases and not hasattr(
             self._thread_local,
@@ -247,13 +255,14 @@ class SQLiteRunner:
 
     def _setup_connection_phase(self) -> None:
         """Setup critical connection settings including WAL mode."""
-        _execute_with_retry(
+        execute_setup_with_retry(
             lambda: db_backend.setup_connection_phase(
                 self._db_path,
                 config=self._config,
+                busy_timeout_ms=setup_busy_timeout_ms(self._config),
             ),
-            max_retries=30,
-            retry_delay=0.1,
+            phase=str(SetupPhase.CONNECTION.value),
+            target=self._db_path,
         )
 
     def _setup_optimization_phase(self) -> None:
@@ -267,6 +276,36 @@ class SQLiteRunner:
     def _apply_optimization_settings(self, conn: sqlite3.Connection) -> None:
         """Apply optimization settings to a connection."""
         db_backend.apply_optimization_settings(conn, config=self._config)
+
+    @contextlib.contextmanager
+    def _setup_operation_context(self) -> Iterator[None]:
+        """Temporarily use the shorter setup busy timeout on this thread."""
+
+        previous = getattr(self._thread_local, "setup_busy_timeout", False)
+        self._thread_local.setup_busy_timeout = True
+        if hasattr(self._thread_local, "conn"):
+            self._apply_busy_timeout(
+                self._thread_local.conn,
+                setup_busy_timeout_ms(self._config),
+            )
+        try:
+            yield
+        finally:
+            if previous:
+                self._thread_local.setup_busy_timeout = previous
+            else:
+                with contextlib.suppress(AttributeError):
+                    del self._thread_local.setup_busy_timeout
+            if hasattr(self._thread_local, "conn"):
+                self._apply_busy_timeout(
+                    self._thread_local.conn,
+                    int(self._config["BROKER_BUSY_TIMEOUT"]),
+                )
+
+    def _apply_busy_timeout(self, conn: sqlite3.Connection, timeout_ms: int) -> None:
+        """Apply only the SQLite busy timeout to an existing connection."""
+
+        conn.execute(f"PRAGMA busy_timeout={timeout_ms}")
 
     def run(
         self,
@@ -381,15 +420,12 @@ class SQLiteRunner:
         Returns True when this runner executed *operation*, or False when the
         phase had already been completed by this or another process.
         """
-        if phase == SetupPhase.CONNECTION and not self._database_file_exists():
-            self._discard_stale_completion_markers()
-
         if phase in self._completed_phases:
             return False
 
         service = self._phase_lock_service()
         phase_name = self._phase_marker_name(phase)
-        if service.has_phase(phase_name):
+        if self._has_valid_completion_marker(service, phase, phase_name):
             with self._setup_lock:
                 self._completed_phases.add(phase)
             return False
@@ -441,12 +477,42 @@ class SQLiteRunner:
         elif phase == SetupPhase.OPTIMIZATION:
             self._setup_optimization_phase()
 
-    def _database_file_exists(self) -> bool:
-        """Return whether the database file currently exists."""
+    def _target_needs_fresh_setup_markers(self) -> bool:
+        """Return whether fallback completion markers cannot describe target state."""
+
         try:
-            return Path(self._db_path).exists()
+            db_path = Path(self._db_path)
+            if not db_path.exists():
+                return True
+            return db_path.stat().st_size == 0
         except (ValueError, OSError, TypeError):
             return False
+
+    def _has_valid_completion_marker(
+        self,
+        service: PhaseLockService,
+        phase: SetupPhase,
+        phase_name: str,
+    ) -> bool:
+        """Return whether an existing marker can be trusted for this phase."""
+
+        if phase != SetupPhase.CONNECTION:
+            return service.has_phase(phase_name)
+
+        if self._target_needs_fresh_setup_markers():
+            self._discard_stale_completion_markers()
+            return False
+
+        if not service.has_phase(phase_name):
+            return False
+
+        try:
+            db_backend.validate_database(Path(self._db_path), verify_magic=False)
+        except (DatabaseError, OSError, ValueError, TypeError) as exc:
+            raise OperationalError(
+                f"File at {self._db_path} exists but is not a valid SQLite database"
+            ) from exc
+        return True
 
     def _discard_stale_completion_markers(self) -> None:
         """Remove fallback completion markers left behind after database deletion."""
@@ -468,7 +534,8 @@ class SQLiteRunner:
 
         with contextlib.suppress(ValueError, OSError, TypeError):
             service = self._phase_lock_service()
-            if service.has_phase(self._phase_marker_name(phase)):
+            phase_name = self._phase_marker_name(phase)
+            if self._has_valid_completion_marker(service, phase, phase_name):
                 with self._setup_lock:
                     self._completed_phases.add(phase)
                 return True

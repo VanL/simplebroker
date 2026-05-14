@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -113,6 +114,58 @@ def test_execute_with_retry_does_not_retry_unrelated_operational_errors(
     with pytest.raises(OperationalError, match="syntax error"):
         _execute_with_retry(
             lambda: (_ for _ in ()).throw(OperationalError("syntax error"))
+        )
+
+
+def test_execute_with_retry_uses_elapsed_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monotonic_time = 0.0
+    sleeps: list[float] = []
+
+    def fake_monotonic() -> float:
+        return monotonic_time
+
+    def fake_sleep(wait: float, stop_event=None) -> bool:
+        nonlocal monotonic_time
+        sleeps.append(wait)
+        monotonic_time += wait
+        return True
+
+    monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+
+    with pytest.raises(OperationalError, match="database is locked"):
+        _execute_with_retry(
+            lambda: (_ for _ in ()).throw(OperationalError("database is locked")),
+            max_retries=None,
+            retry_delay=0.1,
+            max_retry_delay=0.1,
+            max_elapsed=0.15,
+        )
+
+    assert sleeps
+    assert all(wait <= 0.1 for wait in sleeps)
+    assert monotonic_time <= 0.15
+
+
+def test_execute_with_retry_elapsed_budget_still_honors_stop_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop_event = threading.Event()
+
+    def fake_sleep(wait: float, stop_event=None) -> bool:
+        return False
+
+    monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+
+    with pytest.raises(StopException, match="Retry interrupted"):
+        _execute_with_retry(
+            lambda: (_ for _ in ()).throw(OperationalError("database is busy")),
+            max_retries=None,
+            retry_delay=0.01,
+            max_elapsed=1.0,
+            stop_event=stop_event,
         )
 
 

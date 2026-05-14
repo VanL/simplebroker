@@ -35,7 +35,11 @@ class BuiltinBackend(Protocol):
     ) -> None: ...
 
     def setup_connection_phase(
-        self, db_path: str, *, config: dict[str, Any]
+        self,
+        db_path: str,
+        *,
+        config: dict[str, Any],
+        busy_timeout_ms: int | None = None,
     ) -> None: ...
 
 

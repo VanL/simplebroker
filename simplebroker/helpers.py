@@ -3,9 +3,9 @@
 import os
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path, PurePath
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from ._backends import get_configured_backend
 from ._constants import (
@@ -19,6 +19,10 @@ T = TypeVar("T")
 
 _config = load_config()
 db_backend = get_configured_backend(_config)
+SETUP_RETRY_MAX_ELAPSED = 10.0
+SETUP_RETRY_DELAY = 0.05
+SETUP_RETRY_MAX_DELAY = 0.25
+SETUP_BUSY_TIMEOUT_CAP_MS = 250
 
 
 def interruptible_sleep(
@@ -77,17 +81,22 @@ def interruptible_sleep(
 def _execute_with_retry(
     operation: Callable[[], T],
     *,
-    max_retries: int = 10,
+    max_retries: int | None = 10,
     retry_delay: float = 0.05,
     stop_event: threading.Event | None = None,
+    max_elapsed: float | None = None,
+    max_retry_delay: float | None = None,
 ) -> T:
     """Execute a database operation with retry logic for locked database errors.
 
     Args:
         operation: A callable that performs the database operation
-        max_retries: Maximum number of retry attempts
+        max_retries: Maximum number of retry attempts. None means the elapsed
+            deadline is the only retry bound.
         retry_delay: Initial delay between retries (exponential backoff applied)
         stop_event: Optional threading.Event that can interrupt the retry loop
+        max_elapsed: Optional elapsed-time retry budget in seconds
+        max_retry_delay: Optional cap for each retry sleep
 
     Returns:
         The result of the operation
@@ -103,25 +112,71 @@ def _execute_with_retry(
         "database busy",
     )
 
-    for attempt in range(max_retries):
+    if max_retries is None and max_elapsed is None:
+        raise ValueError("max_retries=None requires max_elapsed")
+
+    start = time.monotonic()
+    attempt = 0
+    while True:
         try:
             return operation()
         except OperationalError as e:
             msg = str(e).lower()
             if any(marker in msg for marker in locked_markers):
-                if attempt < max_retries - 1:
+                retry_count_available = max_retries is None or attempt < max_retries - 1
+                elapsed = time.monotonic() - start
+                elapsed_available = max_elapsed is None or elapsed < max_elapsed
+                if retry_count_available and elapsed_available:
                     # exponential back-off + 0-25 ms jitter using time-based pseudo-random
                     jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
                     wait = retry_delay * (2**attempt) + jitter
+                    if max_retry_delay is not None:
+                        wait = min(wait, max_retry_delay)
+                    if max_elapsed is not None:
+                        remaining = max_elapsed - elapsed
+                        if remaining <= 0:
+                            raise
+                        wait = min(wait, remaining)
                     if not interruptible_sleep(wait, stop_event):
                         # Sleep was interrupted, raise exception to exit retry loop
                         raise StopException("Retry interrupted by stop event") from None
+                    attempt += 1
                     continue
             # If not a locked error or last attempt, re-raise
             raise
 
-    # This should never be reached, but satisfies mypy
-    raise AssertionError("Unreachable code")
+
+def setup_busy_timeout_ms(config: Mapping[str, Any]) -> int:
+    """Return the short busy timeout used by SQLite setup operations."""
+
+    busy_timeout = int(config["BROKER_BUSY_TIMEOUT"])
+    return max(0, min(busy_timeout, SETUP_BUSY_TIMEOUT_CAP_MS))
+
+
+def execute_setup_with_retry(
+    operation: Callable[[], T],
+    *,
+    phase: str,
+    target: str,
+    stop_event: threading.Event | None = None,
+) -> T:
+    """Run setup work with bounded retry progress and contextual errors."""
+
+    try:
+        return _execute_with_retry(
+            operation,
+            max_retries=None,
+            retry_delay=SETUP_RETRY_DELAY,
+            stop_event=stop_event,
+            max_elapsed=SETUP_RETRY_MAX_ELAPSED,
+            max_retry_delay=SETUP_RETRY_MAX_DELAY,
+        )
+    except OperationalError as exc:
+        raise OperationalError(
+            "Setup phase "
+            f"{phase!r} for {target!r} could not make progress within "
+            f"{SETUP_RETRY_MAX_ELAPSED:.1f}s: {exc}"
+        ) from exc
 
 
 def _is_filesystem_root(path: Path) -> bool:

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from simplebroker._backends.sqlite import runtime as sqlite_runtime
 from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import IntegrityError, OperationalError
 from simplebroker._phaselock import PhaseLockService
@@ -282,6 +283,47 @@ class TestSQLiteRunnerErrorHandling:
                 # This should raise RuntimeError when WAL mode fails
                 with pytest.raises(RuntimeError, match="Failed to enable WAL mode"):
                     runner.setup(SetupPhase.CONNECTION)
+
+    @pytest.mark.sqlite_only
+    def test_setup_operation_context_caps_and_restores_busy_timeout(self, tmp_path):
+        """Setup work should not inherit the long normal-operation busy timeout."""
+
+        runner = SQLiteRunner(
+            str(tmp_path / "test.db"),
+            config={"BROKER_BUSY_TIMEOUT": 5000},
+        )
+        try:
+            with runner._setup_operation_context():
+                conn = runner.get_connection()
+                setup_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+
+            restored_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        finally:
+            runner.close()
+
+        assert setup_timeout <= 250
+        assert restored_timeout == 5000
+
+    @pytest.mark.sqlite_only
+    def test_setup_connection_phase_converts_raw_sqlite_lock_error(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """The setup retry helper only sees converted SimpleBroker errors."""
+
+        def raise_locked(*args, **kwargs):
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(sqlite_runtime, "check_version", lambda: None)
+        monkeypatch.setattr(sqlite_runtime.sqlite3, "connect", raise_locked)
+
+        with pytest.raises(OperationalError, match="database is locked"):
+            sqlite_runtime.setup_connection_phase(
+                str(tmp_path / "test.db"),
+                config={"BROKER_BUSY_TIMEOUT": 5000},
+                busy_timeout_ms=250,
+            )
 
     def test_readonly_database_error(self):
         """Test error handling with read-only database."""

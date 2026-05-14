@@ -5,9 +5,29 @@ from pathlib import Path
 
 import pytest
 
+from simplebroker import Queue
+from simplebroker import _phaselock as phaselock_module
+from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import OperationalError
 from simplebroker._phaselock import PhaseLockService
 from simplebroker._runner import SetupPhase, SQLiteRunner
+
+
+def _force_status_sidecars(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make PhaseLockService use fallback status files for deterministic tests."""
+
+    monkeypatch.setattr(phaselock_module.os, "getxattr", None, raising=False)
+    monkeypatch.setattr(phaselock_module.os, "setxattr", None, raising=False)
+
+
+def _write_status_markers(db_path: Path) -> None:
+    service = PhaseLockService(db_path)
+    for phase_name in (
+        "connection",
+        f"schema-v{SCHEMA_VERSION}",
+        "optimization",
+    ):
+        service.status_path_for_phase(phase_name).touch(mode=0o600)
 
 
 class TestSQLiteRunnerValidation:
@@ -114,3 +134,42 @@ class TestSQLiteRunnerValidation:
         finally:
             # Clean up
             Path(small_file_path).unlink(missing_ok=True)
+
+    @pytest.mark.sqlite_only
+    def test_zero_byte_database_discards_stale_status_markers(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Fallback status markers must not make setup skip an empty target."""
+
+        _force_status_sidecars(monkeypatch)
+        db_path = tmp_path / "broker.db"
+        db_path.touch()
+        _write_status_markers(db_path)
+
+        queue = Queue("q", db_path=str(db_path))
+        queue.write("msg")
+
+        assert queue.read() == "msg"
+
+    @pytest.mark.sqlite_only
+    def test_nonempty_invalid_database_with_stale_markers_fails_without_reinit(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Stale markers must not cause invalid user data to be overwritten."""
+
+        _force_status_sidecars(monkeypatch)
+        db_path = tmp_path / "broker.db"
+        original_bytes = b"not sqlite"
+        db_path.write_bytes(original_bytes)
+        _write_status_markers(db_path)
+
+        queue = Queue("q", db_path=str(db_path))
+        with pytest.raises(RuntimeError, match="not a valid SQLite database") as exc:
+            queue.write("msg")
+
+        assert isinstance(exc.value.__cause__, OperationalError)
+        assert db_path.read_bytes() == original_bytes

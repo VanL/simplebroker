@@ -167,6 +167,7 @@ class _AdvisoryLock:
             try:
                 with contextlib.suppress(OSError):
                     os.chmod(self.path, 0o600)
+                self._prepare_lock_file(lock_file)
                 self._try_lock(lock_file)
             except OSError as exc:
                 last_error = exc
@@ -189,6 +190,17 @@ class _AdvisoryLock:
             self._file = lock_file
             self._locked = True
             return True
+
+    def _prepare_lock_file(self, lock_file: BinaryIO) -> None:
+        """Ensure byte-range locking has at least one byte to lock."""
+
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+            with contextlib.suppress(OSError):
+                os.fsync(lock_file.fileno())
+        lock_file.seek(0)
 
     def _acquire_process_lock(
         self,
@@ -225,6 +237,7 @@ class _AdvisoryLock:
         elapsed = time.monotonic() - start
         parts = [
             f"Timeout waiting for phase lock: {self.path}",
+            f"lock_path={self.path}",
             f"timeout={self.timeout:.3f}s",
             f"elapsed={elapsed:.3f}s",
         ]

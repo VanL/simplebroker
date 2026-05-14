@@ -23,6 +23,7 @@ from typing import (
 
 from ._backend_plugins import (
     BackendPlugin,
+    BrokerConnection,
     get_backend_plugin,
     resolve_runner_backend_plugin,
 )
@@ -48,7 +49,7 @@ from ._runner import SetupPhase, SQLiteRunner, SQLRunner, close_owned_runner
 from ._sql import RetrieveQuerySpec
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
-from .helpers import _execute_with_retry, interruptible_sleep
+from .helpers import _execute_with_retry, execute_setup_with_retry, interruptible_sleep
 from .metadata import QueueStats
 
 if TYPE_CHECKING:
@@ -77,6 +78,14 @@ def _resolve_backend_plugin(
         runner,
         explicit_plugin,
         fallback_plugin=fallback_plugin,
+    )
+
+
+def _is_direct_backend(plugin: BackendPlugin) -> bool:
+    """Return whether a backend bypasses the SQL runner path."""
+
+    return getattr(plugin, "sql", None) is None and bool(
+        getattr(plugin, "is_direct_backend", False)
     )
 
 
@@ -264,11 +273,13 @@ class DBConnection:
                 else get_backend_plugin("sqlite")
             )
         )
-        self._runner: SQLRunner | None = (
-            _BorrowedRunner(runner, backend_plugin=self._backend_plugin)
-            if runner is not None
-            else None
-        )
+        self._runner: Any | None = None
+        if runner is not None:
+            self._runner = (
+                runner
+                if _is_direct_backend(self._backend_plugin)
+                else _BorrowedRunner(runner, backend_plugin=self._backend_plugin)
+            )
         self._core = None
         self._thread_local = threading.local()
         self._stop_event = threading.Event()
@@ -288,14 +299,22 @@ class DBConnection:
 
         # If we have an external runner, create a borrowed core immediately.
         if self._runner:
-            self._core = BrokerCore(
-                self._runner,
-                config=self._config,
-                backend_plugin=self._backend_plugin,
-                stop_event=self._stop_event,
-            )
+            if _is_direct_backend(self._backend_plugin):
+                create_core = self._backend_plugin.create_core_from_runner
+                self._core = create_core(
+                    self._runner,
+                    config=self._config,
+                    stop_event=self._stop_event,
+                )
+            else:
+                self._core = BrokerCore(
+                    self._runner,
+                    config=self._config,
+                    backend_plugin=self._backend_plugin,
+                    stop_event=self._stop_event,
+                )
 
-    def _create_managed_connection(self) -> "BrokerCore | BrokerDB":
+    def _create_managed_connection(self) -> BrokerConnection:
         """Create one owned connection/core for the current thread."""
         if (
             self._resolved_target is None
@@ -308,6 +327,16 @@ class DBConnection:
             )
             connection.set_stop_event(self._stop_event)
             return connection
+
+        if _is_direct_backend(self._backend_plugin):
+            core = self._backend_plugin.create_core(
+                self._resolved_target.target,
+                backend_options=self._resolved_target.backend_options,
+                config=self._config,
+                stop_event=self._stop_event,
+            )
+            core.set_stop_event(self._stop_event)
+            return core
 
         runner = self._backend_plugin.create_runner(
             self._resolved_target.target,
@@ -323,9 +352,7 @@ class DBConnection:
         core.set_stop_event(self._stop_event)
         return core
 
-    def get_connection(
-        self, *, config: dict[str, Any] = _config
-    ) -> "BrokerCore | BrokerDB":
+    def get_connection(self, *, config: dict[str, Any] = _config) -> BrokerConnection:
         """Get a robust database connection with retry logic.
 
         Returns a borrowed `BrokerCore` when using an injected runner, or a
@@ -399,7 +426,7 @@ class DBConnection:
 
     def _get_shared_connection(
         self, *, config: dict[str, Any] = _config
-    ) -> "BrokerCore | BrokerDB":
+    ) -> BrokerConnection:
         if self._stop_event.is_set():
             raise StopException("Connection interrupted")
 
@@ -428,7 +455,7 @@ class DBConnection:
 
         raise RuntimeError("Failed to establish database connection")
 
-    def get_core(self) -> "BrokerCore":
+    def get_core(self) -> BrokerConnection:
         """Get or create the BrokerCore instance.
 
         This provides direct access to the core for persistent connections.
@@ -449,6 +476,21 @@ class DBConnection:
                     config=self._config,
                     stop_event=self._stop_event,
                 )
+            elif _is_direct_backend(self._backend_plugin):
+                if self._runner is None:
+                    self._core = self._backend_plugin.create_core(
+                        self._resolved_target.target,
+                        backend_options=self._resolved_target.backend_options,
+                        config=self._config,
+                        stop_event=self._stop_event,
+                    )
+                else:
+                    create_core = self._backend_plugin.create_core_from_runner
+                    self._core = create_core(
+                        self._runner,
+                        config=self._config,
+                        stop_event=self._stop_event,
+                    )
             else:
                 if self._runner is None:
                     self._runner = self._backend_plugin.create_runner(
@@ -596,7 +638,7 @@ def open_broker(
     runner: SQLRunner | None = None,
     *,
     config: dict[str, Any] = _config,
-) -> Iterator["BrokerCore | BrokerDB"]:
+) -> Iterator[BrokerConnection]:
     """Open a backend-agnostic broker connection for the lifetime of a context."""
 
     with DBConnection(db_target, runner, config=config) as connection:
@@ -699,12 +741,45 @@ class BrokerCore:
 
         return _execute_with_retry(stop_checked_operation, **kwargs)
 
+    def _run_setup_with_retry(
+        self,
+        operation: Callable[[], T],
+        *,
+        phase: SetupPhase,
+    ) -> T:
+        """Run setup work with bounded retry progress."""
+
+        def stop_checked_operation() -> T:
+            if self._stop_event.is_set():
+                raise StopException("Operation interrupted by stop event")
+            return operation()
+
+        target = str(getattr(self._runner, "_db_path", "<unknown>"))
+        setup_context = getattr(self._runner, "_setup_operation_context", None)
+        if callable(setup_context):
+            with setup_context():
+                return execute_setup_with_retry(
+                    stop_checked_operation,
+                    phase=str(phase.value),
+                    target=target,
+                    stop_event=self._stop_event,
+                )
+        return execute_setup_with_retry(
+            stop_checked_operation,
+            phase=str(phase.value),
+            target=target,
+            stop_event=self._stop_event,
+        )
+
     def _setup_database(self) -> None:
         """Set up database with optimized settings and schema."""
         with self._lock:
             self._backend_plugin.initialize_database(
                 self._runner,
-                run_with_retry=self._run_with_retry,
+                run_with_retry=lambda operation: self._run_setup_with_retry(
+                    operation,
+                    phase=SetupPhase.SCHEMA,
+                ),
             )
 
     def _setup_schema(self) -> None:
@@ -712,8 +787,14 @@ class BrokerCore:
 
         def operation() -> None:
             self._setup_database()
-            self._verify_database_magic()
-            self._migrate_schema()
+            self._run_setup_with_retry(
+                self._verify_database_magic,
+                phase=SetupPhase.SCHEMA,
+            )
+            self._run_setup_with_retry(
+                self._migrate_schema,
+                phase=SetupPhase.SCHEMA,
+            )
 
         run_exclusive_setup = getattr(self._runner, "run_exclusive_setup", None)
         if callable(run_exclusive_setup):

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from importlib import metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
@@ -21,8 +21,9 @@ class BackendPlugin(Protocol):
     """Public contract for backend plugins."""
 
     name: str
-    sql: BackendSQLNamespace
+    sql: BackendSQLNamespace | None
     schema_version: int
+    is_direct_backend: bool
 
     def init_backend(
         self,
@@ -39,6 +40,23 @@ class BackendPlugin(Protocol):
         backend_options: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> SQLRunner: ...
+
+    def create_core(
+        self,
+        target: str,
+        *,
+        backend_options: Mapping[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
+        stop_event: Any = None,
+    ) -> BrokerConnection: ...
+
+    def create_core_from_runner(
+        self,
+        runner: Any,
+        *,
+        config: Mapping[str, Any] | None = None,
+        stop_event: Any = None,
+    ) -> BrokerConnection: ...
 
     def initialize_target(
         self,
@@ -162,6 +180,98 @@ class BackendPlugin(Protocol):
     ) -> ActivityWaiter | None: ...
 
 
+class BrokerConnection(Protocol):
+    """Internal broker core protocol used by Queue, CLI, and watchers."""
+
+    def __enter__(self) -> BrokerConnection: ...
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None: ...
+
+    def set_stop_event(self, stop_event: Any) -> None: ...
+
+    def generate_timestamp(self) -> int: ...
+
+    def get_cached_last_timestamp(self) -> int: ...
+
+    def refresh_last_timestamp(self) -> int: ...
+
+    def write(self, queue: str, message: str) -> int: ...
+
+    def claim_one(self, queue: str, **kwargs: Any) -> Any: ...
+
+    def claim_many(self, queue: str, **kwargs: Any) -> list[Any]: ...
+
+    def claim_generator(self, queue: str, **kwargs: Any) -> Iterator[Any]: ...
+
+    def peek_one(self, queue: str, **kwargs: Any) -> Any: ...
+
+    def peek_many(self, queue: str, **kwargs: Any) -> list[Any]: ...
+
+    def peek_generator(self, queue: str, **kwargs: Any) -> Iterator[Any]: ...
+
+    def move_one(self, source_queue: str, target_queue: str, **kwargs: Any) -> Any: ...
+
+    def move_many(
+        self, source_queue: str, target_queue: str, **kwargs: Any
+    ) -> list[Any]: ...
+
+    def move_generator(
+        self, source_queue: str, target_queue: str, **kwargs: Any
+    ) -> Iterator[Any]: ...
+
+    def delete(self, queue: str | None = None) -> int: ...
+
+    def broadcast(
+        self, message: str, *, pattern: str = "*"
+    ) -> list[tuple[str, int]]: ...
+
+    def list_queues(self) -> list[str]: ...
+
+    def get_queue_stats(self, queue: str) -> Any: ...
+
+    def queue_exists(self, queue: str) -> bool: ...
+
+    def queue_exists_and_has_messages(self, queue: str) -> bool: ...
+
+    def get_queue_stat(self, queue: str) -> Any: ...
+
+    def list_queue_stats(self) -> list[Any]: ...
+
+    def get_overall_stats(self) -> Any: ...
+
+    def count_claimed_messages(self) -> int: ...
+
+    def status(self) -> dict[str, Any]: ...
+
+    def has_pending_messages(self, queue: str) -> bool: ...
+
+    def get_data_version(self) -> int | None: ...
+
+    def vacuum(self, *, compact: bool = False) -> None: ...
+
+    def get_alias_version(self) -> int: ...
+
+    def resolve_alias(self, name: str) -> str | None: ...
+
+    def canonicalize_queue(self, queue: str) -> str: ...
+
+    def has_alias(self, name: str) -> bool: ...
+
+    def list_aliases(self) -> list[tuple[str, str]]: ...
+
+    def aliases_for_target(self, target: str) -> list[str]: ...
+
+    def add_alias(self, name: str, target: str) -> None: ...
+
+    def remove_alias(self, name: str) -> bool: ...
+
+    def get_meta(self) -> dict[str, Any]: ...
+
+    def close(self) -> None: ...
+
+    def shutdown(self) -> None: ...
+
+
 class ActivityWaiter(Protocol):
     """Optional backend-native waiter used to wake idle watchers."""
 
@@ -192,6 +302,28 @@ class BackendAwareRunner(Protocol):
     def backend_plugin(self) -> BackendPlugin: ...
 
 
+def _ensure_backend_plugin_capabilities(plugin: BackendPlugin) -> None:
+    """Validate that a plugin exposes either SQL hooks or a direct core hook."""
+
+    sql_namespace = getattr(plugin, "sql", None)
+    if sql_namespace is not None:
+        ensure_backend_sql_namespace(sql_namespace)
+        return
+
+    if not bool(getattr(plugin, "is_direct_backend", False)):
+        raise RuntimeError(
+            f"Backend plugin '{getattr(plugin, 'name', '<unknown>')}' has no SQL "
+            "namespace and is not marked as a direct backend"
+        )
+
+    create_core = getattr(plugin, "create_core", None)
+    if not callable(create_core):
+        raise RuntimeError(
+            f"Backend plugin '{getattr(plugin, 'name', '<unknown>')}' must expose "
+            "create_core() when sql is None"
+        )
+
+
 def resolve_runner_backend_plugin(
     runner: SQLRunner,
     explicit_plugin: BackendPlugin | None = None,
@@ -208,7 +340,7 @@ def resolve_runner_backend_plugin(
             plugin = fallback_plugin
     if plugin is None:
         plugin = get_backend_plugin(DEFAULT_BACKEND_NAME)
-    ensure_backend_sql_namespace(plugin.sql)
+    _ensure_backend_plugin_capabilities(plugin)
     return plugin
 
 
@@ -232,7 +364,7 @@ def _load_entry_point_plugin(name: str) -> BackendPlugin:
                 f"Backend plugin '{name}' resolved to object with mismatched name "
                 f"'{getattr(plugin, 'name', None)}'"
             )
-        ensure_backend_sql_namespace(plugin.sql)
+        _ensure_backend_plugin_capabilities(cast(BackendPlugin, plugin))
         return cast(BackendPlugin, plugin)
 
     raise RuntimeError(f"Unknown backend plugin: {name}")
@@ -243,7 +375,7 @@ def get_backend_plugin(name: str = DEFAULT_BACKEND_NAME) -> BackendPlugin:
     if name == DEFAULT_BACKEND_NAME:
         from ._backends.sqlite.plugin import sqlite_backend_plugin
 
-        ensure_backend_sql_namespace(sqlite_backend_plugin.sql)
+        _ensure_backend_plugin_capabilities(cast(BackendPlugin, sqlite_backend_plugin))
         return cast(BackendPlugin, sqlite_backend_plugin)
     return _load_entry_point_plugin(name)
 
@@ -279,6 +411,7 @@ __all__ = [
     "ActivityWaiter",
     "BACKEND_ENTRY_POINT_GROUP",
     "BackendAwareRunner",
+    "BrokerConnection",
     "BackendPlugin",
     "DEFAULT_BACKEND_NAME",
     "MultiQueueActivityWaiterHook",

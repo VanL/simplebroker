@@ -73,7 +73,12 @@ def apply_optimization_settings(
     conn.execute(f"PRAGMA synchronous={sync_mode}")
 
 
-def setup_connection_phase(db_path: str, *, config: dict[str, Any]) -> None:
+def setup_connection_phase(
+    db_path: str,
+    *,
+    config: dict[str, Any],
+    busy_timeout_ms: int | None = None,
+) -> None:
     """Validate and initialize SQLite connection-wide setup such as WAL mode."""
     check_version()
 
@@ -85,9 +90,18 @@ def setup_connection_phase(db_path: str, *, config: dict[str, Any]) -> None:
             f"File at {db_path} exists but is not a valid SQLite database"
         )
 
-    setup_conn = sqlite3.connect(db_path, isolation_level=None)
+    configured_busy_timeout = int(config["BROKER_BUSY_TIMEOUT"])
+    setup_busy_timeout = (
+        configured_busy_timeout if busy_timeout_ms is None else busy_timeout_ms
+    )
+    setup_conn: sqlite3.Connection | None = None
     try:
-        setup_conn.execute("PRAGMA busy_timeout=10000")
+        setup_conn = sqlite3.connect(
+            db_path,
+            isolation_level=None,
+            timeout=setup_busy_timeout / 1000,
+        )
+        setup_conn.execute(f"PRAGMA busy_timeout={setup_busy_timeout}")
 
         if is_new_database:
             setup_conn.execute(SET_AUTO_VACUUM_INCREMENTAL)
@@ -100,5 +114,8 @@ def setup_connection_phase(db_path: str, *, config: dict[str, Any]) -> None:
             result = cursor.fetchone() if cursor else None
             if not result or result[0].lower() != "wal":
                 raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
+    except sqlite3.OperationalError as exc:
+        raise OperationalError(str(exc)) from exc
     finally:
-        setup_conn.close()
+        if setup_conn is not None:
+            setup_conn.close()

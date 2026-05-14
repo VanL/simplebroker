@@ -572,6 +572,9 @@ def test_lock_timeout_when_another_process_holds_lock(tmp_path: Path) -> None:
     assert service.lock_path.exists()
     message = str(exc_info.value)
     assert "timeout=0.150s" in message
+    assert "elapsed=" in message
+    assert f"lock_path={service.lock_path}" in message
+    assert "lock_size=" in message
     assert "target=" in message
     assert "missing=['connection-v1']" in message
 
@@ -587,6 +590,16 @@ def test_lock_context_releases_after_exception(tmp_path: Path) -> None:
 
     with service.locked():
         assert service.lock_path.exists()
+
+
+def test_lock_file_is_prepared_for_byte_range_locking(tmp_path: Path) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(target, timeout=0.5, retry_delay=0.01)
+
+    with service.locked():
+        assert service.lock_path.exists()
+        assert service.lock_path.stat().st_size >= 1
 
 
 @pytest.mark.skipif(os.name != "nt", reason="msvcrt is Windows-only")

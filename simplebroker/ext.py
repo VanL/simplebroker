@@ -8,6 +8,7 @@ from ._backend_plugins import (
     ActivityWaiter,
     BackendAwareRunner,
     BackendPlugin,
+    BrokerConnection,
     MultiQueueActivityWaiterHook,
     get_backend_plugin,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "SQLiteRunner",
     "SetupPhase",
     "BackendPlugin",
+    "BrokerConnection",
     "ActivityWaiter",
     "BackendAwareRunner",
     "MultiQueueActivityWaiterHook",

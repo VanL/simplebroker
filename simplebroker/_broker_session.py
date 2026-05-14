@@ -10,14 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ._backend_plugins import BackendPlugin, get_backend_plugin
+from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
 from ._constants import load_config, resolve_config
 from ._runner import close_owned_runner
 from ._targets import ResolvedTarget
 
 if TYPE_CHECKING:
     from ._runner import SQLRunner
-    from .db import BrokerCore, BrokerDB
 
 _config = load_config()
 
@@ -124,14 +123,14 @@ class _ProcessBrokerSession:
         ) = _target_parts(db_path)
         self._thread_local = threading.local()
         self._lock = threading.RLock()
-        self._cores: set[BrokerCore | BrokerDB] = set()
+        self._cores: set[BrokerConnection] = set()
         self._runner: SQLRunner | None = None
         self._closed = False
 
     def get_connection(
         self,
         stop_event: threading.Event | None,
-    ) -> BrokerCore | BrokerDB:
+    ) -> BrokerConnection:
         """Return this thread's shared core, creating it if needed."""
 
         with self._lock:
@@ -147,13 +146,26 @@ class _ProcessBrokerSession:
             core.set_stop_event(stop_event)
             return core
 
-    def _create_core(self, stop_event: threading.Event | None) -> BrokerCore | BrokerDB:
+    def _create_core(self, stop_event: threading.Event | None) -> BrokerConnection:
         if self._backend_name == "sqlite":
             from .db import BrokerDB
 
             return BrokerDB(self._target, config=self._config, stop_event=stop_event)
 
-        from .db import BrokerCore
+        from .db import BrokerCore, _is_direct_backend
+
+        if _is_direct_backend(self._backend_plugin):
+            if self._runner is None:
+                self._runner = self._backend_plugin.create_runner(
+                    self._target,
+                    backend_options=self._backend_options,
+                    config=self._config,
+                )
+            return self._backend_plugin.create_core_from_runner(
+                self._runner,
+                config=self._config,
+                stop_event=stop_event,
+            )
 
         if self._runner is None:
             self._runner = self._backend_plugin.create_runner(
