@@ -20,6 +20,8 @@ This example shows:
 import json
 import logging
 import time
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from simplebroker import Queue, QueueWatcher
 
@@ -30,12 +32,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def basic_usage() -> None:
+def basic_usage(db_path: Path) -> None:
     """Basic queue operations."""
     print("=== Basic Usage ===")
 
     # Context manager ensures proper cleanup
-    with Queue("demo") as q:
+    with Queue("demo", db_path=str(db_path)) as q:
         # Write messages
         q.write("Hello, World!")
         q.write("Task 1")
@@ -53,11 +55,11 @@ def basic_usage() -> None:
         print(f"Read all: {messages}")  # ["Task 1", "Task 2"]
 
 
-def timestamp_usage() -> None:
+def timestamp_usage(db_path: Path) -> None:
     """Working with timestamps as message IDs."""
     print("\n=== Timestamp Usage ===")
 
-    with Queue("events") as q:
+    with Queue("events", db_path=str(db_path)) as q:
         # Write returns timestamp
         # Note: write() doesn't return timestamps in the current API
         q.write("Event 1")
@@ -76,12 +78,12 @@ def timestamp_usage() -> None:
         print(f"Remaining messages: {remaining}")
 
 
-def error_handling_pattern() -> None:
+def error_handling_pattern(db_path: Path) -> None:
     """Robust error handling with retry logic."""
     print("\n=== Error Handling Pattern ===")
 
-    error_queue = Queue("errors")
-    retry_queue = Queue("retry")
+    error_queue = Queue("errors", db_path=str(db_path))
+    retry_queue = Queue("retry", db_path=str(db_path))
 
     def process_with_retry(message: str, timestamp: int) -> None:
         """Process message with retry logic."""
@@ -136,7 +138,7 @@ def error_handling_pattern() -> None:
                 )
 
     # Example usage
-    with Queue("tasks") as q:
+    with Queue("tasks", db_path=str(db_path)) as q:
         q.write(json.dumps({"task": "process_order", "order_id": 123, "fail": True}))
         q.write(json.dumps({"task": "send_email", "to": "user@example.com"}))
 
@@ -149,7 +151,7 @@ def error_handling_pattern() -> None:
                 process_with_retry(msg, i)
 
 
-def custom_watcher_example() -> None:
+def custom_watcher_example(db_path: Path) -> None:
     """Custom queue watcher with error handling."""
     print("\n=== Custom Watcher Example ===")
 
@@ -157,7 +159,7 @@ def custom_watcher_example() -> None:
         def __init__(self) -> None:
             self.processed_count = 0
             self.error_count = 0
-            self.error_queue = Queue("processing_errors")
+            self.error_queue = Queue("processing_errors", db_path=str(db_path))
 
         def process(self, message: str, timestamp: int) -> None:
             """Process a single message."""
@@ -212,7 +214,7 @@ def custom_watcher_example() -> None:
 
     # Set up processor and watcher
     processor = MessageProcessor()
-    queue = Queue("stream")
+    queue = Queue("stream", db_path=str(db_path))
 
     # Add some test messages
     queue.write("Good message 1")
@@ -223,7 +225,7 @@ def custom_watcher_example() -> None:
     watcher = QueueWatcher(
         "stream",  # Queue name comes first
         processor.process,  # Handler comes second
-        db=".broker.db",  # Database as keyword argument
+        db=str(db_path),  # Database as keyword argument
         error_handler=processor.handle_error,
         peek=False,  # Consume messages
     )
@@ -246,11 +248,11 @@ def custom_watcher_example() -> None:
     print(f"\nProcessing stats: {json.dumps(stats, indent=2)}")
 
 
-def checkpoint_processing() -> None:
+def checkpoint_processing(db_path: Path) -> None:
     """Checkpoint-based processing for resumable workflows."""
     print("\n=== Checkpoint Processing ===")
 
-    checkpoint_file = "/tmp/simplebroker_checkpoint.txt"
+    checkpoint_file = db_path.with_suffix(".checkpoint")
 
     def load_checkpoint() -> int:
         """Load last processed timestamp."""
@@ -270,7 +272,7 @@ def checkpoint_processing() -> None:
         checkpoint = load_checkpoint()
         logger.info(f"Starting from checkpoint: {checkpoint}")
 
-        with Queue("batch_tasks") as q:
+        with Queue("batch_tasks", db_path=str(db_path)) as q:
             # Get all messages (checkpoint filtering would need to be done at DB level)
             result = q.read(all_messages=True)
             messages = list(result) if result else []
@@ -299,7 +301,7 @@ def checkpoint_processing() -> None:
             logger.info(f"Batch complete. Last checkpoint: {load_checkpoint()}")
 
     # Example usage
-    with Queue("batch_tasks") as q:
+    with Queue("batch_tasks", db_path=str(db_path)) as q:
         # Add some messages
         for i in range(5):
             q.write(f"Batch task {i + 1}")
@@ -309,9 +311,11 @@ def checkpoint_processing() -> None:
 
 
 if __name__ == "__main__":
-    # Run all examples
-    basic_usage()
-    timestamp_usage()
-    error_handling_pattern()
-    custom_watcher_example()
-    checkpoint_processing()
+    # Run all examples against an isolated temporary database.
+    with TemporaryDirectory() as tmpdir:
+        path = Path(tmpdir) / "python_api_demo.db"
+        basic_usage(path)
+        timestamp_usage(path)
+        error_handling_pattern(path)
+        custom_watcher_example(path)
+        checkpoint_processing(path)

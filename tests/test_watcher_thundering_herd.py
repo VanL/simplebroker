@@ -150,7 +150,7 @@ def test_thundering_herd_mitigation(broker_target) -> None:
         # Wait for message to be processed
         assert wait_for_condition(
             lambda: call_counts["queue_0"] == 1,
-            timeout=2.0,
+            timeout=5.0 if broker_target.backend_name == "redis" else 2.0,
             message="Waiting for queue_0 to process message",
         )
 

@@ -24,17 +24,17 @@ Only use this approach if you need custom extensions beyond what the public API 
 """
 
 import asyncio
+import contextvars
 import os
-import threading
 import time
 import warnings
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Protocol
 
 try:
     import aiosqlite
-    from aiosqlitepool import ConnectionPool
+    from aiosqlitepool import SQLiteConnectionPool
 except ImportError:
     raise ImportError(
         "This example requires aiosqlite and aiosqlitepool. "
@@ -47,7 +47,7 @@ except ImportError:
 # ADVANCED: Import database constants for low-level operations
 # For standard usage, these constants are handled internally by the Queue class
 from simplebroker._constants import (
-    LOGICAL_COUNTER_BITS,
+    LOGICAL_COUNTER_MASK,
     MAX_LOGICAL_COUNTER,
     MAX_MESSAGE_SIZE,
     SCHEMA_VERSION,
@@ -147,26 +147,29 @@ class PooledAsyncSQLiteRunner:
         self.db_path = db_path
         self.pool_size = pool_size
         self.max_connections = max_connections
-        self._pool: ConnectionPool | None = None
-        self._local = threading.local()  # Thread local storage
+        self._pool: SQLiteConnectionPool | None = None
+        self._transaction_conn: contextvars.ContextVar[aiosqlite.Connection | None] = (
+            contextvars.ContextVar("transaction_conn", default=None)
+        )
+        self._transaction_context: contextvars.ContextVar[
+            AbstractAsyncContextManager[aiosqlite.Connection] | None
+        ] = contextvars.ContextVar("transaction_context", default=None)
 
-    async def _ensure_pool(self) -> ConnectionPool:
+    async def _ensure_pool(self) -> SQLiteConnectionPool:
         """Lazily create the connection pool."""
         if self._pool is None:
-            self._pool = ConnectionPool(
-                self.db_path,
-                minsize=self.pool_size,
-                maxsize=self.max_connections,
-            )
-            # Apply pragmas to the pool's connection factory
-            original_factory = self._pool._connection_factory
 
             async def configured_factory() -> aiosqlite.Connection:
-                conn = await original_factory()
+                conn = await aiosqlite.connect(self.db_path)
                 await self._setup_connection(conn)
                 return conn
 
-            self._pool._connection_factory = configured_factory
+            # aiosqlitepool exposes a fixed-size pool. Use max_connections as
+            # the pool cap to preserve this example's public constructor shape.
+            self._pool = SQLiteConnectionPool(
+                configured_factory,
+                pool_size=self.max_connections,
+            )
         return self._pool
 
     async def _setup_connection(self, conn: aiosqlite.Connection) -> None:
@@ -214,10 +217,11 @@ class PooledAsyncSQLiteRunner:
         pool = await self._ensure_pool()
 
         # Check if we're in a transaction
-        if hasattr(self._local, "conn") and self._local.conn:
+        transaction_conn = self._transaction_conn.get()
+        if transaction_conn is not None:
             # Use the transaction connection
             try:
-                cursor = await self._local.conn.execute(sql, params)
+                cursor = await transaction_conn.execute(sql, params)
                 if fetch:
                     result = await cursor.fetchall()
                     return list(result)
@@ -233,12 +237,13 @@ class PooledAsyncSQLiteRunner:
                 raise
         else:
             # Get connection from pool
-            async with pool.acquire() as conn:
+            async with pool.connection() as conn:
                 try:
                     cursor = await conn.execute(sql, params)
                     if fetch:
                         result = await cursor.fetchall()
                         return list(result)
+                    await conn.commit()
                     return []
                 except aiosqlite.OperationalError as e:
                     raise OperationalError(str(e)) from e
@@ -252,49 +257,57 @@ class PooledAsyncSQLiteRunner:
 
     async def begin_immediate(self) -> None:
         """Start an immediate transaction."""
-        if hasattr(self._local, "conn") and self._local.conn:
+        if self._transaction_conn.get() is not None:
             raise OperationalError("Already in transaction")
 
         pool = await self._ensure_pool()
-        # Acquire a connection for this transaction
-        self._local.conn = await pool.acquire()
+        # Keep one pooled connection checked out for the transaction lifetime.
+        conn_context = pool.connection()
+        conn = await conn_context.__aenter__()
+        self._transaction_context.set(conn_context)
+        self._transaction_conn.set(conn)
         try:
-            await self._local.conn.execute("BEGIN IMMEDIATE")
+            await conn.execute("BEGIN IMMEDIATE")
         except aiosqlite.OperationalError as e:
             # Release connection on error
-            await pool.release(self._local.conn)
-            self._local.conn = None
+            await conn_context.__aexit__(None, None, None)
+            self._transaction_conn.set(None)
+            self._transaction_context.set(None)
             raise OperationalError(str(e)) from e
 
     async def commit(self) -> None:
         """Commit the current transaction."""
-        if not hasattr(self._local, "conn") or not self._local.conn:
-            raise OperationalError("Not in transaction")
+        conn = self._transaction_conn.get()
+        conn_context = self._transaction_context.get()
+        if conn is None or conn_context is None:
+            return
 
-        pool = await self._ensure_pool()
         try:
-            await self._local.conn.commit()
+            await conn.commit()
         except aiosqlite.OperationalError as e:
             raise OperationalError(str(e)) from e
         finally:
             # Always release connection back to pool
-            await pool.release(self._local.conn)
-            self._local.conn = None
+            await conn_context.__aexit__(None, None, None)
+            self._transaction_conn.set(None)
+            self._transaction_context.set(None)
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
-        if not hasattr(self._local, "conn") or not self._local.conn:
-            raise OperationalError("Not in transaction")
+        conn = self._transaction_conn.get()
+        conn_context = self._transaction_context.get()
+        if conn is None or conn_context is None:
+            return
 
-        pool = await self._ensure_pool()
         try:
-            await self._local.conn.rollback()
+            await conn.rollback()
         except aiosqlite.OperationalError as e:
             raise OperationalError(str(e)) from e
         finally:
             # Always release connection back to pool
-            await pool.release(self._local.conn)
-            self._local.conn = None
+            await conn_context.__aexit__(None, None, None)
+            self._transaction_conn.set(None)
+            self._transaction_context.set(None)
 
     async def close(self) -> None:
         """Close the connection pool."""
@@ -309,67 +322,50 @@ class AsyncTimestampGenerator:
     def __init__(self, runner: AsyncSQLRunner):
         self._runner = runner
         self._lock = asyncio.Lock()
-        self._last_physical_ms = 0
-        self._counter = 0
+        self._last_ts = 0
 
     async def generate(self) -> int:
         """Generate a unique hybrid timestamp."""
         async with self._lock:
-            # Generate timestamp atomically with database update
             max_retries = 100
 
             for attempt in range(max_retries):
-                # Current time in milliseconds
-                now_ms = int(time.time() * 1000)
+                rows = await self._runner.run(
+                    "SELECT value FROM meta WHERE key = 'last_ts'", fetch=True
+                )
+                if not rows:
+                    raise RuntimeError("meta.last_ts missing")
 
-                # Check if we're in a new millisecond
-                if now_ms > self._last_physical_ms:
-                    # New millisecond, reset counter
-                    self._last_physical_ms = now_ms
-                    self._counter = 0
+                current_ts = int(rows[0][0])
+                latest_ts = max(self._last_ts, current_ts)
+                time_mask = ~LOGICAL_COUNTER_MASK
+                now_base = time.time_ns() & time_mask
+                last_base = latest_ts & time_mask
+                last_counter = latest_ts & LOGICAL_COUNTER_MASK
+
+                if now_base > last_base:
+                    candidate = now_base
                 else:
-                    # Same millisecond, increment counter
-                    self._counter += 1
-                    if self._counter > MAX_LOGICAL_COUNTER:
-                        # Counter overflow, wait for next millisecond
-                        while now_ms <= self._last_physical_ms:
+                    counter = last_counter + 1
+                    if counter >= MAX_LOGICAL_COUNTER:
+                        while now_base <= last_base:
                             await asyncio.sleep(0.001)
-                            now_ms = int(time.time() * 1000)
-                        self._last_physical_ms = now_ms
-                        self._counter = 0
+                            now_base = time.time_ns() & time_mask
+                        counter = 0
+                    candidate = now_base | counter
 
-                # Build the hybrid timestamp
-                timestamp = (now_ms << LOGICAL_COUNTER_BITS) | self._counter
-
-                # Try to update in database
                 try:
-                    # Get current value
+                    await self._runner.run(
+                        "UPDATE meta SET value = ? WHERE key = 'last_ts' AND value < ?",
+                        (candidate, candidate),
+                    )
                     rows = await self._runner.run(
                         "SELECT value FROM meta WHERE key = 'last_ts'", fetch=True
                     )
-                    current_ts = rows[0][0] if rows else 0
-
-                    # Only update if our timestamp is greater
-                    if timestamp > current_ts:
-                        await self._runner.run(
-                            "UPDATE meta SET value = ? WHERE key = 'last_ts' AND value = ?",
-                            (timestamp, current_ts),
-                        )
-                        # No IntegrityError means success
-                        return timestamp
-                    else:
-                        # Database has a newer timestamp, sync with it
-                        db_physical = current_ts >> LOGICAL_COUNTER_BITS
-                        db_counter = current_ts & MAX_LOGICAL_COUNTER
-
-                        if db_physical > self._last_physical_ms:
-                            self._last_physical_ms = db_physical
-                            self._counter = db_counter + 1
-                        elif db_physical == self._last_physical_ms:
-                            self._counter = max(self._counter, db_counter + 1)
-
-                        # Retry with updated state
-                        continue
+                    stored_ts = int(rows[0][0]) if rows else 0
+                    self._last_ts = stored_ts
+                    if stored_ts == candidate:
+                        return candidate
 
                 except IntegrityError:
                     # Concurrent update, retry

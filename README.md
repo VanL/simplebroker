@@ -739,7 +739,7 @@ watcher = QueueWatcher(
 
 # Start watching (blocks until stopped)
 try:
-    watcher.watch()
+    watcher.run_forever()
 except KeyboardInterrupt:
     print("Watcher stopped by user")
 ```
@@ -757,9 +757,9 @@ def handle_message(msg: str, ts: int):
 
 # Create watcher with database path (recommended for thread safety)
 watcher = QueueWatcher(
-    Path("my.db"),
     "orders",
-    handle_message
+    handle_message,
+    db=Path("my.db"),
 )
 
 # Start in background thread
@@ -784,7 +784,7 @@ def handle_message(msg: str, ts: int):
     print(f"Received: {msg}")
 
 # Automatic thread management with context manager
-with QueueWatcher("my.db", "notifications", handle_message) as watcher:
+with QueueWatcher("notifications", handle_message, db="my.db") as watcher:
     # Thread is started automatically
     # Do other work while watcher processes messages
     time.sleep(10)
@@ -812,7 +812,7 @@ class AsyncQueue:
         """Write message asynchronously."""
         loop = asyncio.get_event_loop()
         def _write():
-            with Queue(self.queue_name, self.db_path) as q:
+            with Queue(self.queue_name, db_path=self.db_path) as q:
                 q.write(message)
         await loop.run_in_executor(self._executor, _write)
     
@@ -820,7 +820,7 @@ class AsyncQueue:
         """Read message asynchronously."""
         loop = asyncio.get_event_loop()
         def _read():
-            with Queue(self.queue_name, self.db_path) as q:
+            with Queue(self.queue_name, db_path=self.db_path) as q:
                 return q.read()
         return await loop.run_in_executor(self._executor, _read)
 
@@ -890,7 +890,7 @@ class PriorityQueueSystem:
     def write_with_priority(self, base_queue: str, message: str, priority: int = 0):
         """Write message with priority (higher = more important)."""
         queue_name = f"{base_queue}_p{priority}"
-        with Queue(queue_name, self.db_path) as q:
+        with Queue(queue_name, db_path=self.db_path) as q:
             q.write(message)
     
     def read_highest_priority(self, base_queue: str) -> str | None:
@@ -898,7 +898,7 @@ class PriorityQueueSystem:
         # Check queues in priority order
         for priority in range(9, -1, -1):
             queue_name = f"{base_queue}_p{priority}"
-            with Queue(queue_name, self.db_path) as q:
+            with Queue(queue_name, db_path=self.db_path) as q:
                 msg = q.read()
                 if msg:
                     return msg
