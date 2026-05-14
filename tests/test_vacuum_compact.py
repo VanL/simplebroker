@@ -90,7 +90,68 @@ def test_cli_vacuum_with_compact(workdir: Path):
         "-f", str(db_path), "--vacuum", "--compact", cwd=workdir
     )
     assert returncode == 0
-    assert "compacted" in stdout.lower()
+    assert stdout == ""
+    assert "compacted" in stderr.lower()
+
+
+def test_cli_vacuum_status_goes_to_stderr(workdir: Path):
+    """Vacuum status is diagnostic output, not stdout payload."""
+    db_path = workdir / "test.db"
+
+    returncode, _, stderr = run_cli(
+        "-f", str(db_path), "write", "test_queue", "message1", cwd=workdir
+    )
+    assert returncode == 0, stderr
+
+    returncode, _, stderr = run_cli(
+        "-f", str(db_path), "read", "test_queue", cwd=workdir
+    )
+    assert returncode == 0, stderr
+
+    returncode, stdout, stderr = run_cli("-f", str(db_path), "--vacuum", cwd=workdir)
+
+    assert returncode == 0
+    assert stdout == ""
+    assert "Vacuumed 1 claimed messages" in stderr
+
+
+def test_cli_vacuum_quiet_suppresses_status(workdir: Path):
+    """Quiet mode suppresses vacuum status without changing the exit code."""
+    db_path = workdir / "test.db"
+
+    returncode, _, stderr = run_cli(
+        "-f", str(db_path), "write", "test_queue", "message1", cwd=workdir
+    )
+    assert returncode == 0, stderr
+
+    returncode, _, stderr = run_cli(
+        "-f", str(db_path), "read", "test_queue", cwd=workdir
+    )
+    assert returncode == 0, stderr
+
+    returncode, stdout, stderr = run_cli(
+        "-f", str(db_path), "--quiet", "--vacuum", cwd=workdir
+    )
+
+    assert returncode == 0
+    assert stdout == ""
+    assert stderr == ""
+
+
+def test_cli_vacuum_no_claimed_status_goes_to_stderr(workdir: Path):
+    """The no-op vacuum message is status output on stderr."""
+    db_path = workdir / "test.db"
+
+    returncode, _, stderr = run_cli(
+        "-f", str(db_path), "write", "test_queue", "message1", cwd=workdir
+    )
+    assert returncode == 0, stderr
+
+    returncode, stdout, stderr = run_cli("-f", str(db_path), "--vacuum", cwd=workdir)
+
+    assert returncode == 0
+    assert stdout == ""
+    assert "No claimed messages to vacuum" in stderr
 
 
 def test_cli_compact_requires_vacuum(workdir: Path):

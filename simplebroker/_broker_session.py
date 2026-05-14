@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from ._backend_plugins import BackendPlugin, get_backend_plugin
 from ._constants import load_config, resolve_config
-from ._runner_lifecycle import close_owned_runner
+from ._runner import close_owned_runner
 from ._targets import ResolvedTarget
 
 if TYPE_CHECKING:

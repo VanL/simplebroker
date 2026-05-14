@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from simplebroker._runner_lifecycle import close_owned_runner
+from simplebroker._runner import close_owned_runner
 
 
 class RecordingRunner:

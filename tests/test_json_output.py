@@ -3,6 +3,8 @@
 import json
 import time
 
+import pytest
+
 from .conftest import run_cli
 from .helper_scripts.timestamp_validation import validate_timestamp
 
@@ -133,6 +135,92 @@ def test_json_empty_queue(workdir):
     rc, out, _ = run_cli("peek", "empty_queue", "--json", cwd=workdir)
     assert rc == 2
     assert out == ""
+
+
+def test_read_json_invalid_timestamp_error_is_json(workdir):
+    """Commands with --json emit structured errors on stderr."""
+    rc, out, err = run_cli(
+        "read",
+        "empty_queue",
+        "--json",
+        "--after",
+        "invalid",
+        cwd=workdir,
+    )
+
+    assert rc == 1
+    assert out == ""
+    payload = json.loads(err)
+    assert payload == {
+        "error": "INVALID_TIMESTAMP",
+        "message": "Invalid timestamp: invalid",
+        "retryable": False,
+    }
+
+
+def test_peek_json_invalid_message_id_error_is_json(workdir):
+    """Invalid -m values use the shared JSON error formatter under --json."""
+    rc, out, err = run_cli(
+        "peek",
+        "empty_queue",
+        "--json",
+        "-m",
+        "not-an-id",
+        cwd=workdir,
+    )
+
+    assert rc == 1
+    assert out == ""
+    payload = json.loads(err)
+    assert payload["error"] == "INVALID_MESSAGE_ID"
+    assert payload["retryable"] is False
+    assert "invalid message ID" in payload["message"]
+
+
+def test_move_json_argument_error_is_json(workdir):
+    """Command-local --json also formats validation errors outside DB access."""
+    rc, out, err = run_cli("move", "same", "same", "--json", cwd=workdir)
+
+    assert rc == 1
+    assert out == ""
+    payload = json.loads(err)
+    assert payload == {
+        "error": "INVALID_ARGUMENT",
+        "message": "Source and destination queues cannot be the same",
+        "retryable": False,
+    }
+
+
+def test_list_json_database_validation_error_is_json(workdir):
+    """Pre-dispatch validation errors honor a command's local --json flag."""
+    db_path = workdir / ".broker.db"
+    db_path.write_text("not sqlite", encoding="utf-8")
+
+    rc, out, err = run_cli("list", "--json", cwd=workdir)
+
+    assert rc == 1
+    assert out == ""
+    payload = json.loads(err)
+    assert payload["error"] == "ERROR"
+    assert payload["retryable"] is False
+    assert "not a valid SQLite database" in payload["message"]
+
+
+def test_plain_error_stays_plain_without_json(workdir):
+    """Plain commands keep line-oriented stderr unless --json is explicit."""
+    rc, out, err = run_cli(
+        "read",
+        "empty_queue",
+        "--after",
+        "invalid",
+        cwd=workdir,
+    )
+
+    assert rc == 1
+    assert out == ""
+    assert err.startswith("simplebroker: error: ")
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(err)
 
 
 def test_json_unicode_handling(workdir):

@@ -66,10 +66,22 @@ def _validate_early_command_args(args: argparse.Namespace) -> int | None:
         try:
             commands._validate_timestamp(timestamp_filter)
         except ValueError as e:
-            print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+            commands._emit_error(
+                e,
+                json_output=bool(getattr(args, "json", False)),
+                code="INVALID_TIMESTAMP",
+            )
             return EXIT_ERROR
 
     return None
+
+
+def _json_output_requested(
+    args: argparse.Namespace, *, status_json_output: bool = False
+) -> bool:
+    """Return whether the parsed command explicitly requested JSON output."""
+
+    return status_json_output or bool(getattr(args, "json", False))
 
 
 def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
@@ -712,9 +724,10 @@ def main(*, config: dict[str, Any] = _config) -> int:
 
     # --status is mutually exclusive with subcommands
     if getattr(args, "status", False) and args.command:
-        print(
-            f"{PROG_NAME}: error: --status cannot be used with commands",
-            file=sys.stderr,
+        commands._emit_error(
+            "--status cannot be used with commands",
+            code="INVALID_ARGUMENT",
+            json_output=status_json_output,
         )
         return EXIT_ERROR
 
@@ -743,7 +756,14 @@ def main(*, config: dict[str, Any] = _config) -> int:
     try:
         resolved_target = _resolve_target(args, config=config)
     except ValueError as e:
-        print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+        commands._emit_error(
+            e,
+            code="INVALID_ARGUMENT",
+            json_output=_json_output_requested(
+                args,
+                status_json_output=status_json_output,
+            ),
+        )
         return EXIT_ERROR
     db_path = resolved_target.target_path
     used_project_scope = resolved_target.used_project_scope
@@ -761,15 +781,20 @@ def main(*, config: dict[str, Any] = _config) -> int:
         try:
             if resolved_target.legacy_sqlite_path_mode:
                 assert db_path is not None
-                file_existed = db_path.exists()
 
                 try:
-                    db_path.unlink(missing_ok=True)
+                    file_existed = resolved_target.plugin.cleanup_target(
+                        str(db_path),
+                        backend_options=resolved_target.backend_options,
+                        config=config,
+                    )
 
                     if file_existed and not args.quiet:
-                        print(f"Database cleaned up: {db_path}")
+                        commands._status(f"Database cleaned up: {db_path}")
                     elif not file_existed and not args.quiet:
-                        print(f"Database not found, nothing to clean up: {db_path}")
+                        commands._status(
+                            f"Database not found, nothing to clean up: {db_path}"
+                        )
                 except PermissionError:
                     print(
                         f"{PROG_NAME}: error: Permission denied: {db_path}",
@@ -785,14 +810,21 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 )
                 if not args.quiet:
                     if existed:
-                        print(f"Database cleaned up: {display_target}")
+                        commands._status(f"Database cleaned up: {display_target}")
                     else:
-                        print(
+                        commands._status(
                             f"Database not found, nothing to clean up: {display_target}"
                         )
             return EXIT_SUCCESS
         except Exception as e:
-            print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+            commands._emit_error(
+                e,
+                code="ERROR",
+                json_output=_json_output_requested(
+                    args,
+                    status_json_output=status_json_output,
+                ),
+            )
             return EXIT_ERROR
 
     # Handle vacuum flag
@@ -804,12 +836,23 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 and not db_path.exists()
             ):
                 if not args.quiet:
-                    print(f"Database not found: {db_path}")
+                    commands._status(f"Database not found: {db_path}")
                 return EXIT_SUCCESS
 
-            return commands.cmd_vacuum(resolved_target, compact=args.compact)
+            return commands.cmd_vacuum(
+                resolved_target,
+                compact=args.compact,
+                quiet=args.quiet,
+            )
         except Exception as e:
-            print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+            commands._emit_error(
+                e,
+                code="ERROR",
+                json_output=_json_output_requested(
+                    args,
+                    status_json_output=status_json_output,
+                ),
+            )
             return EXIT_ERROR
 
     # Handle status flag
@@ -882,7 +925,14 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 _validate_sqlite_database(db_path, verify_magic=False)
 
     except (ValueError, DatabaseError) as e:
-        print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+        commands._emit_error(
+            e,
+            code="ERROR",
+            json_output=_json_output_requested(
+                args,
+                status_json_output=status_json_output,
+            ),
+        )
         return EXIT_ERROR
 
     # Execute command
@@ -913,7 +963,13 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
                     or not message_id_str.isdigit()
                 ):
-                    return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
+                    if args.json:
+                        commands._emit_error(
+                            "invalid message ID: expected exactly 19 digits",
+                            code="INVALID_MESSAGE_ID",
+                            json_output=True,
+                        )
+                    return commands.EXIT_ERROR
 
                 # Check mutual exclusivity
                 if args.all or after_str or before_str:
@@ -942,7 +998,13 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
                     or not message_id_str.isdigit()
                 ):
-                    return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
+                    if args.json:
+                        commands._emit_error(
+                            "invalid message ID: expected exactly 19 digits",
+                            code="INVALID_MESSAGE_ID",
+                            json_output=True,
+                        )
+                    return commands.EXIT_ERROR
 
                 # Check mutual exclusivity
                 if args.all or after_str or before_str:
@@ -994,7 +1056,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
                     or not message_id_str.isdigit()
                 ):
-                    return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
+                    return commands.EXIT_ERROR
 
                 # Require queue when using --message
                 if queue is None:
@@ -1016,7 +1078,13 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
                     or not message_id_str.isdigit()
                 ):
-                    return commands.EXIT_QUEUE_EMPTY  # Return 2 for invalid format
+                    if json_output:
+                        commands._emit_error(
+                            "invalid message ID: expected exactly 19 digits",
+                            code="INVALID_MESSAGE_ID",
+                            json_output=True,
+                        )
+                    return commands.EXIT_ERROR
 
                 # Check mutual exclusivity
                 if after_str or before_str:
@@ -1076,7 +1144,14 @@ def main(*, config: dict[str, Any] = _config) -> int:
         return EXIT_SUCCESS
 
     except (ValueError, DatabaseError) as e:
-        print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+        commands._emit_error(
+            e,
+            code="ERROR",
+            json_output=_json_output_requested(
+                args,
+                status_json_output=status_json_output,
+            ),
+        )
         return EXIT_ERROR
     except KeyboardInterrupt:
         # Handle Ctrl-C gracefully
@@ -1084,7 +1159,15 @@ def main(*, config: dict[str, Any] = _config) -> int:
         return EXIT_SUCCESS
     except Exception as e:
         if not args.quiet:
-            print(f"{PROG_NAME}: {e}", file=sys.stderr)
+            code = "INVALID_ARGUMENT" if isinstance(e, ArgumentParserError) else "ERROR"
+            commands._emit_error(
+                e,
+                code=code,
+                json_output=_json_output_requested(
+                    args,
+                    status_json_output=status_json_output,
+                ),
+            )
         return EXIT_ERROR
 
 

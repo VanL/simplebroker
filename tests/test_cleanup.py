@@ -10,8 +10,10 @@ Test cases:
 """
 
 import os
+import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 
 import pytest
 
@@ -26,6 +28,17 @@ def _uses_sqlite_backend() -> bool:
     return os.environ.get("BROKER_TEST_BACKEND", "sqlite") == "sqlite"
 
 
+def _write_sqlite_meta_db(db_path, *, magic: str | None) -> None:
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        if magic is not None:
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('magic', ?)",
+                (magic,),
+            )
+        conn.commit()
+
+
 def test_cleanup_existing_database(workdir):
     """Test cleaning up an existing database."""
     # Create a database by writing a message
@@ -38,9 +51,10 @@ def test_cleanup_existing_database(workdir):
         assert db_path.exists()
 
     # Clean it up
-    rc, out, _ = run_cli("--cleanup", cwd=workdir)
+    rc, out, err = run_cli("--cleanup", cwd=workdir)
     assert rc == 0
-    assert "Database cleaned up" in out
+    assert out == ""
+    assert "Database cleaned up" in err
     if _uses_sqlite_backend():
         assert wait_for_condition(
             lambda: not db_path.exists(), timeout=1.0, interval=0.05
@@ -78,13 +92,86 @@ def test_cleanup_nonexistent_database(workdir):
             check=False,
         )
         assert proc.returncode == 0
-        assert "Database not found, nothing to clean up" in proc.stdout
+        assert proc.stdout == ""
+        assert "Database not found, nothing to clean up" in proc.stderr
         return
 
     # Cleanup should succeed with appropriate message
-    rc, out, _ = run_cli("--cleanup", cwd=workdir)
+    rc, out, err = run_cli("--cleanup", cwd=workdir)
     assert rc == 0
-    assert "Database not found, nothing to clean up" in out
+    assert out == ""
+    assert "Database not found, nothing to clean up" in err
+
+
+@pytest.mark.sqlite_only
+def test_cleanup_rejects_plain_file(workdir):
+    """Cleanup must not delete a non-SimpleBroker file at the target path."""
+    db_path = workdir / ".broker.db"
+    db_path.write_text("not a sqlite database", encoding="utf-8")
+
+    rc, out, err = run_cli("--cleanup", cwd=workdir)
+
+    assert rc == 1
+    assert out == ""
+    assert "not a valid SQLite database" in err
+    assert db_path.read_text(encoding="utf-8") == "not a sqlite database"
+
+
+@pytest.mark.sqlite_only
+def test_cleanup_rejects_sqlite_db_without_simplebroker_magic(workdir):
+    """Cleanup must not delete a SQLite database without SimpleBroker metadata."""
+    db_path = workdir / ".broker.db"
+    _write_sqlite_meta_db(db_path, magic=None)
+
+    rc, out, err = run_cli("--cleanup", cwd=workdir)
+
+    assert rc == 1
+    assert out == ""
+    assert "missing SimpleBroker metadata" in err
+    assert db_path.exists()
+
+
+@pytest.mark.sqlite_only
+def test_cleanup_rejects_sqlite_db_with_wrong_magic(workdir):
+    """Cleanup must not delete a SQLite database that belongs to another app."""
+    db_path = workdir / ".broker.db"
+    _write_sqlite_meta_db(db_path, magic="not-simplebroker")
+
+    rc, out, err = run_cli("--cleanup", cwd=workdir)
+
+    assert rc == 1
+    assert out == ""
+    assert "incorrect magic string" in err
+    assert db_path.exists()
+
+
+@pytest.mark.sqlite_only
+def test_project_config_sqlite_cleanup_rejects_foreign_db(workdir):
+    """Project-config SQLite cleanup uses the same validation-before-delete rule."""
+    db_path = workdir / "configured.db"
+    _write_sqlite_meta_db(db_path, magic="not-simplebroker")
+    (workdir / PROJECT_CONFIG_FILENAME).write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "sqlite"',
+                'target = "configured.db"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rc, out, err = run_cli(
+        "--cleanup",
+        cwd=workdir,
+        env={"BROKER_PROJECT_SCOPE": "1", "BROKER_TEST_BACKEND": "sqlite"},
+    )
+
+    assert rc == 1
+    assert out == ""
+    assert "incorrect magic string" in err
+    assert db_path.exists()
 
 
 def test_cleanup_with_quiet(workdir):
@@ -140,25 +227,26 @@ def test_cleanup_with_custom_location(tmp_path):
     assert custom_db_path.exists()
 
     # Cleanup with same options
-    rc, out, _ = run_cli(
+    rc, out, err = run_cli(
         "-d", str(custom_dir), "-f", custom_file, "--cleanup", cwd=tmp_path
     )
     assert rc == 0
     assert wait_for_condition(
         lambda: not custom_db_path.exists(), timeout=1.0, interval=0.05
     )
-    assert "Database cleaned up" in out
-    assert str(custom_db_path) in out
+    assert out == ""
+    assert "Database cleaned up" in err
+    assert str(custom_db_path) in err
 
 
 def test_cleanup_exits_before_commands(workdir):
     """Test that cleanup exits without processing commands."""
     # This should cleanup and NOT write a message
-    rc, out, _ = run_cli("--cleanup", "write", "test", "message", cwd=workdir)
+    rc, out, err = run_cli("--cleanup", "write", "test", "message", cwd=workdir)
 
     assert rc == 0
-    # Should see cleanup message, not write command output
-    assert "Database cleaned up" in out or "Database not found" in out
+    assert out == ""
+    assert "Database cleaned up" in err or "Database not found" in err
 
     # Verify no database was created (write command was not executed)
     db_path = workdir / ".broker.db"

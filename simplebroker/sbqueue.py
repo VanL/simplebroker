@@ -426,11 +426,11 @@ class Queue:
         Args:
             limit: Maximum number of messages to read
             with_timestamps: If True, return list of (message, timestamp) tuples
-            delivery_guarantee: Compatibility parameter for older callers.
-                Materialized batch APIs always behave as exactly-once. Passing
-                ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
-                as exactly-once. Use ``read_generator()`` for retryable batch
-                processing.
+            delivery_guarantee: Delivery contract for materializing messages.
+                Materialized batch APIs commit before returning, so
+                ``"at_least_once"`` is satisfied by the stricter exactly-once
+                behavior. Use ``read_generator()`` when you need retry-on-stop
+                batch processing.
             after_timestamp: Only read messages newer than this timestamp
             before_timestamp: Only read messages older than this timestamp
 
@@ -801,17 +801,17 @@ class Queue:
     ) -> list[str] | list[tuple[str, int]]:
         """Move multiple messages from this queue to another.
 
-        Atomic batch move operation with configurable delivery semantics.
+        Atomic materialized batch move operation.
 
         Args:
             destination: Target queue (name or Queue instance)
             limit: Maximum number of messages to move
             with_timestamps: If True, return list of (message, timestamp) tuples
-            delivery_guarantee: Compatibility parameter for older callers.
-                Materialized batch APIs always behave as exactly-once. Passing
-                ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
-                as exactly-once. Use ``move_generator()`` for retryable batch
-                processing.
+            delivery_guarantee: Delivery contract for materializing messages.
+                Materialized batch APIs commit before returning, so
+                ``"at_least_once"`` is satisfied by the stricter exactly-once
+                behavior. Use ``move_generator()`` when you need retry-on-stop
+                batch processing.
             after_timestamp: Only move messages newer than this timestamp
             before_timestamp: Only move messages older than this timestamp
             require_unclaimed: If True (default), only move unclaimed messages

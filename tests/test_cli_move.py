@@ -415,8 +415,8 @@ class TestErrorCases:
         assert rc == 0  # Moving by ID allows claimed messages
         assert out == "msg1"
 
-    def test_invalid_timestamp_format_returns_exit_code_2(self, workdir):
-        """Test that invalid timestamp format returns exit code 2."""
+    def test_invalid_timestamp_format_returns_exit_code_1(self, workdir):
+        """Test that invalid timestamp format returns exit code 1."""
         run_cli("write", "source", "msg1", cwd=workdir)
 
         # Test various invalid timestamp formats
@@ -433,7 +433,7 @@ class TestErrorCases:
             rc, out, err = run_cli(
                 "move", "source", "dest", "-m", invalid_ts, cwd=workdir
             )
-            assert rc == 2, f"Expected exit code 2 for timestamp {invalid_ts}"
+            assert rc == 1, f"Expected exit code 1 for timestamp {invalid_ts}"
 
     def test_same_source_dest_queue_returns_exit_code_1(self, workdir):
         """Test that same source and destination returns exit code 1."""

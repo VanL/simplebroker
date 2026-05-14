@@ -9,7 +9,7 @@ from collections.abc import Iterator
 import pytest
 
 import simplebroker.commands as commands
-from simplebroker._constants import EXIT_ERROR, EXIT_QUEUE_EMPTY, EXIT_SUCCESS
+from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
 from simplebroker.commands import (
     _get_message_content,
     _process_queue_fetch,
@@ -55,14 +55,14 @@ class TestResolveTimestampFilters:
         captured = capsys.readouterr()
         assert "simplebroker: error" in captured.err
 
-    def test_invalid_message_id_returns_queue_empty(
+    def test_invalid_message_id_returns_exit_error(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         error, after_ts, before_ts, exact_ts = _resolve_timestamp_filters(
             None, None, "not-a-ts"
         )
 
-        assert error == EXIT_QUEUE_EMPTY
+        assert error == EXIT_ERROR
         assert after_ts is None and before_ts is None and exact_ts is None
         assert capsys.readouterr().err == ""
 

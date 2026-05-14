@@ -26,7 +26,7 @@ from .conftest import run_cli
 
 
 def test_timestamp_wrong_length_returns_error(workdir: Path):
-    """Test that timestamps with wrong length return exit code 2 without database query."""
+    """Test that timestamps with wrong length return exit code 1 without database query."""
     # Write a message to ensure queue exists
     run_cli("write", "test_queue", "message1", cwd=workdir)
 
@@ -43,22 +43,22 @@ def test_timestamp_wrong_length_returns_error(workdir: Path):
     for ts in invalid_timestamps:
         # Read
         rc, out, err = run_cli("read", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 2, f"Expected exit code 2 for timestamp '{ts}', got {rc}"
+        assert rc == 1, f"Expected exit code 1 for timestamp '{ts}', got {rc}"
         assert out == "", f"Expected no output for invalid timestamp '{ts}'"
 
         # Peek
         rc, out, err = run_cli("peek", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 2
+        assert rc == 1
         assert out == ""
 
         # Delete
         rc, out, err = run_cli("delete", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 2
+        assert rc == 1
         assert out == ""
 
 
 def test_timestamp_non_digits_returns_error(workdir: Path):
-    """Test that timestamps with non-digits return exit code 2 without database query."""
+    """Test that timestamps with non-digits return exit code 1 without database query."""
     # Write a message to ensure queue exists
     run_cli("write", "test_queue", "message1", cwd=workdir)
 
@@ -77,17 +77,17 @@ def test_timestamp_non_digits_returns_error(workdir: Path):
     for ts in invalid_timestamps:
         # Read
         rc, out, err = run_cli("read", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 2, f"Expected exit code 2 for timestamp '{ts}', got {rc}"
+        assert rc == 1, f"Expected exit code 1 for timestamp '{ts}', got {rc}"
         assert out == ""
 
         # Peek
         rc, out, err = run_cli("peek", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 2
+        assert rc == 1
         assert out == ""
 
         # Delete
         rc, out, err = run_cli("delete", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 2
+        assert rc == 1
         assert out == ""
 
 
@@ -128,17 +128,17 @@ def test_other_valid_timestamp_formats_rejected(workdir: Path):
     for ts in invalid_for_message_flag:
         # Read
         rc, out, err = run_cli("read", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 2, f"Expected exit code 2 for timestamp '{ts}', got {rc}"
+        assert rc == 1, f"Expected exit code 1 for timestamp '{ts}', got {rc}"
         assert out == "", f"Expected no output for timestamp '{ts}'"
 
         # Peek
         rc, out, err = run_cli("peek", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 2
+        assert rc == 1
         assert out == ""
 
         # Delete
         rc, out, err = run_cli("delete", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 2
+        assert rc == 1
         assert out == ""
 
 
@@ -327,7 +327,7 @@ def test_nonexistent_timestamp_in_existing_queue(workdir: Path):
     run_cli("write", "test_queue", "message1", cwd=workdir)
 
     # Use a valid but non-existent timestamp
-    fake_ts = "9999999999999999999"
+    fake_ts = "1000000000000000000"
 
     # All operations should return exit code 2
     rc, out, err = run_cli("read", "test_queue", "-m", fake_ts, cwd=workdir)
@@ -853,8 +853,8 @@ def test_timestamp_boundary_values(workdir: Path):
     rc, out, err = run_cli("read", "test_queue", "-m", min_ts, cwd=workdir)
     assert rc == 2  # Not found
 
-    # Test with maximum valid timestamp (all nines)
-    max_ts = "9" * 19
+    # Test with maximum valid timestamp below SQLite's signed 64-bit limit.
+    max_ts = "9223372036854775807"
     rc, out, err = run_cli("read", "test_queue", "-m", max_ts, cwd=workdir)
     assert rc == 2  # Not found
 
@@ -868,7 +868,7 @@ def test_timestamp_boundary_values(workdir: Path):
     # 2^63 = 9223372036854775808 (19 digits)
     overflow_ts = "9223372036854775808"
     rc, out, err = run_cli("read", "test_queue", "-m", overflow_ts, cwd=workdir)
-    assert rc == 2  # Should still return 2 (not found) not crash
+    assert rc == 1  # Invalid because it exceeds SQLite's signed 64-bit range
 
     # The real timestamp should work
     rc, out, err = run_cli("read", "test_queue", "-m", real_ts, cwd=workdir)

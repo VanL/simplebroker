@@ -52,8 +52,9 @@ def test_alias_list_with_target(workdir: Path) -> None:
     assert err == ""
 
     rc, out, err = run_cli("alias", "list", "--target", "missing", cwd=workdir)
-    assert rc == 0
-    assert out == "No aliases found for 'missing'"
+    assert rc == 2
+    assert out == ""
+    assert err == ""
 
 
 @pytest.mark.sqlite_only

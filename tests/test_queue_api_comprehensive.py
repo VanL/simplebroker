@@ -71,7 +71,7 @@ class TestQueueReadMethods:
         assert q.read_many(10) == []
 
     def test_read_many_delivery_guarantees(self, queue_factory):
-        """Test read_many deprecates at-least-once on materialized batches."""
+        """Test read_many accepts at-least-once as exactly-once materialization."""
         q = queue_factory("test")
 
         for i in range(10):
@@ -83,10 +83,9 @@ class TestQueueReadMethods:
         )
         assert len(messages) == 5
 
-        with pytest.warns(DeprecationWarning, match="generator APIs"):
-            messages = q.read_many(
-                5, delivery_guarantee="at_least_once", with_timestamps=False
-            )
+        messages = q.read_many(
+            5, delivery_guarantee="at_least_once", with_timestamps=False
+        )
         assert len(messages) == 5
 
     def test_read_many_after_timestamp(self, queue_factory):
@@ -473,7 +472,7 @@ class TestQueueLastTimestampCaching:
         assert list(dest.peek_generator(with_timestamps=False)) == ["old1", "old2"]
 
     def test_move_many_delivery_guarantees(self, queue_factory):
-        """Test move_many deprecates at-least-once on materialized batches."""
+        """Test move_many accepts at-least-once as exactly-once materialization."""
         source = queue_factory("source")
 
         for i in range(10):
@@ -485,13 +484,12 @@ class TestQueueLastTimestampCaching:
         )
         assert len(messages) == 5
 
-        with pytest.warns(DeprecationWarning, match="generator APIs"):
-            messages = source.move_many(
-                "dest2",
-                5,
-                delivery_guarantee="at_least_once",
-                with_timestamps=False,
-            )
+        messages = source.move_many(
+            "dest2",
+            5,
+            delivery_guarantee="at_least_once",
+            with_timestamps=False,
+        )
         assert len(messages) == 5
 
     def test_move_generator_basic(self, queue_factory):

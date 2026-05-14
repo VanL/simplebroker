@@ -221,8 +221,9 @@ class TestInitCommand:
 
         # Should show initialization message
         captured = capsys.readouterr()
-        assert "Initialized SimpleBroker database" in captured.out
-        assert str(db_path) in captured.out
+        assert captured.out == ""
+        assert "Initialized SimpleBroker database" in captured.err
+        assert str(db_path) in captured.err
 
     def test_init_database_file_permissions(self, tmp_path):
         """Test that init sets proper file permissions on created database."""
@@ -293,8 +294,9 @@ class TestInitCommand:
         assert db_path.exists()
         assert _is_valid_sqlite_db(db_path) is True
 
-        # Should show success message
-        assert "Initialized SimpleBroker database" in stdout
+        # Should show status on stderr and keep stdout reserved for payloads
+        assert stdout == ""
+        assert "Initialized SimpleBroker database" in stderr
 
     def test_init_integration_existing_valid_database(self, workdir):
         """Test init command with existing valid database through CLI."""
@@ -305,7 +307,8 @@ class TestInitCommand:
         # Second init should succeed and report existing
         code, stdout, stderr = run_cli("init", cwd=workdir)
         assert code == 0
-        assert "already exists" in stdout
+        assert stdout == ""
+        assert "already exists" in stderr
 
     def test_init_integration_custom_database_name(self, workdir):
         """Test that init command ignores -f flag (doesn't use custom filename)."""

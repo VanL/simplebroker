@@ -149,23 +149,17 @@ class TestTimestampEdgeCases:
             # Each call to run will be for either SELECT or UPDATE operations
             mock_runner.run.side_effect = [
                 [(0,)],  # Initial read during _initialize
-                [],  # UPDATE statement - retry 1
-                [(0,)],  # SELECT changes() reports no update - retry 1
+                [],  # UPDATE ... RETURNING reports no update - retry 1
                 [(1000,)],  # SELECT to peek latest value after conflict
-                [],  # UPDATE statement - retry 2
-                [(0,)],  # SELECT changes() reports no update - retry 2
+                [],  # UPDATE ... RETURNING reports no update - retry 2
                 [(2000,)],  # SELECT to peek latest value
-                [],  # UPDATE statement - retry 3
-                [(0,)],  # SELECT changes() reports no update - retry 3
+                [],  # UPDATE ... RETURNING reports no update - retry 3
                 [(3000,)],  # SELECT to peek latest value
-                [],  # UPDATE statement - retry 4
-                [(0,)],  # SELECT changes() reports no update - retry 4
+                [],  # UPDATE ... RETURNING reports no update - retry 4
                 [(4000,)],  # SELECT to peek latest value
-                [],  # UPDATE statement - retry 5
-                [(0,)],  # SELECT changes() reports no update - retry 5
+                [],  # UPDATE ... RETURNING reports no update - retry 5
                 [(5000,)],  # SELECT to peek latest value
-                [],  # UPDATE statement - retry 6
-                [(0,)],  # SELECT changes() reports no update - retry 6
+                [],  # UPDATE ... RETURNING reports no update - retry 6
                 [(6000,)],  # SELECT to peek latest value
             ]
 
@@ -253,8 +247,7 @@ class TestTimestampEdgeCases:
         # Mock the store operation to succeed
         mock_runner.run.side_effect = [
             [],  # Initial read returns no timestamp
-            [],  # UPDATE statement succeeds
-            [(1,)],  # SELECT changes() reports one updated row
+            [(1,)],  # UPDATE ... RETURNING reports one updated row
         ]
 
         gen = TimestampGenerator(mock_runner)

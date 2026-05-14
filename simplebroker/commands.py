@@ -29,6 +29,41 @@ DBTarget = str | ResolvedTarget
 _config = load_config()
 
 
+def _status(message: str, *, quiet: bool = False) -> None:
+    """Emit a user-facing status message to stderr."""
+
+    if quiet:
+        return
+    print(message, file=sys.stderr)
+    sys.stderr.flush()
+
+
+def _emit_error(
+    error: BaseException | str,
+    *,
+    code: str,
+    json_output: bool,
+    retryable: bool = False,
+) -> None:
+    """Emit an error to stderr, honoring command-local JSON mode."""
+
+    text = str(error)
+    if json_output:
+        print(
+            json.dumps(
+                {
+                    "error": code,
+                    "message": text,
+                    "retryable": retryable,
+                }
+            ),
+            file=sys.stderr,
+        )
+    else:
+        print(f"simplebroker: error: {text}", file=sys.stderr)
+    sys.stderr.flush()
+
+
 def _target_string(db_target: DBTarget) -> str:
     """Return a human-readable target string."""
     if isinstance(db_target, ResolvedTarget):
@@ -58,11 +93,10 @@ def cmd_alias_list(db_path: DBTarget, target: str | None = None) -> int:
         db = cast(BrokerDB, conn.get_connection())
         if target:
             aliases = db.aliases_for_target(target)
+            for alias in aliases:
+                print(f"{alias} -> {target}")
             if not aliases:
-                print(f"No aliases found for '{target}'")
-            else:
-                for alias in aliases:
-                    print(f"{alias} -> {target}")
+                return EXIT_QUEUE_EMPTY
         else:
             for alias, alias_target in db.list_aliases():
                 print(f"{alias} -> {alias_target}")
@@ -115,7 +149,6 @@ def parse_exact_message_id(message_id_str: str) -> int | None:
     try:
         return TimestampGenerator.validate(message_id_str, exact=True)
     except TimestampError:
-        # For -m, an invalid ID means no message found
         return None
 
 
@@ -261,6 +294,8 @@ def _resolve_timestamp_filters(
     after_str: str | None,
     before_str: str | None,
     message_id_str: str | None,
+    *,
+    json_output: bool = False,
 ) -> tuple[int | None, int | None, int | None, int | None]:
     """Parse shared --after / --before / --message-id filters.
 
@@ -274,8 +309,7 @@ def _resolve_timestamp_filters(
         try:
             after_timestamp = _validate_timestamp(after_str)
         except ValueError as e:
-            print(f"simplebroker: error: {e}", file=sys.stderr)
-            sys.stderr.flush()
+            _emit_error(e, json_output=json_output, code="INVALID_TIMESTAMP")
             return EXIT_ERROR, None, None, None
 
     before_timestamp = None
@@ -283,15 +317,20 @@ def _resolve_timestamp_filters(
         try:
             before_timestamp = _validate_timestamp(before_str)
         except ValueError as e:
-            print(f"simplebroker: error: {e}", file=sys.stderr)
-            sys.stderr.flush()
+            _emit_error(e, json_output=json_output, code="INVALID_TIMESTAMP")
             return EXIT_ERROR, None, None, None
 
     exact_timestamp = None
     if message_id_str is not None:
         exact_timestamp = parse_exact_message_id(message_id_str)
         if exact_timestamp is None:
-            return EXIT_QUEUE_EMPTY, None, None, None
+            if json_output:
+                _emit_error(
+                    "invalid message ID: expected exactly 19 digits within range",
+                    json_output=True,
+                    code="INVALID_MESSAGE_ID",
+                )
+            return EXIT_ERROR, None, None, None
 
     return None, after_timestamp, before_timestamp, exact_timestamp
 
@@ -430,7 +469,12 @@ def cmd_read(
         Exit code
     """
     error_code, after_timestamp, before_timestamp, exact_timestamp = (
-        _resolve_timestamp_filters(after_str, before_str, message_id_str)
+        _resolve_timestamp_filters(
+            after_str,
+            before_str,
+            message_id_str,
+            json_output=json_output,
+        )
     )
     if error_code is not None:
         return error_code
@@ -476,7 +520,12 @@ def cmd_peek(
         Exit code
     """
     error_code, after_timestamp, before_timestamp, exact_timestamp = (
-        _resolve_timestamp_filters(after_str, before_str, message_id_str)
+        _resolve_timestamp_filters(
+            after_str,
+            before_str,
+            message_id_str,
+            json_output=json_output,
+        )
     )
     if error_code is not None:
         return error_code
@@ -600,7 +649,7 @@ def cmd_status(db_path: DBTarget, *, json_output: bool = False) -> int:
             db = cast(BrokerDB, conn.get_connection())
             stats = db.status()
     except Exception as e:
-        print(f"simplebroker: error: {e}", file=sys.stderr)
+        _emit_error(e, code="ERROR", json_output=json_output)
         return EXIT_ERROR
 
     if json_output:
@@ -636,7 +685,6 @@ def cmd_delete(
         # Validate exact timestamp
         exact_timestamp = parse_exact_message_id(message_id_str)
         if exact_timestamp is None:
-            # Silent failure per specification - return 2 for all invalid cases
             return EXIT_QUEUE_EMPTY
 
         # Use Queue API to delete specific message
@@ -686,15 +734,20 @@ def cmd_move(
 
     # Check for same source and destination after alias resolution
     if canonical_source == canonical_dest:
-        print(
-            "simplebroker: error: Source and destination queues cannot be the same",
-            file=sys.stderr,
+        _emit_error(
+            "Source and destination queues cannot be the same",
+            json_output=json_output,
+            code="INVALID_ARGUMENT",
         )
-        sys.stderr.flush()
         return EXIT_ERROR
 
     error_code, after_timestamp, before_timestamp, exact_timestamp = (
-        _resolve_timestamp_filters(after_str, before_str, message_id_str)
+        _resolve_timestamp_filters(
+            after_str,
+            before_str,
+            message_id_str,
+            json_output=json_output,
+        )
     )
     if error_code is not None:
         return error_code
@@ -745,8 +798,7 @@ def cmd_move(
                 return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
 
             except Exception as e:
-                print(f"simplebroker: error: {e}", file=sys.stderr)
-                sys.stderr.flush()
+                _emit_error(e, code="ERROR", json_output=json_output)
                 return EXIT_ERROR
 
         else:
@@ -808,7 +860,7 @@ def cmd_broadcast(
     return EXIT_SUCCESS if queue_count > 0 else EXIT_QUEUE_EMPTY
 
 
-def cmd_vacuum(db_path: DBTarget, compact: bool = False) -> int:
+def cmd_vacuum(db_path: DBTarget, compact: bool = False, *, quiet: bool = False) -> int:
     """Vacuum claimed messages from the database.
 
     Args:
@@ -826,7 +878,7 @@ def cmd_vacuum(db_path: DBTarget, compact: bool = False) -> int:
         claimed_count = db.count_claimed_messages()
 
         if claimed_count == 0 and not compact:
-            print("No claimed messages to vacuum")
+            _status("No claimed messages to vacuum", quiet=quiet)
             return EXIT_SUCCESS
 
         # Run vacuum
@@ -835,9 +887,12 @@ def cmd_vacuum(db_path: DBTarget, compact: bool = False) -> int:
         # Calculate elapsed time
         elapsed = time.monotonic() - start_time
         if claimed_count > 0:
-            print(f"Vacuumed {claimed_count} claimed messages in {elapsed:.1f}s")
+            _status(
+                f"Vacuumed {claimed_count} claimed messages in {elapsed:.1f}s",
+                quiet=quiet,
+            )
         if compact:
-            print(f"Database compacted in {elapsed:.1f}s")
+            _status(f"Database compacted in {elapsed:.1f}s", quiet=quiet)
 
     return EXIT_SUCCESS
 
@@ -870,12 +925,12 @@ def cmd_watch(
 
     # Check for incompatible options
     if move_to and after_str:
-        print(
-            "simplebroker: error: --move drains ALL messages from source queue, "
+        _emit_error(
+            "--move drains ALL messages from source queue, "
             "incompatible with --after filtering",
-            file=sys.stderr,
+            json_output=json_output,
+            code="INVALID_ARGUMENT",
         )
-        sys.stderr.flush()
         return EXIT_ERROR
 
     # Validate timestamp if provided
@@ -884,8 +939,7 @@ def cmd_watch(
         try:
             after_timestamp = _validate_timestamp(after_str)
         except ValueError as e:
-            print(f"simplebroker: error: {e}", file=sys.stderr)
-            sys.stderr.flush()
+            _emit_error(e, json_output=json_output, code="INVALID_TIMESTAMP")
             return EXIT_ERROR
 
     canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
@@ -943,7 +997,7 @@ def cmd_watch(
         # Clean exit on Ctrl-C
         return EXIT_SUCCESS
     except Exception as e:
-        print(f"simplebroker: error: {e}", file=sys.stderr)
+        _emit_error(e, code="ERROR", json_output=json_output)
         return EXIT_ERROR
     finally:
         # Ensure any final output is flushed
@@ -988,8 +1042,10 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
         if db_path.backend_name == "sqlite" and target_path is not None:
             if target_path.exists():
                 if _is_valid_sqlite_db(target_path):
-                    if not quiet:
-                        print(f"SimpleBroker database already exists: {display_target}")
+                    _status(
+                        f"SimpleBroker database already exists: {display_target}",
+                        quiet=quiet,
+                    )
                     return EXIT_SUCCESS
 
                 print(
@@ -1010,8 +1066,10 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
             except Exception:
                 pass
             else:
-                if not quiet:
-                    print(f"SimpleBroker target already exists: {display_target}")
+                _status(
+                    f"SimpleBroker target already exists: {display_target}",
+                    quiet=quiet,
+                )
                 return EXIT_SUCCESS
 
         try:
@@ -1019,11 +1077,16 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
                 target_str,
                 backend_options=db_path.backend_options,
             )
-            if not quiet:
-                if db_path.backend_name == "sqlite":
-                    print(f"Initialized SimpleBroker database: {display_target}")
-                else:
-                    print(f"Initialized SimpleBroker target: {display_target}")
+            if db_path.backend_name == "sqlite":
+                _status(
+                    f"Initialized SimpleBroker database: {display_target}",
+                    quiet=quiet,
+                )
+            else:
+                _status(
+                    f"Initialized SimpleBroker target: {display_target}",
+                    quiet=quiet,
+                )
             return EXIT_SUCCESS
         except Exception as e:
             print(f"Error initializing database: {e}", file=sys.stderr)
@@ -1035,8 +1098,7 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
     if db_path_obj.exists():
         # Check if it's a valid SimpleBroker database
         if _is_valid_sqlite_db(db_path_obj):
-            if not quiet:
-                print(f"SimpleBroker database already exists: {db_path}")
+            _status(f"SimpleBroker database already exists: {db_path}", quiet=quiet)
             return EXIT_SUCCESS
         else:
             print(
@@ -1057,8 +1119,7 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
             conn.get_connection()
             # Additional initialization could be added here if needed
 
-        if not quiet:
-            print(f"Initialized SimpleBroker database: {db_path}")
+        _status(f"Initialized SimpleBroker database: {db_path}", quiet=quiet)
 
         return EXIT_SUCCESS
 

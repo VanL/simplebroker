@@ -91,7 +91,8 @@ def test_cleanup_with_absolute_path(workdir: Path):
     code, stdout, stderr = run_cli("-f", abs_path, "--cleanup", cwd=workdir)
     assert code == 0
     assert not db_path.exists()
-    assert "Database cleaned up" in stdout
+    assert stdout == ""
+    assert "Database cleaned up" in stderr
 
 
 def test_relative_path_still_works(workdir: Path):

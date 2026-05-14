@@ -350,14 +350,16 @@ def test_cleanup_toctou_fix(workdir):
     db_path.unlink()
 
     # Cleanup should still succeed without error
-    rc, out, _ = run_cli("--cleanup", cwd=workdir)
+    rc, out, err = run_cli("--cleanup", cwd=workdir)
     assert rc == 0
-    assert "Database not found, nothing to clean up" in out
+    assert out == ""
+    assert "Database not found, nothing to clean up" in err
 
     # Run cleanup again on non-existent file - should still succeed
-    rc, out, _ = run_cli("--cleanup", cwd=workdir)
+    rc, out, err = run_cli("--cleanup", cwd=workdir)
     assert rc == 0
-    assert "Database not found, nothing to clean up" in out
+    assert out == ""
+    assert "Database not found, nothing to clean up" in err
 
 
 def test_cleanup_quiet_mode(workdir):

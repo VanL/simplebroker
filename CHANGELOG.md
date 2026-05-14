@@ -5,6 +5,26 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] - 2026-05-14
+### Added
+- Added a shared command-layer error formatter. Commands that already accept `--json` now emit structured JSON errors on stderr when `--json` is present, while non-JSON invocations keep the canonical prose error format.
+
+### Changed
+- Invalid `-m` / `--message` IDs now return exit code `1` as invalid input. Valid message IDs that do not match any message still return exit code `2`.
+- `init`, `--cleanup`, and `--vacuum` status messages now go to stderr instead of stdout, keeping stdout reserved for command payloads.
+- `--quiet` now suppresses `--vacuum` and `--cleanup` status output consistently.
+- `broker alias list --target <queue>` now emits no stdout and returns exit code `2` when no aliases match the target.
+- Moved owned-runner shutdown into `simplebroker._runner` and removed the internal `_runner_lifecycle.py` module.
+- Materialized batch APIs continue to accept `delivery_guarantee="at_least_once"` and satisfy it with stricter exactly-once materialization. Use generator APIs for retry-on-stop batch processing.
+
+### Fixed
+- `--cleanup` now validates SQLite targets as SimpleBroker databases before deleting them, including legacy path mode and project-config SQLite targets.
+- SQLite `last_ts` advancement now uses a single `UPDATE ... RETURNING` query instead of a separate `SELECT changes()` statement.
+- Hot-path batch retrieval and SQLite metadata reads avoid redundant list copies when the runner already returned a list.
+
+### simplebroker-pg 1.4.0
+- Compatibility release for SimpleBroker 3.6.0. The Postgres backend inherits the updated core CLI behavior when used with SimpleBroker 3.6.0; there are no Postgres-specific schema or runner changes in this release.
+
 ## [3.5.0] - 2026-05-13
 ### Added
 - Added `--before <timestamp>` for `read`, `peek`, and `move`, using the same timestamp formats as `--since` and strict `ts < timestamp` filtering.
@@ -89,7 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `stream_messages(..., all_messages=False)` now yields at most one message in both peek and consume modes.
 
 ### Changed
-- Materialized batch APIs (`claim_many()`, `move_many()`, `Queue.read_many()`, and `Queue.move_many()`) now always behave as exactly-once. Passing `delivery_guarantee="at_least_once"` emits `DeprecationWarning`; use the generator APIs for retryable batch processing.
+- Materialized batch APIs (`claim_many()`, `move_many()`, `Queue.read_many()`, and `Queue.move_many()`) commit before returning their result lists. Passing `delivery_guarantee="at_least_once"` is supported and satisfied by the stricter exactly-once materialization behavior; use the generator APIs for retryable batch processing.
 - Injected runners are now explicitly caller-owned in the docs and examples, and are reused for the lifetime of the `Queue` object.
 - Updated README wording to emphasize SimpleBroker as simple to install and operate, and refreshed documentation around generator batch semantics and delete behavior.
 

@@ -44,8 +44,7 @@ from ._exceptions import (
     OperationalError,
     StopException,
 )
-from ._runner import SetupPhase, SQLiteRunner, SQLRunner
-from ._runner_lifecycle import close_owned_runner
+from ._runner import SetupPhase, SQLiteRunner, SQLRunner, close_owned_runner
 from ._sql import RetrieveQuerySpec
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
@@ -1069,7 +1068,7 @@ class BrokerCore:
         """
         with self._lock:
             results = self._runner.run(query, params, fetch=True)
-            return list(results) if results else []
+            return results if isinstance(results, list) else list(results)
 
     def _execute_transactional_operation(
         self,
@@ -1103,7 +1102,7 @@ class BrokerCore:
                     queue=queue,
                 )
                 results = self._runner.run(query, params, fetch=True)
-                results_list = list(results) if results else []
+                results_list = results if isinstance(results, list) else list(results)
 
                 if results_list and commit_before_yield:
                     # Commit BEFORE returning for exactly-once semantics
@@ -1174,7 +1173,9 @@ class BrokerCore:
                         queue=queue,
                     )
                     results = self._runner.run(query, params, fetch=True)
-                    results_list = list(results) if results else []
+                    results_list = (
+                        results if isinstance(results, list) else list(results)
+                    )
                     if not results_list:
                         self._runner.rollback()
                         return
@@ -1308,26 +1309,6 @@ class BrokerCore:
         else:
             return results[0][0]
 
-    def _warn_on_materialized_delivery_guarantee(
-        self,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"],
-        *,
-        method_name: str,
-    ) -> None:
-        """Warn when deprecated at-least-once semantics are requested."""
-
-        if delivery_guarantee == "exactly_once":
-            return
-
-        warnings.warn(
-            f"{method_name}() materializes results before returning and now always "
-            "behaves as exactly-once. Passing delivery_guarantee="
-            "'at_least_once' is deprecated; use the generator APIs for "
-            "at_least_once batch processing.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-
     def claim_many(
         self,
         queue: str,
@@ -1344,11 +1325,11 @@ class BrokerCore:
             queue: Name of the queue
             limit: Maximum number of messages to claim
             with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
-            delivery_guarantee: Compatibility parameter for older callers.
-                Materialized batch APIs always behave as exactly-once. Passing
-                ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
-                as exactly-once. Use ``claim_generator()`` for retryable batch
-                processing.
+            delivery_guarantee: Delivery contract for materializing messages.
+                Materialized batch APIs commit before returning, so
+                ``"at_least_once"`` is satisfied by the stricter exactly-once
+                behavior. Use ``claim_generator()`` when you need retry-on-stop
+                batch processing.
             after_timestamp: If provided, only claim messages after this timestamp
             before_timestamp: If provided, only claim messages before this timestamp
 
@@ -1362,10 +1343,6 @@ class BrokerCore:
         """
         if limit < 1:
             raise ValueError("limit must be at least 1")
-
-        self._warn_on_materialized_delivery_guarantee(
-            delivery_guarantee, method_name="claim_many"
-        )
 
         results = self._retrieve(
             queue,
@@ -1657,11 +1634,11 @@ class BrokerCore:
             target_queue: Queue to move to
             limit: Maximum number of messages to move
             with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
-            delivery_guarantee: Compatibility parameter for older callers.
-                Materialized batch APIs always behave as exactly-once. Passing
-                ``"at_least_once"`` emits ``DeprecationWarning`` and is treated
-                as exactly-once. Use ``move_generator()`` for retryable batch
-                processing.
+            delivery_guarantee: Delivery contract for materializing messages.
+                Materialized batch APIs commit before returning, so
+                ``"at_least_once"`` is satisfied by the stricter exactly-once
+                behavior. Use ``move_generator()`` when you need retry-on-stop
+                batch processing.
             after_timestamp: If provided, only move messages after this timestamp
             before_timestamp: If provided, only move messages before this timestamp
             require_unclaimed: If True (default), only move unclaimed messages
@@ -1678,10 +1655,6 @@ class BrokerCore:
             raise ValueError("Source and target queues cannot be the same")
         if limit < 1:
             raise ValueError("limit must be at least 1")
-
-        self._warn_on_materialized_delivery_guarantee(
-            delivery_guarantee, method_name="move_many"
-        )
 
         results = self._retrieve(
             source_queue,

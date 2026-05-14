@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +32,12 @@ from .validation import validate_database
 
 if TYPE_CHECKING:
     from ..._runner import SQLiteRunner, SQLRunner
+
+
+def _as_row_list(rows: Iterable[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
+    """Return rows as a list without copying runner-provided lists."""
+
+    return rows if isinstance(rows, list) else list(rows)
 
 
 class SQLiteBackendPlugin:
@@ -100,6 +106,8 @@ class SQLiteBackendPlugin:
         del backend_options, config
         path = Path(target)
         existed = path.exists()
+        if existed:
+            validate_database(path, verify_magic=True)
         try:
             path.unlink(missing_ok=True)
         except PermissionError as exc:
@@ -165,7 +173,7 @@ class SQLiteBackendPlugin:
         return delete_messages(runner, queue=queue)
 
     def read_magic(self, runner: SQLRunner) -> str | None:
-        rows = list(
+        rows = _as_row_list(
             runner.run("SELECT value FROM meta WHERE key = 'magic'", fetch=True)
         )
         if not rows or rows[0][0] is None:
@@ -173,7 +181,7 @@ class SQLiteBackendPlugin:
         return str(rows[0][0])
 
     def read_schema_version(self, runner: SQLRunner) -> int:
-        rows = list(
+        rows = _as_row_list(
             runner.run(
                 "SELECT value FROM meta WHERE key = 'schema_version'",
                 fetch=True,
@@ -189,24 +197,28 @@ class SQLiteBackendPlugin:
         )
 
     def read_last_ts(self, runner: SQLRunner) -> int:
-        rows = list(
+        rows = _as_row_list(
             runner.run("SELECT value FROM meta WHERE key = 'last_ts'", fetch=True)
         )
         return int(rows[0][0]) if rows and rows[0][0] is not None else 0
 
     def advance_last_ts(self, runner: SQLRunner, *, new_ts: int) -> bool:
-        runner.run(
-            "UPDATE meta SET value = ? WHERE key = 'last_ts' AND value < ?",
-            (new_ts, new_ts),
+        rows = _as_row_list(
+            runner.run(
+                "UPDATE meta SET value = ? "
+                "WHERE key = 'last_ts' AND value < ? "
+                "RETURNING value",
+                (new_ts, new_ts),
+                fetch=True,
+            )
         )
-        rows = list(runner.run("SELECT changes()", fetch=True))
-        return bool(rows and int(rows[0][0]) > 0)
+        return bool(rows)
 
     def write_last_ts(self, runner: SQLRunner, ts: int) -> None:
         runner.run("UPDATE meta SET value = ? WHERE key = 'last_ts'", (ts,))
 
     def read_alias_version(self, runner: SQLRunner) -> int:
-        rows = list(
+        rows = _as_row_list(
             runner.run("SELECT value FROM meta WHERE key = 'alias_version'", fetch=True)
         )
         return int(rows[0][0]) if rows and rows[0][0] is not None else 0

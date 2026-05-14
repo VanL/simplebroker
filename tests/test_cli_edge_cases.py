@@ -135,4 +135,4 @@ class TestCLIEdgeCases:
             with patch("sys.argv", argv):
                 with patch("simplebroker.db.BrokerDB"):
                     result = main()
-                    assert result == 2  # EXIT_QUEUE_EMPTY
+                    assert result == 1

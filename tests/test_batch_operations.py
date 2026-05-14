@@ -22,17 +22,16 @@ class TestBatchOperations:
         assert remaining == ["message4", "message5"]
 
     def test_claim_many_at_least_once(self, broker):
-        """Test claim_many deprecates at-least-once on list-returning APIs."""
+        """Test claim_many accepts at-least-once as exactly-once materialization."""
         for i in range(5):
             broker.write("test_queue", f"message{i + 1}")
 
-        with pytest.warns(DeprecationWarning, match="generator APIs"):
-            messages = broker.claim_many(
-                "test_queue",
-                limit=3,
-                delivery_guarantee="at_least_once",
-                with_timestamps=False,
-            )
+        messages = broker.claim_many(
+            "test_queue",
+            limit=3,
+            delivery_guarantee="at_least_once",
+            with_timestamps=False,
+        )
         assert len(messages) == 3
         assert messages == ["message1", "message2", "message3"]
 
@@ -81,18 +80,17 @@ class TestBatchOperations:
         assert dest_messages == ["message1", "message2", "message3"]
 
     def test_move_many_at_least_once(self, broker):
-        """Test move_many deprecates at-least-once on list-returning APIs."""
+        """Test move_many accepts at-least-once as exactly-once materialization."""
         for i in range(5):
             broker.write("source_queue", f"message{i + 1}")
 
-        with pytest.warns(DeprecationWarning, match="generator APIs"):
-            messages = broker.move_many(
-                "source_queue",
-                "dest_queue",
-                limit=3,
-                delivery_guarantee="at_least_once",
-                with_timestamps=False,
-            )
+        messages = broker.move_many(
+            "source_queue",
+            "dest_queue",
+            limit=3,
+            delivery_guarantee="at_least_once",
+            with_timestamps=False,
+        )
         assert len(messages) == 3
         assert messages == ["message1", "message2", "message3"]
 

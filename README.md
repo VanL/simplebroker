@@ -258,7 +258,7 @@ messages where `after_timestamp < message_timestamp < before_timestamp`.
 ### Exit Codes
 - `0` - Success
 - `1` - General error (e.g., database access error, invalid arguments)
-- `2` - Queue empty, no matching messages, or invalid message ID format (only when queue is actually empty, no messages match the criteria, or the provided message ID has an invalid format)
+- `2` - Queue empty or no matching messages
 
 **Note:** `delete <queue>` and `delete --all` remove rows immediately. `delete <queue> -m <id>` uses claim semantics for a single message, so `--vacuum` reclaims its storage later.
 
@@ -642,6 +642,19 @@ def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
 
 # Use peek=True for safe mode - messages aren't removed until explicitly acknowledged
 ```
+
+### Delivery guarantees
+
+Materialized batch APIs such as `Queue.read_many()`, `Queue.move_many()`,
+`BrokerDB.claim_many()`, and `BrokerDB.move_many()` commit before returning
+their result lists. Passing `delivery_guarantee="at_least_once"` is supported on
+those APIs and is satisfied by the stricter exactly-once materialization
+behavior.
+
+Use generator APIs such as `Queue.read_generator()` and `Queue.move_generator()`
+when you need retry-on-stop batch processing. In `delivery_guarantee="at_least_once"`
+generator mode, SimpleBroker commits a batch only after the full batch has been
+yielded; stopping mid-batch rolls that batch back for retry.
 
 ### Queue metadata
 
