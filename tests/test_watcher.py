@@ -1054,10 +1054,12 @@ class TestErrorScenarios(WatcherTestBase):
         thread = watcher.run_in_thread()
         try:
             assert wait_for_condition(
-                lambda: "Handler error" in caplog.text
-                and (
-                    "Error handler also failed" in caplog.text
-                    or "Error handler failed" in caplog.text
+                lambda: (
+                    "Handler error" in caplog.text
+                    and (
+                        "Error handler also failed" in caplog.text
+                        or "Error handler failed" in caplog.text
+                    )
                 ),
                 timeout=scale_timeout_for_ci(5.0),
                 interval=0.05,
