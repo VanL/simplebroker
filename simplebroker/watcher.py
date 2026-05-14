@@ -1253,7 +1253,7 @@ class PollingStrategy:
         """Stagger slow fallback polls for notification-backed waiters."""
         interval = self._native_idle_poll_interval
         if initial:
-            interval = max(5.0, interval * 5)
+            interval = max(1.0, interval)
         jittered_interval = random.uniform(
             interval,
             interval * 2,

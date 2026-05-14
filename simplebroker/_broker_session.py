@@ -138,11 +138,21 @@ class _ProcessBrokerSession:
                 raise RuntimeError("Broker session is closed")
 
             core = getattr(self._thread_local, "core", None)
-            if core is None:
-                core = self._create_core(stop_event)
-                self._thread_local.core = core
-                self._cores.add(core)
+            if core is not None:
+                core.set_stop_event(stop_event)
+                return core
 
+        core = self._create_core(stop_event)
+
+        with self._lock:
+            if self._closed:
+                if self._backend_name == "sqlite":
+                    core.shutdown()
+                else:
+                    core.close()
+                raise RuntimeError("Broker session is closed")
+            self._thread_local.core = core
+            self._cores.add(core)
             core.set_stop_event(stop_event)
             return core
 
@@ -156,11 +166,13 @@ class _ProcessBrokerSession:
 
         if _is_direct_backend(self._backend_plugin):
             if self._runner is None:
-                self._runner = self._backend_plugin.create_runner(
-                    self._target,
-                    backend_options=self._backend_options,
-                    config=self._config,
-                )
+                with self._lock:
+                    if self._runner is None:
+                        self._runner = self._backend_plugin.create_runner(
+                            self._target,
+                            backend_options=self._backend_options,
+                            config=self._config,
+                        )
             return self._backend_plugin.create_core_from_runner(
                 self._runner,
                 config=self._config,
@@ -168,11 +180,13 @@ class _ProcessBrokerSession:
             )
 
         if self._runner is None:
-            self._runner = self._backend_plugin.create_runner(
-                self._target,
-                backend_options=self._backend_options,
-                config=self._config,
-            )
+            with self._lock:
+                if self._runner is None:
+                    self._runner = self._backend_plugin.create_runner(
+                        self._target,
+                        backend_options=self._backend_options,
+                        config=self._config,
+                    )
         return BrokerCore(
             self._runner,
             config=self._config,

@@ -777,11 +777,15 @@ class TestQueueWatcher(WatcherTestBase):
             initial_collector.handler,
             db=broker_target,
             peek=True,
+            batch_processing=True,
         )
         thread = initial_watcher.run_in_thread()
         try:
             # Wait for all 50 messages to be collected
-            if not initial_collector.wait_for_messages(50, timeout=5.0):
+            if not initial_collector.wait_for_messages(
+                50,
+                timeout=scale_timeout_for_ci(5.0),
+            ):
                 pytest.fail(
                     f"Timeout waiting for messages. Got {len(initial_collector.get_messages())} messages"
                 )
@@ -808,13 +812,17 @@ class TestQueueWatcher(WatcherTestBase):
             db=broker_target,
             peek=True,
             after_timestamp=ts_mid,
+            batch_processing=True,
         )
 
         # Start watcher and let it process messages
         thread = watcher.run_in_thread()
         try:
             # Wait for all 50 new messages to be collected
-            if not collector.wait_for_messages(50, timeout=5.0):
+            if not collector.wait_for_messages(
+                50,
+                timeout=scale_timeout_for_ci(5.0),
+            ):
                 pytest.fail(
                     f"Timeout waiting for messages. Got {len(collector.get_messages())} messages"
                 )
@@ -1045,7 +1053,15 @@ class TestErrorScenarios(WatcherTestBase):
 
         thread = watcher.run_in_thread()
         try:
-            time.sleep(0.2)
+            assert wait_for_condition(
+                lambda: "Handler error" in caplog.text
+                and (
+                    "Error handler also failed" in caplog.text
+                    or "Error handler failed" in caplog.text
+                ),
+                timeout=scale_timeout_for_ci(5.0),
+                interval=0.05,
+            )
         finally:
             watcher.stop()
             thread.join(timeout=2.0)
