@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""ADVANCED EXAMPLE: High-performance async SimpleBroker implementation using aiosqlite and aiosqlitepool.
+"""ADVANCED EXAMPLE: Async SQLite queue implementation using aiosqlitepool.
 
-NOTE: This is an ADVANCED example showing how to build a custom async extension by accessing
-SimpleBroker's internal APIs. Most users should use the standard Queue API from the main package.
+NOTE: This is an ADVANCED SQLite-specific example. It shows how to build an
+async extension that shares SimpleBroker's SQLite schema and core semantics, but
+it is not a backend plugin and it does not implement the synchronous SQLRunner
+extension protocol.
 
 For standard usage, see python_api.py or async_wrapper.py which demonstrate the public API.
 
-This example demonstrates how to build a fully async version of SimpleBroker with:
+This example demonstrates:
 - Connection pooling for high concurrency
-- Async-compatible BrokerCore implementation
-- Full feature parity with the synchronous version
-- Production-ready error handling and resilience
-- Direct access to internal SQL and database operations
+- An async-compatible queue core
+- Schema compatibility with the built-in SQLite backend
+- Direct access to internal SQLite SQL and database operations
 
 Requirements:
     pip install aiosqlite aiosqlitepool
@@ -19,16 +20,16 @@ Requirements:
 Usage:
     See the main() function for examples of how to use the async API.
 
-WARNING: This example uses internal APIs that may change between versions.
-Only use this approach if you need custom extensions beyond what the public API provides.
+WARNING: This example uses internal SQLite APIs that may change between versions.
+Use async_wrapper.py when you need the supported multi-backend async pattern.
 """
 
 import asyncio
 import contextvars
-import os
+import re
 import time
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Protocol
 
@@ -41,21 +42,25 @@ except ImportError:
         "Install with: pip install aiosqlite aiosqlitepool"
     ) from None
 
-# ADVANCED: Import SimpleBroker internals for custom extension
-# Note: These are internal APIs - most users should use the public API instead:
-#   from simplebroker import Queue, QueueWatcher
-# ADVANCED: Import database constants for low-level operations
-# For standard usage, these constants are handled internally by the Queue class
+from simplebroker import resolve_config
+
+# ADVANCED: Import SimpleBroker internals for low-level SQLite compatibility.
+# Standard applications should use Queue, QueueWatcher, or async_wrapper.py.
 from simplebroker._constants import (
     LOGICAL_COUNTER_MASK,
     MAX_LOGICAL_COUNTER,
-    MAX_MESSAGE_SIZE,
+    MAX_QUEUE_NAME_LENGTH,
     SCHEMA_VERSION,
     SIMPLEBROKER_MAGIC,
 )
-from simplebroker._exceptions import DataError, IntegrityError, OperationalError
 from simplebroker._sql import (
     CHECK_CLAIMED_COLUMN as SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED,
+)
+from simplebroker._sql import (
+    CREATE_ALIAS_TARGET_INDEX as SQL_CREATE_IDX_QUEUE_ALIASES_TARGET,
+)
+from simplebroker._sql import (
+    CREATE_ALIASES_TABLE as SQL_CREATE_TABLE_QUEUE_ALIASES,
 )
 from simplebroker._sql import (
     CREATE_MESSAGES_TABLE as SQL_CREATE_TABLE_MESSAGES,
@@ -92,21 +97,30 @@ from simplebroker._sql import (
     GET_QUEUE_STATS as SQL_SELECT_QUEUES_STATS,
 )
 from simplebroker._sql import (
+    INSERT_ALIAS_VERSION_META as SQL_INSERT_ALIAS_VERSION_META,
+)
+from simplebroker._sql import (
     INSERT_MESSAGE as SQL_INSERT_MESSAGE,
 )
 from simplebroker._sql import (
     LIST_QUEUES_UNCLAIMED as SQL_SELECT_QUEUES_UNCLAIMED,
 )
+from simplebroker.ext import DataError, IntegrityError, OperationalError
+
+QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
 
 
 def _validate_queue_name(queue: str) -> str | None:
     """Validate queue name and return error message or None if valid."""
     if not queue:
-        return "Queue name cannot be empty"
-    if len(queue) > 256:
-        return f"Queue name too long ({len(queue)} > 256 characters)"
-    if not queue.replace("-", "").replace("_", "").replace(".", "").isalnum():
-        return "Queue name can only contain letters, numbers, hyphens, underscores, and dots"
+        return "Invalid queue name: cannot be empty"
+    if len(queue) > MAX_QUEUE_NAME_LENGTH:
+        return f"Invalid queue name: exceeds {MAX_QUEUE_NAME_LENGTH} characters"
+    if not QUEUE_NAME_PATTERN.match(queue):
+        return (
+            "Invalid queue name: must contain only letters, numbers, periods, "
+            "underscores, and hyphens. Cannot begin with a hyphen or a period"
+        )
     return None
 
 
@@ -143,10 +157,18 @@ class AsyncSQLRunner(Protocol):
 class PooledAsyncSQLiteRunner:
     """High-performance async SQLite runner with connection pooling."""
 
-    def __init__(self, db_path: str, pool_size: int = 10, max_connections: int = 20):
+    def __init__(
+        self,
+        db_path: str,
+        pool_size: int = 10,
+        max_connections: int = 20,
+        *,
+        config: Mapping[str, Any] | None = None,
+    ):
         self.db_path = db_path
         self.pool_size = pool_size
         self.max_connections = max_connections
+        self._config = resolve_config(config)
         self._pool: SQLiteConnectionPool | None = None
         self._transaction_conn: contextvars.ContextVar[aiosqlite.Connection | None] = (
             contextvars.ContextVar("transaction_conn", default=None)
@@ -186,13 +208,13 @@ class PooledAsyncSQLiteRunner:
                 )
 
         # Apply all pragmas
-        busy_timeout = int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000"))
+        busy_timeout = int(self._config["BROKER_BUSY_TIMEOUT"])
         await conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
 
-        cache_mb = int(os.environ.get("BROKER_CACHE_MB", "10"))
+        cache_mb = int(self._config["BROKER_CACHE_MB"])
         await conn.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
 
-        sync_mode = os.environ.get("BROKER_SYNC_MODE", "FULL").upper()
+        sync_mode = str(self._config["BROKER_SYNC_MODE"]).upper()
         if sync_mode not in ("OFF", "NORMAL", "FULL", "EXTRA"):
             warnings.warn(
                 f"Invalid BROKER_SYNC_MODE '{sync_mode}', defaulting to FULL",
@@ -208,7 +230,8 @@ class PooledAsyncSQLiteRunner:
         if result and result[0].lower() != "wal":
             raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
 
-        await conn.execute("PRAGMA wal_autocheckpoint=1000")
+        wal_autocheckpoint = int(self._config["BROKER_WAL_AUTOCHECKPOINT"])
+        await conn.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
 
     async def run(
         self, sql: str, params: tuple[Any, ...] = (), *, fetch: bool = False
@@ -380,16 +403,21 @@ class AsyncTimestampGenerator:
 
 
 class AsyncBrokerCore:
-    """Async version of BrokerCore with full feature parity."""
+    """Async SQLite queue core for this extension example."""
 
-    def __init__(self, runner: AsyncSQLRunner):
+    def __init__(
+        self,
+        runner: AsyncSQLRunner,
+        *,
+        config: Mapping[str, Any] | None = None,
+    ):
         self._runner = runner
+        self._config = resolve_config(config)
         self._lock = asyncio.Lock()
         self._timestamp_gen: AsyncTimestampGenerator | None = None
         self._write_count = 0
-        self._vacuum_interval = int(
-            os.environ.get("BROKER_AUTO_VACUUM_INTERVAL", "100")
-        )
+        self._vacuum_interval = int(self._config["BROKER_AUTO_VACUUM_INTERVAL"])
+        self._max_message_size = int(self._config["BROKER_MAX_MESSAGE_SIZE"])
         self._initialized = False
 
     async def _ensure_initialized(self) -> None:
@@ -399,6 +427,7 @@ class AsyncBrokerCore:
             await self._verify_database_magic()
             await self._ensure_schema_v2()
             await self._ensure_schema_v3()
+            await self._ensure_schema_v4()
             self._timestamp_gen = AsyncTimestampGenerator(self._runner)
             self._initialized = True
 
@@ -441,6 +470,15 @@ class AsyncBrokerCore:
                     "INSERT OR IGNORE INTO meta (key, value) VALUES ('last_ts', 0)"
                 )
             )
+            await self._execute_with_retry(
+                lambda: self._runner.run(SQL_CREATE_TABLE_QUEUE_ALIASES)
+            )
+            await self._execute_with_retry(
+                lambda: self._runner.run(SQL_CREATE_IDX_QUEUE_ALIASES_TARGET)
+            )
+            await self._execute_with_retry(
+                lambda: self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
+            )
 
             # Insert magic string and schema version
             await self._execute_with_retry(
@@ -457,6 +495,20 @@ class AsyncBrokerCore:
             )
 
             await self._execute_with_retry(self._runner.commit)
+
+    async def _read_schema_version_locked(self) -> int:
+        rows = await self._runner.run(
+            "SELECT value FROM meta WHERE key = 'schema_version'",
+            fetch=True,
+        )
+        return int(rows[0][0]) if rows and rows[0][0] is not None else 1
+
+    async def _write_schema_version_locked(self, version: int) -> None:
+        await self._runner.run(
+            "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (version,),
+        )
 
     async def _verify_database_magic(self) -> None:
         """Verify database magic string and schema version."""
@@ -495,10 +547,19 @@ class AsyncBrokerCore:
     async def _ensure_schema_v2(self) -> None:
         """Migrate to schema with claimed column."""
         async with self._lock:
+            current_version = await self._read_schema_version_locked()
             rows = await self._runner.run(
                 SQL_PRAGMA_TABLE_INFO_MESSAGES_CLAIMED, fetch=True
             )
             if rows and rows[0][0] > 0:
+                if current_version < 2:
+                    await self._runner.begin_immediate()
+                    try:
+                        await self._write_schema_version_locked(2)
+                        await self._runner.commit()
+                    except Exception:
+                        await self._runner.rollback()
+                        raise
                 return
 
             try:
@@ -507,6 +568,8 @@ class AsyncBrokerCore:
                     "ALTER TABLE messages ADD COLUMN claimed INTEGER DEFAULT 0"
                 )
                 await self._runner.run(SQL_CREATE_IDX_MESSAGES_UNCLAIMED)
+                if current_version < 2:
+                    await self._write_schema_version_locked(2)
                 await self._runner.commit()
             except Exception as e:
                 await self._runner.rollback()
@@ -516,16 +579,27 @@ class AsyncBrokerCore:
     async def _ensure_schema_v3(self) -> None:
         """Add unique constraint to timestamp column."""
         async with self._lock:
+            current_version = await self._read_schema_version_locked()
             rows = await self._runner.run(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_messages_ts_unique'",
                 fetch=True,
             )
             if rows and rows[0][0] > 0:
+                if current_version < 3:
+                    await self._runner.begin_immediate()
+                    try:
+                        await self._write_schema_version_locked(3)
+                        await self._runner.commit()
+                    except Exception:
+                        await self._runner.rollback()
+                        raise
                 return
 
             try:
                 await self._runner.begin_immediate()
                 await self._runner.run(SQL_CREATE_IDX_MESSAGES_TS_UNIQUE)
+                if current_version < 3:
+                    await self._write_schema_version_locked(3)
                 await self._runner.commit()
             except IntegrityError as e:
                 await self._runner.rollback()
@@ -539,6 +613,22 @@ class AsyncBrokerCore:
                 await self._runner.rollback()
                 if "already exists" not in str(e):
                     raise
+
+    async def _ensure_schema_v4(self) -> None:
+        """Ensure schema v4 objects used by queue aliases exist."""
+        async with self._lock:
+            current_version = await self._read_schema_version_locked()
+            try:
+                await self._runner.begin_immediate()
+                await self._runner.run(SQL_CREATE_TABLE_QUEUE_ALIASES)
+                await self._runner.run(SQL_CREATE_IDX_QUEUE_ALIASES_TARGET)
+                await self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
+                if current_version < 4:
+                    await self._write_schema_version_locked(4)
+                await self._runner.commit()
+            except Exception:
+                await self._runner.rollback()
+                raise
 
     async def _execute_with_retry(
         self,
@@ -574,10 +664,10 @@ class AsyncBrokerCore:
 
         # Check message size
         message_size = len(message.encode("utf-8"))
-        if message_size > MAX_MESSAGE_SIZE:
+        if message_size > self._max_message_size:
             raise ValueError(
                 f"Message size ({message_size} bytes) exceeds maximum allowed size "
-                f"({MAX_MESSAGE_SIZE} bytes)"
+                f"({self._max_message_size} bytes)"
             )
 
         # Generate timestamp outside transaction
@@ -591,7 +681,7 @@ class AsyncBrokerCore:
         )
 
         # Check if vacuum needed
-        if int(os.environ.get("BROKER_AUTO_VACUUM", "1")) == 1:
+        if int(self._config["BROKER_AUTO_VACUUM"]) == 1:
             self._write_count += 1
             if self._write_count >= self._vacuum_interval:
                 self._write_count = 0
@@ -908,7 +998,7 @@ class AsyncBrokerCore:
             if total_count == 0:
                 return False
 
-            threshold_pct = float(os.environ.get("BROKER_VACUUM_THRESHOLD", "10")) / 100
+            threshold_pct = float(self._config["BROKER_VACUUM_THRESHOLD"])
             return bool(
                 (claimed_count >= total_count * threshold_pct)
                 or (claimed_count > 10000)
@@ -916,7 +1006,7 @@ class AsyncBrokerCore:
 
     async def _vacuum_claimed_messages(self) -> None:
         """Delete claimed messages in batches."""
-        batch_size = int(os.environ.get("BROKER_VACUUM_BATCH_SIZE", "1000"))
+        batch_size = int(self._config["BROKER_VACUUM_BATCH_SIZE"])
 
         while True:
             async with self._lock:
@@ -1030,10 +1120,17 @@ async def async_broker(
     *,
     pool_size: int = 10,
     max_connections: int = 20,
+    config: Mapping[str, Any] | None = None,
 ) -> AsyncIterator[AsyncBrokerCore]:
     """Context manager for async broker with connection pooling."""
-    runner = PooledAsyncSQLiteRunner(db_path, pool_size, max_connections)
-    broker = AsyncBrokerCore(runner)
+    resolved_config = resolve_config(config)
+    runner = PooledAsyncSQLiteRunner(
+        db_path,
+        pool_size,
+        max_connections,
+        config=resolved_config,
+    )
+    broker = AsyncBrokerCore(runner, config=resolved_config)
     try:
         yield broker
     finally:

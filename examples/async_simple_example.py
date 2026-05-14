@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """ADVANCED EXAMPLE: Demonstration of the custom async pooled broker implementation.
 
-NOTE: This example uses the ADVANCED async_pooled_broker.py implementation which
-accesses SimpleBroker's internal APIs. Most users should use the standard Queue API
-or the simpler async_wrapper.py for async operations.
+NOTE: This example uses the ADVANCED async_pooled_broker.py implementation, which
+accesses SimpleBroker's internal SQLite APIs. Most users should use the standard
+Queue API or async_wrapper.py for async operations.
 
 For standard usage, see:
 - python_api.py for the standard synchronous API
@@ -18,8 +18,8 @@ This example demonstrates common use cases for the custom async SimpleBroker:
 Requirements:
     pip install aiosqlite aiosqlitepool
 
-WARNING: This uses a custom implementation that may not track the main SimpleBroker API.
-Consider using async_wrapper.py for production use.
+WARNING: This is a SQLite-specific custom implementation, not the supported
+multi-backend async path. Use async_wrapper.py unless you need this extension pattern.
 """
 
 import asyncio
@@ -28,7 +28,7 @@ import signal
 import sys
 
 # ADVANCED: Import the custom async implementation
-# Note: This uses the advanced async_pooled_broker example.
+# Note: This uses the advanced SQLite-specific async_pooled_broker example.
 # For standard usage, consider using the simpler async_wrapper.py instead.
 from async_pooled_broker import AsyncBrokerCore, AsyncQueue, async_broker
 

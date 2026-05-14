@@ -20,6 +20,7 @@ from simplebroker.helpers import (
     _validate_path_containment,
     _validate_working_directory,
     ensure_compound_db_path,
+    execute_setup_with_retry,
     interruptible_sleep,
     is_ancestor,
 )
@@ -166,6 +167,41 @@ def test_execute_with_retry_elapsed_budget_still_honors_stop_event(
             retry_delay=0.01,
             max_elapsed=1.0,
             stop_event=stop_event,
+        )
+
+
+def test_execute_setup_with_retry_honors_shared_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monotonic_time = 0.0
+
+    def fake_monotonic() -> float:
+        return monotonic_time
+
+    def fake_sleep(wait: float, stop_event=None) -> bool:
+        nonlocal monotonic_time
+        monotonic_time += wait
+        return True
+
+    monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+
+    deadline = 0.15
+    with pytest.raises(OperationalError, match="database is locked"):
+        execute_setup_with_retry(
+            lambda: (_ for _ in ()).throw(OperationalError("database is locked")),
+            phase="schema",
+            target="test.db",
+            deadline=deadline,
+        )
+
+    assert monotonic_time <= deadline
+    with pytest.raises(OperationalError, match="setup deadline expired"):
+        execute_setup_with_retry(
+            lambda: pytest.fail("expired setup deadline should not run"),
+            phase="schema",
+            target="test.db",
+            deadline=deadline,
         )
 
 

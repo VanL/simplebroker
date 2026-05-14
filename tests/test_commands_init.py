@@ -311,30 +311,26 @@ class TestInitCommand:
         assert "already exists" in stderr
 
     def test_init_integration_custom_database_name(self, workdir):
-        """Test that init command ignores -f flag (doesn't use custom filename)."""
-        # Test with custom filename - init should succeed but ignore -f flag
-        code, stdout, stderr = run_cli("init", "-f", "custom.db", cwd=workdir)
+        """Test that init command ignores global -f."""
+        code, stdout, stderr = run_cli("-f", "custom.db", "init", cwd=workdir)
 
         # Should succeed
         assert code == 0
 
-        # Should create database with default name, not custom name
         default_db = workdir / ".broker.db"
         assert default_db.exists()
         assert _is_valid_sqlite_db(default_db) is True
 
-        # Should NOT create database with custom name
         custom_db = workdir / "custom.db"
         assert not custom_db.exists()
 
     def test_init_integration_custom_directory(self, workdir):
-        """Test that init command ignores -d flag (creates in current dir only)."""
+        """Test that init command ignores global -d."""
         # Create subdirectory
         subdir = workdir / "subdir"
         subdir.mkdir()
 
-        # Test init with directory - init should succeed but ignore -d flag
-        code, stdout, stderr = run_cli("init", "-d", str(subdir), cwd=workdir)
+        code, stdout, stderr = run_cli("-d", str(subdir), "init", cwd=workdir)
 
         # Should succeed
         assert code == 0
@@ -344,7 +340,6 @@ class TestInitCommand:
         assert default_db.exists()
         assert _is_valid_sqlite_db(default_db) is True
 
-        # Should NOT create database in specified subdirectory
         subdir_db = subdir / ".broker.db"
         assert not subdir_db.exists()
 

@@ -404,10 +404,12 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
 
 
 def rearrange_args(argv: list[str]) -> list[str]:
-    """Rearrange arguments to put global options before subcommand.
+    """Normalize CLI arguments before argparse handles them.
 
-    This allows global options to appear anywhere on the command line,
-    including after the subcommand.
+    Global options are only recognized before the subcommand.  After a
+    subcommand is found, arguments belong to that command.  For commands with
+    free-form message operands, insert an end-of-options marker so message text
+    that looks like a global flag is still treated as data.
 
     Args:
         argv: list of command line arguments (without program name)
@@ -481,11 +483,13 @@ class ArgumentProcessor:
             )
 
         # Combine: global options first, then command and its arguments
-        return self.global_args + self.command_args
+        return self.global_args + self._protect_free_form_operands(self.command_args)
 
     def _process_argument(self, arg: str) -> None:
         """Process a single argument."""
-        if self.expecting_value_for:
+        if self.found_command:
+            self.command_args.append(arg)
+        elif self.expecting_value_for:
             self._handle_expected_value(arg)
         elif self._is_option_with_equals(arg):
             self._handle_option_with_equals(arg)
@@ -532,6 +536,71 @@ class ArgumentProcessor:
         """Handle a subcommand."""
         self.found_command = True
         self.command_args.append(arg)
+
+    def _protect_free_form_operands(self, command_args: list[str]) -> list[str]:
+        """Protect free-form message operands that start with '-'.
+
+        argparse does not treat unknown option-looking tokens as positional
+        values when parent parser options share the same spelling.  Inserting
+        '--' at the start of the free-form operand preserves literal messages
+        such as '--cleanup' without letting them trigger global behavior.
+        """
+        if not command_args:
+            return command_args
+
+        command = command_args[0]
+        if command == "write":
+            return self._protect_write_operands(command_args)
+        if command == "broadcast":
+            return self._protect_broadcast_operands(command_args)
+        return command_args
+
+    def _protect_write_operands(self, command_args: list[str]) -> list[str]:
+        """Protect the write queue/message positionals."""
+        if "--" in command_args[1:] or len(command_args) < 2:
+            return command_args
+
+        # Queue names that start with '-' are invalid, but protecting the token
+        # prevents it from being interpreted as a global option before
+        # validation reports the queue-name error.
+        if command_args[1].startswith("-"):
+            return [command_args[0], "--", *command_args[1:]]
+
+        if len(command_args) >= 3 and command_args[2].startswith("-"):
+            return [command_args[0], command_args[1], "--", *command_args[2:]]
+
+        return command_args
+
+    def _protect_broadcast_operands(self, command_args: list[str]) -> list[str]:
+        """Protect the broadcast message positional while preserving -p/--pattern."""
+        if "--" in command_args[1:]:
+            return command_args
+
+        protected = [command_args[0]]
+        i = 1
+        while i < len(command_args):
+            arg = command_args[i]
+
+            if arg in {"-p", "--pattern"}:
+                protected.append(arg)
+                if i + 1 < len(command_args):
+                    protected.append(command_args[i + 1])
+                    i += 2
+                else:
+                    i += 1
+                continue
+
+            if arg.startswith("--pattern="):
+                protected.append(arg)
+                i += 1
+                continue
+
+            if arg.startswith("-"):
+                protected.append("--")
+            protected.extend(command_args[i:])
+            return protected
+
+        return command_args
 
 
 def _resolve_database_path(
@@ -685,7 +754,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
         _PARSER_CACHE = create_parser()
     parser = _PARSER_CACHE
 
-    # Parse arguments, rearranging to put global options first
+    # Parse arguments after normalizing global placement and free-form operands.
     status_json_output = False
 
     try:
@@ -693,7 +762,6 @@ def main(*, config: dict[str, Any] = _config) -> int:
             parser.print_help()
             return EXIT_SUCCESS
 
-        # Rearrange arguments to put global options before subcommand
         raw_args = list(sys.argv[1:])
         if "--status" in raw_args:
             processed_args: list[str] = []

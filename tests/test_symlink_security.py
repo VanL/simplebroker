@@ -30,7 +30,7 @@ def test_symlink_path_traversal_attack(workdir: Path):
 
         # Try to access the sensitive file through the symlink
         code, stdout, stderr = run_cli(
-            "write", "-f", "evil.db", "test_queue", "message", cwd=workdir
+            "-f", "evil.db", "write", "test_queue", "message", cwd=workdir
         )
 
         # Should fail because resolved path is outside working directory
@@ -66,7 +66,7 @@ def test_symlink_to_parent_directory(workdir: Path):
     try:
         # Try to use the symlink
         code, stdout, stderr = run_cli(
-            "write", "-f", "parent_link.db", "test_queue", "message", cwd=workdir
+            "-f", "parent_link.db", "write", "test_queue", "message", cwd=workdir
         )
 
         # Should fail
@@ -101,14 +101,14 @@ def test_legitimate_symlink_within_directory(workdir: Path):
     try:
         # This should work because both the symlink and target are within workdir
         code, stdout, stderr = run_cli(
-            "write", "-f", "link.db", "test_queue", "message", cwd=workdir
+            "-f", "link.db", "write", "test_queue", "message", cwd=workdir
         )
 
         assert code == 0, f"Legitimate symlink should work: {stderr}"
 
         # Verify we can read it back
         code, stdout, stderr = run_cli(
-            "read", "-f", "link.db", "test_queue", cwd=workdir
+            "-f", "link.db", "read", "test_queue", cwd=workdir
         )
 
         assert code == 0
@@ -143,7 +143,7 @@ def test_symlink_chain_attack(workdir: Path):
         try:
             # Try to use the symlink chain
             code, stdout, stderr = run_cli(
-                "write", "-f", "link1.db", "test_queue", "message", cwd=workdir
+                "-f", "link1.db", "write", "test_queue", "message", cwd=workdir
             )
 
             # Should fail because ultimate target is outside workdir
@@ -174,7 +174,7 @@ def test_absolute_path_with_symlink(workdir: Path):
         # Using absolute path to the symlink
         abs_link_path = str(link_db.absolute())
         code, stdout, stderr = run_cli(
-            "write", "-f", abs_link_path, "test_queue", "message", cwd=workdir
+            "-f", abs_link_path, "write", "test_queue", "message", cwd=workdir
         )
 
         # Should work because target is valid
@@ -182,7 +182,7 @@ def test_absolute_path_with_symlink(workdir: Path):
 
         # Verify data is in the real file
         code, stdout, stderr = run_cli(
-            "read", "-f", str(real_db.absolute()), "test_queue", cwd=workdir
+            "-f", str(real_db.absolute()), "read", "test_queue", cwd=workdir
         )
         assert code == 0
         assert stdout.strip() == "message"

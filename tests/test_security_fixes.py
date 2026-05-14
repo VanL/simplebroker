@@ -39,12 +39,12 @@ def test_path_traversal_protection(workdir: Path):
         if len(attack) == 1:
             # Single argument with equals
             code, stdout, stderr = run_cli(
-                "write", attack[0], "test_queue", "message", cwd=workdir
+                attack[0], "write", "test_queue", "message", cwd=workdir
             )
         else:
             # Separate flag and value
             code, stdout, stderr = run_cli(
-                "write", *attack, "test_queue", "message", cwd=workdir
+                *attack, "write", "test_queue", "message", cwd=workdir
             )
 
         # All should fail
@@ -63,7 +63,7 @@ def test_path_traversal_protection(workdir: Path):
 
     for path_args in absolute_paths:
         code, stdout, stderr = run_cli(
-            "write", *path_args, "test_queue", "message", cwd=workdir
+            *path_args, "write", "test_queue", "message", cwd=workdir
         )
         # /etc/passwd should fail because it's not a valid database
         # /tmp/test_absolute_*.db might succeed or fail based on permissions
@@ -101,12 +101,12 @@ def test_safe_path_within_directory(workdir: Path):
         if len(path_args) == 1:
             # Single argument with equals
             code, stdout, stderr = run_cli(
-                "write", path_args[0], "test_queue", f"message{i}", cwd=workdir
+                path_args[0], "write", "test_queue", f"message{i}", cwd=workdir
             )
         else:
             # Separate flag and value
             code, stdout, stderr = run_cli(
-                "write", *path_args, "test_queue", f"message{i}", cwd=workdir
+                *path_args, "write", "test_queue", f"message{i}", cwd=workdir
             )
 
         assert code == 0, f"Safe path {path_args} should have succeeded: {stderr}"

@@ -34,28 +34,31 @@ class TestRearrangeArgs:
             "message",
         ]
 
-    def test_global_options_after_subcommand(self):
-        """Test with global options after subcommand."""
-        args = ["write", "queue", "message", "-q", "-d", "/tmp"]
-        assert rearrange_args(args) == ["-q", "-d", "/tmp", "write", "queue", "message"]
+    def test_global_options_after_subcommand_stay_with_command(self):
+        """Global options after a subcommand are not hoisted."""
+        args = ["list", "--cleanup"]
+        assert rearrange_args(args) == ["list", "--cleanup"]
 
-    def test_global_options_mixed(self):
-        """Test with global options mixed throughout."""
-        args = ["-f", "test.db", "write", "-q", "queue", "message", "-d", "/tmp"]
+    def test_free_form_global_looking_message_is_protected(self):
+        """write message text that looks like a global flag is treated as data."""
+        args = ["-f", "test.db", "write", "queue", "--cleanup"]
         assert rearrange_args(args) == [
             "-f",
             "test.db",
-            "-q",
-            "-d",
-            "/tmp",
             "write",
             "queue",
-            "message",
+            "--",
+            "--cleanup",
         ]
+
+    def test_broadcast_global_looking_message_is_protected(self):
+        """broadcast message text that looks like a global flag is treated as data."""
+        args = ["broadcast", "--cleanup"]
+        assert rearrange_args(args) == ["broadcast", "--", "--cleanup"]
 
     def test_equals_form(self):
         """Test --option=value form."""
-        args = ["write", "--dir=/tmp", "queue", "--file=test.db", "message"]
+        args = ["--dir=/tmp", "--file=test.db", "write", "queue", "message"]
         assert rearrange_args(args) == [
             "--dir=/tmp",
             "--file=test.db",
@@ -66,7 +69,7 @@ class TestRearrangeArgs:
 
     def test_missing_value_at_end(self):
         """Test missing value for option at end of args."""
-        args = ["write", "queue", "message", "--dir"]
+        args = ["--dir"]
         with pytest.raises(
             ArgumentParserError, match="option --dir requires an argument"
         ):
@@ -74,7 +77,7 @@ class TestRearrangeArgs:
 
     def test_missing_value_before_another_flag(self):
         """Test missing value when followed by another flag."""
-        args = ["write", "queue", "message", "--dir", "--quiet"]
+        args = ["--dir", "--quiet", "write", "queue", "message"]
         with pytest.raises(
             ArgumentParserError, match="option --dir requires an argument"
         ):
@@ -88,7 +91,7 @@ class TestRearrangeArgs:
 
     def test_equals_without_value(self):
         """Test --option= without value."""
-        args = ["write", "--dir=", "queue", "message"]
+        args = ["--dir=", "write", "queue", "message"]
         with pytest.raises(
             ArgumentParserError, match="option --dir requires an argument"
         ):
@@ -97,13 +100,13 @@ class TestRearrangeArgs:
     def test_boolean_flags(self):
         """Test flags that don't take values."""
         args = [
-            "write",
-            "queue",
-            "message",
             "--quiet",
             "--version",
             "--cleanup",
             "--status",
+            "write",
+            "queue",
+            "message",
         ]
         assert rearrange_args(args) == [
             "--quiet",
@@ -118,18 +121,18 @@ class TestRearrangeArgs:
     def test_subcommand_as_value(self):
         """Test subcommand names used as values."""
         # "read" is used as the database filename
-        args = ["write", "-f", "read", "queue", "message"]
+        args = ["-f", "read", "write", "queue", "message"]
         assert rearrange_args(args) == ["-f", "read", "write", "queue", "message"]
 
     def test_multiple_missing_values(self):
         """Test multiple options with missing values."""
-        args = ["write", "queue", "-d", "-f"]
+        args = ["-d", "-f", "write", "queue"]
         with pytest.raises(ArgumentParserError, match="option -d requires an argument"):
             rearrange_args(args)
 
     def test_short_and_long_options(self):
         """Test mixing short and long option forms."""
-        args = ["write", "-d", "/tmp", "queue", "--file", "test.db", "message"]
+        args = ["-d", "/tmp", "--file", "test.db", "write", "queue", "message"]
         assert rearrange_args(args) == [
             "-d",
             "/tmp",
@@ -145,33 +148,29 @@ class TestCLIMissingValues:
     """Test CLI behavior with missing option values."""
 
     def test_missing_dir_value_at_end(self, workdir: Path):
-        """Test missing value for --dir at end of command."""
-        code, stdout, stderr = run_cli(
-            "write", "queue", "message", "--dir", cwd=workdir
-        )
+        """Test missing value for --dir before command."""
+        code, stdout, stderr = run_cli("--dir", cwd=workdir)
         assert code == 1
         assert "error: option --dir requires an argument" in stderr
 
     def test_missing_dir_value_before_flag(self, workdir: Path):
-        """Test missing value for --dir before another flag."""
+        """Test missing global value before another global flag."""
         code, stdout, stderr = run_cli(
-            "write", "queue", "message", "--dir", "--quiet", cwd=workdir
+            "--dir", "--quiet", "write", "queue", "message", cwd=workdir
         )
         assert code == 1
         assert "error: option --dir requires an argument" in stderr
 
     def test_missing_file_value_at_end(self, workdir: Path):
-        """Test missing value for --file at end of command."""
-        code, stdout, stderr = run_cli(
-            "write", "queue", "message", "--file", cwd=workdir
-        )
+        """Test missing value for --file before command."""
+        code, stdout, stderr = run_cli("--file", cwd=workdir)
         assert code == 1
         assert "error: option --file requires an argument" in stderr
 
     def test_missing_file_value_before_flag(self, workdir: Path):
-        """Test missing value for -f before another flag."""
+        """Test missing value for -f before another global flag."""
         code, stdout, stderr = run_cli(
-            "write", "queue", "message", "-f", "-q", cwd=workdir
+            "-f", "-q", "write", "queue", "message", cwd=workdir
         )
         assert code == 1
         assert "error: option -f requires an argument" in stderr
@@ -179,7 +178,7 @@ class TestCLIMissingValues:
     def test_equals_without_value_dir(self, workdir: Path):
         """Test --dir= without value."""
         code, stdout, stderr = run_cli(
-            "write", "queue", "message", "--dir=", cwd=workdir
+            "--dir=", "write", "queue", "message", cwd=workdir
         )
         assert code == 1
         assert "error: option --dir requires an argument" in stderr
@@ -187,7 +186,7 @@ class TestCLIMissingValues:
     def test_equals_without_value_file(self, workdir: Path):
         """Test --file= without value."""
         code, stdout, stderr = run_cli(
-            "write", "queue", "message", "--file=", cwd=workdir
+            "--file=", "write", "queue", "message", cwd=workdir
         )
         assert code == 1
         assert "error: option --file requires an argument" in stderr
@@ -201,13 +200,13 @@ class TestCLIMissingValues:
 
         # Test valid usage with values
         code, stdout, stderr = run_cli(
-            "write",
-            "queue",
-            "message",
             "--dir",
             str(subdir),
             "--file",
             "test.db",
+            "write",
+            "queue",
+            "message",
             cwd=workdir,
         )
         assert code == 0
@@ -215,20 +214,16 @@ class TestCLIMissingValues:
 
         # Test reading back
         code, stdout, stderr = run_cli(
-            "read", "--dir", str(subdir), "--file", "test.db", "queue", cwd=workdir
+            "--dir", str(subdir), "--file", "test.db", "read", "queue", cwd=workdir
         )
         assert code == 0
         assert stdout.strip() == "message"
 
     def test_complex_scenario_from_review(self, workdir: Path):
-        """Test the exact scenario mentioned in the O3 review."""
-        # The problematic case: broker write q msg --quiet --dir (missing value)
-        code, stdout, stderr = run_cli(
-            "write", "q", "msg", "--quiet", "--dir", cwd=workdir
-        )
-        assert code == 1
-        assert "error: option --dir requires an argument" in stderr
+        """Post-command global-looking message text is not destructive."""
+        code, stdout, stderr = run_cli("write", "q", "--cleanup", cwd=workdir)
+        assert code == 0
 
-        # Ensure it doesn't incorrectly treat --dir as a subcommand arg
-        # and that it properly reports the error
-        assert "simplebroker: error:" in stderr
+        code, stdout, stderr = run_cli("read", "q", cwd=workdir)
+        assert code == 0
+        assert stdout.strip() == "--cleanup"

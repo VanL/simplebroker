@@ -22,22 +22,29 @@ import concurrent.futures
 import functools
 import logging
 from collections.abc import AsyncGenerator, Callable
+from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ParamSpec, TypeVar, cast
+from tempfile import TemporaryDirectory
+from typing import Any, TypeVar, cast
 
-# Use the public API - Queue and QueueWatcher
-from simplebroker import Queue, QueueWatcher
+from simplebroker import (
+    BrokerTarget,
+    Queue,
+    QueueWatcher,
+    open_broker,
+    resolve_broker_target,
+    resolve_config,
+    target_for_directory,
+)
+from simplebroker.ext import BrokerConnection
 from simplebroker.watcher import logger_handler
-
-# For cross-queue operations requiring direct database access (advanced use)
-# Removed DBConnection import - use BrokerDB directly
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Type variables for generic decorator
-P = ParamSpec("P")
 T = TypeVar("T")
 
 
@@ -54,25 +61,100 @@ def run_in_executor(func: Callable[..., T]) -> Callable[..., asyncio.Future[T]]:
     return cast(Callable[..., asyncio.Future[T]], wrapper)
 
 
+@dataclass(frozen=True)
+class BrokerClient:
+    """Small public-API client that owns target resolution."""
+
+    target: BrokerTarget
+    config: dict[str, Any]
+
+    @classmethod
+    def from_root(cls, root: Path | str, **overrides: Any) -> "BrokerClient":
+        """Create a client using normal SimpleBroker target resolution."""
+        config = resolve_config(overrides)
+        return cls(target_for_directory(root, config=config), config)
+
+    @classmethod
+    def for_database(cls, db_path: Path | str, **overrides: Any) -> "BrokerClient":
+        """Create a SQLite client bound to a specific broker database path."""
+        path = Path(db_path).expanduser()
+        root = path.parent if path.is_absolute() else (Path.cwd() / path).parent
+        return cls.from_root(root, BROKER_DEFAULT_DB_NAME=path.name, **overrides)
+
+    @classmethod
+    def from_target(
+        cls,
+        target: BrokerTarget,
+        *,
+        config: dict[str, Any] | None = None,
+        **overrides: Any,
+    ) -> "BrokerClient":
+        """Create a client from an already-resolved backend target."""
+        resolved_config = resolve_config({**(config or {}), **overrides})
+        return cls(target, resolved_config)
+
+    @classmethod
+    def discover(
+        cls, root: Path | str | None = None, **overrides: Any
+    ) -> "BrokerClient":
+        """Discover a project/env target, or create the default target for root."""
+        config = resolve_config(overrides)
+        search_root = Path.cwd() if root is None else Path(root)
+        target = resolve_broker_target(search_root, config=config)
+        if target is None:
+            target = target_for_directory(search_root, config=config)
+        return cls(target, config)
+
+    def queue(self, name: str, *, persistent: bool = False) -> Queue:
+        """Return a Queue bound to this client's resolved target."""
+        return Queue(
+            name,
+            db_path=self.target,
+            persistent=persistent,
+            config=self.config,
+        )
+
+    def broker(self) -> AbstractContextManager[BrokerConnection]:
+        """Open a backend-agnostic broker handle for cross-queue operations."""
+        return open_broker(self.target, config=self.config)
+
+
 class AsyncBroker:
     """Async wrapper for SimpleBroker with thread pool execution."""
 
-    def __init__(self, db_path: Path | str, max_workers: int = 4):
+    def __init__(
+        self,
+        db_path: Path | str | None = None,
+        max_workers: int = 4,
+        *,
+        client: BrokerClient | None = None,
+    ):
         """
         Initialize the async broker.
 
         Args:
-            db_path: Path to the database file
+            db_path: Optional SQLite database path convenience
             max_workers: Maximum number of worker threads (default: 4)
+            client: Optional preconfigured broker client
         """
-        self.db_path = Path(db_path)
+        if client is None and db_path is None:
+            raise ValueError("Provide either db_path or client")
+        self.client = client or BrokerClient.for_database(cast(Path | str, db_path))
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        self._queues: dict[str, Queue] = {}  # Cache Queue instances by name
         self._watchers: list[tuple[QueueWatcher, asyncio.Event]] = []
+
+    @classmethod
+    def from_root(
+        cls, root: Path | str, max_workers: int = 4, **overrides: Any
+    ) -> "AsyncBroker":
+        """Create an async wrapper using normal multi-backend target resolution."""
+        return cls(
+            max_workers=max_workers,
+            client=BrokerClient.from_root(root, **overrides),
+        )
 
     async def __aenter__(self) -> "AsyncBroker":
         """Async context manager entry."""
-        # Queue instances will be created on-demand for each queue name
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -84,51 +166,36 @@ class AsyncBroker:
         # Wait for watchers to finish
         await asyncio.sleep(0.1)  # Give watchers time to stop
 
-        # Queue instances handle their own cleanup
-
         # Shutdown executor
         self._executor.shutdown(wait=True)
-
-    def _get_queue(self, queue_name: str) -> Queue:
-        """Get or create a Queue instance for the given queue name."""
-        if queue_name not in self._queues:
-            self._queues[queue_name] = Queue(queue_name, db_path=str(self.db_path))
-        return self._queues[queue_name]
 
     @run_in_executor
     def push(self, queue: str, message: str) -> None:
         """Push a message to a queue (runs in thread pool)."""
-        q = self._get_queue(queue)
-        q.write(message)
+        with self.client.queue(queue) as q:
+            q.write(message)
 
     @run_in_executor
     def pop(self, queue: str) -> str | None:
         """Pop a message from a queue (runs in thread pool)."""
-        q = self._get_queue(queue)
-        # read() removes and returns the oldest message
-        result = q.read()
+        with self.client.queue(queue) as q:
+            # read() removes and returns the oldest message
+            result = q.read()
         return result if isinstance(result, str) else None
 
     @run_in_executor
     def peek(self, queue: str) -> str | None:
         """Peek at the next message without removing it."""
-        q = self._get_queue(queue)
-        # peek() returns the oldest message without removing it
-        result = q.peek()
+        with self.client.queue(queue) as q:
+            # peek() returns the oldest message without removing it
+            result = q.peek()
         return result if isinstance(result, str) else None
 
     @run_in_executor
     def size(self, queue: str) -> int:
         """Get the size of a queue."""
-        # Use database directly to get queue size
-        from simplebroker.db import BrokerDB
-
-        with BrokerDB(str(self.db_path)) as db:
-            stats = db.get_queue_stats()
-            for queue_name, unclaimed, _total in stats:
-                if queue_name == queue:
-                    return unclaimed
-        return 0
+        with self.client.broker() as broker:
+            return broker.get_queue_stat(queue).pending
 
     async def watch_queue(
         self, queue: str, handler: Callable[[str, int], None], peek: bool = False
@@ -152,7 +219,8 @@ class AsyncBroker:
         watcher = QueueWatcher(
             queue,  # Queue name comes first
             handler,  # Handler comes second
-            db=self.db_path,  # Database is a keyword argument
+            db=self.client.target,  # Resolved target from the client
+            config=self.client.config,
             peek=peek,
         )
 
@@ -199,22 +267,15 @@ class AsyncBroker:
     def _fetch_batch(self, queue: str, batch_size: int) -> list[tuple[str, int]]:
         """Fetch a batch of messages (runs in thread pool)."""
         messages = []
-        q = self._get_queue(queue)
 
         # Read messages one by one up to batch_size
-        # Note: The Queue API doesn't expose timestamps directly in the public API
-        # For this example, we'll just return the message with a placeholder timestamp
-        for _ in range(batch_size):
-            result = q.read(with_timestamps=True)
-            if result is None:
-                break
-            if isinstance(result, tuple):
-                messages.append(result)
-            elif isinstance(result, str):
-                # Fallback if no timestamp available
-                import time
-
-                messages.append((result, int(time.time() * 1000000)))
+        with self.client.queue(queue) as q:
+            for _ in range(batch_size):
+                result = q.read(with_timestamps=True)
+                if result is None:
+                    break
+                if isinstance(result, tuple):
+                    messages.append(result)
 
         return messages
 
@@ -269,56 +330,53 @@ async def example_watcher(broker: AsyncBroker) -> None:
     logger.info(f"Processed {len(processed)} notifications")
 
 
-async def example_cross_queue_operation(db_path: Path) -> None:
-    """Example showing cross-queue operations using BrokerDB (advanced).
+async def example_cross_queue_operation(broker: AsyncBroker) -> None:
+    """Example showing cross-queue operations through the client.
 
-    For operations that need to work across multiple queues atomically,
-    you can use the BrokerDB context manager. This is an advanced
-    pattern for when the simple Queue API isn't sufficient.
+    For operations that need to inspect or modify multiple queues, use the
+    client's open_broker() handle instead of constructing BrokerDB directly.
     """
-    from simplebroker.db import BrokerDB
+    loop = asyncio.get_event_loop()
 
-    # Create a BrokerDB instance for advanced operations
-    broker_db = BrokerDB(str(db_path))
+    def get_stats() -> list[tuple[str, int, int]]:
+        with broker.client.broker() as broker_handle:
+            return broker_handle.get_queue_stats()
 
-    # Use BrokerDB directly for cross-queue operations
-    with broker_db:
-        # Example: Get queue statistics
-        stats = broker_db.get_queue_stats()
-        logger.info(f"Queue stats: {stats}")
-
-    broker_db.close()
+    stats = await loop.run_in_executor(broker._executor, get_stats)
+    logger.info(f"Queue stats: {stats}")
 
 
 async def main() -> None:
     """Main example showing different async patterns."""
 
-    # Create database
-    db_path = Path("async_example.db")
+    with TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "async_example.db"
 
-    async with AsyncBroker(db_path) as broker:
-        logger.info("Starting async broker example...")
+        async with AsyncBroker(db_path) as broker:
+            logger.info("Starting async broker example...")
 
-        # Example 1: Producer/Consumer pattern
-        logger.info("\n--- Producer/Consumer Pattern ---")
-        await asyncio.gather(example_producer(broker), example_consumer(broker))
+            # Example 1: Producer/Consumer pattern
+            logger.info("\n--- Producer/Consumer Pattern ---")
+            await asyncio.gather(example_producer(broker), example_consumer(broker))
 
-        # Example 2: Watcher pattern
-        logger.info("\n--- Watcher Pattern ---")
-        await example_watcher(broker)
+            # Example 2: Watcher pattern
+            logger.info("\n--- Watcher Pattern ---")
+            await example_watcher(broker)
 
-        # Example 3: Concurrent operations
-        logger.info("\n--- Concurrent Operations ---")
-        tasks = [broker.push("concurrent", f"Message {i}") for i in range(5)]
-        await asyncio.gather(*tasks)
-        logger.info("Pushed 5 messages concurrently")
+            # Example 3: Concurrent operations
+            logger.info("\n--- Concurrent Operations ---")
+            tasks = [broker.push("concurrent", f"Message {i}") for i in range(5)]
+            await asyncio.gather(*tasks)
+            logger.info("Pushed 5 messages concurrently")
 
-        # Check queue size
-        size = await broker.size("concurrent")
-        logger.info(f"Queue size: {size}")
+            # Check queue size
+            size = await broker.size("concurrent")
+            logger.info(f"Queue size: {size}")
 
-    # Cleanup
-    db_path.unlink(missing_ok=True)
+            # Example 4: Cross-queue client handle
+            logger.info("\n--- Client Cross-Queue Operation ---")
+            await example_cross_queue_operation(broker)
+
     logger.info("\nAsync broker example completed!")
 
 

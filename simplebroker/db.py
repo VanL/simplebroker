@@ -49,7 +49,12 @@ from ._runner import SetupPhase, SQLiteRunner, SQLRunner, close_owned_runner
 from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
-from .helpers import _execute_with_retry, execute_setup_with_retry, interruptible_sleep
+from .helpers import (
+    SETUP_RETRY_MAX_ELAPSED,
+    _execute_with_retry,
+    execute_setup_with_retry,
+    interruptible_sleep,
+)
 from .metadata import QueueStats
 
 if TYPE_CHECKING:
@@ -759,6 +764,7 @@ class BrokerCore:
         operation: Callable[[], T],
         *,
         phase: SetupPhase,
+        deadline: float | None = None,
     ) -> T:
         """Run setup work with bounded retry progress."""
 
@@ -776,15 +782,17 @@ class BrokerCore:
                     phase=str(phase.value),
                     target=target,
                     stop_event=self._stop_event,
+                    deadline=deadline,
                 )
         return execute_setup_with_retry(
             stop_checked_operation,
             phase=str(phase.value),
             target=target,
             stop_event=self._stop_event,
+            deadline=deadline,
         )
 
-    def _setup_database(self) -> None:
+    def _setup_database(self, *, deadline: float | None = None) -> None:
         """Set up database with optimized settings and schema."""
         with self._lock:
             self._backend_plugin.initialize_database(
@@ -792,6 +800,7 @@ class BrokerCore:
                 run_with_retry=lambda operation: self._run_setup_with_retry(
                     operation,
                     phase=SetupPhase.SCHEMA,
+                    deadline=deadline,
                 ),
             )
 
@@ -799,14 +808,17 @@ class BrokerCore:
         """Set up and migrate schema with backend-specific coordination."""
 
         def operation() -> None:
-            self._setup_database()
+            deadline = time.monotonic() + SETUP_RETRY_MAX_ELAPSED
+            self._setup_database(deadline=deadline)
             self._run_setup_with_retry(
                 self._verify_database_magic,
                 phase=SetupPhase.SCHEMA,
+                deadline=deadline,
             )
             self._run_setup_with_retry(
                 self._migrate_schema,
                 phase=SetupPhase.SCHEMA,
+                deadline=deadline,
             )
 
         run_exclusive_setup = getattr(self._runner, "run_exclusive_setup", None)

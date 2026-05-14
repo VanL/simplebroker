@@ -129,20 +129,20 @@ When working with message queues:
 See **[example_extension_implementation.md](example_extension_implementation.md)** for comprehensive examples including:
 
 - **Daemon Mode Runner** - Background thread processing with auto-stop
-- **Async SQLite Runner** - Full async implementation with aiosqlite
+- **Async SQLite Runner** - SQLite-specific async implementation with aiosqlite
 - **Connection Pool Runner** - High-concurrency optimization
 - **Testing with Mock Runner** - Comprehensive mock runner for unit tests
-- **Complete Async Queue** - Production-ready async queue with all features
+- **Complete Async Queue** - Advanced async queue patterns
 
 ### Custom Async Implementation (Advanced)
 
 **WARNING: These examples use internal APIs and are for advanced users only.**
 **For standard async usage, use [async_wrapper.py](async_wrapper.py) instead.**
 
-- **[async_pooled_broker.py](async_pooled_broker.py)** - Custom async implementation (ADVANCED)
-  - Uses internal SimpleBroker APIs to build custom async broker
+- **[async_pooled_broker.py](async_pooled_broker.py)** - Custom async SQLite implementation (ADVANCED)
+  - Uses internal SimpleBroker SQLite APIs to build a custom async queue core
   - Requires aiosqlite and aiosqlitepool
-  - Full AsyncBrokerCore implementation with feature parity
+  - Shares the current SQLite schema, including alias metadata
   - Connection pooling for optimal concurrency
   - **Only use if async_wrapper.py doesn't meet your needs**
   

@@ -1,19 +1,19 @@
-# ADVANCED: Async SimpleBroker with Connection Pooling
+# ADVANCED: Async SQLite Queue with Connection Pooling
 
 **NOTE: This documentation covers the ADVANCED async_pooled_broker.py example which uses
-internal SimpleBroker APIs to build a custom async implementation. Most users should use:**
+internal SQLite APIs to build a custom async implementation. Most users should use:**
 - **async_wrapper.py** - Simpler async wrapper around the standard Queue API (RECOMMENDED)
 - **python_api.py** - Standard synchronous API examples
 
-This directory contains a high-performance custom async implementation of SimpleBroker using `aiosqlite` and `aiosqlitepool`.
-This is an advanced example for users who need custom database-level extensions beyond what the standard API provides.
+This directory contains a SQLite-specific async queue implementation using `aiosqlite` and `aiosqlitepool`.
+It shares the built-in SQLite schema and core queue semantics, but it is not a backend plugin and it does not implement the synchronous `SQLRunner` extension contract.
 
 ## Features
 
 - **Full async/await support** - Native asyncio implementation
 - **Connection pooling** - High-performance connection pool for concurrent operations
-- **Feature parity** - All SimpleBroker features including timestamps, transactions, vacuum
-- **Production ready** - Comprehensive error handling and resilience
+- **SQLite schema compatibility** - Creates the current SimpleBroker SQLite schema, including alias metadata
+- **Core queue operations** - Timestamps, transactions, moves, broadcast, and vacuum
 - **High throughput** - Optimized for concurrent producers and consumers
 
 ## Installation
@@ -48,7 +48,7 @@ asyncio.run(main())
 
 ### AsyncBrokerCore
 
-The async version of BrokerCore that provides all queue operations:
+An async SQLite queue core for the example:
 
 - `write()` - Add messages to queues
 - `read()` - Read and remove messages  
@@ -220,7 +220,7 @@ async with AsyncBroker("broker.db") as broker:
     msg = await broker.pop("tasks")  # Gets "sync message"
 ```
 
-### Advanced Approach: Custom async implementation
+### Advanced Approach: Custom async SQLite implementation
 
 The custom async_pooled_broker implementation can also coexist with the sync version:
 
@@ -232,7 +232,7 @@ async with async_broker("broker.db") as broker:
     msg = await queue.read()  # Gets "sync message"
 ```
 
-Both implementations use the same database schema and are fully compatible.
+Both implementations use the same SQLite database schema. The pooled async example covers core queue operations, not every public SimpleBroker API surface.
 
-**WARNING**: The async_pooled_broker uses internal APIs that may change between versions.
-Use async_wrapper.py for production code unless you need custom extensions.
+**WARNING**: The async_pooled_broker uses internal SQLite APIs that may change between versions.
+Use async_wrapper.py for the supported multi-backend async path.

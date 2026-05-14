@@ -23,6 +23,7 @@ SETUP_RETRY_MAX_ELAPSED = 10.0
 SETUP_RETRY_DELAY = 0.05
 SETUP_RETRY_MAX_DELAY = 0.25
 SETUP_BUSY_TIMEOUT_CAP_MS = 250
+SETUP_PHASE_LOCK_TIMEOUT = max(20.0, SETUP_RETRY_MAX_ELAPSED * 2.0)
 
 
 def interruptible_sleep(
@@ -159,8 +160,20 @@ def execute_setup_with_retry(
     phase: str,
     target: str,
     stop_event: threading.Event | None = None,
+    deadline: float | None = None,
 ) -> T:
     """Run setup work with bounded retry progress and contextual errors."""
+
+    max_elapsed = SETUP_RETRY_MAX_ELAPSED
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise OperationalError(
+                "Setup phase "
+                f"{phase!r} for {target!r} could not make progress within "
+                f"{SETUP_RETRY_MAX_ELAPSED:.1f}s: setup deadline expired"
+            )
+        max_elapsed = min(max_elapsed, remaining)
 
     try:
         return _execute_with_retry(
@@ -168,7 +181,7 @@ def execute_setup_with_retry(
             max_retries=None,
             retry_delay=SETUP_RETRY_DELAY,
             stop_event=stop_event,
-            max_elapsed=SETUP_RETRY_MAX_ELAPSED,
+            max_elapsed=max_elapsed,
             max_retry_delay=SETUP_RETRY_MAX_DELAY,
         )
     except OperationalError as exc:

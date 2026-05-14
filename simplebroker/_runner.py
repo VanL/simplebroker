@@ -32,6 +32,7 @@ from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config, resolve_co
 from ._exceptions import DatabaseError, DataError, IntegrityError, OperationalError
 from ._phaselock import Phase, PhaseLockService, PhaseLockTimeout, PhaseLockUnavailable
 from .helpers import (
+    SETUP_PHASE_LOCK_TIMEOUT,
     execute_setup_with_retry,
     setup_busy_timeout_ms,
 )
@@ -461,7 +462,7 @@ class SQLiteRunner:
             namespace="user.simplebroker",
             lock_suffix=".setup.lock",
             status_suffix=".setup.status",
-            timeout=10.0,
+            timeout=SETUP_PHASE_LOCK_TIMEOUT,
             retry_delay=0.05,
         )
 

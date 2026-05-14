@@ -534,7 +534,7 @@ class TestCLIIntegration:
         try:
             os.chdir(str(tmp_path))
 
-            with patch("sys.argv", ["broker", "init", "--quiet"]):
+            with patch("sys.argv", ["broker", "--quiet", "init"]):
                 result = main()
 
             assert result == 0

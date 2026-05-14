@@ -182,6 +182,8 @@ $ broker --cleanup
 
 ### Global Options
 
+Global options must appear before the command, for example `broker -f queue.db read jobs`.
+
 - `-d, --dir PATH` - Use PATH instead of current directory
 - `-f, --file NAME` - Database filename or absolute path (default: `.broker.db`)
   - If an absolute path is provided, the directory is extracted automatically
@@ -453,8 +455,8 @@ $ broker -f /var/lib/myapp/queue.db read tasks
 # Reserving work using move
 $ msg_json=$(broker move todo in-process --json 2>/dev/null)
   if [ -n "$msg_json" ]; then
-      msg_id=$(echo "$msg_json" | jq -r '.[0].id')
-      msg_data=$(echo "$msg_json" | jq -r '.[0].data')
+      msg_id=$(echo "$msg_json" | jq -r '.timestamp')
+      msg_data=$(echo "$msg_json" | jq -r '.message')
 
       echo "Processing message $msg_id: $msg_data"
 
@@ -466,6 +468,13 @@ $ msg_json=$(broker move todo in-process --json 2>/dev/null)
   else
       echo "No messages to process"
   fi
+
+# broker move --all --json emits ndjson: one JSON object per line
+$ broker move todo in-process --all --json | while IFS= read -r msg_json; do
+    msg_id=$(echo "$msg_json" | jq -r '.timestamp')
+    msg_data=$(echo "$msg_json" | jq -r '.message')
+    process_message "$msg_data" && broker delete in-process -m "$msg_id"
+done
 ```
 </details>
 
@@ -501,20 +510,13 @@ last_checkpoint=$(cat "$CHECKPOINT_FILE" 2>/dev/null || echo 0)
 echo "Starting from checkpoint: $last_checkpoint"
 
 while true; do
-    # Check if there are messages newer than our checkpoint
-    if ! broker peek "$QUEUE" --json --after "$last_checkpoint" >/dev/null 2>&1; then
-        echo "No new messages, sleeping..."
-        sleep 5
-        continue
-    fi
-    
     echo "Processing new messages..."
     
-    # Process messages one at a time to avoid data loss
+    # Process messages one at a time with peek-then-delete acknowledgement
     processed=0
     while [ $processed -lt $BATCH_SIZE ]; do
-        # Read exactly one message newer than checkpoint
-        message_data=$(broker read "$QUEUE" --json --after "$last_checkpoint" 2>/dev/null)
+        # Peek exactly one message newer than checkpoint without removing it
+        message_data=$(broker peek "$QUEUE" --json --after "$last_checkpoint" 2>/dev/null)
         
         # Check if we got a message
         if [ -z "$message_data" ]; then
@@ -530,11 +532,18 @@ while true; do
         echo "Processing: $message"
         if ! process_event "$message"; then
             echo "Error processing message, will retry on next run"
-            # Exit without updating checkpoint - failed message will be reprocessed
+            # Exit without deleting or checkpointing - failed message will be reprocessed
+            exit 1
+        fi
+
+        # Acknowledge successful processing by deleting the exact message
+        if ! broker delete "$QUEUE" -m "$timestamp" >/dev/null 2>&1; then
+            echo "Warning: processed message $timestamp but failed to delete it" >&2
+            echo "It may be reprocessed on the next run" >&2
             exit 1
         fi
         
-        # Atomically update checkpoint ONLY after successful processing
+        # Atomically update checkpoint ONLY after successful processing and delete
         echo "$timestamp" > "$CHECKPOINT_FILE.tmp"
         mv "$CHECKPOINT_FILE.tmp" "$CHECKPOINT_FILE"
         
@@ -553,11 +562,11 @@ done
 ```
 
 Key features:
-- **No data loss from pipe buffering** - Reads messages one at a time
+- **No data loss from pipe buffering** - Peeks and acknowledges messages one at a time
 - **Atomic checkpoint updates** - Uses temp file + rename for crash safety
 - **Per-message checkpointing** - Updates checkpoint after each successful message
 - **Batch processing** - Processes up to BATCH_SIZE messages at a time for efficiency
-- **Failure recovery** - On error, exits without updating checkpoint so failed message is retried
+- **Failure recovery** - On error, exits without deleting or checkpointing so failed message is retried
 </details>
 
 ## Real-time Queue Watching

@@ -54,7 +54,7 @@ def test_global_option_value_not_mistaken_for_subcommand(workdir: Path):
 
     # Test -f with a value that matches a subcommand name
     code, stdout, stderr = run_cli(
-        "write", "-f", "read.txt", "test_queue", "message1", cwd=workdir
+        "-f", "read.txt", "write", "test_queue", "message1", cwd=workdir
     )
     assert code == 0
 
@@ -69,7 +69,7 @@ def test_global_option_value_not_mistaken_for_subcommand(workdir: Path):
 
     # Test with 'write' as filename after the write command
     code, stdout, stderr = run_cli(
-        "write", "-f", "write", "test_queue", "message2", cwd=workdir
+        "-f", "write", "write", "test_queue", "message2", cwd=workdir
     )
     assert code == 0
 
@@ -81,28 +81,23 @@ def test_global_option_value_not_mistaken_for_subcommand(workdir: Path):
     assert ("messages",) in tables
 
 
-def test_global_options_after_subcommand(workdir: Path):
-    """Test that global options work when placed after subcommand."""
+def test_global_options_after_subcommand_are_not_global(workdir: Path):
+    """Test that global options after subcommand are command arguments."""
     subdir = workdir / "after_cmd"
     subdir.mkdir()
 
-    # Global options after subcommand should still work
     code, stdout, stderr = run_cli(
         "write", "test_queue", "message1", f"--dir={subdir}", cwd=workdir
     )
-    assert code == 0
-    assert (subdir / ".broker.db").exists()
+    assert code != 0
+    assert not (subdir / ".broker.db").exists()
 
-    # Mixed order
-    code, stdout, stderr = run_cli(
-        "write", "-f", "mixed.db", "test_queue", "message2", "-q", cwd=workdir
-    )
+    code, stdout, stderr = run_cli("write", "test_queue", "--cleanup", cwd=workdir)
     assert code == 0
-    assert (workdir / "mixed.db").exists()
 
-    # Verify quiet flag worked (no output)
-    assert stdout == ""
-    assert stderr == ""
+    code, stdout, stderr = run_cli("read", "test_queue", cwd=workdir)
+    assert code == 0
+    assert stdout.strip() == "--cleanup"
 
 
 def test_complex_argument_combinations(workdir: Path):
@@ -110,23 +105,21 @@ def test_complex_argument_combinations(workdir: Path):
     subdir = workdir / "complex"
     subdir.mkdir()
 
-    # Everything mixed together
+    # Global options before the command; command operands after it.
     code, stdout, stderr = run_cli(
-        "write",
-        "test_queue",
         f"--dir={subdir}",
         "-f",
         "complex.db",
+        "write",
+        "test_queue",
         "test message",
-        "-q",
         cwd=workdir,
     )
     assert code == 0
     assert (subdir / "complex.db").exists()
 
-    # Read it back with different order
     code, stdout, stderr = run_cli(
-        f"--dir={subdir}", "read", "-f", "complex.db", "test_queue", cwd=workdir
+        f"--dir={subdir}", "-f", "complex.db", "read", "test_queue", cwd=workdir
     )
     assert code == 0
     assert stdout.strip() == "test message"

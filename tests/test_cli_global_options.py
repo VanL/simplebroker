@@ -1,6 +1,5 @@
-"""Test global options can appear anywhere in command line."""
+"""Test global option placement."""
 
-import os
 from pathlib import Path
 
 import pytest
@@ -8,28 +7,40 @@ import pytest
 from .conftest import run_cli
 
 
-def test_global_options_after_subcommand(workdir: Path):
-    """Test that global options work when placed after the subcommand."""
-    # Test -q after subcommand
-    code, stdout, stderr = run_cli("write", "q1", "msg1", "-q", cwd=workdir)
+def test_free_form_message_can_look_like_global_option(workdir: Path):
+    """Global-looking message text after write is treated as data."""
+    code, stdout, stderr = run_cli("write", "q1", "--cleanup", cwd=workdir)
     assert code == 0
-    assert stdout == ""
-    assert stderr == ""
 
     # Verify message was written
     code, stdout, stderr = run_cli("read", "q1", cwd=workdir)
     assert code == 0
-    assert stdout.strip() == "msg1"
+    assert stdout.strip() == "--cleanup"
 
 
-def test_global_options_between_args(workdir: Path):
-    """Test global options between subcommand arguments."""
-    # Test -q between subcommand and args
-    code, stdout, stderr = run_cli("write", "-q", "q2", "msg2", cwd=workdir)
+def test_broadcast_message_can_look_like_global_option(workdir: Path):
+    """Global-looking message text after broadcast is treated as data."""
+    code, stdout, stderr = run_cli("write", "q1", "seed", cwd=workdir)
+    assert code == 0
+
+    code, stdout, stderr = run_cli("broadcast", "--cleanup", cwd=workdir)
+    assert code == 0
+
+    code, stdout, stderr = run_cli("read", "q1", cwd=workdir)
+    assert code == 0
+    assert stdout.strip() == "seed"
+
+    code, stdout, stderr = run_cli("read", "q1", cwd=workdir)
+    assert code == 0
+    assert stdout.strip() == "--cleanup"
+
+
+def test_global_options_before_subcommand(workdir: Path):
+    """Global options work before the subcommand."""
+    code, stdout, stderr = run_cli("-q", "write", "q2", "msg2", cwd=workdir)
     assert code == 0
     assert stdout == ""
 
-    # Test --dir is not needed after we're using workdir fixture
     code, stdout, stderr = run_cli("write", "q3", "msg3", cwd=workdir)
     assert code == 0
 
@@ -42,48 +53,40 @@ def test_global_options_between_args(workdir: Path):
 
 @pytest.mark.sqlite_only
 def test_multiple_global_options_mixed(workdir: Path):
-    """Test multiple global options in various positions."""
-    # Mix global options before and after subcommand
+    """Test multiple global options before the subcommand."""
     code, stdout, stderr = run_cli(
-        "-f", "custom.db", "write", "q4", "msg4", "-q", cwd=workdir
+        "-f", "custom.db", "-q", "write", "q4", "msg4", cwd=workdir
     )
     assert code == 0
     assert stdout == ""
 
-    # Verify with same mixed options
-    code, stdout, stderr = run_cli("read", "-f", "custom.db", "q4", cwd=workdir)
+    code, stdout, stderr = run_cli("-f", "custom.db", "read", "q4", cwd=workdir)
     assert code == 0
     assert stdout.strip() == "msg4"
 
 
-def test_version_flag_anywhere(workdir: Path):
-    """Test --version flag works in any position."""
-    # After subcommand
-    code, stdout, stderr = run_cli("write", "dummy", "msg", "--version", cwd=workdir)
+def test_version_flag_before_command(workdir: Path):
+    """Test --version before a command exits before executing the command."""
+    code, stdout, stderr = run_cli("--version", "write", "dummy", "msg", cwd=workdir)
     assert code == 0
     assert "simplebroker" in stdout
     assert "write" not in stdout  # Should not execute write command
 
-    # Between args
-    code, stdout, stderr = run_cli("write", "--version", "dummy", "msg", cwd=workdir)
+    code, stdout, stderr = run_cli("--version", cwd=workdir)
     assert code == 0
     assert "simplebroker" in stdout
 
 
-def test_cleanup_flag_anywhere(workdir: Path):
-    """Test --cleanup flag works in any position."""
+def test_cleanup_flag_after_subcommand_is_not_global(workdir: Path):
+    """Post-command --cleanup is not hoisted into destructive global cleanup."""
     # Create a database first
     code, stdout, stderr = run_cli("write", "q", "msg", cwd=workdir)
     assert code == 0
 
-    # Cleanup with flag after subcommand
     code, stdout, stderr = run_cli("list", "--cleanup", "-q", cwd=workdir)
-    assert code == 0
+    assert code != 0
 
-    # Verify database was removed (new write should create fresh db)
-    # On PG, --cleanup drops the schema; re-init so list can work.
-    if os.environ.get("BROKER_TEST_BACKEND") in {"postgres", "redis"}:
-        run_cli("init", cwd=workdir)
+    # Verify database was not cleaned up.
     code, stdout, stderr = run_cli("list", cwd=workdir)
     assert code == 0
-    assert stdout.strip() == ""  # No queues
+    assert "q: 1" in stdout
