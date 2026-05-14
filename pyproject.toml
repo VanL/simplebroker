@@ -91,6 +91,9 @@ markers = [
 
 [tool.mypy]
 python_version = "3.14"
+exclude = [
+    "^extensions/simplebroker_redis/",
+]
 no_namespace_packages = true
 warn_return_any = true
 warn_unused_configs = true

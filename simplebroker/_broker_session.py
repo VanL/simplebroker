@@ -8,7 +8,7 @@ import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
 from ._constants import load_config, resolve_config
@@ -137,7 +137,9 @@ class _ProcessBrokerSession:
             if self._closed:
                 raise RuntimeError("Broker session is closed")
 
-            core = getattr(self._thread_local, "core", None)
+            core = cast(
+                BrokerConnection | None, getattr(self._thread_local, "core", None)
+            )
             if core is not None:
                 core.set_stop_event(stop_event)
                 return core
