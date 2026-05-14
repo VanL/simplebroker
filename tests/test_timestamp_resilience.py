@@ -20,6 +20,11 @@ import pytest
 from simplebroker.db import BrokerDB
 
 
+def _requires_sql_runner(broker) -> None:
+    if getattr(getattr(broker, "_backend_plugin", None), "sql", None) is None:
+        pytest.skip("SQL-runner timestamp fault injection is not supported here")
+
+
 @pytest.mark.shared
 def test_normal_operation_no_conflicts(broker):
     """Verify normal operation has zero overhead."""
@@ -36,6 +41,7 @@ def test_normal_operation_no_conflicts(broker):
 @pytest.mark.shared
 def test_forced_conflict_handled(broker):
     """Test that if somehow a conflict occurs, it's handled gracefully."""
+    _requires_sql_runner(broker)
     # Insert a message with a known timestamp via raw runner
     with broker._lock:
         broker._runner.run(
@@ -92,6 +98,7 @@ def test_transient_conflict_recovery(broker):
 @pytest.mark.shared
 def test_truly_unresolvable_conflict_fails_safely(broker):
     """Test that truly unresolvable conflicts fail with clear error."""
+    _requires_sql_runner(broker)
     with broker._lock:
         broker._runner.run(
             broker._sql.INSERT_MESSAGE,
@@ -149,6 +156,7 @@ def test_resync_fixes_inconsistent_state(broker):
 @pytest.mark.shared
 def test_state_inconsistency_direct_fix(broker):
     """Test that resync correctly fixes state inconsistency."""
+    _requires_sql_runner(broker)
     for i in range(5):
         broker.write("queue", f"Message {i}")
 
@@ -173,6 +181,7 @@ def test_state_inconsistency_direct_fix(broker):
 @pytest.mark.shared
 def test_unresolvable_conflict(broker):
     """Test handling of truly unresolvable conflicts."""
+    _requires_sql_runner(broker)
     with broker._lock:
         broker._runner.begin_immediate()
         broker._runner.run(

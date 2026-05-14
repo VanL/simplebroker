@@ -76,7 +76,8 @@ def test_cleanup_nonexistent_database(workdir):
         assert not db_path.exists()
     else:
         config = load_project_config(workdir / PROJECT_CONFIG_FILENAME)
-        get_backend_plugin("postgres").cleanup_target(
+        backend_name = str(config["backend"])
+        get_backend_plugin(backend_name).cleanup_target(
             str(config["target"]),
             backend_options=dict(config["backend_options"]),
         )

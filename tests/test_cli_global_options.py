@@ -82,7 +82,7 @@ def test_cleanup_flag_anywhere(workdir: Path):
 
     # Verify database was removed (new write should create fresh db)
     # On PG, --cleanup drops the schema; re-init so list can work.
-    if os.environ.get("BROKER_TEST_BACKEND") == "postgres":
+    if os.environ.get("BROKER_TEST_BACKEND") in {"postgres", "redis"}:
         run_cli("init", cwd=workdir)
     code, stdout, stderr = run_cli("list", cwd=workdir)
     assert code == 0
