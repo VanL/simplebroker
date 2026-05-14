@@ -109,6 +109,7 @@ def _run_synchronized_pre_checks(
     watcher_type: type[ConcurrencyTestWatcher],
     *,
     num_watchers: int = 20,
+    warm_thread_connections: bool = False,
 ) -> ConcurrentPreCheckResult:
     """Run one simultaneous pre-check per watcher and return observed counters."""
     broker = make_broker(broker_target)
@@ -125,6 +126,11 @@ def _run_synchronized_pre_checks(
     def run_pre_check(watcher: ConcurrencyTestWatcher) -> bool:
         nonlocal active_pre_checks, max_concurrent
         barrier_timeout = scale_timeout_for_ci(2.0)
+        if warm_thread_connections:
+            # Persistent watcher queues use thread-local cores. Warm in this
+            # worker thread so the timing assertion measures the pre-check
+            # query, not first-use connection setup.
+            watcher._queue_obj.has_pending(None)
         start_barrier.wait(timeout=barrier_timeout)
         with active_lock:
             active_pre_checks += 1
@@ -627,6 +633,7 @@ def test_concurrent_pre_check_timing(broker_target) -> None:
     result = _run_synchronized_pre_checks(
         broker_target,
         TimingWatcher,
+        warm_thread_connections=True,
     )
 
     assert result.total_pre_check_errors == 0
