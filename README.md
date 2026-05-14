@@ -5,21 +5,42 @@
   [![PyPI version](https://badge.fury.io/py/simplebroker.svg)](https://badge.fury.io/py/simplebroker)
   [![Python versions](https://img.shields.io/pypi/pyversions/simplebroker.svg)](https://pypi.org/project/simplebroker/)
 
-*A lightweight message queue backed by SQLite. No setup required, just works.*
+*A lightweight message queue backed by SQLite. No server, no daemon, no
+dependency resolver surprises.*
 
 ```bash
 $ pipx install simplebroker
-$ broker write tasks "ship it 🚀"
+$ broker write tasks "ship it"
 $ broker read tasks
-ship it 🚀
+ship it
 ```
 
-SimpleBroker is a zero-configuration, no-dependency message queue that runs anywhere Python runs. It is designed to be simple to install, simple to operate, and powerful enough for real work.
+SimpleBroker exists for the space between shell pipes and a real broker fleet:
+local automation, agents, cron jobs, test harnesses, small services, and
+project-local coordination that need durable queue semantics without operating
+Redis, RabbitMQ, or a cloud service. The default install has no runtime
+dependencies and stores its state in one SQLite database.
+
+## Recommended For
+
+- **Python projects that need a queue without infrastructure.** Most queue
+  stacks assume Redis, RabbitMQ, Celery, or a managed service. SimpleBroker's
+  default install does not. That matters for tools shipped to users who should
+  not have to set up a queue server.
+- **Shell scripts, cron jobs, and CI/CD pipelines.** `broker write tasks
+  "build #123"` composes with pipes, exit codes, and `--json` like a Unix tool.
+- **Coding agents that need a queue primitive.** The CLI gives agents a durable
+  coordination point without an MCP server, daemon, or project-specific setup.
+- **Library and tool authors embedding queue semantics.** Use a small client or
+  context object over SimpleBroker, translate your app settings into `BROKER_*`
+  config, and hand out queues bound to one resolved broker target. Weft is the
+  reference implementation of this pattern.
 
 ## Table of Contents
 
 - [SimpleBroker](#simplebroker)
   - [Table of Contents](#table-of-contents)
+  - [Recommended For](#recommended-for)
   - [Features](#features)
   - [Use Cases](#use-cases)
   - [Installation](#installation)
@@ -46,6 +67,7 @@ SimpleBroker is a zero-configuration, no-dependency message queue that runs anyw
     - [Thread-Based Background Processing](#thread-based-background-processing)
     - [Context Manager Support](#context-manager-support)
     - [Advanced: Custom Extensions](#advanced-custom-extensions)
+  - [Embedding SimpleBroker in Your Project](#embedding-simplebroker-in-your-project)
   - [Performance \& Tuning](#performance--tuning)
     - [Cross-Backend Benchmarking](#cross-backend-benchmarking)
     - [Environment Variables](#environment-variables)
@@ -53,6 +75,7 @@ SimpleBroker is a zero-configuration, no-dependency message queue that runs anyw
     - [Basic Project Scoping](#basic-project-scoping)
     - [Global Scope](#global-scope)
     - [Project Database Names](#project-database-names)
+    - [Project Config Names](#project-config-names)
     - [Error Behavior When No Project Database Found](#error-behavior-when-no-project-database-found)
     - [Project Initialization](#project-initialization)
     - [Precedence Rules](#precedence-rules)
@@ -110,7 +133,7 @@ The CLI is available as both `broker` and `simplebroker`.
 
 **Requirements:**
 - Python 3.10+
-- SQLite 3.35+ (released March 2021) - required for `DELETE...RETURNING` support
+- SQLite 3.35+ (released March 2021) - required for `RETURNING` support
 
 
 ## Quick Start
@@ -407,8 +430,9 @@ $ broker read worker2  # -> "shutdown signal"
 <summary>Unix Tool Integration</summary>
 
 ```bash
-# Store command output
+# Pipe command output into a queue
 $ df -h | broker write monitoring -
+$ broker peek monitoring
 
 # Process files through a queue
 $ find . -name "*.log" | while read f; do
@@ -421,25 +445,6 @@ $ broker read logfiles --all | xargs -P 4 -I {} process_log {}
 # Remote queue via SSH
 $ echo "remote task" | ssh server "cd /app && broker write tasks -"
 $ ssh server "cd /app && broker read tasks"
-
-
-### Integration with Unix Tools
-
-```bash
-# Pipe to queue
-$ df -h | broker write monitoring -
-
-# Store command output
-$ df -h | broker write monitoring -
-$ broker peek monitoring
-
-# Process files through a queue
-$ find . -name "*.log" | while read f; do
-    broker write logfiles "$f"
-done
-
-# Parallel processing with xargs
-$ broker read logfiles --all | xargs -P 4 -I {} process_log {}
 
 # Use absolute paths for databases in specific locations
 $ broker -f /var/lib/myapp/queue.db write tasks "backup database"
@@ -605,7 +610,6 @@ SimpleBroker also provides a Python API for more advanced use cases:
 
 ```python
 from simplebroker import Queue, QueueWatcher
-from simplebroker.db import DBConnection
 import logging
 
 # Basic usage
@@ -645,11 +649,10 @@ def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
 
 ### Delivery guarantees
 
-Materialized batch APIs such as `Queue.read_many()`, `Queue.move_many()`,
-`BrokerDB.claim_many()`, and `BrokerDB.move_many()` commit before returning
-their result lists. Passing `delivery_guarantee="at_least_once"` is supported on
-those APIs and is satisfied by the stricter exactly-once materialization
-behavior.
+Materialized batch APIs such as `Queue.read_many()` and `Queue.move_many()`
+commit before returning their result lists. Passing
+`delivery_guarantee="at_least_once"` is supported on those APIs and is
+satisfied by the stricter exactly-once materialization behavior.
 
 Use generator APIs such as `Queue.read_generator()` and `Queue.move_generator()`
 when you need retry-on-stop batch processing. In `delivery_guarantee="at_least_once"`
@@ -663,28 +666,12 @@ listing every queue:
 
 ```python
 from simplebroker import Queue, QueueStats
-from simplebroker.db import DBConnection
 
 queue = Queue("tasks")
 
 if queue.exists():
     stats: QueueStats = queue.stats()
     print(stats.pending, stats.claimed, stats.total)
-
-with DBConnection("myapp.db") as conn:
-    db = conn.get_connection()
-
-    # Exact queue lookup: backed by WHERE queue = ?
-    stats = db.get_queue_stat("tasks")
-    print(f"{stats.queue}: {stats.pending} pending")
-
-    # Prefix lookup: backed by a queue-name range query
-    for stats in db.list_queue_stats(prefix="jobs."):
-        print(f"{stats.queue}: {stats.pending}/{stats.total}")
-
-    # Pattern lookup: uses the literal prefix as a SQL prefilter when possible
-    for stats in db.list_queue_stats(pattern="jobs.*"):
-        print(stats.queue)
 ```
 
 `QueueStats.pending` is the unclaimed count. `QueueStats.claimed` is the count
@@ -696,14 +683,10 @@ is true when `total > 0`.
 Sometimes you need a broker-compatible timestamp/ID before enqueueing a message (for logging, correlation IDs, or backpressure planning). You can ask SimpleBroker to generate one without writing a row:
 
 ```python
-with DBConnection("/path/to/.broker.db") as conn:
-    db = conn.get_connection()
-    ts = db.generate_timestamp()  # alias: db.get_ts()
-
 queue = Queue("tasks", db_path="/path/to/.broker.db")
-ts2 = queue.generate_timestamp()  # alias: queue.get_ts()
+ts = queue.generate_timestamp()  # alias: queue.get_ts()
 
-print(ts2 > ts)  # Monotonic within a database
+print(ts)  # Monotonic within a database
 ```
 
 Notes:
@@ -840,24 +823,22 @@ async def main():
         print(f"Got: {msg}")
 ```
 
-For advanced use cases requiring direct database access, you can use the `DBConnection` context manager:
+For advanced use cases requiring cross-queue access, resolve a target once and
+open a backend-agnostic broker handle:
 
 ```python
-from simplebroker.db import DBConnection
+from simplebroker import open_broker, target_for_directory
 
-# Safe database connection management for cross-queue operations
-with DBConnection("myapp.db") as conn:
-    db = conn.get_connection()
-    
-    # Perform cross-queue operations
-    stats = db.get_queue_stat("tasks")
+target = target_for_directory("/srv/myapp")
+
+with open_broker(target) as broker:
+    stats = broker.get_queue_stat("tasks")
     print(f"{stats.queue}: {stats.pending} pending")
 
-    for stats in db.list_queue_stats(prefix="jobs."):
+    for stats in broker.list_queue_stats(prefix="jobs."):
         print(f"{stats.queue}: {stats.pending} pending")
-    
-    # Broadcast to all queues
-    db.broadcast("System maintenance at 5pm")
+
+    broker.broadcast("System maintenance at 5pm")
 ```
 
 **Key async integration strategies:**
@@ -865,7 +846,7 @@ with DBConnection("myapp.db") as conn:
 1. **Use Queue API**: Prefer the high-level Queue class for single-queue operations
 2. **Thread Pool Executor**: Run SimpleBroker's sync methods in threads
 3. **One Queue Per Operation**: Create fresh Queue instances for thread safety
-4. **DBConnection for Advanced Use**: Use DBConnection context manager for cross-queue operations
+4. **open_broker for Advanced Use**: Use `open_broker()` for cross-queue operations
 
 See [`examples/async_wrapper.py`](examples/async_wrapper.py) for a complete async wrapper implementation including:
 - Async context manager for proper cleanup
@@ -875,10 +856,11 @@ See [`examples/async_wrapper.py`](examples/async_wrapper.py) for a complete asyn
 
 ### Advanced: Custom Extensions
 
-**Note:** This is an advanced example showing how to extend SimpleBroker's internals. Most users should use the standard Queue API.
+**Note:** Most application extensions should compose the public `Queue` API. Do
+not subclass `BrokerDB` or import underscore-prefixed modules for application
+logic.
 
 ```python
-from simplebroker.db import BrokerDB, DBConnection
 from simplebroker import Queue
 
 class PriorityQueueSystem:
@@ -903,19 +885,87 @@ class PriorityQueueSystem:
                 if msg:
                     return msg
         return None
-
-# For even more advanced use requiring database subclassing:
-class CustomBroker(BrokerDB):
-    """Example of extending BrokerDB directly (advanced users only)."""
-    
-    def custom_operation(self):
-        # Access internal database methods
-        with self._lock:
-            # Your custom SQL operations here
-            pass
 ```
 
-See [`examples/`](examples/) directory for more patterns including async processing and custom runners.
+Backend authors should use the explicit extension contracts in
+`simplebroker.ext`; see [Advanced: External Backend Plugins](#advanced-external-backend-plugins).
+See [`examples/`](examples/) for application-level patterns.
+
+## Embedding SimpleBroker in Your Project
+
+For embedded use, the current best practice is to put a small project-level
+client or context object in front of SimpleBroker. Let that object resolve the
+broker target once, translate your application's settings into `BROKER_*`
+config keys, and hand out queues bound to that target. Application code should
+call the client instead of open-coding `Queue(...)` across the codebase.
+
+Weft is the reference implementation of this pattern. Its public
+`WeftClient` owns a resolved `WeftContext`; `WeftContext.queue(name)` constructs
+`Queue(name, db_path=context.broker_target, config=context.broker_config)`, and
+`WeftContext.broker()` uses `open_broker()` for backend-agnostic cross-queue
+operations. That keeps SQLite, Postgres, and Redis/Valkey selection behind one
+client contract.
+
+The same shape works for smaller projects:
+
+```python
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from simplebroker import (
+    BrokerTarget,
+    Queue,
+    open_broker,
+    resolve_config,
+    target_for_directory,
+)
+
+
+@dataclass(frozen=True)
+class AppBrokerClient:
+    target: BrokerTarget
+    config: dict[str, Any]
+
+    @classmethod
+    def from_root(cls, root: str | Path, **overrides: Any) -> "AppBrokerClient":
+        root_path = Path(root)
+        (root_path / ".myapp").mkdir(parents=True, exist_ok=True)
+        config = resolve_config(
+            {
+                "BROKER_PROJECT_CONFIG_PATH": ".myapp",
+                "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+                "BROKER_DEFAULT_DB_NAME": ".myapp/broker.db",
+                **overrides,
+            }
+        )
+        return cls(target_for_directory(root_path, config=config), config)
+
+    def queue(self, name: str, *, persistent: bool = False) -> Queue:
+        return Queue(
+            name,
+            db_path=self.target,
+            persistent=persistent,
+            config=self.config,
+        )
+
+    def broker(self):
+        return open_broker(self.target, config=self.config)
+
+
+client = AppBrokerClient.from_root("/srv/myapp")
+client.queue("jobs").write("render invoice")
+
+with client.broker() as broker:
+    print(broker.get_queue_stat("jobs"))
+```
+
+The stable embedding surface is the public package API exported from
+`simplebroker` plus the extension contracts in `simplebroker.ext`. Treat
+underscore-prefixed modules and raw storage details as implementation. If your
+application needs its own environment namespace, translate those values into a
+config dict and pass it through `resolve_config()`; avoid importing
+`simplebroker._constants` or guessing database paths.
 
 ## Performance & Tuning
 
@@ -976,7 +1026,7 @@ The harness measures end-to-end CLI behavior for repeated single-message
 
 **Vacuum Settings:**
 - `BROKER_AUTO_VACUUM` - Enable automatic vacuum of claimed messages (default: true)
-- `BROKER_VACUUM_THRESHOLD` - Number of claimed messages before auto-vacuum triggers (default: 10000)
+- `BROKER_VACUUM_THRESHOLD` - Claimed-message ratio that triggers auto-vacuum (default: 10%)
 - `BROKER_VACUUM_BATCH_SIZE` - Number of messages to delete per vacuum batch (default: 1000)
 - `BROKER_VACUUM_LOCK_TIMEOUT` - Seconds before a vacuum lock is considered stale (default: 300)
 
@@ -1250,9 +1300,10 @@ CLI flags (-f absolute path)?
    ├─ YES → Use directory + filename
    └─ NO → BROKER_PROJECT_SCOPE=true?
       ├─ NO → Use env defaults or built-in defaults
-      └─ YES → Search upward for database
-         ├─ FOUND → Use project database
-         └─ NOT FOUND → Error with message to run 'broker init'
+      └─ YES → Search upward for project config, then legacy SQLite database
+         ├─ PROJECT CONFIG FOUND → Use configured project target
+         ├─ SQLITE DATABASE FOUND → Use project database
+         └─ NOTHING FOUND → Error with message to run 'broker init'
 ```
 
 ### Security Notes
@@ -1281,11 +1332,11 @@ Project scoping includes several security measures to prevent unauthorized acces
 
 **Warnings:**
 
-⚠️ **Project scoping allows accessing databases in parent directories.** Only enable in trusted environments where this behavior is desired.
+**Warning:** Project scoping allows accessing databases in parent directories. Only enable in trusted environments where this behavior is desired.
 
-⚠️ **Database sharing:** Multiple processes will share the same database when project scoping is enabled. Ensure your application handles concurrent access appropriately.
+**Warning:** Multiple processes will share the same database when project scoping is enabled. Ensure your application handles concurrent access appropriately.
 
-⚠️ **No automatic fallback:** When project scoping is enabled but no database is found, SimpleBroker will error out rather than creating a database automatically. You must run `broker init` to create a project database.
+**Warning:** When project scoping is enabled but no database is found, SimpleBroker will error out rather than creating a database automatically. You must run `broker init` to create a project database.
 
 **Best practices:**
 ```bash
@@ -1395,6 +1446,31 @@ broker peek registry  # Sees "service-a:healthy:port:8080"
 ## Architecture & Technical Details
 
 <details>
+<summary>Design Philosophy</summary>
+
+SimpleBroker is optimized for boring deployment and predictable embedding.
+Four rules shape the code and API:
+
+1. **One config path.** Supported runtime knobs are represented as `BROKER_*`
+   keys, loaded from environment variables by `load_config()`, and normalized
+   through `resolve_config()`. Not every internal constant is user-configurable;
+   the contract is that runtime configuration goes through one typed path.
+2. **No base runtime dependencies.** The root `pyproject.toml` keeps
+   `dependencies = []`. Optional backends live in separate packages such as
+   `simplebroker-pg` and `simplebroker-redis`. Small portability modules are
+   kept in-tree when they protect the zero-dependency install path.
+3. **Public API first.** Application embedders should use the names exported
+   from `simplebroker`: `Queue`, watcher classes, broker target helpers,
+   `open_broker()`, and `resolve_config()`. Backend authors should use
+   `simplebroker.ext`. Underscore-prefixed modules are implementation details.
+4. **CLI and library share the same operational model.** `broker write tasks
+   "hi"` and `Queue("tasks").write("hi")` should mean the same queue operation
+   over the same resolved target. The CLI has shell-specific affordances and
+   the library has Python-specific helpers, but the queue semantics stay shared.
+
+</details>
+
+<details>
 <summary>Database Schema and Internals</summary>
 
 SimpleBroker uses a single SQLite database with Write-Ahead Logging (WAL) enabled:
@@ -1419,9 +1495,13 @@ CREATE TABLE messages (
 <details>
 <summary>Concurrency and Delivery Guarantees</summary>
 
-**Exactly-Once Delivery:** Read and move operations use atomic `DELETE...RETURNING` operations. A message is delivered exactly once to a consumer by default.
+**Exactly-Once Delivery:** Read and move operations use atomic backend
+transitions. A message is delivered exactly once to a consumer by default.
 
-**FIFO Ordering:** Messages are always read in the exact order they were written to the database, regardless of which process wrote them. This is guaranteed by SQLite's autoincrement and row-level locking.
+**FIFO Ordering:** Messages are read in write order for a queue, regardless of
+which process wrote them. SQLite uses the autoincrement `id` plus serialized
+write transactions; other backends must preserve the same public ordering
+contract.
 
 **Message Lifecycle:**
 1. **Write Phase**: Message inserted with unique timestamp
@@ -1447,10 +1527,11 @@ This optimization is transparent - messages are still delivered exactly once.
 SimpleBroker core remains SQLite-first so that basic usage has no dependencies outside 
 the Python standard library.
 
-If you need a different backend, use an external plugin package through the
-public extension seam. This repository includes a sibling Postgres package for
-that purpose. `simplebroker[pg]` is a convenience extra that installs the
-external `simplebroker-pg` plugin package for you.
+If you need a different backend, use an external plugin package through
+`simplebroker.ext`. This repository includes sibling Postgres and Valkey/Redis
+packages. `simplebroker[pg]` is a convenience extra that installs the external
+`simplebroker-pg` plugin package for you; the Redis package is developed under
+`extensions/simplebroker_redis`.
 
 For end users:
 
@@ -1462,7 +1543,19 @@ For local development against the sibling extension in this repository:
 
 ```bash
 uv pip install -e "./extensions/simplebroker_pg[dev]"
+uv pip install -e "./extensions/simplebroker_redis[dev]"
 ```
+
+There are two backend shapes:
+
+1. **SQL-runner-shaped backends** reuse SimpleBroker's shared `BrokerCore`.
+   They provide a runner plus a SQL namespace matching the core query contract.
+   Postgres is the reference implementation.
+2. **Direct-core backends** implement the broker core protocol directly because
+   the storage system is not SQL-shaped. Redis/Valkey is the reference
+   implementation: it uses Redis data structures and Lua scripts, so forcing it
+   through the SQL runner abstraction would make both correctness and
+   operations worse.
 
 Explicit Python usage:
 
@@ -1533,6 +1626,37 @@ options for that project. Env is still the right place for supplemental secret
 material such as `BROKER_BACKEND_PASSWORD`.
 </details>
 
+<details>
+<summary>Things That Look Weird but Aren't</summary>
+
+**Why so many `BROKER_*` settings?** `load_config()` documents 32 config keys
+because SimpleBroker is also embedded by larger tools. Most users should never
+touch most of them. Embedders such as Weft translate their own namespace into
+those keys and pass the result through `resolve_config()`, which keeps
+configuration mechanical instead of one-off.
+
+**Why is `BROKER_SYNC_MODE=FULL` the default?** The default favors durability
+over benchmark numbers. `NORMAL` is faster and often reasonable, but it changes
+the power-loss risk profile. SimpleBroker starts from the safer default and
+lets callers opt into the tradeoff.
+
+**Why does `_phaselock.py` exist?** SQLite setup has to be safe across
+processes and platforms. The phase-lock module coordinates setup work with
+file locks and extended-attribute fallback so multiple processes do not race
+schema or optimization phases. It is internal, but deliberately self-contained.
+
+**Why are read messages marked claimed before vacuum removes them?** Claiming
+keeps reads fast and atomic while deferring physical cleanup. Vacuum removes
+claimed rows later. This is why queue stats distinguish pending, claimed, and
+total rows.
+
+**Why does Redis/Valkey use a parallel core instead of the Postgres runner
+model?** Postgres is relational, so the SQL-runner contract fits. Redis is a
+key/value data-structure server; a direct core can express reserved batches,
+Lua-backed transitions, Pub/Sub wake hints, and namespace cleanup honestly.
+
+</details>
+
 ## Development & Contributing
 
 SimpleBroker uses [`uv`](https://github.com/astral-sh/uv) for package management and [`ruff`](https://github.com/astral-sh/ruff) for linting.
@@ -1549,6 +1673,7 @@ uv sync --all-extras
 uv run pytest              # Fast tests only
 uv run pytest -m ""        # All tests including slow ones
 uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
+uv run ./bin/pytest-redis  # Redis/Valkey extension tests; requires a local test server
 uv run ./bin/pytest-pg -q tests/test_watcher_metrics.py -k basic
 uv run ./bin/packaging-smoke --python 3.10
 
@@ -1598,3 +1723,6 @@ MIT © Van Lindberg
 ## Acknowledgments
 
 Built with Python, SQLite, and the Unix philosophy.
+
+SimpleBroker's bias is intentional: make the simple path operationally boring,
+then expose the deeper contracts only when the reader is ready for them.
