@@ -11,6 +11,7 @@ def test_ext_imports():
         ActivityWaiter,
         BackendAwareRunner,
         BackendPlugin,
+        BrokerConnection,
         BrokerError,
         DataError,
         IntegrityError,
@@ -30,6 +31,7 @@ def test_ext_imports():
     assert ActivityWaiter is not None
     assert BackendAwareRunner is not None
     assert BackendPlugin is not None
+    assert BrokerConnection is not None
     assert BrokerError is not None
     assert DataError is not None
     assert IntegrityError is not None
@@ -54,6 +56,7 @@ def test_ext_all_exports():
         "SQLiteRunner",
         "SetupPhase",
         "BackendPlugin",
+        "BrokerConnection",
         "ActivityWaiter",
         "BackendAwareRunner",
         "MultiQueueActivityWaiterHook",
