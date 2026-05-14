@@ -777,6 +777,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                     )
                     return EXIT_ERROR
             else:
+                display_target = resolved_target.display_target
                 existed = resolved_target.plugin.cleanup_target(
                     resolved_target.target,
                     backend_options=resolved_target.backend_options,
@@ -784,11 +785,10 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 )
                 if not args.quiet:
                     if existed:
-                        print(f"Database cleaned up: {resolved_target.target}")
+                        print(f"Database cleaned up: {display_target}")
                     else:
                         print(
-                            "Database not found, nothing to clean up: "
-                            f"{resolved_target.target}"
+                            f"Database not found, nothing to clean up: {display_target}"
                         )
             return EXIT_SUCCESS
         except Exception as e:

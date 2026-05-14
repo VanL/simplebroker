@@ -9,6 +9,7 @@ description = "A lightweight message queue backed by SQLite"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
+license-files = ["LICENSE"]
 authors = [
     {name = "Van Lindberg", email = "van.lindberg@gmail.com"},
 ]
@@ -62,14 +63,16 @@ simplebroker-pg = { path = "./extensions/simplebroker_pg", editable = true }
 
 [tool.hatch.build]
 include = [
-    "simplebroker/**/*.py",
-    "simplebroker/py.typed",
-    "README.md",
-    "LICENSE",
+    "/simplebroker/**/*.py",
+    "/simplebroker/py.typed",
+    "/README.md",
+    "/LICENSE",
 ]
 exclude = [
-    "tests/",
-    "agent_history/",
+    "/.agents",
+    "/.github",
+    "/tests",
+    "/agent_history",
     ".*",
     "*.db",
 ]

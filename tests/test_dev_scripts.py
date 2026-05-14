@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import tarfile
 import zipfile
 from email.message import Message
 from pathlib import Path
@@ -10,7 +11,9 @@ import pytest
 from simplebroker import _scripts
 from simplebroker._scripts import (
     _append_marker_expression,
+    _assert_distribution_clean,
     _assert_metadata_contains,
+    _assert_wheel_contains_license,
     _classify_pytest_target,
     _docker_port,
     _extract_pytest_runner_overrides,
@@ -270,6 +273,7 @@ def test_verify_postgres_test_dsn_runs_select_one(
 
 def test_pytest_pg_main_preflights_dsn_before_pytest(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls = []
 
@@ -306,6 +310,36 @@ def test_pytest_pg_main_preflights_dsn_before_pytest(
     assert run_call[2]["SIMPLEBROKER_PG_TEST_DSN"] == "postgresql://example/test"
     assert run_call[2]["BROKER_TEST_BACKEND"] == "postgres"
     assert calls[2] == ("cleanup", "pg-container")
+    assert "postgresql://example/test" in capsys.readouterr().out
+
+
+def test_pytest_pg_main_redacts_dsn_password(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = []
+
+    monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(_scripts.sys, "argv", ["pytest-pg", "tests/test_smoke.py"])
+    monkeypatch.setattr(
+        _scripts,
+        "_start_postgres_container",
+        lambda: ("pg-container", "postgresql://postgres:secret@127.0.0.1:5432/db"),
+    )
+    monkeypatch.setattr(_scripts, "_verify_postgres_test_dsn", lambda dsn: None)
+    monkeypatch.setattr(_scripts, "_cleanup_container", lambda container_name: None)
+
+    def fake_run(cmd, *, cwd=_scripts.ROOT, env=None, capture_output=False):
+        calls.append(("run", cmd, env, capture_output))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(_scripts, "_run", fake_run)
+
+    assert _scripts.pytest_pg_main() == 0
+
+    out = capsys.readouterr().out
+    assert "postgresql://postgres:***@127.0.0.1:5432/db" in out
+    assert "secret" not in out
 
 
 def test_packaging_smoke_main_builds_and_smoke_installs(
@@ -315,8 +349,12 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
     calls = []
     root_wheel = tmp_path / "simplebroker-3.4.2-py3-none-any.whl"
     extension_wheel = tmp_path / "simplebroker_pg-1.3.0-py3-none-any.whl"
+    root_sdist = tmp_path / "simplebroker-3.4.2.tar.gz"
+    extension_sdist = tmp_path / "simplebroker_pg-1.3.0.tar.gz"
     root_wheel.write_text("", encoding="utf-8")
     extension_wheel.write_text("", encoding="utf-8")
+    root_sdist.write_text("", encoding="utf-8")
+    extension_sdist.write_text("", encoding="utf-8")
 
     root_metadata = Message()
     root_metadata["Provides-Extra"] = "pg"
@@ -344,7 +382,11 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
         calls.append(("wheel", dist_dir, pattern))
         if pattern == "simplebroker-*.whl":
             return root_wheel
-        return extension_wheel
+        if pattern == "simplebroker_pg-*.whl":
+            return extension_wheel
+        if pattern == "simplebroker-*.tar.gz":
+            return root_sdist
+        return extension_sdist
 
     def fake_read_wheel_metadata(wheel_path: Path) -> Message:
         calls.append(("metadata", wheel_path))
@@ -358,6 +400,16 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
 
     monkeypatch.setattr(_scripts, "_require_single_wheel", fake_require_single_wheel)
     monkeypatch.setattr(_scripts, "_read_wheel_metadata", fake_read_wheel_metadata)
+    monkeypatch.setattr(
+        _scripts,
+        "_assert_distribution_clean",
+        lambda archive_path: calls.append(("clean", archive_path)),
+    )
+    monkeypatch.setattr(
+        _scripts,
+        "_assert_wheel_contains_license",
+        lambda wheel_path: calls.append(("license", wheel_path)),
+    )
     monkeypatch.setattr(_scripts, "_run", fake_run)
 
     assert _scripts.packaging_smoke_main() == 0
@@ -367,6 +419,12 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
         ("build", _scripts.ROOT),
         ("build", _scripts.ROOT / "extensions" / "simplebroker_pg"),
     ]
+    assert ("clean", root_wheel) in calls
+    assert ("clean", root_sdist) in calls
+    assert ("clean", extension_wheel) in calls
+    assert ("clean", extension_sdist) in calls
+    assert ("license", root_wheel) in calls
+    assert ("license", extension_wheel) in calls
 
     run_calls = [call for call in calls if call[0] == "run"]
     assert len(run_calls) == 3
@@ -433,6 +491,45 @@ def test_assert_metadata_contains_reports_context() -> None:
 
     with pytest.raises(RuntimeError, match="Expected deps to contain"):
         _assert_metadata_contains(["other"], needle="simplebroker-pg", context="deps")
+
+
+def test_assert_distribution_clean_allows_package_files(tmp_path: Path) -> None:
+    wheel = tmp_path / "package-1.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("simplebroker/db.py", "")
+        archive.writestr("simplebroker-1.0.0.dist-info/METADATA", "")
+
+    _assert_distribution_clean(wheel)
+
+
+def test_assert_distribution_clean_rejects_agent_artifacts(tmp_path: Path) -> None:
+    sdist = tmp_path / "package-1.0.0.tar.gz"
+    bad_file = tmp_path / "README.md"
+    bad_file.write_text("", encoding="utf-8")
+    with tarfile.open(sdist, "w:gz") as archive:
+        archive.add(bad_file, "package-1.0.0/.agents/skills/gstack/README.md")
+
+    with pytest.raises(RuntimeError, match=r"\.agents"):
+        _assert_distribution_clean(sdist)
+
+
+def test_assert_wheel_contains_license_accepts_dist_info_license(
+    tmp_path: Path,
+) -> None:
+    wheel = tmp_path / "package-1.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("package-1.0.0.dist-info/licenses/LICENSE", "")
+
+    _assert_wheel_contains_license(wheel)
+
+
+def test_assert_wheel_contains_license_rejects_missing_license(tmp_path: Path) -> None:
+    wheel = tmp_path / "package-1.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("package-1.0.0.dist-info/METADATA", "")
+
+    with pytest.raises(RuntimeError, match="missing bundled LICENSE"):
+        _assert_wheel_contains_license(wheel)
 
 
 def test_venv_python_uses_platform_specific_layout(

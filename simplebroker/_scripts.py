@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import uuid
@@ -16,6 +17,8 @@ import zipfile
 from email.message import Message
 from email.parser import BytesParser
 from pathlib import Path
+
+from ._targets import redact_backend_target
 
 ROOT = Path(__file__).resolve().parents[1]
 POSTGRES_IMAGE = os.environ.get("SIMPLEBROKER_PG_TEST_IMAGE", "postgres:18")
@@ -420,7 +423,7 @@ def pytest_pg_main() -> int:
 
     try:
         container_name, dsn = _start_postgres_container()
-        print(f"Postgres test DSN: {dsn}", flush=True)
+        print(f"Postgres test DSN: {redact_backend_target(dsn)}", flush=True)
         _verify_postgres_test_dsn(dsn)
 
         shared_env = _build_test_env(dsn=dsn, include_backend_marker=True)
@@ -491,6 +494,53 @@ def _read_wheel_metadata(wheel_path: Path) -> Message:
     return BytesParser().parsebytes(metadata_bytes)
 
 
+def _distribution_member_names(archive_path: Path) -> list[str]:
+    if archive_path.suffix == ".whl":
+        with zipfile.ZipFile(archive_path) as archive:
+            return archive.namelist()
+    if archive_path.name.endswith(".tar.gz"):
+        with tarfile.open(archive_path, "r:gz") as archive:
+            return archive.getnames()
+    raise RuntimeError(f"Unsupported distribution archive: {archive_path}")
+
+
+def _assert_distribution_clean(archive_path: Path) -> None:
+    banned_parts = {
+        ".agents",
+        ".claude",
+        ".github",
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        "node_modules",
+        "tests",
+    }
+    banned_suffixes = (".pyc", ".pyo", ".db", ".db-shm", ".db-wal")
+    offenders: list[str] = []
+
+    for name in _distribution_member_names(archive_path):
+        parts = set(Path(name).parts)
+        if parts & banned_parts or name.endswith(banned_suffixes):
+            offenders.append(name)
+
+    if offenders:
+        sample = ", ".join(offenders[:5])
+        raise RuntimeError(
+            f"Distribution {archive_path} contains excluded paths: {sample}"
+        )
+
+
+def _assert_wheel_contains_license(wheel_path: Path) -> None:
+    license_names = {
+        Path(name).name
+        for name in _distribution_member_names(wheel_path)
+        if ".dist-info/licenses" in Path(name).parts or Path(name).name == "LICENSE"
+    }
+    if "LICENSE" not in license_names:
+        raise RuntimeError(f"Wheel {wheel_path} is missing bundled LICENSE")
+
+
 def _assert_metadata_contains(values: list[str], *, needle: str, context: str) -> None:
     if not any(needle in value for value in values):
         raise RuntimeError(f"Expected {context} to contain {needle!r}, got {values!r}")
@@ -542,6 +592,15 @@ def packaging_smoke_main() -> int:
 
         root_wheel = _require_single_wheel(root_dist, "simplebroker-*.whl")
         extension_wheel = _require_single_wheel(extension_dist, "simplebroker_pg-*.whl")
+        root_sdist = _require_single_wheel(root_dist, "simplebroker-*.tar.gz")
+        extension_sdist = _require_single_wheel(
+            extension_dist, "simplebroker_pg-*.tar.gz"
+        )
+
+        for archive_path in (root_wheel, root_sdist, extension_wheel, extension_sdist):
+            _assert_distribution_clean(archive_path)
+        for wheel_path in (root_wheel, extension_wheel):
+            _assert_wheel_contains_license(wheel_path)
 
         root_metadata = _read_wheel_metadata(root_wheel)
         extension_metadata = _read_wheel_metadata(extension_wheel)
@@ -622,4 +681,9 @@ def packaging_smoke_main() -> int:
         return 1
 
 
-__all__ = ["packaging_smoke_main", "pytest_pg_main"]
+__all__ = [
+    "_assert_distribution_clean",
+    "_assert_wheel_contains_license",
+    "packaging_smoke_main",
+    "pytest_pg_main",
+]

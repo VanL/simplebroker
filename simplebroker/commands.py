@@ -982,17 +982,19 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
     """
     if isinstance(db_path, ResolvedTarget):
         target_str = db_path.target
+        display_target = db_path.display_target
         target_path = db_path.target_path
 
         if db_path.backend_name == "sqlite" and target_path is not None:
             if target_path.exists():
                 if _is_valid_sqlite_db(target_path):
                     if not quiet:
-                        print(f"SimpleBroker database already exists: {target_str}")
+                        print(f"SimpleBroker database already exists: {display_target}")
                     return EXIT_SUCCESS
 
                 print(
-                    f"Error: File exists but is not a SimpleBroker database: {target_str}\n"
+                    "Error: File exists but is not a SimpleBroker database: "
+                    f"{display_target}\n"
                     f"Please remove the file manually and run 'broker init' again.",
                     file=sys.stderr,
                 )
@@ -1009,7 +1011,7 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
                 pass
             else:
                 if not quiet:
-                    print(f"SimpleBroker target already exists: {target_str}")
+                    print(f"SimpleBroker target already exists: {display_target}")
                 return EXIT_SUCCESS
 
         try:
@@ -1019,9 +1021,9 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
             )
             if not quiet:
                 if db_path.backend_name == "sqlite":
-                    print(f"Initialized SimpleBroker database: {target_str}")
+                    print(f"Initialized SimpleBroker database: {display_target}")
                 else:
-                    print(f"Initialized SimpleBroker target: {target_str}")
+                    print(f"Initialized SimpleBroker target: {display_target}")
             return EXIT_SUCCESS
         except Exception as e:
             print(f"Error initializing database: {e}", file=sys.stderr)

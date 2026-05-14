@@ -9,6 +9,7 @@ description = "Postgres backend plugin for SimpleBroker"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
+license-files = ["LICENSE"]
 authors = [
     {name = "Van Lindberg", email = "van.lindberg@gmail.com"},
 ]
@@ -32,8 +33,9 @@ simplebroker = { path = "../..", editable = true }
 
 [tool.hatch.build]
 include = [
-    "simplebroker_pg/**/*.py",
-    "README.md",
+    "/simplebroker_pg/**/*.py",
+    "/README.md",
+    "/LICENSE",
 ]
 
 [tool.pytest.ini_options]
