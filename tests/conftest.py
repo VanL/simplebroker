@@ -96,6 +96,7 @@ finally:
 """
 
 POSTGRES_TEST_BACKEND = "postgres"
+REDIS_TEST_BACKEND = "redis"
 _SQLITE_ONLY_RUN_CLI_MODULE_REASONS = {
     "test_absolute_path.py": "Exercises SQLite file path semantics via -f/-d and asserts on real database files.",
     "test_cli_argument_parsing.py": "Validates --dir/--file path parsing by asserting specific SQLite file creation locations.",
@@ -226,6 +227,80 @@ def _cleanup_postgres_projects(root: Path) -> None:
             backend_options={"schema": schema},
         )
         cleaned_schemas.add(schema)
+
+
+def _redis_test_url() -> str | None:
+    return os.environ.get("SIMPLEBROKER_VALKEY_TEST_URL") or os.environ.get(
+        "SIMPLEBROKER_REDIS_TEST_URL"
+    )
+
+
+def _redis_namespace_name(root: Path) -> str:
+    digest = hashlib.sha1(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
+    return f"pytest_{digest}"
+
+
+def _ensure_redis_project_config(config_root: Path, *, url: str) -> Path:
+    existing = find_project_config(config_root)
+    if existing is not None:
+        return existing
+
+    config_root.mkdir(parents=True, exist_ok=True)
+    namespace = os.environ.get(
+        "SIMPLEBROKER_REDIS_TEST_NAMESPACE"
+    ) or _redis_namespace_name(config_root)
+    config_path = project_config_path_for_directory(config_root)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "redis"',
+                f'target = "{url}"',
+                "",
+                "[backend_options]",
+                f'namespace = "{namespace}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return config_path
+
+
+def _cleanup_redis_projects(root: Path) -> None:
+    if _test_backend_name() != REDIS_TEST_BACKEND:
+        return
+    url = _redis_test_url()
+    if not url:
+        return
+
+    from simplebroker._backend_plugins import get_backend_plugin
+    from simplebroker._project_config import load_project_config
+
+    plugin = get_backend_plugin(REDIS_TEST_BACKEND)
+    cleaned_namespaces: set[str] = set()
+    config_filenames = {
+        PROJECT_CONFIG_FILENAME,
+        project_config_path_for_directory(root).name,
+    }
+    config_paths = {
+        config_path
+        for filename in config_filenames
+        for config_path in root.rglob(filename)
+    }
+    for config_path in config_paths:
+        try:
+            config = load_project_config(config_path)
+        except Exception:
+            continue
+        if config.get("backend") != REDIS_TEST_BACKEND:
+            continue
+        namespace = str(config.get("backend_options", {}).get("namespace", "")).strip()
+        if not namespace or namespace in cleaned_namespaces:
+            continue
+        plugin.cleanup_target(url, backend_options={"namespace": namespace})
+        cleaned_namespaces.add(namespace)
 
 
 # --------------------------------------------------------------------------- #
@@ -381,6 +456,113 @@ def _reset_pg_tables(runner: Any, plugin: Any) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Valkey/Redis worker-scoped fixtures (one namespace per xdist worker)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(scope="session")
+def redis_worker_url() -> str | None:
+    """Return the Valkey test URL, or None when not running against Redis."""
+    if _test_backend_name() != REDIS_TEST_BACKEND:
+        return None
+    url = _redis_test_url()
+    if not url:
+        raise RuntimeError(
+            "BROKER_TEST_BACKEND=redis requires SIMPLEBROKER_VALKEY_TEST_URL"
+        )
+    return url
+
+
+@pytest.fixture(scope="session")
+def redis_worker_namespace(worker_id: str, redis_worker_url: str | None) -> str | None:
+    if redis_worker_url is None:
+        return None
+    namespace = f"pytest_worker_{worker_id}"
+    os.environ["SIMPLEBROKER_REDIS_TEST_NAMESPACE"] = namespace
+    return namespace
+
+
+@pytest.fixture(scope="session")
+def redis_worker_tmpdir(
+    tmp_path_factory: pytest.TempPathFactory,
+    redis_worker_url: str | None,
+    redis_worker_namespace: str | None,
+) -> Path | None:
+    if redis_worker_url is None or redis_worker_namespace is None:
+        return None
+    root = tmp_path_factory.mktemp("redis_worker")
+    config_path = root / PROJECT_CONFIG_FILENAME
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "redis"',
+                f'target = "{redis_worker_url}"',
+                "",
+                "[backend_options]",
+                f'namespace = "{redis_worker_namespace}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+@pytest.fixture(scope="session")
+def redis_worker_plugin(redis_worker_url: str | None) -> BackendPlugin | None:
+    if redis_worker_url is None:
+        return None
+    from simplebroker._backend_plugins import get_backend_plugin
+
+    return get_backend_plugin(REDIS_TEST_BACKEND)
+
+
+@pytest.fixture(scope="session")
+def redis_worker_runner(
+    redis_worker_url: str | None,
+    redis_worker_namespace: str | None,
+    redis_worker_plugin: BackendPlugin | None,
+) -> Iterator[Any]:
+    if (
+        redis_worker_url is None
+        or redis_worker_namespace is None
+        or redis_worker_plugin is None
+    ):
+        yield None
+        return
+
+    from simplebroker_redis import RedisRunner  # type: ignore[import-untyped]
+
+    runner = RedisRunner(redis_worker_url, namespace=redis_worker_namespace)
+    redis_worker_plugin.initialize_target(
+        redis_worker_url,
+        backend_options={"namespace": redis_worker_namespace},
+    )
+    try:
+        yield runner
+    finally:
+        try:
+            redis_worker_plugin.cleanup_target(
+                redis_worker_url,
+                backend_options={"namespace": redis_worker_namespace},
+            )
+        except Exception:
+            pass
+        runner.shutdown()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _redis_worker_bootstrap(redis_worker_runner: Any) -> None:
+    """Autouse: ensure the Redis worker namespace is initialized."""
+
+
+def _reset_redis_namespace(url: str, namespace: str, plugin: Any) -> None:
+    plugin.cleanup_target(url, backend_options={"namespace": namespace})
+    plugin.initialize_target(url, backend_options={"namespace": namespace})
+
+
+# --------------------------------------------------------------------------- #
 # Backend-agnostic fixtures (broker_factory)
 # --------------------------------------------------------------------------- #
 
@@ -392,6 +574,10 @@ def broker_target(
     pg_worker_schema: str | None,
     pg_worker_runner: Any,
     pg_worker_plugin: BackendPlugin | None,
+    redis_worker_url: str | None,
+    redis_worker_namespace: str | None,
+    redis_worker_runner: Any,
+    redis_worker_plugin: BackendPlugin | None,
 ) -> ResolvedTarget:
     """Backend-agnostic resolved target for the active backend."""
     if _test_backend_name() == POSTGRES_TEST_BACKEND:
@@ -404,6 +590,19 @@ def broker_target(
             backend="postgres",
             pg_dsn=pg_worker_dsn,
             pg_schema=pg_worker_schema,
+        )
+    if _test_backend_name() == REDIS_TEST_BACKEND:
+        assert redis_worker_url is not None
+        assert redis_worker_namespace is not None
+        assert redis_worker_runner is not None
+        _reset_redis_namespace(
+            redis_worker_url, redis_worker_namespace, redis_worker_plugin
+        )
+        return make_target(
+            tmp_path,
+            backend="redis",
+            redis_url=redis_worker_url,
+            redis_namespace=redis_worker_namespace,
         )
     return make_target(tmp_path, backend="sqlite")
 
@@ -451,6 +650,11 @@ def workdir(
     pg_worker_tmpdir: Path | None,
     pg_worker_runner: Any,
     pg_worker_plugin: BackendPlugin | None,
+    redis_worker_tmpdir: Path | None,
+    redis_worker_url: str | None,
+    redis_worker_namespace: str | None,
+    redis_worker_runner: Any,
+    redis_worker_plugin: BackendPlugin | None,
 ) -> Iterator[Path]:
     """
     Per-test temporary working directory.
@@ -466,6 +670,17 @@ def workdir(
         monkeypatch.chdir(pg_worker_tmpdir)
         monkeypatch.setenv("BROKER_PROJECT_SCOPE", "1")
         yield pg_worker_tmpdir
+    elif _test_backend_name() == REDIS_TEST_BACKEND:
+        assert redis_worker_tmpdir is not None
+        assert redis_worker_url is not None
+        assert redis_worker_namespace is not None
+        assert redis_worker_runner is not None
+        _reset_redis_namespace(
+            redis_worker_url, redis_worker_namespace, redis_worker_plugin
+        )
+        monkeypatch.chdir(redis_worker_tmpdir)
+        monkeypatch.setenv("BROKER_PROJECT_SCOPE", "1")
+        yield redis_worker_tmpdir
     else:
         monkeypatch.chdir(tmp_path)
         yield tmp_path
@@ -544,6 +759,18 @@ def run_cli(
         # Schema is pre-initialized by the session-scoped pg_worker_runner
         # fixture.  Each CLI subprocess will run its own idempotent
         # initialize_database() via BrokerCore.__init__.
+        full_env.setdefault("BROKER_PROJECT_SCOPE", "1")
+
+    if _test_backend_name(full_env) == REDIS_TEST_BACKEND:
+        url = full_env.get("SIMPLEBROKER_VALKEY_TEST_URL") or full_env.get(
+            "SIMPLEBROKER_REDIS_TEST_URL"
+        )
+        if not url:
+            raise RuntimeError(
+                "BROKER_TEST_BACKEND=redis requires SIMPLEBROKER_VALKEY_TEST_URL"
+            )
+        config_root = _config_root_from_args(args, cwd)
+        _ensure_redis_project_config(config_root, url=url)
         full_env.setdefault("BROKER_PROJECT_SCOPE", "1")
 
     # Use coverage-wrapped subprocess if available, otherwise normal subprocess

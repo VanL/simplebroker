@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from importlib import metadata
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from ._exceptions import DatabaseError
 from ._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 
 if TYPE_CHECKING:
     from ._runner import SQLRunner
+    from .metadata import QueueStats
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
 DEFAULT_BACKEND_NAME = "sqlite"
@@ -183,9 +184,9 @@ class BackendPlugin(Protocol):
 class BrokerConnection(Protocol):
     """Internal broker core protocol used by Queue, CLI, and watchers."""
 
-    def __enter__(self) -> BrokerConnection: ...
+    def __enter__(self) -> Any: ...
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None: ...
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any: ...
 
     def set_stop_event(self, stop_event: Any) -> None: ...
 
@@ -195,55 +196,136 @@ class BrokerConnection(Protocol):
 
     def refresh_last_timestamp(self) -> int: ...
 
-    def write(self, queue: str, message: str) -> int: ...
+    def write(self, queue: str, message: str) -> Any: ...
 
-    def claim_one(self, queue: str, **kwargs: Any) -> Any: ...
+    def claim_one(
+        self,
+        queue: str,
+        *,
+        exact_timestamp: int | None = None,
+        with_timestamps: bool = True,
+    ) -> tuple[str, int] | str | None: ...
 
-    def claim_many(self, queue: str, **kwargs: Any) -> list[Any]: ...
+    def claim_many(
+        self,
+        queue: str,
+        limit: int,
+        *,
+        with_timestamps: bool = True,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+    ) -> list[tuple[str, int]] | list[str]: ...
 
-    def claim_generator(self, queue: str, **kwargs: Any) -> Iterator[Any]: ...
+    def claim_generator(
+        self,
+        queue: str,
+        *,
+        with_timestamps: bool = True,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        batch_size: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+        config: dict[str, Any] = ...,
+    ) -> Iterator[tuple[str, int] | str]: ...
 
-    def peek_one(self, queue: str, **kwargs: Any) -> Any: ...
+    def peek_one(
+        self,
+        queue: str,
+        *,
+        exact_timestamp: int | None = None,
+        with_timestamps: bool = True,
+    ) -> tuple[str, int] | str | None: ...
 
-    def peek_many(self, queue: str, **kwargs: Any) -> list[Any]: ...
+    def peek_many(
+        self,
+        queue: str,
+        limit: int = ...,
+        *,
+        with_timestamps: bool = True,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+    ) -> list[tuple[str, int]] | list[str]: ...
 
-    def peek_generator(self, queue: str, **kwargs: Any) -> Iterator[Any]: ...
+    def peek_generator(
+        self,
+        queue: str,
+        *,
+        with_timestamps: bool = True,
+        batch_size: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+    ) -> Iterator[tuple[str, int] | str]: ...
 
-    def move_one(self, source_queue: str, target_queue: str, **kwargs: Any) -> Any: ...
+    def move_one(
+        self,
+        source_queue: str,
+        target_queue: str,
+        *,
+        exact_timestamp: int | None = None,
+        require_unclaimed: bool = True,
+        with_timestamps: bool = True,
+    ) -> tuple[str, int] | str | None: ...
 
     def move_many(
-        self, source_queue: str, target_queue: str, **kwargs: Any
-    ) -> list[Any]: ...
+        self,
+        source_queue: str,
+        target_queue: str,
+        limit: int,
+        *,
+        with_timestamps: bool = True,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        require_unclaimed: bool = True,
+    ) -> list[tuple[str, int]] | list[str]: ...
 
     def move_generator(
-        self, source_queue: str, target_queue: str, **kwargs: Any
-    ) -> Iterator[Any]: ...
+        self,
+        source_queue: str,
+        target_queue: str,
+        *,
+        with_timestamps: bool = True,
+        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        batch_size: int | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: int | None = None,
+        config: dict[str, Any] = ...,
+    ) -> Iterator[tuple[str, int] | str]: ...
 
     def delete(self, queue: str | None = None) -> int: ...
 
-    def broadcast(
-        self, message: str, *, pattern: str = "*"
-    ) -> list[tuple[str, int]]: ...
+    def broadcast(self, message: str, *, pattern: str | None = None) -> int: ...
 
-    def list_queues(self) -> list[str]: ...
+    def list_queues(self) -> list[tuple[str, int]]: ...
 
-    def get_queue_stats(self, queue: str) -> Any: ...
+    def get_queue_stats(self) -> list[tuple[str, int, int]]: ...
 
     def queue_exists(self, queue: str) -> bool: ...
 
     def queue_exists_and_has_messages(self, queue: str) -> bool: ...
 
-    def get_queue_stat(self, queue: str) -> Any: ...
+    def get_queue_stat(self, queue: str) -> QueueStats: ...
 
-    def list_queue_stats(self) -> list[Any]: ...
+    def list_queue_stats(
+        self,
+        *,
+        prefix: str | None = None,
+        pattern: str | None = None,
+    ) -> list[QueueStats]: ...
 
-    def get_overall_stats(self) -> Any: ...
+    def get_overall_stats(self) -> tuple[int, int]: ...
 
     def count_claimed_messages(self) -> int: ...
 
-    def status(self) -> dict[str, Any]: ...
+    def status(self) -> dict[str, int]: ...
 
-    def has_pending_messages(self, queue: str) -> bool: ...
+    def has_pending_messages(
+        self, queue: str, after_timestamp: int | None = None
+    ) -> bool: ...
 
     def get_data_version(self) -> int | None: ...
 
@@ -263,9 +345,9 @@ class BrokerConnection(Protocol):
 
     def add_alias(self, name: str, target: str) -> None: ...
 
-    def remove_alias(self, name: str) -> bool: ...
+    def remove_alias(self, name: str) -> None: ...
 
-    def get_meta(self) -> dict[str, Any]: ...
+    def get_meta(self) -> dict[str, int | str]: ...
 
     def close(self) -> None: ...
 

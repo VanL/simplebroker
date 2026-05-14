@@ -46,7 +46,7 @@ from ._exceptions import (
     StopException,
 )
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner, close_owned_runner
-from ._sql import RetrieveQuerySpec
+from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
 from .helpers import _execute_with_retry, execute_setup_with_retry, interruptible_sleep
@@ -87,6 +87,18 @@ def _is_direct_backend(plugin: BackendPlugin) -> bool:
     return getattr(plugin, "sql", None) is None and bool(
         getattr(plugin, "is_direct_backend", False)
     )
+
+
+def _get_sql_namespace(plugin: BackendPlugin) -> BackendSQLNamespace:
+    """Return the SQL namespace for runner-backed broker cores."""
+
+    sql = plugin.sql
+    if sql is None:
+        raise RuntimeError(
+            f"Backend plugin '{plugin.name}' cannot be used with BrokerCore "
+            "because it does not expose a SQL namespace"
+        )
+    return sql
 
 
 def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -273,14 +285,14 @@ class DBConnection:
                 else get_backend_plugin("sqlite")
             )
         )
-        self._runner: Any | None = None
+        self._runner: SQLRunner | None = None
         if runner is not None:
             self._runner = (
                 runner
                 if _is_direct_backend(self._backend_plugin)
                 else _BorrowedRunner(runner, backend_plugin=self._backend_plugin)
             )
-        self._core = None
+        self._core: BrokerConnection | None = None
         self._thread_local = threading.local()
         self._stop_event = threading.Event()
         self._shared_key: _SessionKey | None = None
@@ -505,6 +517,7 @@ class DBConnection:
                     backend_plugin=self._backend_plugin,
                     stop_event=self._stop_event,
                 )
+        assert self._core is not None
         return self._core
 
     def cleanup(self, *, config: dict[str, Any] = _config) -> None:
@@ -692,7 +705,7 @@ class BrokerCore:
         # SQL runner for all database operations
         self._runner = runner
         self._backend_plugin = _resolve_backend_plugin(runner, backend_plugin)
-        self._sql = self._backend_plugin.sql
+        self._sql = _get_sql_namespace(self._backend_plugin)
 
         # Stop event to allow interruptible retries, including setup work run
         # during construction.

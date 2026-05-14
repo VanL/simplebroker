@@ -17,13 +17,14 @@ from ._backend_plugins import (
     ActivityWaiter,
     BackendAwareRunner,
     BackendPlugin,
+    BrokerConnection,
     MultiQueueActivityWaiterHook,
     get_backend_plugin,
 )
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
 from ._runner import SQLRunner
 from ._targets import ResolvedTarget
-from .db import BrokerCore, BrokerDB, DBConnection
+from .db import DBConnection
 from .metadata import QueueStats
 from .project import target_for_directory
 
@@ -214,7 +215,7 @@ class Queue:
         return self._db_path
 
     @contextmanager
-    def get_connection(self) -> Iterator[BrokerCore | BrokerDB]:
+    def get_connection(self) -> Iterator[BrokerConnection]:
         """Get connection for operations - handles both persistent and ephemeral modes.
 
         This context manager consolidates the connection logic. It yields a
@@ -222,7 +223,7 @@ class Queue:
         new connection on the fly for the no-runner ephemeral path.
 
         Yields:
-            BrokerCore or BrokerDB: Connection object for database operations
+            BrokerConnection: Connection object for database operations
         """
         if self.conn is not None:
             assert self.conn is not None  # Type guard for mypy
@@ -269,7 +270,7 @@ class Queue:
         self._last_ts = latest
         return latest
 
-    def _update_last_ts_hint(self, connection: BrokerCore | BrokerDB) -> None:
+    def _update_last_ts_hint(self, connection: BrokerConnection) -> None:
         """Update cached last_ts using the connection's generator state."""
 
         if self._last_ts is None:

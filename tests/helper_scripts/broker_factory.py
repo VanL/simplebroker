@@ -16,6 +16,7 @@ from simplebroker._targets import ResolvedTarget
 from simplebroker.db import BrokerCore
 
 POSTGRES_TEST_BACKEND = "postgres"
+REDIS_TEST_BACKEND = "redis"
 
 
 def active_backend(env: dict[str, str] | None = None) -> str:
@@ -31,6 +32,8 @@ def make_target(
     backend: str | None = None,
     pg_dsn: str | None = None,
     pg_schema: str | None = None,
+    redis_url: str | None = None,
+    redis_namespace: str | None = None,
 ) -> ResolvedTarget:
     """Create a ``ResolvedTarget`` for the requested backend.
 
@@ -49,6 +52,16 @@ def make_target(
             project_root=tmp_path,
         )
 
+    if backend == REDIS_TEST_BACKEND:
+        if redis_url is None or redis_namespace is None:
+            raise ValueError("Redis backend requires redis_url and redis_namespace")
+        return ResolvedTarget(
+            backend_name="redis",
+            target=redis_url,
+            backend_options={"namespace": redis_namespace},
+            project_root=tmp_path,
+        )
+
     return ResolvedTarget(
         backend_name="sqlite",
         target=str(tmp_path / "test.db"),
@@ -63,6 +76,16 @@ def make_broker(
 ) -> BrokerCore:
     """Create a ``BrokerCore`` from a resolved target."""
     plugin = target.plugin
+    create_core = getattr(plugin, "create_core", None)
+    if getattr(plugin, "sql", None) is None and callable(create_core):
+        kwargs: dict[str, Any] = {}
+        if config is not None:
+            kwargs["config"] = config
+        return create_core(
+            target.target,
+            backend_options=target.backend_options,
+            **kwargs,
+        )
     runner = plugin.create_runner(
         target.target,
         backend_options=target.backend_options,
