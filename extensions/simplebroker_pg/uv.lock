@@ -198,9 +198,8 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "simplebroker-pg", marker = "extra == 'pg'", editable = "." },
-    { name = "simplebroker-redis", marker = "extra == 'redis'", editable = "../simplebroker_redis" },
 ]
-provides-extras = ["dev", "pg", "redis"]
+provides-extras = ["dev", "pg"]
 
 [[package]]
 name = "simplebroker-pg"
