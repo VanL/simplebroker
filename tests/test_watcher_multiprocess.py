@@ -206,6 +206,45 @@ def test_multiprocess_single_queue() -> None:
         processes = []
 
         try:
+
+            def process_diagnostics() -> list[tuple[int, int | None, int | None, bool]]:
+                return [
+                    (i, p.pid, p.exitcode, p.is_alive())
+                    for i, p in enumerate(processes)
+                ]
+
+            errors: list[tuple[int, str]] = []
+            processed_messages: list[tuple[int, str]] = []
+            seen_messages: set[str] = set()
+
+            def collect_until_seen(
+                expected_messages: set[str], *, timeout: float
+            ) -> None:
+                deadline = time.monotonic() + scale_timeout_for_ci(timeout)
+                while time.monotonic() < deadline:
+                    if expected_messages <= seen_messages:
+                        return
+
+                    try:
+                        msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+
+                    if msg_type == "message":
+                        processed_messages.append((proc_id, data))
+                        seen_messages.add(data)
+                    elif msg_type == "error":
+                        errors.append((proc_id, data))
+                        break
+
+                missing = sorted(expected_messages - seen_messages)
+                raise AssertionError(
+                    "Timed out waiting for shared-queue watcher messages: "
+                    f"received={len(processed_messages)}, "
+                    f"missing_count={len(missing)}, missing_sample={missing[:10]}, "
+                    f"errors={errors}, processes={process_diagnostics()}"
+                )
+
             # Start multiple watcher processes
             num_processes = 4
 
@@ -221,37 +260,49 @@ def test_multiprocess_single_queue() -> None:
                 processes.append(p)
 
             # Wait for all processes to be ready
-            ready_count = 0
-            while ready_count < num_processes:
-                msg_type, proc_id, data = result_queue.get(timeout=5.0)
-                if msg_type == "ready":
-                    ready_count += 1
-
-            # Write messages
-            num_messages = 100
-            for i in range(num_messages):
-                broker.write("shared_queue", f"message_{i}")
-
-            # Collect processed messages
-            processed_messages = []
-            timeout_start = time.monotonic()
-
+            ready_processes = set()
+            ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
             while (
-                len(processed_messages) < num_messages
-                and time.monotonic() - timeout_start < 10
+                len(ready_processes) < num_processes
+                and time.monotonic() < ready_deadline
             ):
                 try:
                     msg_type, proc_id, data = result_queue.get(timeout=0.1)
-                    if msg_type == "message":
-                        processed_messages.append((proc_id, data))
                 except queue.Empty:
                     continue
+
+                if msg_type == "ready":
+                    ready_processes.add(proc_id)
+                elif msg_type == "error":
+                    errors.append((proc_id, data))
+                    break
+
+            if errors or len(ready_processes) != num_processes:
+                raise AssertionError(
+                    "Timed out waiting for watcher processes to start: "
+                    f"ready={sorted(ready_processes)}, errors={errors}, "
+                    f"processes={process_diagnostics()}"
+                )
+
+            num_messages = 100
+            expected_messages = {f"message_{i}" for i in range(num_messages)}
+
+            # Prove at least one shared-queue watcher can consume before bulk writes.
+            broker.write("shared_queue", "message_0")
+            collect_until_seen({"message_0"}, timeout=10.0)
+
+            # Write remaining messages
+            for i in range(1, num_messages):
+                broker.write("shared_queue", f"message_{i}")
+
+            # Collect processed messages
+            collect_until_seen(expected_messages, timeout=10.0)
 
             # Verify all messages were processed
             message_bodies = [msg for _, msg in processed_messages]
             assert len(message_bodies) == num_messages
             # Order is not guaranteed with multiple consumers, just verify all messages present
-            assert set(message_bodies) == {f"message_{i}" for i in range(num_messages)}
+            assert set(message_bodies) == expected_messages
 
             # Check distribution across processes
             process_counts = {}
