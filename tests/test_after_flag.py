@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from simplebroker import Queue
+
 from .conftest import _reset_pg_tables, run_cli
 
 # Test data for timestamp validation
@@ -36,6 +38,13 @@ UNIT_SUFFIX_TESTS = [
     ("1.532", "Float seconds", True),  # Should work - like time.time() output
     ("1e10s", "Scientific notation", False),
 ]
+
+
+def _write_messages_direct(queue_name: str, messages) -> None:
+    """Seed a queue without one CLI subprocess per message."""
+    with Queue(queue_name, persistent=True) as queue:
+        for message in messages:
+            queue.write(message)
 
 
 # Additional test data for human-readable formats
@@ -663,8 +672,10 @@ def test_after_checkpoint_pattern(workdir):
 
     # Write messages in batches
     for batch in range(3):
-        for i in range(5):
-            run_cli("write", queue_name, f"batch{batch}_msg{i}", cwd=workdir)
+        _write_messages_direct(
+            queue_name,
+            [f"batch{batch}_msg{i}" for i in range(5)],
+        )
         time.sleep(0.002)  # Ensure timestamp difference between batches
 
     # Read first batch with timestamps
@@ -950,11 +961,8 @@ def test_after_hybrid_timestamp_ordering(workdir):
     queue_name = "hybrid_queue"
 
     # Write many messages rapidly to trigger same-millisecond timestamps
-    messages = []
-    for i in range(100):
-        msg = f"msg{i:03d}"
-        messages.append(msg)
-        run_cli("write", queue_name, msg, cwd=workdir)
+    messages = [f"msg{i:03d}" for i in range(100)]
+    _write_messages_direct(queue_name, messages)
 
     # Get all timestamps
     rc, out, _ = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)

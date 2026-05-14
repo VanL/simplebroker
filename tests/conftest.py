@@ -64,6 +64,36 @@ if TYPE_CHECKING:
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_CLI_STARTUP_CODE = """
+import os
+import sys
+
+_faulthandler = None
+_dump_timeout = float(
+    os.environ.get("SIMPLEBROKER_TEST_FAULTHANDLER_TIMEOUT", "0") or "0"
+)
+if _dump_timeout > 0:
+    import faulthandler as _faulthandler
+
+    _faulthandler.enable(file=sys.stderr, all_threads=True)
+    _faulthandler.dump_traceback_later(
+        _dump_timeout,
+        file=sys.stderr,
+    )
+
+if os.environ.get("COVERAGE_PROCESS_START"):
+    import coverage
+
+    coverage.process_startup()
+
+try:
+    import runpy
+
+    runpy.run_module("simplebroker.cli", run_name="__main__", alter_sys=True)
+finally:
+    if _faulthandler is not None:
+        _faulthandler.cancel_dump_traceback_later()
+"""
 
 POSTGRES_TEST_BACKEND = "postgres"
 _SQLITE_ONLY_RUN_CLI_MODULE_REASONS = {
@@ -461,6 +491,14 @@ def build_cli_env(env: dict[str, str] | None = None) -> dict[str, str]:
     return full_env
 
 
+def _decode_timeout_stream(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value)
+
+
 def run_cli(
     *args: object,
     cwd: Path,
@@ -489,7 +527,9 @@ def run_cli(
     (return_code, stdout, stderr)
         All output is stripped of trailing new-lines for convenience.
     """
-    cmd = [sys.executable, "-m", "simplebroker.cli", *map(str, args)]
+    cli_args = [*map(str, args)]
+    logical_cmd = [sys.executable, "-m", "simplebroker.cli", *cli_args]
+    cmd = [sys.executable, "-c", _CLI_STARTUP_CODE, *cli_args]
 
     full_env = build_cli_env(env)
 
@@ -511,11 +551,13 @@ def run_cli(
 
     if timeout is None:
         timeout = scale_timeout_for_ci(12.0 if sys.platform == "win32" else 6.0)
+    timeout_grace = min(5.0, max(1.0, timeout * 0.1))
+    full_env["SIMPLEBROKER_TEST_FAULTHANDLER_TIMEOUT"] = f"{timeout:.6f}"
 
     run_kwargs: dict[str, Any] = {
         "cwd": cwd,
         "capture_output": True,
-        "timeout": timeout,
+        "timeout": timeout + timeout_grace,
         "env": full_env,
     }
 
@@ -532,7 +574,17 @@ def run_cli(
         # platform's text-mode newline translation, especially on Windows.
         run_kwargs["input"] = stdin.encode("utf-8")
 
-    completed = run_func(cmd, **run_kwargs)
+    try:
+        completed = run_func(cmd, **run_kwargs)
+    except subprocess.TimeoutExpired as exc:
+        stdout = _decode_timeout_stream(exc.stdout)
+        stderr = _decode_timeout_stream(exc.stderr)
+        raise AssertionError(
+            "CLI command timed out after "
+            f"{timeout:.1f}s plus {timeout_grace:.1f}s dump grace: {logical_cmd!r}\n"
+            f"stdout:\n{stdout or '<empty>'}\n\n"
+            f"stderr:\n{stderr or '<empty>'}"
+        ) from exc
 
     if stdin is None:
         stdout = completed.stdout

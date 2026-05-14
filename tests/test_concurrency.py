@@ -11,25 +11,45 @@ import pytest
 from .conftest import run_cli
 
 
+def _queue_for_workdir(queue_name, workdir):
+    import os
+
+    from simplebroker import Queue
+
+    os.chdir(workdir)
+    return Queue(queue_name, persistent=True)
+
+
 def _read_queue_helper(args):
     """Helper function for multiprocessing tests."""
     _, queue_name, workdir = args
-    return run_cli("read", queue_name, cwd=workdir)
+
+    queue = _queue_for_workdir(queue_name, workdir)
+    try:
+        message = queue.read()
+    finally:
+        queue.close()
+
+    if message is None:
+        return 2, "", ""
+    return 0, message, ""
 
 
 def _read_until_empty_helper(args):
     """Helper function for reading messages until queue is empty."""
-    reader_id, queue_name, workdir = args
+    _reader_id, queue_name, workdir = args
+
+    queue = _queue_for_workdir(queue_name, workdir)
     messages = []
-    while True:
-        rc, out, _ = run_cli("read", queue_name, cwd=workdir)
-        if rc == 0:
-            messages.append(out)
-        elif rc == 2:  # Queue empty
-            break
-        else:
-            raise AssertionError(f"Unexpected return code: {rc}")
-    return messages
+    try:
+        while True:
+            message = queue.read()
+            if message is None:
+                break
+            messages.append(message)
+        return messages
+    finally:
+        queue.close()
 
 
 @pytest.mark.xdist_group(name="concurrency_serial")
@@ -189,9 +209,14 @@ def test_concurrent_readers_multiple_messages(workdir):
     num_readers = 4
 
     # Write multiple messages
-    for i in range(num_messages):
-        rc, _, _ = run_cli("write", "multi", f"msg_{i:02d}", cwd=workdir)
-        assert rc == 0
+    from simplebroker import Queue
+
+    queue = Queue("multi", persistent=True)
+    try:
+        for i in range(num_messages):
+            queue.write(f"msg_{i:02d}")
+    finally:
+        queue.close()
 
     # Have multiple readers read concurrently
     with cf.ProcessPoolExecutor(num_readers) as pool:
