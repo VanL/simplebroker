@@ -53,6 +53,8 @@ def test_validate_version_requires_three_numeric_segments() -> None:
 def test_release_targets_format_expected_tags() -> None:
     assert release.ROOT_RELEASE_TARGET.tag_name("3.1.10") == "v3.1.10"
     assert release.PG_RELEASE_TARGET.tag_name("1.0.6") == "simplebroker_pg/v1.0.6"
+    assert release.REDIS_RELEASE_TARGET.tag_name("0.9.0") == "simplebroker_redis/v0.9.0"
+    assert "redis" in release.RELEASE_TARGETS
 
 
 @pytest.mark.parametrize(
@@ -152,6 +154,54 @@ pg = [
     assert root_pyproject.read_text(encoding="utf-8") == root_text
 
 
+def test_sync_root_redis_extra_dependency_uses_local_redis_version(
+    tmp_path: Path,
+) -> None:
+    root_pyproject = tmp_path / "pyproject.toml"
+    redis_pyproject = tmp_path / "redis-pyproject.toml"
+    root_pyproject.write_text(
+        """[project.optional-dependencies]
+redis = [
+    "simplebroker-redis>=0.8.0,<1",
+]
+""",
+        encoding="utf-8",
+    )
+    redis_pyproject.write_text('[project]\nversion = "0.9.0"\n', encoding="utf-8")
+
+    updated_version = release.sync_root_redis_extra_dependency(
+        root_pyproject_path=root_pyproject,
+        redis_pyproject_path=redis_pyproject,
+    )
+
+    assert updated_version == "0.9.0"
+    assert '"simplebroker-redis>=0.9.0,<1"' in root_pyproject.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_sync_root_redis_extra_dependency_noops_when_current(
+    tmp_path: Path,
+) -> None:
+    root_pyproject = tmp_path / "pyproject.toml"
+    redis_pyproject = tmp_path / "redis-pyproject.toml"
+    root_text = """[project.optional-dependencies]
+redis = [
+    "simplebroker-redis>=0.9.0,<1",
+]
+"""
+    root_pyproject.write_text(root_text, encoding="utf-8")
+    redis_pyproject.write_text('[project]\nversion = "0.9.0"\n', encoding="utf-8")
+
+    updated_version = release.sync_root_redis_extra_dependency(
+        root_pyproject_path=root_pyproject,
+        redis_pyproject_path=redis_pyproject,
+    )
+
+    assert updated_version is None
+    assert root_pyproject.read_text(encoding="utf-8") == root_text
+
+
 def test_require_published_pg_baseline_accepts_published_version(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
 
@@ -166,6 +216,22 @@ def test_require_published_pg_baseline_accepts_published_version(monkeypatch) ->
     assert calls == [("simplebroker-pg", "1.0.6")]
 
 
+def test_require_published_redis_baseline_accepts_published_version(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def version_exists(package_name: str, version: str) -> bool:
+        calls.append((package_name, version))
+        return True
+
+    monkeypatch.setattr(release, "pypi_version_exists", version_exists)
+
+    release.require_published_redis_baseline("0.9.0")
+
+    assert calls == [("simplebroker-redis", "0.9.0")]
+
+
 def test_require_published_pg_baseline_rejects_unpublished_version(monkeypatch) -> None:
     monkeypatch.setattr(
         release,
@@ -175,6 +241,27 @@ def test_require_published_pg_baseline_rejects_unpublished_version(monkeypatch) 
 
     with pytest.raises(RuntimeError, match="Release simplebroker-pg first"):
         release.require_published_pg_baseline("1.0.6")
+
+
+def test_require_published_redis_baseline_rejects_unpublished_version(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        release,
+        "pypi_version_exists",
+        lambda package_name, version: False,
+    )
+
+    with pytest.raises(RuntimeError, match="Release simplebroker-redis first"):
+        release.require_published_redis_baseline("0.9.0")
+
+
+def test_redis_release_target_tracks_extension_lockfile() -> None:
+    paths = release._release_file_paths(release.REDIS_RELEASE_TARGET)
+
+    assert release.REDIS_EXTENSION_PYPROJECT_PATH in paths
+    assert release.REDIS_EXTENSION_UV_LOCK_PATH in paths
+    assert release.UV_LOCK_PATH in paths
 
 
 def test_plan_tag_action_for_new_or_matching_tags() -> None:

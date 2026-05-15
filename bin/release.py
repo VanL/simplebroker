@@ -23,10 +23,14 @@ PYPROJECT_PATH: Final[Path] = PROJECT_ROOT / "pyproject.toml"
 CONSTANTS_PATH: Final[Path] = PROJECT_ROOT / "simplebroker" / "_constants.py"
 PG_EXTENSION_DIR: Final[Path] = PROJECT_ROOT / "extensions" / "simplebroker_pg"
 PG_EXTENSION_PYPROJECT_PATH: Final[Path] = PG_EXTENSION_DIR / "pyproject.toml"
+REDIS_EXTENSION_DIR: Final[Path] = PROJECT_ROOT / "extensions" / "simplebroker_redis"
+REDIS_EXTENSION_PYPROJECT_PATH: Final[Path] = REDIS_EXTENSION_DIR / "pyproject.toml"
 UV_LOCK_PATH: Final[Path] = PROJECT_ROOT / "uv.lock"
 PG_EXTENSION_UV_LOCK_PATH: Final[Path] = PG_EXTENSION_DIR / "uv.lock"
+REDIS_EXTENSION_UV_LOCK_PATH: Final[Path] = REDIS_EXTENSION_DIR / "uv.lock"
 ROOT_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-simplebroker.yml"
 PG_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-simplebroker-pg.yml"
+REDIS_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-simplebroker-redis.yml"
 GITHUB_API_BASE: Final[str] = "https://api.github.com"
 PYPI_API_BASE: Final[str] = "https://pypi.org/pypi"
 HTTP_TIMEOUT_SECONDS: Final[float] = 10.0
@@ -39,6 +43,9 @@ CONSTANTS_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 PG_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
     r'(?m)^(\s*)"simplebroker-pg>=([^",]+),<2",(\s*)$'
+)
+REDIS_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r'(?m)^(\s*)"simplebroker-redis>=([^",]+),<1",(\s*)$'
 )
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
 
@@ -56,6 +63,7 @@ BASE_PRECHECK_COMMANDS: Final[tuple[tuple[str, ...], ...]] = (
         "--override-ini=addopts=-ra -q --strict-markers -n auto --dist loadgroup",
     ),
     ("uv", "run", "--extra", "dev", "./bin/pytest-pg"),
+    ("uv", "run", "--extra", "dev", "./bin/pytest-redis"),
     (
         "uv",
         "run",
@@ -68,6 +76,8 @@ BASE_PRECHECK_COMMANDS: Final[tuple[tuple[str, ...], ...]] = (
         "bin",
         "extensions/simplebroker_pg/simplebroker_pg",
         "extensions/simplebroker_pg/tests",
+        "extensions/simplebroker_redis/simplebroker_redis",
+        "extensions/simplebroker_redis/tests",
     ),
     (
         "uv",
@@ -82,6 +92,8 @@ BASE_PRECHECK_COMMANDS: Final[tuple[tuple[str, ...], ...]] = (
         "bin",
         "extensions/simplebroker_pg/simplebroker_pg",
         "extensions/simplebroker_pg/tests",
+        "extensions/simplebroker_redis/simplebroker_redis",
+        "extensions/simplebroker_redis/tests",
     ),
     (
         "uv",
@@ -92,6 +104,8 @@ BASE_PRECHECK_COMMANDS: Final[tuple[tuple[str, ...], ...]] = (
         "simplebroker",
         "bin/release.py",
         "extensions/simplebroker_pg/simplebroker_pg",
+        "extensions/simplebroker_redis/simplebroker_redis",
+        "extensions/simplebroker_redis/tests",
         "--config-file",
         "pyproject.toml",
     ),
@@ -173,9 +187,19 @@ PG_RELEASE_TARGET: Final[ReleaseTarget] = ReleaseTarget(
     tag_namespace="simplebroker_pg",
     release_workflow=PG_RELEASE_WORKFLOW,
 )
+REDIS_RELEASE_TARGET: Final[ReleaseTarget] = ReleaseTarget(
+    key="redis",
+    package_name="simplebroker-redis",
+    display_name="simplebroker-redis",
+    package_dir=REDIS_EXTENSION_DIR,
+    pyproject_path=REDIS_EXTENSION_PYPROJECT_PATH,
+    tag_namespace="simplebroker_redis",
+    release_workflow=REDIS_RELEASE_WORKFLOW,
+)
 RELEASE_TARGETS: Final[dict[str, ReleaseTarget]] = {
     ROOT_RELEASE_TARGET.key: ROOT_RELEASE_TARGET,
     PG_RELEASE_TARGET.key: PG_RELEASE_TARGET,
+    REDIS_RELEASE_TARGET.key: REDIS_RELEASE_TARGET,
 }
 
 
@@ -323,12 +347,25 @@ def read_pg_extension_version(
 def require_published_pg_baseline(pg_version: str) -> None:
     """Require the core package's PG baseline to exist on PyPI."""
 
-    if pypi_version_exists(PG_RELEASE_TARGET.package_name, pg_version):
+    require_published_extension_baseline(PG_RELEASE_TARGET, pg_version)
+
+
+def require_published_redis_baseline(redis_version: str) -> None:
+    """Require the core package's Redis baseline to exist on PyPI."""
+
+    require_published_extension_baseline(REDIS_RELEASE_TARGET, redis_version)
+
+
+def require_published_extension_baseline(target: ReleaseTarget, version: str) -> None:
+    """Require a core package extension baseline to exist on PyPI."""
+
+    if pypi_version_exists(target.package_name, version):
         return
 
     raise RuntimeError(
-        f"simplebroker[pg] baseline simplebroker-pg {pg_version} is not published "
-        "on PyPI. Release simplebroker-pg first, then retry the core release."
+        f"{target.display_name} baseline {target.package_name} {version} is not "
+        f"published on PyPI. Release {target.display_name} first, then retry "
+        "the core release."
     )
 
 
@@ -364,6 +401,52 @@ def sync_root_pg_extra_dependency(
     return pg_version
 
 
+def read_redis_extension_version(
+    *, redis_pyproject_path: Path = REDIS_EXTENSION_PYPROJECT_PATH
+) -> str:
+    """Read the local simplebroker-redis package version."""
+
+    return _extract_version(
+        redis_pyproject_path,
+        PYPROJECT_VERSION_PATTERN,
+        label=_display_path(redis_pyproject_path),
+    )
+
+
+def sync_root_redis_extra_dependency(
+    *,
+    root_pyproject_path: Path = PYPROJECT_PATH,
+    redis_pyproject_path: Path = REDIS_EXTENSION_PYPROJECT_PATH,
+) -> str | None:
+    """Set simplebroker[redis] to require the local simplebroker-redis version."""
+
+    redis_version = read_redis_extension_version(
+        redis_pyproject_path=redis_pyproject_path
+    )
+    root_pyproject_text = root_pyproject_path.read_text(encoding="utf-8")
+
+    def replace_dependency(match: re.Match[str]) -> str:
+        indent, current_version, trailing = match.groups()
+        if current_version == redis_version:
+            return match.group(0)
+        return f'{indent}"simplebroker-redis>={redis_version},<1",{trailing}'
+
+    updated_text, count = REDIS_EXTRA_DEPENDENCY_PATTERN.subn(
+        replace_dependency,
+        root_pyproject_text,
+        count=1,
+    )
+    if count != 1:
+        raise RuntimeError(
+            "Expected one simplebroker-redis dependency in root pyproject.toml"
+        )
+    if updated_text == root_pyproject_text:
+        return None
+
+    root_pyproject_path.write_text(updated_text, encoding="utf-8")
+    return redis_version
+
+
 def _format_command(command: tuple[str, ...]) -> str:
     return " ".join(shlex.quote(part) for part in command)
 
@@ -385,6 +468,8 @@ def _release_file_paths(target: ReleaseTarget) -> tuple[Path, ...]:
         paths.append(target.constants_path)
     if target.key == PG_RELEASE_TARGET.key:
         paths.append(PG_EXTENSION_UV_LOCK_PATH)
+    if target.key == REDIS_RELEASE_TARGET.key:
+        paths.append(REDIS_EXTENSION_UV_LOCK_PATH)
     return tuple(paths)
 
 
@@ -404,6 +489,8 @@ def build_postupdate_steps(target: ReleaseTarget) -> tuple[CommandStep, ...]:
     steps = [CommandStep(("uv", "lock"))]
     if target.key == PG_RELEASE_TARGET.key:
         steps.append(CommandStep(("uv", "lock"), cwd=PG_EXTENSION_DIR))
+    if target.key == REDIS_RELEASE_TARGET.key:
+        steps.append(CommandStep(("uv", "lock"), cwd=REDIS_EXTENSION_DIR))
     if target.constants_path is not None:
         steps.append(
             CommandStep(("uv", "run", "pytest", "tests/test_constants.py", "-q"))
@@ -813,8 +900,8 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=tuple(RELEASE_TARGETS),
         default=ROOT_RELEASE_TARGET.key,
         help=(
-            "Package to release. Use 'core' for simplebroker or 'pg' for "
-            "simplebroker-pg. Defaults to core."
+            "Package to release. Use 'core' for simplebroker, 'pg' for "
+            "simplebroker-pg, or 'redis' for simplebroker-redis. Defaults to core."
         ),
     )
     parser.add_argument(
@@ -961,13 +1048,22 @@ def main(argv: list[str] | None = None) -> int:
             )
         if target.key == ROOT_RELEASE_TARGET.key:
             pg_version = read_target_version(PG_RELEASE_TARGET)
+            redis_version = read_target_version(REDIS_RELEASE_TARGET)
             print(
                 "dry-run: would ensure simplebroker[pg] requires "
                 f"simplebroker-pg>={pg_version},<2"
             )
             print(
+                "dry-run: would ensure simplebroker[redis] requires "
+                f"simplebroker-redis>={redis_version},<1"
+            )
+            print(
                 "dry-run: would require simplebroker-pg "
                 f"{pg_version} to be published on PyPI first"
+            )
+            print(
+                "dry-run: would require simplebroker-redis "
+                f"{redis_version} to be published on PyPI first"
             )
         for step in build_postupdate_steps(target):
             run_command(step.command, cwd=step.cwd, dry_run=True)
@@ -1002,6 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if target.key == ROOT_RELEASE_TARGET.key:
         require_published_pg_baseline(read_pg_extension_version())
+        require_published_redis_baseline(read_redis_extension_version())
 
     if not args.skip_checks:
         for command in build_precheck_commands():
@@ -1031,6 +1128,14 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "Updated simplebroker[pg] baseline: "
                 f"simplebroker-pg>={pg_dependency_version},<2"
+            )
+        redis_dependency_version = sync_root_redis_extra_dependency()
+        if redis_dependency_version is None:
+            print("simplebroker[redis] baseline already matches simplebroker-redis")
+        else:
+            print(
+                "Updated simplebroker[redis] baseline: "
+                f"simplebroker-redis>={redis_dependency_version},<1"
             )
 
     for step in build_postupdate_steps(target):
