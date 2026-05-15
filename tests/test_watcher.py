@@ -687,6 +687,9 @@ class TestQueueWatcher(WatcherTestBase):
 
     def test_polling_lifecycle(self, broker_target):
         """Test that polling strategy lifecycle works correctly."""
+        broker = make_broker(broker_target)
+        broker.close()
+
         watcher = QueueWatcher(
             "test_queue",
             lambda m, t: None,
