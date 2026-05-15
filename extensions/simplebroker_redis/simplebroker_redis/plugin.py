@@ -205,7 +205,10 @@ class _SharedRedisActivityListener:
                     raise OperationalError(str(self._error)) from self._error
                 current = self._versions.get(registration.queue_name, 0)
                 if current != registration.version:
-                    registration.version = current
+                    if current > registration.version:
+                        registration.version += 1
+                    else:
+                        registration.version = current
                     return True
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
