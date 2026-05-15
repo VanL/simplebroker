@@ -561,10 +561,6 @@ def _local_weft_uv_args() -> tuple[str, ...]:
     return (
         "--with-editable",
         "../weft",
-        "--with-editable",
-        "../weft/.venv/lib/python3.13/site-packages",
-        "--with-editable",
-        "../weft/.venv/lib/python3.14/site-packages",
     )
 
 
