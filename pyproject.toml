@@ -41,11 +41,15 @@ dev = [
     "mypy>=1.0",
     "psycopg[binary]>=3,<4",
     "psycopg-pool>=3.1,<4",
+    "redis>=5,<7",
     "ruff>=0.1.0",
     "pytest-timeout>=2.4.0",
 ]
 pg = [
     "simplebroker-pg>=1.4.0,<2",
+]
+redis = [
+    "simplebroker-redis>=0.9.0,<1",
 ]
 
 [project.scripts]
@@ -60,6 +64,7 @@ Issues = "https://github.com/VanL/simplebroker/issues"
 
 [tool.uv.sources]
 simplebroker-pg = { path = "./extensions/simplebroker_pg", editable = true }
+simplebroker-redis = { path = "./extensions/simplebroker_redis", editable = true }
 
 [tool.hatch.build]
 include = [
@@ -93,7 +98,6 @@ markers = [
 python_version = "3.14"
 exclude = [
     "^examples/",
-    "^extensions/simplebroker_redis/",
     "^extensions/simplebroker_pg/tests/",
     "^tests/",
 ]

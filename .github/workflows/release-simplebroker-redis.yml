@@ -1,9 +1,9 @@
-name: Release simplebroker
+name: Release simplebroker-redis
 
 on:
   push:
     tags:
-      - "v*"
+      - "simplebroker_redis/v*"
 
 permissions:
   contents: write
@@ -41,8 +41,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-            extensions/simplebroker_pg/pyproject.toml
-            extensions/simplebroker_pg/uv.lock
             extensions/simplebroker_redis/pyproject.toml
             extensions/simplebroker_redis/uv.lock
 
@@ -76,8 +74,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-            extensions/simplebroker_pg/pyproject.toml
-            extensions/simplebroker_pg/uv.lock
             extensions/simplebroker_redis/pyproject.toml
             extensions/simplebroker_redis/uv.lock
 
@@ -87,15 +83,15 @@ jobs:
 
       - name: Run linting with ruff
         run: |
-          ruff check simplebroker tests bin extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
+          ruff check simplebroker tests bin extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 
       - name: Check formatting with ruff
         run: |
-          ruff format --check simplebroker tests bin extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
+          ruff format --check simplebroker tests bin extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 
       - name: Type check with mypy
         run: |
-          mypy simplebroker bin/release.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests --config-file pyproject.toml
+          mypy simplebroker bin/release.py extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests --config-file pyproject.toml
 
   packaging:
     runs-on: ubuntu-latest
@@ -114,8 +110,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-            extensions/simplebroker_pg/pyproject.toml
-            extensions/simplebroker_pg/uv.lock
             extensions/simplebroker_redis/pyproject.toml
             extensions/simplebroker_redis/uv.lock
 
@@ -144,8 +138,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-            extensions/simplebroker_pg/pyproject.toml
-            extensions/simplebroker_pg/uv.lock
             extensions/simplebroker_redis/pyproject.toml
             extensions/simplebroker_redis/uv.lock
 
@@ -160,35 +152,6 @@ jobs:
           COVERAGE_FILE: ${{ github.workspace }}/.coverage
         run: |
           uv run pytest --cov=simplebroker --cov-report=term-missing --cov-report=xml -m "not slow"
-
-  test-pg:
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.10", "3.12"]
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
-        with:
-          enable-cache: true
-          cache-dependency-glob: |
-            pyproject.toml
-            uv.lock
-            extensions/simplebroker_pg/pyproject.toml
-            extensions/simplebroker_pg/uv.lock
-
-      - name: Run PG-backed test suites
-        run: |
-          uv run ./bin/pytest-pg
 
   test-redis:
     strategy:
@@ -220,7 +183,7 @@ jobs:
           uv run ./bin/pytest-redis
 
   release:
-    needs: [test, lint, packaging, coverage, test-pg, test-redis]
+    needs: [test, lint, packaging, coverage, test-redis]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -235,17 +198,21 @@ jobs:
         run: |
           python .github/scripts/require_green_workflows.py \
             --workflow "Test" \
-            --workflow "Test Postgres Extension" \
             --workflow "Test Redis Extension"
 
       - name: Install build tools
         run: pip install build
 
       - name: Build sdist and wheel
-        run: python -m build
+        run: python -m build extensions/simplebroker_redis
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#simplebroker_redis/}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
         with:
-          files: dist/*
+          name: "simplebroker-redis ${{ steps.version.outputs.version }}"
+          files: extensions/simplebroker_redis/dist/*
           generate_release_notes: true

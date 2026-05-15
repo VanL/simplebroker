@@ -1,0 +1,70 @@
+name: Test Redis Extension
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  test-redis:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+      with:
+        enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_redis/pyproject.toml
+          extensions/simplebroker_redis/uv.lock
+
+    - name: Run Redis-backed test suites
+      run: |
+        uv run ./bin/pytest-redis
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+    - name: Set up Python
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+      with:
+        enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_redis/pyproject.toml
+          extensions/simplebroker_redis/uv.lock
+
+    - name: Run extension linting with ruff
+      run: |
+        uv run --extra dev ruff check extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
+
+    - name: Check extension formatting with ruff
+      run: |
+        uv run --extra dev ruff format --check extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
+
+    - name: Type check extension with mypy
+      run: |
+        uv run --extra dev mypy extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests --config-file pyproject.toml

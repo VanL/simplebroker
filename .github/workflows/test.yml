@@ -41,6 +41,8 @@ jobs:
           uv.lock
           extensions/simplebroker_pg/pyproject.toml
           extensions/simplebroker_pg/uv.lock
+          extensions/simplebroker_redis/pyproject.toml
+          extensions/simplebroker_redis/uv.lock
 
     - name: Install dependencies
       run: |
@@ -74,6 +76,8 @@ jobs:
           uv.lock
           extensions/simplebroker_pg/pyproject.toml
           extensions/simplebroker_pg/uv.lock
+          extensions/simplebroker_redis/pyproject.toml
+          extensions/simplebroker_redis/uv.lock
 
     - name: Install dependencies
       run: |
@@ -81,15 +85,15 @@ jobs:
 
     - name: Run linting with ruff
       run: |
-        ruff check simplebroker tests bin extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests
+        ruff check simplebroker tests bin extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 
     - name: Check formatting with ruff
       run: |
-        ruff format --check simplebroker tests bin extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests
+        ruff format --check simplebroker tests bin extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 
     - name: Type check with mypy
       run: |
-        mypy simplebroker bin/release.py extensions/simplebroker_pg/simplebroker_pg --config-file pyproject.toml
+        mypy simplebroker bin/release.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests --config-file pyproject.toml
 
   packaging:
     runs-on: ubuntu-latest
@@ -110,6 +114,8 @@ jobs:
           uv.lock
           extensions/simplebroker_pg/pyproject.toml
           extensions/simplebroker_pg/uv.lock
+          extensions/simplebroker_redis/pyproject.toml
+          extensions/simplebroker_redis/uv.lock
 
     - name: Install build tools
       run: |
@@ -138,6 +144,8 @@ jobs:
           uv.lock
           extensions/simplebroker_pg/pyproject.toml
           extensions/simplebroker_pg/uv.lock
+          extensions/simplebroker_redis/pyproject.toml
+          extensions/simplebroker_redis/uv.lock
 
     - name: Install dependencies
       run: |

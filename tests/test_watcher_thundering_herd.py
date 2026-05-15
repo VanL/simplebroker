@@ -117,11 +117,21 @@ class InstrumentedQueueWatcher(QueueWatcher):
             self.main_loop_ready.set()
 
 
+def _watcher_ci_timeout(broker_target) -> float:
+    base_timeout = 10.0 if broker_target.backend_name in {"postgres", "redis"} else 5.0
+    return scale_timeout_for_ci(base_timeout)
+
+
 def _watcher_startup_timeout(broker_target) -> float:
     """Return a startup timeout for tests whose invariant begins after readiness."""
 
-    base_timeout = 10.0 if broker_target.backend_name in {"postgres", "redis"} else 5.0
-    return scale_timeout_for_ci(base_timeout)
+    return _watcher_ci_timeout(broker_target)
+
+
+def _watcher_processing_timeout(broker_target) -> float:
+    """Return a timeout for watcher delivery assertions after readiness."""
+
+    return _watcher_ci_timeout(broker_target)
 
 
 def _ready_watcher_count(watchers: list[InstrumentedQueueWatcher]) -> int:
@@ -181,7 +191,7 @@ def test_thundering_herd_mitigation(broker_target) -> None:
         # Wait for message to be processed
         assert wait_for_condition(
             lambda: call_counts["queue_0"] == 1,
-            timeout=5.0 if broker_target.backend_name == "redis" else 2.0,
+            timeout=_watcher_processing_timeout(broker_target),
             message="Waiting for queue_0 to process message",
         )
 
@@ -276,7 +286,7 @@ def test_thundering_herd_with_multiple_active_queues(broker_target) -> None:
         for queue in active_queues:
             assert wait_for_condition(
                 lambda q=queue: call_counts[q] == 10,
-                timeout=5.0,
+                timeout=_watcher_processing_timeout(broker_target),
                 message=f"Waiting for {queue} to process 10 messages",
             )
 

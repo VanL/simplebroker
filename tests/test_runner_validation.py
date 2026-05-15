@@ -7,6 +7,7 @@ import pytest
 
 from simplebroker import Queue
 from simplebroker import _phaselock as phaselock_module
+from simplebroker import _runner as runner_module
 from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import OperationalError
 from simplebroker._phaselock import PhaseLockService
@@ -173,3 +174,35 @@ class TestSQLiteRunnerValidation:
 
         assert isinstance(exc.value.__cause__, OperationalError)
         assert db_path.read_bytes() == original_bytes
+
+    @pytest.mark.sqlite_only
+    def test_connection_marker_check_does_not_open_sqlite_connection(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Trusting an existing connection marker must be a passive file check."""
+
+        _force_status_sidecars(monkeypatch)
+        db_path = tmp_path / "broker.db"
+
+        queue = Queue("q", db_path=str(db_path))
+        try:
+            queue.write("msg")
+        finally:
+            queue.close()
+
+        def fail_validation(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("completion marker check opened SQLite validation")
+
+        monkeypatch.setattr(
+            runner_module.db_backend,
+            "validate_database",
+            fail_validation,
+        )
+
+        runner = SQLiteRunner(str(db_path))
+        try:
+            runner.setup(SetupPhase.CONNECTION)
+        finally:
+            runner.close()

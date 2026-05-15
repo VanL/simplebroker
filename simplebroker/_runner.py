@@ -29,7 +29,7 @@ else:
 
 from ._backends import get_configured_backend
 from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config, resolve_config
-from ._exceptions import DatabaseError, DataError, IntegrityError, OperationalError
+from ._exceptions import DataError, IntegrityError, OperationalError
 from ._phaselock import Phase, PhaseLockService, PhaseLockTimeout, PhaseLockUnavailable
 from .helpers import (
     SETUP_PHASE_LOCK_TIMEOUT,
@@ -485,7 +485,9 @@ class SQLiteRunner:
             db_path = Path(self._db_path)
             if not db_path.exists():
                 return True
-            return db_path.stat().st_size == 0
+            # SQLite database headers are 16 bytes. Smaller non-empty files
+            # cannot be initialized databases, so stale markers cannot be trusted.
+            return db_path.stat().st_size < 16
         except (ValueError, OSError, TypeError):
             return False
 
@@ -507,12 +509,6 @@ class SQLiteRunner:
         if not service.has_phase(phase_name):
             return False
 
-        try:
-            db_backend.validate_database(Path(self._db_path), verify_magic=False)
-        except (DatabaseError, OSError, ValueError, TypeError) as exc:
-            raise OperationalError(
-                f"File at {self._db_path} exists but is not a valid SQLite database"
-            ) from exc
         return True
 
     def _discard_stale_completion_markers(self) -> None:

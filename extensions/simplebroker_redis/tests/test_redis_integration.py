@@ -1,0 +1,64 @@
+"""Basic Valkey/Redis backend integration tests."""
+
+from __future__ import annotations
+
+import pytest
+from simplebroker_redis import RedisRunner, get_backend_plugin
+
+from simplebroker import Queue
+
+pytestmark = [pytest.mark.redis_only]
+
+
+def test_runner_queue_round_trip(redis_runner: RedisRunner) -> None:
+    queue = Queue("jobs", runner=redis_runner, persistent=True)
+    try:
+        queue.write("hello")
+        assert queue.read() == "hello"
+        assert queue.read() is None
+    finally:
+        queue.close()
+
+
+def test_plugin_core_round_trip(redis_url: str, redis_namespace: str) -> None:
+    plugin = get_backend_plugin()
+    core = plugin.create_core(
+        redis_url,
+        backend_options={"namespace": redis_namespace},
+    )
+    try:
+        core.write("jobs", "hello")
+        assert core.peek_one("jobs", with_timestamps=False) == "hello"
+        assert core.claim_one("jobs", with_timestamps=False) == "hello"
+    finally:
+        core.shutdown()
+        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_activity_waiter_receives_queue_scoped_publish(
+    redis_url: str, redis_namespace: str
+) -> None:
+    plugin = get_backend_plugin()
+    waiter = plugin.create_activity_waiter(
+        target=redis_url,
+        backend_options={"namespace": redis_namespace},
+        queue_name="jobs",
+        stop_event=None,
+    )
+    assert waiter is not None
+    core = plugin.create_core(
+        redis_url,
+        backend_options={"namespace": redis_namespace},
+    )
+    try:
+        assert waiter.wait(0.05) is False
+        core.write("other", "miss")
+        assert waiter.wait(0.05) is False
+
+        core.write("jobs", "hit")
+        assert waiter.wait(2.0) is True
+        assert core.claim_one("jobs", with_timestamps=False) == "hit"
+    finally:
+        waiter.close()
+        core.shutdown()
+        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})

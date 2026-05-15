@@ -29,8 +29,10 @@ class TestWatcherCleanup:
         # Verify thread is running
         assert thread.is_alive()
 
-        # Thread count should have increased
-        assert len(threading.enumerate()) > initial_threads
+        # The watcher thread should be one of the live threads. Total process
+        # thread count is not stable under backend helpers and pytest workers.
+        assert thread in threading.enumerate()
+        assert len(threading.enumerate()) >= initial_threads
 
         # Don't stop explicitly - let cleanup handle it
 

@@ -10,8 +10,6 @@ __pycache__/
 .code
 .codex
 docs/
-extensions/simplebroker_redis/
-bin/pytest-redis
 build/
 develop-eggs/
 dist/
