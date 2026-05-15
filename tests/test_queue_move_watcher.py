@@ -1,5 +1,6 @@
 """Tests for the QueueMoveWatcher feature."""
 
+import sys
 import threading
 import time
 
@@ -10,10 +11,25 @@ pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueMoveWatcher
 
 from .helper_scripts.cleanup import register_watcher
-from .helper_scripts.timing import wait_for_condition
+from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 from .helper_scripts.watcher_base import WatcherTestBase
 
 pytestmark = [pytest.mark.shared]
+
+
+def _is_windows_sqlite(broker_target) -> bool:
+    return sys.platform == "win32" and broker_target.backend_name == "sqlite"
+
+
+def _move_watcher_timeout(
+    broker_target,
+    *,
+    default: float,
+    windows_sqlite: float = 15.0,
+) -> float:
+    if _is_windows_sqlite(broker_target):
+        return scale_timeout_for_ci(windows_sqlite)
+    return scale_timeout_for_ci(default)
 
 
 class MoveCollector:
@@ -292,12 +308,16 @@ class TestQueueMoveWatcher(WatcherTestBase):
         """Test concurrent writes during move operations."""
         moved_count = 0
         moved_lock = threading.Lock()
+        first_move_seen = threading.Event()
         all_writes_done = threading.Event()
+        write_errors: list[tuple[int, str]] = []
+        successful_writes: list[int] = []
 
         def counting_handler(body: str, ts: int):
             nonlocal moved_count
             with moved_lock:
                 moved_count += 1
+                first_move_seen.set()
 
         # Add initial messages
         for i in range(5):
@@ -314,67 +334,89 @@ class TestQueueMoveWatcher(WatcherTestBase):
         # Start move
         thread = watcher.run_in_thread()
         writer_thread = None
+        expected_count = 10
+        moved_in_time = False
         try:
-            # Wait a bit to ensure watcher is running
-            # This is acceptable as we're not testing timing, just concurrent safety
-            time.sleep(0.05)
+            assert first_move_seen.wait(
+                timeout=_move_watcher_timeout(broker_target, default=2.0)
+            ), "Move watcher did not start processing initial messages"
 
             # Add more messages while moving
-            write_errors = []
-
             def write_with_error_capture():
-                for i in range(5):
-                    try:
-                        broker.write("source", f"concurrent_{i}")
-                        time.sleep(0.01)
-                    except Exception as e:
-                        write_errors.append((i, str(e)))
-                all_writes_done.set()
+                try:
+                    for i in range(5):
+                        try:
+                            broker.write("source", f"concurrent_{i}")
+                            successful_writes.append(i)
+                            time.sleep(0.01)
+                        except Exception as e:
+                            write_errors.append((i, f"{type(e).__name__}: {e}"))
+                finally:
+                    all_writes_done.set()
 
             writer_thread = threading.Thread(target=write_with_error_capture)
             writer_thread.start()
 
             # Wait for all writes to complete
-            all_writes_done.wait(timeout=2.0)
-            writer_thread.join(timeout=1.0)
+            assert all_writes_done.wait(
+                timeout=_move_watcher_timeout(broker_target, default=3.0)
+            ), (
+                "Timed out waiting for concurrent writes to finish: "
+                f"successful_writes={successful_writes}, "
+                f"write_errors={write_errors}, "
+                f"writer_alive={writer_thread.is_alive()}"
+            )
+            writer_thread.join(timeout=scale_timeout_for_ci(1.0))
+            assert not writer_thread.is_alive(), "Writer thread did not stop"
 
-            # Give the watcher more time to process all messages
-            # Poll until all messages are moved or timeout
-            start_time = time.monotonic()
-            expected_count = 10 - len(write_errors)
-            while time.monotonic() - start_time < 2.0:
-                with moved_lock:
-                    if moved_count >= expected_count:
-                        break
-                time.sleep(0.05)
+            expected_count = 5 + len(successful_writes)
+            moved_in_time = wait_for_condition(
+                lambda: moved_count >= expected_count,
+                timeout=_move_watcher_timeout(broker_target, default=5.0),
+                interval=0.05,
+            )
 
         finally:
             # Stop with timeout safety
             watcher.stop()
-            thread.join(timeout=2.0)
+            thread.join(timeout=scale_timeout_for_ci(2.0))
             if thread.is_alive():
                 pytest.fail("Watcher thread did not stop within timeout")
             if writer_thread and writer_thread.is_alive():
-                writer_thread.join(timeout=1.0)
+                writer_thread.join(timeout=scale_timeout_for_ci(1.0))
 
         # Check for write errors
         if write_errors:
             print(f"Write errors occurred: {write_errors}")
 
-        # All successfully written messages should be moved
-        with moved_lock:
-            assert moved_count == expected_count, (
-                f"Expected {expected_count} messages (10 - {len(write_errors)} errors), got {moved_count}"
-            )
-
         # Verify all messages in destination
         dest_messages = list(broker.peek_generator("dest", with_timestamps=False))
+
+        # Source should be empty
+        source_messages = list(broker.peek_generator("source", with_timestamps=False))
+
+        # All successfully written messages should be moved
+        with moved_lock:
+            observed_moved = moved_count
+
+        assert moved_in_time, (
+            "Timed out waiting for move watcher to process successful writes: "
+            f"expected_count={expected_count}, moved_count={observed_moved}, "
+            f"watcher.move_count={watcher.move_count}, "
+            f"successful_writes={successful_writes}, "
+            f"write_errors={write_errors}, "
+            f"dest_messages={dest_messages}, "
+            f"source_messages={source_messages}"
+        )
+        assert observed_moved == expected_count, (
+            f"Expected {expected_count} moved messages "
+            f"(5 initial + {len(successful_writes)} successful concurrent writes), "
+            f"got {observed_moved}"
+        )
         assert len(dest_messages) == expected_count, (
             f"Expected {expected_count} messages in dest, got {len(dest_messages)}"
         )
 
-        # Source should be empty
-        source_messages = list(broker.peek_generator("source", with_timestamps=False))
         assert len(source_messages) == 0
 
     def test_transaction_safety(self, broker, broker_target):
