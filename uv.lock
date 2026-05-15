@@ -624,7 +624,7 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "3.6.0"
+version = "3.6.1"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -666,7 +666,7 @@ provides-extras = ["dev", "pg", "redis"]
 
 [[package]]
 name = "simplebroker-pg"
-version = "1.4.0"
+version = "1.4.1"
 source = { editable = "extensions/simplebroker_pg" }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
@@ -686,7 +686,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "simplebroker-redis"
-version = "0.9.0"
+version = "0.9.1"
 source = { editable = "extensions/simplebroker_redis" }
 dependencies = [
     { name = "redis" },
