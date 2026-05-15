@@ -122,9 +122,8 @@ class _AdvisoryLock:
     def acquire(
         self,
         *,
-        should_stop_waiting: Callable[[], bool] | None = None,
         diagnostics: Callable[[], str] | None = None,
-    ) -> bool:
+    ) -> None:
         if fcntl is None and msvcrt is None:
             raise PhaseLockUnavailable(
                 "No supported advisory file lock primitive is available"
@@ -133,25 +132,16 @@ class _AdvisoryLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         start = time.monotonic()
         last_error: OSError | None = None
-        if not self._acquire_process_lock(
+        self._acquire_process_lock(
             start,
-            should_stop_waiting=should_stop_waiting,
             diagnostics=diagnostics,
-        ):
-            return False
+        )
 
         while True:
-            if should_stop_waiting is not None and should_stop_waiting():
-                self._release_process_lock()
-                return False
-
             try:
                 lock_file = self.path.open("a+b")
             except OSError as exc:
                 last_error = exc
-                if should_stop_waiting is not None and should_stop_waiting():
-                    self._release_process_lock()
-                    return False
                 if time.monotonic() - start >= self.timeout:
                     self._release_process_lock()
                     raise PhaseLockTimeout(
@@ -172,9 +162,6 @@ class _AdvisoryLock:
             except OSError as exc:
                 last_error = exc
                 lock_file.close()
-                if should_stop_waiting is not None and should_stop_waiting():
-                    self._release_process_lock()
-                    return False
                 if time.monotonic() - start >= self.timeout:
                     self._release_process_lock()
                     raise PhaseLockTimeout(
@@ -189,7 +176,7 @@ class _AdvisoryLock:
 
             self._file = lock_file
             self._locked = True
-            return True
+            return
 
     def _prepare_lock_file(self, lock_file: BinaryIO) -> None:
         """Ensure byte-range locking has at least one byte to lock."""
@@ -206,17 +193,14 @@ class _AdvisoryLock:
         self,
         start: float,
         *,
-        should_stop_waiting: Callable[[], bool] | None,
         diagnostics: Callable[[], str] | None,
-    ) -> bool:
+    ) -> None:
         process_lock = _process_lock_for(self.path)
         while True:
-            if should_stop_waiting is not None and should_stop_waiting():
-                return False
             if process_lock.acquire(blocking=False):
                 self._process_lock = process_lock
                 self._process_locked = True
-                return True
+                return
             if time.monotonic() - start >= self.timeout:
                 raise PhaseLockTimeout(
                     self._timeout_message(
@@ -395,23 +379,13 @@ class PhaseLockService:
     def run_phases(self, phases: Iterable[Phase]) -> PhaseRunResult:
         """Run missing phases in order under the setup lock.
 
-        If all phase markers are already present, no lock is acquired. Otherwise
-        the lock is acquired, markers are re-read, and only still-missing phases
-        run. While waiting, completion is rechecked so a contender can return as
-        soon as another process finishes the same requested phases.
+        The lock is always acquired before completion markers are trusted. This
+        makes marker observation a happens-after edge for the prior owner:
+        waiters do not proceed until any process that wrote the marker has also
+        released and closed the advisory lock file.
         """
 
         phase_list = tuple(phases)
-        using_xattrs = self._should_use_xattrs()
-        if self._all_marked(phase_list, using_xattrs=using_xattrs):
-            return PhaseRunResult(
-                completed=(),
-                skipped=tuple(phase.name for phase in phase_list),
-                xattrs_available=self.xattrs_available,
-                lock_path=self.lock_path,
-                status_paths=() if using_xattrs else self._status_paths_for(phase_list),
-            )
-
         completed: list[str] = []
         skipped: list[str] = []
         lock = _AdvisoryLock(
@@ -419,21 +393,9 @@ class PhaseLockService:
             timeout=self.timeout,
             retry_delay=self.retry_delay,
         )
-        acquired = lock.acquire(
-            should_stop_waiting=lambda: self._all_marked(
-                phase_list, using_xattrs=self._should_use_xattrs()
-            ),
+        lock.acquire(
             diagnostics=lambda: self._phase_diagnostics(phase_list),
         )
-        if not acquired:
-            using_xattrs = self._should_use_xattrs()
-            return PhaseRunResult(
-                completed=(),
-                skipped=tuple(phase.name for phase in phase_list),
-                xattrs_available=self.xattrs_available,
-                lock_path=self.lock_path,
-                status_paths=() if using_xattrs else self._status_paths_for(phase_list),
-            )
 
         try:
             using_xattrs = self._should_use_xattrs()
@@ -487,19 +449,6 @@ class PhaseLockService:
             phase.action()
             self._mark_status_phase(phase.name)
             completed.append(phase.name)
-
-    def _all_marked(
-        self,
-        phases: tuple[Phase, ...],
-        *,
-        using_xattrs: bool,
-    ) -> bool:
-        if using_xattrs:
-            return all(
-                self._has_xattr_phase(phase.name, attr_name=phase.attr_name)
-                for phase in phases
-            )
-        return all(self._has_status_phase(phase.name) for phase in phases)
 
     def _should_use_xattrs(self) -> bool:
         if self._use_xattrs is False:

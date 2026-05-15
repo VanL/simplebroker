@@ -524,6 +524,65 @@ class TestSQLiteRunnerErrorHandling:
         assert runner._created_files == set()
 
     @pytest.mark.sqlite_only
+    def test_run_exclusive_setup_marker_does_not_bypass_held_lock(self, tmp_path):
+        """A setup marker is trusted only after acquiring the setup lock."""
+        db_path = tmp_path / "test.db"
+        runner = SQLiteRunner(str(db_path))
+        service = PhaseLockService(db_path)
+        service.status_path_for_phase(f"schema-v{SCHEMA_VERSION}").touch(mode=0o600)
+        lock_held = threading.Event()
+        release_lock = threading.Event()
+        contender_started = threading.Event()
+        contender_done = threading.Event()
+        operation_ran = False
+        result_holder: dict[str, bool] = {}
+        errors: list[BaseException] = []
+
+        def hold_lock() -> None:
+            with service.locked():
+                lock_held.set()
+                release_lock.wait(timeout=2.0)
+
+        def operation() -> None:
+            nonlocal operation_ran
+            operation_ran = True
+
+        def contender() -> None:
+            contender_started.set()
+            try:
+                result_holder["result"] = runner.run_exclusive_setup(
+                    SetupPhase.SCHEMA,
+                    operation,
+                )
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                contender_done.set()
+
+        holder = threading.Thread(target=hold_lock)
+        waiter = threading.Thread(target=contender)
+
+        try:
+            holder.start()
+            assert lock_held.wait(timeout=1.0)
+            waiter.start()
+            assert contender_started.wait(timeout=1.0)
+            assert not contender_done.wait(timeout=0.2)
+            release_lock.set()
+            assert contender_done.wait(timeout=1.0)
+        finally:
+            release_lock.set()
+            holder.join(timeout=1.0)
+            waiter.join(timeout=1.0)
+            runner.close()
+
+        assert not errors
+        assert result_holder["result"] is False
+        assert operation_ran is False
+        assert not holder.is_alive()
+        assert not waiter.is_alive()
+
+    @pytest.mark.sqlite_only
     def test_schema_setup_is_serialized_across_processes(self, tmp_path):
         """Only one process should run schema bootstrap for a fresh database."""
         db_path = tmp_path / "test.db"

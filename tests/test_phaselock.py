@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from simplebroker._phaselock import Phase, PhaseLockService, PhaseLockTimeout
+from simplebroker._phaselock import (
+    Phase,
+    PhaseLockService,
+    PhaseLockTimeout,
+    PhaseRunResult,
+)
 
 
 def _real_xattrs_supported(target: Path) -> bool:
@@ -471,7 +476,7 @@ def test_no_xattr_status_marker_keeps_completed_status_files(tmp_path: Path) -> 
     )
 
 
-def test_no_xattr_waiter_skips_when_phase_marked_while_lock_is_held(
+def test_no_xattr_existing_status_marker_does_not_bypass_held_lock(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "broker.db"
@@ -483,26 +488,95 @@ def test_no_xattr_waiter_skips_when_phase_marked_while_lock_is_held(
         use_xattrs=False,
     )
     calls: list[str] = []
+    result_holder: dict[str, object] = {}
+    errors: list[BaseException] = []
+    started = threading.Event()
+    done = threading.Event()
+    release = target.with_suffix(".release")
 
-    def mark_phase_after_waiter_blocks() -> None:
-        time.sleep(0.05)
-        service.status_path_for_phase("connection-v1").touch(mode=0o600)
+    service.status_path_for_phase("connection-v1").touch(mode=0o600)
+
+    def run_waiter() -> None:
+        started.set()
+        try:
+            result_holder["result"] = service.run_phases(
+                (Phase("connection-v1", lambda: calls.append("ran")),)
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
 
     with _subprocess_holding_phase_lock(target):
-        marker = threading.Thread(target=mark_phase_after_waiter_blocks)
-        marker.start()
-        start = time.monotonic()
-        result = service.run_phases(
-            (Phase("connection-v1", lambda: calls.append("ran")),)
-        )
-        elapsed = time.monotonic() - start
-        marker.join(timeout=1.0)
+        waiter = threading.Thread(target=run_waiter)
+        waiter.start()
+        assert started.wait(timeout=1.0)
+        assert not done.wait(timeout=0.2)
+        release.touch()
+        assert done.wait(timeout=1.0)
+        waiter.join(timeout=1.0)
 
+    assert not errors
+    result = result_holder["result"]
+    assert isinstance(result, PhaseRunResult)
     assert result.completed == ()
     assert result.skipped == ("connection-v1",)
     assert calls == []
-    assert elapsed < 0.5
-    assert not marker.is_alive()
+    assert not waiter.is_alive()
+
+
+def test_no_xattr_waiter_does_not_skip_when_phase_marked_while_lock_is_held(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(
+        target,
+        timeout=1.0,
+        retry_delay=0.01,
+        use_xattrs=False,
+    )
+    calls: list[str] = []
+    result_holder: dict[str, object] = {}
+    errors: list[BaseException] = []
+    started = threading.Event()
+    done = threading.Event()
+    release = target.with_suffix(".release")
+
+    def run_waiter() -> None:
+        started.set()
+        try:
+            result_holder["result"] = service.run_phases(
+                (Phase("connection-v1", lambda: calls.append("ran")),)
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    def mark_phase_after_waiter_blocks() -> None:
+        assert started.wait(timeout=1.0)
+        service.status_path_for_phase("connection-v1").touch(mode=0o600)
+
+    with _subprocess_holding_phase_lock(target):
+        waiter = threading.Thread(target=run_waiter)
+        marker = threading.Thread(target=mark_phase_after_waiter_blocks)
+        waiter.start()
+        marker.start()
+        marker.join(timeout=1.0)
+        assert not marker.is_alive()
+        assert not done.wait(timeout=0.2)
+        release.touch()
+        assert done.wait(timeout=1.0)
+        waiter.join(timeout=1.0)
+
+    assert not errors
+    result = result_holder["result"]
+    assert isinstance(result, PhaseRunResult)
+    assert result.completed == ()
+    assert result.skipped == ("connection-v1",)
+    assert calls == []
+    assert not waiter.is_alive()
 
 
 def test_process_local_lock_serializes_threads(tmp_path: Path) -> None:

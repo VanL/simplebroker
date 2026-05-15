@@ -438,25 +438,17 @@ class SQLiteRunner:
         Returns True when this runner executed *operation*, or False when the
         phase had already been completed by this or another process.
         """
-        if phase in self._completed_phases:
-            return False
-
         service = self._phase_lock_service()
         phase_name = self._phase_marker_name(phase)
-        if self._has_valid_completion_marker(service, phase, phase_name):
-            with self._setup_lock:
-                self._completed_phases.add(phase)
-            return False
+        if phase == SetupPhase.CONNECTION and self._target_needs_fresh_setup_markers():
+            self._discard_stale_completion_markers()
 
         ran = False
 
         def guarded_operation() -> None:
             nonlocal ran
             with self._setup_lock:
-                if phase in self._completed_phases:
-                    return
                 operation()
-                self._completed_phases.add(phase)
                 ran = True
 
         try:
@@ -467,7 +459,7 @@ class SQLiteRunner:
         self._created_files.add(result.lock_path)
         self._created_files.update(result.status_paths)
 
-        if phase_name in result.skipped:
+        if phase_name in result.completed or phase_name in result.skipped:
             with self._setup_lock:
                 self._completed_phases.add(phase)
 
