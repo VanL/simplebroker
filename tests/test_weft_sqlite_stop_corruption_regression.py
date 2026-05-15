@@ -1,13 +1,8 @@
 """Regression harness for Weft's SQLite STOP corruption pattern.
 
-Run with Weft importable, for example:
-
-    PYTHONPATH=/path/to/weft:/path/to/simplebroker \
-        pytest tests/test_weft_sqlite_stop_corruption_regression.py
-
-This is intentionally close to the failing Weft test. It gives SimpleBroker a
-red local anchor while the smaller library-only reproducer is still being
-reduced.
+When Weft is not already importable, this test looks for a sibling ``../weft``
+checkout and its ``.venv``. That keeps the regression easy to run from a local
+SimpleBroker checkout while still skipping cleanly in environments without Weft.
 """
 
 from __future__ import annotations
@@ -22,6 +17,28 @@ from typing import Any
 import pytest
 
 pytestmark = pytest.mark.sqlite_only
+
+
+def _add_sibling_weft_to_sys_path() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    weft_root = repo_root.parent / "weft"
+    if not (weft_root / "weft").is_dir():
+        return
+
+    weft_root_str = str(weft_root)
+    if weft_root_str not in sys.path:
+        sys.path.insert(0, weft_root_str)
+
+    venv_root = weft_root / ".venv"
+    for site_packages in sorted(
+        (venv_root / "lib").glob("python*/site-packages")
+    ) + sorted((venv_root / "lib64").glob("python*/site-packages")):
+        site_packages_str = str(site_packages)
+        if site_packages_str not in sys.path:
+            sys.path.append(site_packages_str)
+
+
+_add_sibling_weft_to_sys_path()
 
 psutil = pytest.importorskip("psutil")
 pytest.importorskip("weft")

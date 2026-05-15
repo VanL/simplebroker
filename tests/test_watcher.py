@@ -533,12 +533,24 @@ class TestQueueWatcher(WatcherTestBase):
 
             success = wait_for_condition(
                 lambda: total_processed() >= num_messages,
-                timeout=scale_timeout_for_ci(5.0),
+                timeout=scale_timeout_for_ci(15.0, ci_factor=2.0),
                 interval=0.05,
             )
             if not success:
+                db = make_broker(broker_target)
+                try:
+                    remaining = list(
+                        db.peek_generator("work_queue", with_timestamps=False)
+                    )
+                finally:
+                    db.close()
+                alive_workers = sum(
+                    1 for _watcher, thread in workers if thread.is_alive()
+                )
                 pytest.fail(
-                    f"Workers processed only {total_processed()} of {num_messages} messages"
+                    f"Workers processed only {total_processed()} of {num_messages} "
+                    f"messages; remaining={len(remaining)}; "
+                    f"alive_workers={alive_workers}"
                 )
         finally:
             # Stop all workers

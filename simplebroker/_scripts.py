@@ -584,7 +584,11 @@ def _venv_python(env_dir: Path) -> Path:
 
 
 def _remove_build_outputs() -> None:
-    for path in (ROOT / "dist", ROOT / "extensions" / "simplebroker_pg" / "dist"):
+    for path in (
+        ROOT / "dist",
+        ROOT / "extensions" / "simplebroker_pg" / "dist",
+        ROOT / "extensions" / "simplebroker_redis" / "dist",
+    ):
         shutil.rmtree(path, ignore_errors=True)
 
 
@@ -596,7 +600,7 @@ def _build_distribution(project_dir: Path) -> None:
 
 
 def packaging_smoke_main() -> int:
-    """Build wheels, inspect metadata, and smoke-install the pg extra."""
+    """Build wheels, inspect metadata, and smoke-install supported extras."""
 
     parser = argparse.ArgumentParser(
         description="Build and smoke-test SimpleBroker packaging artifacts."
@@ -617,33 +621,56 @@ def packaging_smoke_main() -> int:
 
         _build_distribution(ROOT)
         _build_distribution(ROOT / "extensions" / "simplebroker_pg")
+        _build_distribution(ROOT / "extensions" / "simplebroker_redis")
 
         root_dist = ROOT / "dist"
-        extension_dist = ROOT / "extensions" / "simplebroker_pg" / "dist"
+        pg_extension_dist = ROOT / "extensions" / "simplebroker_pg" / "dist"
+        redis_extension_dist = ROOT / "extensions" / "simplebroker_redis" / "dist"
 
         root_wheel = _require_single_wheel(root_dist, "simplebroker-*.whl")
-        extension_wheel = _require_single_wheel(extension_dist, "simplebroker_pg-*.whl")
         root_sdist = _require_single_wheel(root_dist, "simplebroker-*.tar.gz")
-        extension_sdist = _require_single_wheel(
-            extension_dist, "simplebroker_pg-*.tar.gz"
+        pg_extension_wheel = _require_single_wheel(
+            pg_extension_dist, "simplebroker_pg-*.whl"
+        )
+        pg_extension_sdist = _require_single_wheel(
+            pg_extension_dist, "simplebroker_pg-*.tar.gz"
+        )
+        redis_extension_wheel = _require_single_wheel(
+            redis_extension_dist, "simplebroker_redis-*.whl"
+        )
+        redis_extension_sdist = _require_single_wheel(
+            redis_extension_dist, "simplebroker_redis-*.tar.gz"
         )
 
-        for archive_path in (root_wheel, root_sdist, extension_wheel, extension_sdist):
+        for archive_path in (
+            root_wheel,
+            root_sdist,
+            pg_extension_wheel,
+            pg_extension_sdist,
+            redis_extension_wheel,
+            redis_extension_sdist,
+        ):
             _assert_distribution_clean(archive_path)
-        for wheel_path in (root_wheel, extension_wheel):
+        for wheel_path in (root_wheel, pg_extension_wheel, redis_extension_wheel):
             _assert_wheel_contains_license(wheel_path)
 
         root_metadata = _read_wheel_metadata(root_wheel)
-        extension_metadata = _read_wheel_metadata(extension_wheel)
+        pg_extension_metadata = _read_wheel_metadata(pg_extension_wheel)
+        redis_extension_metadata = _read_wheel_metadata(redis_extension_wheel)
 
         provides_extra = root_metadata.get_all("Provides-Extra", [])
         requires_dist = root_metadata.get_all("Requires-Dist", [])
-        requires_python = extension_metadata.get("Requires-Python", "")
+        pg_requires_python = pg_extension_metadata.get("Requires-Python", "")
+        redis_requires_python = redis_extension_metadata.get("Requires-Python", "")
         root_version = root_metadata.get("Version")
 
         if "pg" not in provides_extra:
             raise RuntimeError(
                 f"Expected root wheel to provide extra 'pg', got {provides_extra!r}"
+            )
+        if "redis" not in provides_extra:
+            raise RuntimeError(
+                f"Expected root wheel to provide extra 'redis', got {provides_extra!r}"
             )
         _assert_metadata_contains(
             requires_dist,
@@ -655,10 +682,25 @@ def packaging_smoke_main() -> int:
             needle="extra == 'pg'",
             context="root wheel Requires-Dist",
         )
-        if requires_python != ">=3.10":
+        _assert_metadata_contains(
+            requires_dist,
+            needle="simplebroker-redis",
+            context="root wheel Requires-Dist",
+        )
+        _assert_metadata_contains(
+            requires_dist,
+            needle="extra == 'redis'",
+            context="root wheel Requires-Dist",
+        )
+        if pg_requires_python != ">=3.10":
             raise RuntimeError(
-                "Expected extension wheel Requires-Python to be '>=3.10', got "
-                f"{requires_python!r}"
+                "Expected PG extension wheel Requires-Python to be '>=3.10', got "
+                f"{pg_requires_python!r}"
+            )
+        if redis_requires_python != ">=3.10":
+            raise RuntimeError(
+                "Expected Redis extension wheel Requires-Python to be '>=3.10', got "
+                f"{redis_requires_python!r}"
             )
         if not root_version:
             raise RuntimeError(f"Wheel {root_wheel} is missing a Version header")
@@ -678,8 +720,10 @@ def packaging_smoke_main() -> int:
                     "--find-links",
                     str(root_dist),
                     "--find-links",
-                    str(extension_dist),
-                    f"simplebroker[pg] @ {root_wheel.resolve().as_uri()}",
+                    str(pg_extension_dist),
+                    "--find-links",
+                    str(redis_extension_dist),
+                    f"simplebroker[pg,redis] @ {root_wheel.resolve().as_uri()}",
                 ]
             )
 
@@ -689,9 +733,12 @@ def packaging_smoke_main() -> int:
                     "-c",
                     (
                         "import simplebroker_pg; "
+                        "import simplebroker_redis; "
                         "from simplebroker.ext import get_backend_plugin; "
-                        "plugin = get_backend_plugin('postgres'); "
-                        "assert plugin.name == 'postgres'"
+                        "pg_plugin = get_backend_plugin('postgres'); "
+                        "redis_plugin = get_backend_plugin('redis'); "
+                        "assert pg_plugin.name == 'postgres'; "
+                        "assert redis_plugin.name == 'redis'"
                     ),
                 ]
             )

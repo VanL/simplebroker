@@ -49,66 +49,127 @@ REDIS_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
 
-BASE_PRECHECK_COMMANDS: Final[tuple[tuple[str, ...], ...]] = (
-    (
-        "uv",
-        "run",
-        "--extra",
-        "dev",
-        "pytest",
-        "-v",
-        "--tb=short",
-        "-m",
-        "",
-        "--override-ini=addopts=-ra -q --strict-markers -n auto --dist loadgroup",
-    ),
-    ("uv", "run", "--extra", "dev", "./bin/pytest-pg"),
-    ("uv", "run", "--extra", "dev", "./bin/pytest-redis"),
-    (
-        "uv",
-        "run",
-        "--extra",
-        "dev",
-        "ruff",
-        "check",
-        "simplebroker",
-        "tests",
-        "bin",
-        "extensions/simplebroker_pg/simplebroker_pg",
-        "extensions/simplebroker_pg/tests",
-        "extensions/simplebroker_redis/simplebroker_redis",
-        "extensions/simplebroker_redis/tests",
-    ),
-    (
-        "uv",
-        "run",
-        "--extra",
-        "dev",
-        "ruff",
-        "format",
-        "--check",
-        "simplebroker",
-        "tests",
-        "bin",
-        "extensions/simplebroker_pg/simplebroker_pg",
-        "extensions/simplebroker_pg/tests",
-        "extensions/simplebroker_redis/simplebroker_redis",
-        "extensions/simplebroker_redis/tests",
-    ),
-    (
-        "uv",
-        "run",
-        "--extra",
-        "dev",
-        "mypy",
-        "simplebroker",
-        "bin/release.py",
-        "extensions/simplebroker_pg/simplebroker_pg",
-        "extensions/simplebroker_redis/simplebroker_redis",
-        "extensions/simplebroker_redis/tests",
-        "--config-file",
-        "pyproject.toml",
-    ),
+ROOT_TEST_COMMAND: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "--extra",
+    "dev",
+    "pytest",
+    "-v",
+    "--tb=short",
+    "-m",
+    "",
+    "--override-ini=addopts=-ra -q --strict-markers -n auto --dist loadgroup",
+)
+PG_TEST_COMMAND: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "--extra",
+    "dev",
+    "./bin/pytest-pg",
+)
+REDIS_TEST_COMMAND: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "--extra",
+    "dev",
+    "./bin/pytest-redis",
+)
+PG_TOOL_PATHS: Final[tuple[str, ...]] = (
+    "simplebroker",
+    "tests",
+    "bin",
+    "extensions/simplebroker_pg/simplebroker_pg",
+    "extensions/simplebroker_pg/tests",
+)
+REDIS_TOOL_PATHS: Final[tuple[str, ...]] = (
+    "simplebroker",
+    "tests",
+    "bin",
+    "extensions/simplebroker_redis/simplebroker_redis",
+    "extensions/simplebroker_redis/tests",
+)
+ALL_EXTENSION_TOOL_PATHS: Final[tuple[str, ...]] = (
+    "simplebroker",
+    "tests",
+    "bin",
+    "extensions/simplebroker_pg/simplebroker_pg",
+    "extensions/simplebroker_pg/tests",
+    "extensions/simplebroker_redis/simplebroker_redis",
+    "extensions/simplebroker_redis/tests",
+)
+PG_MYPY_PATHS: Final[tuple[str, ...]] = (
+    "simplebroker",
+    "bin/release.py",
+    "extensions/simplebroker_pg/simplebroker_pg",
+)
+REDIS_MYPY_PATHS: Final[tuple[str, ...]] = (
+    "simplebroker",
+    "bin/release.py",
+    "extensions/simplebroker_redis/simplebroker_redis",
+    "extensions/simplebroker_redis/tests",
+)
+ALL_EXTENSION_MYPY_PATHS: Final[tuple[str, ...]] = (
+    "simplebroker",
+    "bin/release.py",
+    "extensions/simplebroker_pg/simplebroker_pg",
+    "extensions/simplebroker_redis/simplebroker_redis",
+    "extensions/simplebroker_redis/tests",
+)
+RUFF_CHECK_PREFIX: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "--extra",
+    "dev",
+    "ruff",
+    "check",
+)
+RUFF_FORMAT_PREFIX: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "--extra",
+    "dev",
+    "ruff",
+    "format",
+    "--check",
+)
+MYPY_PREFIX: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "--extra",
+    "dev",
+    "mypy",
+)
+MYPY_SUFFIX: Final[tuple[str, ...]] = (
+    "--config-file",
+    "pyproject.toml",
+)
+ROOT_PACKAGING_SMOKE_COMMAND: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "./bin/packaging-smoke",
+    "--python",
+    "3.10",
+)
+PG_BUILD_COMMAND: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "--with",
+    "build",
+    "python",
+    "-m",
+    "build",
+    "extensions/simplebroker_pg",
+)
+REDIS_BUILD_COMMAND: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "--with",
+    "build",
+    "python",
+    "-m",
+    "build",
+    "extensions/simplebroker_redis",
 )
 PRECHECK_ENV_OVERRIDES: Final[dict[str, str]] = {"PYTEST_ADDOPTS": "-x --maxfail=1"}
 TagAction = Literal[
@@ -477,10 +538,44 @@ def _release_file_args(target: ReleaseTarget) -> tuple[str, ...]:
     return tuple(_display_path(path) for path in _release_file_paths(target))
 
 
-def build_precheck_commands() -> tuple[tuple[str, ...], ...]:
+def _ruff_check_command(paths: tuple[str, ...]) -> tuple[str, ...]:
+    return (*RUFF_CHECK_PREFIX, *paths)
+
+
+def _ruff_format_command(paths: tuple[str, ...]) -> tuple[str, ...]:
+    return (*RUFF_FORMAT_PREFIX, *paths)
+
+
+def _mypy_command(paths: tuple[str, ...]) -> tuple[str, ...]:
+    return (*MYPY_PREFIX, *paths, *MYPY_SUFFIX)
+
+
+def build_precheck_commands(target: ReleaseTarget) -> tuple[tuple[str, ...], ...]:
     """Return release-helper precheck commands."""
 
-    return BASE_PRECHECK_COMMANDS
+    backend_tests: tuple[tuple[str, ...], ...]
+    if target.key == ROOT_RELEASE_TARGET.key:
+        tool_paths = ALL_EXTENSION_TOOL_PATHS
+        mypy_paths = ALL_EXTENSION_MYPY_PATHS
+        backend_tests = (PG_TEST_COMMAND, REDIS_TEST_COMMAND)
+    elif target.key == PG_RELEASE_TARGET.key:
+        tool_paths = PG_TOOL_PATHS
+        mypy_paths = PG_MYPY_PATHS
+        backend_tests = (PG_TEST_COMMAND,)
+    elif target.key == REDIS_RELEASE_TARGET.key:
+        tool_paths = REDIS_TOOL_PATHS
+        mypy_paths = REDIS_MYPY_PATHS
+        backend_tests = (REDIS_TEST_COMMAND,)
+    else:
+        raise RuntimeError(f"Unknown release target: {target.key}")
+
+    return (
+        ROOT_TEST_COMMAND,
+        *backend_tests,
+        _ruff_check_command(tool_paths),
+        _ruff_format_command(tool_paths),
+        _mypy_command(mypy_paths),
+    )
 
 
 def build_postupdate_steps(target: ReleaseTarget) -> tuple[CommandStep, ...]:
@@ -495,9 +590,14 @@ def build_postupdate_steps(target: ReleaseTarget) -> tuple[CommandStep, ...]:
         steps.append(
             CommandStep(("uv", "run", "pytest", "tests/test_constants.py", "-q"))
         )
-    steps.append(
-        CommandStep(("uv", "run", "./bin/packaging-smoke", "--python", "3.10"))
-    )
+    if target.key == ROOT_RELEASE_TARGET.key:
+        steps.append(CommandStep(ROOT_PACKAGING_SMOKE_COMMAND))
+    elif target.key == PG_RELEASE_TARGET.key:
+        steps.append(CommandStep(PG_BUILD_COMMAND))
+    elif target.key == REDIS_RELEASE_TARGET.key:
+        steps.append(CommandStep(REDIS_BUILD_COMMAND))
+    else:
+        raise RuntimeError(f"Unknown release target: {target.key}")
     return tuple(steps)
 
 
@@ -1026,7 +1126,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.publish:
             _print_publish_note()
         if not args.skip_checks:
-            for command in build_precheck_commands():
+            for command in build_precheck_commands(target):
                 run_command(
                     command,
                     dry_run=True,
@@ -1101,7 +1201,7 @@ def main(argv: list[str] | None = None) -> int:
         require_published_redis_baseline(read_redis_extension_version())
 
     if not args.skip_checks:
-        for command in build_precheck_commands():
+        for command in build_precheck_commands(target):
             run_command(command, env_overrides=PRECHECK_ENV_OVERRIDES)
 
     if version_changed:

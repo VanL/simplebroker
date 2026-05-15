@@ -306,7 +306,8 @@ class SQLiteRunner:
     def _apply_busy_timeout(self, conn: sqlite3.Connection, timeout_ms: int) -> None:
         """Apply only the SQLite busy timeout to an existing connection."""
 
-        conn.execute(f"PRAGMA busy_timeout={timeout_ms}")
+        cursor = conn.execute(f"PRAGMA busy_timeout={timeout_ms}")
+        cursor.close()
 
     def run(
         self,
@@ -319,10 +320,13 @@ class SQLiteRunner:
         try:
             conn = self.get_connection()
             cursor = conn.execute(sql, params)
-            # Only fetch if explicitly requested
-            if fetch:
-                return cursor.fetchall()
-            return []
+            try:
+                # Only fetch if explicitly requested
+                if fetch:
+                    return cursor.fetchall()
+                return []
+            finally:
+                cursor.close()
         except sqlite3.OperationalError as e:
             raise OperationalError(str(e)) from e
         except sqlite3.IntegrityError as e:
@@ -334,7 +338,8 @@ class SQLiteRunner:
         """Start an immediate transaction."""
         try:
             conn = self.get_connection()
-            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute("BEGIN IMMEDIATE")
+            cursor.close()
         except sqlite3.OperationalError as e:
             raise OperationalError(str(e)) from e
         except sqlite3.IntegrityError as e:
@@ -389,6 +394,7 @@ class SQLiteRunner:
 
     def _close_tracked_connection(self, conn: sqlite3.Connection) -> bool:
         """Close one tracked connection, returning whether close succeeded."""
+        self._prepare_connection_for_close(conn)
         try:
             conn.close()
         except Exception as exc:
@@ -396,6 +402,17 @@ class SQLiteRunner:
                 logger.warning("Error closing SQLite connection: %s", exc)
             return False
         return True
+
+    def _prepare_connection_for_close(self, conn: sqlite3.Connection) -> None:
+        """Best-effort cleanup so connection close cannot inherit long busy waits."""
+
+        with contextlib.suppress(Exception):
+            conn.interrupt()
+        with contextlib.suppress(Exception):
+            cursor = conn.execute("PRAGMA busy_timeout=0")
+            cursor.close()
+        with contextlib.suppress(Exception):
+            conn.rollback()
 
     def setup(self, phase: SetupPhase) -> None:
         """Run specific setup phase in an idempotent manner.

@@ -126,6 +126,85 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 runner.close()
 
+    def test_runner_closes_execute_cursors(self):
+        """Runner-owned cursors should be finalized before connection shutdown."""
+
+        class FakeCursor:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def fetchall(self):
+                return [("ok",)]
+
+            def close(self):
+                self.closed = True
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.cursors: list[FakeCursor] = []
+
+            def execute(self, _sql, _params=()):
+                cursor = FakeCursor()
+                self.cursors.append(cursor)
+                return cursor
+
+        runner = SQLiteRunner("unused.db")
+        fake_conn = FakeConnection()
+        runner._thread_local.conn = fake_conn
+
+        assert list(runner.run("SELECT 1", fetch=True)) == [("ok",)]
+        assert fake_conn.cursors[-1].closed
+
+        assert list(runner.run("INSERT INTO test VALUES (1)")) == []
+        assert fake_conn.cursors[-1].closed
+
+        runner.begin_immediate()
+        assert fake_conn.cursors[-1].closed
+
+        runner._apply_busy_timeout(fake_conn, 1)
+        assert fake_conn.cursors[-1].closed
+
+    def test_close_prepares_connection_to_avoid_busy_waits(self):
+        """Connection close should not inherit the normal SQLite busy timeout."""
+
+        class FakeCursor:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.closed = False
+                self.interrupted = False
+                self.rolled_back = False
+                self.statements: list[str] = []
+                self.cursor = FakeCursor()
+
+            def interrupt(self):
+                self.interrupted = True
+
+            def execute(self, sql):
+                self.statements.append(sql)
+                return self.cursor
+
+            def rollback(self):
+                self.rolled_back = True
+
+            def close(self):
+                self.closed = True
+
+        runner = SQLiteRunner("unused.db")
+        fake_conn = FakeConnection()
+
+        assert runner._close_tracked_connection(fake_conn) is True
+        assert fake_conn.interrupted
+        assert fake_conn.statements == ["PRAGMA busy_timeout=0"]
+        assert fake_conn.cursor.closed
+        assert fake_conn.rolled_back
+        assert fake_conn.closed
+
     def test_begin_immediate_errors_real(self):
         """Test real error handling in begin_immediate."""
         with tempfile.TemporaryDirectory() as tmpdir:

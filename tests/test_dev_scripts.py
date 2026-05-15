@@ -430,18 +430,25 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
 ) -> None:
     calls = []
     root_wheel = tmp_path / "simplebroker-3.4.2-py3-none-any.whl"
-    extension_wheel = tmp_path / "simplebroker_pg-1.3.0-py3-none-any.whl"
+    pg_extension_wheel = tmp_path / "simplebroker_pg-1.3.0-py3-none-any.whl"
+    redis_extension_wheel = tmp_path / "simplebroker_redis-0.9.0-py3-none-any.whl"
     root_sdist = tmp_path / "simplebroker-3.4.2.tar.gz"
-    extension_sdist = tmp_path / "simplebroker_pg-1.3.0.tar.gz"
+    pg_extension_sdist = tmp_path / "simplebroker_pg-1.3.0.tar.gz"
+    redis_extension_sdist = tmp_path / "simplebroker_redis-0.9.0.tar.gz"
     root_wheel.write_text("", encoding="utf-8")
-    extension_wheel.write_text("", encoding="utf-8")
+    pg_extension_wheel.write_text("", encoding="utf-8")
+    redis_extension_wheel.write_text("", encoding="utf-8")
     root_sdist.write_text("", encoding="utf-8")
-    extension_sdist.write_text("", encoding="utf-8")
+    pg_extension_sdist.write_text("", encoding="utf-8")
+    redis_extension_sdist.write_text("", encoding="utf-8")
 
     root_metadata = Message()
     root_metadata["Provides-Extra"] = "pg"
+    root_metadata["Provides-Extra"] = "redis"
     root_metadata["Requires-Dist"] = "simplebroker-pg>=1.3.0,<2"
     root_metadata["Requires-Dist"] = "simplebroker-pg>=1.3.0,<2; extra == 'pg'"
+    root_metadata["Requires-Dist"] = "simplebroker-redis>=0.9.0,<1"
+    root_metadata["Requires-Dist"] = "simplebroker-redis>=0.9.0,<1; extra == 'redis'"
     root_metadata["Version"] = "3.4.2"
 
     extension_metadata = Message()
@@ -465,10 +472,14 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
         if pattern == "simplebroker-*.whl":
             return root_wheel
         if pattern == "simplebroker_pg-*.whl":
-            return extension_wheel
+            return pg_extension_wheel
+        if pattern == "simplebroker_redis-*.whl":
+            return redis_extension_wheel
         if pattern == "simplebroker-*.tar.gz":
             return root_sdist
-        return extension_sdist
+        if pattern == "simplebroker_pg-*.tar.gz":
+            return pg_extension_sdist
+        return redis_extension_sdist
 
     def fake_read_wheel_metadata(wheel_path: Path) -> Message:
         calls.append(("metadata", wheel_path))
@@ -501,21 +512,28 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
         ("build", _scripts.ROOT),
         ("build", _scripts.ROOT / "extensions" / "simplebroker_pg"),
     ]
+    assert calls[3] == ("build", _scripts.ROOT / "extensions" / "simplebroker_redis")
     assert ("clean", root_wheel) in calls
     assert ("clean", root_sdist) in calls
-    assert ("clean", extension_wheel) in calls
-    assert ("clean", extension_sdist) in calls
+    assert ("clean", pg_extension_wheel) in calls
+    assert ("clean", pg_extension_sdist) in calls
+    assert ("clean", redis_extension_wheel) in calls
+    assert ("clean", redis_extension_sdist) in calls
     assert ("license", root_wheel) in calls
-    assert ("license", extension_wheel) in calls
+    assert ("license", pg_extension_wheel) in calls
+    assert ("license", redis_extension_wheel) in calls
 
     run_calls = [call for call in calls if call[0] == "run"]
     assert len(run_calls) == 3
     assert run_calls[0][1][:4] == ["uv", "venv", "--python", "3.13"]
     assert run_calls[1][1][:4] == ["uv", "pip", "install", "--python"]
     assert "--find-links" in run_calls[1][1]
-    assert f"simplebroker[pg] @ {root_wheel.resolve().as_uri()}" in run_calls[1][1]
+    assert (
+        f"simplebroker[pg,redis] @ {root_wheel.resolve().as_uri()}" in run_calls[1][1]
+    )
     assert run_calls[2][1][1] == "-c"
     assert "get_backend_plugin('postgres')" in run_calls[2][1][2]
+    assert "get_backend_plugin('redis')" in run_calls[2][1][2]
 
 
 def test_packaging_smoke_main_returns_subprocess_failure(

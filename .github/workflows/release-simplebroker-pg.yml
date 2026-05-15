@@ -117,9 +117,9 @@ jobs:
         run: |
           python -m pip install build
 
-      - name: Run packaging smoke
+      - name: Build Postgres extension package
         run: |
-          uv run ./bin/packaging-smoke --python 3.10
+          python -m build extensions/simplebroker_pg
 
   coverage:
     runs-on: ubuntu-latest

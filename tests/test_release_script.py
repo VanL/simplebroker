@@ -57,6 +57,57 @@ def test_release_targets_format_expected_tags() -> None:
     assert "redis" in release.RELEASE_TARGETS
 
 
+def _commands_text(commands: tuple[tuple[str, ...], ...]) -> str:
+    return "\n".join(" ".join(command) for command in commands)
+
+
+def test_redis_prechecks_are_target_scoped() -> None:
+    commands = release.build_precheck_commands(release.REDIS_RELEASE_TARGET)
+    text = _commands_text(commands)
+
+    assert "./bin/pytest-redis" in text
+    assert "extensions/simplebroker_redis/simplebroker_redis" in text
+    assert "extensions/simplebroker_redis/tests" in text
+    assert "./bin/pytest-pg" not in text
+    assert "extensions/simplebroker_pg" not in text
+
+
+def test_pg_prechecks_are_target_scoped() -> None:
+    commands = release.build_precheck_commands(release.PG_RELEASE_TARGET)
+    text = _commands_text(commands)
+
+    assert "./bin/pytest-pg" in text
+    assert "extensions/simplebroker_pg/simplebroker_pg" in text
+    assert "extensions/simplebroker_pg/tests" in text
+    assert "./bin/pytest-redis" not in text
+    assert "extensions/simplebroker_redis" not in text
+
+
+def test_core_prechecks_cover_both_extensions() -> None:
+    commands = release.build_precheck_commands(release.ROOT_RELEASE_TARGET)
+    text = _commands_text(commands)
+
+    assert "./bin/pytest-pg" in text
+    assert "./bin/pytest-redis" in text
+    assert "extensions/simplebroker_pg/simplebroker_pg" in text
+    assert "extensions/simplebroker_redis/simplebroker_redis" in text
+
+
+def test_extension_postupdate_steps_build_only_target_extension() -> None:
+    redis_steps = release.build_postupdate_steps(release.REDIS_RELEASE_TARGET)
+    pg_steps = release.build_postupdate_steps(release.PG_RELEASE_TARGET)
+    redis_text = _commands_text(tuple(step.command for step in redis_steps))
+    pg_text = _commands_text(tuple(step.command for step in pg_steps))
+
+    assert "build extensions/simplebroker_redis" in redis_text
+    assert "extensions/simplebroker_pg" not in redis_text
+    assert "packaging-smoke" not in redis_text
+
+    assert "build extensions/simplebroker_pg" in pg_text
+    assert "extensions/simplebroker_redis" not in pg_text
+    assert "packaging-smoke" not in pg_text
+
+
 @pytest.mark.parametrize(
     ("remote_url", "slug"),
     [
