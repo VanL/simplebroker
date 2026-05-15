@@ -528,6 +528,8 @@ def test_multiple_queues_concurrent_activity(broker_target) -> None:
                 futures.append(future)
 
             concurrent.futures.wait(futures)
+            for future in futures:
+                future.result()
 
         # Wait for processing - give more time on slower systems
         success = wait_for_condition(
