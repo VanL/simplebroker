@@ -505,6 +505,13 @@ def test_multiple_queues_concurrent_activity(broker_target) -> None:
             watchers.append(w)
             w.run_in_thread()
 
+        wait_for_condition(
+            lambda: all(w.drain_count > 0 for w in watchers),
+            timeout=scale_timeout_for_ci(5.0),
+            interval=0.01,
+            message="All watchers should enter their initial drain before writes",
+        )
+
         # Concurrent writer function
         def write_to_queue(queue_name, start_idx) -> None:
             for i in range(messages_per_queue):
