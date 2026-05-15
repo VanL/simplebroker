@@ -525,7 +525,7 @@ class TestSQLiteRunnerErrorHandling:
 
     @pytest.mark.sqlite_only
     def test_run_exclusive_setup_marker_does_not_bypass_held_lock(self, tmp_path):
-        """A setup marker is trusted only after acquiring the setup lock."""
+        """A fallback setup marker is trusted only after acquiring the setup lock."""
         db_path = tmp_path / "test.db"
 
         class StrictSetupRunner(SQLiteRunner):
@@ -537,6 +537,7 @@ class TestSQLiteRunnerErrorHandling:
                     status_suffix=".setup.status",
                     timeout=10.0,
                     retry_delay=0.05,
+                    use_xattrs=False,
                     strict_marker_locking=True,
                 )
 
