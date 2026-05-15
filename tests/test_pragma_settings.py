@@ -1,11 +1,45 @@
 """Tests for SQLite PRAGMA settings and environment variable configuration."""
 
 import sqlite3
+from typing import cast
 
 import pytest
 
+from simplebroker._backends.sqlite import runtime as sqlite_runtime
+from simplebroker._constants import load_config
 from simplebroker._runner import SQLiteRunner
 from simplebroker.db import BrokerCore, BrokerDB
+
+
+class TrackingCursor:
+    def __init__(self, row: tuple[str, ...] | None = None) -> None:
+        self.row = row
+        self.closed = False
+
+    def fetchone(self) -> tuple[str, ...] | None:
+        return self.row
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class TrackingConnection:
+    def __init__(self) -> None:
+        self.cursors: list[TrackingCursor] = []
+        self.closed = False
+
+    def execute(self, sql: str) -> TrackingCursor:
+        row = None
+        if sql == "PRAGMA journal_mode":
+            row = ("delete",)
+        elif sql == "PRAGMA journal_mode=WAL":
+            row = ("wal",)
+        cursor = TrackingCursor(row)
+        self.cursors.append(cursor)
+        return cursor
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def test_default_pragma_settings(tmp_path) -> None:
@@ -67,6 +101,37 @@ def test_sqlite_runner_uses_constructor_config(tmp_path) -> None:
         assert runner.run("PRAGMA busy_timeout", fetch=True)[0][0] == 1234
         assert runner.run("PRAGMA cache_size", fetch=True)[0][0] == -25600
         assert runner.run("PRAGMA wal_autocheckpoint", fetch=True)[0][0] == 5000
+
+
+def test_sqlite_runtime_closes_connection_setting_cursors() -> None:
+    """Setup PRAGMA cursors should not wait for connection-close finalization."""
+    config = load_config()
+    tracker = TrackingConnection()
+    conn = cast(sqlite3.Connection, tracker)
+
+    sqlite_runtime.apply_connection_settings(
+        conn,
+        config=config,
+        optimization_complete=True,
+    )
+
+    assert tracker.cursors
+    assert all(cursor.closed for cursor in tracker.cursors)
+
+
+def test_sqlite_connection_phase_closes_setup_cursors(monkeypatch, tmp_path) -> None:
+    """Connection-phase setup should finalize every cursor before closing."""
+    config = load_config()
+    conn = TrackingConnection()
+
+    monkeypatch.setattr(sqlite_runtime, "check_version", lambda: None)
+    monkeypatch.setattr(sqlite_runtime.sqlite3, "connect", lambda *args, **kwargs: conn)
+
+    sqlite_runtime.setup_connection_phase(str(tmp_path / "test.db"), config=config)
+
+    assert conn.closed
+    assert conn.cursors
+    assert all(cursor.closed for cursor in conn.cursors)
 
 
 def test_custom_cache_size(tmp_path) -> None:

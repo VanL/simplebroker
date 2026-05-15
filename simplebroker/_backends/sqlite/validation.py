@@ -38,6 +38,7 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:
         raise DatabaseError(f"Cannot read database file: {file_path} ({exc})") from exc
 
     conn: sqlite3.Connection | None = None
+    cursor: sqlite3.Cursor | None = None
     try:
         conn = sqlite3.connect(f"file:{file_path}?mode=ro", uri=True)
         cursor = conn.cursor()
@@ -69,6 +70,11 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:
             f"OS error while accessing database: {file_path} ({exc})"
         ) from exc
     finally:
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
         if conn is not None:
             try:
                 conn.close()

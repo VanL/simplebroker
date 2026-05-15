@@ -61,6 +61,45 @@ def _commands_text(commands: tuple[tuple[str, ...], ...]) -> str:
     return "\n".join(" ".join(command) for command in commands)
 
 
+def test_root_test_command_adds_local_weft_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    project_root.mkdir()
+    weft_root = tmp_path / "weft"
+    weft_root.mkdir()
+    (weft_root / "pyproject.toml").write_text(
+        "[project]\nname = 'weft'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+
+    assert release._root_test_command()[:6] == (
+        "uv",
+        "run",
+        "--extra",
+        "dev",
+        "--with-editable",
+        "../weft",
+    )
+
+
+def test_root_test_command_skips_local_weft_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    project_root.mkdir()
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+
+    command = release._root_test_command()
+
+    assert "--with-editable" not in command
+    assert command[:4] == ("uv", "run", "--extra", "dev")
+    assert command[4] == "pytest"
+
+
 def test_redis_prechecks_are_target_scoped() -> None:
     commands = release.build_precheck_commands(release.REDIS_RELEASE_TARGET)
     text = _commands_text(commands)

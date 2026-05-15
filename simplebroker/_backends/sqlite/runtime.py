@@ -12,12 +12,28 @@ from ..._sql.sqlite import SELECT_SQLITE_VERSION, SET_AUTO_VACUUM_INCREMENTAL
 from .validation import is_valid_database
 
 
+def _execute_and_close(conn: sqlite3.Connection, sql: str) -> None:
+    """Execute a setup statement and finalize its cursor immediately."""
+
+    cursor = conn.execute(sql)
+    cursor.close()
+
+
+def _fetchone_and_close(conn: sqlite3.Connection, sql: str) -> tuple[Any, ...] | None:
+    """Fetch one setup row and finalize its cursor immediately."""
+
+    cursor = conn.execute(sql)
+    try:
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+
+
 def check_version() -> None:
     """Check the minimum SQLite version required by SimpleBroker."""
     conn = sqlite3.connect(":memory:")
     try:
-        cursor = conn.execute(SELECT_SQLITE_VERSION)
-        version = cursor.fetchone() if cursor else None
+        version = _fetchone_and_close(conn, SELECT_SQLITE_VERSION)
         if version:
             version_parts = [int(part) for part in version[0].split(".")]
             if version_parts < [3, 35, 0]:
@@ -39,7 +55,7 @@ def apply_connection_settings(
 ) -> None:
     """Apply per-connection SQLite settings that do not require exclusive locks."""
     busy_timeout = config["BROKER_BUSY_TIMEOUT"]
-    conn.execute(f"PRAGMA busy_timeout={busy_timeout}")
+    _execute_and_close(conn, f"PRAGMA busy_timeout={busy_timeout}")
 
     wal_autocheckpoint = config["BROKER_WAL_AUTOCHECKPOINT"]
     if wal_autocheckpoint < 0:
@@ -49,7 +65,7 @@ def apply_connection_settings(
             stacklevel=2,
         )
         wal_autocheckpoint = 1000
-    conn.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
+    _execute_and_close(conn, f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
 
     if optimization_complete:
         apply_optimization_settings(conn, config=config)
@@ -60,7 +76,7 @@ def apply_optimization_settings(
 ) -> None:
     """Apply SQLite performance tuning settings to a connection."""
     cache_mb = config["BROKER_CACHE_MB"]
-    conn.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
+    _execute_and_close(conn, f"PRAGMA cache_size=-{cache_mb * 1024}")
 
     sync_mode = config["BROKER_SYNC_MODE"]
     if sync_mode not in ("FULL", "NORMAL", "OFF"):
@@ -70,7 +86,7 @@ def apply_optimization_settings(
             stacklevel=2,
         )
         sync_mode = "FULL"
-    conn.execute(f"PRAGMA synchronous={sync_mode}")
+    _execute_and_close(conn, f"PRAGMA synchronous={sync_mode}")
 
 
 def setup_connection_phase(
@@ -101,17 +117,16 @@ def setup_connection_phase(
             isolation_level=None,
             timeout=setup_busy_timeout / 1000,
         )
-        setup_conn.execute(f"PRAGMA busy_timeout={setup_busy_timeout}")
+        _execute_and_close(setup_conn, f"PRAGMA busy_timeout={setup_busy_timeout}")
 
         if is_new_database:
-            setup_conn.execute(SET_AUTO_VACUUM_INCREMENTAL)
+            _execute_and_close(setup_conn, SET_AUTO_VACUUM_INCREMENTAL)
 
-        cursor = setup_conn.execute("PRAGMA journal_mode")
-        current_mode = cursor.fetchone()[0] if cursor else "delete"
+        row = _fetchone_and_close(setup_conn, "PRAGMA journal_mode")
+        current_mode = row[0] if row else "delete"
 
         if current_mode.lower() != "wal":
-            cursor = setup_conn.execute("PRAGMA journal_mode=WAL")
-            result = cursor.fetchone() if cursor else None
+            result = _fetchone_and_close(setup_conn, "PRAGMA journal_mode=WAL")
             if not result or result[0].lower() != "wal":
                 raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
     except sqlite3.OperationalError as exc:

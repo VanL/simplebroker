@@ -7,6 +7,7 @@ isolation and coordination.
 import multiprocessing
 import queue
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -40,6 +41,7 @@ def watcher_process(
             def __init__(self, *args, **kwargs) -> None:
                 super().__init__(*args, **kwargs)
                 self._enable_pre_check = enable_pre_check
+                self._initial_drain_seen = threading.Event()
 
             def _has_pending_messages(self):
                 if not self._enable_pre_check:
@@ -48,17 +50,24 @@ def watcher_process(
                 return super()._has_pending_messages()
 
             def _drain_queue(self) -> None:
-                if self._enable_pre_check:
-                    if not self._has_pending_messages():
-                        return
-                super()._drain_queue()
+                try:
+                    super()._drain_queue()
+                finally:
+                    self._initial_drain_seen.set()
 
         watcher = ProcessWatcher(queue_name, handler, db=db_path)
 
         # Run until stop signal
         thread = watcher.run_in_thread()
 
-        # Signal ready after the watcher thread has actually been started.
+        ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+        while not watcher._initial_drain_seen.wait(timeout=0.05):
+            if not thread.is_alive():
+                raise RuntimeError("Watcher thread exited before initial drain")
+            if time.monotonic() >= ready_deadline:
+                raise TimeoutError("Watcher thread did not complete initial drain")
+
+        # Signal ready after the watcher has completed startup drain.
         result_queue.put(("ready", process_id, None))
 
         while True:
@@ -67,6 +76,10 @@ def watcher_process(
                 if command == "stop":
                     break
             except queue.Empty:
+                if not thread.is_alive():
+                    raise RuntimeError(
+                        "Watcher thread exited before stop signal"
+                    ) from None
                 continue
 
         watcher.stop()

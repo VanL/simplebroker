@@ -49,11 +49,13 @@ REDIS_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
 
-ROOT_TEST_COMMAND: Final[tuple[str, ...]] = (
+ROOT_TEST_COMMAND_PREFIX: Final[tuple[str, ...]] = (
     "uv",
     "run",
     "--extra",
     "dev",
+)
+ROOT_TEST_PYTEST_ARGS: Final[tuple[str, ...]] = (
     "pytest",
     "-v",
     "--tb=short",
@@ -550,6 +552,19 @@ def _mypy_command(paths: tuple[str, ...]) -> tuple[str, ...]:
     return (*MYPY_PREFIX, *paths, *MYPY_SUFFIX)
 
 
+def _local_weft_uv_args() -> tuple[str, ...]:
+    """Return local Weft uv args for release-helper root tests when available."""
+
+    weft_root = PROJECT_ROOT.parent / "weft"
+    if not (weft_root / "pyproject.toml").is_file():
+        return ()
+    return ("--with-editable", "../weft")
+
+
+def _root_test_command() -> tuple[str, ...]:
+    return (*ROOT_TEST_COMMAND_PREFIX, *_local_weft_uv_args(), *ROOT_TEST_PYTEST_ARGS)
+
+
 def build_precheck_commands(target: ReleaseTarget) -> tuple[tuple[str, ...], ...]:
     """Return release-helper precheck commands."""
 
@@ -570,7 +585,7 @@ def build_precheck_commands(target: ReleaseTarget) -> tuple[tuple[str, ...], ...
         raise RuntimeError(f"Unknown release target: {target.key}")
 
     return (
-        ROOT_TEST_COMMAND,
+        _root_test_command(),
         *backend_tests,
         _ruff_check_command(tool_paths),
         _ruff_format_command(tool_paths),
