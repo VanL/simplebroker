@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from ..._exceptions import OperationalError
 from ..._sql.sqlite import SELECT_SQLITE_VERSION, SET_AUTO_VACUUM_INCREMENTAL
@@ -24,7 +24,7 @@ def _fetchone_and_close(conn: sqlite3.Connection, sql: str) -> tuple[Any, ...] |
 
     cursor = conn.execute(sql)
     try:
-        return cursor.fetchone()
+        return cast("tuple[Any, ...] | None", cursor.fetchone())
     finally:
         cursor.close()
 
