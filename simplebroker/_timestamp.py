@@ -47,7 +47,7 @@ class TimestampGenerator:
     ):
         self._runner = runner
         self._backend_plugin = resolve_runner_backend_plugin(runner, backend_plugin)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._initialized = False
         self._last_ts = 0
         self._counter = 0
@@ -102,29 +102,30 @@ class TimestampGenerator:
         """
         Robust, lock-free (DB-wise) timestamp generator.
         """
-        self._ensure_pid()
+        with self._lock:
+            self._ensure_pid()
 
-        # one local fast-path loop, *no* DB locks are held here
-        for _ in range(6):  # hard upper bound
-            physical_ns, logical = self._next_components()
-            new_ts = self._encode_hybrid_timestamp(physical_ns, logical)
+            # one local fast-path loop, *no* DB locks are held here
+            for _ in range(6):  # hard upper bound
+                physical_ns, logical = self._next_components()
+                new_ts = self._encode_hybrid_timestamp(physical_ns, logical)
 
-            # Ensure it fits in SQLite's signed 64-bit integer
-            if new_ts >= SQLITE_MAX_INT64:
-                raise TimestampError("Timestamp too far in future")
+                # Ensure it fits in SQLite's signed 64-bit integer
+                if new_ts >= SQLITE_MAX_INT64:
+                    raise TimestampError("Timestamp too far in future")
 
-            # >>> single atomic write – no BEGIN <<< -----------------
-            if self._store_if_greater(new_ts):
-                self._last_ts = new_ts
-                return new_ts
-            # ---------------------------------------------------------
+                # >>> single atomic write – no BEGIN <<< -----------------
+                if self._store_if_greater(new_ts):
+                    self._last_ts = new_ts
+                    return new_ts
+                # ---------------------------------------------------------
 
-            # Someone beat us – read their value and try again
-            latest = self._peek_last_ts()
-            if latest is None:
-                # meta row disappeared – DB is corrupt
-                raise TimestampError("meta.last_ts missing")
-            self._last_ts = latest
+                # Someone beat us – read their value and try again
+                latest = self._peek_last_ts()
+                if latest is None:
+                    # meta row disappeared – DB is corrupt
+                    raise TimestampError("meta.last_ts missing")
+                self._last_ts = latest
 
         # Fall back to resilience mechanism
         raise IntegrityError("unable to generate unique timestamp (exhausted retries)")

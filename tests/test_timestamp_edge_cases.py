@@ -1,6 +1,10 @@
 """Test edge cases in _timestamp.py to increase coverage."""
 
+import concurrent.futures
 import os
+import threading
+import time
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
@@ -8,6 +12,37 @@ import pytest
 from simplebroker._exceptions import IntegrityError, TimestampError
 from simplebroker._runner import SQLRunner
 from simplebroker._timestamp import TimestampGenerator
+
+
+class AtomicLastTimestampPlugin:
+    """Minimal backend plugin for exercising TimestampGenerator concurrency."""
+
+    name = "atomic-test"
+    sql = None
+    schema_version = 1
+    is_direct_backend = True
+
+    def __init__(self) -> None:
+        self.last_ts = 0
+        self._lock = threading.Lock()
+
+    def read_last_ts(self, runner: Any) -> int:
+        del runner
+        with self._lock:
+            return self.last_ts
+
+    def advance_last_ts(self, runner: Any, *, new_ts: int) -> bool:
+        del runner
+        with self._lock:
+            time.sleep(0.0001)
+            if self.last_ts < new_ts:
+                self.last_ts = new_ts
+                return True
+            return False
+
+    def create_core(self, target: str, **kwargs: Any) -> None:
+        del target, kwargs
+        raise NotImplementedError
 
 
 class TimeAdvancer:
@@ -37,6 +72,34 @@ class TimeAdvancer:
 
 class TestTimestampEdgeCases:
     """Test edge cases in timestamp generation and validation."""
+
+    def test_shared_timestamp_generator_serializes_threads(self) -> None:
+        """One generator instance should be safe for concurrent callers."""
+
+        plugin = AtomicLastTimestampPlugin()
+        gen = TimestampGenerator(object(), backend_plugin=plugin)
+        thread_count = 16
+        per_thread = 20
+        start = threading.Barrier(thread_count)
+
+        def generate_many() -> list[int]:
+            start.wait()
+            return [gen.generate() for _ in range(per_thread)]
+
+        with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=thread_count
+            ) as executor:
+                futures = [executor.submit(generate_many) for _ in range(thread_count)]
+                timestamps = [
+                    timestamp
+                    for future in futures
+                    for timestamp in future.result(timeout=5.0)
+                ]
+
+        assert len(timestamps) == thread_count * per_thread
+        assert len(set(timestamps)) == len(timestamps)
+        assert max(timestamps) == plugin.last_ts
 
     def test_validate_empty_string(self):
         """Test validation with empty string."""

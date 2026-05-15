@@ -20,6 +20,7 @@ from simplebroker._runner import SetupPhase, SQLiteRunner
 from simplebroker.db import BrokerCore
 
 from .helper_scripts.database_errors import DatabaseErrorInjector
+from .helper_scripts.timing import scale_timeout_for_ci
 
 
 def _run_schema_setup_probe(args: tuple[str, str, int]) -> None:
@@ -575,19 +576,24 @@ class TestSQLiteRunnerErrorHandling:
 
         holder = threading.Thread(target=hold_lock)
         waiter = threading.Thread(target=contender)
+        waiter_started = False
 
         try:
             holder.start()
-            assert lock_held.wait(timeout=1.0)
+            assert lock_held.wait(timeout=scale_timeout_for_ci(5.0)), (
+                "Lock holder did not acquire the setup lock in time"
+            )
             waiter.start()
-            assert contender_started.wait(timeout=1.0)
+            waiter_started = True
+            assert contender_started.wait(timeout=scale_timeout_for_ci(1.0))
             assert not contender_done.wait(timeout=0.2)
             release_lock.set()
-            assert contender_done.wait(timeout=1.0)
+            assert contender_done.wait(timeout=scale_timeout_for_ci(1.0))
         finally:
             release_lock.set()
-            holder.join(timeout=1.0)
-            waiter.join(timeout=1.0)
+            holder.join(timeout=scale_timeout_for_ci(1.0))
+            if waiter_started:
+                waiter.join(timeout=scale_timeout_for_ci(1.0))
             runner.close()
 
         assert not errors
