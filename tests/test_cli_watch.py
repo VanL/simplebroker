@@ -8,6 +8,14 @@ from .helper_scripts.timestamp_validation import validate_timestamp
 from .helper_scripts.timing import scale_timeout_for_ci
 
 
+def _watch_output_timeout(timeout: float = 2.0) -> float:
+    """Allow Windows CI extra time for watch subprocess startup and first output."""
+
+    if sys.platform == "win32":
+        return scale_timeout_for_ci(timeout)
+    return timeout
+
+
 def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages=None):
     """Wait for JSON output from a process with timeout.
 
@@ -55,12 +63,17 @@ def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages
     # Timeout reached
     if expected_count:
         raise TimeoutError(
-            f"Expected {expected_count} JSON objects, got {len(json_objects)}"
+            f"Expected {expected_count} JSON objects, got {len(json_objects)}; "
+            f"stdout={proc.stdout!r}; stderr={proc.stderr!r}; "
+            f"returncode={proc.proc.poll()!r}"
         )
     elif expected_messages:
         found = {obj["message"] for obj in json_objects}
         missing = expected_messages - found
-        raise TimeoutError(f"Missing expected messages: {missing}")
+        raise TimeoutError(
+            f"Missing expected messages: {missing}; stdout={proc.stdout!r}; "
+            f"stderr={proc.stderr!r}; returncode={proc.proc.poll()!r}"
+        )
 
     return json_objects
 
@@ -80,7 +93,7 @@ class TestWatchCommand:
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "watchtest"]
         with managed_subprocess(cmd, cwd=workdir) as proc:
             # Wait for the message to appear in output
-            assert proc.wait_for_output("hello", timeout=2.0)
+            assert proc.wait_for_output("hello", timeout=_watch_output_timeout())
             # Process automatically terminated on exit
 
     def test_watch_sigint_handling(self, workdir):
@@ -95,7 +108,7 @@ class TestWatchCommand:
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "siginttest"]
         with managed_subprocess(cmd, cwd=workdir) as proc:
             # Wait for it to start and process the first message
-            proc.wait_for_output("message1", timeout=2.0)
+            proc.wait_for_output("message1", timeout=_watch_output_timeout())
 
             return_code = proc.wait_after_interrupt(
                 timeout=scale_timeout_for_ci(10.0, ci_factor=2.0)
@@ -133,7 +146,7 @@ class TestWatchCommand:
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "--peek", "peektest"]
         with managed_subprocess(cmd, cwd=workdir) as proc:
             # Wait for the message to appear in output
-            assert proc.wait_for_output("peekmsg", timeout=2.0)
+            assert proc.wait_for_output("peekmsg", timeout=_watch_output_timeout())
 
             # Get output
             stdout = proc.stdout
@@ -162,7 +175,11 @@ class TestWatchCommand:
         cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "--json", "jsontest"]
         with managed_subprocess(cmd, cwd=workdir) as proc:
             # Wait for JSON output
-            json_objects = wait_for_json_output(proc, expected_count=1, timeout=2.0)
+            json_objects = wait_for_json_output(
+                proc,
+                expected_count=1,
+                timeout=_watch_output_timeout(),
+            )
 
             # Validate the output
             assert len(json_objects) >= 1, (
@@ -195,7 +212,11 @@ class TestWatchCommand:
         ]
         with managed_subprocess(cmd, cwd=workdir) as proc:
             # Wait for initial message
-            wait_for_json_output(proc, expected_count=1, timeout=2.0)
+            wait_for_json_output(
+                proc,
+                expected_count=1,
+                timeout=_watch_output_timeout(),
+            )
 
             # Write another message to trigger more output
             rc, _, _ = run_cli("write", "timestamptest", "trigger message", cwd=workdir)
@@ -205,7 +226,7 @@ class TestWatchCommand:
             collected_messages = wait_for_json_output(
                 proc,
                 expected_messages={"initial message", "trigger message"},
-                timeout=2.0,
+                timeout=_watch_output_timeout(),
             )
 
             # Verify we got messages
