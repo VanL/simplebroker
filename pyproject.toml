@@ -46,10 +46,10 @@ dev = [
     "pytest-timeout>=2.4.0",
 ]
 pg = [
-    "simplebroker-pg>=1.4.0,<2",
+    "simplebroker-pg>=1.4.2,<2",
 ]
 redis = [
-    "simplebroker-redis>=0.9.0,<1",
+    "simplebroker-redis>=0.9.2,<1",
 ]
 
 [project.scripts]
