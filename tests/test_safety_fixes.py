@@ -304,6 +304,9 @@ def test_sqlite_version_check(workdir, monkeypatch):
         def fetchone(self):
             return ("3.34.0",)  # Version before 3.35
 
+        def close(self):
+            pass
+
     class MockConnection:
         def __init__(self, *args, **kwargs):
             self.call_count = 0
