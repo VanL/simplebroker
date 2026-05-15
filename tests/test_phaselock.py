@@ -486,6 +486,7 @@ def test_no_xattr_existing_status_marker_does_not_bypass_held_lock(
         timeout=1.0,
         retry_delay=0.01,
         use_xattrs=False,
+        strict_marker_locking=True,
     )
     calls: list[str] = []
     result_holder: dict[str, object] = {}
@@ -535,6 +536,7 @@ def test_no_xattr_waiter_does_not_skip_when_phase_marked_while_lock_is_held(
         timeout=1.0,
         retry_delay=0.01,
         use_xattrs=False,
+        strict_marker_locking=True,
     )
     calls: list[str] = []
     result_holder: dict[str, object] = {}
@@ -577,6 +579,38 @@ def test_no_xattr_waiter_does_not_skip_when_phase_marked_while_lock_is_held(
     assert result.skipped == ("connection-v1",)
     assert calls == []
     assert not waiter.is_alive()
+
+
+def test_no_xattr_non_strict_waiter_skips_when_phase_marked_while_lock_is_held(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(
+        target,
+        timeout=1.0,
+        retry_delay=0.01,
+        use_xattrs=False,
+        strict_marker_locking=False,
+    )
+    calls: list[str] = []
+
+    def mark_phase_after_waiter_blocks() -> None:
+        time.sleep(0.05)
+        service.status_path_for_phase("connection-v1").touch(mode=0o600)
+
+    with _subprocess_holding_phase_lock(target):
+        marker = threading.Thread(target=mark_phase_after_waiter_blocks)
+        marker.start()
+        result = service.run_phases(
+            (Phase("connection-v1", lambda: calls.append("ran")),)
+        )
+        marker.join(timeout=1.0)
+
+    assert result.completed == ()
+    assert result.skipped == ("connection-v1",)
+    assert calls == []
+    assert not marker.is_alive()
 
 
 def test_process_local_lock_serializes_threads(tmp_path: Path) -> None:

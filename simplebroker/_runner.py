@@ -440,8 +440,17 @@ class SQLiteRunner:
         """
         service = self._phase_lock_service()
         phase_name = self._phase_marker_name(phase)
+        if phase in self._completed_phases and not service.strict_marker_locking:
+            return False
+
         if phase == SetupPhase.CONNECTION and self._target_needs_fresh_setup_markers():
             self._discard_stale_completion_markers()
+        elif not service.strict_marker_locking and self._has_valid_completion_marker(
+            service, phase, phase_name
+        ):
+            with self._setup_lock:
+                self._completed_phases.add(phase)
+            return False
 
         ran = False
 

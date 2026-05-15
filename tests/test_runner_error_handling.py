@@ -527,8 +527,21 @@ class TestSQLiteRunnerErrorHandling:
     def test_run_exclusive_setup_marker_does_not_bypass_held_lock(self, tmp_path):
         """A setup marker is trusted only after acquiring the setup lock."""
         db_path = tmp_path / "test.db"
-        runner = SQLiteRunner(str(db_path))
-        service = PhaseLockService(db_path)
+
+        class StrictSetupRunner(SQLiteRunner):
+            def _phase_lock_service(self) -> PhaseLockService:
+                return PhaseLockService(
+                    self._db_path,
+                    namespace="user.simplebroker",
+                    lock_suffix=".setup.lock",
+                    status_suffix=".setup.status",
+                    timeout=10.0,
+                    retry_delay=0.05,
+                    strict_marker_locking=True,
+                )
+
+        runner = StrictSetupRunner(str(db_path))
+        service = runner._phase_lock_service()
         service.status_path_for_phase(f"schema-v{SCHEMA_VERSION}").touch(mode=0o600)
         lock_held = threading.Event()
         release_lock = threading.Event()
