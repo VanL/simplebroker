@@ -167,10 +167,7 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
         # Record polling state before message
         delay_count_before = len(strategy.delay_history)
 
-        # Record from the completed enqueue so the latency check measures
-        # watcher responsiveness rather than producer-side write time.
         broker.write("test_queue", "test message")
-        message_time = time.monotonic()
 
         # Wait for message processing
         wait_for_condition(
@@ -198,9 +195,9 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
         )
 
         # The watcher should process the message written for this phase. The
-        # burst-mode invariant is checked above from polling history; a strict
-        # wall-clock latency budget is not deterministic on loaded CI workers.
-        assert processed_messages[0][1] >= message_time
+        # burst-mode invariant is checked above from polling history; exact
+        # wall-clock ordering around broker.write() returning is scheduler-dependent.
+        assert processed_messages[0][0] == "test message"
 
     finally:
         if watcher is not None:

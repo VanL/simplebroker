@@ -9,6 +9,7 @@ from __future__ import annotations
 import concurrent.futures
 import math
 import os
+import sys
 import threading
 import time
 from collections import Counter
@@ -42,6 +43,7 @@ class ConcurrencyTestWatcher(QueueWatcher):
         self.pre_check_operational_errors = 0
         self.drain_count = 0
         self.dispatch_count = 0
+        self.main_loop_entered = threading.Event()
         self._lock = threading.Lock()
 
     def _has_pending_messages(self) -> bool:
@@ -65,6 +67,11 @@ class ConcurrencyTestWatcher(QueueWatcher):
 
         # Let parent handle the actual draining
         super()._drain_queue()
+
+    def _process_messages(self) -> None:
+        """Signal that startup is complete before entering the main loop."""
+        self.main_loop_entered.set()
+        super()._process_messages()
 
     def _dispatch(self, message: str, timestamp: int, *, config=None) -> None:
         """Add instrumentation to dispatch."""
@@ -94,6 +101,55 @@ class ConcurrencyTestWatcher(QueueWatcher):
         if config is not None:
             return super()._process_with_retry(wrapped, operation_name, config=config)
         return super()._process_with_retry(wrapped, operation_name)
+
+
+def _is_windows_sqlite(broker_target) -> bool:
+    return sys.platform == "win32" and broker_target.backend_name == "sqlite"
+
+
+def _watcher_startup_timeout(broker_target) -> float:
+    base_timeout = 10.0 if _is_windows_sqlite(broker_target) else 5.0
+    return scale_timeout_for_ci(base_timeout)
+
+
+def _watcher_processing_timeout(
+    broker_target,
+    *,
+    default: float,
+    postgres: float | None = None,
+    windows_sqlite: float = 15.0,
+) -> float:
+    if broker_target.backend_name == "postgres" and postgres is not None:
+        return scale_timeout_for_ci(postgres)
+    if _is_windows_sqlite(broker_target):
+        return scale_timeout_for_ci(windows_sqlite)
+    return scale_timeout_for_ci(default)
+
+
+def _ready_watcher_count(watchers: list[ConcurrencyTestWatcher]) -> int:
+    return sum(watcher.main_loop_entered.is_set() for watcher in watchers)
+
+
+def _watcher_thread_states(
+    watchers: list[ConcurrencyTestWatcher],
+) -> list[tuple[int, bool]]:
+    states: list[tuple[int, bool]] = []
+    for index, watcher in enumerate(watchers):
+        thread_ref = getattr(watcher, "_thread", None)
+        thread = thread_ref() if thread_ref is not None else None
+        states.append((index, bool(thread is not None and thread.is_alive())))
+    return states
+
+
+def _wait_for_watchers_ready(
+    watchers: list[ConcurrencyTestWatcher],
+    broker_target,
+) -> bool:
+    return wait_for_condition(
+        lambda: all(watcher.main_loop_entered.is_set() for watcher in watchers),
+        timeout=_watcher_startup_timeout(broker_target),
+        interval=0.05,
+    )
 
 
 @dataclass(frozen=True)
@@ -189,7 +245,10 @@ def test_pre_check_race_no_message_loss(broker_target) -> None:
             watchers.append(w)
             w.run_in_thread()
 
-        time.sleep(0.2)
+        assert _wait_for_watchers_ready(watchers, broker_target), (
+            f"Only {_ready_watcher_count(watchers)}/{len(watchers)} watchers "
+            f"entered the main loop: threads={_watcher_thread_states(watchers)}"
+        )
 
         # Rapidly add messages while watchers are running
         expected_messages = []
@@ -207,12 +266,15 @@ def test_pre_check_race_no_message_loss(broker_target) -> None:
 
         success = wait_for_condition(
             lambda: processed_count() >= len(expected_messages),
-            timeout=scale_timeout_for_ci(5.0),
+            timeout=_watcher_processing_timeout(broker_target, default=5.0),
             interval=0.05,
         )
         if not success:
             pytest.fail(
-                f"Timed out waiting for watchers: processed {processed_count()} of {len(expected_messages)}"
+                "Timed out waiting for watchers: "
+                f"processed {processed_count()} of {len(expected_messages)}; "
+                f"ready={_ready_watcher_count(watchers)}/{len(watchers)}; "
+                f"threads={_watcher_thread_states(watchers)}"
             )
 
         # Verify all messages were processed exactly once
@@ -707,6 +769,11 @@ def test_pre_check_database_contention(broker_target) -> None:
             watchers.append(w)
             w.run_in_thread()
 
+        assert _wait_for_watchers_ready(watchers, broker_target), (
+            f"Only {_ready_watcher_count(watchers)}/{len(watchers)} watchers "
+            f"entered the main loop: threads={_watcher_thread_states(watchers)}"
+        )
+
         def processing_snapshot() -> tuple[int, dict[str, int]]:
             with processed_lock:
                 return processed_total, dict(processed_counts)
@@ -733,10 +800,16 @@ def test_pre_check_database_contention(broker_target) -> None:
         if writer_errors:
             raise AssertionError("Writer thread failed") from writer_errors[0]
 
-        processing_timeout = 30.0 if broker_target.backend_name == "postgres" else 5.0
-        assert all_processed.wait(timeout=scale_timeout_for_ci(processing_timeout)), (
+        processing_timeout = _watcher_processing_timeout(
+            broker_target,
+            default=5.0,
+            postgres=30.0,
+        )
+        assert all_processed.wait(timeout=processing_timeout), (
             "Timed out waiting for watcher processing under contention: "
-            f"processed={processing_snapshot()}"
+            f"processed={processing_snapshot()}; "
+            f"ready={_ready_watcher_count(watchers)}/{len(watchers)}; "
+            f"threads={_watcher_thread_states(watchers)}"
         )
 
         # Verify all watchers still functioned under contention
