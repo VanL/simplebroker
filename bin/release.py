@@ -558,7 +558,14 @@ def _local_weft_uv_args() -> tuple[str, ...]:
     weft_root = PROJECT_ROOT.parent / "weft"
     if not (weft_root / "pyproject.toml").is_file():
         return ()
-    return ("--with-editable", "../weft")
+    return (
+        "--with-editable",
+        "../weft",
+        "--with-editable",
+        "../weft/.venv/lib/python3.13/site-packages",
+        "--with-editable",
+        "../weft/.venv/lib/python3.14/site-packages",
+    )
 
 
 def _root_test_command() -> tuple[str, ...]:

@@ -65,6 +65,11 @@ class InstrumentedPollingStrategy(PollingStrategy):
         """Get current check count for testing."""
         return self._check_count
 
+    def get_delay_history(self) -> list[float]:
+        """Return a stable copy of recorded delays."""
+        with self._lock:
+            return self.delay_history.copy()
+
 
 class InstrumentedQueueWatcher(QueueWatcher):
     """QueueWatcher with instrumented polling strategy."""
@@ -786,7 +791,7 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:
             message="Continuous activity should restart burst mode",
         )
 
-        start_count = len(strategy.delay_history)
+        start_count = len(strategy.get_delay_history())
 
         # Add remaining messages continuously
         for i in range(1, 5):
@@ -794,17 +799,39 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:
             time.sleep(0.02)  # Small delay between messages
 
         # Wait for all messages
-        wait_for_condition(
+        assert wait_for_condition(
             lambda: len(processed_messages) == 6,  # 1 + 5 messages
             timeout=2.0,
             message="All messages should be processed",
         )
 
-        # Verify stayed in burst mode during activity
-        activity_delays = strategy.delay_history[start_count:]
+        def burst_run_after_continuous_activity() -> bool:
+            activity_delays = strategy.get_delay_history()[start_count:]
+            consecutive_zeroes = 0
+            for delay in activity_delays:
+                if delay == 0:
+                    consecutive_zeroes += 1
+                    if consecutive_zeroes >= 5:
+                        return True
+                else:
+                    consecutive_zeroes = 0
+            return False
+
+        assert wait_for_condition(
+            burst_run_after_continuous_activity,
+            timeout=1.0,
+            message="Continuous activity should record a burst run",
+        )
+
+        # Verify activity returned the watcher to burst mode. Native activity
+        # backends can record a few backed-off waits before notifications wake
+        # the watcher, so require a burst run instead of a ratio over the whole
+        # window.
+        activity_delays = strategy.get_delay_history()[start_count:]
         zero_count = sum(1 for d in activity_delays if d == 0)
-        assert zero_count > len(activity_delays) * 0.8, (
-            "Should mostly stay in burst mode with continuous activity"
+        assert zero_count >= 5, (
+            "Should return to burst mode with continuous activity, "
+            f"got delays={activity_delays}"
         )
 
     finally:
