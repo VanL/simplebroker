@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import threading
 import time
 from unittest.mock import patch
@@ -105,6 +106,7 @@ class MonitoredQueueWatcher(QueueWatcher):
         self._enable_pre_check = True
         self._last_log_time = time.time()
         self._log_interval = float(os.environ.get("BROKER_WATCHER_LOG_INTERVAL", "60"))
+        self.main_loop_entered = threading.Event()
 
     def _has_pending_messages(self) -> bool:
         """Track pre-check performance."""
@@ -149,6 +151,11 @@ class MonitoredQueueWatcher(QueueWatcher):
 
         self._maybe_log_stats()
 
+    def _process_messages(self) -> None:
+        """Signal that startup is complete before entering the main loop."""
+        self.main_loop_entered.set()
+        super()._process_messages()
+
     def _dispatch(self, message: str, timestamp: int, *, config=None) -> None:
         """Track message processing time."""
         start = time.perf_counter()
@@ -180,6 +187,52 @@ class MonitoredQueueWatcher(QueueWatcher):
             self._last_log_time = current_time
 
 
+def _is_windows_sqlite(broker_target) -> bool:
+    return sys.platform == "win32" and broker_target.backend_name == "sqlite"
+
+
+def _metrics_startup_timeout(broker_target) -> float:
+    base_timeout = 10.0 if _is_windows_sqlite(broker_target) else 5.0
+    return scale_timeout_for_ci(base_timeout)
+
+
+def _metrics_processing_timeout(
+    broker_target,
+    *,
+    default: float,
+    windows_sqlite: float = 15.0,
+) -> float:
+    if _is_windows_sqlite(broker_target):
+        return scale_timeout_for_ci(windows_sqlite)
+    return scale_timeout_for_ci(default)
+
+
+def _wait_for_metrics_watchers_ready(
+    watchers: list[MonitoredQueueWatcher],
+    broker_target,
+) -> bool:
+    return wait_for_condition(
+        lambda: all(watcher.main_loop_entered.is_set() for watcher in watchers),
+        timeout=_metrics_startup_timeout(broker_target),
+        interval=0.05,
+    )
+
+
+def _ready_metrics_watcher_count(watchers: list[MonitoredQueueWatcher]) -> int:
+    return sum(watcher.main_loop_entered.is_set() for watcher in watchers)
+
+
+def _metrics_thread_states(
+    watchers: list[MonitoredQueueWatcher],
+) -> list[tuple[int, bool]]:
+    states: list[tuple[int, bool]] = []
+    for index, watcher in enumerate(watchers):
+        thread_ref = getattr(watcher, "_thread", None)
+        thread = thread_ref() if thread_ref is not None else None
+        states.append((index, bool(thread is not None and thread.is_alive())))
+    return states
+
+
 def test_metrics_collection_basic(broker_target) -> None:
     """Test basic metrics collection functionality."""
     broker = make_broker(broker_target)
@@ -206,11 +259,19 @@ def test_metrics_collection_basic(broker_target) -> None:
         thread = watcher.run_in_thread()
 
         # Wait for all messages to be processed
+        assert _wait_for_metrics_watchers_ready([watcher], broker_target), (
+            "Metrics watcher did not enter the main loop: "
+            f"threads={_metrics_thread_states([watcher])}"
+        )
         assert wait_for_count(
             lambda: metrics.get_stats()["messages_processed"],
             expected_count=10,
-            timeout=scale_timeout_for_ci(2.0),
+            timeout=_metrics_processing_timeout(broker_target, default=2.0),
             interval=0.05,
+        ), (
+            "Timed out waiting for metrics collection: "
+            f"stats={metrics.get_stats()}; "
+            f"threads={_metrics_thread_states([watcher])}"
         )
 
         watcher.stop()
@@ -381,8 +442,12 @@ def test_metrics_aggregation(broker_target) -> None:
             threads.append(thread)
 
         try:
-            # Let watchers run without messages to generate empty wake-ups
-            time.sleep(0.2)
+            assert _wait_for_metrics_watchers_ready(watchers, broker_target), (
+                "Only "
+                f"{_ready_metrics_watcher_count(watchers)}/{len(watchers)} "
+                "metrics watchers entered the main loop: "
+                f"threads={_metrics_thread_states(watchers)}"
+            )
 
             # Generate activity
             for i in range(num_watchers):
@@ -392,9 +457,14 @@ def test_metrics_aggregation(broker_target) -> None:
             assert wait_for_count(
                 lambda: global_metrics.get_stats()["messages_processed"],
                 expected_count=num_watchers * 10,
-                timeout=scale_timeout_for_ci(3.0),
+                timeout=_metrics_processing_timeout(broker_target, default=3.0),
                 interval=0.05,
                 at_least=True,
+            ), (
+                "Timed out waiting for aggregated metrics: "
+                f"stats={global_metrics.get_stats()}; "
+                f"ready={_ready_metrics_watcher_count(watchers)}/{len(watchers)}; "
+                f"threads={_metrics_thread_states(watchers)}"
             )
 
             # Check aggregated metrics
