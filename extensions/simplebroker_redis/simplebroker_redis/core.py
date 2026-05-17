@@ -9,7 +9,7 @@ import uuid
 import warnings
 from collections.abc import Generator, Mapping, Sequence
 from fnmatch import fnmatchcase
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 import redis
 
@@ -629,6 +629,39 @@ class RedisBrokerCore:
         if not rows:
             return None
         return rows[0] if with_timestamps else rows[0][0]
+
+    @overload
+    def peek_many(
+        self,
+        queue: str,
+        limit: int = PEEK_BATCH_SIZE,
+        *,
+        with_timestamps: Literal[True] = True,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+    ) -> list[tuple[str, int]]: ...
+
+    @overload
+    def peek_many(
+        self,
+        queue: str,
+        limit: int = PEEK_BATCH_SIZE,
+        *,
+        with_timestamps: Literal[False],
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+    ) -> list[str]: ...
+
+    @overload
+    def peek_many(
+        self,
+        queue: str,
+        limit: int = PEEK_BATCH_SIZE,
+        *,
+        with_timestamps: bool,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+    ) -> list[tuple[str, int]] | list[str]: ...
 
     def peek_many(
         self,
