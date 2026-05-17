@@ -301,9 +301,7 @@ redis = [
     )
 
     assert updated_version == "0.9.0"
-    assert '"simplebroker-redis>=0.9.0"' in root_pyproject.read_text(
-        encoding="utf-8"
-    )
+    assert '"simplebroker-redis>=0.9.0"' in root_pyproject.read_text(encoding="utf-8")
 
 
 def test_sync_root_redis_extra_dependency_noops_when_current(
