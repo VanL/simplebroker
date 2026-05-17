@@ -834,6 +834,29 @@ class TestQueueDelete:
         result = q.delete(message_id=999999999999999999)
         assert result is False
 
+    def test_delete_by_id_physically_removes_claimed_message(self, queue_factory):
+        """Deleting by ID should remove claimed rows, not claim them again."""
+        q = queue_factory("test")
+
+        q.write("message1")
+        q.write("message2")
+        messages = list(q.peek_generator(with_timestamps=True))
+        target_ts = messages[0][1]
+
+        assert q.read_one(exact_timestamp=target_ts) == "message1"
+        before = q.stats()
+        assert before.pending == 1
+        assert before.claimed == 1
+        assert before.total == 2
+
+        assert q.delete(message_id=target_ts) is True
+
+        after = q.stats()
+        assert after.pending == 1
+        assert after.claimed == 0
+        assert after.total == 1
+        assert list(q.peek_generator(with_timestamps=False)) == ["message2"]
+
 
 class TestQueueHighLevelMethods:
     """Test high-level read/peek/move methods that mirror CLI behavior."""

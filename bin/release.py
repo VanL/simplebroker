@@ -42,10 +42,10 @@ CONSTANTS_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(
     r'(?m)^__version__:\s*Final\[str\]\s*=\s*"([^"]+)"$'
 )
 PG_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r'(?m)^(\s*)"simplebroker-pg>=([^",]+),<2",(\s*)$'
+    r'(?m)^(\s*)"simplebroker-pg>=([^",]+)",(\s*)$'
 )
 REDIS_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r'(?m)^(\s*)"simplebroker-redis>=([^",]+),<1",(\s*)$'
+    r'(?m)^(\s*)"simplebroker-redis>=([^",]+)",(\s*)$'
 )
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
 
@@ -446,7 +446,7 @@ def sync_root_pg_extra_dependency(
         indent, current_version, trailing = match.groups()
         if current_version == pg_version:
             return match.group(0)
-        return f'{indent}"simplebroker-pg>={pg_version},<2",{trailing}'
+        return f'{indent}"simplebroker-pg>={pg_version}",{trailing}'
 
     updated_text, count = PG_EXTRA_DEPENDENCY_PATTERN.subn(
         replace_dependency,
@@ -492,7 +492,7 @@ def sync_root_redis_extra_dependency(
         indent, current_version, trailing = match.groups()
         if current_version == redis_version:
             return match.group(0)
-        return f'{indent}"simplebroker-redis>={redis_version},<1",{trailing}'
+        return f'{indent}"simplebroker-redis>={redis_version}",{trailing}'
 
     updated_text, count = REDIS_EXTRA_DEPENDENCY_PATTERN.subn(
         replace_dependency,
@@ -562,6 +562,38 @@ def _local_weft_uv_args() -> tuple[str, ...]:
         "--with-editable",
         "../weft",
     )
+
+
+def _local_weft_pythonpath() -> str | None:
+    """Return local Weft venv dependency paths when available."""
+
+    weft_venv = PROJECT_ROOT.parent / "weft" / ".venv"
+    site_packages_paths = sorted(
+        (weft_venv / "lib").glob("python*/site-packages")
+    ) + sorted((weft_venv / "lib64").glob("python*/site-packages"))
+    if not site_packages_paths:
+        return None
+    return os.pathsep.join(str(path) for path in site_packages_paths)
+
+
+def _is_root_test_command(command: tuple[str, ...]) -> bool:
+    """Return whether command is the root pytest precheck."""
+
+    return (
+        command[: len(ROOT_TEST_COMMAND_PREFIX)] == ROOT_TEST_COMMAND_PREFIX
+        and command[-len(ROOT_TEST_PYTEST_ARGS) :] == ROOT_TEST_PYTEST_ARGS
+    )
+
+
+def _precheck_env_overrides(command: tuple[str, ...]) -> dict[str, str]:
+    """Return precheck environment overrides for one command."""
+
+    env = dict(PRECHECK_ENV_OVERRIDES)
+    if _is_root_test_command(command):
+        local_weft_pythonpath = _local_weft_pythonpath()
+        if local_weft_pythonpath is not None:
+            env["PYTHONPATH"] = local_weft_pythonpath
+    return env
 
 
 def _root_test_command() -> tuple[str, ...]:
@@ -634,6 +666,10 @@ def _merge_command_env(
         if key == "PYTEST_ADDOPTS":
             existing = merged.get(key, "").strip()
             merged[key] = f"{existing} {value}".strip() if existing else value
+            continue
+        if key == "PYTHONPATH":
+            existing = merged.get(key, "").strip()
+            merged[key] = os.pathsep.join(part for part in (existing, value) if part)
             continue
         merged[key] = value
     return merged
@@ -1148,7 +1184,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_command(
                     command,
                     dry_run=True,
-                    env_overrides=PRECHECK_ENV_OVERRIDES,
+                    env_overrides=_precheck_env_overrides(command),
                 )
         if version_changed:
             print(
@@ -1169,11 +1205,11 @@ def main(argv: list[str] | None = None) -> int:
             redis_version = read_target_version(REDIS_RELEASE_TARGET)
             print(
                 "dry-run: would ensure simplebroker[pg] requires "
-                f"simplebroker-pg>={pg_version},<2"
+                f"simplebroker-pg>={pg_version}"
             )
             print(
                 "dry-run: would ensure simplebroker[redis] requires "
-                f"simplebroker-redis>={redis_version},<1"
+                f"simplebroker-redis>={redis_version}"
             )
             print(
                 "dry-run: would require simplebroker-pg "
@@ -1220,7 +1256,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.skip_checks:
         for command in build_precheck_commands(target):
-            run_command(command, env_overrides=PRECHECK_ENV_OVERRIDES)
+            run_command(command, env_overrides=_precheck_env_overrides(command))
 
     if version_changed:
         write_target_version(target, target_version)
@@ -1245,7 +1281,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(
                 "Updated simplebroker[pg] baseline: "
-                f"simplebroker-pg>={pg_dependency_version},<2"
+                f"simplebroker-pg>={pg_dependency_version}"
             )
         redis_dependency_version = sync_root_redis_extra_dependency()
         if redis_dependency_version is None:
@@ -1253,7 +1289,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(
                 "Updated simplebroker[redis] baseline: "
-                f"simplebroker-redis>={redis_dependency_version},<1"
+                f"simplebroker-redis>={redis_dependency_version}"
             )
 
     for step in build_postupdate_steps(target):

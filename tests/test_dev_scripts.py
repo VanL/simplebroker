@@ -431,10 +431,10 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
     calls = []
     root_wheel = tmp_path / "simplebroker-3.4.2-py3-none-any.whl"
     pg_extension_wheel = tmp_path / "simplebroker_pg-1.3.0-py3-none-any.whl"
-    redis_extension_wheel = tmp_path / "simplebroker_redis-0.9.0-py3-none-any.whl"
+    redis_extension_wheel = tmp_path / "simplebroker_redis-1.0.0-py3-none-any.whl"
     root_sdist = tmp_path / "simplebroker-3.4.2.tar.gz"
     pg_extension_sdist = tmp_path / "simplebroker_pg-1.3.0.tar.gz"
-    redis_extension_sdist = tmp_path / "simplebroker_redis-0.9.0.tar.gz"
+    redis_extension_sdist = tmp_path / "simplebroker_redis-1.0.0.tar.gz"
     root_wheel.write_text("", encoding="utf-8")
     pg_extension_wheel.write_text("", encoding="utf-8")
     redis_extension_wheel.write_text("", encoding="utf-8")
@@ -445,10 +445,10 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
     root_metadata = Message()
     root_metadata["Provides-Extra"] = "pg"
     root_metadata["Provides-Extra"] = "redis"
-    root_metadata["Requires-Dist"] = "simplebroker-pg>=1.3.0,<2"
-    root_metadata["Requires-Dist"] = "simplebroker-pg>=1.3.0,<2; extra == 'pg'"
-    root_metadata["Requires-Dist"] = "simplebroker-redis>=0.9.0,<1"
-    root_metadata["Requires-Dist"] = "simplebroker-redis>=0.9.0,<1; extra == 'redis'"
+    root_metadata["Requires-Dist"] = "simplebroker-pg>=1.3.0"
+    root_metadata["Requires-Dist"] = "simplebroker-pg>=1.3.0; extra == 'pg'"
+    root_metadata["Requires-Dist"] = "simplebroker-redis>=1.0.0"
+    root_metadata["Requires-Dist"] = "simplebroker-redis>=1.0.0; extra == 'redis'"
     root_metadata["Version"] = "3.4.2"
 
     extension_metadata = Message()

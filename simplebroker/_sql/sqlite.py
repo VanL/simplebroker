@@ -199,6 +199,27 @@ DELETE_QUEUE_MESSAGES = """
 DELETE FROM messages WHERE queue = ?
 """
 
+CREATE_TEMP_DELETE_MESSAGE_IDS = """
+CREATE TEMP TABLE IF NOT EXISTS simplebroker_delete_message_ids (
+    ts INTEGER PRIMARY KEY
+) WITHOUT ROWID
+"""
+
+CLEAR_TEMP_DELETE_MESSAGE_IDS = """
+DELETE FROM simplebroker_delete_message_ids
+"""
+
+DELETE_STAGED_MESSAGE_IDS = """
+DELETE FROM messages
+WHERE id IN (
+    SELECT m.id
+    FROM messages AS m
+    JOIN simplebroker_delete_message_ids AS d
+      ON d.ts = m.ts
+    WHERE m.queue = ?
+)
+"""
+
 # Delete claimed messages in batches (for vacuum)
 DELETE_CLAIMED_BATCH = """
 DELETE FROM messages
@@ -462,6 +483,17 @@ def build_move_by_id_query(where_conditions: list[str]) -> str:
         WHERE {where_clause}
         RETURNING id, body, ts
         ORDER BY id
+        """
+
+
+def build_insert_delete_message_ids_query(count: int) -> str:
+    """Build a bounded temp-table insert for exact physical delete IDs."""
+    if count < 1:
+        raise ValueError("count must be at least 1")
+    values = ", ".join(["(?)"] * count)
+    return f"""
+        INSERT OR IGNORE INTO simplebroker_delete_message_ids(ts)
+        VALUES {values}
         """
 
 

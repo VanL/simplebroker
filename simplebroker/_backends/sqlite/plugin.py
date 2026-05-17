@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +13,7 @@ from ..._exceptions import DatabaseError
 from ..._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 from .maintenance import (
     database_size_bytes,
+    delete_message_ids,
     delete_messages,
     get_data_version,
     vacuum,
@@ -171,6 +172,15 @@ class SQLiteBackendPlugin:
 
     def delete_messages(self, runner: SQLRunner, *, queue: str | None) -> int:
         return delete_messages(runner, queue=queue)
+
+    def delete_message_ids(
+        self,
+        runner: SQLRunner,
+        *,
+        queue: str,
+        message_ids: Sequence[int],
+    ) -> int:
+        return delete_message_ids(runner, queue=queue, message_ids=message_ids)
 
     def read_magic(self, runner: SQLRunner) -> str | None:
         rows = _as_row_list(

@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 import warnings
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from fnmatch import fnmatchcase
 from typing import Any, Literal
 
@@ -901,6 +901,38 @@ class RedisBrokerCore:
                 pipe.srem(self._key("queues"), name)
                 pipe.execute()
         return deleted
+
+    def delete_message_ids(self, queue: str, message_ids: Sequence[int]) -> int:
+        self._validate_queue_name(queue)
+        self._assert_no_reentrant_mutation_during_batch("delete_message_ids")
+        if not message_ids:
+            return 0
+
+        deduped = tuple(dict.fromkeys(message_ids))
+        if self._runner.stale_batch_seconds >= 0:
+            self.recover_stale_batches(max_age_seconds=self._runner.stale_batch_seconds)
+        encoded_ids = [encode_id(message_id) for message_id in deduped]
+        try:
+            result = self._client.eval(
+                scripts.DELETE_MESSAGE_IDS,
+                6,
+                self._qkey(queue, "pending"),
+                self._qkey(queue, "claimed"),
+                self._qkey(queue, "reserved"),
+                self._keys.bodies,
+                self._keys.all_ids,
+                self._keys.queues,
+                queue,
+                *encoded_ids,
+            )
+        except redis.RedisError as exc:
+            raise _translate_redis_error(exc) from exc
+        result_int = response_int(result)
+        if result_int < 0:
+            raise OperationalError(
+                "Cannot delete message while an at_least_once batch is active"
+            )
+        return result_int
 
     def broadcast(self, message: str, *, pattern: str | None = None) -> int:
         self._validate_message_size(message)

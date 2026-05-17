@@ -183,20 +183,20 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "3.6.1"
+version = "3.7.0"
 source = { editable = "../../" }
 
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
-    { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3,<4" },
-    { name = "psycopg-pool", marker = "extra == 'dev'", specifier = ">=3.1,<4" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3" },
+    { name = "psycopg-pool", marker = "extra == 'dev'", specifier = ">=3.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.0" },
-    { name = "redis", marker = "extra == 'dev'", specifier = ">=5,<7" },
+    { name = "redis", marker = "extra == 'dev'", specifier = ">=5" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "simplebroker-pg", marker = "extra == 'pg'", editable = "." },
     { name = "simplebroker-redis", marker = "extra == 'redis'", editable = "../simplebroker_redis" },
@@ -205,7 +205,7 @@ provides-extras = ["dev", "pg", "redis"]
 
 [[package]]
 name = "simplebroker-pg"
-version = "1.4.2"
+version = "1.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
@@ -221,8 +221,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "psycopg", extras = ["binary"], specifier = ">=3,<4" },
-    { name = "psycopg-pool", specifier = ">=3.1,<4" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3" },
+    { name = "psycopg-pool", specifier = ">=3.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
     { name = "simplebroker", editable = "../../" },

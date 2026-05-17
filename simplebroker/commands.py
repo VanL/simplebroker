@@ -680,14 +680,14 @@ def cmd_delete(
     if queue_name is not None:
         canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
 
-    # Handle delete by timestamp
+    # Handle exact physical delete by message ID.
     if message_id_str is not None and canonical_queue is not None:
         # Validate exact timestamp
         exact_timestamp = parse_exact_message_id(message_id_str)
         if exact_timestamp is None:
             return EXIT_QUEUE_EMPTY
 
-        # Use Queue API to delete specific message
+        # Use Queue API to delete the specific message.
         with Queue(canonical_queue, db_path=db_path) as queue:
             deleted = queue.delete(message_id=exact_timestamp)
 

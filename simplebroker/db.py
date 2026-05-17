@@ -8,7 +8,7 @@ import threading
 import time
 import warnings
 import weakref
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from fnmatch import fnmatchcase
 from functools import lru_cache
@@ -2143,6 +2143,39 @@ class BrokerCore:
 
         # Execute with retry logic
         return self._run_with_retry(_do_delete)
+
+    def delete_message_ids(self, queue: str, message_ids: Sequence[int]) -> int:
+        """Physically delete exact message IDs from one queue.
+
+        Claimed and unclaimed messages are both eligible for deletion. Missing
+        IDs and IDs belonging to other queues are ignored.
+        """
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+        self._assert_no_reentrant_mutation_during_batch("delete_message_ids")
+        if not message_ids:
+            return 0
+
+        deduped = tuple(dict.fromkeys(message_ids))
+
+        def _do_delete_message_ids() -> int:
+            transaction_open = False
+            with self._lock:
+                self._runner.begin_immediate()
+                transaction_open = True
+                try:
+                    deleted_count = self._backend_plugin.delete_message_ids(
+                        self._runner, queue=queue, message_ids=deduped
+                    )
+                    self._runner.commit()
+                    transaction_open = False
+                    return deleted_count
+                except Exception:
+                    if transaction_open:
+                        self._runner.rollback()
+                    raise
+
+        return self._run_with_retry(_do_delete_message_ids)
 
     def broadcast(self, message: str, *, pattern: str | None = None) -> int:
         """Broadcast a message to all existing queues atomically.

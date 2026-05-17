@@ -79,6 +79,7 @@ BASELINE_TIMES = {
     "concurrent_mixed_ops": 2.5,  # Estimated for mixed operations
     "move_1k_messages": 0.093,  # Moving 1000 messages individually
     "claim_1k_messages": 0.056,  # Claiming 1000 messages
+    "batch_delete_5k_messages": 3.0,  # Physical batch delete of 5000 IDs
     "vacuum_10k_messages": 3.0,  # Estimated based on batch operations
     "write_1k_messages": 0.719,  # Writing 1000 messages
     "move_watcher_100": 2.0,  # Estimated for watcher operations
@@ -660,6 +661,33 @@ def test_performance_improvement_with_claims(workdir: Path):
     )
 
     conn.close()
+
+
+@pytest.mark.slow
+def test_batch_delete_many_performance(workdir: Path):
+    """Physical batch delete should avoid per-ID cleanup loops."""
+    db_path = workdir / "test.db"
+    message_count = 10000
+    delete_count = 5000
+
+    with Queue("delete_perf_queue", db_path=str(db_path), persistent=True) as q:
+        for i in range(message_count):
+            q.write(f"msg{i:05d}")
+        timestamps = [
+            timestamp for _body, timestamp in q.peek_generator(with_timestamps=True)
+        ][:delete_count]
+
+        start_time = time.monotonic()
+        deleted = q.delete_many(timestamps)
+        delete_time = time.monotonic() - start_time
+
+    assert deleted == delete_count
+    with sqlite3.connect(str(db_path)) as conn:
+        row_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    assert row_count == message_count - delete_count
+    assert delete_time < get_timeout("batch_delete_5k_messages"), (
+        f"Deleting {delete_count} messages took {delete_time:.2f}s"
+    )
 
 
 @pytest.mark.slow

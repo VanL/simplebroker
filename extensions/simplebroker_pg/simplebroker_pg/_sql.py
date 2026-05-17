@@ -48,6 +48,19 @@ WITH deleted AS (
 )
 SELECT COUNT(*) FROM deleted
 """
+DELETE_MESSAGE_IDS_COUNT = """
+WITH ids(ts) AS MATERIALIZED (
+    SELECT DISTINCT unnest(?::bigint[])
+),
+deleted AS (
+    DELETE FROM messages AS m
+    USING ids
+    WHERE m.queue = ?
+      AND m.ts = ids.ts
+    RETURNING 1
+)
+SELECT COUNT(*) FROM deleted
+"""
 GET_ALIAS_VERSION = "SELECT alias_version FROM meta WHERE singleton = TRUE"
 GET_DISTINCT_QUEUES = "SELECT DISTINCT queue FROM messages ORDER BY queue"
 GET_LAST_TS = "SELECT last_ts FROM meta WHERE singleton = TRUE"

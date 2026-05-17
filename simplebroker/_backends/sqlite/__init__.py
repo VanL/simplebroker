@@ -2,6 +2,7 @@
 
 from .maintenance import (
     database_size_bytes,
+    delete_message_ids,
     delete_messages,
     get_data_version,
     vacuum,
@@ -25,6 +26,7 @@ __all__ = [
     "apply_optimization_settings",
     "check_version",
     "database_size_bytes",
+    "delete_message_ids",
     "delete_messages",
     "get_data_version",
     "initialize_database",

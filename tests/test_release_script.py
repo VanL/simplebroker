@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -98,6 +99,41 @@ def test_root_test_command_skips_local_weft_when_unavailable(
     assert "--with-editable" not in command
     assert command[:4] == ("uv", "run", "--extra", "dev")
     assert command[4] == "pytest"
+
+
+def test_precheck_env_extends_pythonpath_with_local_weft_venv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    project_root.mkdir()
+    site_packages = tmp_path / "weft" / ".venv" / "lib" / "python3.13" / "site-packages"
+    site_packages.mkdir(parents=True)
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+
+    root_command = release._root_test_command()
+    backend_command = release.PG_TEST_COMMAND
+    env = release._precheck_env_overrides(root_command)
+
+    assert env["PYTEST_ADDOPTS"] == "-x --maxfail=1"
+    assert env["PYTHONPATH"] == str(site_packages)
+    assert release._precheck_env_overrides(backend_command) == {
+        "PYTEST_ADDOPTS": "-x --maxfail=1"
+    }
+
+
+def test_command_env_appends_pythonpath_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "existing"))
+
+    env = release._merge_command_env({"PYTHONPATH": str(tmp_path / "weft-deps")})
+
+    assert env is not None
+    assert env["PYTHONPATH"] == os.pathsep.join(
+        [str(tmp_path / "existing"), str(tmp_path / "weft-deps")]
+    )
 
 
 def test_redis_prechecks_are_target_scoped() -> None:
@@ -208,7 +244,7 @@ def test_sync_root_pg_extra_dependency_uses_local_pg_version(tmp_path: Path) -> 
     root_pyproject.write_text(
         """[project.optional-dependencies]
 pg = [
-    "simplebroker-pg>=1.0.4,<2",
+    "simplebroker-pg>=1.0.4",
 ]
 """,
         encoding="utf-8",
@@ -221,7 +257,7 @@ pg = [
     )
 
     assert updated_version == "1.0.6"
-    assert '"simplebroker-pg>=1.0.6,<2"' in root_pyproject.read_text(encoding="utf-8")
+    assert '"simplebroker-pg>=1.0.6"' in root_pyproject.read_text(encoding="utf-8")
 
 
 def test_sync_root_pg_extra_dependency_noops_when_current(tmp_path: Path) -> None:
@@ -229,7 +265,7 @@ def test_sync_root_pg_extra_dependency_noops_when_current(tmp_path: Path) -> Non
     pg_pyproject = tmp_path / "pg-pyproject.toml"
     root_text = """[project.optional-dependencies]
 pg = [
-    "simplebroker-pg>=1.0.6,<2",
+    "simplebroker-pg>=1.0.6",
 ]
 """
     root_pyproject.write_text(root_text, encoding="utf-8")
@@ -252,7 +288,7 @@ def test_sync_root_redis_extra_dependency_uses_local_redis_version(
     root_pyproject.write_text(
         """[project.optional-dependencies]
 redis = [
-    "simplebroker-redis>=0.8.0,<1",
+    "simplebroker-redis>=0.8.0",
 ]
 """,
         encoding="utf-8",
@@ -265,7 +301,7 @@ redis = [
     )
 
     assert updated_version == "0.9.0"
-    assert '"simplebroker-redis>=0.9.0,<1"' in root_pyproject.read_text(
+    assert '"simplebroker-redis>=0.9.0"' in root_pyproject.read_text(
         encoding="utf-8"
     )
 
@@ -277,7 +313,7 @@ def test_sync_root_redis_extra_dependency_noops_when_current(
     redis_pyproject = tmp_path / "redis-pyproject.toml"
     root_text = """[project.optional-dependencies]
 redis = [
-    "simplebroker-redis>=0.9.0,<1",
+    "simplebroker-redis>=0.9.0",
 ]
 """
     root_pyproject.write_text(root_text, encoding="utf-8")

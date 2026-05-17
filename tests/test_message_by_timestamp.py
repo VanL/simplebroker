@@ -404,7 +404,12 @@ def test_already_claimed_message(workdir: Path):
     rc, out, err = run_cli("peek", "test_queue", "-m", ts, cwd=workdir)
     assert rc == 2
 
-    # Delete should also fail on claimed message
+    # Delete physically removes claimed messages.
+    rc, out, err = run_cli("delete", "test_queue", "-m", ts, cwd=workdir)
+    assert rc == 0
+    assert out == ""
+
+    # Once physically deleted, the message is gone for delete too.
     rc, out, err = run_cli("delete", "test_queue", "-m", ts, cwd=workdir)
     assert rc == 2
 
@@ -670,8 +675,8 @@ def test_read_by_timestamp_gets_vacuumed(workdir: Path):
 
 
 @pytest.mark.sqlite_only
-def test_delete_by_timestamp_gets_vacuumed(workdir: Path):
-    """Test that messages deleted by timestamp are properly vacuumed."""
+def test_delete_by_timestamp_physically_removes_row(workdir: Path):
+    """Test that messages deleted by timestamp are physically removed."""
     db_path = workdir / ".broker.db"
 
     # Write messages
@@ -684,18 +689,20 @@ def test_delete_by_timestamp_gets_vacuumed(workdir: Path):
     ts = lines[1].split("\t")[0]  # Delete middle message
     run_cli("delete", "test_queue", "-m", ts, cwd=workdir)
 
-    # Check message is claimed
+    # Exact delete should not create claimed-row debt.
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
     claimed_count = cursor.fetchone()[0]
-    assert claimed_count == 1
+    assert claimed_count == 0
+    cursor.execute("SELECT COUNT(*) FROM messages")
+    total_count = cursor.fetchone()[0]
+    assert total_count == 2
     conn.close()
 
-    # Run vacuum
+    # Vacuum should have nothing further to remove from the exact delete path.
     run_cli("--vacuum", cwd=workdir)
 
-    # Check claimed message is gone
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM messages")

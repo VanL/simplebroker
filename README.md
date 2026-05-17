@@ -206,7 +206,7 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `exists <queue> [--json]` | Check whether a queue has any messages, including claimed rows |
 | `stats <queue> [--json]` | Show pending, claimed, and total counts for one queue |
 | `list [--stats] [--prefix PREFIX \| --pattern GLOB] [--json]` | Show queues and message counts |
-| `delete <queue> [-m <id>]` | Delete a queue immediately, or claim a specific message by ID for later vacuum |
+| `delete <queue> [-m <id>]` | Delete a queue immediately, or physically delete a specific message by ID |
 | `delete --all` | Delete all queues immediately |
 | `broadcast <message\|->` | Send message to all existing queues |
 | `watch <queue> [options]` | Watch queue for new messages |
@@ -285,7 +285,7 @@ messages where `after_timestamp < message_timestamp < before_timestamp`.
 - `1` - General error (e.g., database access error, invalid arguments)
 - `2` - Queue empty or no matching messages
 
-**Note:** `delete <queue>` and `delete --all` remove rows immediately. `delete <queue> -m <id>` uses claim semantics for a single message, so `--vacuum` reclaims its storage later.
+**Note:** `delete <queue>`, `delete --all`, and `delete <queue> -m <id>` remove matching rows immediately. Reads still use claimed-row semantics and are reclaimed by `--vacuum`.
 
 ## Critical Safety Notes
 
@@ -656,6 +656,10 @@ def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
 # Use peek=True for safe mode - messages aren't removed until explicitly acknowledged
 ```
 
+For cleanup paths that already know many exact message IDs, use
+`Queue.delete_many(message_ids)` to physically delete them in one backend-level
+batch.
+
 ### Delivery guarantees
 
 Materialized batch APIs such as `Queue.read_many()` and `Queue.move_many()`
@@ -684,7 +688,7 @@ if queue.exists():
 ```
 
 `QueueStats.pending` is the unclaimed count. `QueueStats.claimed` is the count
-of messages already read or deleted but not yet vacuumed. `QueueStats.exists`
+of messages already read or claimed but not yet vacuumed. `QueueStats.exists`
 is true when `total > 0`.
 
 ### Generating timestamps without writing

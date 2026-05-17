@@ -520,6 +520,22 @@ class PostgresBackendPlugin:
             )
         return int(rows[0][0]) if rows else 0
 
+    def delete_message_ids(
+        self,
+        runner: SQLRunner,
+        *,
+        queue: str,
+        message_ids: Sequence[int],
+    ) -> int:
+        rows = list(
+            runner.run(
+                pg_sql.DELETE_MESSAGE_IDS_COUNT,
+                (list(message_ids), queue),
+                fetch=True,
+            )
+        )
+        return int(rows[0][0]) if rows else 0
+
     def read_magic(self, runner: SQLRunner) -> str | None:
         state = _load_meta_state(runner)
         if state is None:

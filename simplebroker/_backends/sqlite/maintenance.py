@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -18,10 +19,19 @@ from ..._sql import (
     SET_AUTO_VACUUM_INCREMENTAL,
     VACUUM,
 )
-from ..._sql.sqlite import CHECK_CLAIMED_MESSAGES_EXISTS, SELECT_CHANGES
+from ..._sql.sqlite import (
+    CHECK_CLAIMED_MESSAGES_EXISTS,
+    CLEAR_TEMP_DELETE_MESSAGE_IDS,
+    CREATE_TEMP_DELETE_MESSAGE_IDS,
+    DELETE_STAGED_MESSAGE_IDS,
+    SELECT_CHANGES,
+    build_insert_delete_message_ids_query,
+)
 
 if TYPE_CHECKING:
     from ..._runner import SQLRunner
+
+_DELETE_MESSAGE_IDS_INSERT_CHUNK_SIZE = 500
 
 
 def delete_messages(runner: SQLRunner, *, queue: str | None) -> int:
@@ -31,6 +41,25 @@ def delete_messages(runner: SQLRunner, *, queue: str | None) -> int:
     else:
         runner.run(DELETE_QUEUE_MESSAGES, (queue,))
     return _changes_on_same_connection(runner)
+
+
+def delete_message_ids(
+    runner: SQLRunner, *, queue: str, message_ids: Sequence[int]
+) -> int:
+    """Physically delete exact message IDs from one queue."""
+    if not message_ids:
+        return 0
+
+    runner.run(CREATE_TEMP_DELETE_MESSAGE_IDS)
+    runner.run(CLEAR_TEMP_DELETE_MESSAGE_IDS)
+    for start in range(0, len(message_ids), _DELETE_MESSAGE_IDS_INSERT_CHUNK_SIZE):
+        batch = message_ids[start : start + _DELETE_MESSAGE_IDS_INSERT_CHUNK_SIZE]
+        runner.run(build_insert_delete_message_ids_query(len(batch)), tuple(batch))
+
+    runner.run(DELETE_STAGED_MESSAGE_IDS, (queue,))
+    deleted_count = _changes_on_same_connection(runner)
+    runner.run(CLEAR_TEMP_DELETE_MESSAGE_IDS)
+    return deleted_count
 
 
 def _changes_on_same_connection(runner: SQLRunner) -> int:

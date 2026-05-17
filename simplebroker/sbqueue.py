@@ -903,16 +903,29 @@ class Queue:
         """
         with self.get_connection() as connection:
             if message_id is not None:
-                # Delete specific message by ID - use claim_one with exact_timestamp
-                message = connection.claim_one(
-                    self.name,
-                    exact_timestamp=message_id,
-                    with_timestamps=False,
-                )
-                return message is not None
+                return connection.delete_message_ids(self.name, [message_id]) > 0
             else:
                 # Delete all messages in the queue
                 return connection.delete(self.name) > 0
+
+    def delete_many(self, message_ids: Sequence[int]) -> int:
+        """Physically delete exact message IDs from this queue.
+
+        Claimed and unclaimed messages are both eligible for deletion. Missing
+        IDs and IDs belonging to other queues are ignored.
+
+        Args:
+            message_ids: Message IDs to delete from this queue.
+
+        Returns:
+            Number of messages physically deleted.
+
+        Raises:
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the database is locked/busy
+        """
+        with self.get_connection() as connection:
+            return connection.delete_message_ids(self.name, message_ids)
 
     def __enter__(self) -> "Queue":
         """Enter the context manager."""

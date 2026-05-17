@@ -53,6 +53,20 @@ def test_queue_delete_by_id(queue_factory):
     assert q.read() == "message2"
 
 
+def test_queue_delete_many(queue_factory):
+    """Test physically deleting multiple messages by ID."""
+    q = queue_factory("test")
+
+    q.write("message1")
+    q.write("message2")
+    q.write("message3")
+
+    timestamps = dict(q.peek_generator(with_timestamps=True))
+
+    assert q.delete_many([timestamps["message1"], timestamps["message3"]]) == 2
+    assert list(q.peek_generator(with_timestamps=False)) == ["message2"]
+
+
 def test_queue_delete_empty_queue_returns_false(queue_factory):
     """Test deleting from an empty queue reports no-op status."""
     q = queue_factory("test")

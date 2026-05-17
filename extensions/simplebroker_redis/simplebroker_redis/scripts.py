@@ -112,6 +112,36 @@ end
 return out
 """
 
+DELETE_MESSAGE_IDS = """
+local pending = KEYS[1]
+local claimed = KEYS[2]
+local reserved = KEYS[3]
+local bodies = KEYS[4]
+local all_ids = KEYS[5]
+local queues = KEYS[6]
+local queue = ARGV[1]
+for i = 2, #ARGV do
+  if redis.call('ZSCORE', reserved, ARGV[i]) ~= false then
+    return -1
+  end
+end
+local deleted = 0
+for i = 2, #ARGV do
+  local id = ARGV[i]
+  local removed_pending = redis.call('ZREM', pending, id)
+  local removed_claimed = redis.call('ZREM', claimed, id)
+  if removed_pending > 0 or removed_claimed > 0 then
+    redis.call('HDEL', bodies, id)
+    redis.call('ZREM', all_ids, id)
+    deleted = deleted + 1
+  end
+end
+if redis.call('ZCARD', pending) == 0 and redis.call('ZCARD', claimed) == 0 and redis.call('ZCARD', reserved) == 0 then
+  redis.call('SREM', queues, queue)
+end
+return deleted
+"""
+
 BEGIN_BATCH = """
 local pending = KEYS[1]
 local reserved = KEYS[2]
