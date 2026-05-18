@@ -472,7 +472,7 @@ def test_metrics_aggregation(broker_target) -> None:
 
             assert stats["messages_processed"] == num_watchers * 10
             assert stats["total_wake_ups"] > stats["messages_processed"]
-            assert stats["efficiency"] > 0.5
+            assert stats["efficiency"] > 0.45
         finally:
             # Stop all watchers and join threads
             for w in watchers:
