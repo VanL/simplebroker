@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any, cast
 
@@ -18,12 +19,61 @@ from simplebroker.db import BrokerCore
 pytestmark = [pytest.mark.pg_only]
 
 
+class FakeCursor:
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self._rows = rows
+
+    def __enter__(self) -> FakeCursor:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+        *,
+        prepare: bool = False,
+    ) -> None:
+        del sql, params, prepare
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._rows
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._rows[0] if self._rows else None
+
+
+class FakeConnection:
+    def __init__(self, rows: list[tuple[Any, ...]] | None = None) -> None:
+        self._rows = rows or [(1,)]
+        self.commit_calls = 0
+        self.rollback_calls = 0
+
+    def cursor(self) -> FakeCursor:
+        return FakeCursor(self._rows)
+
+    def commit(self) -> None:
+        self.commit_calls += 1
+
+    def rollback(self) -> None:
+        self.rollback_calls += 1
+
+
 class FakePool:
     def __init__(self) -> None:
+        self.conn = FakeConnection()
+        self.getconn_calls = 0
         self.putconn_calls = 0
         self.close_calls = 0
 
+    def getconn(self) -> FakeConnection:
+        self.getconn_calls += 1
+        return self.conn
+
     def putconn(self, conn: object) -> None:
+        assert conn is self.conn
         self.putconn_calls += 1
 
     def close(self) -> None:
@@ -35,7 +85,16 @@ def _runner_with_thread_connection() -> tuple[PostgresRunner, FakePool]:
     pool = FakePool()
     runner._pool = pool
     runner._thread_local = threading.local()
-    runner._thread_local.conn = object()
+    runner._thread_local.conn = pool.conn
+    return cast(PostgresRunner, runner), pool
+
+
+def _runner_with_fake_pool() -> tuple[PostgresRunner, FakePool]:
+    runner = cast(Any, object.__new__(PostgresRunner))
+    pool = FakePool()
+    runner._pool = pool
+    runner._thread_local = threading.local()
+    runner._pid = os.getpid()
     return cast(PostgresRunner, runner), pool
 
 
@@ -46,6 +105,24 @@ def test_release_thread_connection_returns_connection_without_closing_pool() -> 
 
     assert pool.putconn_calls == 1
     assert pool.close_calls == 0
+    assert not hasattr(runner._thread_local, "conn")
+
+
+def test_lease_thread_connection_keeps_operation_checkout_until_release() -> None:
+    runner, pool = _runner_with_fake_pool()
+
+    runner.lease_thread_connection()
+    assert pool.getconn_calls == 1
+
+    assert list(runner.run("SELECT 1", fetch=True)) == [(1,)]
+
+    assert pool.getconn_calls == 1
+    assert pool.putconn_calls == 0
+    assert hasattr(runner._thread_local, "conn")
+
+    runner.release_thread_connection()
+
+    assert pool.putconn_calls == 1
     assert not hasattr(runner._thread_local, "conn")
 
 

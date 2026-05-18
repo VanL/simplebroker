@@ -26,11 +26,64 @@ class CountingSQLiteRunner(SQLiteRunner):
         self._counting_plugin = plugin
         super().__init__(db_path)
 
+    def lease_thread_connection(self) -> None:
+        self._counting_plugin.runner_lease_calls += 1
+        lease_depth = int(getattr(self._thread_local, "lease_depth", 0))
+        self._thread_local.lease_depth = lease_depth + 1
+        self.get_connection()
+
+    def _thread_connection_leased(self) -> bool:
+        return int(getattr(self._thread_local, "lease_depth", 0)) > 0
+
+    def _release_after_operation(self) -> None:
+        if not self._thread_connection_leased():
+            self.release_thread_connection()
+
+    def _finish_transaction(self) -> None:
+        if hasattr(self._thread_local, "in_transaction"):
+            delattr(self._thread_local, "in_transaction")
+        self._release_after_operation()
+
+    def run(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+        *,
+        fetch: bool = False,
+    ) -> Any:
+        try:
+            return super().run(sql, params, fetch=fetch)
+        finally:
+            if not bool(getattr(self._thread_local, "in_transaction", False)):
+                self._release_after_operation()
+
+    def begin_immediate(self) -> None:
+        super().begin_immediate()
+        self._thread_local.in_transaction = True
+
+    def commit(self) -> None:
+        try:
+            super().commit()
+        finally:
+            self._finish_transaction()
+
+    def rollback(self) -> None:
+        try:
+            super().rollback()
+        finally:
+            self._finish_transaction()
+
     def close(self) -> None:
         self._counting_plugin.runner_close_calls += 1
         super().close()
 
     def release_thread_connection(self) -> None:
+        lease_depth = int(getattr(self._thread_local, "lease_depth", 0))
+        if lease_depth > 1:
+            self._thread_local.lease_depth = lease_depth - 1
+            return
+        if lease_depth == 1:
+            delattr(self._thread_local, "lease_depth")
         self._counting_plugin.runner_release_calls += 1
 
 
@@ -45,6 +98,7 @@ class CountingBackendPlugin:
         self.create_runner_calls = 0
         self.runner_close_calls = 0
         self.runner_release_calls = 0
+        self.runner_lease_calls = 0
 
     def create_runner(
         self,
@@ -249,6 +303,28 @@ def test_cleanup_connections_does_not_release_shared_runner(
         queue.write("two")
 
     assert counting_backend.create_runner_calls == 1
+
+
+def test_persistent_queues_keep_shared_backend_checkout_across_operations(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+) -> None:
+    target = counting_target(tmp_path, schema="same")
+
+    with contextlib.ExitStack() as stack:
+        queue_a = stack.enter_context(Queue("a", db_path=target, persistent=True))
+        queue_b = stack.enter_context(Queue("b", db_path=target, persistent=True))
+
+        for _ in range(3):
+            queue_a.has_pending()
+            queue_b.has_pending()
+
+        assert counting_backend.runner_lease_calls == 1
+        assert counting_backend.runner_release_calls == 0
+
+    assert counting_backend.create_runner_calls == 1
+    assert counting_backend.runner_release_calls >= 1
+    assert counting_backend.runner_close_calls >= 1
 
 
 def test_ephemeral_queues_do_not_use_process_local_registry(

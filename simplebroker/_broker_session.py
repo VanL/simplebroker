@@ -12,7 +12,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
 from ._constants import load_config, resolve_config
-from ._runner import close_owned_runner
+from ._runner import (
+    close_owned_runner,
+    lease_runner_thread_connection,
+    release_runner_thread_connection,
+)
 from ._targets import ResolvedTarget
 
 if TYPE_CHECKING:
@@ -175,11 +179,17 @@ class _ProcessBrokerSession:
                             backend_options=self._backend_options,
                             config=self._config,
                         )
-            return self._backend_plugin.create_core_from_runner(
-                self._runner,
-                config=self._config,
-                stop_event=stop_event,
-            )
+            leased = lease_runner_thread_connection(self._runner)
+            try:
+                return self._backend_plugin.create_core_from_runner(
+                    self._runner,
+                    config=self._config,
+                    stop_event=stop_event,
+                )
+            except Exception:
+                if leased:
+                    release_runner_thread_connection(self._runner)
+                raise
 
         if self._runner is None:
             with self._lock:
@@ -189,12 +199,18 @@ class _ProcessBrokerSession:
                         backend_options=self._backend_options,
                         config=self._config,
                     )
-        return BrokerCore(
-            self._runner,
-            config=self._config,
-            backend_plugin=self._backend_plugin,
-            stop_event=stop_event,
-        )
+        leased = lease_runner_thread_connection(self._runner)
+        try:
+            return BrokerCore(
+                self._runner,
+                config=self._config,
+                backend_plugin=self._backend_plugin,
+                stop_event=stop_event,
+            )
+        except Exception:
+            if leased:
+                release_runner_thread_connection(self._runner)
+            raise
 
     def cleanup_current_thread(self) -> None:
         """Recycle the current thread's cached core without releasing the session."""
@@ -212,15 +228,16 @@ class _ProcessBrokerSession:
             core.close()
 
     def release_current_thread_connection(self) -> None:
-        """Release a pooled backend checkout while keeping this thread's core."""
+        """Keep shared persistent session connections leased until cleanup.
 
-        if self._backend_name == "sqlite":
-            return
+        Persistent queues multiplex queue operations through the same
+        process-local session. Releasing the current thread's backend core
+        after every operation turns ``persistent=True`` into connection churn
+        for pool-backed backends. Explicit queue/session cleanup owns the
+        actual close lifecycle.
+        """
 
-        with self._lock:
-            core = getattr(self._thread_local, "core", None)
-        if core is not None:
-            core.close()
+        return
 
     def close_all(self) -> None:
         """Close all owned resources for this session."""
@@ -240,6 +257,9 @@ class _ProcessBrokerSession:
             for core in cores:
                 core.shutdown()
             return
+
+        for core in cores:
+            core.close()
 
         if runner is not None:
             close_owned_runner(runner)

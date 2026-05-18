@@ -138,6 +138,24 @@ def close_owned_runner(runner: SQLRunner) -> None:
     runner.close()
 
 
+def lease_runner_thread_connection(runner: SQLRunner) -> bool:
+    """Ask a runner to retain this thread's backend checkout when supported."""
+
+    lease_thread_connection = getattr(runner, "lease_thread_connection", None)
+    if callable(lease_thread_connection):
+        lease_thread_connection()
+        return True
+    return False
+
+
+def release_runner_thread_connection(runner: SQLRunner) -> None:
+    """Release this thread's retained backend checkout when supported."""
+
+    release_thread_connection = getattr(runner, "release_thread_connection", None)
+    if callable(release_thread_connection):
+        release_thread_connection()
+
+
 class SQLiteRunner:
     """Default synchronous SQLite implementation with thread-local connections."""
 

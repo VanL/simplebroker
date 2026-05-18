@@ -1592,8 +1592,10 @@ finally:
 When persistent queues resolve their backend from a path or project config, handles
 for the same resolved backend target share process-local backend session state.
 For Postgres this prevents the number of queue handles in one process from
-allocating one runner or pool each. Backends may still create separate physical
-connections per thread or per pool checkout.
+allocating one runner or pool each. Backends that support retained thread
+checkouts, including Postgres, keep one checked-out backend connection per
+persistent reactor thread until the queue/session is cleaned up. Transient queue
+handles still return their checkouts after each operation.
 
 Advanced watcher integrations can ask SimpleBroker for one native wake waiter
 across several queues:

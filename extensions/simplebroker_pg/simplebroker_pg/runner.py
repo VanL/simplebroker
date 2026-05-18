@@ -579,6 +579,16 @@ class PostgresRunner:
             self._thread_local.conn = self._pool.getconn()
         return cast(psycopg.Connection[Any], self._thread_local.conn)
 
+    def lease_thread_connection(self) -> None:
+        """Keep this thread's pooled connection checked out until release."""
+
+        lease_depth = int(getattr(self._thread_local, "lease_depth", 0))
+        self._thread_local.lease_depth = lease_depth + 1
+        self._get_thread_conn()
+
+    def _thread_connection_leased(self) -> bool:
+        return int(getattr(self._thread_local, "lease_depth", 0)) > 0
+
     def _return_thread_conn(self) -> None:
         """Return the current thread's connection to the pool."""
         conn = getattr(self._thread_local, "conn", None)
@@ -590,6 +600,19 @@ class PostgresRunner:
                 self._pool.putconn(conn)
             except Exception:
                 pass  # Pool may already be closed during teardown
+
+    def _return_thread_conn_after_operation(self) -> None:
+        """Return non-leased operation checkouts to the pool."""
+
+        if not self._thread_connection_leased():
+            self._return_thread_conn()
+
+    def _finish_transaction(self) -> None:
+        if self._thread_connection_leased():
+            if hasattr(self._thread_local, "in_transaction"):
+                delattr(self._thread_local, "in_transaction")
+            return
+        self._return_thread_conn()
 
     def _in_transaction(self) -> bool:
         return bool(getattr(self._thread_local, "in_transaction", False))
@@ -615,7 +638,7 @@ class PostgresRunner:
             raise _translate_error(exc) from exc
         finally:
             if not self._in_transaction():
-                self._return_thread_conn()
+                self._return_thread_conn_after_operation()
 
     def begin_immediate(self) -> None:
         conn = self._get_thread_conn()
@@ -628,24 +651,38 @@ class PostgresRunner:
             raise _translate_error(exc) from exc
 
     def commit(self) -> None:
+        failed = False
         try:
             self._get_thread_conn().commit()
         except psycopg.Error as exc:
+            failed = True
+            self._return_thread_conn()
             raise _translate_error(exc) from exc
         finally:
-            self._return_thread_conn()
+            if not failed:
+                self._finish_transaction()
 
     def rollback(self) -> None:
+        failed = False
         try:
             self._get_thread_conn().rollback()
             self.invalidate_meta_cache()
         except psycopg.Error as exc:
+            failed = True
+            self._return_thread_conn()
             raise _translate_error(exc) from exc
         finally:
-            self._return_thread_conn()
+            if not failed:
+                self._finish_transaction()
 
     def release_thread_connection(self) -> None:
         """Return the current thread's connection to the pool."""
+        lease_depth = int(getattr(self._thread_local, "lease_depth", 0))
+        if lease_depth > 1:
+            self._thread_local.lease_depth = lease_depth - 1
+            return
+        if lease_depth == 1:
+            delattr(self._thread_local, "lease_depth")
         self._return_thread_conn()
 
     def close(self) -> None:
