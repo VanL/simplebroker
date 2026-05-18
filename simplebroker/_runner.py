@@ -482,6 +482,10 @@ class SQLiteRunner:
             status_suffix=".setup.status",
             timeout=SETUP_PHASE_LOCK_TIMEOUT,
             retry_delay=0.05,
+            # SQLite setup markers must be a happens-after barrier, not just
+            # completion hints. Waiters should observe a completed phase only
+            # after the prior setup owner has released the advisory lock.
+            strict_marker_locking=True,
         )
 
     def _phase_marker_name(self, phase: SetupPhase) -> str:

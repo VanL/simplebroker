@@ -526,29 +526,17 @@ class TestSQLiteRunnerErrorHandling:
 
     @pytest.mark.sqlite_only
     def test_run_exclusive_setup_marker_does_not_bypass_held_lock(self, tmp_path):
-        """A fallback setup marker is trusted only after acquiring the setup lock."""
+        """SQLite setup markers are trusted only after acquiring the setup lock."""
         db_path = tmp_path / "test.db"
-
-        class StrictSetupRunner(SQLiteRunner):
-            def _phase_lock_service(self) -> PhaseLockService:
-                return PhaseLockService(
-                    self._db_path,
-                    namespace="user.simplebroker",
-                    lock_suffix=".setup.lock",
-                    status_suffix=".setup.status",
-                    timeout=10.0,
-                    retry_delay=0.05,
-                    use_xattrs=False,
-                    strict_marker_locking=True,
-                )
-
-        runner = StrictSetupRunner(str(db_path))
+        db_path.touch()
+        runner = SQLiteRunner(str(db_path))
         service = runner._phase_lock_service()
-        service.status_path_for_phase(f"schema-v{SCHEMA_VERSION}").touch(mode=0o600)
+        phase_name = f"schema-v{SCHEMA_VERSION}"
         lock_held = threading.Event()
         release_lock = threading.Event()
         contender_started = threading.Event()
         contender_done = threading.Event()
+        marker_published = threading.Event()
         operation_ran = False
         result_holder: dict[str, bool] = {}
         errors: list[BaseException] = []
@@ -574,8 +562,15 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 contender_done.set()
 
+        def publish_marker_after_contender_waits() -> None:
+            assert contender_started.wait(timeout=scale_timeout_for_ci(1.0))
+            if not service.mark_phase(phase_name):
+                service.status_path_for_phase(phase_name).touch(mode=0o600)
+            marker_published.set()
+
         holder = threading.Thread(target=hold_lock)
         waiter = threading.Thread(target=contender)
+        marker = threading.Thread(target=publish_marker_after_contender_waits)
         waiter_started = False
 
         try:
@@ -586,6 +581,8 @@ class TestSQLiteRunnerErrorHandling:
             waiter.start()
             waiter_started = True
             assert contender_started.wait(timeout=scale_timeout_for_ci(1.0))
+            marker.start()
+            assert marker_published.wait(timeout=scale_timeout_for_ci(1.0))
             assert not contender_done.wait(timeout=0.2)
             release_lock.set()
             assert contender_done.wait(timeout=scale_timeout_for_ci(1.0))
@@ -594,6 +591,7 @@ class TestSQLiteRunnerErrorHandling:
             holder.join(timeout=scale_timeout_for_ci(1.0))
             if waiter_started:
                 waiter.join(timeout=scale_timeout_for_ci(1.0))
+            marker.join(timeout=scale_timeout_for_ci(1.0))
             runner.close()
 
         assert not errors
@@ -601,6 +599,7 @@ class TestSQLiteRunnerErrorHandling:
         assert operation_ran is False
         assert not holder.is_alive()
         assert not waiter.is_alive()
+        assert not marker.is_alive()
 
     @pytest.mark.sqlite_only
     def test_schema_setup_is_serialized_across_processes(self, tmp_path):

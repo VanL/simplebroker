@@ -1714,6 +1714,9 @@ python bin/release.py --version 3.1.10
 # Release simplebroker-pg
 python bin/release.py pg --version 1.0.6
 
+# Release every current unpublished package version with one local check run
+python bin/release.py all
+
 # Preview the checks, version files, commit, and tag action
 python bin/release.py --dry-run
 ```
@@ -1725,9 +1728,18 @@ required release checks, waits for the sibling `Test` and `Test Postgres
 Extension` workflow runs on the same commit to finish green, and only then
 creates the GitHub release with built artifacts.
 
-When changing the root `pg` extra, release `simplebroker-pg` first, wait for
-that version to be available on PyPI, then release `simplebroker` with the
-updated extra bound.
+Use `python bin/release.py all` after version files have already been bumped
+across packages. It scans `simplebroker`, `simplebroker-pg`, and
+`simplebroker-redis`, skips versions already published on GitHub Releases or
+PyPI, runs the combined release checks once, syncs root extension extras when
+the core package is part of the batch, creates one release commit if needed, and
+pushes all selected tags. Extension tags are prepared before the core tag so a
+batch release can carry new extension baselines and the matching core package
+together.
+
+When releasing only `simplebroker` with updated extension extras, the extension
+versions must already be available on PyPI first. The `all` target is the path
+for releasing unpublished extension baselines and the core package together.
 
 ## License
 

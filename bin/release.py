@@ -48,6 +48,7 @@ REDIS_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
     r'(?m)^(\s*)"simplebroker-redis>=([^",]+)",(\s*)$'
 )
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
+ALL_RELEASE_TARGET_KEY: Final[str] = "all"
 
 ROOT_TEST_COMMAND_PREFIX: Final[tuple[str, ...]] = (
     "uv",
@@ -232,6 +233,16 @@ class ReleaseState:
         return self.github_release_exists or self.pypi_release_exists
 
 
+@dataclass(frozen=True)
+class ReleaseCandidate:
+    """One package version selected for a batch release."""
+
+    target: ReleaseTarget
+    current_version: str
+    release_version: str
+    state: ReleaseState
+
+
 ROOT_RELEASE_TARGET: Final[ReleaseTarget] = ReleaseTarget(
     key="core",
     package_name="simplebroker",
@@ -264,6 +275,11 @@ RELEASE_TARGETS: Final[dict[str, ReleaseTarget]] = {
     PG_RELEASE_TARGET.key: PG_RELEASE_TARGET,
     REDIS_RELEASE_TARGET.key: REDIS_RELEASE_TARGET,
 }
+BATCH_RELEASE_TARGETS: Final[tuple[ReleaseTarget, ...]] = (
+    PG_RELEASE_TARGET,
+    REDIS_RELEASE_TARGET,
+    ROOT_RELEASE_TARGET,
+)
 
 
 def validate_version(version: str) -> str:
@@ -540,6 +556,37 @@ def _release_file_args(target: ReleaseTarget) -> tuple[str, ...]:
     return tuple(_display_path(path) for path in _release_file_paths(target))
 
 
+def _unique_paths(paths: tuple[Path, ...]) -> tuple[Path, ...]:
+    """Return paths in their first-seen order without duplicates."""
+
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for path in paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        unique.append(path)
+    return tuple(unique)
+
+
+def _release_file_paths_for_targets(
+    targets: tuple[ReleaseTarget, ...],
+) -> tuple[Path, ...]:
+    """Return tracked release files for a group of targets."""
+
+    return _unique_paths(
+        tuple(path for target in targets for path in _release_file_paths(target))
+    )
+
+
+def _release_file_args_for_targets(
+    targets: tuple[ReleaseTarget, ...],
+) -> tuple[str, ...]:
+    return tuple(
+        _display_path(path) for path in _release_file_paths_for_targets(targets)
+    )
+
+
 def _ruff_check_command(paths: tuple[str, ...]) -> tuple[str, ...]:
     return (*RUFF_CHECK_PREFIX, *paths)
 
@@ -600,24 +647,37 @@ def _root_test_command() -> tuple[str, ...]:
     return (*ROOT_TEST_COMMAND_PREFIX, *_local_weft_uv_args(), *ROOT_TEST_PYTEST_ARGS)
 
 
-def build_precheck_commands(target: ReleaseTarget) -> tuple[tuple[str, ...], ...]:
-    """Return release-helper precheck commands."""
+def build_precheck_commands_for_targets(
+    targets: tuple[ReleaseTarget, ...],
+) -> tuple[tuple[str, ...], ...]:
+    """Return release-helper precheck commands for one or more targets."""
 
-    backend_tests: tuple[tuple[str, ...], ...]
-    if target.key == ROOT_RELEASE_TARGET.key:
+    target_keys = {target.key for target in targets}
+    run_pg = (
+        ROOT_RELEASE_TARGET.key in target_keys or PG_RELEASE_TARGET.key in target_keys
+    )
+    run_redis = (
+        ROOT_RELEASE_TARGET.key in target_keys
+        or REDIS_RELEASE_TARGET.key in target_keys
+    )
+
+    if ROOT_RELEASE_TARGET.key in target_keys or (run_pg and run_redis):
         tool_paths = ALL_EXTENSION_TOOL_PATHS
         mypy_paths = ALL_EXTENSION_MYPY_PATHS
-        backend_tests = (PG_TEST_COMMAND, REDIS_TEST_COMMAND)
-    elif target.key == PG_RELEASE_TARGET.key:
+    elif run_pg:
         tool_paths = PG_TOOL_PATHS
         mypy_paths = PG_MYPY_PATHS
-        backend_tests = (PG_TEST_COMMAND,)
-    elif target.key == REDIS_RELEASE_TARGET.key:
+    elif run_redis:
         tool_paths = REDIS_TOOL_PATHS
         mypy_paths = REDIS_MYPY_PATHS
-        backend_tests = (REDIS_TEST_COMMAND,)
     else:
-        raise RuntimeError(f"Unknown release target: {target.key}")
+        raise RuntimeError("At least one release target is required")
+
+    backend_tests: list[tuple[str, ...]] = []
+    if run_pg:
+        backend_tests.append(PG_TEST_COMMAND)
+    if run_redis:
+        backend_tests.append(REDIS_TEST_COMMAND)
 
     return (
         _root_test_command(),
@@ -628,27 +688,55 @@ def build_precheck_commands(target: ReleaseTarget) -> tuple[tuple[str, ...], ...
     )
 
 
-def build_postupdate_steps(target: ReleaseTarget) -> tuple[CommandStep, ...]:
-    """Return post-version-update verification/build steps."""
+def build_precheck_commands(target: ReleaseTarget) -> tuple[tuple[str, ...], ...]:
+    """Return release-helper precheck commands."""
+
+    return build_precheck_commands_for_targets((target,))
+
+
+def _unique_steps(steps: tuple[CommandStep, ...]) -> tuple[CommandStep, ...]:
+    """Return command steps in their first-seen order without duplicates."""
+
+    seen: set[tuple[Path, tuple[str, ...]]] = set()
+    unique: list[CommandStep] = []
+    for step in steps:
+        key = (step.cwd, step.command)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(step)
+    return tuple(unique)
+
+
+def build_postupdate_steps_for_targets(
+    targets: tuple[ReleaseTarget, ...],
+) -> tuple[CommandStep, ...]:
+    """Return post-version-update verification/build steps for one or more targets."""
 
     steps = [CommandStep(("uv", "lock"))]
-    if target.key == PG_RELEASE_TARGET.key:
+    target_keys = {target.key for target in targets}
+    if PG_RELEASE_TARGET.key in target_keys:
         steps.append(CommandStep(("uv", "lock"), cwd=PG_EXTENSION_DIR))
-    if target.key == REDIS_RELEASE_TARGET.key:
+    if REDIS_RELEASE_TARGET.key in target_keys:
         steps.append(CommandStep(("uv", "lock"), cwd=REDIS_EXTENSION_DIR))
-    if target.constants_path is not None:
+    if ROOT_RELEASE_TARGET.key in target_keys:
         steps.append(
             CommandStep(("uv", "run", "pytest", "tests/test_constants.py", "-q"))
         )
-    if target.key == ROOT_RELEASE_TARGET.key:
         steps.append(CommandStep(ROOT_PACKAGING_SMOKE_COMMAND))
-    elif target.key == PG_RELEASE_TARGET.key:
+    if PG_RELEASE_TARGET.key in target_keys:
         steps.append(CommandStep(PG_BUILD_COMMAND))
-    elif target.key == REDIS_RELEASE_TARGET.key:
+    if REDIS_RELEASE_TARGET.key in target_keys:
         steps.append(CommandStep(REDIS_BUILD_COMMAND))
-    else:
-        raise RuntimeError(f"Unknown release target: {target.key}")
-    return tuple(steps)
+    if not target_keys:
+        raise RuntimeError("At least one release target is required")
+    return _unique_steps(tuple(steps))
+
+
+def build_postupdate_steps(target: ReleaseTarget) -> tuple[CommandStep, ...]:
+    """Return post-version-update verification/build steps."""
+
+    return build_postupdate_steps_for_targets((target,))
 
 
 def _merge_command_env(
@@ -1027,8 +1115,14 @@ def plan_tag_action(
 def release_files_changed(target: ReleaseTarget) -> bool:
     """Return True when release files have unstaged modifications."""
 
+    return release_files_changed_for_targets((target,))
+
+
+def release_files_changed_for_targets(targets: tuple[ReleaseTarget, ...]) -> bool:
+    """Return True when release files for any target have unstaged modifications."""
+
     result = _capture_command(
-        ("git", "diff", "--quiet", "--", *_release_file_args(target))
+        ("git", "diff", "--quiet", "--", *_release_file_args_for_targets(targets))
     )
     if result.returncode == 0:
         return False
@@ -1036,6 +1130,149 @@ def release_files_changed(target: ReleaseTarget) -> bool:
         return True
     detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
     raise RuntimeError(f"Unable to inspect release file changes: {detail}")
+
+
+def discover_unpublished_releases(
+    targets: tuple[ReleaseTarget, ...] = BATCH_RELEASE_TARGETS,
+) -> tuple[ReleaseCandidate, ...]:
+    """Return current package versions that have not been externally published."""
+
+    candidates: list[ReleaseCandidate] = []
+    for target in targets:
+        current_version = read_target_version(target)
+        state = inspect_release_state(current_version, target=target)
+        if state.published:
+            continue
+        candidates.append(
+            ReleaseCandidate(
+                target=target,
+                current_version=current_version,
+                release_version=current_version,
+                state=state,
+            )
+        )
+    return tuple(candidates)
+
+
+def _candidate_targets(
+    candidates: tuple[ReleaseCandidate, ...],
+) -> tuple[ReleaseTarget, ...]:
+    return tuple(candidate.target for candidate in candidates)
+
+
+def _candidate_for_target(
+    candidates: tuple[ReleaseCandidate, ...],
+    target: ReleaseTarget,
+) -> ReleaseCandidate | None:
+    for candidate in candidates:
+        if candidate.target.key == target.key:
+            return candidate
+    return None
+
+
+def _format_release_candidate(candidate: ReleaseCandidate) -> str:
+    return f"{candidate.target.display_name} {candidate.release_version}"
+
+
+def _batch_release_commit_message(
+    candidates: tuple[ReleaseCandidate, ...],
+) -> str:
+    if len(candidates) == 1:
+        candidate = candidates[0]
+        return f"Release {candidate.target.display_name} {candidate.release_version}"
+    releases = ", ".join(
+        _format_release_candidate(candidate) for candidate in candidates
+    )
+    return f"Release {releases}"
+
+
+def _plan_candidate_tag_actions(
+    candidates: tuple[ReleaseCandidate, ...],
+    *,
+    head_commit: str,
+    version_changed: bool,
+    allow_retag: bool,
+) -> dict[str, TagAction]:
+    return {
+        candidate.target.key: plan_tag_action(
+            candidate.state,
+            head_commit=head_commit,
+            version_changed=version_changed,
+            allow_retag=allow_retag,
+        )
+        for candidate in candidates
+    }
+
+
+def _require_core_baselines_or_batch_releases(
+    candidates: tuple[ReleaseCandidate, ...],
+) -> None:
+    """Require core extension baselines to be published or in this batch."""
+
+    if _candidate_for_target(candidates, ROOT_RELEASE_TARGET) is None:
+        return
+
+    pg_version = read_pg_extension_version()
+    pg_candidate = _candidate_for_target(candidates, PG_RELEASE_TARGET)
+    if pg_candidate is None or pg_candidate.release_version != pg_version:
+        require_published_pg_baseline(pg_version)
+
+    redis_version = read_redis_extension_version()
+    redis_candidate = _candidate_for_target(candidates, REDIS_RELEASE_TARGET)
+    if redis_candidate is None or redis_candidate.release_version != redis_version:
+        require_published_redis_baseline(redis_version)
+
+
+def _print_batch_release_plan(
+    candidates: tuple[ReleaseCandidate, ...],
+    tag_actions: dict[str, TagAction],
+) -> None:
+    print("targets:")
+    for candidate in candidates:
+        print(f"  {candidate.target.display_name}:")
+        print(f"    current: {candidate.current_version}")
+        print(f"    release: {candidate.release_version}")
+        print("    status:  unpublished on GitHub Release and PyPI")
+        print(
+            f"    tag:     {candidate.state.tag_name} "
+            f"({tag_actions[candidate.target.key]})"
+        )
+
+
+def _print_dry_run_core_baseline_notes(
+    candidates: tuple[ReleaseCandidate, ...],
+) -> None:
+    if _candidate_for_target(candidates, ROOT_RELEASE_TARGET) is None:
+        return
+
+    pg_version = read_target_version(PG_RELEASE_TARGET)
+    redis_version = read_target_version(REDIS_RELEASE_TARGET)
+    print(
+        f"dry-run: would ensure simplebroker[pg] requires simplebroker-pg>={pg_version}"
+    )
+    print(
+        "dry-run: would ensure simplebroker[redis] requires "
+        f"simplebroker-redis>={redis_version}"
+    )
+
+    if _candidate_for_target(candidates, PG_RELEASE_TARGET) is None:
+        print(
+            "dry-run: would require simplebroker-pg "
+            f"{pg_version} to be published on PyPI first"
+        )
+    else:
+        print(f"dry-run: simplebroker-pg {pg_version} would be released in this batch")
+
+    if _candidate_for_target(candidates, REDIS_RELEASE_TARGET) is None:
+        print(
+            "dry-run: would require simplebroker-redis "
+            f"{redis_version} to be published on PyPI first"
+        )
+    else:
+        print(
+            "dry-run: simplebroker-redis "
+            f"{redis_version} would be released in this batch"
+        )
 
 
 def _remote_tag_reuse_note(state: ReleaseState) -> str:
@@ -1051,11 +1288,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "target",
         nargs="?",
-        choices=tuple(RELEASE_TARGETS),
+        choices=(*RELEASE_TARGETS, ALL_RELEASE_TARGET_KEY),
         default=ROOT_RELEASE_TARGET.key,
         help=(
             "Package to release. Use 'core' for simplebroker, 'pg' for "
-            "simplebroker-pg, or 'redis' for simplebroker-redis. Defaults to core."
+            "simplebroker-pg, 'redis' for simplebroker-redis, or 'all' to release "
+            "all current unpublished package versions. Defaults to core."
         ),
     )
     parser.add_argument(
@@ -1063,7 +1301,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--version",
         help=(
             "Explicit release version in X.Y.Z format. When omitted, the helper "
-            "reuses the target's current version if it has not been published yet."
+            "reuses the target's current version if it has not been published yet. "
+            "Not valid with target 'all'."
         ),
     )
     parser.add_argument(
@@ -1140,9 +1379,161 @@ def _print_publish_note() -> None:
     )
 
 
+def _run_batch_release(args: argparse.Namespace) -> int:
+    """Run one release pass for every current unpublished package version."""
+
+    if args.version is not None:
+        raise RuntimeError(
+            "--version cannot be used with target 'all'. Update the package version "
+            "files first, then run `bin/release.py all`."
+        )
+
+    dirty = is_dirty_worktree()
+    if dirty and not args.dry_run:
+        raise RuntimeError("Working tree must be clean before release.")
+
+    candidates = discover_unpublished_releases()
+    if not candidates:
+        if dirty:
+            print("dry-run: working tree is dirty; a real release would fail")
+        if args.publish:
+            _print_publish_note()
+        print("No unpublished release targets found.")
+        return 0
+
+    initial_head_commit = current_head_commit()
+    tag_actions = _plan_candidate_tag_actions(
+        candidates,
+        head_commit=initial_head_commit,
+        version_changed=False,
+        allow_retag=args.retag,
+    )
+    release_targets = _candidate_targets(candidates)
+
+    _print_batch_release_plan(candidates, tag_actions)
+
+    if args.dry_run:
+        if dirty:
+            print("dry-run: working tree is dirty; a real release would fail")
+        if args.publish:
+            _print_publish_note()
+        if not args.skip_checks:
+            for command in build_precheck_commands_for_targets(release_targets):
+                run_command(
+                    command,
+                    dry_run=True,
+                    env_overrides=_precheck_env_overrides(command),
+                )
+        print("dry-run: would reuse current unpublished version files")
+        _print_dry_run_core_baseline_notes(candidates)
+        for step in build_postupdate_steps_for_targets(release_targets):
+            run_command(step.command, cwd=step.cwd, dry_run=True)
+        print(
+            "dry-run: would create one release commit if generated release files "
+            "change during post-update checks"
+        )
+        run_command(
+            ("git", "add", *_release_file_args_for_targets(release_targets)),
+            dry_run=True,
+        )
+        run_command(
+            ("git", "commit", "-m", _batch_release_commit_message(candidates)),
+            dry_run=True,
+        )
+        for candidate in candidates:
+            _prepare_tag_action(
+                candidate.state,
+                tag_action=tag_actions[candidate.target.key],
+                dry_run=True,
+            )
+        run_command(("git", "push"), dry_run=True)
+        for candidate in candidates:
+            _push_tag_action(
+                candidate.state,
+                tag_action=tag_actions[candidate.target.key],
+                dry_run=True,
+            )
+        print(
+            "dry-run: next step is to wait for release workflows on "
+            + ", ".join(candidate.state.tag_name for candidate in candidates)
+        )
+        return 0
+
+    _require_command("uv")
+    if args.publish:
+        _print_publish_note()
+
+    _require_core_baselines_or_batch_releases(candidates)
+
+    if not args.skip_checks:
+        for command in build_precheck_commands_for_targets(release_targets):
+            run_command(command, env_overrides=_precheck_env_overrides(command))
+
+    core_candidate = _candidate_for_target(candidates, ROOT_RELEASE_TARGET)
+    if core_candidate is not None:
+        pg_dependency_version = sync_root_pg_extra_dependency()
+        if pg_dependency_version is None:
+            print("simplebroker[pg] baseline already matches simplebroker-pg")
+        else:
+            print(
+                "Updated simplebroker[pg] baseline: "
+                f"simplebroker-pg>={pg_dependency_version}"
+            )
+        redis_dependency_version = sync_root_redis_extra_dependency()
+        if redis_dependency_version is None:
+            print("simplebroker[redis] baseline already matches simplebroker-redis")
+        else:
+            print(
+                "Updated simplebroker[redis] baseline: "
+                f"simplebroker-redis>={redis_dependency_version}"
+            )
+
+    for step in build_postupdate_steps_for_targets(release_targets):
+        run_command(step.command, cwd=step.cwd)
+
+    release_commit_created = release_files_changed_for_targets(release_targets)
+    if release_commit_created:
+        run_command(("git", "add", *_release_file_args_for_targets(release_targets)))
+        run_command(("git", "commit", "-m", _batch_release_commit_message(candidates)))
+    else:
+        print("No release commit needed; release files already match target versions")
+
+    head_commit = current_head_commit()
+    tag_actions = _plan_candidate_tag_actions(
+        candidates,
+        head_commit=head_commit,
+        version_changed=release_commit_created,
+        allow_retag=args.retag,
+    )
+
+    for candidate in candidates:
+        _prepare_tag_action(
+            candidate.state,
+            tag_action=tag_actions[candidate.target.key],
+            dry_run=False,
+        )
+    run_command(("git", "push"))
+    for candidate in candidates:
+        _push_tag_action(
+            candidate.state,
+            tag_action=tag_actions[candidate.target.key],
+            dry_run=False,
+        )
+
+    print(
+        "Next step: wait for release workflows on "
+        + ", ".join(candidate.state.tag_name for candidate in candidates)
+        + ". PyPI publication is not performed by this helper."
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.target == ALL_RELEASE_TARGET_KEY:
+        return _run_batch_release(args)
+
     target = RELEASE_TARGETS[args.target]
 
     current_version = read_target_version(target)

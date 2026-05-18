@@ -168,6 +168,24 @@ def test_core_prechecks_cover_both_extensions() -> None:
     assert "extensions/simplebroker_redis/simplebroker_redis" in text
 
 
+def test_batch_prechecks_deduplicate_shared_checks() -> None:
+    commands = release.build_precheck_commands_for_targets(
+        (
+            release.PG_RELEASE_TARGET,
+            release.REDIS_RELEASE_TARGET,
+            release.ROOT_RELEASE_TARGET,
+        )
+    )
+    command_lines = [" ".join(command) for command in commands]
+    text = "\n".join(command_lines)
+
+    assert sum("./bin/pytest-pg" in command for command in command_lines) == 1
+    assert sum("./bin/pytest-redis" in command for command in command_lines) == 1
+    assert sum(" pytest " in f" {command} " for command in command_lines) == 1
+    assert "extensions/simplebroker_pg/simplebroker_pg" in text
+    assert "extensions/simplebroker_redis/simplebroker_redis" in text
+
+
 def test_extension_postupdate_steps_build_only_target_extension() -> None:
     redis_steps = release.build_postupdate_steps(release.REDIS_RELEASE_TARGET)
     pg_steps = release.build_postupdate_steps(release.PG_RELEASE_TARGET)
@@ -181,6 +199,31 @@ def test_extension_postupdate_steps_build_only_target_extension() -> None:
     assert "build extensions/simplebroker_pg" in pg_text
     assert "extensions/simplebroker_redis" not in pg_text
     assert "packaging-smoke" not in pg_text
+
+
+def test_batch_postupdate_steps_build_every_selected_package_once() -> None:
+    steps = release.build_postupdate_steps_for_targets(
+        (
+            release.PG_RELEASE_TARGET,
+            release.REDIS_RELEASE_TARGET,
+            release.ROOT_RELEASE_TARGET,
+        )
+    )
+    command_lines = [" ".join(step.command) for step in steps]
+
+    assert command_lines.count("uv lock") == 3
+    assert sum("packaging-smoke" in command for command in command_lines) == 1
+    assert (
+        sum("build extensions/simplebroker_pg" in command for command in command_lines)
+        == 1
+    )
+    assert (
+        sum(
+            "build extensions/simplebroker_redis" in command
+            for command in command_lines
+        )
+        == 1
+    )
 
 
 @pytest.mark.parametrize(
@@ -386,6 +429,101 @@ def test_redis_release_target_tracks_extension_lockfile() -> None:
     assert release.REDIS_EXTENSION_PYPROJECT_PATH in paths
     assert release.REDIS_EXTENSION_UV_LOCK_PATH in paths
     assert release.UV_LOCK_PATH in paths
+
+
+def test_batch_release_files_deduplicate_shared_lockfile() -> None:
+    paths = release._release_file_paths_for_targets(
+        (
+            release.PG_RELEASE_TARGET,
+            release.REDIS_RELEASE_TARGET,
+            release.ROOT_RELEASE_TARGET,
+        )
+    )
+
+    assert paths.count(release.UV_LOCK_PATH) == 1
+    assert release.PG_EXTENSION_UV_LOCK_PATH in paths
+    assert release.REDIS_EXTENSION_UV_LOCK_PATH in paths
+
+
+def test_discover_unpublished_releases_skips_published_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    versions = {
+        release.PG_RELEASE_TARGET.key: "1.5.0",
+        release.REDIS_RELEASE_TARGET.key: "1.0.0",
+        release.ROOT_RELEASE_TARGET.key: "3.7.0",
+    }
+
+    def read_version(target) -> str:
+        return versions[target.key]
+
+    def inspect_state(version: str, *, target):
+        return release.ReleaseState(
+            target=target,
+            version=version,
+            tag_name=target.tag_name(version),
+            github_release_exists=target.key == release.REDIS_RELEASE_TARGET.key,
+            pypi_release_exists=False,
+            local_tag_commit=None,
+            remote_tag_commit=None,
+        )
+
+    monkeypatch.setattr(release, "read_target_version", read_version)
+    monkeypatch.setattr(release, "inspect_release_state", inspect_state)
+
+    candidates = release.discover_unpublished_releases()
+
+    assert [candidate.target.key for candidate in candidates] == ["pg", "core"]
+    assert [candidate.release_version for candidate in candidates] == ["1.5.0", "3.7.0"]
+
+
+def test_core_baselines_can_be_released_in_same_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(release, "read_pg_extension_version", lambda: "1.5.0")
+    monkeypatch.setattr(release, "read_redis_extension_version", lambda: "1.0.0")
+    monkeypatch.setattr(
+        release,
+        "require_published_pg_baseline",
+        lambda version: calls.append(("pg", version)),
+    )
+    monkeypatch.setattr(
+        release,
+        "require_published_redis_baseline",
+        lambda version: calls.append(("redis", version)),
+    )
+
+    candidates = (
+        release.ReleaseCandidate(
+            target=release.PG_RELEASE_TARGET,
+            current_version="1.5.0",
+            release_version="1.5.0",
+            state=_state(),
+        ),
+        release.ReleaseCandidate(
+            target=release.REDIS_RELEASE_TARGET,
+            current_version="1.0.0",
+            release_version="1.0.0",
+            state=_state(),
+        ),
+        release.ReleaseCandidate(
+            target=release.ROOT_RELEASE_TARGET,
+            current_version="3.7.0",
+            release_version="3.7.0",
+            state=_state(),
+        ),
+    )
+
+    release._require_core_baselines_or_batch_releases(candidates)
+
+    assert calls == []
+
+
+def test_all_target_rejects_explicit_version() -> None:
+    with pytest.raises(RuntimeError, match="--version cannot be used"):
+        release.main(["all", "--version", "3.7.2", "--dry-run"])
 
 
 def test_plan_tag_action_for_new_or_matching_tags() -> None:
