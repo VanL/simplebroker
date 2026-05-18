@@ -50,12 +50,15 @@ class FakeConnection:
         self._rows = rows or [(1,)]
         self.commit_calls = 0
         self.rollback_calls = 0
+        self.commit_error: PsycopgOperationalError | None = None
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(self._rows)
 
     def commit(self) -> None:
         self.commit_calls += 1
+        if self.commit_error is not None:
+            raise self.commit_error
 
     def rollback(self) -> None:
         self.rollback_calls += 1
@@ -86,6 +89,10 @@ def _runner_with_thread_connection() -> tuple[PostgresRunner, FakePool]:
     runner._pool = pool
     runner._thread_local = threading.local()
     runner._thread_local.conn = pool.conn
+    runner._lease_lock = threading.RLock()
+    runner._leased_operation_lock = threading.RLock()
+    runner._leased_conn = None
+    runner._lease_depth = 0
     return cast(PostgresRunner, runner), pool
 
 
@@ -95,6 +102,10 @@ def _runner_with_fake_pool() -> tuple[PostgresRunner, FakePool]:
     runner._pool = pool
     runner._thread_local = threading.local()
     runner._pid = os.getpid()
+    runner._lease_lock = threading.RLock()
+    runner._leased_operation_lock = threading.RLock()
+    runner._leased_conn = None
+    runner._lease_depth = 0
     return cast(PostgresRunner, runner), pool
 
 
@@ -118,12 +129,76 @@ def test_lease_thread_connection_keeps_operation_checkout_until_release() -> Non
 
     assert pool.getconn_calls == 1
     assert pool.putconn_calls == 0
-    assert hasattr(runner._thread_local, "conn")
+    assert runner._leased_conn is pool.conn
 
     runner.release_thread_connection()
 
     assert pool.putconn_calls == 1
-    assert not hasattr(runner._thread_local, "conn")
+    assert runner._leased_conn is None
+
+
+def test_multiple_leases_share_one_checkout_until_last_release() -> None:
+    runner, pool = _runner_with_fake_pool()
+
+    runner.lease_thread_connection()
+    runner.lease_thread_connection()
+
+    assert pool.getconn_calls == 1
+    assert runner._leased_conn is pool.conn
+
+    runner.release_thread_connection()
+    assert pool.putconn_calls == 0
+    assert runner._leased_conn is pool.conn
+
+    runner.release_thread_connection()
+    assert pool.putconn_calls == 1
+    assert runner._leased_conn is None
+
+
+def test_leased_checkout_is_shared_across_threads() -> None:
+    runner, pool = _runner_with_fake_pool()
+    runner.lease_thread_connection()
+    main_conn = runner._get_thread_conn()
+    worker_conns: list[object] = []
+
+    def touch_runner() -> None:
+        runner.lease_thread_connection()
+        try:
+            worker_conns.append(runner._get_thread_conn())
+        finally:
+            runner.release_thread_connection()
+
+    thread = threading.Thread(target=touch_runner)
+    thread.start()
+    thread.join()
+
+    assert worker_conns == [main_conn]
+    assert pool.getconn_calls == 1
+    assert pool.putconn_calls == 0
+
+    runner.release_thread_connection()
+    assert pool.putconn_calls == 1
+
+
+def test_leased_commit_failure_releases_failed_checkout() -> None:
+    runner, pool = _runner_with_fake_pool()
+    runner.lease_thread_connection()
+    pool.conn.commit_error = PsycopgOperationalError("boom")
+
+    runner.begin_immediate()
+
+    with pytest.raises(OperationalError):
+        runner.commit()
+
+    assert runner._lease_depth == 1
+    assert runner._leased_conn is None
+    assert pool.putconn_calls == 1
+
+    pool.conn.commit_error = None
+    assert list(runner.run("SELECT 1", fetch=True)) == [(1,)]
+    assert pool.getconn_calls == 2
+
+    runner.release_thread_connection()
 
 
 def test_close_returns_thread_connection_and_closes_pool() -> None:
