@@ -52,6 +52,12 @@ jobs:
       run: |
         pytest -v --tb=short -m "not slow" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup"
 
+    - name: Run phaselock fallback-path gate
+      env:
+        _ENABLE_PHASELOCK_XATTRS: "0"
+      run: |
+        pytest -v --tb=short -m "not slow" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup" tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
+
     - name: Test CLI installation
       run: |
         broker --version

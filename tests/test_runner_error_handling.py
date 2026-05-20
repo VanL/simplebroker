@@ -400,6 +400,34 @@ class TestSQLiteRunnerErrorHandling:
         assert restored_timeout == 5000
 
     @pytest.mark.sqlite_only
+    def test_setup_operation_context_caps_new_connection_timeout(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Setup-created connections should start with the short timeout."""
+
+        connect_timeouts: list[float | None] = []
+        original_connect = sqlite3.connect
+
+        def connect_spy(*args, **kwargs):
+            connect_timeouts.append(kwargs.get("timeout"))
+            return original_connect(*args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", connect_spy)
+        runner = SQLiteRunner(
+            str(tmp_path / "test.db"),
+            config={"BROKER_BUSY_TIMEOUT": 5000},
+        )
+        try:
+            with runner._setup_operation_context():
+                runner.get_connection()
+        finally:
+            runner.close()
+
+        assert connect_timeouts == [0.25]
+
+    @pytest.mark.sqlite_only
     def test_schema_setup_uses_one_shared_retry_deadline(
         self,
         monkeypatch,

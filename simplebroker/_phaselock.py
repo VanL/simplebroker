@@ -58,6 +58,9 @@ _UNSUPPORTED_XATTR_ERRNOS = {
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[Path, threading.RLock] = {}
 _MAX_STATUS_BYTES = 64 * 1024
+_ENABLE_PHASELOCK_XATTRS = "_ENABLE_PHASELOCK_XATTRS"
+_XATTR_ENV_ENABLED = {"1", "true", "yes", "on", "xattr", "xattrs"}
+_XATTR_ENV_DISABLED = {"0", "false", "no", "off", "fallback", "status", "none"}
 
 
 class PhaseLockTimeout(TimeoutError):
@@ -92,6 +95,17 @@ def _xattr_provider() -> _XattrProvider | None:
         return _XattrProvider(get_value=get_value, set_value=set_value)
 
     return _darwin_xattr_provider()
+
+
+def _xattr_env_mode() -> bool | None:
+    value = os.environ.get(_ENABLE_PHASELOCK_XATTRS, "").strip().lower()
+    if not value or value == "auto":
+        return True
+    if value in _XATTR_ENV_ENABLED:
+        return True
+    if value in _XATTR_ENV_DISABLED:
+        return False
+    return None
 
 
 def _darwin_xattr_provider() -> _XattrProvider | None:
@@ -464,7 +478,7 @@ class PhaseLockService:
     def xattrs_available(self) -> bool:
         """Return whether xattrs have appeared usable for this service."""
 
-        if self._use_xattrs is False:
+        if self._xattrs_disabled():
             return False
         if self._xattrs_available is not None:
             return self._xattrs_available
@@ -644,8 +658,13 @@ class PhaseLockService:
         status_phases, _diagnostic = self._read_status_phases()
         return all(phase.name in status_phases for phase in phases)
 
+    def _xattrs_disabled(self) -> bool:
+        if self._use_xattrs is not None:
+            return self._use_xattrs is False
+        return _xattr_env_mode() is False
+
     def _should_use_xattrs(self) -> bool:
-        if self._use_xattrs is False:
+        if self._xattrs_disabled():
             self._xattrs_available = False
             return False
         if not self.xattrs_available:
@@ -665,7 +684,7 @@ class PhaseLockService:
         return self._get_xattr(key) is not None
 
     def _get_xattr(self, key: str) -> bytes | None:
-        if self._use_xattrs is False:
+        if self._xattrs_disabled():
             self._xattrs_available = False
             return None
         provider = _xattr_provider()
@@ -689,7 +708,7 @@ class PhaseLockService:
         return bytes(value)
 
     def _set_xattr(self, key: str, value: bytes) -> bool:
-        if self._use_xattrs is False:
+        if self._xattrs_disabled():
             self._xattrs_available = False
             return False
         provider = _xattr_provider()

@@ -18,9 +18,7 @@ from simplebroker._runner import SetupPhase, SQLiteRunner
 def _force_status_sidecars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make PhaseLockService use fallback status files for deterministic tests."""
 
-    monkeypatch.setattr(phaselock_module.os, "getxattr", None, raising=False)
-    monkeypatch.setattr(phaselock_module.os, "setxattr", None, raising=False)
-    monkeypatch.setattr(phaselock_module, "_darwin_xattr_provider", lambda: None)
+    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "0")
 
 
 def _setup_phase_names() -> tuple[str, ...]:

@@ -21,8 +21,14 @@ from simplebroker._phaselock import (
 
 
 def _real_xattrs_supported(target: Path) -> bool:
-    service = PhaseLockService(target)
+    service = PhaseLockService(target, use_xattrs=True)
     phase_name = "pytest-probe"
+    return service.mark_phase(phase_name) and service.has_phase(phase_name)
+
+
+def _default_xattrs_supported(target: Path) -> bool:
+    service = PhaseLockService(target)
+    phase_name = "pytest-default-probe"
     return service.mark_phase(phase_name) and service.has_phase(phase_name)
 
 
@@ -67,7 +73,7 @@ def test_darwin_ctypes_xattrs_are_used_when_stdlib_xattrs_are_missing(
     monkeypatch.setattr(phaselock_module.os, "setxattr", None, raising=False)
     target = tmp_path / "broker.db"
     target.touch()
-    if not _real_xattrs_supported(target):
+    if not _default_xattrs_supported(target):
         pytest.skip("Darwin libc xattrs are not supported on this filesystem")
 
     calls: list[str] = []
@@ -110,6 +116,55 @@ def test_missing_stdlib_and_darwin_xattrs_falls_back_to_status_file(
     assert result.status_paths == (service.status_base_path,)
     assert calls == ["connection"]
     assert _read_status_file(service.status_base_path) == ["connection-v1"]
+
+
+def test_env_can_force_status_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import simplebroker._phaselock as phaselock_module
+
+    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "0")
+    target = tmp_path / "broker.db"
+    target.touch()
+    calls: list[str] = []
+    service = PhaseLockService(target)
+
+    result = service.run_phases(
+        (Phase("connection-v1", lambda: calls.append("connection")),)
+    )
+
+    assert result.completed == ("connection-v1",)
+    assert result.xattrs_available is False
+    assert result.status_paths == (service.status_base_path,)
+    assert calls == ["connection"]
+    assert _read_status_file(service.status_base_path) == ["connection-v1"]
+
+
+def test_explicit_xattr_setting_overrides_env_fallback_when_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import simplebroker._phaselock as phaselock_module
+
+    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "0")
+    target = tmp_path / "broker.db"
+    target.touch()
+    if not _real_xattrs_supported(target):
+        pytest.skip("real xattrs are not supported on this runtime/filesystem")
+
+    calls: list[str] = []
+    service = PhaseLockService(target, use_xattrs=True)
+
+    result = service.run_phases(
+        (Phase("connection-v1", lambda: calls.append("connection")),)
+    )
+
+    assert result.completed == ("connection-v1",)
+    assert result.xattrs_available is True
+    assert result.status_paths == ()
+    assert calls == ["connection"]
+    assert not service.status_base_path.exists()
 
 
 @contextmanager
@@ -162,7 +217,7 @@ def _subprocess_holding_phase_lock(target: Path) -> Iterator[subprocess.Popen[st
 def test_real_xattr_runtime_marks_and_skips_completed_phases(tmp_path: Path) -> None:
     target = tmp_path / "broker.db"
     target.touch()
-    if not _real_xattrs_supported(target):
+    if not _default_xattrs_supported(target):
         pytest.skip("real xattrs are not supported on this runtime/filesystem")
 
     calls: list[str] = []
@@ -187,7 +242,7 @@ def test_real_xattr_runtime_marks_and_skips_completed_phases(tmp_path: Path) -> 
 def test_real_xattr_runtime_resumes_from_last_marked_phase(tmp_path: Path) -> None:
     target = tmp_path / "broker.db"
     target.touch()
-    if not _real_xattrs_supported(target):
+    if not _default_xattrs_supported(target):
         pytest.skip("real xattrs are not supported on this runtime/filesystem")
 
     calls: list[str] = []
@@ -227,7 +282,7 @@ def test_failure_while_lock_held_leaves_partial_xattrs_and_blocks_contenders(
 ) -> None:
     target = tmp_path / "broker.db"
     target.touch()
-    if not _real_xattrs_supported(target):
+    if not _default_xattrs_supported(target):
         pytest.skip("real xattrs are not supported on this runtime/filesystem")
 
     ready = tmp_path / "phase2-ready"

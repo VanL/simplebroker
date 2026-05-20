@@ -221,12 +221,17 @@ class SQLiteRunner:
         if not hasattr(self._thread_local, "conn"):
             # Check if database exists before creating connection
             db_existed = os.path.exists(self._db_path)
+            if getattr(self._thread_local, "setup_busy_timeout", False):
+                connect_timeout_ms = setup_busy_timeout_ms(self._config)
+            else:
+                connect_timeout_ms = int(self._config["BROKER_BUSY_TIMEOUT"])
 
             # Create new connection for this thread with autocommit mode
             # This is crucial for proper transaction handling
             self._thread_local.conn = sqlite3.connect(
                 self._db_path,
                 isolation_level=None,
+                timeout=max(0, connect_timeout_ms) / 1000,
                 # SQLiteRunner owns these internal connections. Disable
                 # sqlite's same-thread restriction so session cleanup can close
                 # worker-thread connections after queue operations return.
