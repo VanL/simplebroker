@@ -1,7 +1,10 @@
+# Copyright (c) 2025 Van Lindberg
+# SPDX-License-Identifier: MIT
+
 """Small phase setup coordinator with advisory lock files and xattr hints.
 
 This module is intentionally standalone: it depends only on the Python standard
-library and can be copied into another project without SimpleBroker imports.
+library and can be copied into another project.
 
 The design treats extended attributes as durable completion hints when they are
 available. When xattrs are unavailable, it records completed phases in an
@@ -21,8 +24,10 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import TracebackType
 from typing import BinaryIO, cast
-from urllib.parse import quote
+
+__version__ = "1.0"
 
 try:  # Unix/Linux/macOS
     import fcntl
@@ -58,7 +63,7 @@ _UNSUPPORTED_XATTR_ERRNOS = {
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[Path, threading.RLock] = {}
 _MAX_STATUS_BYTES = 64 * 1024
-_ENABLE_PHASELOCK_XATTRS = "_ENABLE_PHASELOCK_XATTRS"
+PHASELOCK_ENABLE_XATTRS = "PHASELOCK_ENABLE_XATTRS"
 _XATTR_ENV_ENABLED = {"1", "true", "yes", "on", "xattr", "xattrs"}
 _XATTR_ENV_DISABLED = {"0", "false", "no", "off", "fallback", "status", "none"}
 
@@ -98,7 +103,7 @@ def _xattr_provider() -> _XattrProvider | None:
 
 
 def _xattr_env_mode() -> bool | None:
-    value = os.environ.get(_ENABLE_PHASELOCK_XATTRS, "").strip().lower()
+    value = os.environ.get(PHASELOCK_ENABLE_XATTRS, "").strip().lower()
     if not value or value == "auto":
         return True
     if value in _XATTR_ENV_ENABLED:
@@ -442,7 +447,29 @@ class _AdvisoryLock:
 
 
 class AdvisoryFileLock(_AdvisoryLock):
-    """Public exact-path advisory lock for already-built lock sidecar paths."""
+    """Public exact-path advisory lock for already-built lock sidecar paths.
+
+    The lock is advisory. All cooperating processes must take the same lock
+    path before touching the protected resource.
+    """
+
+    @property
+    def locked(self) -> bool:
+        """Return whether this object currently holds the advisory lock."""
+
+        return self._locked
+
+    def __enter__(self) -> AdvisoryFileLock:
+        self.acquire()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.release()
 
 
 class PhaseLockService:
@@ -452,7 +479,7 @@ class PhaseLockService:
         self,
         target: str | os.PathLike[str],
         *,
-        namespace: str = "user.simplebroker",
+        namespace: str = "user.phaselock",
         lock_suffix: str = ".lock",
         status_suffix: str = ".status",
         timeout: float = 10.0,
@@ -550,6 +577,15 @@ class PhaseLockService:
         """
 
         phase_list = tuple(phases)
+        if not phase_list:
+            return PhaseRunResult(
+                completed=(),
+                skipped=(),
+                xattrs_available=self.xattrs_available,
+                lock_path=self.lock_path,
+                status_paths=(),
+            )
+
         using_xattrs = self._should_use_xattrs()
         if not self.strict_marker_locking and self._all_marked(
             phase_list, using_xattrs=using_xattrs
@@ -595,7 +631,6 @@ class PhaseLockService:
                 self._run_xattr_phases(phase_list, completed, skipped)
             else:
                 self._run_status_phases(phase_list, completed, skipped)
-            self._cleanup_legacy_files()
         finally:
             lock.release()
 
@@ -727,13 +762,6 @@ class PhaseLockService:
         self._xattrs_available = True
         return True
 
-    def _status_path_for_phase(self, phase_name: str) -> Path:
-        return self._legacy_status_path_for_phase(phase_name)
-
-    def status_path_for_phase(self, phase_name: str) -> Path:
-        """Return the legacy fallback status sidecar path for a phase."""
-        return self._status_path_for_phase(phase_name)
-
     def _has_status_phase(self, phase_name: str) -> bool:
         status_phases, _diagnostic = self._read_status_phases()
         return phase_name in status_phases
@@ -750,8 +778,6 @@ class PhaseLockService:
         paths.extend(
             self.status_base_path.parent.glob(f"{self.status_base_path.name}.tmp.*")
         )
-        paths.extend(self._legacy_status_paths())
-        paths.extend(self._legacy_status_temp_paths())
         return sorted(set(paths))
 
     def _mark_status_phase(self, phase_name: str) -> None:
@@ -846,38 +872,6 @@ class PhaseLockService:
             finally:
                 os.close(fd)
 
-    def _legacy_lock_path(self) -> Path:
-        return self.target.with_suffix(".setup.lock")
-
-    def _legacy_status_base_path(self) -> Path:
-        return self.target.with_suffix(".setup.status")
-
-    def _legacy_status_path_for_phase(self, phase_name: str) -> Path:
-        _validate_phase_name(phase_name)
-        encoded = quote(phase_name, safe="-._~")
-        legacy_base_path = self._legacy_status_base_path()
-        return legacy_base_path.with_name(f"{legacy_base_path.name}.{encoded}")
-
-    def _legacy_status_paths(self) -> list[Path]:
-        legacy_base_path = self._legacy_status_base_path()
-        return sorted(legacy_base_path.parent.glob(f"{legacy_base_path.name}.*"))
-
-    def _legacy_status_temp_paths(self) -> list[Path]:
-        legacy_base_path = self._legacy_status_base_path()
-        return sorted(legacy_base_path.parent.glob(f"{legacy_base_path.name}.tmp.*"))
-
-    def _cleanup_legacy_files(self) -> None:
-        legacy_lock_path = self._legacy_lock_path()
-        if legacy_lock_path != self.lock_path:
-            with contextlib.suppress(OSError):
-                legacy_lock_path.unlink()
-        for path in self._legacy_status_paths():
-            with contextlib.suppress(OSError):
-                path.unlink()
-        for path in self._legacy_status_temp_paths():
-            with contextlib.suppress(OSError):
-                path.unlink()
-
     def discard_status_markers(self) -> None:
         """Remove fallback completion markers.
 
@@ -903,7 +897,6 @@ class PhaseLockService:
             (marked if is_marked else missing).append(phase.name)
 
         status_entries, status_diagnostic = self._read_status_entries()
-        legacy_status_files = [path.name for path in self._legacy_status_paths()]
         status_parts = [
             f"target={self.target}",
             f"target_exists={self.target.exists()}",
@@ -913,7 +906,6 @@ class PhaseLockService:
             f"status_phases={status_entries}",
             f"marked={marked}",
             f"missing={missing}",
-            f"legacy_status_files={legacy_status_files}",
         ]
         if status_diagnostic is not None:
             status_parts.append(status_diagnostic)
@@ -922,9 +914,11 @@ class PhaseLockService:
 
 __all__ = [
     "AdvisoryFileLock",
+    "PHASELOCK_ENABLE_XATTRS",
     "Phase",
     "PhaseLockService",
     "PhaseLockTimeout",
     "PhaseLockUnavailable",
     "PhaseRunResult",
+    "__version__",
 ]

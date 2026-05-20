@@ -11,6 +11,10 @@ from simplebroker.watcher import QueueWatcher
 pytestmark = [pytest.mark.sqlite_only]
 
 
+def _simplebroker_phase_lock(path: Path) -> PhaseLockService:
+    return PhaseLockService(path, namespace="user.simplebroker")
+
+
 def test_queue_uses_configured_default_db_name_when_db_path_omitted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -21,7 +25,7 @@ def test_queue_uses_configured_default_db_name_when_db_path_omitted(
     queue.generate_timestamp()
 
     assert (tmp_path / ".weft" / "broker.db").is_file()
-    assert PhaseLockService(tmp_path / ".weft" / "broker.db").has_phase(
+    assert _simplebroker_phase_lock(tmp_path / ".weft" / "broker.db").has_phase(
         f"schema-v{SCHEMA_VERSION}"
     )
     assert not (tmp_path / ".broker.db").exists()
@@ -83,7 +87,7 @@ def test_queue_explicit_db_path_overrides_config_default(
     queue.generate_timestamp()
 
     assert (tmp_path / "explicit.db").is_file()
-    assert PhaseLockService(tmp_path / "explicit.db").has_phase(
+    assert _simplebroker_phase_lock(tmp_path / "explicit.db").has_phase(
         f"schema-v{SCHEMA_VERSION}"
     )
     assert not list(tmp_path.glob("*.done"))

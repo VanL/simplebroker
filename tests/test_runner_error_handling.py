@@ -670,13 +670,10 @@ class TestSQLiteRunnerErrorHandling:
         db_path = tmp_path / "MockBroker.db"
         runner = SQLiteRunner(str(db_path))
         service = PhaseLockService(db_path)
-        legacy_lock_path = db_path.with_suffix(".setup.lock")
 
         sidecars = [
             service.lock_path,
             service.status_base_path,
-            service.status_path_for_phase("connection"),
-            legacy_lock_path,
         ]
         for path in sidecars:
             path.touch()

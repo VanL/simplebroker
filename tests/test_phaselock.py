@@ -7,7 +7,7 @@ import sys
 import textwrap
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -15,11 +15,13 @@ import pytest
 
 import simplebroker._phaselock as phaselock_module
 from simplebroker._phaselock import (
+    AdvisoryFileLock,
     Phase,
     PhaseLockService,
     PhaseLockTimeout,
     PhaseLockUnavailable,
     PhaseRunResult,
+    __version__,
 )
 
 
@@ -63,16 +65,20 @@ def _read_status_file(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
+def test_version_is_1_0() -> None:
+    assert __version__ == "1.0"
+
+
 def test_xattr_env_mode_parses_enabled_disabled_and_unknown_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "YES")
+    monkeypatch.setenv(phaselock_module.PHASELOCK_ENABLE_XATTRS, "YES")
     assert phaselock_module._xattr_env_mode() is True
 
-    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "fallback")
+    monkeypatch.setenv(phaselock_module.PHASELOCK_ENABLE_XATTRS, "fallback")
     assert phaselock_module._xattr_env_mode() is False
 
-    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "definitely")
+    monkeypatch.setenv(phaselock_module.PHASELOCK_ENABLE_XATTRS, "definitely")
     assert phaselock_module._xattr_env_mode() is None
 
 
@@ -85,7 +91,7 @@ def test_stdlib_xattr_provider_wraps_get_and_set_values_as_bytes(
 
     def getxattr(path: Path, key: str) -> bytearray:
         assert path == target
-        assert key == "user.simplebroker.phase"
+        assert key == "user.phaselock.phase"
         return bytearray(b"done")
 
     def setxattr(path: Path, key: str, value: bytes) -> None:
@@ -97,9 +103,9 @@ def test_stdlib_xattr_provider_wraps_get_and_set_values_as_bytes(
     provider = phaselock_module._xattr_provider()
 
     assert provider is not None
-    assert provider.get_value(target, "user.simplebroker.phase") == b"done"
-    provider.set_value(target, "user.simplebroker.phase", bytearray(b"1"))
-    assert calls == [(target, "user.simplebroker.phase", b"1")]
+    assert provider.get_value(target, "user.phaselock.phase") == b"done"
+    provider.set_value(target, "user.phaselock.phase", bytearray(b"1"))
+    assert calls == [(target, "user.phaselock.phase", b"1")]
 
 
 def test_darwin_xattr_provider_returns_none_on_non_darwin_platform(
@@ -135,6 +141,346 @@ def test_darwin_xattr_provider_caches_initialization_failure(
     assert phaselock_module._darwin_xattr_provider() is None
     assert phaselock_module._DARWIN_XATTR_PROVIDER is None
     assert phaselock_module._darwin_xattr_provider() is None
+
+
+class _FakeCFunction:
+    def __init__(self, handler: Callable[..., int]) -> None:
+        self._handler = handler
+        self.argtypes: list[object] | None = None
+        self.restype: object | None = None
+
+    def __call__(self, *args: object) -> int:
+        return self._handler(*args)
+
+
+class _FakeLibc:
+    def __init__(
+        self,
+        getxattr: _FakeCFunction,
+        setxattr: _FakeCFunction,
+    ) -> None:
+        self.getxattr = getxattr
+        self.setxattr = setxattr
+
+
+def _install_fake_darwin_libc(
+    monkeypatch: pytest.MonkeyPatch,
+    getxattr_handler: Callable[..., int],
+    setxattr_handler: Callable[..., int] | None = None,
+) -> tuple[_FakeLibc, list[tuple[str | None, bool]], list[str]]:
+    import ctypes
+    import ctypes.util
+
+    def default_setxattr(*args: object) -> int:
+        return 0
+
+    fake_libc = _FakeLibc(
+        _FakeCFunction(getxattr_handler),
+        _FakeCFunction(setxattr_handler or default_setxattr),
+    )
+    cdll_calls: list[tuple[str | None, bool]] = []
+    find_library_calls: list[str] = []
+
+    def find_library(name: str) -> str | None:
+        find_library_calls.append(name)
+        return "/fake/libc.dylib"
+
+    def cdll(path: str | None, *, use_errno: bool = False) -> _FakeLibc:
+        cdll_calls.append((path, use_errno))
+        return fake_libc
+
+    monkeypatch.setattr(phaselock_module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        phaselock_module,
+        "_DARWIN_XATTR_PROVIDER",
+        phaselock_module._DARWIN_XATTR_PROVIDER_UNSET,
+    )
+    monkeypatch.setattr(ctypes.util, "find_library", find_library)
+    monkeypatch.setattr(ctypes, "CDLL", cdll)
+    return fake_libc, cdll_calls, find_library_calls
+
+
+def test_darwin_xattr_provider_configures_libc_signatures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+
+    fake_libc, cdll_calls, find_library_calls = _install_fake_darwin_libc(
+        monkeypatch,
+        lambda *args: 0,
+    )
+
+    provider = phaselock_module._darwin_xattr_provider()
+
+    assert provider is not None
+    assert find_library_calls == ["c"]
+    assert cdll_calls == [("/fake/libc.dylib", True)]
+    assert fake_libc.getxattr.argtypes == [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_uint32,
+        ctypes.c_int,
+    ]
+    assert fake_libc.getxattr.restype is ctypes.c_ssize_t
+    assert fake_libc.setxattr.argtypes == [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+        ctypes.c_size_t,
+        ctypes.c_uint32,
+        ctypes.c_int,
+    ]
+    assert fake_libc.setxattr.restype is ctypes.c_int
+
+
+def test_darwin_xattr_provider_gets_and_sets_values_through_libc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+
+    target = tmp_path / "broker.db"
+    value = b"done"
+    get_calls: list[tuple[bytes, bytes, object | None, int, int, int]] = []
+    set_calls: list[tuple[bytes, bytes, bytes, int, int, int]] = []
+
+    def getxattr(
+        path: bytes,
+        key: bytes,
+        buffer: object | None,
+        size: int,
+        position: int,
+        options: int,
+    ) -> int:
+        get_calls.append((path, key, buffer, size, position, options))
+        assert path == os.fsencode(target)
+        assert key == b"user.phaselock.phase"
+        if buffer is None:
+            return len(value)
+        ctypes.memmove(buffer, value, len(value))
+        return len(value)
+
+    def setxattr(
+        path: bytes,
+        key: bytes,
+        buffer: object,
+        size: int,
+        position: int,
+        options: int,
+    ) -> int:
+        set_calls.append(
+            (path, key, ctypes.string_at(buffer, size), size, position, options)
+        )
+        return 0
+
+    _install_fake_darwin_libc(monkeypatch, getxattr, setxattr)
+    provider = phaselock_module._darwin_xattr_provider()
+
+    assert provider is not None
+    assert provider.get_value(target, "user.phaselock.phase") == value
+    provider.set_value(target, "user.phaselock.phase", bytearray(b"1"))
+    assert [(call[3], call[4], call[5]) for call in get_calls] == [
+        (0, 0, 0),
+        (len(value), 0, 0),
+    ]
+    assert set_calls == [
+        (
+            os.fsencode(target),
+            b"user.phaselock.phase",
+            b"1",
+            1,
+            0,
+            0,
+        )
+    ]
+
+
+def test_darwin_xattr_provider_returns_empty_value_without_second_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "broker.db"
+    calls: list[tuple[bytes, bytes, object | None, int, int, int]] = []
+
+    def getxattr(
+        path: bytes,
+        key: bytes,
+        buffer: object | None,
+        size: int,
+        position: int,
+        options: int,
+    ) -> int:
+        calls.append((path, key, buffer, size, position, options))
+        return 0
+
+    _install_fake_darwin_libc(monkeypatch, getxattr)
+    provider = phaselock_module._darwin_xattr_provider()
+
+    assert provider is not None
+    assert provider.get_value(target, "user.phaselock.empty") == b""
+    assert calls == [
+        (os.fsencode(target), b"user.phaselock.empty", None, 0, 0, 0)
+    ]
+
+
+def test_darwin_xattr_provider_retries_get_when_value_grows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+
+    target = tmp_path / "broker.db"
+    value = b"grown"
+    calls: list[tuple[object | None, int]] = []
+
+    def getxattr(
+        path: bytes,
+        key: bytes,
+        buffer: object | None,
+        size: int,
+        position: int,
+        options: int,
+    ) -> int:
+        calls.append((buffer, size))
+        if len(calls) == 1:
+            return 3
+        if len(calls) == 2:
+            ctypes.set_errno(getattr(errno, "ERANGE", 34))
+            return -1
+        if len(calls) == 3:
+            return len(value)
+        ctypes.memmove(buffer, value, len(value))
+        return len(value)
+
+    _install_fake_darwin_libc(monkeypatch, getxattr)
+    provider = phaselock_module._darwin_xattr_provider()
+
+    assert provider is not None
+    assert provider.get_value(target, "user.phaselock.phase") == value
+    assert [(buffer is None, size) for buffer, size in calls] == [
+        (True, 0),
+        (False, 3),
+        (True, 0),
+        (False, len(value)),
+    ]
+
+
+def test_darwin_xattr_provider_raises_when_read_fails_without_erange(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+
+    target = tmp_path / "broker.db"
+    calls = 0
+
+    def getxattr(
+        path: bytes,
+        key: bytes,
+        buffer: object | None,
+        size: int,
+        position: int,
+        options: int,
+    ) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return 4
+        ctypes.set_errno(errno.EIO)
+        return -1
+
+    _install_fake_darwin_libc(monkeypatch, getxattr)
+    provider = phaselock_module._darwin_xattr_provider()
+
+    assert provider is not None
+    with pytest.raises(OSError) as error:
+        provider.get_value(target, "user.phaselock.phase")
+    assert error.value.errno == errno.EIO
+    assert error.value.filename == os.fspath(target)
+
+
+def test_darwin_xattr_provider_raises_when_retry_size_probe_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+
+    target = tmp_path / "broker.db"
+    calls = 0
+
+    def getxattr(
+        path: bytes,
+        key: bytes,
+        buffer: object | None,
+        size: int,
+        position: int,
+        options: int,
+    ) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return 3
+        if calls == 2:
+            ctypes.set_errno(getattr(errno, "ERANGE", 34))
+            return -1
+        ctypes.set_errno(errno.EIO)
+        return -1
+
+    _install_fake_darwin_libc(monkeypatch, getxattr)
+    provider = phaselock_module._darwin_xattr_provider()
+
+    assert provider is not None
+    with pytest.raises(OSError) as error:
+        provider.get_value(target, "user.phaselock.phase")
+    assert error.value.errno == errno.EIO
+    assert error.value.filename == os.fspath(target)
+
+
+def test_darwin_xattr_provider_raises_oserror_from_errno(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+
+    target = tmp_path / "broker.db"
+
+    def getxattr(
+        path: bytes,
+        key: bytes,
+        buffer: object | None,
+        size: int,
+        position: int,
+        options: int,
+    ) -> int:
+        ctypes.set_errno(errno.EIO)
+        return -1
+
+    def setxattr(
+        path: bytes,
+        key: bytes,
+        buffer: object,
+        size: int,
+        position: int,
+        options: int,
+    ) -> int:
+        ctypes.set_errno(errno.EACCES)
+        return -1
+
+    _install_fake_darwin_libc(monkeypatch, getxattr, setxattr)
+    provider = phaselock_module._darwin_xattr_provider()
+
+    assert provider is not None
+    with pytest.raises(OSError) as get_error:
+        provider.get_value(target, "user.phaselock.phase")
+    assert get_error.value.errno == errno.EIO
+    assert get_error.value.filename == os.fspath(target)
+
+    with pytest.raises(OSError) as set_error:
+        provider.set_value(target, "user.phaselock.phase", b"1")
+    assert set_error.value.errno == errno.EACCES
+    assert set_error.value.filename == os.fspath(target)
 
 
 def test_process_lock_key_falls_back_when_resolve_fails(
@@ -215,7 +561,7 @@ def test_env_can_force_status_fallback(
 ) -> None:
     import simplebroker._phaselock as phaselock_module
 
-    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "0")
+    monkeypatch.setenv(phaselock_module.PHASELOCK_ENABLE_XATTRS, "0")
     target = tmp_path / "broker.db"
     target.touch()
     calls: list[str] = []
@@ -238,7 +584,7 @@ def test_explicit_xattr_setting_overrides_env_fallback_when_available(
 ) -> None:
     import simplebroker._phaselock as phaselock_module
 
-    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "0")
+    monkeypatch.setenv(phaselock_module.PHASELOCK_ENABLE_XATTRS, "0")
     target = tmp_path / "broker.db"
     target.touch()
     if not _real_xattrs_supported(target):
@@ -256,6 +602,12 @@ def test_explicit_xattr_setting_overrides_env_fallback_when_available(
     assert result.status_paths == ()
     assert calls == ["connection"]
     assert not service.status_base_path.exists()
+
+
+def test_default_namespace_is_generic(tmp_path: Path) -> None:
+    service = PhaseLockService(tmp_path / "resource.db")
+
+    assert service.attr_key("connection-v1") == "user.phaselock.connection-v1"
 
 
 def test_empty_namespace_uses_raw_attr_name(tmp_path: Path) -> None:
@@ -278,7 +630,11 @@ def test_has_phase_uses_status_file_when_xattrs_are_disabled(tmp_path: Path) -> 
 def test_empty_phase_list_in_status_mode_returns_no_status_paths(
     tmp_path: Path,
 ) -> None:
-    service = PhaseLockService(tmp_path / "broker.db", use_xattrs=False)
+    service = PhaseLockService(
+        tmp_path / "broker.db",
+        use_xattrs=False,
+        strict_marker_locking=True,
+    )
 
     result = service.run_phases(())
 
@@ -513,7 +869,6 @@ def test_no_xattr_fallback_writes_single_status_file_and_no_done_files(
         "schema-v4",
     ]
     assert sorted(tmp_path.glob("broker.status.*")) == []
-    assert sorted(tmp_path.glob("broker.setup.status.*")) == []
     assert not list(tmp_path.glob("*.done"))
 
 
@@ -889,114 +1244,19 @@ def test_write_status_phases_removes_temp_file_when_fdopen_fails(
     assert list(tmp_path.glob("broker.status.tmp.*")) == []
 
 
-def test_discard_status_markers_removes_current_temp_and_legacy_markers(
-    tmp_path: Path,
-) -> None:
+def test_discard_status_markers_removes_current_markers(tmp_path: Path) -> None:
     target = tmp_path / "broker.db"
     service = PhaseLockService(target, use_xattrs=False)
     current_temp = tmp_path / "broker.status.tmp.1"
-    legacy_status = service.status_path_for_phase("connection-v1")
-    legacy_temp = tmp_path / "broker.setup.status.tmp.1"
 
     service.status_base_path.touch()
     current_temp.touch()
-    legacy_status.touch()
-    legacy_temp.touch()
     service.lock_path.touch()
 
     service.discard_status_markers()
 
     assert not service.status_base_path.exists()
     assert not current_temp.exists()
-    assert not legacy_status.exists()
-    assert not legacy_temp.exists()
-    assert service.lock_path.exists()
-
-
-def test_cleanup_legacy_files_removes_temp_paths_from_temp_glob(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = PhaseLockService(tmp_path / "broker.db", use_xattrs=False)
-    legacy_temp = tmp_path / "broker.setup.status.tmp.only"
-    legacy_temp.touch()
-
-    monkeypatch.setattr(service, "_legacy_status_paths", lambda: [])
-    monkeypatch.setattr(service, "_legacy_status_temp_paths", lambda: [legacy_temp])
-
-    service._cleanup_legacy_files()
-
-    assert not legacy_temp.exists()
-
-
-def test_no_xattr_legacy_status_sidecars_are_ignored_then_cleaned(
-    tmp_path: Path,
-) -> None:
-    target = tmp_path / "broker.db"
-    target.touch()
-    service = PhaseLockService(target, use_xattrs=False)
-    service.status_path_for_phase("connection-v1").touch(mode=0o600)
-    service.status_path_for_phase("schema-v4").touch(mode=0o600)
-    calls: list[str] = []
-
-    result = service.run_phases(
-        (
-            Phase("connection-v1", lambda: calls.append("connection")),
-            Phase("schema-v4", lambda: calls.append("schema")),
-            Phase("optimization-v1", lambda: calls.append("optimization")),
-        )
-    )
-
-    assert result.completed == ("connection-v1", "schema-v4", "optimization-v1")
-    assert result.skipped == ()
-    assert calls == ["connection", "schema", "optimization"]
-    assert _read_status_file(service.status_base_path) == [
-        "connection-v1",
-        "schema-v4",
-        "optimization-v1",
-    ]
-    assert not service.status_path_for_phase("connection-v1").exists()
-    assert not service.status_path_for_phase("schema-v4").exists()
-
-
-def test_no_xattr_legacy_status_sidecars_clean_when_new_status_skips(
-    tmp_path: Path,
-) -> None:
-    target = tmp_path / "broker.db"
-    target.touch()
-    service = PhaseLockService(
-        target,
-        use_xattrs=False,
-        strict_marker_locking=True,
-    )
-    _write_status_file(service.status_base_path, ["connection-v1", "schema-v4"])
-    service.status_path_for_phase("connection-v1").touch(mode=0o600)
-    calls: list[str] = []
-
-    result = service.run_phases(
-        (
-            Phase("connection-v1", lambda: calls.append("connection")),
-            Phase("schema-v4", lambda: calls.append("schema")),
-        )
-    )
-
-    assert result.completed == ()
-    assert result.skipped == ("connection-v1", "schema-v4")
-    assert calls == []
-    assert not service.status_path_for_phase("connection-v1").exists()
-
-
-def test_no_xattr_legacy_lock_is_ignored_then_cleaned(tmp_path: Path) -> None:
-    target = tmp_path / "broker.db"
-    target.touch()
-    service = PhaseLockService(target, use_xattrs=False)
-    legacy_lock_path = target.with_suffix(".setup.lock")
-    legacy_lock_path.touch(mode=0o600)
-
-    result = service.run_phases((Phase("connection-v1", lambda: None),))
-
-    assert result.completed == ("connection-v1",)
-    assert not legacy_lock_path.exists()
     assert service.lock_path.exists()
 
 
@@ -1222,6 +1482,22 @@ def test_lock_context_releases_after_exception(tmp_path: Path) -> None:
 
     with service.locked():
         assert service.lock_path.exists()
+
+
+def test_advisory_file_lock_context_manager_releases_after_exception(
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "resource.lock"
+    lock = AdvisoryFileLock(lock_path, timeout=0.5, retry_delay=0.01)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with lock:
+            assert lock.locked
+            raise RuntimeError("boom")
+
+    assert not lock.locked
+    with AdvisoryFileLock(lock_path, timeout=0.5, retry_delay=0.01) as second_lock:
+        assert second_lock.locked
 
 
 def test_advisory_lock_unavailable_without_lock_primitives(

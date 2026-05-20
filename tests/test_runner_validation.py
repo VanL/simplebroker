@@ -18,7 +18,7 @@ from simplebroker._runner import SetupPhase, SQLiteRunner
 def _force_status_sidecars(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make PhaseLockService use fallback status files for deterministic tests."""
 
-    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "0")
+    monkeypatch.setenv(phaselock_module.PHASELOCK_ENABLE_XATTRS, "0")
 
 
 def _setup_phase_names() -> tuple[str, ...]:
@@ -31,12 +31,6 @@ def _write_status_file(db_path: Path, phases: Iterable[str]) -> None:
         "".join(f"{phase_name}\n" for phase_name in phases),
         encoding="utf-8",
     )
-
-
-def _write_legacy_status_sidecars(db_path: Path, phases: Iterable[str]) -> None:
-    service = PhaseLockService(db_path)
-    for phase_name in phases:
-        service.status_path_for_phase(phase_name).touch(mode=0o600)
 
 
 def _read_status_file(db_path: Path) -> list[str]:
@@ -158,14 +152,12 @@ class TestSQLiteRunnerValidation:
         db_path = tmp_path / "broker.db"
         db_path.touch()
         _write_status_file(db_path, _setup_phase_names())
-        _write_legacy_status_sidecars(db_path, _setup_phase_names())
 
         queue = Queue("q", db_path=str(db_path))
         queue.write("msg")
 
         assert queue.read() == "msg"
         assert _read_status_file(db_path) == list(_setup_phase_names())
-        assert not list(tmp_path.glob("broker.setup.status.*"))
 
     @pytest.mark.sqlite_only
     def test_nonempty_invalid_database_with_stale_markers_fails_without_reinit(
@@ -180,7 +172,6 @@ class TestSQLiteRunnerValidation:
         original_bytes = b"not sqlite"
         db_path.write_bytes(original_bytes)
         _write_status_file(db_path, _setup_phase_names())
-        _write_legacy_status_sidecars(db_path, _setup_phase_names())
 
         queue = Queue("q", db_path=str(db_path))
         with pytest.raises(RuntimeError, match="not a valid SQLite database") as exc:
@@ -213,7 +204,6 @@ class TestSQLiteRunnerValidation:
         assert service.status_base_path == tmp_path / "broker.status"
         assert service.status_base_path.exists()
         assert _read_status_file(db_path) == list(_setup_phase_names())
-        assert not list(tmp_path.glob("broker.setup.status.*"))
 
     @pytest.mark.sqlite_only
     def test_connection_marker_check_does_not_open_sqlite_connection(
