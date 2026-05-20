@@ -51,9 +51,9 @@ def test_streaming_read_all(workdir: Path, pg_worker_runner):
     assert lines[0] == "message_0"
     assert lines[count - 1] == f"message_{count - 1}"
 
-    code, stdout, stderr = run_cli("list", cwd=workdir)
+    code, stdout, stderr = run_cli("list", "--stats", cwd=workdir)
     assert code == 0
-    assert stdout.strip() == ""
+    assert stdout.splitlines()[0] == (f"test_queue: 0 ({count} total, {count} claimed)")
 
 
 @pytest.mark.slow
