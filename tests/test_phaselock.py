@@ -320,9 +320,7 @@ def test_darwin_xattr_provider_returns_empty_value_without_second_read(
 
     assert provider is not None
     assert provider.get_value(target, "user.phaselock.empty") == b""
-    assert calls == [
-        (os.fsencode(target), b"user.phaselock.empty", None, 0, 0, 0)
-    ]
+    assert calls == [(os.fsencode(target), b"user.phaselock.empty", None, 0, 0, 0)]
 
 
 def test_darwin_xattr_provider_retries_get_when_value_grows(
