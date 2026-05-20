@@ -444,6 +444,7 @@ class _AdvisoryLock:
 class AdvisoryFileLock(_AdvisoryLock):
     """Public exact-path advisory lock for already-built lock sidecar paths."""
 
+
 class PhaseLockService:
     """Coordinate ordered setup phases with a lock file and xattr completion hints."""
 
