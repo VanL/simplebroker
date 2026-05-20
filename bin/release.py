@@ -612,12 +612,16 @@ def _local_weft_uv_args() -> tuple[str, ...]:
 
 
 def _local_weft_pythonpath() -> str | None:
-    """Return local Weft venv dependency paths when available."""
+    """Return compatible local Weft venv dependency paths when available."""
 
     weft_venv = PROJECT_ROOT.parent / "weft" / ".venv"
+    runtime_python_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
     site_packages_paths = sorted(
         (weft_venv / "lib").glob("python*/site-packages")
     ) + sorted((weft_venv / "lib64").glob("python*/site-packages"))
+    site_packages_paths = [
+        path for path in site_packages_paths if path.parent.name == runtime_python_dir
+    ]
     if not site_packages_paths:
         return None
     return os.pathsep.join(str(path) for path in site_packages_paths)

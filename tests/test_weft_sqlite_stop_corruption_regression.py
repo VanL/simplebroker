@@ -7,6 +7,7 @@ SimpleBroker checkout while still skipping cleanly in environments without Weft.
 
 from __future__ import annotations
 
+import importlib
 import json
 import sqlite3
 import sys
@@ -19,29 +20,49 @@ import pytest
 pytestmark = pytest.mark.sqlite_only
 
 
-def _add_sibling_weft_to_sys_path() -> None:
+def _add_sibling_weft_to_sys_path() -> str | None:
     repo_root = Path(__file__).resolve().parents[1]
     weft_root = repo_root.parent / "weft"
     if not (weft_root / "weft").is_dir():
-        return
+        return None
 
     weft_root_str = str(weft_root)
     if weft_root_str not in sys.path:
         sys.path.insert(0, weft_root_str)
 
     venv_root = weft_root / ".venv"
+    runtime_python_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    incompatible_site_packages: list[Path] = []
+    added_compatible_site_packages = False
     for site_packages in sorted(
         (venv_root / "lib").glob("python*/site-packages")
     ) + sorted((venv_root / "lib64").glob("python*/site-packages")):
+        if site_packages.parent.name != runtime_python_dir:
+            incompatible_site_packages.append(site_packages)
+            continue
         site_packages_str = str(site_packages)
         if site_packages_str not in sys.path:
             sys.path.append(site_packages_str)
+        added_compatible_site_packages = True
+    if incompatible_site_packages and not added_compatible_site_packages:
+        versions = ", ".join(path.parent.name for path in incompatible_site_packages)
+        return (
+            f"sibling Weft .venv has {versions}, but pytest is running "
+            f"{runtime_python_dir}; use `uv run --with-editable ../weft pytest ...` "
+            "or rebuild ../weft/.venv with the same Python version"
+        )
+    return None
 
 
-_add_sibling_weft_to_sys_path()
+_sibling_weft_skip_reason = _add_sibling_weft_to_sys_path()
 
 psutil = pytest.importorskip("psutil")
-pytest.importorskip("weft")
+try:
+    importlib.import_module("weft")
+except ModuleNotFoundError as exc:
+    if _sibling_weft_skip_reason is not None:
+        pytest.skip(_sibling_weft_skip_reason, allow_module_level=True)
+    pytest.skip(f"could not import 'weft': {exc}", allow_module_level=True)
 task_cmd = pytest.importorskip("weft.commands.tasks")
 build_context = pytest.importorskip("weft.context").build_context
 launch_task_process = pytest.importorskip("weft.core.launcher").launch_task_process

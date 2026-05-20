@@ -107,7 +107,10 @@ def test_precheck_env_extends_pythonpath_with_local_weft_venv(
 ) -> None:
     project_root = tmp_path / "simplebroker"
     project_root.mkdir()
-    site_packages = tmp_path / "weft" / ".venv" / "lib" / "python3.13" / "site-packages"
+    runtime_python_dir = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    site_packages = (
+        tmp_path / "weft" / ".venv" / "lib" / runtime_python_dir / "site-packages"
+    )
     site_packages.mkdir(parents=True)
     monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
 
@@ -120,6 +123,29 @@ def test_precheck_env_extends_pythonpath_with_local_weft_venv(
     assert release._precheck_env_overrides(backend_command) == {
         "PYTEST_ADDOPTS": "-x --maxfail=1"
     }
+
+
+def test_precheck_env_skips_incompatible_local_weft_venv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    project_root.mkdir()
+    incompatible_minor = 13 if sys.version_info.minor != 13 else 14
+    site_packages = (
+        tmp_path
+        / "weft"
+        / ".venv"
+        / "lib"
+        / f"python{sys.version_info.major}.{incompatible_minor}"
+        / "site-packages"
+    )
+    site_packages.mkdir(parents=True)
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+
+    env = release._precheck_env_overrides(release._root_test_command())
+
+    assert env == {"PYTEST_ADDOPTS": "-x --maxfail=1"}
 
 
 def test_command_env_appends_pythonpath_override(
