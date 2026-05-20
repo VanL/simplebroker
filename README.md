@@ -160,8 +160,11 @@ $ broker peek myqueue
 $ broker move myqueue processed
 $ broker move errors retry --all
 
-# list all queues
+# list all queue names
 $ broker list
+myqueue
+processed
+$ broker list --stats
 myqueue: 3
 processed: 1
 $ broker stats myqueue
@@ -205,7 +208,7 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `move <source> <dest> [options]` | Atomically transfer messages between queues |
 | `exists <queue> [--json]` | Check whether a queue has any messages, including claimed rows |
 | `stats <queue> [--json]` | Show pending, claimed, and total counts for one queue |
-| `list [--stats] [--prefix PREFIX \| --pattern GLOB] [--json]` | Show queues and message counts |
+| `list [--stats] [--prefix PREFIX \| --pattern GLOB] [--json]` | Show queue names; `--stats` adds counts |
 | `delete <queue> [-m <id>]` | Delete a queue immediately, or physically delete a specific message by ID |
 | `delete --all` | Delete all queues immediately |
 | `broadcast <message\|->` | Send message to all existing queues |
@@ -261,6 +264,7 @@ $ broker alias remove task1.outbox
 **Queue metadata options:**
 - `stats <queue>` reports counts for exactly one queue without scanning all queues.
 - `exists <queue>` exits `0` when the queue has any row and `2` when it has none.
+- `list` reports queue names. Use `list --stats` when you need counts.
 - `list --prefix <prefix>` uses a literal queue-name prefix.
 - `list --pattern <glob>` uses fnmatch-style matching.
 - `--json` on `exists`, `stats`, or `list` emits JSON suitable for scripts.
@@ -405,6 +409,10 @@ $ broker write logs "2023-12-01 system started"
 $ broker write metrics "cpu_usage:0.75"
 
 $ broker list
+emails
+logs
+metrics
+$ broker list --stats
 emails: 1
 logs: 1
 metrics: 1
@@ -660,6 +668,27 @@ For cleanup paths that already know many exact message IDs, use
 `Queue.delete_many(message_ids)` to physically delete them in one backend-level
 batch.
 
+For diagnostic or administrative paths that need to locate messages by body
+content, use `Queue.find_message_ids(...)` and then pass the returned IDs to
+`delete_many()` or another ID-based API:
+
+```python
+with Queue("tasks") as q:
+    ids = q.find_message_ids(
+        body_contains="order-123",
+        limit=50,
+    )
+    q.delete_many(ids)
+```
+
+Body search is literal and case-sensitive; `%`, `_`, `*`, and other pattern
+characters have no special meaning. The search string must contain at least
+three non-whitespace characters and be at most 1024 characters long. The limit
+must be between 1 and 1000. By default only pending messages are searched; pass
+`include_claimed=True` to include claimed-but-not-vacuumed messages. This API
+can scan every message in the selected queue, so keep it out of hot request
+paths and prefer exact message IDs when possible.
+
 ### Delivery guarantees
 
 Materialized batch APIs such as `Queue.read_many()` and `Queue.move_many()`
@@ -674,8 +703,7 @@ yielded; stopping mid-batch rolls that batch back for retry.
 
 ### Queue metadata
 
-Use targeted metadata APIs when you need queue existence or counts without
-listing every queue:
+Use targeted metadata APIs when you need queue existence or counts:
 
 ```python
 from simplebroker import Queue, QueueStats
@@ -690,6 +718,10 @@ if queue.exists():
 `QueueStats.pending` is the unclaimed count. `QueueStats.claimed` is the count
 of messages already read or claimed but not yet vacuumed. `QueueStats.exists`
 is true when `total > 0`.
+
+For cross-queue metadata, `open_broker(...).list_queues()` returns queue names
+only, including claimed-only queues. Use `list_queue_stats()` when you need
+counts.
 
 ### Generating timestamps without writing
 
@@ -848,11 +880,38 @@ with open_broker(target) as broker:
     stats = broker.get_queue_stat("tasks")
     print(f"{stats.queue}: {stats.pending} pending")
 
+    for queue_name in broker.list_queues(prefix="jobs."):
+        print(queue_name)
+
     for stats in broker.list_queue_stats(prefix="jobs."):
         print(f"{stats.queue}: {stats.pending} pending")
 
     broker.broadcast("System maintenance at 5pm")
+
+    cutoff_ts = broker.get_cached_last_timestamp()
+    deleted = broker.delete_from_queues(
+        ["jobs.high", "jobs.low"],
+        before_timestamp=cutoff_ts,
+    )
+
+    matching_ids = broker.find_message_ids(
+        "jobs.high",
+        body_contains="customer-123",
+        limit=50,
+        before_timestamp=cutoff_ts,
+    )
 ```
+
+`delete_from_queues()` physically deletes matching messages from the selected
+queues. Claimed and unclaimed messages are both eligible. When
+`before_timestamp` is provided, the bound is strict: only messages with
+`ts < before_timestamp` are deleted.
+
+`find_message_ids()` returns message IDs from one queue whose body contains a
+literal, case-sensitive substring. It does not delete or mutate messages.
+Timestamp bounds are strict: `after_timestamp` means `ts > after_timestamp` and
+`before_timestamp` means `ts < before_timestamp`. This is intentionally an
+API-only surface because it may require a full queue scan.
 
 **Key async integration strategies:**
 

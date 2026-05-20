@@ -12,7 +12,7 @@ class BackendSQLNamespace(Protocol):
 
     INSERT_MESSAGE: str
     GET_MAX_MESSAGE_TS: str
-    LIST_QUEUES_UNCLAIMED: str
+    LIST_QUEUES_PREFIX: str
     GET_QUEUE_STATS: str
     GET_OVERALL_STATS: str
     GET_QUEUE_STAT: str
@@ -39,7 +39,7 @@ class BackendSQLNamespace(Protocol):
 _REQUIRED_SQL_ATTRIBUTES = (
     "INSERT_MESSAGE",
     "GET_MAX_MESSAGE_TS",
-    "LIST_QUEUES_UNCLAIMED",
+    "LIST_QUEUES_PREFIX",
     "GET_QUEUE_STATS",
     "GET_OVERALL_STATS",
     "GET_QUEUE_STAT",

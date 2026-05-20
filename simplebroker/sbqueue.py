@@ -22,6 +22,7 @@ from ._backend_plugins import (
     get_backend_plugin,
 )
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
+from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
 from ._targets import ResolvedTarget
 from .db import DBConnection
@@ -926,6 +927,37 @@ class Queue:
         """
         with self.get_connection() as connection:
             return connection.delete_message_ids(self.name, message_ids)
+
+    def find_message_ids(
+        self,
+        *,
+        body_contains: str,
+        limit: int = BODY_SEARCH_DEFAULT_LIMIT,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[int]:
+        """Find message IDs in this queue by literal body substring.
+
+        Args:
+            body_contains: Literal substring to search for.
+            limit: Maximum number of message IDs to return.
+            after_timestamp: Only find messages newer than this timestamp.
+            before_timestamp: Only find messages older than this timestamp.
+            include_claimed: If True, include claimed messages where supported.
+
+        Returns:
+            List of matching message IDs.
+        """
+        with self.get_connection() as connection:
+            return connection.find_message_ids(
+                self.name,
+                body_contains=body_contains,
+                limit=limit,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
+                include_claimed=include_claimed,
+            )
 
     def __enter__(self) -> "Queue":
         """Enter the context manager."""

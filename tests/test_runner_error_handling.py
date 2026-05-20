@@ -23,6 +23,14 @@ from .helper_scripts.database_errors import DatabaseErrorInjector
 from .helper_scripts.timing import scale_timeout_for_ci
 
 
+def _write_status_file(db_path: Path, phases: tuple[str, ...] | list[str]) -> None:
+    service = PhaseLockService(db_path)
+    service.status_base_path.write_text(
+        "".join(f"{phase}\n" for phase in phases),
+        encoding="utf-8",
+    )
+
+
 def _run_schema_setup_probe(args: tuple[str, str, int]) -> None:
     """Open one BrokerDB while recording schema bootstrap entry/exit."""
     import time
@@ -503,7 +511,7 @@ class TestSQLiteRunnerErrorHandling:
                 DatabaseErrorInjector.restore_writable(db_path)
 
     @pytest.mark.sqlite_only
-    def test_cleanup_marker_files_preserves_shared_setup_sidecars(self, tmp_path):
+    def test_cleanup_marker_files_preserves_current_setup_sidecars(self, tmp_path):
         """Per-handle cleanup must not delete cross-process setup coordination files."""
         db_path = tmp_path / "test.db"
         runner = SQLiteRunner(str(db_path))
@@ -511,9 +519,7 @@ class TestSQLiteRunnerErrorHandling:
 
         sidecars = [
             service.lock_path,
-            service.status_path_for_phase("connection"),
-            service.status_path_for_phase(f"schema-v{SCHEMA_VERSION}"),
-            service.status_path_for_phase("optimization"),
+            service.status_base_path,
         ]
         for path in sidecars:
             path.touch()
@@ -565,7 +571,7 @@ class TestSQLiteRunnerErrorHandling:
         def publish_marker_after_contender_waits() -> None:
             assert contender_started.wait(timeout=scale_timeout_for_ci(1.0))
             if not service.mark_phase(phase_name):
-                service.status_path_for_phase(phase_name).touch(mode=0o600)
+                _write_status_file(db_path, [phase_name])
             marker_published.set()
 
         holder = threading.Thread(target=hold_lock)
@@ -636,11 +642,13 @@ class TestSQLiteRunnerErrorHandling:
         db_path = tmp_path / "MockBroker.db"
         runner = SQLiteRunner(str(db_path))
         service = PhaseLockService(db_path)
+        legacy_lock_path = db_path.with_suffix(".setup.lock")
 
         sidecars = [
             service.lock_path,
+            service.status_base_path,
             service.status_path_for_phase("connection"),
-            service.status_path_for_phase("optimization"),
+            legacy_lock_path,
         ]
         for path in sidecars:
             path.touch()

@@ -5,6 +5,23 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.0] - 2026-05-20
+### Added
+- Added `delete_from_queues(...)` for backend-level physical deletion across several queues, with strict `before_timestamp` filtering and consistent SQLite, Postgres, and Redis behavior.
+- Added `find_message_ids(...)` on broker handles and queues for API-only, literal, case-sensitive message body substring search that returns message IDs without mutating messages.
+
+### Changed
+- `list_queues()` now returns queue names only, including claimed-only queues. Use `list_queue_stats()`, `get_queue_stats()`, or `get_queue_stat()` when counts are needed.
+- `broker list` now prints queue names by default. Use `broker list --stats` to include pending, claimed, and total counts.
+- Updated README and async examples to use names-only queue listing and explicit stats APIs for counts.
+
+### simplebroker-pg 1.6.0
+- Added Postgres implementations for multi-queue physical delete, literal body substring ID search, and names-only queue listing with prefix filtering.
+
+### simplebroker-redis 1.1.0
+- Added Redis implementations for multi-queue physical delete, literal body substring ID search, and names-only queue listing from the Redis queue-name set.
+- Redis batch deletion now refuses active at-least-once reserved batches, while body search skips active reserved IDs without mutating them.
+
 ## [3.7.1] - 2026-05-18
 ### Fixed
 - Make connection phases strict on POSIX

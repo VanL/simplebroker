@@ -496,8 +496,8 @@ class SQLiteRunner:
         return PhaseLockService(
             self._db_path,
             namespace="user.simplebroker",
-            lock_suffix=".setup.lock",
-            status_suffix=".setup.status",
+            lock_suffix=".lock",
+            status_suffix=".status",
             timeout=SETUP_PHASE_LOCK_TIMEOUT,
             retry_delay=0.05,
             # SQLite setup markers must be a happens-after barrier, not just
@@ -585,7 +585,7 @@ class SQLiteRunner:
         Shared setup coordination files must outlive any one BrokerDB/Queue
         handle. Weft and other callers create many short-lived handles against
         the same database; if one handle unlinks a shared setup lock or status
-        sidecar while another process is still using it, the next opener can
+        file while another process is still using it, the next opener can
         bypass the intended cross-process serialization. Keep those files for
         real databases, but preserve the mock-path cleanup behavior that older
         tests rely on.
@@ -612,8 +612,7 @@ class SQLiteRunner:
             service = self._phase_lock_service()
             if file_path == service.lock_path:
                 return False
-            status_prefix = f"{service.status_base_path.name}."
-            if file_path.name.startswith(status_prefix):
+            if file_path == service.status_base_path:
                 return False
 
         return True

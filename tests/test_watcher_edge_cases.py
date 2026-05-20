@@ -674,8 +674,9 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
             watcher.run()
 
             # Verify message was moved despite handler error
-            # Get queue counts from list_queues
-            queues = dict(broker.list_queues())
+            queues = {
+                name: pending for name, pending, _total in broker.get_queue_stats()
+            }
             assert queues.get("source", 0) == 0
             assert queues.get("dest", 0) == 1
 

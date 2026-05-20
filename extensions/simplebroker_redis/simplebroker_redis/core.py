@@ -20,7 +20,13 @@ from simplebroker._constants import (
     resolve_config,
 )
 from simplebroker._exceptions import OperationalError, TimestampError
-from simplebroker._timestamp import TimestampGenerator
+from simplebroker._message_search import (
+    BODY_SEARCH_DEFAULT_LIMIT,
+    BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE,
+    validate_body_contains,
+    validate_body_search_limit,
+)
+from simplebroker._timestamp import TimestampGenerator, validate_timestamp_bound
 from simplebroker.db import (
     _literal_prefix_from_fnmatch,
     _validate_queue_name_cached,
@@ -825,12 +831,27 @@ class RedisBrokerCore:
                 else:
                     self._rollback_batch(source_queue, token, rows)
 
-    def list_queues(self) -> list[tuple[str, int]]:
+    def list_queues(
+        self,
+        *,
+        prefix: str | None = None,
+        pattern: str | None = None,
+    ) -> list[str]:
+        self._check_fork_safety()
+        if prefix is not None and pattern is not None:
+            raise ValueError("prefix and pattern cannot be used together")
+        if prefix is not None:
+            _validate_queue_prefix(prefix)
+
         queues = sorted(str(queue) for queue in self._queue_names())
-        return [
-            (queue, response_int(self._client.zcard(self._qkey(queue, "pending"))))
-            for queue in queues
-        ]
+        if prefix is not None:
+            queues = [queue for queue in queues if queue.startswith(prefix)]
+        if pattern is not None:
+            literal_prefix = _literal_prefix_from_fnmatch(pattern)
+            if literal_prefix:
+                _validate_queue_prefix(literal_prefix)
+            queues = [queue for queue in queues if fnmatchcase(queue, pattern)]
+        return queues
 
     def get_queue_stats(self) -> list[tuple[str, int, int]]:
         return [
@@ -966,6 +987,132 @@ class RedisBrokerCore:
                 "Cannot delete message while an at_least_once batch is active"
             )
         return result_int
+
+    def delete_from_queues(
+        self,
+        queue_names: Sequence[str],
+        *,
+        before_timestamp: int | None = None,
+    ) -> int:
+        self._check_fork_safety()
+        self._assert_no_reentrant_mutation_during_batch("delete_from_queues")
+        if isinstance(queue_names, (str, bytes)):
+            raise TypeError(
+                "queue_names must be a sequence of queue names, not a string"
+            )
+        before_timestamp = validate_timestamp_bound(
+            "before_timestamp", before_timestamp
+        )
+
+        deduped = tuple(dict.fromkeys(queue_names))
+        for queue in deduped:
+            self._validate_queue_name(queue)
+        if not deduped:
+            return 0
+
+        self.recover_stale_batches(max_age_seconds=self._runner.stale_batch_seconds)
+        keys = [self._keys.bodies, self._keys.all_ids, self._keys.queues]
+        for queue in deduped:
+            keys.extend(
+                (
+                    self._qkey(queue, "pending"),
+                    self._qkey(queue, "claimed"),
+                    self._qkey(queue, "reserved"),
+                )
+            )
+        try:
+            result = self._client.eval(
+                scripts.DELETE_FROM_QUEUES,
+                len(keys),
+                *keys,
+                str(len(deduped)),
+                max_bound(before_timestamp),
+                *deduped,
+            )
+        except redis.RedisError as exc:
+            raise _translate_redis_error(exc) from exc
+        result_int = response_int(result)
+        if result_int < 0:
+            raise OperationalError(
+                "Cannot delete message while an at_least_once batch is active"
+            )
+        return result_int
+
+    def find_message_ids(
+        self,
+        queue: str,
+        *,
+        body_contains: str,
+        limit: int = BODY_SEARCH_DEFAULT_LIMIT,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[int]:
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+        body_contains = validate_body_contains(body_contains)
+        limit = validate_body_search_limit(limit)
+        after_timestamp = validate_timestamp_bound("after_timestamp", after_timestamp)
+        before_timestamp = validate_timestamp_bound(
+            "before_timestamp", before_timestamp
+        )
+        self.recover_stale_batches(max_age_seconds=self._runner.stale_batch_seconds)
+
+        source_keys = [self._qkey(queue, "pending")]
+        if include_claimed:
+            source_keys.append(self._qkey(queue, "claimed"))
+        source_bounds = {key: min_bound(after_timestamp) for key in source_keys}
+        exhausted: set[str] = set()
+        maxb = max_bound(before_timestamp)
+        reserved_key = self._qkey(queue, "reserved")
+        matches: list[int] = []
+
+        while len(matches) < limit and len(exhausted) < len(source_keys):
+            candidate_ids: set[str] = set()
+            for source_key in source_keys:
+                if source_key in exhausted:
+                    continue
+                ids = [
+                    str(encoded)
+                    for encoded in response_list(
+                        self._client.zrangebylex(
+                            source_key,
+                            source_bounds[source_key],
+                            maxb,
+                            start=0,
+                            num=BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE,
+                        )
+                    )
+                ]
+                if not ids:
+                    exhausted.add(source_key)
+                    continue
+                source_bounds[source_key] = f"({ids[-1]}"
+                candidate_ids.update(ids)
+                if len(ids) < BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE:
+                    exhausted.add(source_key)
+
+            if not candidate_ids:
+                continue
+
+            ordered_ids = sorted(candidate_ids)
+            bodies = response_list(self._client.hmget(self._keys.bodies, ordered_ids))
+            with self._client.pipeline(transaction=False) as pipe:
+                for encoded in ordered_ids:
+                    pipe.zscore(reserved_key, encoded)
+                reserved_scores = response_list(pipe.execute())
+
+            for encoded, body, reserved_score in zip(
+                ordered_ids, bodies, reserved_scores, strict=False
+            ):
+                if len(matches) >= limit:
+                    break
+                if reserved_score is not None or body is None:
+                    continue
+                if body_contains in str(body):
+                    matches.append(decode_id(encoded))
+
+        return matches
 
     def broadcast(self, message: str, *, pattern: str | None = None) -> int:
         self._validate_message_size(message)

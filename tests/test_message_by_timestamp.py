@@ -589,13 +589,13 @@ def test_read_by_timestamp_affects_read_after(workdir: Path):
 
 
 def test_list_command_reflects_operations(workdir: Path):
-    """Test that list command shows correct counts after timestamp operations."""
+    """Test that list stats show correct counts after timestamp operations."""
     # Write messages
     for i in range(5):
         run_cli("write", "test_queue", f"message{i}", cwd=workdir)
 
     # Check initial count
-    rc, out, err = run_cli("list", cwd=workdir)
+    rc, out, err = run_cli("list", "--stats", cwd=workdir)
     assert "test_queue: 5" in out
 
     # Get and read a message by timestamp
@@ -603,8 +603,8 @@ def test_list_command_reflects_operations(workdir: Path):
     ts = out.split("\t")[0]
     run_cli("read", "test_queue", "-m", ts, cwd=workdir)
 
-    # list should show 4 unclaimed
-    rc, out, err = run_cli("list", cwd=workdir)
+    # list --stats should show 4 unclaimed
+    rc, out, err = run_cli("list", "--stats", cwd=workdir)
     assert "test_queue: 4" in out
 
     # list with --stats should show claimed

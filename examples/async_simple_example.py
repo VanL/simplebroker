@@ -82,10 +82,10 @@ async def monitor(broker: AsyncBrokerCore, shutdown_event: asyncio.Event) -> Non
     """Monitor queue status periodically."""
     while not shutdown_event.is_set():
         try:
-            queues = await broker.list_queues()
-            if queues:
+            queue_stats = await broker.get_queue_stats()
+            if queue_stats:
                 print("\n--- Queue Status ---")
-                for queue_name, count in queues:
+                for queue_name, count, _total in queue_stats:
                     print(f"  {queue_name}: {count} messages")
                 print("-------------------\n")
 
@@ -158,8 +158,8 @@ async def main() -> None:
 
         # Final status
         print("\n=== Final Status ===")
-        queues = await broker.list_queues()
-        for queue_name, count in queues:
+        queue_stats = await broker.get_queue_stats()
+        for queue_name, count, _total in queue_stats:
             print(f"{queue_name}: {count} messages remaining")
 
         # Process any retry messages

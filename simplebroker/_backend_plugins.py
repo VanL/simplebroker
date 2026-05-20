@@ -138,6 +138,26 @@ class BackendPlugin(Protocol):
         message_ids: Sequence[int],
     ) -> int: ...
 
+    def delete_from_queues(
+        self,
+        runner: SQLRunner,
+        *,
+        queue_names: Sequence[str],
+        before_timestamp: int | None = None,
+    ) -> int: ...
+
+    def find_message_ids(
+        self,
+        runner: SQLRunner,
+        *,
+        queue: str,
+        body_contains: str,
+        limit: int,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[int]: ...
+
     def read_magic(self, runner: SQLRunner) -> str | None: ...
 
     def read_schema_version(self, runner: SQLRunner) -> int: ...
@@ -308,9 +328,32 @@ class BrokerConnection(Protocol):
 
     def delete_message_ids(self, queue: str, message_ids: Sequence[int]) -> int: ...
 
+    def delete_from_queues(
+        self,
+        queue_names: Sequence[str],
+        *,
+        before_timestamp: int | None = None,
+    ) -> int: ...
+
+    def find_message_ids(
+        self,
+        queue: str,
+        *,
+        body_contains: str,
+        limit: int = ...,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[int]: ...
+
     def broadcast(self, message: str, *, pattern: str | None = None) -> int: ...
 
-    def list_queues(self) -> list[tuple[str, int]]: ...
+    def list_queues(
+        self,
+        *,
+        prefix: str | None = None,
+        pattern: str | None = None,
+    ) -> list[str]: ...
 
     def get_queue_stats(self) -> list[tuple[str, int, int]]: ...
 

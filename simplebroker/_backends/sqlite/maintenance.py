@@ -22,16 +22,22 @@ from ..._sql import (
 from ..._sql.sqlite import (
     CHECK_CLAIMED_MESSAGES_EXISTS,
     CLEAR_TEMP_DELETE_MESSAGE_IDS,
+    CLEAR_TEMP_DELETE_QUEUE_NAMES,
     CREATE_TEMP_DELETE_MESSAGE_IDS,
+    CREATE_TEMP_DELETE_QUEUE_NAMES,
     DELETE_STAGED_MESSAGE_IDS,
+    DELETE_STAGED_QUEUE_NAMES,
+    DELETE_STAGED_QUEUE_NAMES_BEFORE,
     SELECT_CHANGES,
     build_insert_delete_message_ids_query,
+    build_insert_delete_queue_names_query,
 )
 
 if TYPE_CHECKING:
     from ..._runner import SQLRunner
 
 _DELETE_MESSAGE_IDS_INSERT_CHUNK_SIZE = 500
+_DELETE_QUEUE_NAMES_INSERT_CHUNK_SIZE = 500
 
 
 def delete_messages(runner: SQLRunner, *, queue: str | None) -> int:
@@ -59,6 +65,31 @@ def delete_message_ids(
     runner.run(DELETE_STAGED_MESSAGE_IDS, (queue,))
     deleted_count = _changes_on_same_connection(runner)
     runner.run(CLEAR_TEMP_DELETE_MESSAGE_IDS)
+    return deleted_count
+
+
+def delete_from_queues(
+    runner: SQLRunner,
+    *,
+    queue_names: Sequence[str],
+    before_timestamp: int | None = None,
+) -> int:
+    """Physically delete messages from multiple queues."""
+    if not queue_names:
+        return 0
+
+    runner.run(CREATE_TEMP_DELETE_QUEUE_NAMES)
+    runner.run(CLEAR_TEMP_DELETE_QUEUE_NAMES)
+    for start in range(0, len(queue_names), _DELETE_QUEUE_NAMES_INSERT_CHUNK_SIZE):
+        batch = queue_names[start : start + _DELETE_QUEUE_NAMES_INSERT_CHUNK_SIZE]
+        runner.run(build_insert_delete_queue_names_query(len(batch)), tuple(batch))
+
+    if before_timestamp is None:
+        runner.run(DELETE_STAGED_QUEUE_NAMES)
+    else:
+        runner.run(DELETE_STAGED_QUEUE_NAMES_BEFORE, (before_timestamp,))
+    deleted_count = _changes_on_same_connection(runner)
+    runner.run(CLEAR_TEMP_DELETE_QUEUE_NAMES)
     return deleted_count
 
 

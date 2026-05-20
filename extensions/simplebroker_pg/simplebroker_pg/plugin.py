@@ -536,6 +536,61 @@ class PostgresBackendPlugin:
         )
         return int(rows[0][0]) if rows else 0
 
+    def delete_from_queues(
+        self,
+        runner: SQLRunner,
+        *,
+        queue_names: Sequence[str],
+        before_timestamp: int | None = None,
+    ) -> int:
+        if before_timestamp is None:
+            rows = list(
+                runner.run(
+                    pg_sql.DELETE_FROM_QUEUES_COUNT,
+                    (list(queue_names),),
+                    fetch=True,
+                )
+            )
+        else:
+            rows = list(
+                runner.run(
+                    pg_sql.DELETE_FROM_QUEUES_BEFORE_COUNT,
+                    (list(queue_names), before_timestamp),
+                    fetch=True,
+                )
+            )
+        return int(rows[0][0]) if rows else 0
+
+    def find_message_ids(
+        self,
+        runner: SQLRunner,
+        *,
+        queue: str,
+        body_contains: str,
+        limit: int,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[int]:
+        params: list[object] = [queue, body_contains]
+        if after_timestamp is not None:
+            params.append(after_timestamp)
+        if before_timestamp is not None:
+            params.append(before_timestamp)
+        params.append(limit)
+        rows = list(
+            runner.run(
+                pg_sql.build_find_message_ids_query(
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
+                    include_claimed=include_claimed,
+                ),
+                tuple(params),
+                fetch=True,
+            )
+        )
+        return [int(row[0]) for row in rows]
+
     def read_magic(self, runner: SQLRunner) -> str | None:
         state = _load_meta_state(runner)
         if state is None:

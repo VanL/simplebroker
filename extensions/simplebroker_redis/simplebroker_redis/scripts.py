@@ -142,6 +142,66 @@ end
 return deleted
 """
 
+DELETE_FROM_QUEUES = """
+local bodies = KEYS[1]
+local all_ids = KEYS[2]
+local queues = KEYS[3]
+local queue_count = tonumber(ARGV[1])
+local maxb = ARGV[2]
+
+local function pending_key(index)
+  return KEYS[3 + ((index - 1) * 3) + 1]
+end
+
+local function claimed_key(index)
+  return KEYS[3 + ((index - 1) * 3) + 2]
+end
+
+local function reserved_key(index)
+  return KEYS[3 + ((index - 1) * 3) + 3]
+end
+
+for i = 1, queue_count do
+  local reserved_matches = redis.call('ZRANGEBYLEX', reserved_key(i), '-', maxb, 'LIMIT', 0, 1)
+  if #reserved_matches > 0 then
+    return -1
+  end
+end
+
+local deleted = 0
+local seen = {}
+
+local function delete_ids(source, ids)
+  for _, id in ipairs(ids) do
+    local removed = redis.call('ZREM', source, id)
+    if removed > 0 and seen[id] == nil then
+      redis.call('HDEL', bodies, id)
+      redis.call('ZREM', all_ids, id)
+      seen[id] = true
+      deleted = deleted + 1
+    end
+  end
+end
+
+for i = 1, queue_count do
+  local pending = pending_key(i)
+  local claimed = claimed_key(i)
+  local reserved = reserved_key(i)
+  local queue = ARGV[2 + i]
+  local pending_ids = redis.call('ZRANGEBYLEX', pending, '-', maxb)
+  local claimed_ids = redis.call('ZRANGEBYLEX', claimed, '-', maxb)
+
+  delete_ids(pending, pending_ids)
+  delete_ids(claimed, claimed_ids)
+
+  if redis.call('ZCARD', pending) == 0 and redis.call('ZCARD', claimed) == 0 and redis.call('ZCARD', reserved) == 0 then
+    redis.call('SREM', queues, queue)
+  end
+end
+
+return deleted
+"""
+
 BEGIN_BATCH = """
 local pending = KEYS[1]
 local reserved = KEYS[2]

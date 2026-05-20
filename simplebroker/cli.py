@@ -225,7 +225,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     list_parser.add_argument(
         "--stats",
         action="store_true",
-        help="show statistics including claimed messages",
+        help="show counts including claimed messages",
     )
     list_filter_group = list_parser.add_mutually_exclusive_group()
     list_filter_group.add_argument(

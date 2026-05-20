@@ -13,6 +13,7 @@ from ..._exceptions import DatabaseError
 from ..._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 from .maintenance import (
     database_size_bytes,
+    delete_from_queues,
     delete_message_ids,
     delete_messages,
     get_data_version,
@@ -181,6 +182,49 @@ class SQLiteBackendPlugin:
         message_ids: Sequence[int],
     ) -> int:
         return delete_message_ids(runner, queue=queue, message_ids=message_ids)
+
+    def delete_from_queues(
+        self,
+        runner: SQLRunner,
+        *,
+        queue_names: Sequence[str],
+        before_timestamp: int | None = None,
+    ) -> int:
+        return delete_from_queues(
+            runner,
+            queue_names=queue_names,
+            before_timestamp=before_timestamp,
+        )
+
+    def find_message_ids(
+        self,
+        runner: SQLRunner,
+        *,
+        queue: str,
+        body_contains: str,
+        limit: int,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[int]:
+        params: list[object] = [queue, body_contains]
+        if after_timestamp is not None:
+            params.append(after_timestamp)
+        if before_timestamp is not None:
+            params.append(before_timestamp)
+        params.append(limit)
+        rows = _as_row_list(
+            runner.run(
+                _sql.build_find_message_ids_query(
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
+                    include_claimed=include_claimed,
+                ),
+                tuple(params),
+                fetch=True,
+            )
+        )
+        return [int(row[0]) for row in rows]
 
     def read_magic(self, runner: SQLRunner) -> str | None:
         rows = _as_row_list(

@@ -120,6 +120,7 @@ def test_normal_operation_still_works(tmp_path):
         db.write("queue1", "msg1")
         db.write("queue2", "msg2")
         queues = db.list_queues()
-        assert len(queues) == 2
-        assert ("queue1", 1) in queues
-        assert ("queue2", 1) in queues
+        assert len(queues) == 3
+        assert "queue1" in queues
+        assert "queue2" in queues
+        assert "test-queue" in queues

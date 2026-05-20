@@ -220,6 +220,33 @@ WHERE id IN (
 )
 """
 
+CREATE_TEMP_DELETE_QUEUE_NAMES = """
+CREATE TEMP TABLE IF NOT EXISTS simplebroker_delete_queue_names (
+    queue TEXT PRIMARY KEY
+) WITHOUT ROWID
+"""
+
+CLEAR_TEMP_DELETE_QUEUE_NAMES = """
+DELETE FROM simplebroker_delete_queue_names
+"""
+
+DELETE_STAGED_QUEUE_NAMES = """
+DELETE FROM messages
+WHERE queue IN (
+    SELECT queue
+    FROM simplebroker_delete_queue_names
+)
+"""
+
+DELETE_STAGED_QUEUE_NAMES_BEFORE = """
+DELETE FROM messages
+WHERE queue IN (
+    SELECT queue
+    FROM simplebroker_delete_queue_names
+)
+AND ts < ?
+"""
+
 # Delete claimed messages in batches (for vacuum)
 DELETE_CLAIMED_BATCH = """
 DELETE FROM messages
@@ -283,6 +310,14 @@ ORDER BY queue
 # Get distinct queues for broadcast
 GET_DISTINCT_QUEUES = """
 SELECT DISTINCT queue FROM messages ORDER BY queue
+"""
+
+# List queue names for a literal queue-name prefix
+LIST_QUEUES_PREFIX = """
+SELECT DISTINCT queue
+FROM messages
+WHERE queue >= ? AND queue < ?
+ORDER BY queue
 """
 
 # Check if queue exists and has messages
@@ -494,6 +529,41 @@ def build_insert_delete_message_ids_query(count: int) -> str:
     return f"""
         INSERT OR IGNORE INTO simplebroker_delete_message_ids(ts)
         VALUES {values}
+        """
+
+
+def build_insert_delete_queue_names_query(count: int) -> str:
+    """Build a bounded temp-table insert for multi-queue physical delete."""
+    if count < 1:
+        raise ValueError("count must be at least 1")
+    values = ", ".join(["(?)"] * count)
+    return f"""
+        INSERT OR IGNORE INTO simplebroker_delete_queue_names(queue)
+        VALUES {values}
+        """
+
+
+def build_find_message_ids_query(
+    *,
+    after_timestamp: int | None,
+    before_timestamp: int | None,
+    include_claimed: bool,
+) -> str:
+    """Build a literal body-substring message ID search query."""
+    where_conditions = ["queue = ?", "instr(body, ?) > 0"]
+    if not include_claimed:
+        where_conditions.append("claimed = 0")
+    if after_timestamp is not None:
+        where_conditions.append("ts > ?")
+    if before_timestamp is not None:
+        where_conditions.append("ts < ?")
+    where_clause = " AND ".join(where_conditions)
+    return f"""
+        SELECT ts
+        FROM messages
+        WHERE {where_clause}
+        ORDER BY id
+        LIMIT ?
         """
 
 

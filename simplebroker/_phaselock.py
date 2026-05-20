@@ -4,8 +4,8 @@ This module is intentionally standalone: it depends only on the Python standard
 library and can be copied into another project without SimpleBroker imports.
 
 The design treats extended attributes as durable completion hints when they are
-available. When xattrs are unavailable, it records each completed phase in an
-atomically replaced status sidecar. A separate stable sidecar file and
+available. When xattrs are unavailable, it records completed phases in an
+atomically replaced status file. A separate stable sidecar file and
 process-local mutex protect setup. File existence is never considered lock
 ownership; only the acquired locks are authoritative.
 """
@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -56,6 +57,7 @@ _UNSUPPORTED_XATTR_ERRNOS = {
 
 _PROCESS_LOCKS_GUARD = threading.Lock()
 _PROCESS_LOCKS: dict[Path, threading.RLock] = {}
+_MAX_STATUS_BYTES = 64 * 1024
 
 
 class PhaseLockTimeout(TimeoutError):
@@ -64,6 +66,125 @@ class PhaseLockTimeout(TimeoutError):
 
 class PhaseLockUnavailable(RuntimeError):
     """Raised when this platform has no supported advisory file lock primitive."""
+
+
+@dataclass(frozen=True)
+class _XattrProvider:
+    get_value: Callable[[Path, str], bytes]
+    set_value: Callable[[Path, str, bytes], None]
+
+
+_DARWIN_XATTR_PROVIDER_UNSET = object()
+_DARWIN_XATTR_PROVIDER: _XattrProvider | None | object = _DARWIN_XATTR_PROVIDER_UNSET
+
+
+def _xattr_provider() -> _XattrProvider | None:
+    getter = getattr(os, "getxattr", None)
+    setter = getattr(os, "setxattr", None)
+    if callable(getter) and callable(setter):
+
+        def get_value(path: Path, key: str) -> bytes:
+            return bytes(getter(path, key))
+
+        def set_value(path: Path, key: str, value: bytes) -> None:
+            setter(path, key, bytes(value))
+
+        return _XattrProvider(get_value=get_value, set_value=set_value)
+
+    return _darwin_xattr_provider()
+
+
+def _darwin_xattr_provider() -> _XattrProvider | None:
+    global _DARWIN_XATTR_PROVIDER
+
+    if sys.platform != "darwin":
+        return None
+    if _DARWIN_XATTR_PROVIDER is not _DARWIN_XATTR_PROVIDER_UNSET:
+        return _DARWIN_XATTR_PROVIDER  # type: ignore[return-value]
+
+    try:
+        import ctypes
+        import ctypes.util
+
+        libc_path = ctypes.util.find_library("c")
+        libc = ctypes.CDLL(libc_path or None, use_errno=True)
+        getxattr = libc.getxattr
+        getxattr.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            ctypes.c_int,
+        ]
+        getxattr.restype = ctypes.c_ssize_t
+        setxattr = libc.setxattr
+        setxattr.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_uint32,
+            ctypes.c_int,
+        ]
+        setxattr.restype = ctypes.c_int
+
+        def raise_oserror(path: Path) -> None:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error), os.fspath(path))
+
+        def get_value(path: Path, key: str) -> bytes:
+            path_bytes = os.fsencode(path)
+            key_bytes = os.fsencode(key)
+            size = getxattr(path_bytes, key_bytes, None, 0, 0, 0)
+            if size < 0:
+                raise_oserror(path)
+            if size == 0:
+                return b""
+
+            while True:
+                buffer = ctypes.create_string_buffer(size)
+                read_size = getxattr(
+                    path_bytes,
+                    key_bytes,
+                    buffer,
+                    size,
+                    0,
+                    0,
+                )
+                if read_size >= 0:
+                    return bytes(buffer.raw[:read_size])
+                if ctypes.get_errno() != getattr(errno, "ERANGE", 34):
+                    raise_oserror(path)
+                size = getxattr(path_bytes, key_bytes, None, 0, 0, 0)
+                if size < 0:
+                    raise_oserror(path)
+
+        def set_value(path: Path, key: str, value: bytes) -> None:
+            path_bytes = os.fsencode(path)
+            key_bytes = os.fsencode(key)
+            value_bytes = bytes(value)
+            buffer = ctypes.create_string_buffer(value_bytes)
+            if setxattr(path_bytes, key_bytes, buffer, len(value_bytes), 0, 0) != 0:
+                raise_oserror(path)
+
+        _DARWIN_XATTR_PROVIDER = _XattrProvider(
+            get_value=get_value,
+            set_value=set_value,
+        )
+    except Exception:
+        _DARWIN_XATTR_PROVIDER = None
+    return _DARWIN_XATTR_PROVIDER
+
+
+def _validate_phase_name(phase_name: str) -> None:
+    if (
+        not phase_name
+        or "\x00" in phase_name
+        or "\n" in phase_name
+        or "\r" in phase_name
+    ):
+        raise ValueError("phase names must be non-empty and contain no NUL or newlines")
 
 
 def _process_lock_key(path: Path) -> Path:
@@ -314,8 +435,8 @@ class PhaseLockService:
         target: str | os.PathLike[str],
         *,
         namespace: str = "user.simplebroker",
-        lock_suffix: str = ".setup.lock",
-        status_suffix: str = ".setup.status",
+        lock_suffix: str = ".lock",
+        status_suffix: str = ".status",
         timeout: float = 10.0,
         retry_delay: float = 0.05,
         use_xattrs: bool | None = None,
@@ -347,18 +468,13 @@ class PhaseLockService:
             return False
         if self._xattrs_available is not None:
             return self._xattrs_available
-        return all(
-            callable(getattr(os, name, None)) for name in ("getxattr", "setxattr")
-        )
+        return _xattr_provider() is not None
 
     def attr_key(self, phase_name: str, attr_name: str | None = None) -> str:
         """Return the xattr key for a phase."""
 
         raw_name = attr_name or phase_name
-        if not raw_name or "\x00" in raw_name:
-            raise ValueError(
-                "phase attribute names must be non-empty and contain no NUL"
-            )
+        _validate_phase_name(raw_name)
         if self.namespace:
             return f"{self.namespace}.{raw_name}"
         return raw_name
@@ -367,7 +483,7 @@ class PhaseLockService:
         """Return True when the phase completion marker is present."""
 
         if not self._should_use_xattrs():
-            return self._status_path_for_phase(phase_name).exists()
+            return self._has_status_phase(phase_name)
         key = self.attr_key(phase_name, attr_name)
         return self._get_xattr(key) is not None
 
@@ -461,6 +577,7 @@ class PhaseLockService:
                 self._run_xattr_phases(phase_list, completed, skipped)
             else:
                 self._run_status_phases(phase_list, completed, skipped)
+            self._cleanup_legacy_files()
         finally:
             lock.release()
 
@@ -500,12 +617,17 @@ class PhaseLockService:
         completed: list[str],
         skipped: list[str],
     ) -> None:
+        status_order, _diagnostic = self._read_status_entries()
+        status_phases = set(status_order)
         for phase in phases:
-            if self._has_status_phase(phase.name):
+            _validate_phase_name(phase.name)
+            if phase.name in status_phases:
                 skipped.append(phase.name)
                 continue
             phase.action()
-            self._mark_status_phase(phase.name)
+            status_phases.add(phase.name)
+            status_order.append(phase.name)
+            self._write_status_phases(status_order)
             completed.append(phase.name)
 
     def _all_marked(
@@ -519,7 +641,8 @@ class PhaseLockService:
                 self._has_xattr_phase(phase.name, attr_name=phase.attr_name)
                 for phase in phases
             )
-        return all(self._has_status_phase(phase.name) for phase in phases)
+        status_phases, _diagnostic = self._read_status_phases()
+        return all(phase.name in status_phases for phase in phases)
 
     def _should_use_xattrs(self) -> bool:
         if self._use_xattrs is False:
@@ -528,7 +651,7 @@ class PhaseLockService:
         if not self.xattrs_available:
             return False
         # Probe the target. Missing attr means xattrs work; unsupported means
-        # use the per-phase status sidecar fallback.
+        # use the status file fallback.
         self._get_xattr(self.attr_key("__phaselock_probe__"))
         return self.xattrs_available
 
@@ -545,12 +668,12 @@ class PhaseLockService:
         if self._use_xattrs is False:
             self._xattrs_available = False
             return None
-        getter = getattr(os, "getxattr", None)
-        if not callable(getter):
+        provider = _xattr_provider()
+        if provider is None:
             self._xattrs_available = False
             return None
         try:
-            value = getter(self.target, key)
+            value = provider.get_value(self.target, key)
         except FileNotFoundError:
             return None
         except OSError as exc:
@@ -569,12 +692,12 @@ class PhaseLockService:
         if self._use_xattrs is False:
             self._xattrs_available = False
             return False
-        setter = getattr(os, "setxattr", None)
-        if not callable(setter):
+        provider = _xattr_provider()
+        if provider is None:
             self._xattrs_available = False
             return False
         try:
-            setter(self.target, key, bytes(value))
+            provider.set_value(self.target, key, bytes(value))
         except (FileNotFoundError, OSError):
             self._xattrs_available = False
             return False
@@ -582,37 +705,155 @@ class PhaseLockService:
         return True
 
     def _status_path_for_phase(self, phase_name: str) -> Path:
-        encoded = quote(phase_name, safe="-._~")
-        return self.status_base_path.with_name(
-            f"{self.status_base_path.name}.{encoded}"
-        )
+        return self._legacy_status_path_for_phase(phase_name)
 
     def status_path_for_phase(self, phase_name: str) -> Path:
-        """Return the fallback status sidecar path for a phase."""
+        """Return the legacy fallback status sidecar path for a phase."""
         return self._status_path_for_phase(phase_name)
 
     def _has_status_phase(self, phase_name: str) -> bool:
-        return self._status_path_for_phase(phase_name).exists()
+        status_phases, _diagnostic = self._read_status_phases()
+        return phase_name in status_phases
 
     def _status_paths_for(self, phases: tuple[Phase, ...]) -> tuple[Path, ...]:
-        return tuple(
-            self._status_path_for_phase(phase.name)
-            for phase in phases
-            if self._has_status_phase(phase.name)
-        )
+        if self.status_base_path.exists():
+            return (self.status_base_path,)
+        return ()
 
     def _status_paths(self) -> list[Path]:
-        return sorted(
-            self.status_base_path.parent.glob(f"{self.status_base_path.name}.*")
+        paths: list[Path] = []
+        if self.status_base_path.exists():
+            paths.append(self.status_base_path)
+        paths.extend(
+            self.status_base_path.parent.glob(f"{self.status_base_path.name}.tmp.*")
         )
+        paths.extend(self._legacy_status_paths())
+        paths.extend(self._legacy_status_temp_paths())
+        return sorted(set(paths))
 
     def _mark_status_phase(self, phase_name: str) -> None:
-        destination = self._status_path_for_phase(phase_name)
+        _validate_phase_name(phase_name)
+        status_order, _diagnostic = self._read_status_entries()
+        if phase_name not in set(status_order):
+            status_order.append(phase_name)
+        self._write_status_phases(status_order)
+
+    def _read_status_phases(self) -> tuple[set[str], str | None]:
+        entries, diagnostic = self._read_status_entries()
+        return set(entries), diagnostic
+
+    def _read_status_entries(self) -> tuple[list[str], str | None]:
+        try:
+            stat = self.status_base_path.stat()
+        except FileNotFoundError:
+            return [], None
+        except OSError as exc:
+            return [], f"status_read_error={exc!r}"
+
+        if stat.st_size > _MAX_STATUS_BYTES:
+            return [], f"status_read_error=status file too large: {stat.st_size}"
+
+        try:
+            raw = self.status_base_path.read_bytes()
+            text = raw.decode("utf-8")
+        except OSError as exc:
+            return [], f"status_read_error={exc!r}"
+        except UnicodeDecodeError as exc:
+            return [], f"status_parse_error={exc!r}"
+
+        entries: list[str] = []
+        seen: set[str] = set()
+        for line in text.splitlines():
+            if not line:
+                continue
+            try:
+                _validate_phase_name(line)
+            except ValueError as exc:
+                return [], f"status_parse_error={exc!r}"
+            if line in seen:
+                continue
+            seen.add(line)
+            entries.append(line)
+        return entries, None
+
+    def _write_status_phases(self, phases: Iterable[str]) -> None:
+        status_order: list[str] = []
+        seen: set[str] = set()
+        for phase_name in phases:
+            _validate_phase_name(phase_name)
+            if phase_name in seen:
+                continue
+            seen.add(phase_name)
+            status_order.append(phase_name)
+
+        self.status_base_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = self.status_base_path.with_name(
             f"{self.status_base_path.name}.tmp.{os.getpid()}.{time.time_ns()}"
         )
-        tmp_path.touch(mode=0o600)
-        os.replace(tmp_path, destination)
+        data = "".join(f"{phase_name}\n" for phase_name in status_order).encode("utf-8")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        fd: int | None = None
+        try:
+            fd = os.open(tmp_path, flags, 0o600)
+            with os.fdopen(fd, "wb") as status_file:
+                fd = None
+                status_file.write(data)
+                status_file.flush()
+                with contextlib.suppress(OSError):
+                    os.fsync(status_file.fileno())
+            os.replace(tmp_path, self.status_base_path)
+            self._fsync_parent_directory()
+        except Exception:
+            if fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+            raise
+
+    def _fsync_parent_directory(self) -> None:
+        flags = getattr(os, "O_RDONLY", 0)
+        with contextlib.suppress(OSError, AttributeError):
+            fd = os.open(self.status_base_path.parent, flags)
+            try:
+                with contextlib.suppress(OSError):
+                    os.fsync(fd)
+            finally:
+                os.close(fd)
+
+    def _legacy_lock_path(self) -> Path:
+        return self.target.with_suffix(".setup.lock")
+
+    def _legacy_status_base_path(self) -> Path:
+        return self.target.with_suffix(".setup.status")
+
+    def _legacy_status_path_for_phase(self, phase_name: str) -> Path:
+        _validate_phase_name(phase_name)
+        encoded = quote(phase_name, safe="-._~")
+        legacy_base_path = self._legacy_status_base_path()
+        return legacy_base_path.with_name(f"{legacy_base_path.name}.{encoded}")
+
+    def _legacy_status_paths(self) -> list[Path]:
+        legacy_base_path = self._legacy_status_base_path()
+        return sorted(legacy_base_path.parent.glob(f"{legacy_base_path.name}.*"))
+
+    def _legacy_status_temp_paths(self) -> list[Path]:
+        legacy_base_path = self._legacy_status_base_path()
+        return sorted(legacy_base_path.parent.glob(f"{legacy_base_path.name}.tmp.*"))
+
+    def _cleanup_legacy_files(self) -> None:
+        legacy_lock_path = self._legacy_lock_path()
+        if legacy_lock_path != self.lock_path:
+            with contextlib.suppress(OSError):
+                legacy_lock_path.unlink()
+        for path in self._legacy_status_paths():
+            with contextlib.suppress(OSError):
+                path.unlink()
+        for path in self._legacy_status_temp_paths():
+            with contextlib.suppress(OSError):
+                path.unlink()
 
     def discard_status_markers(self) -> None:
         """Remove fallback completion markers.
@@ -638,12 +879,22 @@ class PhaseLockService:
             )
             (marked if is_marked else missing).append(phase.name)
 
-        status_files = [path.name for path in self._status_paths()]
-        return (
-            f"target={self.target}; target_exists={self.target.exists()}; "
-            f"xattrs_available={self.xattrs_available}; "
-            f"marked={marked}; missing={missing}; status_files={status_files}"
-        )
+        status_entries, status_diagnostic = self._read_status_entries()
+        legacy_status_files = [path.name for path in self._legacy_status_paths()]
+        status_parts = [
+            f"target={self.target}",
+            f"target_exists={self.target.exists()}",
+            f"xattrs_available={self.xattrs_available}",
+            f"status_path={self.status_base_path}",
+            f"status_exists={self.status_base_path.exists()}",
+            f"status_phases={status_entries}",
+            f"marked={marked}",
+            f"missing={missing}",
+            f"legacy_status_files={legacy_status_files}",
+        ]
+        if status_diagnostic is not None:
+            status_parts.append(status_diagnostic)
+        return "; ".join(status_parts)
 
 
 __all__ = [

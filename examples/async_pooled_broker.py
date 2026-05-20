@@ -102,9 +102,6 @@ from simplebroker._sql import (
 from simplebroker._sql import (
     INSERT_MESSAGE as SQL_INSERT_MESSAGE,
 )
-from simplebroker._sql import (
-    LIST_QUEUES_UNCLAIMED as SQL_SELECT_QUEUES_UNCLAIMED,
-)
 from simplebroker.ext import DataError, IntegrityError, OperationalError
 
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
@@ -841,17 +838,17 @@ class AsyncBrokerCore:
                         await self._runner.rollback()
                         raise
 
-    async def list_queues(self) -> list[tuple[str, int]]:
-        """list all queues with their unclaimed message counts."""
+    async def list_queues(self) -> list[str]:
+        """List queue names."""
         await self._ensure_initialized()
 
         async def _do_list() -> list[tuple[Any, ...]]:
             async with self._lock:
-                result = await self._runner.run(SQL_SELECT_QUEUES_UNCLAIMED, fetch=True)
+                result = await self._runner.run(SQL_SELECT_DISTINCT_QUEUES, fetch=True)
                 return list(result)
 
         rows = await self._execute_with_retry(_do_list)
-        return [(str(row[0]), int(row[1])) for row in rows]
+        return [str(row[0]) for row in rows]
 
     async def get_queue_stats(self) -> list[tuple[str, int, int]]:
         """Get all queues with both unclaimed and total message counts."""
@@ -1094,8 +1091,8 @@ class AsyncQueue:
 
     async def size(self) -> int:
         """Get the number of unclaimed messages in this queue."""
-        queues = await self._broker.list_queues()
-        for queue_name, count in queues:
+        queue_stats = await self._broker.get_queue_stats()
+        for queue_name, count, _total in queue_stats:
             if queue_name == self.name:
                 return count
         return 0

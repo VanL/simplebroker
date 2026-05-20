@@ -47,8 +47,7 @@ def test_global_options_before_subcommand(workdir: Path):
     # Verify both messages
     code, stdout, stderr = run_cli("list", cwd=workdir)
     assert code == 0
-    assert "q2: 1" in stdout
-    assert "q3: 1" in stdout
+    assert stdout.splitlines() == ["q2", "q3"]
 
 
 @pytest.mark.sqlite_only
@@ -89,4 +88,4 @@ def test_cleanup_flag_after_subcommand_is_not_global(workdir: Path):
     # Verify database was not cleaned up.
     code, stdout, stderr = run_cli("list", cwd=workdir)
     assert code == 0
-    assert "q: 1" in stdout
+    assert stdout.splitlines() == ["q"]

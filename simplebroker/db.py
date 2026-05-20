@@ -45,10 +45,15 @@ from ._exceptions import (
     OperationalError,
     StopException,
 )
+from ._message_search import (
+    BODY_SEARCH_DEFAULT_LIMIT,
+    validate_body_contains,
+    validate_body_search_limit,
+)
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner, close_owned_runner
 from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import ResolvedTarget
-from ._timestamp import TimestampGenerator
+from ._timestamp import TimestampGenerator, validate_timestamp_bound
 from .helpers import (
     SETUP_RETRY_MAX_ELAPSED,
     _execute_with_retry,
@@ -1924,22 +1929,54 @@ class BrokerCore:
         self._ts_conflict_count = 0
         self._ts_resync_count = 0
 
-    def list_queues(self) -> list[tuple[str, int]]:
-        """list all queues with their unclaimed message counts.
+    def list_queues(
+        self,
+        *,
+        prefix: str | None = None,
+        pattern: str | None = None,
+    ) -> list[str]:
+        """List queue names, optionally filtered by prefix or fnmatch pattern.
 
         Returns:
-            list of (queue_name, unclaimed_message_count) tuples, sorted by name
+            list of queue names sorted by name
 
         Raises:
             RuntimeError: If called from a forked process
         """
         self._check_fork_safety()
+        if prefix is not None and pattern is not None:
+            raise ValueError("prefix and pattern cannot be used together")
 
-        def _do_list() -> list[tuple[str, int]]:
+        def _do_list() -> list[str]:
             with self._lock:
-                return list(
-                    self._runner.run(self._sql.LIST_QUEUES_UNCLAIMED, fetch=True)
-                )
+                sql_prefix = prefix
+                if pattern is not None:
+                    literal_prefix = _literal_prefix_from_fnmatch(pattern)
+                    sql_prefix = literal_prefix or None
+
+                if sql_prefix is not None:
+                    _validate_queue_prefix(sql_prefix)
+
+                if sql_prefix:
+                    bounds = (sql_prefix, _prefix_upper_bound(sql_prefix))
+                    rows = list(
+                        self._runner.run(
+                            self._sql.LIST_QUEUES_PREFIX, bounds, fetch=True
+                        )
+                    )
+                else:
+                    rows = list(
+                        self._runner.run(self._sql.GET_DISTINCT_QUEUES, fetch=True)
+                    )
+
+                queues = [str(row[0]) for row in rows]
+
+                if prefix is not None:
+                    queues = [queue for queue in queues if queue.startswith(prefix)]
+                if pattern is not None:
+                    queues = [queue for queue in queues if fnmatchcase(queue, pattern)]
+
+                return queues
 
         # Execute with retry logic
         return self._run_with_retry(_do_list)
@@ -2176,6 +2213,88 @@ class BrokerCore:
                     raise
 
         return self._run_with_retry(_do_delete_message_ids)
+
+    def find_message_ids(
+        self,
+        queue: str,
+        *,
+        body_contains: str,
+        limit: int = BODY_SEARCH_DEFAULT_LIMIT,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[int]:
+        """Find message IDs in one queue by literal body substring."""
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+        body_contains = validate_body_contains(body_contains)
+        limit = validate_body_search_limit(limit)
+        after_timestamp = validate_timestamp_bound("after_timestamp", after_timestamp)
+        before_timestamp = validate_timestamp_bound(
+            "before_timestamp", before_timestamp
+        )
+
+        def _do_find_message_ids() -> list[int]:
+            with self._lock:
+                return self._backend_plugin.find_message_ids(
+                    self._runner,
+                    queue=queue,
+                    body_contains=body_contains,
+                    limit=limit,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
+                    include_claimed=include_claimed,
+                )
+
+        return self._run_with_retry(_do_find_message_ids)
+
+    def delete_from_queues(
+        self,
+        queue_names: Sequence[str],
+        *,
+        before_timestamp: int | None = None,
+    ) -> int:
+        """Physically delete messages from multiple queues.
+
+        Claimed and unclaimed messages are both eligible for deletion. Missing
+        queues are ignored.
+        """
+        self._check_fork_safety()
+        self._assert_no_reentrant_mutation_during_batch("delete_from_queues")
+        if isinstance(queue_names, (str, bytes)):
+            raise TypeError(
+                "queue_names must be a sequence of queue names, not a string"
+            )
+        before_timestamp = validate_timestamp_bound(
+            "before_timestamp", before_timestamp
+        )
+
+        deduped = tuple(dict.fromkeys(queue_names))
+        for queue in deduped:
+            self._validate_queue_name(queue)
+        if not deduped:
+            return 0
+
+        def _do_delete_from_queues() -> int:
+            transaction_open = False
+            with self._lock:
+                self._runner.begin_immediate()
+                transaction_open = True
+                try:
+                    deleted_count = self._backend_plugin.delete_from_queues(
+                        self._runner,
+                        queue_names=deduped,
+                        before_timestamp=before_timestamp,
+                    )
+                    self._runner.commit()
+                    transaction_open = False
+                    return deleted_count
+                except Exception:
+                    if transaction_open:
+                        self._runner.rollback()
+                    raise
+
+        return self._run_with_retry(_do_delete_from_queues)
 
     def broadcast(self, message: str, *, pattern: str | None = None) -> int:
         """Broadcast a message to all existing queues atomically.

@@ -28,6 +28,19 @@ if TYPE_CHECKING:
     from ._runner import SQLRunner
 
 
+def validate_timestamp_bound(name: str, value: int | None) -> int | None:
+    """Validate an integer timestamp filter bound."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an int or None")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    if value >= SQLITE_MAX_INT64:
+        raise ValueError(f"{name} exceeds maximum timestamp value")
+    return value
+
+
 class TimestampGenerator:
     """Thread-safe hybrid timestamp generator with validation.
 

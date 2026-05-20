@@ -112,7 +112,7 @@ def test_concurrent_operations_different_queues(broker):
         for future in futures:
             future.result()
 
-    queues = dict(broker.list_queues())
+    queues = {name: pending for name, pending, _total in broker.get_queue_stats()}
     assert queues.get("queue1", 0) == 1
     assert queues.get("queue2", 0) == 0
     assert queues.get("queue3", 0) == 2

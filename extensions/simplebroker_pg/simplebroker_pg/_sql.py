@@ -61,8 +61,31 @@ deleted AS (
 )
 SELECT COUNT(*) FROM deleted
 """
+DELETE_FROM_QUEUES_COUNT = """
+WITH deleted AS (
+    DELETE FROM messages
+    WHERE queue = ANY(?::text[])
+    RETURNING 1
+)
+SELECT COUNT(*) FROM deleted
+"""
+DELETE_FROM_QUEUES_BEFORE_COUNT = """
+WITH deleted AS (
+    DELETE FROM messages
+    WHERE queue = ANY(?::text[])
+      AND ts < ?
+    RETURNING 1
+)
+SELECT COUNT(*) FROM deleted
+"""
 GET_ALIAS_VERSION = "SELECT alias_version FROM meta WHERE singleton = TRUE"
 GET_DISTINCT_QUEUES = "SELECT DISTINCT queue FROM messages ORDER BY queue"
+LIST_QUEUES_PREFIX = """
+SELECT DISTINCT queue
+FROM messages
+WHERE queue COLLATE "C" >= ? AND queue COLLATE "C" < ?
+ORDER BY queue
+"""
 GET_LAST_TS = "SELECT last_ts FROM meta WHERE singleton = TRUE"
 GET_MAX_MESSAGE_TS = "SELECT COALESCE(MAX(ts), 0) FROM messages"
 GET_OVERALL_STATS = """
@@ -210,6 +233,30 @@ def _build_where_clause(spec: RetrieveQuerySpec) -> tuple[list[str], list[object
         where_conditions.append("ts < ?")
         params.append(spec.before_timestamp)
     return where_conditions, params
+
+
+def build_find_message_ids_query(
+    *,
+    after_timestamp: int | None,
+    before_timestamp: int | None,
+    include_claimed: bool,
+) -> str:
+    """Build a literal body-substring message ID search query."""
+    where_conditions = ["queue = ?", "strpos(body, ?) > 0"]
+    if not include_claimed:
+        where_conditions.append("claimed = FALSE")
+    if after_timestamp is not None:
+        where_conditions.append("ts > ?")
+    if before_timestamp is not None:
+        where_conditions.append("ts < ?")
+    where_clause = " AND ".join(where_conditions)
+    return f"""
+        SELECT ts
+        FROM messages
+        WHERE {where_clause}
+        ORDER BY order_id
+        LIMIT ?
+        """
 
 
 def build_retrieve_query(

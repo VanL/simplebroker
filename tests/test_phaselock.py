@@ -21,24 +21,9 @@ from simplebroker._phaselock import (
 
 
 def _real_xattrs_supported(target: Path) -> bool:
-    if not callable(getattr(os, "getxattr", None)):
-        return False
-    if not callable(getattr(os, "setxattr", None)):
-        return False
-
-    key = "user.simplebroker.pytest.probe"
-    try:
-        os.setxattr(target, key, b"1")
-        return os.getxattr(target, key) == b"1"
-    except OSError:
-        return False
-    finally:
-        remove = getattr(os, "removexattr", None)
-        if callable(remove):
-            try:
-                remove(target, key)
-            except OSError:
-                pass
+    service = PhaseLockService(target)
+    phase_name = "pytest-probe"
+    return service.mark_phase(phase_name) and service.has_phase(phase_name)
 
 
 def _wait_for_file(
@@ -59,6 +44,72 @@ def _wait_for_file(
             )
         time.sleep(0.01)
     raise AssertionError(f"Timed out waiting for {path}")
+
+
+def _write_status_file(path: Path, phases: tuple[str, ...] | list[str]) -> None:
+    path.write_text("".join(f"{phase}\n" for phase in phases), encoding="utf-8")
+
+
+def _read_status_file(path: Path) -> list[str]:
+    return path.read_text(encoding="utf-8").splitlines()
+
+
+def test_darwin_ctypes_xattrs_are_used_when_stdlib_xattrs_are_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != "darwin":
+        pytest.skip("Darwin-only ctypes xattr provider")
+
+    import simplebroker._phaselock as phaselock_module
+
+    monkeypatch.setattr(phaselock_module.os, "getxattr", None, raising=False)
+    monkeypatch.setattr(phaselock_module.os, "setxattr", None, raising=False)
+    target = tmp_path / "broker.db"
+    target.touch()
+    if not _real_xattrs_supported(target):
+        pytest.skip("Darwin libc xattrs are not supported on this filesystem")
+
+    calls: list[str] = []
+    service = PhaseLockService(target)
+    phases = (Phase("connection-v1", lambda: calls.append("connection")),)
+
+    first = service.run_phases(phases)
+    second = service.run_phases(phases)
+
+    assert first.completed == ("connection-v1",)
+    assert first.xattrs_available is True
+    assert first.status_paths == ()
+    assert second.completed == ()
+    assert second.skipped == ("connection-v1",)
+    assert calls == ["connection"]
+    assert service.lock_path.exists()
+    assert not service.status_base_path.exists()
+
+
+def test_missing_stdlib_and_darwin_xattrs_falls_back_to_status_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import simplebroker._phaselock as phaselock_module
+
+    monkeypatch.setattr(phaselock_module.os, "getxattr", None, raising=False)
+    monkeypatch.setattr(phaselock_module.os, "setxattr", None, raising=False)
+    monkeypatch.setattr(phaselock_module, "_darwin_xattr_provider", lambda: None)
+    target = tmp_path / "broker.db"
+    target.touch()
+    calls: list[str] = []
+    service = PhaseLockService(target)
+
+    result = service.run_phases(
+        (Phase("connection-v1", lambda: calls.append("connection")),)
+    )
+
+    assert result.completed == ("connection-v1",)
+    assert result.xattrs_available is False
+    assert result.status_paths == (service.status_base_path,)
+    assert calls == ["connection"]
+    assert _read_status_file(service.status_base_path) == ["connection-v1"]
 
 
 @contextmanager
@@ -254,7 +305,7 @@ def test_failure_while_lock_held_leaves_partial_xattrs_and_blocks_contenders(
     assert service.lock_path.exists()
 
 
-def test_no_xattr_fallback_keeps_per_phase_status_files_and_no_done_files(
+def test_no_xattr_fallback_writes_single_status_file_and_no_done_files(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "broker.db"
@@ -272,17 +323,20 @@ def test_no_xattr_fallback_keeps_per_phase_status_files_and_no_done_files(
 
     assert first.completed == ("connection-v1", "schema-v4")
     assert first.xattrs_available is False
-    expected_status_paths = (
-        tmp_path / "broker.setup.status.connection-v1",
-        tmp_path / "broker.setup.status.schema-v4",
-    )
+    expected_status_paths = (tmp_path / "broker.status",)
     assert first.status_paths == expected_status_paths
     assert second.completed == ()
     assert second.skipped == ("connection-v1", "schema-v4")
     assert second.status_paths == expected_status_paths
     assert calls == ["connection", "schema"]
+    assert service.lock_path == tmp_path / "broker.lock"
     assert service.lock_path.exists()
-    assert sorted(tmp_path.glob("*.status.*")) == sorted(expected_status_paths)
+    assert _read_status_file(service.status_base_path) == [
+        "connection-v1",
+        "schema-v4",
+    ]
+    assert sorted(tmp_path.glob("broker.status.*")) == []
+    assert sorted(tmp_path.glob("broker.setup.status.*")) == []
     assert not list(tmp_path.glob("*.done"))
 
 
@@ -300,6 +354,7 @@ def test_no_xattr_action_failure_keeps_single_lock_file(tmp_path: Path) -> None:
 
     assert service.lock_path.exists()
     assert list(tmp_path.glob("*.lock")) == [service.lock_path]
+    assert not service.status_base_path.exists()
     assert not list(tmp_path.glob("*.status.*"))
     assert not list(tmp_path.glob("*.done"))
 
@@ -326,9 +381,7 @@ def test_no_xattr_status_marker_resumes_from_last_completed_phase(
         )
 
     assert calls == ["connection", "schema-failed"]
-    assert list(tmp_path.glob("*.status.*")) == [
-        tmp_path / "broker.setup.status.connection-v1"
-    ]
+    assert _read_status_file(service.status_base_path) == ["connection-v1"]
 
     result = service.run_phases(
         (
@@ -341,13 +394,11 @@ def test_no_xattr_status_marker_resumes_from_last_completed_phase(
     assert result.completed == ("schema-v4", "optimization-v1")
     assert result.skipped == ("connection-v1",)
     assert calls == ["connection", "schema-failed", "schema", "optimization"]
-    assert sorted(tmp_path.glob("*.status.*")) == sorted(
-        [
-            tmp_path / "broker.setup.status.connection-v1",
-            tmp_path / "broker.setup.status.schema-v4",
-            tmp_path / "broker.setup.status.optimization-v1",
-        ]
-    )
+    assert _read_status_file(service.status_base_path) == [
+        "connection-v1",
+        "schema-v4",
+        "optimization-v1",
+    ]
     assert service.lock_path.exists()
 
 
@@ -411,9 +462,7 @@ def test_no_xattr_failure_while_lock_held_leaves_partial_status_marker(
     try:
         _wait_for_file(ready, proc=proc)
 
-        assert list(tmp_path.glob("*.status.*")) == [
-            tmp_path / "broker.setup.status.connection-v1"
-        ]
+        assert _read_status_file(service.status_base_path) == ["connection-v1"]
         with pytest.raises(PhaseLockTimeout):
             service.run_phases(
                 (
@@ -439,21 +488,23 @@ def test_no_xattr_failure_while_lock_held_leaves_partial_status_marker(
     assert result.completed == ("schema-v4",)
     assert result.skipped == ("connection-v1",)
     assert calls == ["schema"]
-    assert sorted(tmp_path.glob("*.status.*")) == sorted(
-        [
-            tmp_path / "broker.setup.status.connection-v1",
-            tmp_path / "broker.setup.status.schema-v4",
-        ]
-    )
+    assert _read_status_file(service.status_base_path) == [
+        "connection-v1",
+        "schema-v4",
+    ]
     assert service.lock_path.exists()
 
 
-def test_no_xattr_status_marker_keeps_completed_status_files(tmp_path: Path) -> None:
+def test_no_xattr_status_file_keeps_independent_completed_phases(
+    tmp_path: Path,
+) -> None:
     target = tmp_path / "broker.db"
     target.touch()
     service = PhaseLockService(target, use_xattrs=False)
-    (tmp_path / "broker.setup.status.connection-v1").touch()
-    (tmp_path / "broker.setup.status.schema-v4").touch()
+    _write_status_file(
+        service.status_base_path,
+        ["connection-v1", "schema-v4"],
+    )
     calls: list[str] = []
 
     result = service.run_phases(
@@ -467,13 +518,124 @@ def test_no_xattr_status_marker_keeps_completed_status_files(tmp_path: Path) -> 
     assert result.completed == ("optimization-v1",)
     assert result.skipped == ("connection-v1", "schema-v4")
     assert calls == ["optimization"]
-    assert sorted(tmp_path.glob("*.status.*")) == sorted(
-        [
-            tmp_path / "broker.setup.status.connection-v1",
-            tmp_path / "broker.setup.status.schema-v4",
-            tmp_path / "broker.setup.status.optimization-v1",
-        ]
+    assert _read_status_file(service.status_base_path) == [
+        "connection-v1",
+        "schema-v4",
+        "optimization-v1",
+    ]
+
+
+def test_no_xattr_sparse_status_does_not_imply_missing_phases(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(target, use_xattrs=False)
+    _write_status_file(service.status_base_path, ["connection-v1", "optimization-v1"])
+    calls: list[str] = []
+
+    result = service.run_phases(
+        (
+            Phase("connection-v1", lambda: calls.append("connection")),
+            Phase("schema-v4", lambda: calls.append("schema")),
+            Phase("optimization-v1", lambda: calls.append("optimization")),
+        )
     )
+
+    assert result.completed == ("schema-v4",)
+    assert result.skipped == ("connection-v1", "optimization-v1")
+    assert calls == ["schema"]
+    assert _read_status_file(service.status_base_path) == [
+        "connection-v1",
+        "optimization-v1",
+        "schema-v4",
+    ]
+
+
+def test_no_xattr_malformed_status_is_not_trusted(tmp_path: Path) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(target, use_xattrs=False)
+    service.status_base_path.write_bytes(b"connection-v1\nbad\x00phase\n")
+    calls: list[str] = []
+
+    result = service.run_phases((Phase("connection-v1", lambda: calls.append("ran")),))
+
+    assert result.completed == ("connection-v1",)
+    assert result.skipped == ()
+    assert calls == ["ran"]
+    assert _read_status_file(service.status_base_path) == ["connection-v1"]
+
+
+def test_no_xattr_legacy_status_sidecars_are_ignored_then_cleaned(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(target, use_xattrs=False)
+    service.status_path_for_phase("connection-v1").touch(mode=0o600)
+    service.status_path_for_phase("schema-v4").touch(mode=0o600)
+    calls: list[str] = []
+
+    result = service.run_phases(
+        (
+            Phase("connection-v1", lambda: calls.append("connection")),
+            Phase("schema-v4", lambda: calls.append("schema")),
+            Phase("optimization-v1", lambda: calls.append("optimization")),
+        )
+    )
+
+    assert result.completed == ("connection-v1", "schema-v4", "optimization-v1")
+    assert result.skipped == ()
+    assert calls == ["connection", "schema", "optimization"]
+    assert _read_status_file(service.status_base_path) == [
+        "connection-v1",
+        "schema-v4",
+        "optimization-v1",
+    ]
+    assert not service.status_path_for_phase("connection-v1").exists()
+    assert not service.status_path_for_phase("schema-v4").exists()
+
+
+def test_no_xattr_legacy_status_sidecars_clean_when_new_status_skips(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(
+        target,
+        use_xattrs=False,
+        strict_marker_locking=True,
+    )
+    _write_status_file(service.status_base_path, ["connection-v1", "schema-v4"])
+    service.status_path_for_phase("connection-v1").touch(mode=0o600)
+    calls: list[str] = []
+
+    result = service.run_phases(
+        (
+            Phase("connection-v1", lambda: calls.append("connection")),
+            Phase("schema-v4", lambda: calls.append("schema")),
+        )
+    )
+
+    assert result.completed == ()
+    assert result.skipped == ("connection-v1", "schema-v4")
+    assert calls == []
+    assert not service.status_path_for_phase("connection-v1").exists()
+
+
+def test_no_xattr_legacy_lock_is_ignored_then_cleaned(tmp_path: Path) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(target, use_xattrs=False)
+    legacy_lock_path = target.with_suffix(".setup.lock")
+    legacy_lock_path.touch(mode=0o600)
+
+    result = service.run_phases((Phase("connection-v1", lambda: None),))
+
+    assert result.completed == ("connection-v1",)
+    assert not legacy_lock_path.exists()
+    assert service.lock_path.exists()
 
 
 def test_no_xattr_existing_status_marker_does_not_bypass_held_lock(
@@ -495,7 +657,7 @@ def test_no_xattr_existing_status_marker_does_not_bypass_held_lock(
     done = threading.Event()
     release = target.with_suffix(".release")
 
-    service.status_path_for_phase("connection-v1").touch(mode=0o600)
+    _write_status_file(service.status_base_path, ["connection-v1"])
 
     def run_waiter() -> None:
         started.set()
@@ -558,7 +720,7 @@ def test_no_xattr_waiter_does_not_skip_when_phase_marked_while_lock_is_held(
 
     def mark_phase_after_waiter_blocks() -> None:
         assert started.wait(timeout=1.0)
-        service.status_path_for_phase("connection-v1").touch(mode=0o600)
+        _write_status_file(service.status_base_path, ["connection-v1"])
 
     with _subprocess_holding_phase_lock(target):
         waiter = threading.Thread(target=run_waiter)
@@ -597,7 +759,7 @@ def test_no_xattr_non_strict_waiter_skips_when_phase_marked_while_lock_is_held(
 
     def mark_phase_after_waiter_blocks() -> None:
         time.sleep(0.05)
-        service.status_path_for_phase("connection-v1").touch(mode=0o600)
+        _write_status_file(service.status_base_path, ["connection-v1"])
 
     with _subprocess_holding_phase_lock(target):
         marker = threading.Thread(target=mark_phase_after_waiter_blocks)

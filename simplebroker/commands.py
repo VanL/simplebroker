@@ -551,7 +551,7 @@ def cmd_list(
     prefix: str | None = None,
     json_output: bool = False,
 ) -> int:
-    """list all queues with counts.
+    """List queue names, optionally with counts.
 
     Args:
         db_path: Path to database file
@@ -566,30 +566,34 @@ def cmd_list(
     with DBConnection(db_path) as conn:
         db = cast(BrokerDB, conn.get_connection())
 
-        queue_stats = db.list_queue_stats(prefix=prefix, pattern=pattern)
+        if show_stats:
+            queue_stats = db.list_queue_stats(prefix=prefix, pattern=pattern)
 
-        # Filter to only show queues with unclaimed messages when not showing stats
-        if not show_stats:
-            queue_stats = [stats for stats in queue_stats if stats.pending > 0]
+            # Show each queue with unclaimed count (and total if different)
+            for stats in queue_stats:
+                if json_output:
+                    print(json.dumps(_queue_stats_payload(stats)))
+                elif stats.pending != stats.total:
+                    print(
+                        f"{stats.queue}: {stats.pending} "
+                        f"({stats.total} total, {stats.claimed} claimed)"
+                    )
+                else:
+                    print(f"{stats.queue}: {stats.pending}")
 
-        # Show each queue with unclaimed count (and total if different)
-        for stats in queue_stats:
-            if json_output:
-                print(json.dumps(_queue_stats_payload(stats)))
-            elif show_stats and stats.pending != stats.total:
-                print(
-                    f"{stats.queue}: {stats.pending} "
-                    f"({stats.total} total, {stats.claimed} claimed)"
-                )
-            else:
-                print(f"{stats.queue}: {stats.pending}")
+            # Only show overall claimed message stats if --stats flag is used
+            if not json_output:
+                total_claimed, total_messages = db.get_overall_stats()
 
-        # Only show overall claimed message stats if --stats flag is used
-        if show_stats and not json_output:
-            total_claimed, total_messages = db.get_overall_stats()
-
-            if total_claimed > 0:
-                print(f"\nTotal claimed messages: {total_claimed}/{total_messages}")
+                if total_claimed > 0:
+                    print(f"\nTotal claimed messages: {total_claimed}/{total_messages}")
+        else:
+            queues = db.list_queues(prefix=prefix, pattern=pattern)
+            for queue in queues:
+                if json_output:
+                    print(json.dumps({"queue": queue}))
+                else:
+                    print(queue)
 
     return EXIT_SUCCESS
 

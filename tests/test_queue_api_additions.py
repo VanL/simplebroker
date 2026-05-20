@@ -67,6 +67,40 @@ def test_queue_delete_many(queue_factory):
     assert list(q.peek_generator(with_timestamps=False)) == ["message2"]
 
 
+def test_queue_find_message_ids(queue_factory):
+    """Test finding message IDs by literal body substring."""
+    q = queue_factory("test")
+
+    q.write("target one")
+    q.write("miss")
+    q.write("target two")
+    timestamps = dict(q.peek_generator(with_timestamps=True))
+
+    assert q.find_message_ids(body_contains="target", limit=10) == [
+        timestamps["target one"],
+        timestamps["target two"],
+    ]
+    assert list(q.peek_generator(with_timestamps=False)) == [
+        "target one",
+        "miss",
+        "target two",
+    ]
+
+
+def test_queue_find_message_ids_composes_with_delete_many(queue_factory):
+    """Test using found IDs as input to physical batch delete."""
+    q = queue_factory("test")
+
+    q.write("remove target one")
+    q.write("keep")
+    q.write("remove target two")
+
+    ids = q.find_message_ids(body_contains="target", limit=10)
+
+    assert q.delete_many(ids) == 2
+    assert list(q.peek_generator(with_timestamps=False)) == ["keep"]
+
+
 def test_queue_delete_empty_queue_returns_false(queue_factory):
     """Test deleting from an empty queue reports no-op status."""
     q = queue_factory("test")

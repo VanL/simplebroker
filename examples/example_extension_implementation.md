@@ -1123,18 +1123,17 @@ class AsyncBrokerCore:
         row = await cursor.fetchone()
         return row[0] if row else 0
     
-    async def list_queues(self) -> list[tuple[str, int]]:
-        """list all queues with message counts."""
+    async def list_queues(self) -> list[str]:
+        """List queue names."""
         await self._ensure_connection()
         
         cursor = await self._conn.execute("""
-            SELECT queue, COUNT(*) 
+            SELECT DISTINCT queue
             FROM messages 
-            WHERE claimed = 0 
-            GROUP BY queue 
             ORDER BY queue
         """)
-        return await cursor.fetchall()
+        rows = await cursor.fetchall()
+        return [row[0] for row in rows]
     
     async def close(self):
         """Close database connection."""
@@ -1251,7 +1250,8 @@ async def example_monitoring():
         while True:
             queues = await broker.list_queues()
             print("\nQueue Status:")
-            for name, count in queues:
+            for name in queues:
+                count = await broker.queue_size(name)
                 print(f"  {name}: {count} messages")
             
             if not queues:

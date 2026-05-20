@@ -104,13 +104,60 @@ def test_list_queue_stats_rejects_prefix_and_pattern(broker) -> None:
         broker.list_queue_stats(prefix="weft.", pattern="weft.*")
 
 
-def test_legacy_queue_listing_shapes_remain_compatible(queue_factory, broker) -> None:
-    queue_factory("jobs").write("one")
+def test_list_queues_returns_names_only_and_includes_claimed(
+    queue_factory, broker
+) -> None:
+    queue_factory("jobs.pending").write("one")
+    queue_factory("jobs.claimed").write("two")
+    queue_factory("events").write("three")
 
-    queue_stats = broker.get_queue_stats()
+    assert broker.claim_one("jobs.claimed", with_timestamps=False) == "two"
+
     queues = broker.list_queues()
 
-    assert queue_stats == [("jobs", 1, 1)]
-    assert queues == [("jobs", 1)]
-    assert all(isinstance(item, tuple) for item in queue_stats)
-    assert all(isinstance(item, tuple) for item in queues)
+    assert queues == ["events", "jobs.claimed", "jobs.pending"]
+    assert all(isinstance(item, str) for item in queues)
+    assert broker.get_queue_stats() == [
+        ("events", 1, 1),
+        ("jobs.claimed", 0, 1),
+        ("jobs.pending", 1, 1),
+    ]
+
+
+def test_list_queues_filters_by_prefix(queue_factory, broker) -> None:
+    for name in ("weft.jobs.a", "weft.jobs.b", "weft.events.a", "other"):
+        queue_factory(name).write(f"message for {name}")
+
+    assert broker.list_queues(prefix="weft.jobs.") == [
+        "weft.jobs.a",
+        "weft.jobs.b",
+    ]
+
+
+def test_list_queues_filters_by_pattern(queue_factory, broker) -> None:
+    for name in ("weft.jobs.a", "weft.jobs.b", "weft.events.a", "other"):
+        queue_factory(name).write(f"message for {name}")
+
+    assert broker.list_queues(pattern="weft.jobs.*") == [
+        "weft.jobs.a",
+        "weft.jobs.b",
+    ]
+    assert broker.list_queues(pattern="*.a") == [
+        "weft.events.a",
+        "weft.jobs.a",
+    ]
+
+
+def test_list_queues_rejects_prefix_and_pattern(broker) -> None:
+    with pytest.raises(ValueError, match="prefix.*pattern|pattern.*prefix"):
+        broker.list_queues(prefix="weft.", pattern="weft.*")
+
+
+def test_list_queues_drops_queue_after_rows_removed(queue_factory, broker) -> None:
+    queue = queue_factory("jobs")
+    queue.write("one")
+
+    assert broker.list_queues() == ["jobs"]
+
+    assert broker.delete("jobs") == 1
+    assert broker.list_queues() == []

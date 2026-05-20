@@ -78,14 +78,16 @@ def test_stats_json_output(workdir) -> None:
     assert payload["pending"] + payload["claimed"] == payload["total"]
 
 
-def test_list_prefix_without_stats_hides_claimed_only_queues(workdir) -> None:
+def test_list_prefix_without_stats_prints_names_and_includes_claimed_only(
+    workdir,
+) -> None:
     for queue in ("weft.jobs.a", "weft.jobs.b", "weft.events.a", "other"):
         assert run_cli("write", queue, f"message for {queue}", cwd=workdir)[0] == 0
     assert run_cli("read", "weft.jobs.b", cwd=workdir)[0] == 0
 
     rc, out, _ = run_cli("list", "--prefix", "weft.jobs.", cwd=workdir)
     assert rc == 0
-    assert out.splitlines() == ["weft.jobs.a: 1"]
+    assert out.splitlines() == ["weft.jobs.a", "weft.jobs.b"]
 
 
 def test_list_prefix_with_stats_includes_claimed_only_queues(workdir) -> None:
@@ -108,6 +110,16 @@ def test_list_pattern_with_stats(workdir) -> None:
     rc, out, _ = run_cli("list", "--pattern", "weft.jobs.*", "--stats", cwd=workdir)
     assert rc == 0
     assert out.splitlines() == ["weft.jobs.a: 1", "weft.jobs.b: 1"]
+
+
+def test_list_json_without_stats_outputs_queue_names(workdir) -> None:
+    for queue in ("jobs.a", "jobs.b"):
+        assert run_cli("write", queue, f"message for {queue}", cwd=workdir)[0] == 0
+
+    rc, out, _ = run_cli("list", "--prefix", "jobs.", "--json", cwd=workdir)
+
+    assert rc == 0
+    assert _json_lines(out) == [{"queue": "jobs.a"}, {"queue": "jobs.b"}]
 
 
 def test_list_json_stats_output(workdir) -> None:

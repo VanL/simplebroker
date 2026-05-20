@@ -53,7 +53,8 @@ An async SQLite queue core for the example:
 - `write()` - Add messages to queues
 - `read()` - Read and remove messages  
 - `stream_read()` - Stream messages efficiently
-- `list_queues()` - list all queues with counts
+- `list_queues()` - list queue names
+- `get_queue_stats()` - list queues with counts
 - `move()` - Move messages between queues
 - `broadcast()` - Send to all queues
 - `vacuum()` - Clean up claimed messages
