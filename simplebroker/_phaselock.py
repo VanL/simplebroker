@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, cast
 from urllib.parse import quote
 
 try:  # Unix/Linux/macOS
@@ -100,7 +100,7 @@ def _darwin_xattr_provider() -> _XattrProvider | None:
     if sys.platform != "darwin":
         return None
     if _DARWIN_XATTR_PROVIDER is not _DARWIN_XATTR_PROVIDER_UNSET:
-        return _DARWIN_XATTR_PROVIDER  # type: ignore[return-value]
+        return cast("_XattrProvider | None", _DARWIN_XATTR_PROVIDER)
 
     try:
         import ctypes

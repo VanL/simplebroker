@@ -34,6 +34,7 @@ simplebroker = { path = "../..", editable = true }
 [tool.hatch.build]
 include = [
     "/simplebroker_pg/**/*.py",
+    "/simplebroker_pg/py.typed",
     "/README.md",
     "/LICENSE",
 ]
