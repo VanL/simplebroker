@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -12,10 +13,12 @@ from pathlib import Path
 
 import pytest
 
+import simplebroker._phaselock as phaselock_module
 from simplebroker._phaselock import (
     Phase,
     PhaseLockService,
     PhaseLockTimeout,
+    PhaseLockUnavailable,
     PhaseRunResult,
 )
 
@@ -58,6 +61,94 @@ def _write_status_file(path: Path, phases: tuple[str, ...] | list[str]) -> None:
 
 def _read_status_file(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
+
+
+def test_xattr_env_mode_parses_enabled_disabled_and_unknown_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "YES")
+    assert phaselock_module._xattr_env_mode() is True
+
+    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "fallback")
+    assert phaselock_module._xattr_env_mode() is False
+
+    monkeypatch.setenv(phaselock_module._ENABLE_PHASELOCK_XATTRS, "definitely")
+    assert phaselock_module._xattr_env_mode() is None
+
+
+def test_stdlib_xattr_provider_wraps_get_and_set_values_as_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "broker.db"
+    calls: list[tuple[Path, str, bytes]] = []
+
+    def getxattr(path: Path, key: str) -> bytearray:
+        assert path == target
+        assert key == "user.simplebroker.phase"
+        return bytearray(b"done")
+
+    def setxattr(path: Path, key: str, value: bytes) -> None:
+        calls.append((path, key, value))
+
+    monkeypatch.setattr(phaselock_module.os, "getxattr", getxattr, raising=False)
+    monkeypatch.setattr(phaselock_module.os, "setxattr", setxattr, raising=False)
+
+    provider = phaselock_module._xattr_provider()
+
+    assert provider is not None
+    assert provider.get_value(target, "user.simplebroker.phase") == b"done"
+    provider.set_value(target, "user.simplebroker.phase", bytearray(b"1"))
+    assert calls == [(target, "user.simplebroker.phase", b"1")]
+
+
+def test_darwin_xattr_provider_returns_none_on_non_darwin_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(phaselock_module.sys, "platform", "linux")
+    monkeypatch.setattr(
+        phaselock_module,
+        "_DARWIN_XATTR_PROVIDER",
+        phaselock_module._DARWIN_XATTR_PROVIDER_UNSET,
+    )
+
+    assert phaselock_module._darwin_xattr_provider() is None
+
+
+def test_darwin_xattr_provider_caches_initialization_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+
+    monkeypatch.setattr(phaselock_module.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        phaselock_module,
+        "_DARWIN_XATTR_PROVIDER",
+        phaselock_module._DARWIN_XATTR_PROVIDER_UNSET,
+    )
+    monkeypatch.setattr(
+        ctypes,
+        "CDLL",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("no libc")),
+    )
+
+    assert phaselock_module._darwin_xattr_provider() is None
+    assert phaselock_module._DARWIN_XATTR_PROVIDER is None
+    assert phaselock_module._darwin_xattr_provider() is None
+
+
+def test_process_lock_key_falls_back_when_resolve_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "broker.lock"
+
+    def fail_resolve(self: Path, *, strict: bool = False) -> Path:
+        raise RuntimeError("cannot resolve")
+
+    monkeypatch.setattr(Path, "resolve", fail_resolve)
+
+    assert phaselock_module._process_lock_key(path) == path.absolute()
 
 
 def test_darwin_ctypes_xattrs_are_used_when_stdlib_xattrs_are_missing(
@@ -164,6 +255,37 @@ def test_explicit_xattr_setting_overrides_env_fallback_when_available(
     assert result.xattrs_available is True
     assert result.status_paths == ()
     assert calls == ["connection"]
+    assert not service.status_base_path.exists()
+
+
+def test_empty_namespace_uses_raw_attr_name(tmp_path: Path) -> None:
+    service = PhaseLockService(tmp_path / "broker.db", namespace=".")
+
+    assert service.attr_key("connection-v1") == "connection-v1"
+    assert service.attr_key("connection-v1", attr_name="custom") == "custom"
+
+
+def test_has_phase_uses_status_file_when_xattrs_are_disabled(tmp_path: Path) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(target, use_xattrs=False)
+    _write_status_file(service.status_base_path, ["connection-v1"])
+
+    assert service.has_phase("connection-v1")
+    assert not service.has_phase("schema-v4")
+
+
+def test_empty_phase_list_in_status_mode_returns_no_status_paths(
+    tmp_path: Path,
+) -> None:
+    service = PhaseLockService(tmp_path / "broker.db", use_xattrs=False)
+
+    result = service.run_phases(())
+
+    assert result.completed == ()
+    assert result.skipped == ()
+    assert result.status_paths == ()
+    assert not service.lock_path.exists()
     assert not service.status_base_path.exists()
 
 
@@ -414,6 +536,42 @@ def test_no_xattr_action_failure_keeps_single_lock_file(tmp_path: Path) -> None:
     assert not list(tmp_path.glob("*.done"))
 
 
+def test_xattr_mark_failure_falls_back_to_status_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    missing_errno = 8765
+
+    class FailingSetXattrProvider:
+        def get_value(self, path: Path, key: str) -> bytes:
+            raise OSError(missing_errno, "missing")
+
+        def set_value(self, path: Path, key: str, value: bytes) -> None:
+            raise OSError(errno.EPERM, "unsupported")
+
+    monkeypatch.setattr(phaselock_module, "_MISSING_XATTR_ERRNOS", {missing_errno})
+    monkeypatch.setattr(
+        phaselock_module,
+        "_xattr_provider",
+        lambda: FailingSetXattrProvider(),
+    )
+    service = PhaseLockService(target, use_xattrs=True)
+    calls: list[str] = []
+
+    result = service.run_phases(
+        (Phase("connection-v1", lambda: calls.append("connection")),)
+    )
+
+    assert result.completed == ("connection-v1",)
+    assert result.skipped == ()
+    assert result.xattrs_available is False
+    assert result.status_paths == (service.status_base_path,)
+    assert calls == ["connection"]
+    assert _read_status_file(service.status_base_path) == ["connection-v1"]
+
+
 def test_no_xattr_status_marker_resumes_from_last_completed_phase(
     tmp_path: Path,
 ) -> None:
@@ -620,6 +778,155 @@ def test_no_xattr_malformed_status_is_not_trusted(tmp_path: Path) -> None:
     assert result.skipped == ()
     assert calls == ["ran"]
     assert _read_status_file(service.status_base_path) == ["connection-v1"]
+
+
+def test_status_reader_deduplicates_and_ignores_blank_lines(tmp_path: Path) -> None:
+    service = PhaseLockService(tmp_path / "broker.db", use_xattrs=False)
+    service.status_base_path.write_text(
+        "connection-v1\n\nschema-v4\nconnection-v1\n",
+        encoding="utf-8",
+    )
+
+    entries, diagnostic = service._read_status_entries()
+
+    assert entries == ["connection-v1", "schema-v4"]
+    assert diagnostic is None
+
+
+def test_status_reader_reports_oversized_and_invalid_utf8_status_files(
+    tmp_path: Path,
+) -> None:
+    service = PhaseLockService(tmp_path / "broker.db", use_xattrs=False)
+    service.status_base_path.write_bytes(
+        b"a" * (phaselock_module._MAX_STATUS_BYTES + 1)
+    )
+
+    entries, diagnostic = service._read_status_entries()
+
+    assert entries == []
+    assert diagnostic == (
+        "status_read_error=status file too large: "
+        f"{phaselock_module._MAX_STATUS_BYTES + 1}"
+    )
+
+    service.status_base_path.write_bytes(b"\xff")
+
+    entries, diagnostic = service._read_status_entries()
+    phase_diagnostics = service._phase_diagnostics(
+        (Phase("connection-v1", lambda: None),)
+    )
+
+    assert entries == []
+    assert diagnostic is not None
+    assert diagnostic.startswith("status_parse_error=")
+    assert "status_parse_error=" in phase_diagnostics
+
+
+def test_status_reader_reports_stat_and_read_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PhaseLockService(tmp_path / "broker.db", use_xattrs=False)
+    service.status_base_path.write_text("connection-v1\n", encoding="utf-8")
+    real_stat = Path.stat
+    real_read_bytes = Path.read_bytes
+
+    def fail_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if self == service.status_base_path:
+            raise OSError("stat failed")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fail_stat)
+
+    entries, diagnostic = service._read_status_entries()
+
+    assert entries == []
+    assert diagnostic is not None
+    assert diagnostic.startswith("status_read_error=")
+
+    monkeypatch.setattr(Path, "stat", real_stat)
+
+    def fail_read_bytes(self: Path) -> bytes:
+        if self == service.status_base_path:
+            raise OSError("read failed")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read_bytes)
+
+    entries, diagnostic = service._read_status_entries()
+
+    assert entries == []
+    assert diagnostic is not None
+    assert diagnostic.startswith("status_read_error=")
+
+
+def test_write_status_phases_deduplicates_entries(tmp_path: Path) -> None:
+    service = PhaseLockService(tmp_path / "broker.db", use_xattrs=False)
+
+    service._write_status_phases(["connection-v1", "connection-v1", "schema-v4"])
+
+    assert _read_status_file(service.status_base_path) == [
+        "connection-v1",
+        "schema-v4",
+    ]
+
+
+def test_write_status_phases_removes_temp_file_when_fdopen_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PhaseLockService(tmp_path / "broker.db", use_xattrs=False)
+
+    def fail_fdopen(fd: int, mode: str) -> object:
+        raise RuntimeError("fdopen failed")
+
+    monkeypatch.setattr(phaselock_module.os, "fdopen", fail_fdopen)
+
+    with pytest.raises(RuntimeError, match="fdopen failed"):
+        service._write_status_phases(["connection-v1"])
+
+    assert not service.status_base_path.exists()
+    assert list(tmp_path.glob("broker.status.tmp.*")) == []
+
+
+def test_discard_status_markers_removes_current_temp_and_legacy_markers(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "broker.db"
+    service = PhaseLockService(target, use_xattrs=False)
+    current_temp = tmp_path / "broker.status.tmp.1"
+    legacy_status = service.status_path_for_phase("connection-v1")
+    legacy_temp = tmp_path / "broker.setup.status.tmp.1"
+
+    service.status_base_path.touch()
+    current_temp.touch()
+    legacy_status.touch()
+    legacy_temp.touch()
+    service.lock_path.touch()
+
+    service.discard_status_markers()
+
+    assert not service.status_base_path.exists()
+    assert not current_temp.exists()
+    assert not legacy_status.exists()
+    assert not legacy_temp.exists()
+    assert service.lock_path.exists()
+
+
+def test_cleanup_legacy_files_removes_temp_paths_from_temp_glob(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = PhaseLockService(tmp_path / "broker.db", use_xattrs=False)
+    legacy_temp = tmp_path / "broker.setup.status.tmp.only"
+    legacy_temp.touch()
+
+    monkeypatch.setattr(service, "_legacy_status_paths", lambda: [])
+    monkeypatch.setattr(service, "_legacy_status_temp_paths", lambda: [legacy_temp])
+
+    service._cleanup_legacy_files()
+
+    assert not legacy_temp.exists()
 
 
 def test_no_xattr_legacy_status_sidecars_are_ignored_then_cleaned(
@@ -917,6 +1224,169 @@ def test_lock_context_releases_after_exception(tmp_path: Path) -> None:
         assert service.lock_path.exists()
 
 
+def test_advisory_lock_unavailable_without_lock_primitives(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_path = tmp_path / "broker.lock"
+    lock = phaselock_module._AdvisoryLock(lock_path, timeout=0.01, retry_delay=0.0)
+
+    monkeypatch.setattr(phaselock_module, "fcntl", None)
+    monkeypatch.setattr(phaselock_module, "msvcrt", None)
+
+    with pytest.raises(PhaseLockUnavailable):
+        lock.acquire()
+
+    with lock_path.open("a+b") as lock_file:
+        with pytest.raises(PhaseLockUnavailable):
+            lock._try_lock(lock_file)
+
+
+def test_advisory_lock_open_errors_timeout_with_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock = phaselock_module._AdvisoryLock(
+        tmp_path / "broker.lock",
+        timeout=0.0,
+        retry_delay=0.0,
+    )
+
+    def fail_open(self: Path, *args: object, **kwargs: object) -> object:
+        raise OSError(errno.EACCES, "permission denied")
+
+    monkeypatch.setattr(Path, "open", fail_open)
+
+    with pytest.raises(PhaseLockTimeout) as exc_info:
+        lock.acquire(diagnostics=lambda: "diagnostic=present")
+
+    message = str(exc_info.value)
+    assert "last_error=" in message
+    assert "diagnostic=present" in message
+
+
+def test_advisory_lock_stops_after_lock_attempt_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock = phaselock_module._AdvisoryLock(
+        tmp_path / "broker.lock",
+        timeout=1.0,
+        retry_delay=0.0,
+    )
+    stop_calls = 0
+
+    def stop_waiting() -> bool:
+        nonlocal stop_calls
+        stop_calls += 1
+        return stop_calls >= 3
+
+    def fail_try_lock(self: object, lock_file: object) -> None:
+        raise BlockingIOError(errno.EAGAIN, "busy")
+
+    monkeypatch.setattr(phaselock_module._AdvisoryLock, "_try_lock", fail_try_lock)
+
+    assert lock.acquire(should_stop_waiting=stop_waiting) is False
+    assert lock._file is None
+    assert not lock._process_locked
+
+
+def test_process_local_lock_timeout_includes_diagnostics(tmp_path: Path) -> None:
+    lock_path = tmp_path / "broker.lock"
+    first_lock = phaselock_module._AdvisoryLock(
+        lock_path,
+        timeout=1.0,
+        retry_delay=0.01,
+    )
+    errors: list[BaseException] = []
+
+    assert first_lock.acquire()
+
+    def contend() -> None:
+        contender = phaselock_module._AdvisoryLock(
+            lock_path,
+            timeout=0.05,
+            retry_delay=0.001,
+        )
+        try:
+            contender.acquire(diagnostics=lambda: "process_lock=busy")
+        except BaseException as exc:
+            errors.append(exc)
+
+    try:
+        thread = threading.Thread(target=contend)
+        thread.start()
+        thread.join(timeout=1.0)
+    finally:
+        first_lock.release()
+
+    assert not thread.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], PhaseLockTimeout)
+    assert "process_lock=busy" in str(errors[0])
+
+
+def test_timeout_message_reports_missing_lock_stat_and_last_error(
+    tmp_path: Path,
+) -> None:
+    lock = phaselock_module._AdvisoryLock(
+        tmp_path / "missing.lock",
+        timeout=1.0,
+        retry_delay=0.01,
+    )
+
+    message = lock._timeout_message(
+        time.monotonic(),
+        last_error=OSError("open failed"),
+        diagnostics=lambda: (_ for _ in ()).throw(RuntimeError("diagnostic failed")),
+    )
+
+    assert "lock_stat_error=" in message
+    assert "last_error=" in message
+    assert "diagnostic failed" not in message
+
+
+def test_advisory_lock_uses_msvcrt_when_fcntl_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[int, int]] = []
+
+    class FakeMsvcrt:
+        LK_NBLCK = 7
+        LK_UNLCK = 8
+
+        def locking(self, fd: int, mode: int, nbytes: int) -> None:
+            calls.append((mode, nbytes))
+
+    monkeypatch.setattr(phaselock_module, "fcntl", None)
+    monkeypatch.setattr(phaselock_module, "msvcrt", FakeMsvcrt())
+    lock = phaselock_module._AdvisoryLock(
+        tmp_path / "broker.lock",
+        timeout=0.5,
+        retry_delay=0.01,
+    )
+
+    assert lock.acquire()
+    lock.release()
+
+    assert calls == [(FakeMsvcrt.LK_NBLCK, 1), (FakeMsvcrt.LK_UNLCK, 1)]
+
+
+def test_advisory_lock_release_without_file_is_noop(tmp_path: Path) -> None:
+    lock = phaselock_module._AdvisoryLock(
+        tmp_path / "broker.lock",
+        timeout=0.5,
+        retry_delay=0.01,
+    )
+
+    lock.release()
+    lock._release_process_lock()
+
+    assert lock._file is None
+    assert not lock._process_locked
+
+
 def test_lock_file_is_prepared_for_byte_range_locking(tmp_path: Path) -> None:
     target = tmp_path / "broker.db"
     target.touch()
@@ -946,3 +1416,77 @@ def test_empty_phase_or_attr_name_is_rejected(tmp_path: Path) -> None:
         service.attr_key("")
     with pytest.raises(ValueError, match="NUL"):
         service.attr_key("bad\x00phase")
+
+
+def test_xattr_get_and_set_failure_modes_update_availability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    unsupported_errno = 9876
+
+    monkeypatch.setattr(
+        phaselock_module, "_UNSUPPORTED_XATTR_ERRNOS", {unsupported_errno}
+    )
+
+    disabled = PhaseLockService(target, use_xattrs=False)
+    assert disabled._get_xattr("key") is None
+    assert disabled._set_xattr("key", b"value") is False
+    assert disabled.xattrs_available is False
+
+    monkeypatch.setattr(phaselock_module, "_xattr_provider", lambda: None)
+    missing_provider = PhaseLockService(target, use_xattrs=True)
+    assert missing_provider._get_xattr("key") is None
+    assert missing_provider._set_xattr("key", b"value") is False
+    assert missing_provider.xattrs_available is False
+
+    class MissingTargetProvider:
+        def get_value(self, path: Path, key: str) -> bytes:
+            raise FileNotFoundError(path)
+
+        def set_value(self, path: Path, key: str, value: bytes) -> None:
+            raise FileNotFoundError(path)
+
+    monkeypatch.setattr(
+        phaselock_module,
+        "_xattr_provider",
+        lambda: MissingTargetProvider(),
+    )
+    missing_target = PhaseLockService(target, use_xattrs=True)
+    assert missing_target._get_xattr("key") is None
+    assert missing_target._set_xattr("key", b"value") is False
+
+    class UnsupportedProvider:
+        def get_value(self, path: Path, key: str) -> bytes:
+            raise OSError(unsupported_errno, "unsupported")
+
+        def set_value(self, path: Path, key: str, value: bytes) -> None:
+            raise OSError(unsupported_errno, "unsupported")
+
+    monkeypatch.setattr(
+        phaselock_module,
+        "_xattr_provider",
+        lambda: UnsupportedProvider(),
+    )
+    unsupported = PhaseLockService(target, use_xattrs=True)
+    assert unsupported._get_xattr("key") is None
+    assert unsupported._set_xattr("key", b"value") is False
+    assert unsupported.xattrs_available is False
+
+    class UnexpectedProvider:
+        def get_value(self, path: Path, key: str) -> bytes:
+            raise OSError(errno.EIO, "io failed")
+
+        def set_value(self, path: Path, key: str, value: bytes) -> None:
+            raise OSError(errno.EIO, "io failed")
+
+    monkeypatch.setattr(
+        phaselock_module,
+        "_xattr_provider",
+        lambda: UnexpectedProvider(),
+    )
+    unexpected = PhaseLockService(target, use_xattrs=True)
+    assert unexpected._get_xattr("key") is None
+    assert unexpected._set_xattr("key", b"value") is False
+    assert unexpected.xattrs_available is False
