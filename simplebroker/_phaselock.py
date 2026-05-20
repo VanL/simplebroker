@@ -921,6 +921,7 @@ class PhaseLockService:
 
 
 __all__ = [
+    "AdvisoryFileLock",
     "Phase",
     "PhaseLockService",
     "PhaseLockTimeout",
