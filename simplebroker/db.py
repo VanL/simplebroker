@@ -948,9 +948,8 @@ class BrokerCore:
             64-bit hybrid timestamp that serves as both timestamp and unique message ID
         """
         self._assert_no_reentrant_mutation_during_batch("generate_timestamp")
-        # Note: The timestamp generator handles its own locking and state management
-        # We don't need to hold self._lock here
-        return self._timestamp_gen.generate()
+        with self._lock:
+            return self._timestamp_gen.generate()
 
     # Alias for backwards compatibility / shorter name
     get_ts = generate_timestamp
@@ -958,12 +957,14 @@ class BrokerCore:
     def get_cached_last_timestamp(self) -> int:
         """Return the last timestamp observed by the generator without new I/O."""
 
-        return self._timestamp_gen.get_cached_last_ts()
+        with self._lock:
+            return self._timestamp_gen.get_cached_last_ts()
 
     def refresh_last_timestamp(self) -> int:
         """Refresh and return the generator's cached timestamp via a meta-table peek."""
 
-        return self._timestamp_gen.refresh_last_ts()
+        with self._lock:
+            return self._timestamp_gen.refresh_last_ts()
 
     def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
@@ -1016,52 +1017,53 @@ class BrokerCore:
             self._ts_resync_count = 0
 
         # Retry loop for timestamp conflicts
-        for attempt in range(MAX_TS_RETRIES):
-            try:
-                # Use existing _do_write logic wrapped in retry handler
-                self._do_write_with_ts_retry(queue, message)
-                return  # Success!
+        with self._lock:
+            for attempt in range(MAX_TS_RETRIES):
+                try:
+                    # Use existing _do_write logic wrapped in retry handler
+                    self._do_write_with_ts_retry(queue, message)
+                    return  # Success!
 
-            except IntegrityError as e:
-                # The only INSERT in _do_write_with_ts_retry targets the
-                # messages table whose only unique constraints are the PK
-                # (auto-assigned) and the ts column.  Any IntegrityError here
-                # is therefore a timestamp conflict — regardless of backend
-                # error message wording (SQLite vs Postgres).
+                except IntegrityError as e:
+                    # The only INSERT in _do_write_with_ts_retry targets the
+                    # messages table whose only unique constraints are the PK
+                    # (auto-assigned) and the ts column.  Any IntegrityError here
+                    # is therefore a timestamp conflict — regardless of backend
+                    # error message wording (SQLite vs Postgres).
 
-                # Track conflict for metrics
-                self._ts_conflict_count += 1
+                    # Track conflict for metrics
+                    self._ts_conflict_count += 1
 
-                if attempt == 0:
-                    # First retry: Simple backoff (handles transient issues)
-                    # Log at debug level - this might be a transient race
-                    self._log_ts_conflict("transient", attempt)
-                    # Note: Using time.sleep here instead of interruptible_sleep because:
-                    # 1. This is a very short wait (0.001s) for timestamp conflict resolution
-                    # 2. This is within a database transaction that shouldn't be interrupted
-                    # 3. No associated stop event exists at this low level
-                    time.sleep(RETRY_BACKOFF_BASE)
+                    if attempt == 0:
+                        # First retry: Simple backoff (handles transient issues)
+                        # Log at debug level - this might be a transient race
+                        self._log_ts_conflict("transient", attempt)
+                        # Note: Using time.sleep here instead of interruptible_sleep because:
+                        # 1. This is a very short wait (0.001s) for timestamp conflict resolution
+                        # 2. This is within a database transaction that shouldn't be interrupted
+                        # 3. No associated stop event exists at this low level
+                        time.sleep(RETRY_BACKOFF_BASE)
 
-                elif attempt == 1:
-                    # Second retry: Resynchronize state
-                    # Log at warning level - this indicates state inconsistency
-                    self._log_ts_conflict("resync_needed", attempt)
-                    self._resync_timestamp_generator()
-                    self._ts_resync_count += 1
-                    # Note: Same reason as above - short wait for timestamp conflict
-                    time.sleep(RETRY_BACKOFF_BASE * 2)
+                    elif attempt == 1:
+                        # Second retry: Resynchronize state
+                        # Log at warning level - this indicates state inconsistency
+                        self._log_ts_conflict("resync_needed", attempt)
+                        self._resync_timestamp_generator()
+                        self._ts_resync_count += 1
+                        # Note: Same reason as above - short wait for timestamp conflict
+                        time.sleep(RETRY_BACKOFF_BASE * 2)
 
-                else:
-                    # Final failure: Exhausted all strategies
-                    # Log at error level - this should never happen
-                    self._log_ts_conflict("failed", attempt)
-                    raise RuntimeError(
-                        f"Failed to write message after {MAX_TS_RETRIES} attempts "
-                        f"including timestamp resynchronization. "
-                        f"Queue: {queue}, Conflicts: {self._ts_conflict_count}, "
-                        f"Resyncs: {self._ts_resync_count}. "
-                        f"This indicates a severe issue that should be reported."
-                    ) from e
+                    else:
+                        # Final failure: Exhausted all strategies
+                        # Log at error level - this should never happen
+                        self._log_ts_conflict("failed", attempt)
+                        raise RuntimeError(
+                            f"Failed to write message after {MAX_TS_RETRIES} attempts "
+                            f"including timestamp resynchronization. "
+                            f"Queue: {queue}, Conflicts: {self._ts_conflict_count}, "
+                            f"Resyncs: {self._ts_resync_count}. "
+                            f"This indicates a severe issue that should be reported."
+                        ) from e
 
         # This should never be reached due to the return/raise logic above
         raise AssertionError("Unreachable code in write retry loop")

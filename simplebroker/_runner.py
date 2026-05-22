@@ -181,6 +181,8 @@ class SQLiteRunner:
         # Note: sqlite3.Connection doesn't support weak references, so we use a regular set
         self._all_connections: set[sqlite3.Connection] = set()
         self._connections_lock = threading.Lock()
+        self._operation_lock = threading.RLock()
+        self._connection_generation = 0
         # For backward compatibility, expose _conn as a property
         # that returns the current thread's connection
 
@@ -215,7 +217,18 @@ class SQLiteRunner:
             # Clear tracked connections from parent process
             with self._connections_lock:
                 self._all_connections.clear()
+                self._connection_generation += 1
             self._pid = current_pid
+
+        if hasattr(self._thread_local, "conn"):
+            conn_generation = getattr(self._thread_local, "conn_generation", None)
+            if conn_generation is None:
+                self._thread_local.conn_generation = self._connection_generation
+            elif conn_generation != self._connection_generation:
+                with contextlib.suppress(AttributeError):
+                    delattr(self._thread_local, "conn")
+                with contextlib.suppress(AttributeError):
+                    delattr(self._thread_local, "conn_generation")
 
         # Check if this thread has a connection
         if not hasattr(self._thread_local, "conn"):
@@ -241,6 +254,7 @@ class SQLiteRunner:
             # Track the new connection for centralized cleanup
             with self._connections_lock:
                 self._all_connections.add(self._thread_local.conn)
+                self._thread_local.conn_generation = self._connection_generation
 
             # Track if we created the database (for test cleanup)
             if not db_existed and os.path.exists(self._db_path):
@@ -340,80 +354,89 @@ class SQLiteRunner:
         fetch: bool = False,
     ) -> Iterable[tuple[Any, ...]]:
         """Execute SQL and optionally return rows."""
-        try:
-            conn = self.get_connection()
-            cursor = conn.execute(sql, params)
+        with self._operation_lock:
             try:
-                # Only fetch if explicitly requested
-                if fetch:
-                    return cursor.fetchall()
-                return []
-            finally:
-                cursor.close()
-        except sqlite3.OperationalError as e:
-            raise OperationalError(str(e)) from e
-        except sqlite3.IntegrityError as e:
-            raise IntegrityError(str(e)) from e
-        except sqlite3.DataError as e:
-            raise DataError(str(e)) from e
+                conn = self.get_connection()
+                cursor = conn.execute(sql, params)
+                try:
+                    # Only fetch if explicitly requested
+                    if fetch:
+                        return cursor.fetchall()
+                    return []
+                finally:
+                    cursor.close()
+            except sqlite3.OperationalError as e:
+                raise OperationalError(str(e)) from e
+            except sqlite3.IntegrityError as e:
+                raise IntegrityError(str(e)) from e
+            except sqlite3.DataError as e:
+                raise DataError(str(e)) from e
 
     def begin_immediate(self) -> None:
         """Start an immediate transaction."""
-        try:
-            conn = self.get_connection()
-            cursor = conn.execute("BEGIN IMMEDIATE")
-            cursor.close()
-        except sqlite3.OperationalError as e:
-            raise OperationalError(str(e)) from e
-        except sqlite3.IntegrityError as e:
-            raise IntegrityError(str(e)) from e
-        except sqlite3.DataError as e:
-            raise DataError(str(e)) from e
+        with self._operation_lock:
+            try:
+                conn = self.get_connection()
+                cursor = conn.execute("BEGIN IMMEDIATE")
+                cursor.close()
+            except sqlite3.OperationalError as e:
+                raise OperationalError(str(e)) from e
+            except sqlite3.IntegrityError as e:
+                raise IntegrityError(str(e)) from e
+            except sqlite3.DataError as e:
+                raise DataError(str(e)) from e
 
     def commit(self) -> None:
         """Commit the current transaction."""
-        try:
-            conn = self.get_connection()
-            conn.commit()
-        except sqlite3.OperationalError as e:
-            raise OperationalError(str(e)) from e
-        except sqlite3.IntegrityError as e:
-            raise IntegrityError(str(e)) from e
-        except sqlite3.DataError as e:
-            raise DataError(str(e)) from e
+        with self._operation_lock:
+            try:
+                conn = self.get_connection()
+                conn.commit()
+            except sqlite3.OperationalError as e:
+                raise OperationalError(str(e)) from e
+            except sqlite3.IntegrityError as e:
+                raise IntegrityError(str(e)) from e
+            except sqlite3.DataError as e:
+                raise DataError(str(e)) from e
 
     def rollback(self) -> None:
         """Rollback the current transaction."""
-        try:
-            conn = self.get_connection()
-            conn.rollback()
-        except sqlite3.OperationalError as e:
-            raise OperationalError(str(e)) from e
-        except sqlite3.IntegrityError as e:
-            raise IntegrityError(str(e)) from e
-        except sqlite3.DataError as e:
-            raise DataError(str(e)) from e
+        with self._operation_lock:
+            try:
+                conn = self.get_connection()
+                conn.rollback()
+            except sqlite3.OperationalError as e:
+                raise OperationalError(str(e)) from e
+            except sqlite3.IntegrityError as e:
+                raise IntegrityError(str(e)) from e
+            except sqlite3.DataError as e:
+                raise DataError(str(e)) from e
 
     def close(self) -> None:
         """Close all connections created by this runner and release resources."""
-        # Close ALL connections created by this runner instance across all threads.
-        # Keep failed closes tracked so cleanup does not drop the last reference.
-        with self._connections_lock:
-            connections = list(self._all_connections)
+        with self._operation_lock:
+            # Close ALL connections created by this runner instance across all threads.
+            # Keep failed closes tracked so cleanup does not drop the last reference.
+            with self._connections_lock:
+                self._connection_generation += 1
+                connections = list(self._all_connections)
 
-        closed_connections = []
-        for conn in connections:
-            if self._close_tracked_connection(conn):
-                closed_connections.append(conn)
+            closed_connections = []
+            for conn in connections:
+                if self._close_tracked_connection(conn):
+                    closed_connections.append(conn)
 
-        with self._connections_lock:
-            for conn in closed_connections:
-                self._all_connections.discard(conn)
+            with self._connections_lock:
+                for conn in closed_connections:
+                    self._all_connections.discard(conn)
 
-        # Also clean up the current thread's local storage for good hygiene
-        if hasattr(self._thread_local, "conn"):
-            with contextlib.suppress(Exception):
-                delattr(self._thread_local, "conn")
+            # Also clean up the current thread's local storage for good hygiene
+            if hasattr(self._thread_local, "conn"):
+                with contextlib.suppress(Exception):
+                    delattr(self._thread_local, "conn")
+            if hasattr(self._thread_local, "conn_generation"):
+                with contextlib.suppress(Exception):
+                    delattr(self._thread_local, "conn_generation")
 
     def _close_tracked_connection(self, conn: sqlite3.Connection) -> bool:
         """Close one tracked connection, returning whether close succeeded."""
