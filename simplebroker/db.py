@@ -456,7 +456,13 @@ class DBConnection:
         for attempt in range(max_retries):
             try:
                 session = self._ensure_shared_session()
-                return session.get_connection(self._stop_event)
+                connection = session.get_connection(self._stop_event)
+                try:
+                    self._push_shared_operation_session(session)
+                except Exception:
+                    session.release_current_thread_connection()
+                    raise
+                return connection
             except Exception as e:
                 if attempt >= max_retries - 1:
                     if config["BROKER_LOGGING_ENABLED"]:
@@ -477,6 +483,28 @@ class DBConnection:
 
         raise RuntimeError("Failed to establish database connection")
 
+    def _push_shared_operation_session(self, session: "_ProcessBrokerSession") -> None:
+        stack = cast(
+            "list[_ProcessBrokerSession] | None",
+            getattr(self._thread_local, "shared_operation_sessions", None),
+        )
+        if stack is None:
+            stack = []
+            self._thread_local.shared_operation_sessions = stack
+        stack.append(session)
+
+    def _pop_shared_operation_session(self) -> "_ProcessBrokerSession | None":
+        stack = cast(
+            "list[_ProcessBrokerSession] | None",
+            getattr(self._thread_local, "shared_operation_sessions", None),
+        )
+        if not stack:
+            return None
+        session = stack.pop()
+        if not stack:
+            delattr(self._thread_local, "shared_operation_sessions")
+        return session
+
     def get_core(self) -> BrokerConnection:
         """Get or create the BrokerCore instance.
 
@@ -486,7 +514,11 @@ class DBConnection:
             BrokerCore instance
         """
         if self._share_in_process:
-            return self.get_connection()
+            session = self._ensure_shared_session()
+            return session.get_connection(
+                self._stop_event,
+                lease_operation=False,
+            )
 
         if self._core is None:
             if (
@@ -602,12 +634,10 @@ class DBConnection:
     def release_connection_after_use(self) -> None:
         """Release transient pooled resources after one queue operation."""
 
-        if (
-            self._share_in_process
-            and self._shared_session is not None
-            and not self._shared_released
-        ):
-            self._shared_session.release_current_thread_connection()
+        if self._share_in_process:
+            session = self._pop_shared_operation_session()
+            if session is not None:
+                session.release_current_thread_connection()
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Set the stop event used for interruptible retries."""

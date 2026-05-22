@@ -17,6 +17,7 @@ from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
 from simplebroker._broker_session import _session_key, close_process_broker_sessions
 from simplebroker._runner import SQLiteRunner
 from simplebroker._targets import ResolvedTarget
+from simplebroker.db import BrokerCore
 
 
 class CountingSQLiteRunner(SQLiteRunner):
@@ -436,6 +437,61 @@ def test_persistent_sqlite_queues_keep_thread_local_connection_isolation(
     assert len(set(main_thread_ids)) == 1
     assert len(set(worker_thread_ids)) == 1
     assert set(main_thread_ids) != set(worker_thread_ids)
+
+
+def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = Queue("jobs", db_path=str(tmp_path / "sqlite.db"), persistent=True)
+    operation_entered = threading.Event()
+    release_operation = threading.Event()
+    close_returned = threading.Event()
+    operation_errors: list[BaseException] = []
+    close_errors: list[BaseException] = []
+    original_write = BrokerCore.write
+
+    def delayed_write(self: BrokerCore, queue_name: str, message: str) -> None:
+        operation_entered.set()
+        assert release_operation.wait(timeout=5.0)
+        original_write(self, queue_name, message)
+
+    def write_message() -> None:
+        try:
+            queue.write("payload")
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread
+            operation_errors.append(exc)
+
+    def close_queue() -> None:
+        try:
+            queue.close()
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread
+            close_errors.append(exc)
+        finally:
+            close_returned.set()
+
+    monkeypatch.setattr(BrokerCore, "write", delayed_write)
+
+    operation_thread = threading.Thread(target=write_message)
+    close_thread = threading.Thread(target=close_queue)
+    operation_thread.start()
+    assert operation_entered.wait(timeout=5.0)
+
+    close_thread.start()
+    try:
+        assert not close_returned.wait(timeout=0.25), (
+            "Queue.close() returned while a persistent queue operation was still "
+            "using the shared broker session"
+        )
+    finally:
+        release_operation.set()
+        operation_thread.join(timeout=5.0)
+        close_thread.join(timeout=5.0)
+
+    assert not operation_thread.is_alive()
+    assert not close_thread.is_alive()
+    assert not operation_errors
+    assert not close_errors
 
 
 def test_process_session_key_includes_pid(

@@ -127,18 +127,27 @@ class _ProcessBrokerSession:
         ) = _target_parts(db_path)
         self._thread_local = threading.local()
         self._lock = threading.RLock()
+        self._operation_condition = threading.Condition(self._lock)
+        self._active_operations = 0
         self._cores: set[BrokerConnection] = set()
         self._runner: SQLRunner | None = None
+        self._closing = False
         self._closed = False
 
     def get_connection(
         self,
         stop_event: threading.Event | None,
+        *,
+        lease_operation: bool = True,
     ) -> BrokerConnection:
         """Return this thread's shared core, creating it if needed."""
 
+        if lease_operation:
+            self._begin_operation()
         with self._lock:
-            if self._closed:
+            if self._closed or self._closing:
+                if lease_operation:
+                    self._end_operation()
                 raise RuntimeError("Broker session is closed")
 
             core = cast(
@@ -148,19 +157,55 @@ class _ProcessBrokerSession:
                 core.set_stop_event(stop_event)
                 return core
 
-        core = self._create_core(stop_event)
+        try:
+            core = self._create_core(stop_event)
+        except Exception:
+            if lease_operation:
+                self._end_operation()
+            raise
 
         with self._lock:
-            if self._closed:
-                if self._backend_name == "sqlite":
-                    core.shutdown()
-                else:
-                    core.close()
+            if self._closed or self._closing:
+                try:
+                    if self._backend_name == "sqlite":
+                        core.shutdown()
+                    else:
+                        core.close()
+                finally:
+                    if lease_operation:
+                        self._end_operation()
                 raise RuntimeError("Broker session is closed")
             self._thread_local.core = core
             self._cores.add(core)
             core.set_stop_event(stop_event)
             return core
+
+    def _begin_operation(self) -> None:
+        """Retain the session while a queue operation is using a core."""
+
+        with self._operation_condition:
+            if self._closed or self._closing:
+                raise RuntimeError("Broker session is closed")
+            self._active_operations += 1
+            depth = int(getattr(self._thread_local, "operation_depth", 0))
+            self._thread_local.operation_depth = depth + 1
+
+    def _end_operation(self) -> None:
+        """Release one active queue operation lease."""
+
+        with self._operation_condition:
+            depth = int(getattr(self._thread_local, "operation_depth", 0))
+            if depth > 1:
+                self._thread_local.operation_depth = depth - 1
+            elif depth == 1:
+                delattr(self._thread_local, "operation_depth")
+
+            if self._active_operations <= 0:
+                return
+
+            self._active_operations -= 1
+            if self._active_operations == 0:
+                self._operation_condition.notify_all()
 
     def _create_core(self, stop_event: threading.Event | None) -> BrokerConnection:
         if self._backend_name == "sqlite":
@@ -228,7 +273,7 @@ class _ProcessBrokerSession:
             core.close()
 
     def release_current_thread_connection(self) -> None:
-        """Keep shared persistent session connections leased until cleanup.
+        """Release this operation while keeping the backend checkout cached.
 
         Persistent queues multiplex queue operations through the same
         process-local session. Releasing the current thread's backend core
@@ -237,14 +282,17 @@ class _ProcessBrokerSession:
         actual close lifecycle.
         """
 
-        return
+        self._end_operation()
 
     def close_all(self) -> None:
         """Close all owned resources for this session."""
 
-        with self._lock:
+        with self._operation_condition:
             if self._closed:
                 return
+            self._closing = True
+            while self._active_operations > 0:
+                self._operation_condition.wait()
             self._closed = True
             cores = list(self._cores)
             self._cores.clear()
