@@ -29,7 +29,7 @@ else:
 
 from ._backends import get_configured_backend
 from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config, resolve_config
-from ._exceptions import DataError, IntegrityError, OperationalError
+from ._exceptions import DatabaseError, DataError, IntegrityError, OperationalError
 from ._phaselock import Phase, PhaseLockService, PhaseLockTimeout, PhaseLockUnavailable
 from .helpers import (
     SETUP_PHASE_LOCK_TIMEOUT,
@@ -371,6 +371,8 @@ class SQLiteRunner:
                 raise IntegrityError(str(e)) from e
             except sqlite3.DataError as e:
                 raise DataError(str(e)) from e
+            except sqlite3.DatabaseError as e:
+                raise DatabaseError(str(e)) from e
 
     def begin_immediate(self) -> None:
         """Start an immediate transaction."""
@@ -385,6 +387,8 @@ class SQLiteRunner:
                 raise IntegrityError(str(e)) from e
             except sqlite3.DataError as e:
                 raise DataError(str(e)) from e
+            except sqlite3.DatabaseError as e:
+                raise DatabaseError(str(e)) from e
 
     def commit(self) -> None:
         """Commit the current transaction."""
@@ -398,6 +402,8 @@ class SQLiteRunner:
                 raise IntegrityError(str(e)) from e
             except sqlite3.DataError as e:
                 raise DataError(str(e)) from e
+            except sqlite3.DatabaseError as e:
+                raise DatabaseError(str(e)) from e
 
     def rollback(self) -> None:
         """Rollback the current transaction."""
@@ -411,6 +417,8 @@ class SQLiteRunner:
                 raise IntegrityError(str(e)) from e
             except sqlite3.DataError as e:
                 raise DataError(str(e)) from e
+            except sqlite3.DatabaseError as e:
+                raise DatabaseError(str(e)) from e
 
     def close(self) -> None:
         """Close all connections created by this runner and release resources."""

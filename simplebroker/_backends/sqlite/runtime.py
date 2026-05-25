@@ -7,7 +7,7 @@ import warnings
 from pathlib import Path
 from typing import Any, cast
 
-from ..._exceptions import OperationalError
+from ..._exceptions import DatabaseError, OperationalError
 from ..._sql.sqlite import SELECT_SQLITE_VERSION, SET_AUTO_VACUUM_INCREMENTAL
 from .validation import is_valid_database
 
@@ -131,6 +131,8 @@ def setup_connection_phase(
                 raise RuntimeError(f"Failed to enable WAL mode, got: {result}")
     except sqlite3.OperationalError as exc:
         raise OperationalError(str(exc)) from exc
+    except sqlite3.DatabaseError as exc:
+        raise DatabaseError(str(exc)) from exc
     finally:
         if setup_conn is not None:
             setup_conn.close()

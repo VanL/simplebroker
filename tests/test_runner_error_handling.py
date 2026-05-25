@@ -14,7 +14,7 @@ from simplebroker import db as db_module
 from simplebroker import helpers as helpers_module
 from simplebroker._backends.sqlite import runtime as sqlite_runtime
 from simplebroker._constants import SCHEMA_VERSION
-from simplebroker._exceptions import IntegrityError, OperationalError
+from simplebroker._exceptions import DatabaseError, IntegrityError, OperationalError
 from simplebroker._phaselock import PhaseLockService
 from simplebroker._runner import SetupPhase, SQLiteRunner
 from simplebroker.db import BrokerCore
@@ -130,6 +130,29 @@ class TestSQLiteRunnerErrorHandling:
                         runner.run(
                             "INSERT INTO strict_table (int_col) VALUES ('not_an_int')",
                             fetch=False,
+                        )
+                    )
+            finally:
+                runner.close()
+
+    def test_run_database_error_real(self):
+        """Test that real sqlite3.DatabaseError is converted to DatabaseError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "test.db"
+            with db_module.BrokerDB(str(db_path)) as broker:
+                broker.write("test", "message")
+
+            with db_path.open("r+b") as handle:
+                handle.seek(100)
+                handle.write(b"\xff" * 1000)
+
+            runner = SQLiteRunner(str(db_path))
+            try:
+                with pytest.raises(DatabaseError, match="database disk image"):
+                    list(
+                        runner.run(
+                            "SELECT value FROM meta WHERE key = 'last_ts'",
+                            fetch=True,
                         )
                     )
             finally:
