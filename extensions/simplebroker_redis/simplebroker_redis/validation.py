@@ -16,8 +16,13 @@ from simplebroker._exceptions import DatabaseError
 from ._constants import DEFAULT_NAMESPACE, REDIS_SCHEMA_VERSION
 from .responses import response_dict
 
-NAMESPACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+NAMESPACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 GLOB_CHARS = frozenset("*?[]{}")
+QUEUE_KEY_PART_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+BATCH_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+TOP_LEVEL_KEYS = frozenset({"meta", "queues", "aliases", "bodies", "all_ids"})
+QUEUE_KEY_STATES = frozenset({"pending", "claimed", "reserved"})
+BATCH_KEY_KINDS = frozenset({"ids", "meta"})
 
 
 class NamespaceState(str, Enum):
@@ -53,13 +58,40 @@ def require_namespace(backend_options: Mapping[str, Any] | None) -> str:
         )
     if not NAMESPACE_RE.match(namespace):
         raise DatabaseError(
-            "Redis namespace must be 1-128 chars of letters, numbers, _, -, ., or :"
+            "Redis namespace must be 1-128 chars of letters, numbers, _, -, or ."
         )
     return namespace
 
 
 def key_prefix(namespace: str) -> str:
     return f"simplebroker:{namespace}"
+
+
+def is_namespace_key(prefix: str, key: object) -> bool:
+    """Return whether a Redis key belongs to this namespace's known key schema."""
+
+    marker = f"{prefix}:"
+    text = str(key)
+    if not text.startswith(marker):
+        return False
+    parts = text[len(marker) :].split(":")
+
+    if len(parts) == 1:
+        return parts[0] in TOP_LEVEL_KEYS
+
+    if len(parts) == 2:
+        return parts == ["activity", "all"]
+
+    if len(parts) == 3:
+        group, name, kind = parts
+        if group == "q":
+            return kind in QUEUE_KEY_STATES and bool(QUEUE_KEY_PART_RE.match(name))
+        if group == "batches":
+            return kind in BATCH_KEY_KINDS and bool(BATCH_TOKEN_RE.match(name))
+        if group == "activity" and name == "q":
+            return bool(QUEUE_KEY_PART_RE.match(kind))
+
+    return False
 
 
 def connect(target: str) -> redis.Redis:
@@ -84,7 +116,8 @@ def inspect_namespace(
         meta = response_dict(client.hgetall(meta_key))
         key_count = 0
         for _key in client.scan_iter(f"{prefix}:*"):
-            key_count += 1
+            if is_namespace_key(prefix, _key):
+                key_count += 1
             if key_count > 1 and meta:
                 break
 

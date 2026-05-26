@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from simplebroker import open_broker, target_for_directory
 from simplebroker._exceptions import IntegrityError, TimestampError
 from simplebroker._runner import SQLRunner
 from simplebroker._timestamp import TimestampGenerator
@@ -100,6 +101,69 @@ class TestTimestampEdgeCases:
         assert len(timestamps) == thread_count * per_thread
         assert len(set(timestamps)) == len(timestamps)
         assert max(timestamps) == plugin.last_ts
+
+    def test_clock_regression_keeps_generator_monotonic(self) -> None:
+        """A wall-clock rollback should advance only the logical counter."""
+
+        plugin = AtomicLastTimestampPlugin()
+        gen = TimestampGenerator(object(), backend_plugin=plugin)
+
+        with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
+            first = gen.generate()
+
+        first_physical, first_counter = gen._decode_hybrid_timestamp(first)
+        regressed_ns = first_physical - 1_000_000_000
+
+        with patch("simplebroker._timestamp.time.time_ns", return_value=regressed_ns):
+            second = gen.generate()
+
+        second_physical, second_counter = gen._decode_hybrid_timestamp(second)
+
+        assert second > first
+        assert second_physical == first_physical
+        assert second_counter == first_counter + 1
+        assert plugin.last_ts == second
+
+    def test_clock_regression_counter_exhaustion_fails_clearly(self) -> None:
+        """If logical slots run out during rollback, fail before storing a lower ts."""
+
+        plugin = AtomicLastTimestampPlugin()
+        gen = TimestampGenerator(object(), backend_plugin=plugin)
+        last = gen._encode_hybrid_timestamp(2_000_000_000, 4095)
+        plugin.last_ts = last
+        gen._last_ts = last
+        gen._initialized = True
+
+        with (
+            patch("simplebroker._timestamp.MAX_ITERATIONS", 0),
+            patch("simplebroker._timestamp.time.time_ns", return_value=1_000_000_000),
+            pytest.raises(TimestampError, match="Logical counter exhausted"),
+        ):
+            gen.generate()
+
+    def test_write_succeeds_during_clock_regression(self, tmp_path) -> None:
+        """INSERT writes should not fail while wall-clock time is below last_ts."""
+
+        target = target_for_directory(tmp_path)
+
+        with open_broker(target) as db:
+            db.write("queue", "first")
+            first = db.get_cached_last_timestamp()
+            first_physical, _ = db._timestamp_gen._decode_hybrid_timestamp(first)
+
+            with patch(
+                "simplebroker._timestamp.time.time_ns",
+                return_value=first_physical - 1_000_000_000,
+            ):
+                db.write("queue", "second")
+
+            second = db.get_cached_last_timestamp()
+
+            assert second > first
+            assert list(db.peek_generator("queue", with_timestamps=False)) == [
+                "first",
+                "second",
+            ]
 
     def test_validate_empty_string(self):
         """Test validation with empty string."""

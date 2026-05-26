@@ -1,5 +1,6 @@
 """Tests for SQLite PRAGMA settings and environment variable configuration."""
 
+import os
 import sqlite3
 from typing import cast
 
@@ -7,7 +8,7 @@ import pytest
 
 from simplebroker._backends.sqlite import runtime as sqlite_runtime
 from simplebroker._constants import load_config
-from simplebroker._runner import SQLiteRunner
+from simplebroker._runner import SetupPhase, SQLiteRunner
 from simplebroker.db import BrokerCore, BrokerDB
 
 
@@ -101,6 +102,23 @@ def test_sqlite_runner_uses_constructor_config(tmp_path) -> None:
         assert runner.run("PRAGMA busy_timeout", fetch=True)[0][0] == 1234
         assert runner.run("PRAGMA cache_size", fetch=True)[0][0] == -25600
         assert runner.run("PRAGMA wal_autocheckpoint", fetch=True)[0][0] == 5000
+
+
+def test_sqlite_runner_restores_optimization_settings_after_fork_detection(
+    tmp_path,
+) -> None:
+    """Inherited runners should recover optimization state before opening child conns."""
+    db_path = tmp_path / "test.db"
+    runner = SQLiteRunner(str(db_path), config={"BROKER_CACHE_MB": 25})
+
+    with BrokerCore(runner):
+        assert runner.run("PRAGMA cache_size", fetch=True)[0][0] == -25600
+
+        runner._pid = os.getpid() - 1
+        conn = runner.get_connection()
+
+        assert SetupPhase.OPTIMIZATION in runner._completed_phases
+        assert conn.execute("PRAGMA cache_size").fetchone()[0] == -25600
 
 
 def test_sqlite_runtime_closes_connection_setting_cursors() -> None:

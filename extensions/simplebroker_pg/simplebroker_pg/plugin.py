@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, cast
@@ -12,7 +13,11 @@ from psycopg import ProgrammingError, conninfo
 
 from simplebroker._backend_plugins import ActivityWaiter, BackendPlugin
 from simplebroker._exceptions import DatabaseError
-from simplebroker._runner import SQLRunner
+from simplebroker._runner import (
+    SQLRunner,
+    lease_runner_thread_connection,
+    release_runner_thread_connection,
+)
 from simplebroker._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 
 from . import _sql as pg_sql
@@ -698,51 +703,69 @@ class PostgresBackendPlugin:
     ) -> None:
         schema_name = cast(_SchemaAwareRunner, runner).schema
         lock_key = stable_lock_key("vacuum", schema_name)
-        rows = list(
-            runner.run("SELECT pg_try_advisory_lock(?)", (lock_key,), fetch=True)
-        )
-        if not rows or not rows[0][0]:
-            return
-
-        had_claimed_messages = False
-        batch_size = int(config["BROKER_VACUUM_BATCH_SIZE"])
+        leased = lease_runner_thread_connection(runner)
         try:
-            while True:
-                runner.begin_immediate()
-                try:
-                    rows = list(
-                        runner.run(
-                            pg_sql.DELETE_CLAIMED_BATCH_COUNT,
-                            (batch_size,),
-                            fetch=True,
-                        )
-                    )
-                    deleted_count = int(rows[0][0]) if rows else 0
-                    if deleted_count == 0:
-                        runner.rollback()
-                        break
-                    had_claimed_messages = True
-                    runner.commit()
-                except Exception:
-                    runner.rollback()
-                    raise
+            rows = list(
+                runner.run("SELECT pg_try_advisory_lock(?)", (lock_key,), fetch=True)
+            )
+            if not rows or not rows[0][0]:
+                return
 
-            if compact:
-                for statement in (
-                    pg_sql.COMPACT_TABLE_MESSAGES,
-                    pg_sql.COMPACT_TABLE_META,
-                    pg_sql.COMPACT_TABLE_ALIASES,
-                ):
-                    runner.run(statement)
-            elif had_claimed_messages:
-                for statement in (
-                    "ANALYZE messages",
-                    "ANALYZE meta",
-                    "ANALYZE aliases",
-                ):
-                    runner.run(statement)
+            had_claimed_messages = False
+            batch_size = int(config["BROKER_VACUUM_BATCH_SIZE"])
+            try:
+                while True:
+                    runner.begin_immediate()
+                    try:
+                        rows = list(
+                            runner.run(
+                                pg_sql.DELETE_CLAIMED_BATCH_COUNT,
+                                (batch_size,),
+                                fetch=True,
+                            )
+                        )
+                        deleted_count = int(rows[0][0]) if rows else 0
+                        if deleted_count == 0:
+                            runner.rollback()
+                            break
+                        had_claimed_messages = True
+                        runner.commit()
+                    except Exception:
+                        runner.rollback()
+                        raise
+
+                if compact:
+                    for statement in (
+                        pg_sql.COMPACT_TABLE_MESSAGES,
+                        pg_sql.COMPACT_TABLE_META,
+                        pg_sql.COMPACT_TABLE_ALIASES,
+                    ):
+                        runner.run(statement)
+                elif had_claimed_messages:
+                    for statement in (
+                        "ANALYZE messages",
+                        "ANALYZE meta",
+                        "ANALYZE aliases",
+                    ):
+                        runner.run(statement)
+            finally:
+                unlock_rows = list(
+                    runner.run(
+                        "SELECT pg_advisory_unlock(?)",
+                        (lock_key,),
+                        fetch=True,
+                    )
+                )
+                if not unlock_rows or not unlock_rows[0][0]:
+                    warnings.warn(
+                        "Postgres vacuum advisory lock release failed; "
+                        "cleanup lock may remain held by the backend session",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
         finally:
-            runner.run("SELECT pg_advisory_unlock(?)", (lock_key,))
+            if leased:
+                release_runner_thread_connection(runner)
 
     def create_activity_waiter(
         self,

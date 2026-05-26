@@ -265,6 +265,12 @@ class _AdvisoryLock:
         should_stop_waiting: Callable[[], bool] | None = None,
         diagnostics: Callable[[], str] | None = None,
     ) -> bool:
+        if self._locked:
+            raise RuntimeError(
+                "AdvisoryFileLock does not support re-entrant acquisition. "
+                "Create a new lock instance or release before re-acquiring."
+            )
+
         if fcntl is None and msvcrt is None:
             raise PhaseLockUnavailable(
                 "No supported advisory file lock primitive is available"

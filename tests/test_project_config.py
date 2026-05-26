@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import uuid
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -72,6 +74,78 @@ def test_load_project_config_and_resolve_relative_sqlite_target(
     assert config_data["target"] == "data/queue.db"
     assert resolved.backend_name == "sqlite"
     assert resolved.target_path == (tmp_path / "data" / "queue.db").resolve()
+
+
+@pytest.mark.sqlite_only
+def test_load_project_config_preserves_unicode_sqlite_target(
+    tmp_path: Path,
+) -> None:
+    """TOML basic strings should preserve literal non-ASCII characters."""
+    config_path = tmp_path / ".broker.toml"
+    target = str(tmp_path / "données" / "queue.db")
+    _write_project_config(config_path, backend="sqlite", target=target)
+
+    config_data = load_project_config(config_path)
+    resolved = resolve_project_target(config_path)
+
+    assert config_data["target"] == target
+    assert resolved.target_path == Path(target).resolve()
+
+    code, stdout, stderr = run_cli(
+        "init",
+        cwd=tmp_path,
+        env={"BROKER_PROJECT_SCOPE": "1", "BROKER_TEST_BACKEND": "sqlite"},
+    )
+    assert code == 0, stderr
+    assert stdout == ""
+    assert Path(target).exists()
+    assert not (tmp_path / "donnÃ©es" / "queue.db").exists()
+
+
+def test_load_project_config_decodes_toml_basic_string_escapes(
+    tmp_path: Path,
+) -> None:
+    """Supported TOML basic-string escapes should decode without mojibake."""
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "sqlite"',
+                'target = "data\\u002Fqueue.db"',
+                "[backend_options]",
+                'note = "line\\nquote\\" slash\\\\ emoji\\U0001F600"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config_data = load_project_config(config_path)
+
+    assert config_data["target"] == "data/queue.db"
+    assert config_data["backend_options"]["note"] == 'line\nquote" slash\\ emoji😀'
+
+
+def test_load_project_config_rejects_invalid_toml_basic_string_escape(
+    tmp_path: Path,
+) -> None:
+    """Unknown backslash escapes are not valid in TOML basic strings."""
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "sqlite"',
+                'target = "data\\qqueue.db"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"Invalid TOML string escape: \\q"):
+        load_project_config(config_path)
 
 
 def test_project_config_preferred_over_legacy_project_database(workdir: Path) -> None:
@@ -157,6 +231,54 @@ def test_project_config_roundtrip_from_nested_directory(workdir: Path) -> None:
     code, stdout, stderr = run_cli("read", "jobs", cwd=nested, env=env)
     assert code == 0, stderr
     assert stdout == "hello"
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize(
+    ("magic_value", "expected_error"),
+    [
+        (None, "simplebroker: error: Database is missing SimpleBroker metadata:"),
+        (
+            "wrong-app",
+            "simplebroker: error: Database has incorrect magic string "
+            "(not a SimpleBroker database):",
+        ),
+    ],
+)
+def test_project_config_foreign_sqlite_db_reports_specific_primary_error(
+    workdir: Path,
+    magic_value: str | None,
+    expected_error: str,
+) -> None:
+    """Foreign SQLite databases should not be reported as corrupted."""
+    project_root = workdir / "project"
+    project_root.mkdir()
+    _write_project_config(
+        project_root / ".broker.toml",
+        backend="sqlite",
+        target=".broker.db",
+    )
+
+    db_path = project_root / ".broker.db"
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        if magic_value is None:
+            conn.execute("INSERT INTO meta VALUES ('version', '1.0')")
+        else:
+            conn.execute("INSERT INTO meta VALUES ('magic', ?)", (magic_value,))
+        conn.commit()
+
+    code, stdout, stderr = run_cli(
+        "read",
+        "myqueue",
+        cwd=project_root,
+        env={"BROKER_PROJECT_SCOPE": "1", "BROKER_TEST_BACKEND": "sqlite"},
+    )
+
+    assert code == 1
+    assert stdout == ""
+    assert stderr.startswith(expected_error)
+    assert "Database corruption or invalid format" not in stderr
 
 
 @pytest.mark.sqlite_only

@@ -1003,12 +1003,12 @@ class BrokerCore:
             ts: 64-bit hybrid timestamp
 
         Returns:
-            tuple of (physical_us, logical_counter)
+            tuple of (physical_ns_base, logical_counter)
         """
-        # Extract physical time (upper 52 bits) and logical counter (lower 12 bits)
-        physical_us = ts >> 12
-        logical_counter = ts & ((1 << 12) - 1)
-        return physical_us, logical_counter
+        time_mask = ~MAX_LOGICAL_COUNTER
+        physical_ns_base = ts & time_mask
+        logical_counter = ts & MAX_LOGICAL_COUNTER
+        return physical_ns_base, logical_counter
 
     def _validate_message_size(self, message: str) -> None:
         message_size = len(message.encode("utf-8"))
@@ -1928,8 +1928,8 @@ class BrokerCore:
 
                     warnings.warn(
                         f"Timestamp generator resynchronized. "
-                        f"Old: {old_last_ts} ({old_physical}us + {old_logical}), "
-                        f"New: {max_msg_ts} ({new_physical}us + {new_logical}). "
+                        f"Old: {old_last_ts} ({old_physical}ns + {old_logical}), "
+                        f"New: {max_msg_ts} ({new_physical}ns + {new_logical}). "
                         f"Gap: {max_msg_ts - old_last_ts} timestamps. "
                         f"This indicates past state inconsistency.",
                         RuntimeWarning,
@@ -2416,11 +2416,12 @@ class BrokerCore:
         self, *, compact: bool = False, config: dict[str, Any] = _config
     ) -> None:
         """Run backend-defined vacuum/compaction work."""
-        self._backend_plugin.vacuum(
-            self._runner,
-            compact=compact,
-            config=config,
-        )
+        with self._lock:
+            self._backend_plugin.vacuum(
+                self._runner,
+                compact=compact,
+                config=config,
+            )
 
     def queue_exists_and_has_messages(self, queue: str) -> bool:
         """Check if a queue exists and has messages.

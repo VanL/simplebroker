@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-_URI_PASSWORD_RE = re.compile(r"(://[^/?#@\s:]+:)([^/?#@\s@]+)(@)")
+_URI_PASSWORD_RE = re.compile(r"(://[^/?#@\s:]*:)([^/?#@\s@]+)(@)")
 _CONNINFO_PASSWORD_RE = re.compile(
     r"(?i)(\bpassword\s*=\s*)(?:'[^']*'|\"[^\"]*\"|[^\s]+)"
 )

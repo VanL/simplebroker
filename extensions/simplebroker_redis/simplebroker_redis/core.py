@@ -38,6 +38,7 @@ from . import scripts
 from .keys import RedisKeys, decode_id, encode_id, exact_bound, max_bound, min_bound
 from .responses import response_dict, response_int, response_list, response_set
 from .runner import RedisRunner
+from .validation import is_namespace_key
 
 _config = load_config()
 
@@ -1175,6 +1176,8 @@ class RedisBrokerCore:
         recovered = 0
         pattern = self._key("batches", "*", "meta")
         for meta_key in list(self._client.scan_iter(pattern)):
+            if not is_namespace_key(self._prefix, meta_key):
+                continue
             parts = str(meta_key).split(":")
             if len(parts) < 4:
                 continue

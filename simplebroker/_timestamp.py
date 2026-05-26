@@ -45,8 +45,8 @@ class TimestampGenerator:
     """Thread-safe hybrid timestamp generator with validation.
 
     Generates 64-bit timestamps with:
-    - 52 bits: microseconds after epoch
-    - 12 bits: monotonic counter for ordering within same microsecond
+    - high bits: nanoseconds after epoch, aligned to the counter granularity
+    - low 12 bits: logical counter for ordering within the same time base
 
     This ensures unique, monotonically increasing timestamps even under
     high concurrency.
@@ -197,9 +197,12 @@ class TimestampGenerator:
 
             if now_ns_base > last_phys_ns:
                 # Time has advanced, reset counter
+                physical_ns = now_ns_base
                 self._counter = 0
             else:
-                # Same time base, increment counter
+                # Clock is unchanged or has regressed. Carry forward the last
+                # physical component and advance the logical counter.
+                physical_ns = last_phys_ns
                 self._counter = last_counter + 1
                 if self._counter >= MAX_LOGICAL_COUNTER:
                     # Counter overflow, wait for clock to advance
@@ -214,9 +217,15 @@ class TimestampGenerator:
                         now_ns = time.time_ns()
                         now_ns_base = now_ns & time_mask
                         num_iterations += 1
+                    if now_ns_base <= last_phys_ns:
+                        raise TimestampError(
+                            "Logical counter exhausted while waiting for clock "
+                            "to advance"
+                        )
+                    physical_ns = now_ns_base
                     self._counter = 0
 
-            return now_ns_base, self._counter
+            return physical_ns, self._counter
 
     # -----------------------------------------------------------------
     # 2. try to store the new value if it is higher

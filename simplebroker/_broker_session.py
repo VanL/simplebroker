@@ -5,6 +5,7 @@ from __future__ import annotations
 import atexit
 import os
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from ._runner import SQLRunner
 
 _config = load_config()
+_CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
 
 _FrozenValue = (
     tuple[tuple[str, "_FrozenValue"], ...]
@@ -291,8 +293,13 @@ class _ProcessBrokerSession:
             if self._closed:
                 return
             self._closing = True
+            deadline = time.monotonic() + _CLOSE_ACTIVE_OPERATION_TIMEOUT
             while self._active_operations > 0:
-                self._operation_condition.wait()
+                # Daemon threads may not release leases during interpreter shutdown.
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._operation_condition.wait(timeout=remaining)
             self._closed = True
             cores = list(self._cores)
             self._cores.clear()

@@ -219,6 +219,7 @@ class SQLiteRunner:
                 self._all_connections.clear()
                 self._connection_generation += 1
             self._pid = current_pid
+            self._recover_completed_phases_from_markers()
 
         if hasattr(self._thread_local, "conn"):
             conn_generation = getattr(self._thread_local, "conn_generation", None)
@@ -290,6 +291,11 @@ class SQLiteRunner:
         )
         if SetupPhase.OPTIMIZATION in self._completed_phases:
             self._thread_local.optimization_applied = True
+
+    def _recover_completed_phases_from_markers(self) -> None:
+        """Refresh process-local setup phase state from durable markers."""
+        for phase in SetupPhase:
+            self.is_setup_complete(phase)
 
     def _setup_connection_phase(self) -> None:
         """Setup critical connection settings including WAL mode."""

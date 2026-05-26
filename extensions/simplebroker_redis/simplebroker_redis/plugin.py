@@ -25,6 +25,7 @@ from .runner import RedisRunner
 from .validation import (
     NamespaceState,
     inspect_namespace,
+    is_namespace_key,
     key_prefix,
     require_namespace,
     validate_target,
@@ -426,14 +427,20 @@ class RedisBackendPlugin:
             core = RedisBrokerCore(runner)
             core.recover_stale_batches(max_age_seconds=runner.stale_batch_seconds)
             redis_keys = RedisKeys(namespace)
+            prefix = redis_keys.prefix
             for reserved_key in client.scan_iter(f"{redis_keys.prefix}:q:*:reserved"):
+                if not is_namespace_key(prefix, reserved_key):
+                    continue
                 if response_int(client.zcard(reserved_key)):
                     raise DatabaseError(
                         "Cannot clean up Redis namespace while an at_least_once "
                         "batch is active"
                     )
-            prefix = redis_keys.prefix
-            matching_keys = list(client.scan_iter(f"{prefix}:*"))
+            matching_keys = [
+                key
+                for key in client.scan_iter(f"{prefix}:*")
+                if is_namespace_key(prefix, key)
+            ]
             if not matching_keys:
                 return False
             unlink = getattr(client, "unlink", None)

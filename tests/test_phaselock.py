@@ -1507,6 +1507,41 @@ def test_advisory_file_lock_context_manager_releases_after_exception(
         assert second_lock.locked
 
 
+def test_advisory_file_lock_rejects_same_instance_reentrant_context(
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "resource.lock"
+    lock = AdvisoryFileLock(lock_path, timeout=0.5, retry_delay=0.01)
+
+    with lock:
+        with pytest.raises(RuntimeError, match="does not support re-entrant"):
+            with lock:
+                pass
+        assert lock.locked
+
+    assert not lock.locked
+
+    result: list[bool] = []
+    errors: list[BaseException] = []
+
+    def acquire_from_other_thread() -> None:
+        second_lock = AdvisoryFileLock(lock_path, timeout=0.5, retry_delay=0.01)
+        try:
+            if second_lock.acquire():
+                result.append(True)
+                second_lock.release()
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=acquire_from_other_thread)
+    thread.start()
+    thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+    assert errors == []
+    assert result == [True]
+
+
 def test_advisory_lock_unavailable_without_lock_primitives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

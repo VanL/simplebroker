@@ -19,6 +19,16 @@ from ._targets import ResolvedTarget
 PROJECT_CONFIG_FILENAME = DEFAULT_PROJECT_CONFIG_NAME
 SUPPORTED_PROJECT_CONFIG_VERSION = 1
 _SECTION_RE = re.compile(r"^\[(?P<section>[A-Za-z0-9_]+)\]$")
+_BASIC_STRING_ESCAPES = {
+    "b": "\b",
+    "t": "\t",
+    "n": "\n",
+    "f": "\f",
+    "r": "\r",
+    '"': '"',
+    "\\": "\\",
+}
+_HEX_RE = re.compile(r"^[0-9A-Fa-f]+$")
 
 
 def _strip_comments(line: str) -> str:
@@ -45,7 +55,7 @@ def _parse_value(raw_value: str) -> Any:
         raise ValueError("Empty value is not allowed in .broker.toml")
 
     if value.startswith('"') and value.endswith('"'):
-        return bytes(value[1:-1], "utf-8").decode("unicode_escape")
+        return _parse_basic_string(value[1:-1])
     if value in {"true", "false"}:
         return value == "true"
     try:
@@ -57,6 +67,56 @@ def _parse_value(raw_value: str) -> Any:
     except ValueError:
         pass
     raise ValueError(f"Unsupported TOML value: {raw_value}")
+
+
+def _parse_basic_string(value: str) -> str:
+    """Decode the TOML basic-string escapes supported by .broker.toml."""
+    result: list[str] = []
+    index = 0
+
+    while index < len(value):
+        char = value[index]
+        if char != "\\":
+            if _is_disallowed_basic_string_char(char):
+                raise ValueError(f"Invalid control character in TOML string: {char!r}")
+            result.append(char)
+            index += 1
+            continue
+
+        index += 1
+        if index >= len(value):
+            raise ValueError("Invalid TOML string escape: trailing backslash")
+
+        escape = value[index]
+        if escape in _BASIC_STRING_ESCAPES:
+            result.append(_BASIC_STRING_ESCAPES[escape])
+            index += 1
+            continue
+
+        if escape in {"u", "U"}:
+            length = 4 if escape == "u" else 8
+            start = index + 1
+            end = start + length
+            digits = value[start:end]
+            if len(digits) != length or _HEX_RE.fullmatch(digits) is None:
+                raise ValueError(f"Invalid TOML Unicode escape: \\{escape}{digits}")
+            codepoint = int(digits, 16)
+            if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
+                raise ValueError(
+                    f"Invalid TOML Unicode scalar value: \\{escape}{digits}"
+                )
+            result.append(chr(codepoint))
+            index = end
+            continue
+
+        raise ValueError(f"Invalid TOML string escape: \\{escape}")
+
+    return "".join(result)
+
+
+def _is_disallowed_basic_string_char(char: str) -> bool:
+    codepoint = ord(char)
+    return codepoint <= 0x08 or 0x0A <= codepoint <= 0x1F or codepoint == 0x7F
 
 
 def _parse_project_config_text(text: str) -> dict[str, Any]:

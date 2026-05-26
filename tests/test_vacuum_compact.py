@@ -314,3 +314,20 @@ def test_automatic_vacuum_runs_incremental_vacuum(workdir: Path):
         assert "PRAGMA incremental_vacuum(100)" in sql_commands
         # Should NOT have run full VACUUM
         assert "VACUUM" not in sql_commands
+
+
+def test_vacuum_claimed_messages_holds_core_lock(workdir: Path):
+    """Internal vacuum should honor BrokerCore's serialized-operation contract."""
+    db_path = workdir / "test.db"
+
+    with BrokerDB(str(db_path)) as db:
+        observed_lock_state = []
+
+        def track_vacuum(runner, *, compact, config):
+            del runner, compact, config
+            observed_lock_state.append(db._lock._is_owned())
+
+        with patch.object(db._backend_plugin, "vacuum", side_effect=track_vacuum):
+            db._vacuum_claimed_messages(compact=False)
+
+        assert observed_lock_state == [True]

@@ -8,6 +8,13 @@ def test_redact_backend_target_redacts_uri_password() -> None:
     )
 
 
+def test_redact_backend_target_redacts_uri_password_with_empty_username() -> None:
+    assert (
+        redact_backend_target("redis://:secret@127.0.0.1:6379/0")
+        == "redis://:***@127.0.0.1:6379/0"
+    )
+
+
 def test_redact_backend_target_redacts_conninfo_password() -> None:
     assert (
         redact_backend_target("host=db.example.com user=app password='secret value'")

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pytest
+import redis
 from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.keys import RedisKeys, encode_id
+from simplebroker_redis.validation import key_prefix
 
 from simplebroker import Queue
 
@@ -33,6 +35,31 @@ def test_plugin_core_round_trip(redis_url: str, redis_namespace: str) -> None:
         assert core.claim_one("jobs", with_timestamps=False) == "hello"
     finally:
         core.shutdown()
+        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_cleanup_preserves_colon_extended_namespace_keys(
+    redis_url: str, redis_namespace: str
+) -> None:
+    plugin = get_backend_plugin()
+    parent_prefix = key_prefix(redis_namespace)
+    child_meta = f"{parent_prefix}:child:meta"
+    client = redis.Redis.from_url(redis_url, decode_responses=True)
+    try:
+        plugin.initialize_target(
+            redis_url, backend_options={"namespace": redis_namespace}
+        )
+        client.hset(child_meta, mapping={"owner": "legacy-child"})
+
+        assert plugin.cleanup_target(
+            redis_url, backend_options={"namespace": redis_namespace}
+        )
+
+        assert not client.exists(f"{parent_prefix}:meta")
+        assert client.hgetall(child_meta) == {"owner": "legacy-child"}
+    finally:
+        client.delete(child_meta)
+        client.close()
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
 
 

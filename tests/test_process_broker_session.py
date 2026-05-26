@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import threading
+import time
 from collections.abc import Iterator
 from importlib.metadata import EntryPoint
 from pathlib import Path
@@ -14,7 +15,11 @@ import pytest
 from simplebroker import Queue
 from simplebroker._backend_plugins import BACKEND_ENTRY_POINT_GROUP
 from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
-from simplebroker._broker_session import _session_key, close_process_broker_sessions
+from simplebroker._broker_session import (
+    _ProcessBrokerSession,
+    _session_key,
+    close_process_broker_sessions,
+)
 from simplebroker._runner import SQLiteRunner
 from simplebroker._targets import ResolvedTarget
 from simplebroker.db import BrokerCore
@@ -492,6 +497,39 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
     assert not close_thread.is_alive()
     assert not operation_errors
     assert not close_errors
+
+
+def test_process_session_close_all_times_out_when_operation_never_releases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "simplebroker._broker_session._CLOSE_ACTIVE_OPERATION_TIMEOUT",
+        0.05,
+    )
+    session = _ProcessBrokerSession(str(tmp_path / "sqlite.db"))
+    session._begin_operation()
+    close_returned = threading.Event()
+
+    def close_session() -> None:
+        session.close_all()
+        close_returned.set()
+
+    started_at = time.monotonic()
+    close_thread = threading.Thread(target=close_session)
+    close_thread.start()
+    close_thread.join(timeout=1.0)
+    elapsed = time.monotonic() - started_at
+
+    try:
+        assert not close_thread.is_alive()
+        assert close_returned.is_set()
+        assert elapsed < 0.5
+        assert session._closed
+    finally:
+        if session._active_operations > 0:
+            session._end_operation()
+        close_thread.join(timeout=1.0)
 
 
 def test_process_session_key_includes_pid(

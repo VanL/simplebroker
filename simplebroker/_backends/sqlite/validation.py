@@ -34,6 +34,8 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:
                 raise DatabaseError(
                     f"File is not a valid SQLite database (invalid header): {file_path}"
                 )
+    except DatabaseError:
+        raise
     except OSError as exc:
         raise DatabaseError(f"Cannot read database file: {file_path} ({exc})") from exc
 
@@ -57,6 +59,8 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:
                     "Database has incorrect magic string "
                     f"(not a SimpleBroker database): {file_path}"
                 )
+    except DatabaseError:
+        raise
     except sqlite3.DatabaseError as exc:
         raise DatabaseError(
             f"Database corruption or invalid format: {file_path} ({exc})"
