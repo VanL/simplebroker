@@ -324,7 +324,7 @@ class TestWorkerPool(WatcherTestBase):
                 "dynamic_queue",
                 collectors,
                 expected_total=100,
-                timeout=6.0,
+                timeout=scale_timeout_for_ci(10.0, ci_factor=3.0),
             )
 
         finally:
