@@ -183,7 +183,7 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "3.8.4"
+version = "3.8.5"
 source = { editable = "../../" }
 
 [package.metadata]
@@ -205,7 +205,7 @@ provides-extras = ["dev", "pg", "redis"]
 
 [[package]]
 name = "simplebroker-pg"
-version = "1.6.0"
+version = "1.6.1"
 source = { editable = "." }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
