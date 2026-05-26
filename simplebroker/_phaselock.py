@@ -68,6 +68,14 @@ _XATTR_ENV_ENABLED = {"1", "true", "yes", "on", "xattr", "xattrs"}
 _XATTR_ENV_DISABLED = {"0", "false", "no", "off", "fallback", "status", "none"}
 
 
+def _status_file_fsync_enabled() -> bool:
+    """Return whether fallback status writes should force disk flushes."""
+
+    # The status file is a setup cache; on Windows CI, fsync can stall long
+    # enough to trip CLI timeouts, while os.replace still gives atomic publish.
+    return os.name != "nt"
+
+
 class PhaseLockTimeout(TimeoutError):
     """Raised when the phase lock cannot be acquired before the timeout."""
 
@@ -856,10 +864,12 @@ class PhaseLockService:
                 fd = None
                 status_file.write(data)
                 status_file.flush()
-                with contextlib.suppress(OSError):
-                    os.fsync(status_file.fileno())
+                if _status_file_fsync_enabled():
+                    with contextlib.suppress(OSError):
+                        os.fsync(status_file.fileno())
             os.replace(tmp_path, self.status_base_path)
-            self._fsync_parent_directory()
+            if _status_file_fsync_enabled():
+                self._fsync_parent_directory()
         except Exception:
             if fd is not None:
                 with contextlib.suppress(OSError):

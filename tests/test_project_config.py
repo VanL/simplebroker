@@ -30,6 +30,30 @@ from simplebroker.project import (
 from .conftest import run_cli
 
 
+def _toml_basic_string(value: str) -> str:
+    """Return a TOML basic string with required backslash escapes."""
+    escapes = {
+        "\b": "\\b",
+        "\t": "\\t",
+        "\n": "\\n",
+        "\f": "\\f",
+        "\r": "\\r",
+        '"': '\\"',
+        "\\": "\\\\",
+    }
+    parts: list[str] = []
+    for char in value:
+        escaped = escapes.get(char)
+        if escaped is not None:
+            parts.append(escaped)
+            continue
+        if ord(char) <= 0x08 or 0x0A <= ord(char) <= 0x1F or ord(char) == 0x7F:
+            parts.append(f"\\u{ord(char):04X}")
+            continue
+        parts.append(char)
+    return f'"{"".join(parts)}"'
+
+
 def _write_project_config(
     path: Path,
     *,
@@ -39,14 +63,14 @@ def _write_project_config(
 ) -> None:
     lines = [
         "version = 1",
-        f'backend = "{backend}"',
-        f'target = "{target}"',
+        f"backend = {_toml_basic_string(backend)}",
+        f"target = {_toml_basic_string(target)}",
         "",
     ]
     if backend_options:
         lines.append("[backend_options]")
         for key, value in backend_options.items():
-            lines.append(f'{key} = "{value}"')
+            lines.append(f"{key} = {_toml_basic_string(value)}")
         lines.append("")
 
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -125,6 +149,32 @@ def test_load_project_config_decodes_toml_basic_string_escapes(
 
     assert config_data["target"] == "data/queue.db"
     assert config_data["backend_options"]["note"] == 'line\nquote" slash\\ emoji😀'
+
+
+def test_load_project_config_accepts_toml_literal_strings(
+    tmp_path: Path,
+) -> None:
+    """TOML literal strings should preserve Windows backslashes."""
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                "backend = 'sqlite'",
+                "target = 'C:\\Users\\runner\\données#1\\queue.db' # comment",
+                "[backend_options]",
+                "note = 'slash\\n stays literal'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config_data = load_project_config(config_path)
+
+    assert config_data["backend"] == "sqlite"
+    assert config_data["target"] == "C:\\Users\\runner\\données#1\\queue.db"
+    assert config_data["backend_options"]["note"] == "slash\\n stays literal"
 
 
 def test_load_project_config_rejects_invalid_toml_basic_string_escape(

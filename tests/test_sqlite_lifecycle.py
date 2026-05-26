@@ -61,6 +61,8 @@ def test_close_does_not_abort_during_concurrent_shared_core_writes() -> None:
                 if any(thread.is_alive() for thread in threads):
                     errors.append(("thread", "writer stayed alive after stop"))
 
+                core.close()
+
                 connection = sqlite3.connect(db_path)
                 try:
                     integrity = connection.execute(

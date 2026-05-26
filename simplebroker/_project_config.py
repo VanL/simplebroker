@@ -33,17 +33,31 @@ _HEX_RE = re.compile(r"^[0-9A-Fa-f]+$")
 
 def _strip_comments(line: str) -> str:
     """Strip TOML-style comments while preserving quoted strings."""
-    in_quotes = False
+    quote_char: str | None = None
     escaped = False
     result: list[str] = []
 
     for char in line:
-        if char == '"' and not escaped:
-            in_quotes = not in_quotes
-        if char == "#" and not in_quotes:
-            break
         result.append(char)
-        escaped = char == "\\" and not escaped
+        if quote_char is None:
+            if char in {"'", '"'}:
+                quote_char = char
+                escaped = False
+                continue
+            if char == "#":
+                result.pop()
+                break
+            continue
+
+        if quote_char == '"' and char == '"' and not escaped:
+            quote_char = None
+            escaped = False
+            continue
+        if quote_char == "'" and char == "'":
+            quote_char = None
+            continue
+
+        escaped = quote_char == '"' and char == "\\" and not escaped
 
     return "".join(result).strip()
 
@@ -56,6 +70,8 @@ def _parse_value(raw_value: str) -> Any:
 
     if value.startswith('"') and value.endswith('"'):
         return _parse_basic_string(value[1:-1])
+    if value.startswith("'") and value.endswith("'"):
+        return _parse_literal_string(value[1:-1])
     if value in {"true", "false"}:
         return value == "true"
     try:
@@ -117,6 +133,14 @@ def _parse_basic_string(value: str) -> str:
 def _is_disallowed_basic_string_char(char: str) -> bool:
     codepoint = ord(char)
     return codepoint <= 0x08 or 0x0A <= codepoint <= 0x1F or codepoint == 0x7F
+
+
+def _parse_literal_string(value: str) -> str:
+    """Parse a TOML literal string without escape processing."""
+    for char in value:
+        if _is_disallowed_basic_string_char(char):
+            raise ValueError(f"Invalid control character in TOML string: {char!r}")
+    return value
 
 
 def _parse_project_config_text(text: str) -> dict[str, Any]:
