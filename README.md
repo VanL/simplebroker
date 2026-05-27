@@ -341,8 +341,8 @@ Timestamps are:
 - **Meaningful** - Can extract creation time from the ID
 
 The format:
-- High 52 bits: microseconds after Unix epoch
-- Low 12 bits: logical counter for sub-microsecond ordering
+- High bits: nanoseconds after Unix epoch (bottom 12 bits cleared)
+- Low 12 bits: logical counter for sub-nanosecond-granularity ordering
 - Similar to Twitter's Snowflake IDs or UUID7
 
 
