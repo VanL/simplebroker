@@ -55,7 +55,7 @@ from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator, validate_timestamp_bound
 from .helpers import (
-    SETUP_RETRY_MAX_ELAPSED,
+    SetupProgressBudget,
     _execute_with_retry,
     execute_setup_with_retry,
     interruptible_sleep,
@@ -799,7 +799,7 @@ class BrokerCore:
         operation: Callable[[], T],
         *,
         phase: SetupPhase,
-        deadline: float | None = None,
+        progress_budget: SetupProgressBudget | None = None,
     ) -> T:
         """Run setup work with bounded retry progress."""
 
@@ -817,17 +817,21 @@ class BrokerCore:
                     phase=str(phase.value),
                     target=target,
                     stop_event=self._stop_event,
-                    deadline=deadline,
+                    progress_budget=progress_budget,
                 )
         return execute_setup_with_retry(
             stop_checked_operation,
             phase=str(phase.value),
             target=target,
             stop_event=self._stop_event,
-            deadline=deadline,
+            progress_budget=progress_budget,
         )
 
-    def _setup_database(self, *, deadline: float | None = None) -> None:
+    def _setup_database(
+        self,
+        *,
+        progress_budget: SetupProgressBudget | None = None,
+    ) -> None:
         """Set up database with optimized settings and schema."""
         with self._lock:
             self._backend_plugin.initialize_database(
@@ -835,7 +839,7 @@ class BrokerCore:
                 run_with_retry=lambda operation: self._run_setup_with_retry(
                     operation,
                     phase=SetupPhase.SCHEMA,
-                    deadline=deadline,
+                    progress_budget=progress_budget,
                 ),
             )
 
@@ -843,17 +847,17 @@ class BrokerCore:
         """Set up and migrate schema with backend-specific coordination."""
 
         def operation() -> None:
-            deadline = time.monotonic() + SETUP_RETRY_MAX_ELAPSED
-            self._setup_database(deadline=deadline)
+            progress_budget = SetupProgressBudget()
+            self._setup_database(progress_budget=progress_budget)
             self._run_setup_with_retry(
                 self._verify_database_magic,
                 phase=SetupPhase.SCHEMA,
-                deadline=deadline,
+                progress_budget=progress_budget,
             )
             self._run_setup_with_retry(
                 self._migrate_schema,
                 phase=SetupPhase.SCHEMA,
-                deadline=deadline,
+                progress_budget=progress_budget,
             )
 
         run_exclusive_setup = getattr(self._runner, "run_exclusive_setup", None)

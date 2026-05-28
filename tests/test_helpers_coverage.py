@@ -10,6 +10,7 @@ import pytest
 from simplebroker import helpers
 from simplebroker._exceptions import OperationalError, StopException
 from simplebroker.helpers import (
+    SetupProgressBudget,
     _create_compound_db_directories,
     _execute_with_retry,
     _find_project_database,
@@ -170,7 +171,63 @@ def test_execute_with_retry_elapsed_budget_still_honors_stop_event(
         )
 
 
-def test_execute_setup_with_retry_honors_shared_deadline(
+def test_execute_setup_with_retry_refreshes_progress_budget_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monotonic_time = 0.0
+    first_attempts = 0
+    second_ran = False
+
+    def fake_monotonic() -> float:
+        return monotonic_time
+
+    def fake_sleep(wait: float, stop_event=None) -> bool:
+        nonlocal monotonic_time
+        monotonic_time += wait
+        return True
+
+    monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(helpers.time, "time", lambda: 0.0)
+    monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+    monkeypatch.setattr(helpers, "SETUP_RETRY_MAX_ELAPSED", 0.15)
+
+    def first_operation() -> str:
+        nonlocal first_attempts
+        first_attempts += 1
+        if monotonic_time < 0.14:
+            raise OperationalError("database is locked")
+        return "first"
+
+    def second_operation() -> str:
+        nonlocal second_ran
+        second_ran = True
+        return "second"
+
+    budget = SetupProgressBudget()
+
+    assert (
+        execute_setup_with_retry(
+            first_operation,
+            phase="schema",
+            target="test.db",
+            progress_budget=budget,
+        )
+        == "first"
+    )
+    assert first_attempts > 1
+    assert (
+        execute_setup_with_retry(
+            second_operation,
+            phase="schema",
+            target="test.db",
+            progress_budget=budget,
+        )
+        == "second"
+    )
+    assert second_ran
+
+
+def test_execute_setup_with_retry_fails_when_no_operation_makes_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monotonic_time = 0.0
@@ -184,25 +241,89 @@ def test_execute_setup_with_retry_honors_shared_deadline(
         return True
 
     monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(helpers.time, "time", lambda: 0.0)
     monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+    monkeypatch.setattr(helpers, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
-    deadline = 0.15
-    with pytest.raises(OperationalError, match="database is locked"):
+    budget = SetupProgressBudget()
+
+    with pytest.raises(OperationalError) as exc_info:
         execute_setup_with_retry(
             lambda: (_ for _ in ()).throw(OperationalError("database is locked")),
             phase="schema",
             target="test.db",
-            deadline=deadline,
+            progress_budget=budget,
         )
 
-    assert monotonic_time <= deadline
-    with pytest.raises(OperationalError, match="setup deadline expired"):
+    message = str(exc_info.value)
+    assert "made no progress" in message
+    assert "database is locked" in message
+
+
+def test_execute_setup_with_retry_does_not_refresh_budget_on_failed_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monotonic_time = 0.0
+    second_ran = False
+
+    def fake_monotonic() -> float:
+        return monotonic_time
+
+    def fake_sleep(wait: float, stop_event=None) -> bool:
+        nonlocal monotonic_time
+        monotonic_time += wait
+        return True
+
+    def second_operation() -> str:
+        nonlocal second_ran
+        second_ran = True
+        return "second"
+
+    monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(helpers.time, "time", lambda: 0.0)
+    monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+    monkeypatch.setattr(helpers, "SETUP_RETRY_MAX_ELAPSED", 0.15)
+
+    budget = SetupProgressBudget()
+
+    with pytest.raises(OperationalError, match="made no progress"):
         execute_setup_with_retry(
-            lambda: pytest.fail("expired setup deadline should not run"),
+            lambda: (_ for _ in ()).throw(OperationalError("database is locked")),
             phase="schema",
             target="test.db",
-            deadline=deadline,
+            progress_budget=budget,
         )
+
+    with pytest.raises(OperationalError, match="setup idle timeout expired"):
+        execute_setup_with_retry(
+            second_operation,
+            phase="schema",
+            target="test.db",
+            progress_budget=budget,
+        )
+
+    assert not second_ran
+
+
+def test_execute_setup_with_retry_reports_immediate_setup_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(helpers, "SETUP_RETRY_MAX_ELAPSED", 0.15)
+
+    budget = SetupProgressBudget()
+
+    with pytest.raises(OperationalError) as exc_info:
+        execute_setup_with_retry(
+            lambda: (_ for _ in ()).throw(OperationalError("syntax error")),
+            phase="schema",
+            target="test.db",
+            progress_budget=budget,
+        )
+
+    message = str(exc_info.value)
+    assert "failed" in message
+    assert "syntax error" in message
+    assert "made no progress" not in message
 
 
 def test_validate_working_directory_reports_missing_and_file_paths(

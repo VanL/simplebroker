@@ -24,6 +24,13 @@ SETUP_RETRY_DELAY = 0.05
 SETUP_RETRY_MAX_DELAY = 0.25
 SETUP_BUSY_TIMEOUT_CAP_MS = 250
 SETUP_PHASE_LOCK_TIMEOUT = max(20.0, SETUP_RETRY_MAX_ELAPSED * 2.0)
+_LOCKED_ERROR_MARKERS = (
+    "database is locked",
+    "database table is locked",
+    "database schema is locked",
+    "database is busy",
+    "database busy",
+)
 
 
 def interruptible_sleep(
@@ -105,14 +112,6 @@ def _execute_with_retry(
     Raises:
         The last exception if all retries fail
     """
-    locked_markers = (
-        "database is locked",
-        "database table is locked",
-        "database schema is locked",
-        "database is busy",
-        "database busy",
-    )
-
     if max_retries is None and max_elapsed is None:
         raise ValueError("max_retries=None requires max_elapsed")
 
@@ -122,8 +121,7 @@ def _execute_with_retry(
         try:
             return operation()
         except OperationalError as e:
-            msg = str(e).lower()
-            if any(marker in msg for marker in locked_markers):
+            if _is_locked_operational_error(e):
                 retry_count_available = max_retries is None or attempt < max_retries - 1
                 elapsed = time.monotonic() - start
                 elapsed_available = max_elapsed is None or elapsed < max_elapsed
@@ -147,11 +145,55 @@ def _execute_with_retry(
             raise
 
 
+def _is_locked_operational_error(exc: OperationalError) -> bool:
+    """Return whether an OperationalError represents lock or busy contention."""
+
+    message = str(exc).lower()
+    return any(marker in message for marker in _LOCKED_ERROR_MARKERS)
+
+
 def setup_busy_timeout_ms(config: Mapping[str, Any]) -> int:
     """Return the short busy timeout used by SQLite setup operations."""
 
     busy_timeout = int(config["BROKER_BUSY_TIMEOUT"])
     return max(0, min(busy_timeout, SETUP_BUSY_TIMEOUT_CAP_MS))
+
+
+class SetupProgressBudget:
+    """Track idle time between successful setup operations."""
+
+    def __init__(self, idle_timeout: float | None = None) -> None:
+        self.idle_timeout = (
+            SETUP_RETRY_MAX_ELAPSED if idle_timeout is None else idle_timeout
+        )
+        self._last_progress = time.monotonic()
+
+    def remaining(self) -> float:
+        """Return seconds left before setup is considered idle."""
+
+        return self.idle_timeout - (time.monotonic() - self._last_progress)
+
+    def record_progress(self) -> None:
+        """Refresh the idle budget after a setup operation succeeds."""
+
+        self._last_progress = time.monotonic()
+
+
+def _setup_phase_context(phase: str, target: str) -> str:
+    return f"Setup phase {phase!r} for {target!r}"
+
+
+def _setup_idle_timeout_error(
+    *,
+    phase: str,
+    target: str,
+    idle_timeout: float,
+    detail: str,
+) -> OperationalError:
+    return OperationalError(
+        f"{_setup_phase_context(phase, target)} made no progress for "
+        f"{idle_timeout:.1f}s: {detail}"
+    )
 
 
 def execute_setup_with_retry(
@@ -160,23 +202,23 @@ def execute_setup_with_retry(
     phase: str,
     target: str,
     stop_event: threading.Event | None = None,
-    deadline: float | None = None,
+    progress_budget: SetupProgressBudget | None = None,
 ) -> T:
     """Run setup work with bounded retry progress and contextual errors."""
 
     max_elapsed = SETUP_RETRY_MAX_ELAPSED
-    if deadline is not None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise OperationalError(
-                "Setup phase "
-                f"{phase!r} for {target!r} could not make progress within "
-                f"{SETUP_RETRY_MAX_ELAPSED:.1f}s: setup deadline expired"
+    if progress_budget is not None:
+        max_elapsed = progress_budget.remaining()
+        if max_elapsed <= 0:
+            raise _setup_idle_timeout_error(
+                phase=phase,
+                target=target,
+                idle_timeout=progress_budget.idle_timeout,
+                detail="setup idle timeout expired",
             )
-        max_elapsed = min(max_elapsed, remaining)
 
     try:
-        return _execute_with_retry(
+        result = _execute_with_retry(
             operation,
             max_retries=None,
             retry_delay=SETUP_RETRY_DELAY,
@@ -185,11 +227,31 @@ def execute_setup_with_retry(
             max_retry_delay=SETUP_RETRY_MAX_DELAY,
         )
     except OperationalError as exc:
+        if progress_budget is not None:
+            remaining = progress_budget.remaining()
+            if remaining <= 0 and _is_locked_operational_error(exc):
+                raise _setup_idle_timeout_error(
+                    phase=phase,
+                    target=target,
+                    idle_timeout=progress_budget.idle_timeout,
+                    detail=str(exc),
+                ) from exc
+            raise OperationalError(
+                f"{_setup_phase_context(phase, target)} failed: {exc}"
+            ) from exc
+
+        if not _is_locked_operational_error(exc):
+            raise OperationalError(
+                f"{_setup_phase_context(phase, target)} failed: {exc}"
+            ) from exc
+
         raise OperationalError(
-            "Setup phase "
-            f"{phase!r} for {target!r} could not make progress within "
+            f"{_setup_phase_context(phase, target)} could not make progress within "
             f"{SETUP_RETRY_MAX_ELAPSED:.1f}s: {exc}"
         ) from exc
+    if progress_budget is not None:
+        progress_budget.record_progress()
+    return result
 
 
 def _is_filesystem_root(path: Path) -> bool:

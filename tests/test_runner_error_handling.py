@@ -451,11 +451,11 @@ class TestSQLiteRunnerErrorHandling:
         assert connect_timeouts == [0.25]
 
     @pytest.mark.sqlite_only
-    def test_schema_setup_uses_one_shared_retry_deadline(
+    def test_schema_setup_refreshes_idle_budget_after_forward_progress(
         self,
         monkeypatch,
     ):
-        """Schema bootstrap should not restart the setup budget per statement."""
+        """Schema bootstrap should refresh its idle budget after progress."""
 
         class FakeRunner:
             def run_exclusive_setup(self, phase, operation):
@@ -508,17 +508,128 @@ class TestSQLiteRunnerErrorHandling:
         core._lock = threading.RLock()
         core._stop_event = threading.Event()
 
-        monkeypatch.setattr(db_module.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(helpers_module.time, "monotonic", fake_monotonic)
         monkeypatch.setattr(helpers_module.time, "time", lambda: 0.0)
         monkeypatch.setattr(helpers_module, "interruptible_sleep", fake_sleep)
-        monkeypatch.setattr(db_module, "SETUP_RETRY_MAX_ELAPSED", 0.15)
         monkeypatch.setattr(helpers_module, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
-        with pytest.raises(OperationalError, match="setup deadline expired"):
-            core._setup_schema()
+        core._setup_schema()
 
         assert first_calls > 1
-        assert not second_ran
+        assert second_ran
+
+    @pytest.mark.sqlite_only
+    def test_schema_setup_still_fails_when_no_schema_operation_progresses(
+        self,
+        monkeypatch,
+    ):
+        """Schema bootstrap should fail when no setup operation succeeds."""
+
+        class FakeRunner:
+            def run_exclusive_setup(self, phase, operation):
+                assert phase == SetupPhase.SCHEMA
+                operation()
+                return True
+
+        class FakeBackendPlugin:
+            def initialize_database(self, runner, *, run_with_retry):
+                del runner
+                run_with_retry(first_operation)
+
+        class MinimalBrokerCore(BrokerCore):
+            def __init__(self):
+                pass
+
+            def _verify_database_magic(self):
+                pass
+
+            def _migrate_schema(self):
+                pass
+
+        monotonic_time = 0.0
+
+        def fake_monotonic():
+            return monotonic_time
+
+        def fake_sleep(wait, stop_event=None):
+            nonlocal monotonic_time
+            del stop_event
+            monotonic_time += wait
+            return True
+
+        def first_operation():
+            raise OperationalError("database is locked")
+
+        core = MinimalBrokerCore()
+        core._runner = FakeRunner()
+        core._backend_plugin = FakeBackendPlugin()
+        core._lock = threading.RLock()
+        core._stop_event = threading.Event()
+
+        monkeypatch.setattr(helpers_module.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(helpers_module.time, "time", lambda: 0.0)
+        monkeypatch.setattr(helpers_module, "interruptible_sleep", fake_sleep)
+        monkeypatch.setattr(helpers_module, "SETUP_RETRY_MAX_ELAPSED", 0.15)
+
+        with pytest.raises(OperationalError) as exc_info:
+            core._setup_schema()
+
+        message = str(exc_info.value)
+        assert "made no progress" in message
+        assert "database is locked" in message
+
+    @pytest.mark.sqlite_only
+    def test_schema_setup_budget_starts_inside_phase_action(
+        self,
+        monkeypatch,
+    ):
+        """Waiting to enter the schema phase should not consume setup budget."""
+
+        class FakeRunner:
+            def run_exclusive_setup(self, phase, operation):
+                nonlocal monotonic_time
+                assert phase == SetupPhase.SCHEMA
+                monotonic_time += 100.0
+                operation()
+                return True
+
+        class FakeBackendPlugin:
+            def initialize_database(self, runner, *, run_with_retry):
+                del runner
+                run_with_retry(first_operation)
+
+        class MinimalBrokerCore(BrokerCore):
+            def __init__(self):
+                pass
+
+            def _verify_database_magic(self):
+                pass
+
+            def _migrate_schema(self):
+                pass
+
+        monotonic_time = 0.0
+        first_ran = False
+
+        def fake_monotonic():
+            return monotonic_time
+
+        def first_operation():
+            nonlocal first_ran
+            first_ran = True
+
+        core = MinimalBrokerCore()
+        core._runner = FakeRunner()
+        core._backend_plugin = FakeBackendPlugin()
+        core._lock = threading.RLock()
+        core._stop_event = threading.Event()
+
+        monkeypatch.setattr(helpers_module.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(helpers_module, "SETUP_RETRY_MAX_ELAPSED", 0.15)
+
+        core._setup_schema()
+
+        assert first_ran
 
     @pytest.mark.sqlite_only
     def test_setup_connection_phase_converts_raw_sqlite_lock_error(
