@@ -14,11 +14,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
         exclude:
           # macOS runners are expensive, so only test on latest Python
-          - os: macos-latest
-            python-version: "3.10"
           - os: macos-latest
             python-version: "3.11"
           - os: macos-latest
@@ -109,7 +107,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
       with:
-        python-version: "3.10"
+        python-version: "3.11"
 
     - name: Install uv
       uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
@@ -129,7 +127,7 @@ jobs:
 
     - name: Run packaging smoke
       run: |
-        uv run ./bin/packaging-smoke --python 3.10
+        uv run ./bin/packaging-smoke --python 3.11
 
   coverage:
     runs-on: ubuntu-latest

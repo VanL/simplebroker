@@ -51,7 +51,7 @@ def _write_messages_direct(queue_name: str, messages) -> None:
 # Get current time for relative tests
 def get_human_readable_test_data():
     """Generate test data with current timestamps."""
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
     yesterday = now - datetime.timedelta(days=1)
     tomorrow = now + datetime.timedelta(days=1)
 
@@ -452,7 +452,7 @@ def test_after_iso_date_formats(workdir):
     run_cli("write", queue_name, "test message", cwd=workdir)
 
     # Test date-only formats
-    today = datetime.datetime.now(datetime.timezone.utc)
+    today = datetime.datetime.now(datetime.UTC)
     yesterday = today - datetime.timedelta(days=1)
     tomorrow = today + datetime.timedelta(days=1)
 
@@ -483,7 +483,7 @@ def test_after_iso_datetime_formats(workdir):
     time.sleep(0.2)  # 200ms gap to ensure clear separation
 
     # Get timestamp between messages
-    checkpoint = datetime.datetime.now(datetime.timezone.utc)
+    checkpoint = datetime.datetime.now(datetime.UTC)
 
     time.sleep(0.2)  # 200ms gap
     run_cli("write", queue_name, "msg2", cwd=workdir)
@@ -560,7 +560,7 @@ def test_after_mixed_timestamp_formats(workdir):
     # Native timestamp is microseconds after epoch << 12
     us_after_epoch = native_ts >> 12
     unix_seconds = us_after_epoch // 1_000_000
-    dt = datetime.datetime.fromtimestamp(unix_seconds, datetime.timezone.utc)
+    dt = datetime.datetime.fromtimestamp(unix_seconds, datetime.UTC)
 
     # Test each format
     # Note: Native format has full precision, but Unix seconds and ISO format
@@ -1152,9 +1152,7 @@ def test_after_naive_datetime_utc_assumption(workdir):
     # Convert native timestamp to datetime
     # Native timestamp is microseconds after epoch << 12
     us_after_epoch = native_ts >> 12
-    dt_utc = datetime.datetime.fromtimestamp(
-        us_after_epoch / 1_000_000, datetime.timezone.utc
-    )
+    dt_utc = datetime.datetime.fromtimestamp(us_after_epoch / 1_000_000, datetime.UTC)
 
     # Create naive datetime (no timezone info)
     dt_naive = dt_utc.replace(tzinfo=None)

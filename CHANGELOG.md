@@ -5,6 +5,17 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-05-30
+### Changed
+- Dropped Python 3.10 support. SimpleBroker and its Postgres and Redis extension packages now require Python 3.11+.
+- `.broker.toml` parsing now uses the Python standard library `tomllib` module.
+
+### simplebroker-pg 2.0.0
+- Dropped Python 3.10 support. The Postgres extension now requires Python 3.11+ and SimpleBroker 4.0.0+.
+
+### simplebroker-redis 2.0.0
+- Dropped Python 3.10 support. The Redis extension now requires Python 3.11+ and SimpleBroker 4.0.0+.
+
 ## [3.8.0] - 2026-05-20
 ### Added
 - Added `delete_from_queues(...)` for backend-level physical deletion across several queues, with strict `before_timestamp` filtering and consistent SQLite, Postgres, and Redis behavior.

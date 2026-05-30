@@ -452,10 +452,10 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
     root_metadata["Version"] = "3.4.2"
 
     extension_metadata = Message()
-    extension_metadata["Requires-Python"] = ">=3.10"
+    extension_metadata["Requires-Python"] = ">=3.11"
 
     monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(_scripts.sys, "argv", ["packaging-smoke", "--python", "3.13"])
+    monkeypatch.setattr(_scripts.sys, "argv", ["packaging-smoke"])
     monkeypatch.setattr(
         _scripts,
         "_remove_build_outputs",
@@ -525,7 +525,7 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
 
     run_calls = [call for call in calls if call[0] == "run"]
     assert len(run_calls) == 3
-    assert run_calls[0][1][:4] == ["uv", "venv", "--python", "3.13"]
+    assert run_calls[0][1][:4] == ["uv", "venv", "--python", "3.11"]
     assert run_calls[1][1][:4] == ["uv", "pip", "install", "--python"]
     assert "--find-links" in run_calls[1][1]
     assert (

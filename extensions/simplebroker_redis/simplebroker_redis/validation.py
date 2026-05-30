@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import redis
@@ -25,7 +25,7 @@ QUEUE_KEY_STATES = frozenset({"pending", "claimed", "reserved"})
 BATCH_KEY_KINDS = frozenset({"ids", "meta"})
 
 
-class NamespaceState(str, Enum):
+class NamespaceState(StrEnum):
     """Ownership state for one Valkey/Redis namespace."""
 
     ABSENT = "ABSENT"

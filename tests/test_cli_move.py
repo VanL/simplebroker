@@ -296,7 +296,7 @@ class TestTimestampFormats:
         run_cli("write", "iso_queue", "test message", cwd=workdir)
 
         # Test date formats
-        today = datetime.datetime.now(datetime.timezone.utc)
+        today = datetime.datetime.now(datetime.UTC)
         yesterday = today - datetime.timedelta(days=1)
         tomorrow = today + datetime.timedelta(days=1)
 
@@ -342,7 +342,7 @@ class TestTimestampFormats:
         # Convert to different formats
         us_after_epoch = native_ts >> 12
         unix_seconds = us_after_epoch // 1_000_000
-        dt = datetime.datetime.fromtimestamp(unix_seconds, datetime.timezone.utc)
+        dt = datetime.datetime.fromtimestamp(unix_seconds, datetime.UTC)
 
         # Test each format
         formats = [

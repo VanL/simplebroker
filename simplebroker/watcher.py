@@ -79,10 +79,8 @@ import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, Self
 
-# For Python 3.8 compatibility, we avoid using Self type
-# and use string forward references instead
 from ._constants import (
     MAX_TOTAL_RETRY_TIME,
     load_config,
@@ -948,7 +946,7 @@ class BaseWatcher(ABC):
         """
         self.run_forever()
 
-    def __enter__(self) -> BaseWatcher:
+    def __enter__(self) -> Self:
         """Enter context manager - start watcher in background thread."""
         self.run_in_thread()
         return self
@@ -1047,7 +1045,7 @@ class SignalHandlerContext:
         self.handler = handler
         self.original_handler: Callable[[int, Any], None] | int | None = None
 
-    def __enter__(self) -> SignalHandlerContext:
+    def __enter__(self) -> Self:
         self.original_handler = signal.signal(self.signum, self.handler)
         return self
 

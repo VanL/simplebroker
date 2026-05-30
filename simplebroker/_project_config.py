@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import re
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -18,174 +18,32 @@ from ._targets import ResolvedTarget
 
 PROJECT_CONFIG_FILENAME = DEFAULT_PROJECT_CONFIG_NAME
 SUPPORTED_PROJECT_CONFIG_VERSION = 1
-_SECTION_RE = re.compile(r"^\[(?P<section>[A-Za-z0-9_]+)\]$")
-_BASIC_STRING_ESCAPES = {
-    "b": "\b",
-    "t": "\t",
-    "n": "\n",
-    "f": "\f",
-    "r": "\r",
-    '"': '"',
-    "\\": "\\",
-}
-_HEX_RE = re.compile(r"^[0-9A-Fa-f]+$")
 
 
-def _strip_comments(line: str) -> str:
-    """Strip TOML-style comments while preserving quoted strings."""
-    quote_char: str | None = None
-    escaped = False
-    result: list[str] = []
+def _validated_backend_options(raw_options: object) -> dict[str, Any]:
+    if not isinstance(raw_options, dict):
+        raise ValueError("'backend_options' must be a table in .broker.toml")
 
-    for char in line:
-        result.append(char)
-        if quote_char is None:
-            if char in {"'", '"'}:
-                quote_char = char
-                escaped = False
-                continue
-            if char == "#":
-                result.pop()
-                break
-            continue
-
-        if quote_char == '"' and char == '"' and not escaped:
-            quote_char = None
-            escaped = False
-            continue
-        if quote_char == "'" and char == "'":
-            quote_char = None
-            continue
-
-        escaped = quote_char == '"' and char == "\\" and not escaped
-
-    return "".join(result).strip()
-
-
-def _parse_value(raw_value: str) -> Any:
-    """Parse a restricted subset of TOML values used by SimpleBroker."""
-    value = raw_value.strip()
-    if not value:
-        raise ValueError("Empty value is not allowed in .broker.toml")
-
-    if value.startswith('"') and value.endswith('"'):
-        return _parse_basic_string(value[1:-1])
-    if value.startswith("'") and value.endswith("'"):
-        return _parse_literal_string(value[1:-1])
-    if value in {"true", "false"}:
-        return value == "true"
-    try:
-        return int(value)
-    except ValueError:
-        pass
-    try:
-        return float(value)
-    except ValueError:
-        pass
-    raise ValueError(f"Unsupported TOML value: {raw_value}")
-
-
-def _parse_basic_string(value: str) -> str:
-    """Decode the TOML basic-string escapes supported by .broker.toml."""
-    result: list[str] = []
-    index = 0
-
-    while index < len(value):
-        char = value[index]
-        if char != "\\":
-            if _is_disallowed_basic_string_char(char):
-                raise ValueError(f"Invalid control character in TOML string: {char!r}")
-            result.append(char)
-            index += 1
-            continue
-
-        index += 1
-        if index >= len(value):
-            raise ValueError("Invalid TOML string escape: trailing backslash")
-
-        escape = value[index]
-        if escape in _BASIC_STRING_ESCAPES:
-            result.append(_BASIC_STRING_ESCAPES[escape])
-            index += 1
-            continue
-
-        if escape in {"u", "U"}:
-            length = 4 if escape == "u" else 8
-            start = index + 1
-            end = start + length
-            digits = value[start:end]
-            if len(digits) != length or _HEX_RE.fullmatch(digits) is None:
-                raise ValueError(f"Invalid TOML Unicode escape: \\{escape}{digits}")
-            codepoint = int(digits, 16)
-            if codepoint > 0x10FFFF or 0xD800 <= codepoint <= 0xDFFF:
-                raise ValueError(
-                    f"Invalid TOML Unicode scalar value: \\{escape}{digits}"
-                )
-            result.append(chr(codepoint))
-            index = end
-            continue
-
-        raise ValueError(f"Invalid TOML string escape: \\{escape}")
-
-    return "".join(result)
-
-
-def _is_disallowed_basic_string_char(char: str) -> bool:
-    codepoint = ord(char)
-    return codepoint <= 0x08 or 0x0A <= codepoint <= 0x1F or codepoint == 0x7F
-
-
-def _parse_literal_string(value: str) -> str:
-    """Parse a TOML literal string without escape processing."""
-    for char in value:
-        if _is_disallowed_basic_string_char(char):
-            raise ValueError(f"Invalid control character in TOML string: {char!r}")
-    return value
-
-
-def _parse_project_config_text(text: str) -> dict[str, Any]:
-    """Parse the supported .broker.toml subset into a dictionary."""
-    parsed: dict[str, Any] = {}
-    section: str | None = None
-
-    for line_number, raw_line in enumerate(text.splitlines(), start=1):
-        line = _strip_comments(raw_line)
-        if not line:
-            continue
-
-        section_match = _SECTION_RE.match(line)
-        if section_match:
-            section = section_match.group("section")
-            parsed.setdefault(section, {})
-            continue
-
-        if "=" not in line:
-            raise ValueError(f"Invalid .broker.toml line {line_number}: {raw_line!r}")
-
-        key, raw_value = line.split("=", 1)
-        key = key.strip()
-        if not key:
-            raise ValueError(f"Invalid empty key on line {line_number}")
-
-        value = _parse_value(raw_value)
-        if section is None:
-            parsed[key] = value
-        else:
-            table = parsed.setdefault(section, {})
-            if not isinstance(table, dict):
-                raise ValueError(f"Invalid table assignment on line {line_number}")
-            table[key] = value
-
-    return parsed
+    options: dict[str, Any] = {}
+    for key, value in raw_options.items():
+        if not isinstance(value, str | int | float | bool):
+            raise ValueError(
+                "'backend_options' values must be strings, integers, floats, "
+                "or booleans in .broker.toml"
+            )
+        options[str(key)] = value
+    return options
 
 
 def load_project_config(config_path: Path) -> dict[str, Any]:
     """Load and validate a .broker.toml file."""
-    data = _parse_project_config_text(config_path.read_text(encoding="utf-8"))
+    with config_path.open("rb") as config_file:
+        data = tomllib.load(config_file)
 
     version = data.get("version")
     backend = data.get("backend")
     target = data.get("target")
+    backend_options = _validated_backend_options(data.get("backend_options", {}))
 
     if version != SUPPORTED_PROJECT_CONFIG_VERSION:
         raise ValueError(
@@ -196,12 +54,6 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
         raise ValueError(".broker.toml requires a non-empty string 'backend'")
     if not isinstance(target, str) or not target:
         raise ValueError(".broker.toml requires a non-empty string 'target'")
-
-    backend_options = data.get("backend_options", {})
-    if backend_options is None:
-        backend_options = {}
-    if not isinstance(backend_options, dict):
-        raise ValueError("'backend_options' must be a table in .broker.toml")
 
     return {
         "version": version,

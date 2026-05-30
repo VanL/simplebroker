@@ -194,8 +194,102 @@ def test_load_project_config_rejects_invalid_toml_basic_string_escape(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match=r"Invalid TOML string escape: \\q"):
+    with pytest.raises(ValueError):
         load_project_config(config_path)
+
+
+def test_load_project_config_rejects_duplicate_toml_keys(tmp_path: Path) -> None:
+    """Duplicate TOML keys should be rejected instead of silently overwritten."""
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "sqlite"',
+                'target = "first.db"',
+                'target = "second.db"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        load_project_config(config_path)
+
+
+def test_load_project_config_rejects_backend_option_arrays(tmp_path: Path) -> None:
+    """Backend options should remain a shallow scalar table."""
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "redis"',
+                'target = "redis://127.0.0.1:6379/0"',
+                "",
+                "[backend_options]",
+                'namespace = ["one", "two"]',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        load_project_config(config_path)
+
+
+def test_load_project_config_rejects_nested_backend_option_tables(
+    tmp_path: Path,
+) -> None:
+    """Nested backend options should not leak through to backend plugins."""
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "redis"',
+                'target = "redis://127.0.0.1:6379/0"',
+                "",
+                "[backend_options.pool]",
+                "timeout = 5",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        load_project_config(config_path)
+
+
+def test_load_project_config_ignores_unknown_top_level_fields(
+    tmp_path: Path,
+) -> None:
+    """Unknown top-level data is ignored by the current config contract."""
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "version = 1",
+                'backend = "sqlite"',
+                'target = "queue.db"',
+                'description = "ignored"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    config_data = load_project_config(config_path)
+
+    assert config_data == {
+        "version": 1,
+        "backend": "sqlite",
+        "target": "queue.db",
+        "backend_options": {},
+    }
 
 
 def test_project_config_preferred_over_legacy_project_database(workdir: Path) -> None:

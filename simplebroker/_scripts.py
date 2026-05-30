@@ -607,7 +607,7 @@ def packaging_smoke_main() -> int:
     )
     parser.add_argument(
         "--python",
-        default="3.10",
+        default="3.11",
         help="Python version or interpreter to use for the install smoke env.",
     )
     args = parser.parse_args()
@@ -692,14 +692,14 @@ def packaging_smoke_main() -> int:
             needle="extra == 'redis'",
             context="root wheel Requires-Dist",
         )
-        if pg_requires_python != ">=3.10":
+        if pg_requires_python != ">=3.11":
             raise RuntimeError(
-                "Expected PG extension wheel Requires-Python to be '>=3.10', got "
+                "Expected PG extension wheel Requires-Python to be '>=3.11', got "
                 f"{pg_requires_python!r}"
             )
-        if redis_requires_python != ">=3.10":
+        if redis_requires_python != ">=3.11":
             raise RuntimeError(
-                "Expected Redis extension wheel Requires-Python to be '>=3.10', got "
+                "Expected Redis extension wheel Requires-Python to be '>=3.11', got "
                 f"{redis_requires_python!r}"
             )
         if not root_version:

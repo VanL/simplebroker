@@ -5,6 +5,11 @@ Valkey/Redis backend extension for SimpleBroker.
 This package exposes the public SimpleBroker backend name `redis`. It targets
 Valkey 7.x and Redis 7.x and the test suite runs against Valkey.
 
+## Requirements
+
+- Python 3.11+
+- Valkey 7.x or Redis 7.x
+
 Durability depends on the server configuration. A Valkey or Redis deployment
 without AOF/RDB persistence can lose messages on restart. Use SQLite or
 Postgres when you need storage durability from the broker stack by default.

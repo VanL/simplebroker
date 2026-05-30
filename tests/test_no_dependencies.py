@@ -6,21 +6,14 @@ These tests ensure this promise is maintained.
 
 import ast
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
-tomllib = None
-try:
-    import tomllib
-except ImportError:
-    # Python < 3.11
-    pass
-
 pytestmark = [pytest.mark.shared]
 
 
-@pytest.mark.skipif(tomllib is None, reason="tomllib not available in Python < 3.11")
 def test_pyproject_has_no_dependencies():
     """Verify pyproject.toml declares no runtime dependencies."""
     project_root = Path(__file__).parent.parent
@@ -133,10 +126,6 @@ def test_typing_extensions_not_imported():
     assert not violations, (
         "Found typing_extensions imports:\n"
         + "\n".join(f"  {file}:{line}" for file, line in violations)
-        + "\n\nUse 'from typing import ...' with version checks instead."
-        + "\n\nExample:"
-        + "\n  if sys.version_info >= (3, 11):"
-        + "\n      from typing import Self"
-        + "\n  else:"
-        + "\n      # fallback for Python 3.10"
+        + "\n\nUse stdlib typing imports directly. "
+        + "This project requires Python 3.11+."
     )

@@ -67,7 +67,7 @@ async def worker(
                     # In a real app, you might move to a retry queue
                     await queue.write(f"RETRY:{msg}")
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # No message available, check if we should shutdown
             if shutdown_event.is_set():
                 break

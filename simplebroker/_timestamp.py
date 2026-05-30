@@ -8,7 +8,8 @@ import os
 import random
 import threading
 import time
-from datetime import datetime
+from datetime import UTC, date, datetime
+from datetime import time as datetime_time
 from typing import TYPE_CHECKING
 
 from ._backend_plugins import BackendPlugin, resolve_runner_backend_plugin
@@ -439,10 +440,8 @@ class TimestampGenerator:
             # Try date-only format
             try:
                 # Parse as date and convert to datetime at midnight UTC
-                from datetime import date, time, timezone
-
                 date_obj = date.fromisoformat(normalized)
-                dt = datetime.combine(date_obj, time.min, tzinfo=timezone.utc)
+                dt = datetime.combine(date_obj, datetime_time.min, tzinfo=UTC)
             except ValueError:
                 return None  # Not a valid date format
 
@@ -452,13 +451,9 @@ class TimestampGenerator:
         # Convert to UTC if timezone-aware
         if dt.tzinfo is None:
             # Assume UTC for naive datetimes
-            from datetime import timezone
-
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
         else:
-            from datetime import timezone
-
-            dt = dt.astimezone(timezone.utc)
+            dt = dt.astimezone(UTC)
 
         # Convert to nanoseconds after epoch
         ns_after_epoch = int(dt.timestamp() * 1_000_000_000)

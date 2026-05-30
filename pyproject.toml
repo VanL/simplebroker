@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simplebroker"
-version = "3.8.6"
+version = "4.0.0"
 description = "A lightweight message queue backed by SQLite"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 license-files = ["LICENSE"]
 authors = [
@@ -21,7 +21,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -46,10 +45,10 @@ dev = [
     "pytest-timeout>=2.4.0",
 ]
 pg = [
-    "simplebroker-pg>=1.6.1",
+    "simplebroker-pg>=2.0.0",
 ]
 redis = [
-    "simplebroker-redis>=1.1.1",
+    "simplebroker-redis>=2.0.0",
 ]
 
 [project.scripts]
@@ -112,7 +111,7 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 88
 
 [tool.ruff.lint]
@@ -128,8 +127,6 @@ select = [
 ignore = [
     "E501", # line too long (handled by black)
     "B008", # do not perform function calls in argument defaults
-    "UP045", # Use X | None - not available until Python 3.10
-    "UP006", # Use lowercase generics - not available until Python 3.9
 ]
 
 [tool.ruff.lint.isort]

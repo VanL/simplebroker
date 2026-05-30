@@ -8,7 +8,7 @@ backend plugin hook.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.11+
 - PostgreSQL
 - A dedicated schema for SimpleBroker tables
 

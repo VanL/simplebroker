@@ -481,15 +481,10 @@ def resolve_runner_backend_plugin(
 
 def _load_entry_point_plugin(name: str) -> BackendPlugin:
     """Load an external backend plugin by entry point name."""
-    entry_points_obj: Any = metadata.entry_points()
-    if hasattr(entry_points_obj, "select"):
-        matches = entry_points_obj.select(group=BACKEND_ENTRY_POINT_GROUP, name=name)
-    else:  # pragma: no cover - Python <3.10 compatibility fallback
-        matches = [
-            entry_point
-            for entry_point in entry_points_obj.get(BACKEND_ENTRY_POINT_GROUP, [])
-            if entry_point.name == name
-        ]
+    matches = metadata.entry_points().select(
+        group=BACKEND_ENTRY_POINT_GROUP,
+        name=name,
+    )
 
     for entry_point in matches:
         loaded = entry_point.load()

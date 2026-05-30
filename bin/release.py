@@ -152,7 +152,7 @@ ROOT_PACKAGING_SMOKE_COMMAND: Final[tuple[str, ...]] = (
     "run",
     "./bin/packaging-smoke",
     "--python",
-    "3.10",
+    "3.11",
 )
 PG_BUILD_COMMAND: Final[tuple[str, ...]] = (
     "uv",

@@ -132,7 +132,7 @@ pip install "simplebroker[pg]"
 The CLI is available as both `broker` and `simplebroker`.
 
 **Requirements:**
-- Python 3.10+
+- Python 3.11+
 - SQLite 3.35+ (released March 2021) - required for `RETURNING` support
 
 
@@ -1750,7 +1750,7 @@ PHASELOCK_ENABLE_XATTRS=0 uv run pytest tests/test_phaselock.py tests/test_runne
 uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
 uv run ./bin/pytest-redis  # Redis/Valkey extension tests; requires a local test server
 uv run ./bin/pytest-pg -q tests/test_watcher_metrics.py -k basic
-uv run ./bin/packaging-smoke --python 3.10
+uv run ./bin/packaging-smoke --python 3.11
 
 # Lint and format
 uv run ruff check --fix simplebroker tests bin

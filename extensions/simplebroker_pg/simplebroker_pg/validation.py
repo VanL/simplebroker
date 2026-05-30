@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import psycopg
@@ -26,7 +26,7 @@ TYPED_META_COLUMNS = {
 }
 
 
-class SchemaState(str, Enum):
+class SchemaState(StrEnum):
     """Ownership state for the configured Postgres schema."""
 
     ABSENT = "ABSENT"

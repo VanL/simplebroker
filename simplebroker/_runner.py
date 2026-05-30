@@ -12,20 +12,11 @@ import itertools
 import logging
 import os
 import sqlite3
-import sys
 import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
-
-# Self was added to typing in Python 3.11
-if sys.version_info >= (3, 11):
-    from typing import Self
-else:
-    from typing import TypeVar
-
-    Self = TypeVar("Self", bound="SQLiteRunner")  # type: ignore[misc]
+from typing import Any, Literal, Protocol, Self, cast
 
 from ._backends import get_configured_backend
 from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config, resolve_config

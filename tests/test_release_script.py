@@ -236,9 +236,11 @@ def test_batch_postupdate_steps_build_every_selected_package_once() -> None:
         )
     )
     command_lines = [" ".join(step.command) for step in steps]
+    text = "\n".join(command_lines)
 
     assert command_lines.count("uv lock") == 3
     assert sum("packaging-smoke" in command for command in command_lines) == 1
+    assert "uv run ./bin/packaging-smoke --python 3.11" in text
     assert (
         sum("build extensions/simplebroker_pg" in command for command in command_lines)
         == 1
