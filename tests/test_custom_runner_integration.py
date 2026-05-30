@@ -141,3 +141,30 @@ def test_injected_runner_is_caller_owned_across_close_and_finalizer():
 
         runner.close()
         assert runner.close_calls == 1
+
+
+def test_broker_core_teardown_does_not_force_global_gc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Broker handle teardown should not scale with process-wide object graph size."""
+    collect_calls = 0
+
+    def collect() -> int:
+        nonlocal collect_calls
+        collect_calls += 1
+        return 0
+
+    monkeypatch.setattr(gc, "collect", collect)
+
+    core = BrokerDB(str(tmp_path / "close.db"))
+    core.close()
+    assert collect_calls == 0
+
+    owned_core = BrokerDB(str(tmp_path / "shutdown.db"))
+    owned_core.shutdown()
+    assert collect_calls == 0
+
+    finalizer_core = BrokerDB(str(tmp_path / "finalizer.db"))
+    finalizer_core.__del__()
+    assert collect_calls == 0

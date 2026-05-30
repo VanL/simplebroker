@@ -1,6 +1,5 @@
 """Database module for SimpleBroker - handles all SQLite operations."""
 
-import gc
 import logging
 import os
 import re
@@ -2683,8 +2682,6 @@ class BrokerCore:
                 release_thread_connection()
             else:
                 self._runner.close()
-            # Force garbage collection to release any lingering references on Windows
-            gc.collect()
 
     def shutdown(self) -> None:
         """Shut down the underlying runner when this core owns it."""
@@ -2693,7 +2690,6 @@ class BrokerCore:
             if hasattr(self._runner, "cleanup_marker_files"):
                 self._runner.cleanup_marker_files()
             close_owned_runner(self._runner)
-            gc.collect()
 
     def __enter__(self) -> "BrokerCore":
         """Enter context manager."""
