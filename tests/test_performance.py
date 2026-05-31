@@ -12,6 +12,7 @@ Run these with pytest -m "" on your own machine to test performance.
 """
 
 import sqlite3
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -22,7 +23,7 @@ from simplebroker import Queue
 from simplebroker.db import BrokerDB, _validate_queue_name_cached
 from simplebroker.watcher import QueueMoveWatcher
 
-from .conftest import run_cli
+from .conftest import build_cli_env, run_cli
 from .performance_calibration import (
     get_calibration_ratio,
     get_machine_performance_ratio,
@@ -51,6 +52,7 @@ TIMESTAMP_LOOKUP_COUNT = 1000
 TIMESTAMP_LOOKUP_SAMPLE_COUNT = 5
 CONCURRENT_OPS_BASE_COUNT = 100
 CONCURRENT_OPS_COUNT = 20
+CONCURRENT_OPS_SUBPROCESS_STARTUP_BASELINE = 0.30
 MOVE_LARGE_BATCH_COUNT = 1000
 CLAIM_PERF_MESSAGE_COUNT = 1000
 VACUUM_LARGE_MESSAGE_COUNT = 10000
@@ -94,6 +96,30 @@ BASELINE_CALIBRATION_KEYS = {
 # Minimum performance thresholds (messages per second)
 MIN_BULK_MOVE_RATE = 500  # messages/second
 MIN_AFTER_QUERY_RATE = 2000  # messages/second
+
+
+def _measure_python_startup_tax(workdir: Path, count: int) -> float:
+    """Measure baseline subprocess launch cost under the current test pressure."""
+    command = [sys.executable, "-c", "pass"]
+    env = build_cli_env()
+    start = time.monotonic()
+    for _ in range(count):
+        subprocess.run(
+            command,
+            cwd=workdir,
+            capture_output=True,
+            check=True,
+            env=env,
+            timeout=6.0,
+        )
+    return time.monotonic() - start
+
+
+def _subprocess_startup_slack(startup_elapsed: float) -> float:
+    expected_startup = CONCURRENT_OPS_SUBPROCESS_STARTUP_BASELINE * (
+        1 + PERF_BUFFER_PERCENT
+    )
+    return max(0.0, startup_elapsed - expected_startup)
 
 
 def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
@@ -504,6 +530,7 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
     Note: Some reads exit with EXIT_QUEUE_EMPTY as messages get consumed,
     which is expected."""
     db_path = workdir / "test.db"
+    startup_elapsed = _measure_python_startup_tax(workdir, CONCURRENT_OPS_COUNT)
 
     # Write many messages using Queue API
     with Queue("test_queue", db_path=str(db_path), persistent=True) as q:
@@ -543,7 +570,13 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
     elapsed = time.monotonic() - start
 
     # Should complete reasonably quickly (under 2.5 seconds for this workload)
-    assert elapsed < get_timeout("concurrent_mixed_ops")
+    timeout = get_timeout("concurrent_mixed_ops") + _subprocess_startup_slack(
+        startup_elapsed
+    )
+    assert elapsed < timeout, (
+        f"Mixed CLI operations took {elapsed:.3f}s, expected < {timeout:.3f}s; "
+        f"startup_elapsed={startup_elapsed:.3f}s"
+    )
 
     # Verify operations succeeded (allowing EXIT_QUEUE_EMPTY for reads)
     success_count = 0
