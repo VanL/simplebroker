@@ -595,7 +595,7 @@ provides-extras = ["dev", "pg", "redis"]
 
 [[package]]
 name = "simplebroker-pg"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "extensions/simplebroker_pg" }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },
@@ -615,7 +615,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "simplebroker-redis"
-version = "2.0.0"
+version = "2.0.1"
 source = { editable = "extensions/simplebroker_redis" }
 dependencies = [
     { name = "redis" },
