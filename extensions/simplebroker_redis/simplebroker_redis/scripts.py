@@ -1,8 +1,12 @@
 """Lua scripts used by the Valkey/Redis backend."""
 
 ADVANCE_LAST_TS = """
-local current = tonumber(redis.call('HGET', KEYS[1], 'last_ts') or '0')
-local new_ts = tonumber(ARGV[1])
+local function pad19(value)
+  local text = tostring(value or '0')
+  return string.rep('0', 19 - string.len(text)) .. text
+end
+local current = pad19(redis.call('HGET', KEYS[1], 'last_ts') or '0')
+local new_ts = ARGV[2]
 if current < new_ts then
   redis.call('HSET', KEYS[1], 'last_ts', ARGV[1])
   return 1
@@ -32,35 +36,39 @@ redis.call('SADD', queues, queue)
 return {1}
 """
 
-IMPORT_MESSAGES = """
+INSERT_MESSAGES = """
 local meta = KEYS[1]
 local bodies = KEYS[2]
 local all_ids = KEYS[3]
 local queues = KEYS[4]
-local required_last_ts = tonumber(ARGV[1])
-local count = tonumber(ARGV[2])
+local required_last_ts = ARGV[2]
+local count = tonumber(ARGV[3])
 if redis.call('HGET', meta, 'magic') == false then
   return {-2}
 end
 local seen = {}
 for index = 1, count do
-  local arg_offset = 3 + ((index - 1) * 3)
+  local arg_offset = 4 + ((index - 1) * 3)
   local id = ARGV[arg_offset + 1]
   if seen[id] == true then
-    return {-1}
+    return {-3}
   end
   seen[id] = true
   if redis.call('HEXISTS', bodies, id) == 1 or redis.call('ZSCORE', all_ids, id) ~= false then
     return {-1}
   end
 end
-local current = tonumber(redis.call('HGET', meta, 'last_ts') or '0')
+local function pad19(value)
+  local text = tostring(value or '0')
+  return string.rep('0', 19 - string.len(text)) .. text
+end
+local current = pad19(redis.call('HGET', meta, 'last_ts') or '0')
 if current < required_last_ts then
   redis.call('HSET', meta, 'last_ts', ARGV[1])
 end
 for index = 1, count do
   local key_offset = 4 + index
-  local arg_offset = 3 + ((index - 1) * 3)
+  local arg_offset = 4 + ((index - 1) * 3)
   local pending = KEYS[key_offset]
   local queue = ARGV[arg_offset]
   local id = ARGV[arg_offset + 1]

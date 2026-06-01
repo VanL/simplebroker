@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simplebroker-redis"
-version = "2.1.0"
+version = "2.2.0"
 description = "Valkey/Redis backend extension for SimpleBroker"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,7 +14,7 @@ authors = [
     {name = "Van Lindberg", email = "van.lindberg@gmail.com"},
 ]
 dependencies = [
-    "simplebroker>=4.2.0",
+    "simplebroker>=4.3.0",
     "redis>=5",
 ]
 

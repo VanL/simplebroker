@@ -18,7 +18,7 @@ from simplebroker._exceptions import DatabaseError, OperationalError
 from . import scripts
 from ._constants import DEFAULT_NAMESPACE, DEFAULT_TARGET, REDIS_SCHEMA_VERSION
 from .core import RedisBrokerCore
-from .keys import RedisKeys
+from .keys import RedisKeys, encode_id
 from .pool import POOL_OPTION_KEYS, pool_options_from_config
 from .responses import response_int
 from .runner import RedisRunner
@@ -477,6 +477,7 @@ class RedisBackendPlugin:
                 1,
                 f"{key_prefix(runner.namespace)}:meta",
                 str(new_ts),
+                encode_id(new_ts),
             )
             return bool(result)
         except redis.RedisError as exc:

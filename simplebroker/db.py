@@ -44,10 +44,9 @@ from ._exceptions import (
     OperationalError,
     StopException,
 )
-from ._message_import import (
-    MessageImportRecord,
-    normalize_import_records,
-    normalize_message_id,
+from ._message_insert import (
+    MessageInsertRecord,
+    normalize_insert_records,
 )
 from ._message_search import (
     BODY_SEARCH_DEFAULT_LIMIT,
@@ -1106,46 +1105,16 @@ class BrokerCore:
         # This should never be reached due to the return/raise logic above
         raise AssertionError("Unreachable code in write retry loop")
 
-    def _validate_exact_message_write(
-        self,
-        operation_name: str,
-        queue: str,
-        message: str,
-        message_id: int,
-    ) -> int:
-        self._check_fork_safety()
-        self._validate_queue_name(queue)
-        self._assert_no_reentrant_mutation_during_batch(operation_name)
-        self._validate_message_size(message)
-        return normalize_message_id(message_id)
+    def insert_messages(self, records: Iterable[MessageInsertRecord]) -> None:
+        """Insert pending messages with exact caller-supplied message IDs.
 
-    def import_message(self, queue: str, message: str, *, message_id: int) -> None:
-        """Import a pending message with an exact historical message ID."""
-        normalized_id = self._validate_exact_message_write(
-            "import_message",
-            queue,
-            message,
-            message_id,
-        )
-
-        current_last_ts = self.refresh_last_timestamp()
-        if normalized_id >= current_last_ts:
-            raise ValueError("imported message_id must be lower than current last_ts")
-
-        self._run_with_retry(
-            lambda: self._do_write_transaction(queue, message, normalized_id)
-        )
-
-    def import_messages(self, records: Iterable[MessageImportRecord]) -> None:
-        """Import pending messages with exact historical message IDs.
-
-        Bulk import advances ``last_ts`` above the highest imported ID inside
+        Exact-ID insert advances ``last_ts`` above the highest inserted ID inside
         the same transaction, so a fresh destination can restore a dump without
         a caller-visible priming write.
         """
         self._check_fork_safety()
-        self._assert_no_reentrant_mutation_during_batch("import_messages")
-        normalized_records, required_last_ts = normalize_import_records(
+        self._assert_no_reentrant_mutation_during_batch("insert_messages")
+        normalized_records, required_last_ts = normalize_insert_records(
             records,
             validate_queue_name=self._validate_queue_name,
             validate_message_size=self._validate_message_size,
@@ -1154,37 +1123,12 @@ class BrokerCore:
             return
 
         self._run_with_retry(
-            lambda: self._do_import_messages_transaction(
+            lambda: self._do_insert_messages_transaction(
                 normalized_records,
                 required_last_ts,
             )
         )
         self.refresh_last_timestamp()
-
-    def write_reserved_message(
-        self,
-        queue: str,
-        message: str,
-        *,
-        message_id: int,
-    ) -> None:
-        """Write a message using a previously generated broker message ID."""
-        normalized_id = self._validate_exact_message_write(
-            "write_reserved_message",
-            queue,
-            message,
-            message_id,
-        )
-
-        current_last_ts = self.refresh_last_timestamp()
-        if normalized_id > current_last_ts:
-            raise ValueError(
-                "reserved message_id must be less than or equal to current last_ts"
-            )
-
-        self._run_with_retry(
-            lambda: self._do_write_transaction(queue, message, normalized_id)
-        )
 
     def _log_ts_conflict(
         self, conflict_type: str, attempt: int, *, config: dict[str, Any] = _config
@@ -1256,12 +1200,12 @@ class BrokerCore:
                 self._runner.rollback()
                 raise
 
-    def _do_import_messages_transaction(
+    def _do_insert_messages_transaction(
         self,
-        records: Sequence[MessageImportRecord],
+        records: Sequence[MessageInsertRecord],
         required_last_ts: int,
     ) -> None:
-        """Import exact-ID messages and advance last_ts in one transaction."""
+        """Insert exact-ID messages and advance last_ts in one transaction."""
         with self._lock:
             self._runner.begin_immediate()
             try:

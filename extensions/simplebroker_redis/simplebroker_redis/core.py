@@ -20,10 +20,9 @@ from simplebroker._constants import (
     resolve_config,
 )
 from simplebroker._exceptions import IntegrityError, OperationalError, TimestampError
-from simplebroker._message_import import (
-    MessageImportRecord,
-    normalize_import_records,
-    normalize_message_id,
+from simplebroker._message_insert import (
+    MessageInsertRecord,
+    normalize_insert_records,
 )
 from simplebroker._message_search import (
     BODY_SEARCH_DEFAULT_LIMIT,
@@ -183,23 +182,10 @@ class RedisBrokerCore:
         self._assert_no_reentrant_mutation_during_batch("write")
         self._write_message(queue, message)
 
-    def import_message(self, queue: str, message: str, *, message_id: int) -> None:
+    def insert_messages(self, records: Iterable[MessageInsertRecord]) -> None:
         self._check_fork_safety()
-        self._validate_queue_name(queue)
-        self._validate_message_size(message)
-        self._assert_no_reentrant_mutation_during_batch("import_message")
-        normalized_id = normalize_message_id(message_id)
-
-        current_last_ts = self.refresh_last_timestamp()
-        if normalized_id >= current_last_ts:
-            raise ValueError("imported message_id must be lower than current last_ts")
-
-        self._write_exact_message(queue, message, normalized_id, operation="import")
-
-    def import_messages(self, records: Iterable[MessageImportRecord]) -> None:
-        self._check_fork_safety()
-        self._assert_no_reentrant_mutation_during_batch("import_messages")
-        normalized_records, required_last_ts = normalize_import_records(
+        self._assert_no_reentrant_mutation_during_batch("insert_messages")
+        normalized_records, required_last_ts = normalize_insert_records(
             records,
             validate_queue_name=self._validate_queue_name,
             validate_message_size=self._validate_message_size,
@@ -208,14 +194,18 @@ class RedisBrokerCore:
             return
 
         pending_keys = [self._keys.pending(queue) for queue, _, _ in normalized_records]
-        argv: list[str] = [str(required_last_ts), str(len(normalized_records))]
+        argv: list[str] = [
+            str(required_last_ts),
+            encode_id(required_last_ts),
+            str(len(normalized_records)),
+        ]
         for queue, message, message_id in normalized_records:
             argv.extend((queue, encode_id(message_id), message))
 
         try:
             result = response_list(
                 self._client.eval(
-                    scripts.IMPORT_MESSAGES,
+                    scripts.INSERT_MESSAGES,
                     4 + len(pending_keys),
                     self._keys.meta,
                     self._keys.bodies,
@@ -238,65 +228,9 @@ class RedisBrokerCore:
             raise IntegrityError("message ID already exists")
         if code == -2:
             raise OperationalError("Redis namespace is not initialized")
-        raise OperationalError(f"Unexpected Redis import result: {code}")
-
-    def write_reserved_message(
-        self,
-        queue: str,
-        message: str,
-        *,
-        message_id: int,
-    ) -> None:
-        self._check_fork_safety()
-        self._validate_queue_name(queue)
-        self._validate_message_size(message)
-        self._assert_no_reentrant_mutation_during_batch("write_reserved_message")
-        normalized_id = normalize_message_id(message_id)
-
-        current_last_ts = self.refresh_last_timestamp()
-        if normalized_id > current_last_ts:
-            raise ValueError(
-                "reserved message_id must be less than or equal to current last_ts"
-            )
-
-        self._write_exact_message(queue, message, normalized_id, operation="reserved")
-
-    def _write_exact_message(
-        self,
-        queue: str,
-        message: str,
-        message_id: int,
-        *,
-        operation: str,
-    ) -> None:
-        encoded = encode_id(message_id)
-        try:
-            result = response_list(
-                self._client.eval(
-                    scripts.WRITE_MESSAGE,
-                    5,
-                    self._keys.meta,
-                    self._keys.bodies,
-                    self._keys.all_ids,
-                    self._keys.pending(queue),
-                    self._keys.queues,
-                    queue,
-                    encoded,
-                    message,
-                )
-            )
-        except redis.RedisError as exc:
-            raise _translate_redis_error(exc) from exc
-
-        code = int(result[0])
-        if code == 1:
-            self._publish(queue)
-            return
-        if code == -1:
-            raise IntegrityError("message ID already exists")
-        if code == -2:
-            raise OperationalError("Redis namespace is not initialized")
-        raise OperationalError(f"Unexpected Redis {operation} write result: {code}")
+        if code == -3:
+            raise IntegrityError("duplicate message ID in insert batch")
+        raise OperationalError(f"Unexpected Redis insert result: {code}")
 
     def _write_message(self, queue: str, message: str) -> int:
         for attempt in range(3):

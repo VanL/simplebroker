@@ -5,6 +5,20 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.0] - 2026-06-01
+### Changed
+- Replaced the 4.1/4.2 exact-ID APIs with a single API-only `insert_messages(...)` method on broker handles and `Queue`. It accepts one or more exact-ID records, advances `last_ts` above the largest supplied ID inside the same transaction, and inserts pending messages with their supplied IDs.
+
+### Removed
+- Removed `import_message(...)`, `import_messages(...)`, and `write_reserved_message(...)` before they had external compatibility requirements.
+
+### simplebroker-pg 2.2.0
+- Bumped the Postgres extension for the SimpleBroker 4.3.0 exact-ID `insert_messages(...)` API.
+
+### simplebroker-redis 2.2.0
+- Bumped the Redis extension for the SimpleBroker 4.3.0 exact-ID `insert_messages(...)` API.
+- Fixed Redis `last_ts` advancement to compare 64-bit timestamp strings exactly instead of converting them to Lua numbers.
+
 ## [4.2.0] - 2026-06-01
 ### Added
 - Added API-only `write_reserved_message(...)` for writing a message with a previously generated broker message ID.

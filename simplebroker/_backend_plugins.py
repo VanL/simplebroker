@@ -226,19 +226,9 @@ class BrokerConnection(Protocol):
 
     def write(self, queue: str, message: str) -> Any: ...
 
-    def import_message(self, queue: str, message: str, *, message_id: int) -> None: ...
-
-    def import_messages(
+    def insert_messages(
         self,
         records: Iterable[tuple[str, str, int]],
-    ) -> None: ...
-
-    def write_reserved_message(
-        self,
-        queue: str,
-        message: str,
-        *,
-        message_id: int,
     ) -> None: ...
 
     def claim_one(

@@ -304,13 +304,7 @@ class Queue:
             connection.write(self.name, message)
             self._update_last_ts_hint(connection)
 
-    def import_message(self, message: str, *, message_id: int) -> None:
-        """Import a pending message with an exact existing message ID."""
-        with self.get_connection() as connection:
-            connection.import_message(self.name, message, message_id=message_id)
-            self._update_last_ts_hint(connection)
-
-    def _import_records_for_queue(
+    def _insert_records_for_queue(
         self,
         records: Iterable[tuple[str, int]],
     ) -> Iterator[tuple[str, str, int]]:
@@ -319,20 +313,14 @@ class Queue:
                 message, message_id = record
             except (TypeError, ValueError) as exc:
                 raise TypeError(
-                    "queue import records must be (message, message_id) tuples"
+                    "queue insert records must be (message, message_id) tuples"
                 ) from exc
             yield self.name, message, message_id
 
-    def import_messages(self, records: Iterable[tuple[str, int]]) -> None:
-        """Import pending messages into this queue with exact existing IDs."""
+    def insert_messages(self, records: Iterable[tuple[str, int]]) -> None:
+        """Insert pending messages into this queue with exact existing IDs."""
         with self.get_connection() as connection:
-            connection.import_messages(self._import_records_for_queue(records))
-            self._update_last_ts_hint(connection)
-
-    def write_reserved_message(self, message: str, *, message_id: int) -> None:
-        """Write using a previously generated broker message ID."""
-        with self.get_connection() as connection:
-            connection.write_reserved_message(self.name, message, message_id=message_id)
+            connection.insert_messages(self._insert_records_for_queue(records))
             self._update_last_ts_hint(connection)
 
     def generate_timestamp(self) -> int:
