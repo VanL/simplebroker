@@ -19,7 +19,7 @@ from simplebroker._constants import (
     load_config,
     resolve_config,
 )
-from simplebroker._exceptions import OperationalError, TimestampError
+from simplebroker._exceptions import IntegrityError, OperationalError, TimestampError
 from simplebroker._message_search import (
     BODY_SEARCH_DEFAULT_LIMIT,
     BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE,
@@ -177,6 +177,48 @@ class RedisBrokerCore:
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("write")
         self._write_message(queue, message)
+
+    def import_message(self, queue: str, message: str, *, message_id: int) -> None:
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+        self._validate_message_size(message)
+        self._assert_no_reentrant_mutation_during_batch("import_message")
+        normalized_id = validate_timestamp_bound("message_id", message_id)
+        if normalized_id is None:
+            raise TypeError("message_id must be an int")
+
+        current_last_ts = self.refresh_last_timestamp()
+        if normalized_id >= current_last_ts:
+            raise ValueError("imported message_id must be lower than current last_ts")
+
+        encoded = encode_id(normalized_id)
+        try:
+            result = response_list(
+                self._client.eval(
+                    scripts.WRITE_MESSAGE,
+                    5,
+                    self._keys.meta,
+                    self._keys.bodies,
+                    self._keys.all_ids,
+                    self._keys.pending(queue),
+                    self._keys.queues,
+                    queue,
+                    encoded,
+                    message,
+                )
+            )
+        except redis.RedisError as exc:
+            raise _translate_redis_error(exc) from exc
+
+        code = int(result[0])
+        if code == 1:
+            self._publish(queue)
+            return
+        if code == -1:
+            raise IntegrityError("message ID already exists")
+        if code == -2:
+            raise OperationalError("Redis namespace is not initialized")
+        raise OperationalError(f"Unexpected Redis import result: {code}")
 
     def _write_message(self, queue: str, message: str) -> int:
         for attempt in range(3):

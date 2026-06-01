@@ -1101,6 +1101,24 @@ class BrokerCore:
         # This should never be reached due to the return/raise logic above
         raise AssertionError("Unreachable code in write retry loop")
 
+    def import_message(self, queue: str, message: str, *, message_id: int) -> None:
+        """Import a pending message with an exact historical message ID."""
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+        self._assert_no_reentrant_mutation_during_batch("import_message")
+        self._validate_message_size(message)
+        normalized_id = validate_timestamp_bound("message_id", message_id)
+        if normalized_id is None:
+            raise TypeError("message_id must be an int")
+
+        current_last_ts = self.refresh_last_timestamp()
+        if normalized_id >= current_last_ts:
+            raise ValueError("imported message_id must be lower than current last_ts")
+
+        self._run_with_retry(
+            lambda: self._do_write_transaction(queue, message, normalized_id)
+        )
+
     def _log_ts_conflict(
         self, conflict_type: str, attempt: int, *, config: dict[str, Any] = _config
     ) -> None:

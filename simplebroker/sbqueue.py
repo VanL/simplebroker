@@ -304,6 +304,12 @@ class Queue:
             connection.write(self.name, message)
             self._update_last_ts_hint(connection)
 
+    def import_message(self, message: str, *, message_id: int) -> None:
+        """Import a pending message with an exact existing message ID."""
+        with self.get_connection() as connection:
+            connection.import_message(self.name, message, message_id=message_id)
+            self._update_last_ts_hint(connection)
+
     def generate_timestamp(self) -> int:
         """Generate a broker-compatible timestamp using the underlying database.
 

@@ -738,6 +738,33 @@ Notes:
 - Timestamps are monotonic per database and match what `Queue.write()` uses internally.
 - Generating a timestamp does not reserve a slot; it simply gives you the next ID.
 
+### Importing messages with existing IDs
+
+Use `import_message(...)` only for restore/import workflows that already have
+SimpleBroker message IDs. Normal producers should use `write(...)`.
+
+Imported IDs must be historical for the destination broker: `message_id` must
+be lower than the broker's current `last_ts`. Check that high-water mark before
+importing:
+
+```python
+from simplebroker import open_broker
+
+records = [
+    ("tasks", "restore one", 1837025672140161024),
+    ("tasks", "restore two", 1837025672140162048),
+]
+
+with open_broker("/path/to/.broker.db") as broker:
+    current_last_ts = broker.refresh_last_timestamp()
+    if max(message_id for _, _, message_id in records) >= current_last_ts:
+        raise RuntimeError("import IDs are not historical for this broker")
+    for queue, body, message_id in records:
+        broker.import_message(queue, body, message_id=message_id)
+```
+
+There is no CLI surface for exact-ID imports.
+
 ### Tracking the last generated timestamp
 
 Each `Queue` instance caches the most recent `meta.last_ts` value it has seen via the `queue.last_ts` attribute. The cache updates automatically after calls to `queue.write()` and `queue.generate_timestamp()`.

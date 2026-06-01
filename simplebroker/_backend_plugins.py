@@ -226,6 +226,8 @@ class BrokerConnection(Protocol):
 
     def write(self, queue: str, message: str) -> Any: ...
 
+    def import_message(self, queue: str, message: str, *, message_id: int) -> None: ...
+
     def claim_one(
         self,
         queue: str,
