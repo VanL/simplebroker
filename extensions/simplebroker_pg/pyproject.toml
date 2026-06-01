@@ -14,7 +14,7 @@ authors = [
     {name = "Van Lindberg", email = "van.lindberg@gmail.com"},
 ]
 dependencies = [
-    "simplebroker>=4.1.0",
+    "simplebroker>=4.2.0",
     "psycopg[binary]>=3",
     "psycopg-pool>=3.1",
 ]
