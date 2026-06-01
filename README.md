@@ -773,6 +773,12 @@ with open_broker("/path/to/.broker.db") as broker:
 pending messages with their exact IDs. Normal producers should still use
 `write(...)`, which allocates IDs through the broker timestamp generator.
 
+> **Supply IDs that came from a SimpleBroker timestamp generator** (your own
+> reserved ID, or the source broker's dump). Because `insert_messages(...)` moves
+> `last_ts` to just above the largest ID in the batch, an arbitrarily large ID
+> pushes the high-water mark far into the future and stalls later `write()` calls
+> until the wall clock catches up. IDs must be non-negative and below `2**63 - 1`.
+
 For a single queue handle, pass `(message, message_id)` pairs:
 
 ```python
