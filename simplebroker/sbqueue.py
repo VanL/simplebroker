@@ -7,7 +7,7 @@ queues without managing the underlying database connection.
 import logging
 import threading
 import weakref
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -308,6 +308,31 @@ class Queue:
         """Import a pending message with an exact existing message ID."""
         with self.get_connection() as connection:
             connection.import_message(self.name, message, message_id=message_id)
+            self._update_last_ts_hint(connection)
+
+    def _import_records_for_queue(
+        self,
+        records: Iterable[tuple[str, int]],
+    ) -> Iterator[tuple[str, str, int]]:
+        for record in records:
+            try:
+                message, message_id = record
+            except (TypeError, ValueError) as exc:
+                raise TypeError(
+                    "queue import records must be (message, message_id) tuples"
+                ) from exc
+            yield self.name, message, message_id
+
+    def import_messages(self, records: Iterable[tuple[str, int]]) -> None:
+        """Import pending messages into this queue with exact existing IDs."""
+        with self.get_connection() as connection:
+            connection.import_messages(self._import_records_for_queue(records))
+            self._update_last_ts_hint(connection)
+
+    def write_reserved_message(self, message: str, *, message_id: int) -> None:
+        """Write using a previously generated broker message ID."""
+        with self.get_connection() as connection:
+            connection.write_reserved_message(self.name, message, message_id=message_id)
             self._update_last_ts_hint(connection)
 
     def generate_timestamp(self) -> int:

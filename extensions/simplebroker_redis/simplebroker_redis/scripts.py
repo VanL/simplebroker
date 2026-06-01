@@ -32,6 +32,47 @@ redis.call('SADD', queues, queue)
 return {1}
 """
 
+IMPORT_MESSAGES = """
+local meta = KEYS[1]
+local bodies = KEYS[2]
+local all_ids = KEYS[3]
+local queues = KEYS[4]
+local required_last_ts = tonumber(ARGV[1])
+local count = tonumber(ARGV[2])
+if redis.call('HGET', meta, 'magic') == false then
+  return {-2}
+end
+local seen = {}
+for index = 1, count do
+  local arg_offset = 3 + ((index - 1) * 3)
+  local id = ARGV[arg_offset + 1]
+  if seen[id] == true then
+    return {-1}
+  end
+  seen[id] = true
+  if redis.call('HEXISTS', bodies, id) == 1 or redis.call('ZSCORE', all_ids, id) ~= false then
+    return {-1}
+  end
+end
+local current = tonumber(redis.call('HGET', meta, 'last_ts') or '0')
+if current < required_last_ts then
+  redis.call('HSET', meta, 'last_ts', ARGV[1])
+end
+for index = 1, count do
+  local key_offset = 4 + index
+  local arg_offset = 3 + ((index - 1) * 3)
+  local pending = KEYS[key_offset]
+  local queue = ARGV[arg_offset]
+  local id = ARGV[arg_offset + 1]
+  local body = ARGV[arg_offset + 2]
+  redis.call('HSET', bodies, id, body)
+  redis.call('ZADD', all_ids, 0, id)
+  redis.call('ZADD', pending, 0, id)
+  redis.call('SADD', queues, queue)
+end
+return {1}
+"""
+
 CLAIM_MESSAGES = """
 local pending = KEYS[1]
 local claimed = KEYS[2]

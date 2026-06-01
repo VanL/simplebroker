@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from importlib import metadata
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
@@ -227,6 +227,19 @@ class BrokerConnection(Protocol):
     def write(self, queue: str, message: str) -> Any: ...
 
     def import_message(self, queue: str, message: str, *, message_id: int) -> None: ...
+
+    def import_messages(
+        self,
+        records: Iterable[tuple[str, str, int]],
+    ) -> None: ...
+
+    def write_reserved_message(
+        self,
+        queue: str,
+        message: str,
+        *,
+        message_id: int,
+    ) -> None: ...
 
     def claim_one(
         self,
