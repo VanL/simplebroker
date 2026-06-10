@@ -54,6 +54,7 @@ from ._message_search import (
     validate_body_search_limit,
 )
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner, close_owned_runner
+from ._sidecar import SidecarSession
 from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator, validate_timestamp_bound
@@ -1002,6 +1003,65 @@ class BrokerCore:
 
         with self._lock:
             return self._timestamp_gen.refresh_last_ts()
+
+    @contextmanager
+    def sidecar(self, *, transaction: bool = False) -> Iterator[SidecarSession]:
+        """Open a session for caller-owned sidecar tables in this database.
+
+        Sidecar tables share the broker's database but are owned by the
+        caller (see ``simplebroker.ext.RESERVED_TABLE_NAMES`` for the names
+        you must not touch). Statements run through the broker's lock and
+        retry discipline:
+
+        - ``transaction=False`` (default): every ``run()`` is retried on
+          lock contention and self-commits (runner autocommit).
+        - ``transaction=True``: ``BEGIN IMMEDIATE`` is acquired through the
+          retry loop; the transaction commits when the ``with`` block exits
+          cleanly and rolls back if it raises. Statements inside the
+          transaction are not individually retried (the write lock is
+          already held). Do not nest, and do not call queue operations on
+          this core inside the block: SQLite cannot nest write transactions.
+
+        Both modes refuse to start while this thread is yielding an
+        at-least-once generator batch from this core: in that window the
+        connection has an open transaction, and sidecar statements would
+        silently join it.
+
+        Raises:
+            SidecarUnavailableError: On backends without SQL storage.
+            RuntimeError: If called during an open at-least-once batch.
+        """
+        self._assert_no_reentrant_mutation_during_batch("sidecar")
+        with self._lock:
+            if not transaction:
+
+                def _run_autocommit(
+                    sql: str,
+                    params: tuple[Any, ...] = (),
+                    *,
+                    fetch: bool = False,
+                ) -> Iterable[tuple[Any, ...]]:
+                    return self._run_with_retry(
+                        lambda: self._runner.run(sql, params, fetch=fetch)
+                    )
+
+                session = SidecarSession(_run_autocommit)
+                try:
+                    yield session
+                finally:
+                    session.close()
+                return
+
+            self._run_with_retry(self._runner.begin_immediate)
+            session = SidecarSession(self._runner.run)
+            try:
+                yield session
+            except BaseException:
+                self._runner.rollback()
+                raise
+            finally:
+                session.close()
+            self._runner.commit()
 
     def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
