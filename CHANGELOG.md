@@ -5,7 +5,7 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.4.0] - 2026-06-10
+## [4.5.0] - 2026-06-10
 ### Added
 - Added a public sidecar-table API for embedding applications: `Queue.sidecar()` /
   `BrokerCore.sidecar()` yield a `SidecarSession` for caller-owned tables in the
@@ -16,9 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PollingStrategy`, `default_error_handler`, and the new public `StopWatching`
   exception (the former private `_StopLoop`, which remains as an alias).
 
-### simplebroker-redis 2.3.0
+### simplebroker-redis 2.3.1
 - `RedisBrokerCore.sidecar()` raises `SidecarUnavailableError` (the Redis backend has
-  no SQL storage). Requires simplebroker>=4.4.0.
+  no SQL storage). Requires simplebroker>=4.5.0.
 
 ## [4.3.0] - 2026-06-01
 ### Changed
