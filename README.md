@@ -345,6 +345,7 @@ The format:
 - High 52 bits: microseconds after Unix epoch
 - Low 12 bits: logical counter for sub-microsecond ordering
 - Similar to Twitter's Snowflake IDs or UUID7
+- The format is compatible with time.time_ns(), but the precision is closer to microseconds (~4 μs) due to limits on the precision of the host clock
 
 
 ### JSON for Safe Processing
