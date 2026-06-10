@@ -174,8 +174,7 @@ def test_sidecar_write_retries_until_external_lock_clears(
             try:
                 with q.sidecar(transaction=True) as session:
                     session.run(
-                        "CREATE TABLE IF NOT EXISTS app_kv "
-                        "(k TEXT PRIMARY KEY, v TEXT)"
+                        "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
                     )
                     session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("g", "7"))
             except Exception as exc:  # pragma: no cover - failure diagnostics
@@ -209,9 +208,7 @@ def test_sidecar_tables_survive_queue_traffic_and_vacuum(
     assert q.read() == "m0"  # claim one message so vacuum has work to do
 
     with q.sidecar(transaction=True) as session:
-        session.run(
-            "CREATE TABLE IF NOT EXISTS app_state (k TEXT PRIMARY KEY, v TEXT)"
-        )
+        session.run("CREATE TABLE IF NOT EXISTS app_state (k TEXT PRIMARY KEY, v TEXT)")
         session.run("INSERT INTO app_state (k, v) VALUES (?, ?)", ("h", "8"))
 
     with q.get_connection() as conn:
