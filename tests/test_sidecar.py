@@ -118,3 +118,33 @@ def test_queue_sidecar_persistent(tmp_path: Path) -> None:
             rows = list(session.run("SELECT v FROM app_kv", fetch=True))
         assert rows == [("6",)]
         assert q.read() == "interleaved"
+
+
+def test_sidecar_blocked_during_at_least_once_batch(tmp_path: Path) -> None:
+    with Queue("jobs", db_path=_db(tmp_path), persistent=True) as q:
+        q.write("m1")
+        q.write("m2")
+        with q.get_connection() as conn:
+            gen = conn.claim_generator(
+                "jobs",
+                with_timestamps=False,
+                delivery_guarantee="at_least_once",
+            )
+            assert next(gen) == "m1"
+            # The generator is suspended mid-batch: this thread holds an
+            # open transaction. Both sidecar modes must refuse.
+            with pytest.raises(RuntimeError, match="at_least_once"):
+                with conn.sidecar():
+                    pass
+            with pytest.raises(RuntimeError, match="at_least_once"):
+                with conn.sidecar(transaction=True):
+                    pass
+            gen.close()  # rolls the batch back; m1/m2 stay claimable
+
+
+def test_session_unusable_after_block_exits(tmp_path: Path) -> None:
+    q = Queue("jobs", db_path=_db(tmp_path))
+    with q.sidecar() as session:
+        session.run("CREATE TABLE IF NOT EXISTS app_kv (k TEXT, v TEXT)")
+    with pytest.raises(RuntimeError, match="closed"):
+        session.run("SELECT 1", fetch=True)
