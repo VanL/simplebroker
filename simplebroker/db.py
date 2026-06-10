@@ -1689,6 +1689,7 @@ class BrokerCore:
         *,
         exact_timestamp: int | None = None,
         with_timestamps: bool = True,
+        include_claimed: bool = False,
     ) -> tuple[str, int] | str | None:
         """Peek at exactly one message from a queue without claiming it.
 
@@ -1698,6 +1699,11 @@ class BrokerCore:
             queue: Name of the queue
             exact_timestamp: If provided, peek only at message with this timestamp
             with_timestamps: If True, return (body, timestamp) tuple; if False, return just body
+            include_claimed: If True, also return claimed (consumed but not
+                yet vacuumed) messages, merged in message-ID order. Claimed
+                rows are deletion-pending: vacuum may remove them at any
+                time, and seeing one says nothing about delivery state.
+                Peeking never changes claim state.
 
         Returns:
             (message_body, timestamp) tuple if with_timestamps=True and message found,
@@ -1709,7 +1715,11 @@ class BrokerCore:
             RuntimeError: If called from a forked process
         """
         results = self._retrieve(
-            queue, operation="peek", limit=1, exact_timestamp=exact_timestamp
+            queue,
+            operation="peek",
+            limit=1,
+            exact_timestamp=exact_timestamp,
+            require_unclaimed=not include_claimed,
         )
         if not results:
             return None
@@ -1726,6 +1736,7 @@ class BrokerCore:
         with_timestamps: bool = True,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> list[tuple[str, int]] | list[str]:
         """Peek at multiple messages from a queue without claiming them.
 
@@ -1737,6 +1748,11 @@ class BrokerCore:
             with_timestamps: If True, return (body, timestamp) tuples; if False, return just bodies
             after_timestamp: If provided, only peek at messages after this timestamp
             before_timestamp: If provided, only peek at messages before this timestamp
+            include_claimed: If True, also return claimed (consumed but not
+                yet vacuumed) messages, merged in message-ID order. Claimed
+                rows are deletion-pending: vacuum may remove them at any
+                time, and seeing one says nothing about delivery state.
+                Peeking never changes claim state.
 
         Returns:
             list of (message_body, timestamp) tuples if with_timestamps=True,
@@ -1755,6 +1771,7 @@ class BrokerCore:
             limit=limit,
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
+            require_unclaimed=not include_claimed,
         )
 
         if with_timestamps:
@@ -1771,6 +1788,7 @@ class BrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> Iterator[tuple[str, int] | str]:
         """Generator that peeks at messages in a queue without claiming them.
 
@@ -1781,6 +1799,11 @@ class BrokerCore:
             after_timestamp: If provided, only peek at messages after this timestamp
             before_timestamp: If provided, only peek at messages before this timestamp
             exact_timestamp: If provided, only peek at message with this exact timestamp
+            include_claimed: If True, also return claimed (consumed but not
+                yet vacuumed) messages, merged in message-ID order. Claimed
+                rows are deletion-pending: vacuum may remove them at any
+                time, and seeing one says nothing about delivery state.
+                Peeking never changes claim state.
 
         Yields:
             (message_body, timestamp) tuples if with_timestamps=True,
@@ -1802,6 +1825,7 @@ class BrokerCore:
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
+                require_unclaimed=not include_claimed,
             )
 
             # If no results, we're done

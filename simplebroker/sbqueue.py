@@ -536,6 +536,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         message_id: int | None = None,
+        include_claimed: bool = False,
     ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None:
         """View message(s) without removing them from the queue (CLI-mirroring method).
 
@@ -548,6 +549,11 @@ class Queue:
             after_timestamp: Only peek at messages newer than this timestamp
             before_timestamp: Only peek at messages older than this timestamp
             message_id: Peek at specific message by ID (cannot be used with other filters)
+            include_claimed: If True, also return claimed (consumed but not
+                yet vacuumed) messages, merged in message-ID order. Claimed
+                rows are deletion-pending: vacuum may remove them at any
+                time, and seeing one says nothing about delivery state.
+                Peeking never changes claim state.
 
         Returns:
             Depends on parameters:
@@ -570,7 +576,9 @@ class Queue:
         if message_id is not None:
             # Peek at specific message by ID
             return self.peek_one(
-                exact_timestamp=message_id, with_timestamps=with_timestamps
+                exact_timestamp=message_id,
+                with_timestamps=with_timestamps,
+                include_claimed=include_claimed,
             )
         elif all_messages:
             # Return generator for all messages
@@ -578,6 +586,7 @@ class Queue:
                 with_timestamps=with_timestamps,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
+                include_claimed=include_claimed,
             )
         else:
             # Peek at single message
@@ -587,24 +596,37 @@ class Queue:
                     with_timestamps=with_timestamps,
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
+                    include_claimed=include_claimed,
                 )
                 try:
                     return next(gen)
                 except StopIteration:
                     return None
             else:
-                return self.peek_one(with_timestamps=with_timestamps)
+                return self.peek_one(
+                    with_timestamps=with_timestamps,
+                    include_claimed=include_claimed,
+                )
 
     # ========== Granular Peek API ==========
 
     def peek_one(
-        self, *, exact_timestamp: int | None = None, with_timestamps: bool = False
+        self,
+        *,
+        exact_timestamp: int | None = None,
+        with_timestamps: bool = False,
+        include_claimed: bool = False,
     ) -> str | tuple[str, int] | None:
         """Peek at exactly one message without removing it from the queue.
 
         Args:
             exact_timestamp: If provided, peek only at message with this timestamp
             with_timestamps: If True, return (message, timestamp) tuple
+            include_claimed: If True, also return claimed (consumed but not
+                yet vacuumed) messages, merged in message-ID order. Claimed
+                rows are deletion-pending: vacuum may remove them at any
+                time, and seeing one says nothing about delivery state.
+                Peeking never changes claim state.
 
         Returns:
             Message string or (message, timestamp) tuple if with_timestamps=True,
@@ -619,6 +641,7 @@ class Queue:
                 self.name,
                 exact_timestamp=exact_timestamp,
                 with_timestamps=with_timestamps,
+                include_claimed=include_claimed,
             )
 
     def peek_many(
@@ -628,6 +651,7 @@ class Queue:
         with_timestamps: bool = False,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> list[str] | list[tuple[str, int]]:
         """Peek at multiple messages without removing them from the queue.
 
@@ -636,6 +660,11 @@ class Queue:
             with_timestamps: If True, return list of (message, timestamp) tuples
             after_timestamp: Only peek at messages newer than this timestamp
             before_timestamp: Only peek at messages older than this timestamp
+            include_claimed: If True, also return claimed (consumed but not
+                yet vacuumed) messages, merged in message-ID order. Claimed
+                rows are deletion-pending: vacuum may remove them at any
+                time, and seeing one says nothing about delivery state.
+                Peeking never changes claim state.
 
         Returns:
             list of messages or list of (message, timestamp) tuples if with_timestamps=True
@@ -652,6 +681,7 @@ class Queue:
                 with_timestamps=with_timestamps,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
+                include_claimed=include_claimed,
             )
 
     def peek_generator(
@@ -661,6 +691,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> Iterator[str | tuple[str, int]]:
         """Generator that peeks at messages without removing them from the queue.
 
@@ -671,6 +702,11 @@ class Queue:
             after_timestamp: Only peek at messages newer than this timestamp
             before_timestamp: Only peek at messages older than this timestamp
             exact_timestamp: Only peek at message with this exact timestamp
+            include_claimed: If True, also return claimed (consumed but not
+                yet vacuumed) messages, merged in message-ID order. Claimed
+                rows are deletion-pending: vacuum may remove them at any
+                time, and seeing one says nothing about delivery state.
+                Peeking never changes claim state.
 
         Yields:
             Messages or (message, timestamp) tuples if with_timestamps=True
@@ -686,6 +722,7 @@ class Queue:
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
+                include_claimed=include_claimed,
             )
 
     def move(

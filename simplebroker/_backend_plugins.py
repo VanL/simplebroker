@@ -272,6 +272,7 @@ class BrokerConnection(Protocol):
         *,
         exact_timestamp: int | None = None,
         with_timestamps: bool = True,
+        include_claimed: bool = False,
     ) -> tuple[str, int] | str | None: ...
 
     def peek_many(
@@ -282,6 +283,7 @@ class BrokerConnection(Protocol):
         with_timestamps: bool = True,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> list[tuple[str, int]] | list[str]: ...
 
     def peek_generator(
@@ -293,6 +295,7 @@ class BrokerConnection(Protocol):
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> Iterator[tuple[str, int] | str]: ...
 
     def move_one(
