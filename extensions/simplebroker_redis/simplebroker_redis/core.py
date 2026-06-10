@@ -324,18 +324,17 @@ class RedisBrokerCore:
         exact_timestamp: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        state: str = "pending",
     ) -> list[str]:
-        pending = self._qkey(queue, "pending")
+        zset = self._qkey(queue, state)
         if exact_timestamp is not None:
             encoded = encode_id(exact_timestamp)
-            return (
-                [encoded] if self._client.zscore(pending, encoded) is not None else []
-            )
+            return [encoded] if self._client.zscore(zset, encoded) is not None else []
         return [
             str(encoded)
             for encoded in response_list(
                 self._client.zrangebylex(
-                    pending,
+                    zset,
                     min_bound(after_timestamp),
                     max_bound(before_timestamp),
                     start=offset,
@@ -353,15 +352,37 @@ class RedisBrokerCore:
         exact_timestamp: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> list[tuple[str, int]]:
-        ids = self._zrange_pending(
-            queue,
-            limit=limit,
-            offset=offset,
-            exact_timestamp=exact_timestamp,
-            after_timestamp=after_timestamp,
-            before_timestamp=before_timestamp,
-        )
+        if not include_claimed:
+            ids = self._zrange_pending(
+                queue,
+                limit=limit,
+                offset=offset,
+                exact_timestamp=exact_timestamp,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
+            )
+        else:
+            # Union of the pending and claimed ZSETs. Encoded IDs are
+            # lexicographically ordered, so a plain sort merges by message
+            # ID; offset/limit apply to the merged stream, so fetch up to
+            # offset+limit candidates from each state (a k-way merge bound).
+            fetch = limit + offset
+            merged: set[str] = set()
+            for state in ("pending", "claimed"):
+                merged.update(
+                    self._zrange_pending(
+                        queue,
+                        limit=fetch,
+                        offset=0,
+                        exact_timestamp=exact_timestamp,
+                        after_timestamp=after_timestamp,
+                        before_timestamp=before_timestamp,
+                        state=state,
+                    )
+                )
+            ids = sorted(merged)[offset : offset + limit]
         if not ids:
             return []
         bodies = response_list(self._client.hmget(self._key("bodies"), ids))
@@ -691,9 +712,15 @@ class RedisBrokerCore:
         *,
         exact_timestamp: int | None = None,
         with_timestamps: bool = True,
+        include_claimed: bool = False,
     ) -> tuple[str, int] | str | None:
         self._validate_queue_name(queue)
-        rows = self._peek_rows(queue, limit=1, exact_timestamp=exact_timestamp)
+        rows = self._peek_rows(
+            queue,
+            limit=1,
+            exact_timestamp=exact_timestamp,
+            include_claimed=include_claimed,
+        )
         if not rows:
             return None
         return rows[0] if with_timestamps else rows[0][0]
@@ -707,6 +734,7 @@ class RedisBrokerCore:
         with_timestamps: Literal[True] = True,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> list[tuple[str, int]]: ...
 
     @overload
@@ -718,6 +746,7 @@ class RedisBrokerCore:
         with_timestamps: Literal[False],
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> list[str]: ...
 
     @overload
@@ -729,6 +758,7 @@ class RedisBrokerCore:
         with_timestamps: bool,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> list[tuple[str, int]] | list[str]: ...
 
     def peek_many(
@@ -739,6 +769,7 @@ class RedisBrokerCore:
         with_timestamps: bool = True,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> list[tuple[str, int]] | list[str]:
         if limit < 1:
             raise ValueError("limit must be at least 1")
@@ -748,6 +779,7 @@ class RedisBrokerCore:
             limit=limit,
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
+            include_claimed=include_claimed,
         )
         return rows if with_timestamps else [body for body, _ in rows]
 
@@ -760,6 +792,7 @@ class RedisBrokerCore:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: int | None = None,
+        include_claimed: bool = False,
     ) -> Generator[tuple[str, int] | str, None, None]:
         effective_batch_size = batch_size or PEEK_BATCH_SIZE
         offset = 0
@@ -771,6 +804,7 @@ class RedisBrokerCore:
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
+                include_claimed=include_claimed,
             )
             if not rows:
                 return
