@@ -5,6 +5,20 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.6.0] - 2026-06-10
+### Added
+- Added `include_claimed` to the public peek surface — `Queue.peek/peek_one/
+  peek_many/peek_generator`, the `BrokerConnection` protocol, and the CLI
+  (`broker peek --include-claimed`). When set, peeks return claimed (consumed
+  but not yet vacuumed) messages merged with pending ones in message-ID order.
+  Claimed rows are deletion-pending; peeking never changes claim state. This
+  completes the public claimed-row round trip started by
+  `find_message_ids(include_claimed=...)`.
+
+### simplebroker-redis 2.4.0
+- Implemented `include_claimed` peeks by merging the per-queue pending and
+  claimed ZSETs. Requires simplebroker>=4.6.0.
+
 ## [4.5.0] - 2026-06-10
 ### Added
 - Added a public sidecar-table API for embedding applications: `Queue.sidecar()` /

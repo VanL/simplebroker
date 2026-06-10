@@ -386,7 +386,13 @@ $ broker read tasks --all --after "2024-01-15T14:30:00Z"
 
 # Process a bounded open interval
 $ broker peek tasks --all --after "$start" --before "$end"
+
+# Also show consumed rows not yet vacuumed (inspection only)
+$ broker peek tasks --all --include-claimed
 ```
+
+Claimed rows are deletion-pending — vacuum may remove them at any time;
+`--include-claimed` is an inspection tool, not delivery state.
 
 ## Common Patterns
 
@@ -702,6 +708,15 @@ Use generator APIs such as `Queue.read_generator()` and `Queue.move_generator()`
 when you need retry-on-stop batch processing. In `delivery_guarantee="at_least_once"`
 generator mode, SimpleBroker commits a batch only after the full batch has been
 yielded; stopping mid-batch rolls that batch back for retry.
+
+Peeks can also inspect claimed (consumed but not yet vacuumed) messages:
+
+```python
+q.peek_many(10, include_claimed=True)   # pending + claimed, in message-ID order
+```
+
+Claimed rows are deletion-pending — vacuum may remove them at any time — so
+`include_claimed` is an inspection tool, not delivery state.
 
 ### Queue metadata
 
