@@ -5,6 +5,21 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.4.0] - 2026-06-10
+### Added
+- Added a public sidecar-table API for embedding applications: `Queue.sidecar()` /
+  `BrokerCore.sidecar()` yield a `SidecarSession` for caller-owned tables in the
+  broker's database, inheriting the broker's retry loop, locking, and
+  ephemeral-vs-persistent connection discipline. Exported `SidecarSession`,
+  `SidecarUnavailableError`, and `RESERVED_TABLE_NAMES` from `simplebroker.ext`.
+- Promoted the watcher subclassing contract into `simplebroker.ext`: `BaseWatcher`,
+  `PollingStrategy`, `default_error_handler`, and the new public `StopWatching`
+  exception (the former private `_StopLoop`, which remains as an alias).
+
+### simplebroker-redis 2.3.0
+- `RedisBrokerCore.sidecar()` raises `SidecarUnavailableError` (the Redis backend has
+  no SQL storage). Requires simplebroker>=4.4.0.
+
 ## [4.3.0] - 2026-06-01
 ### Changed
 - Replaced the 4.1/4.2 exact-ID APIs with a single API-only `insert_messages(...)` method on broker handles and `Queue`. It accepts one or more exact-ID records, advances `last_ts` above the largest supplied ID inside the same transaction, and inserts pending messages with their supplied IDs.

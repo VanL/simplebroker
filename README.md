@@ -67,6 +67,7 @@ dependencies and stores its state in one SQLite database.
     - [Thread-Based Background Processing](#thread-based-background-processing)
     - [Context Manager Support](#context-manager-support)
     - [Advanced: Custom Extensions](#advanced-custom-extensions)
+    - [Sidecar tables (advanced)](#sidecar-tables-advanced)
   - [Embedding SimpleBroker in Your Project](#embedding-simplebroker-in-your-project)
   - [Performance \& Tuning](#performance--tuning)
     - [Cross-Backend Benchmarking](#cross-backend-benchmarking)
@@ -1011,6 +1012,47 @@ class PriorityQueueSystem:
 Backend authors should use the explicit extension contracts in
 `simplebroker.ext`; see [Advanced: External Backend Plugins](#advanced-external-backend-plugins).
 See [`examples/`](examples/) for application-level patterns.
+
+### Sidecar tables (advanced)
+
+Embedding applications sometimes need a few of their own tables living in the
+broker's database — operational state that should share the broker's durability
+and backups without a second storage system. The sidecar API supports exactly
+that, through the broker's own locking and retry discipline:
+
+```python
+from simplebroker import Queue
+
+q = Queue("jobs", db_path="app.db")
+
+# Transactional writes: BEGIN IMMEDIATE through the broker's retry loop,
+# commit on clean exit, rollback if the block raises.
+with q.sidecar(transaction=True) as s:
+    s.run("CREATE TABLE IF NOT EXISTS myapp_state (k TEXT PRIMARY KEY, v TEXT)")
+    s.run("INSERT INTO myapp_state (k, v) VALUES (?, ?)", ("cursor", "42"))
+
+# Autocommit reads/writes: each statement retried on lock contention.
+with q.sidecar() as s:
+    rows = list(s.run("SELECT v FROM myapp_state WHERE k = ?", ("cursor",), fetch=True))
+```
+
+Rules of the road:
+
+- **Prefix your tables** (`myapp_...`) and never touch the broker's own tables —
+  see `simplebroker.ext.RESERVED_TABLE_NAMES`.
+- Connection lifetime follows the `Queue`: ephemeral queues get in and get out
+  per session; `persistent=True` queues reuse their connection.
+- Use `?` (qmark) placeholders. They work natively on SQLite and are translated
+  by the Postgres backend (where sidecar tables live in the broker's configured
+  schema). Other SQL dialect differences are yours to manage.
+- The Redis backend has no SQL storage: `sidecar()` raises
+  `SidecarUnavailableError` there. Catch it to probe the capability.
+- Don't nest sidecar transactions and don't call queue operations inside a
+  `sidecar(transaction=True)` block on the same persistent handle — SQLite
+  cannot nest write transactions.
+- Schema setup: idempotent `CREATE TABLE IF NOT EXISTS` (plus additive
+  `ALTER TABLE`) inside a `transaction=True` session is race-safe across
+  processes.
 
 ## Embedding SimpleBroker in Your Project
 
