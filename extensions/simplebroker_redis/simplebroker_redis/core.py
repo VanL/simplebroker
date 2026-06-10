@@ -8,6 +8,7 @@ import time
 import uuid
 import warnings
 from collections.abc import Generator, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from fnmatch import fnmatchcase
 from typing import Any, Literal, overload
 
@@ -19,7 +20,12 @@ from simplebroker._constants import (
     load_config,
     resolve_config,
 )
-from simplebroker._exceptions import IntegrityError, OperationalError, TimestampError
+from simplebroker._exceptions import (
+    IntegrityError,
+    OperationalError,
+    SidecarUnavailableError,
+    TimestampError,
+)
 from simplebroker._message_insert import (
     MessageInsertRecord,
     normalize_insert_records,
@@ -30,6 +36,7 @@ from simplebroker._message_search import (
     validate_body_contains,
     validate_body_search_limit,
 )
+from simplebroker._sidecar import SidecarSession
 from simplebroker._timestamp import TimestampGenerator, validate_timestamp_bound
 from simplebroker.db import (
     _literal_prefix_from_fnmatch,
@@ -1347,6 +1354,15 @@ class RedisBrokerCore:
             pipe.hdel(self._key("aliases"), alias)
             pipe.hset(self._key("meta"), "alias_version", str(time.time_ns()))
             pipe.execute()
+
+    def sidecar(
+        self, *, transaction: bool = False
+    ) -> AbstractContextManager[SidecarSession]:
+        """Sidecar tables require a SQL backend; Redis has no SQL storage."""
+        raise SidecarUnavailableError(
+            "the Redis backend does not support sidecar tables "
+            "(no SQL storage); use the SQLite or Postgres backend"
+        )
 
     def get_meta(self) -> dict[str, int | str]:
         meta = response_dict(self._client.hgetall(self._key("meta")))
