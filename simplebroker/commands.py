@@ -5,6 +5,7 @@ import sys
 import time
 import warnings
 from collections.abc import Callable, Iterator
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -503,6 +504,7 @@ def cmd_peek(
     after_str: str | None = None,
     message_id_str: str | None = None,
     before_str: str | None = None,
+    include_claimed: bool = False,
 ) -> int:
     """Peek at message(s) without removing them using Queue API.
 
@@ -515,6 +517,8 @@ def cmd_peek(
         after_str: Timestamp string for filtering
         message_id_str: Specific message ID to peek at
         before_str: Timestamp string for upper-bound filtering
+        include_claimed: If True, also show claimed (consumed but not yet
+            vacuumed) messages; claimed rows may disappear to vacuum at any time
 
     Returns:
         Exit code
@@ -533,8 +537,10 @@ def cmd_peek(
     canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
     with Queue(canonical_queue, db_path=db_path) as queue:
         return _process_queue_fetch(
-            fetch_one=queue.peek_one,
-            fetch_generator=queue.peek_generator,
+            fetch_one=partial(queue.peek_one, include_claimed=include_claimed),
+            fetch_generator=partial(
+                queue.peek_generator, include_claimed=include_claimed
+            ),
             exact_timestamp=exact_timestamp,
             all_messages=all_messages,
             after_timestamp=after_timestamp,

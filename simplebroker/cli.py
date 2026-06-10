@@ -219,6 +219,14 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     # Peek command
     peek_parser = subparsers.add_parser("peek", help="read without removing")
     add_read_peek_args(peek_parser)
+    peek_parser.add_argument(
+        "--include-claimed",
+        action="store_true",
+        help=(
+            "also show claimed (consumed but not yet vacuumed) messages; "
+            "claimed rows may disappear to vacuum at any time"
+        ),
+    )
 
     # list command
     list_parser = subparsers.add_parser("list", help="list all queues")
@@ -1089,6 +1097,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 after_str=after_str,
                 message_id_str=message_id_str,
                 before_str=before_str,
+                include_claimed=args.include_claimed,
             )
         elif args.command == "list":
             show_stats = getattr(args, "stats", False)
