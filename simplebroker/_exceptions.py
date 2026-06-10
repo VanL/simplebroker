@@ -87,4 +87,15 @@ class MessageError(BrokerError):
     pass
 
 
+class SidecarUnavailableError(BrokerError):
+    """The active backend has no SQL storage for sidecar tables.
+
+    Raised by ``sidecar()`` on backends (for example Redis/Valkey) that do
+    not store queues in a SQL database. Catch this to detect the capability:
+    there is deliberately no separate ``supports_sidecar`` flag.
+    """
+
+    pass
+
+
 # ~

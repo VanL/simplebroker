@@ -1,7 +1,8 @@
 """Public extension points for SimpleBroker.
 
 This module provides the public API for extending SimpleBroker with custom
-runners, backend plugins, and core components like timestamp generation.
+runners, backend plugins, and core components like timestamp generation,
+plus the sidecar-table session surface for embedding applications.
 """
 
 from ._backend_plugins import (
@@ -19,9 +20,11 @@ from ._exceptions import (
     MessageError,
     OperationalError,
     QueueNameError,
+    SidecarUnavailableError,
     TimestampError,
 )
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner
+from ._sidecar import RESERVED_TABLE_NAMES, SidecarSession
 from ._timestamp import TimestampGenerator
 
 __all__ = [
@@ -36,6 +39,9 @@ __all__ = [
     "MultiQueueActivityWaiterHook",
     "get_backend_plugin",
     "TimestampGenerator",
+    # Sidecar tables
+    "RESERVED_TABLE_NAMES",
+    "SidecarSession",
     # Exceptions
     "BrokerError",
     "OperationalError",
@@ -44,6 +50,7 @@ __all__ = [
     "TimestampError",
     "QueueNameError",
     "MessageError",
+    "SidecarUnavailableError",
 ]
 
 # ~

@@ -8,6 +8,7 @@ pytestmark = [pytest.mark.shared]
 def test_ext_imports():
     """Test that all exports from ext.py can be imported."""
     from simplebroker.ext import (
+        RESERVED_TABLE_NAMES,
         ActivityWaiter,
         BackendAwareRunner,
         BackendPlugin,
@@ -20,6 +21,8 @@ def test_ext_imports():
         OperationalError,
         QueueNameError,
         SetupPhase,
+        SidecarSession,
+        SidecarUnavailableError,
         SQLiteRunner,
         SQLRunner,
         TimestampError,
@@ -28,6 +31,7 @@ def test_ext_imports():
     )
 
     # Verify they're all importable
+    assert RESERVED_TABLE_NAMES is not None
     assert ActivityWaiter is not None
     assert BackendAwareRunner is not None
     assert BackendPlugin is not None
@@ -40,6 +44,8 @@ def test_ext_imports():
     assert OperationalError is not None
     assert QueueNameError is not None
     assert SetupPhase is not None
+    assert SidecarSession is not None
+    assert SidecarUnavailableError is not None
     assert SQLiteRunner is not None
     assert SQLRunner is not None
     assert TimestampError is not None
@@ -69,6 +75,9 @@ def test_ext_all_exports():
         "TimestampError",
         "QueueNameError",
         "MessageError",
+        "RESERVED_TABLE_NAMES",
+        "SidecarSession",
+        "SidecarUnavailableError",
     ]
 
     assert set(ext.__all__) == set(expected)
