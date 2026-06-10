@@ -94,3 +94,27 @@ def test_transaction_rolls_back_on_exception(tmp_path: Path) -> None:
         with conn.sidecar() as session:
             rows = list(session.run("SELECT v FROM app_kv", fetch=True))
     assert rows == []  # the insert was rolled back; the exception propagated
+
+
+def test_queue_sidecar_ephemeral(tmp_path: Path) -> None:
+    q = Queue("jobs", db_path=_db(tmp_path))
+    with q.sidecar(transaction=True) as session:
+        session.run("CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)")
+        session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("e", "5"))
+    with q.sidecar() as session:
+        rows = list(session.run("SELECT v FROM app_kv", fetch=True))
+    assert rows == [("5",)]
+
+
+def test_queue_sidecar_persistent(tmp_path: Path) -> None:
+    with Queue("jobs", db_path=_db(tmp_path), persistent=True) as q:
+        with q.sidecar(transaction=True) as session:
+            session.run(
+                "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
+            )
+            session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("f", "6"))
+        q.write("interleaved")  # queue ops and sidecar ops share the handle
+        with q.sidecar() as session:
+            rows = list(session.run("SELECT v FROM app_kv", fetch=True))
+        assert rows == [("6",)]
+        assert q.read() == "interleaved"

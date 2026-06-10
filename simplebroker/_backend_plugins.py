@@ -11,7 +11,10 @@ from ._exceptions import DatabaseError
 from ._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 
 if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
+
     from ._runner import SQLRunner
+    from ._sidecar import SidecarSession
     from .metadata import QueueStats
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
@@ -388,6 +391,10 @@ class BrokerConnection(Protocol):
     def get_data_version(self) -> int | None: ...
 
     def vacuum(self, *, compact: bool = False) -> None: ...
+
+    def sidecar(
+        self, *, transaction: bool = False
+    ) -> AbstractContextManager[SidecarSession]: ...
 
     def get_alias_version(self) -> int: ...
 

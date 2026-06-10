@@ -24,6 +24,7 @@ from ._backend_plugins import (
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
 from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
+from ._sidecar import SidecarSession
 from ._targets import ResolvedTarget
 from .db import DBConnection
 from .metadata import QueueStats
@@ -270,6 +271,21 @@ class Queue:
             latest = connection.refresh_last_timestamp()
         self._last_ts = latest
         return latest
+
+    @contextmanager
+    def sidecar(self, *, transaction: bool = False) -> Iterator[SidecarSession]:
+        """Open a sidecar-table session against this queue's database.
+
+        Connection lifetime follows this queue's mode: ephemeral queues open
+        and close a connection for the session ("get in, get out");
+        persistent queues reuse their held connection. See
+        ``BrokerCore.sidecar`` for transaction semantics and
+        ``simplebroker.ext.RESERVED_TABLE_NAMES`` for tables you must not
+        touch.
+        """
+        with self.get_connection() as connection:
+            with connection.sidecar(transaction=transaction) as session:
+                yield session
 
     def _update_last_ts_hint(self, connection: BrokerConnection) -> None:
         """Update cached last_ts using the connection's generator state."""
