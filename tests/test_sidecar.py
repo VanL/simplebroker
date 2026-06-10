@@ -15,7 +15,11 @@ from pathlib import Path
 import pytest
 
 from simplebroker import Queue
-from simplebroker.ext import SidecarSession, SidecarUnavailableError
+from simplebroker.ext import (
+    RESERVED_TABLE_NAMES,
+    SidecarSession,
+    SidecarUnavailableError,
+)
 
 
 def test_sidecar_unavailable_error_is_broker_error() -> None:
@@ -193,3 +197,28 @@ def test_sidecar_write_retries_until_external_lock_clears(
     with q.sidecar() as session:
         rows = list(session.run("SELECT v FROM app_kv", fetch=True))
     assert rows == [("7",)]
+
+
+def test_sidecar_tables_survive_queue_traffic_and_vacuum(
+    tmp_path: Path,
+) -> None:
+    db = _db(tmp_path)
+    q = Queue("jobs", db_path=db)
+    for i in range(3):
+        q.write(f"m{i}")
+    assert q.read() == "m0"  # claim one message so vacuum has work to do
+
+    with q.sidecar(transaction=True) as session:
+        session.run(
+            "CREATE TABLE IF NOT EXISTS app_state (k TEXT PRIMARY KEY, v TEXT)"
+        )
+        session.run("INSERT INTO app_state (k, v) VALUES (?, ?)", ("h", "8"))
+
+    with q.get_connection() as conn:
+        conn.vacuum()  # broker maintenance must not touch sidecar tables
+
+    with q.sidecar() as session:
+        rows = list(session.run("SELECT v FROM app_state", fetch=True))
+    assert rows == [("8",)]
+    assert q.read() == "m1"  # queue semantics undisturbed
+    assert RESERVED_TABLE_NAMES >= {"messages", "meta"}
