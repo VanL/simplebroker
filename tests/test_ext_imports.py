@@ -12,6 +12,7 @@ def test_ext_imports():
         ActivityWaiter,
         BackendAwareRunner,
         BackendPlugin,
+        BaseWatcher,
         BrokerConnection,
         BrokerError,
         DataError,
@@ -19,20 +20,27 @@ def test_ext_imports():
         MessageError,
         MultiQueueActivityWaiterHook,
         OperationalError,
+        PollingStrategy,
         QueueNameError,
         SetupPhase,
         SidecarSession,
         SidecarUnavailableError,
         SQLiteRunner,
         SQLRunner,
+        StopWatching,
         TimestampError,
         TimestampGenerator,
+        default_error_handler,
         get_backend_plugin,
     )
 
     # Verify they're all importable
     assert RESERVED_TABLE_NAMES is not None
     assert ActivityWaiter is not None
+    assert BaseWatcher is not None
+    assert PollingStrategy is not None
+    assert StopWatching is not None
+    assert default_error_handler is not None
     assert BackendAwareRunner is not None
     assert BackendPlugin is not None
     assert BrokerConnection is not None
@@ -78,6 +86,26 @@ def test_ext_all_exports():
         "RESERVED_TABLE_NAMES",
         "SidecarSession",
         "SidecarUnavailableError",
+        "BaseWatcher",
+        "PollingStrategy",
+        "StopWatching",
+        "default_error_handler",
     ]
 
     assert set(ext.__all__) == set(expected)
+
+
+def test_watcher_contract_exports():
+    """The watcher subclassing contract is part of the ext surface."""
+    from simplebroker.ext import (
+        BaseWatcher,
+        PollingStrategy,
+        StopWatching,
+        default_error_handler,
+    )
+    from simplebroker.watcher import _StopLoop
+
+    assert _StopLoop is StopWatching  # backwards-compatible private alias
+    assert BaseWatcher is not None
+    assert PollingStrategy is not None
+    assert callable(default_error_handler)

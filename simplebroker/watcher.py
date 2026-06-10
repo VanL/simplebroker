@@ -98,9 +98,12 @@ if TYPE_CHECKING:
     from ._backend_plugins import ActivityWaiter
 
 __all__ = [
+    "BaseWatcher",
     "Message",
+    "PollingStrategy",
     "QueueMoveWatcher",
     "QueueWatcher",
+    "StopWatching",
     "simple_print_handler",
     "json_print_handler",
     "logger_handler",
@@ -235,8 +238,17 @@ logger = logging.getLogger(__name__)
 config = load_config()
 
 
-class _StopLoop(Exception):
-    """Internal sentinel for graceful shutdown."""
+class StopWatching(Exception):
+    """Sentinel raised inside watcher loops to stop watching gracefully.
+
+    Subclasses of ``BaseWatcher`` (and error handlers) may raise this to
+    end ``run_forever()`` cleanly. Public as of 4.4.0; ``_StopLoop`` remains
+    as a private alias for older imports.
+    """
+
+
+# Backwards-compatible private alias (pre-4.4 name).
+_StopLoop = StopWatching
 
 
 class BaseWatcher(ABC):
@@ -401,7 +413,7 @@ class BaseWatcher(ABC):
 
         Raises:
             OperationalError: If all retries exhausted
-            _StopLoop: If stop requested during retry
+            StopWatching: If stop requested during retry
 
         """
         max_retries = 5
@@ -411,7 +423,7 @@ class BaseWatcher(ABC):
                 self._check_stop()
                 return process_func()
             except StopException:
-                raise _StopLoop from None
+                raise StopWatching from None
             except OperationalError as e:
                 if attempt >= max_retries - 1:
                     if config["BROKER_LOGGING_ENABLED"]:
@@ -429,8 +441,8 @@ class BaseWatcher(ABC):
                     )
 
                 if not interruptible_sleep(wait_time, self._stop_event):
-                    raise _StopLoop from None
-            except _StopLoop:
+                    raise StopWatching from None
+            except StopWatching:
                 raise
 
         # This should never be reached
@@ -460,7 +472,7 @@ class BaseWatcher(ABC):
             error_handler: Error handler callback
 
         Raises:
-            _StopLoop: If error handler returns False
+            StopWatching: If error handler returns False
 
         """
         stop_requested = False
@@ -482,16 +494,16 @@ class BaseWatcher(ABC):
                     f"Error handler failed: {eh_error}\nOriginal error: {e}",
                 )
 
-        # Raise _StopLoop outside the try block to avoid catching it
+        # Raise StopWatching outside the try block to avoid catching it
         if stop_requested:
             # Set stop event to ensure the watcher stops completely
             self._stop_event.set()
-            raise _StopLoop from None
+            raise StopWatching from None
 
     def _check_stop(self) -> None:
-        """Check if stop has been requested and raise _StopLoop if so."""
+        """Check if stop has been requested and raise StopWatching if so."""
         if self._stop_event.is_set():
-            raise _StopLoop
+            raise StopWatching
 
     def stop(self, *, join: bool = True, timeout: float = 2.0) -> None:
         """Request a graceful shutdown.
@@ -761,7 +773,7 @@ class BaseWatcher(ABC):
                 # If we get here, we exited normally
                 break
 
-            except (StopException, _StopLoop):
+            except (StopException, StopWatching):
                 # Normal shutdown
                 break
             except KeyboardInterrupt:
@@ -809,7 +821,7 @@ class BaseWatcher(ABC):
         """Try to dispatch a message, return True if successful.
 
         This method provides safe message dispatch with exception handling.
-        It will re-raise _StopLoop exceptions but catch and handle all other
+        It will re-raise StopWatching exceptions but catch and handle all other
         exceptions, returning False to indicate dispatch failure.
 
         Args:
@@ -820,13 +832,13 @@ class BaseWatcher(ABC):
             True if message was dispatched successfully, False otherwise
 
         Raises:
-            _StopLoop: If stop was requested during dispatch
+            StopWatching: If stop was requested during dispatch
         """
         try:
             self._dispatch(body, timestamp, config=self._config)
             self._queue_obj._observe_timestamp(timestamp)
             return True
-        except _StopLoop:
+        except StopWatching:
             raise  # Re-raise stop signal
         except Exception:
             # Don't update timestamp if dispatch failed in peek mode
@@ -1713,7 +1725,7 @@ class QueueMoveWatcher(BaseWatcher):
 
             try:
                 self._drain_queue()
-            except _StopLoop:
+            except StopWatching:
                 break
 
     # run_forever and run_in_thread are inherited from BaseWatcher
@@ -1758,7 +1770,7 @@ class QueueMoveWatcher(BaseWatcher):
                 if config["BROKER_LOGGING_ENABLED"]:
                     logger.info(f"Reached max_messages limit ({self._max_messages})")
                 self._stop_event.set()
-                raise _StopLoop
+                raise StopWatching
 
         return found_any
 

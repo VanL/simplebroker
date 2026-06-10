@@ -26,6 +26,12 @@ from ._exceptions import (
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner
 from ._sidecar import RESERVED_TABLE_NAMES, SidecarSession
 from ._timestamp import TimestampGenerator
+from .watcher import (
+    BaseWatcher,
+    PollingStrategy,
+    StopWatching,
+    default_error_handler,
+)
 
 __all__ = [
     # Protocols and implementations
@@ -42,6 +48,11 @@ __all__ = [
     # Sidecar tables
     "RESERVED_TABLE_NAMES",
     "SidecarSession",
+    # Watcher contract
+    "BaseWatcher",
+    "PollingStrategy",
+    "StopWatching",
+    "default_error_handler",
     # Exceptions
     "BrokerError",
     "OperationalError",
