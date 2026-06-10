@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from simplebroker import Queue
 from simplebroker.ext import SidecarSession, SidecarUnavailableError
 
@@ -55,3 +57,40 @@ def test_autocommit_rows_survive_across_connections(tmp_path: Path) -> None:
                 session.run("SELECT v FROM app_kv WHERE k = ?", ("b",), fetch=True)
             )
     assert rows == [("2",)]
+
+
+def test_transaction_commits_on_clean_exit(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    with Queue("jobs", db_path=db).get_connection() as conn:
+        with conn.sidecar(transaction=True) as session:
+            session.run(
+                "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
+            )
+            session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("c", "3"))
+    with Queue("jobs", db_path=db).get_connection() as conn:
+        with conn.sidecar() as session:
+            rows = list(session.run("SELECT v FROM app_kv", fetch=True))
+    assert rows == [("3",)]
+
+
+def test_transaction_rolls_back_on_exception(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    with Queue("jobs", db_path=db).get_connection() as conn:
+        with conn.sidecar(transaction=True) as session:
+            session.run(
+                "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
+            )
+
+    class _Boom(Exception):
+        pass
+
+    with pytest.raises(_Boom):
+        with Queue("jobs", db_path=db).get_connection() as conn:
+            with conn.sidecar(transaction=True) as session:
+                session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("d", "4"))
+                raise _Boom()
+
+    with Queue("jobs", db_path=db).get_connection() as conn:
+        with conn.sidecar() as session:
+            rows = list(session.run("SELECT v FROM app_kv", fetch=True))
+    assert rows == []  # the insert was rolled back; the exception propagated
