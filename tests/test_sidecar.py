@@ -8,6 +8,8 @@ Postgres and Redis coverage lives in the extension test directories.
 
 from __future__ import annotations
 
+import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -148,3 +150,46 @@ def test_session_unusable_after_block_exits(tmp_path: Path) -> None:
         session.run("CREATE TABLE IF NOT EXISTS app_kv (k TEXT, v TEXT)")
     with pytest.raises(RuntimeError, match="closed"):
         session.run("SELECT 1", fetch=True)
+
+
+def test_sidecar_write_retries_until_external_lock_clears(
+    tmp_path: Path,
+) -> None:
+    db = _db(tmp_path)
+    q = Queue("jobs", db_path=db)
+    q.write("seed")  # materialize the database file and schema first
+
+    blocker = sqlite3.connect(db, timeout=1.0)
+    try:
+        blocker.execute("BEGIN IMMEDIATE")  # hold the write lock
+
+        done = threading.Event()
+        errors: list[Exception] = []
+
+        def writer() -> None:
+            try:
+                with q.sidecar(transaction=True) as session:
+                    session.run(
+                        "CREATE TABLE IF NOT EXISTS app_kv "
+                        "(k TEXT PRIMARY KEY, v TEXT)"
+                    )
+                    session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("g", "7"))
+            except Exception as exc:  # pragma: no cover - failure diagnostics
+                errors.append(exc)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=writer, daemon=True)
+        thread.start()
+        # While the external lock is held the writer must not finish.
+        assert not done.wait(0.3), "writer finished while the db was locked"
+        blocker.rollback()
+    finally:
+        blocker.close()
+
+    assert done.wait(15), "sidecar write never completed after lock release"
+    thread.join(5)
+    assert errors == []
+    with q.sidecar() as session:
+        rows = list(session.run("SELECT v FROM app_kv", fetch=True))
+    assert rows == [("7",)]
