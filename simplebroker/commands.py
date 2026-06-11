@@ -17,7 +17,8 @@ from ._constants import (
     load_config,
     resolve_config,
 )
-from ._exceptions import TimestampError
+from ._dump import dump_lines, load_lines
+from ._exceptions import IntegrityError, TimestampError
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
 from .db import BrokerDB, DBConnection
@@ -868,6 +869,61 @@ def cmd_broadcast(
 
     # Return EXIT_QUEUE_EMPTY if no queues matched, EXIT_SUCCESS otherwise
     return EXIT_SUCCESS if queue_count > 0 else EXIT_QUEUE_EMPTY
+
+
+def cmd_dump(
+    db_path: DBTarget,
+    include: list[str] | None = None,
+    exclude: list[str] | None = None,
+) -> int:
+    """Write the broker's contents to stdout as simplebroker-dump v1 ndjson.
+
+    Args:
+        db_path: Path/target of the broker database
+        include: fnmatch-style globs; when given, only matching queues dump
+        exclude: fnmatch-style globs; matching queues are omitted
+
+    Returns:
+        Exit code (0 on success; the dump of an empty broker is its header)
+    """
+    # Cross-queue operation: use DBConnection directly (same idiom as cmd_list)
+    with DBConnection(db_path) as conn:
+        broker = conn.get_connection()
+        for line in dump_lines(broker, include=include, exclude=exclude):
+            print(line)
+    return EXIT_SUCCESS
+
+
+def cmd_load(db_path: DBTarget) -> int:
+    """Apply a simplebroker-dump from stdin to the broker.
+
+    Returns:
+        Exit code (0 on success; 1 with a line-numbered stderr message on
+        invalid input or duplicate message IDs at the destination)
+    """
+    if sys.stdin.isatty():
+        print(
+            "broker load: reads a dump from stdin into a fresh broker "
+            "(e.g. `broker load < backup.ndjson`)",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    try:
+        with DBConnection(db_path) as conn:
+            broker = conn.get_connection()
+            load_lines(broker, sys.stdin)
+    except ValueError as exc:
+        print(f"broker load: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    except IntegrityError as exc:
+        print(
+            f"broker load: {exc} (load targets a fresh database; "
+            "duplicate message IDs are never overwritten)",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    return EXIT_SUCCESS
 
 
 def cmd_vacuum(db_path: DBTarget, compact: bool = False, *, quiet: bool = False) -> int:

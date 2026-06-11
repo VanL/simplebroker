@@ -332,6 +332,24 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         help="only broadcast to queues matching this fnmatch-style glob",
     )
 
+    dump_parser = subparsers.add_parser(
+        "dump", help="write all queues to stdout as ndjson"
+    )
+    dump_parser.add_argument(
+        "--include",
+        action="append",
+        metavar="GLOB",
+        help="only dump queues matching this fnmatch-style glob (repeatable)",
+    )
+    dump_parser.add_argument(
+        "--exclude",
+        action="append",
+        metavar="GLOB",
+        help="omit queues matching this fnmatch-style glob (repeatable)",
+    )
+
+    subparsers.add_parser("load", help="restore a dump from stdin into this broker")
+
     alias_parser = subparsers.add_parser("alias", help="manage queue aliases")
     alias_subparsers = alias_parser.add_subparsers(dest="alias_command")
 
@@ -470,6 +488,8 @@ class ArgumentProcessor:
             "broadcast",
             "watch",
             "init",
+            "dump",
+            "load",
         }
 
         self.global_args: list[str] = []
@@ -1016,7 +1036,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
         if (
             not resolved_target.legacy_sqlite_path_mode
             and not args.cleanup
-            and args.command not in {"init", "write", "broadcast"}
+            and args.command not in {"init", "write", "broadcast", "load"}
         ):
             resolved_target.plugin.validate_target(
                 resolved_target.target,
@@ -1184,6 +1204,14 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 args.message,
                 pattern=getattr(args, "pattern", None),
             )
+        elif args.command == "dump":
+            return commands.cmd_dump(
+                resolved_target,
+                include=args.include,
+                exclude=args.exclude,
+            )
+        elif args.command == "load":
+            return commands.cmd_load(resolved_target)
         elif args.command == "alias":
             subcommand = getattr(args, "alias_command", None)
             if subcommand is None:
