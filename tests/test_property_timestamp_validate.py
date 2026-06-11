@@ -98,7 +98,11 @@ def test_unit_suffixes_and_bare_seconds_agree(n: int) -> None:
     assert TimestampGenerator.validate(f"{n}s") == expected
     assert TimestampGenerator.validate(f"{n * 1000}ms") == expected
     assert TimestampGenerator.validate(f"{n * NS_PER_S}ns") == expected
-    assert TimestampGenerator.validate(str(n)) == expected
+    if len(str(n)) != 8:
+        # 8-digit bare numbers that form a valid calendar date are hijacked
+        # by the YYYYMMDD ISO heuristic before the seconds heuristic —
+        # FINDING F7, pinned in the quirk test below.
+        assert TimestampGenerator.validate(str(n)) == expected
 
 
 @given(st.integers(min_value=0, max_value=4_102_444_800))  # 1970 .. 2100-01-01
@@ -147,4 +151,23 @@ def test_known_quirk_non_ascii_digits_accepted() -> None:
     digits, so Eastern Arabic numerals parse like ASCII ones."""
     assert (
         TimestampGenerator.validate("١٢٣s") == (123 * NS_PER_S) & ~LOGICAL_COUNTER_MASK
+    )
+
+
+def test_known_quirk_8_digit_bare_numbers_can_parse_as_yyyymmdd() -> None:
+    """FINDING F7 (pinned, not endorsed; discovered by the equivalence
+    property at the Task 6 gate): an 8-digit all-digit string that forms a
+    valid calendar date is consumed by the ISO YYYYMMDD heuristic
+    (_timestamp.py, _parse_iso8601's len==8 check) BEFORE the documented
+    unix-seconds heuristic ever sees it. So some legal 1970–1973 unix-seconds
+    inputs are silently reinterpreted as ancient or far-future dates."""
+    # 10550401 (unix seconds in 1973) parses as 1055-04-01 -> negative (F2).
+    assert TimestampGenerator.validate("10550401") < 0
+    # 25980801 parses as 2598-08-01 -> beyond the 2262 horizon -> rejected.
+    with pytest.raises(TimestampError):
+        TimestampGenerator.validate("25980801")
+    # 8-digit numbers that do NOT form a valid date still read as seconds.
+    assert (
+        TimestampGenerator.validate("99999999")
+        == (99999999 * NS_PER_S) & ~LOGICAL_COUNTER_MASK
     )
