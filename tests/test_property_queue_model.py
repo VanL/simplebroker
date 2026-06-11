@@ -108,6 +108,27 @@ class QueueModelMachine(RuleBasedStateMachine):
             assert got == (body, ts)
             insort(self.claimed[key], (ts, body))
 
+    @rule(key=st.sampled_from(QUEUE_KEYS), limit=st.integers(min_value=1, max_value=5))
+    def read_many(self, key: str, limit: int) -> None:
+        got = self._queues[key].read_many(limit, with_timestamps=True)
+        expected = self.pending[key][:limit]
+        assert got == [(body, ts) for ts, body in expected]
+        del self.pending[key][: len(expected)]
+        for entry in expected:
+            insort(self.claimed[key], entry)
+
+    @rule(key=st.sampled_from(QUEUE_KEYS), include_claimed=st.booleans())
+    def peek_is_nondestructive_and_exact(self, key: str, include_claimed: bool) -> None:
+        got = self._queues[key].peek_many(
+            limit=1000, with_timestamps=True, include_claimed=include_claimed
+        )
+        rows = self.pending[key] + (self.claimed[key] if include_claimed else [])
+        # Merged in ascending message-ID order; sorted() never ties because
+        # timestamps are globally unique.
+        assert got == [(body, ts) for ts, body in sorted(rows)]
+        # Deliberately no model mutation: if a peek ever claimed or deleted
+        # anything, the very next counts_match_the_model invariant fails.
+
     # ---------- invariants ----------
 
     @invariant()
