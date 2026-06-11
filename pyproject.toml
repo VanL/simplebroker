@@ -34,6 +34,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     "build>=1.2",
+    "hypothesis>=6.100",
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "pytest-xdist>=3.0",

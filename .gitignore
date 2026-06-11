@@ -46,6 +46,7 @@ env/
 coverage.xml
 .pytest_cache/
 htmlcov/
+.hypothesis/
 .tox/
 .nox/
 .mypy_cache/
