@@ -91,3 +91,6 @@ weft/
 .codex*
 .code*
 .coder*
+
+# Codex CLI session metadata
+.context/
