@@ -170,6 +170,52 @@ class QueueModelMachine(RuleBasedStateMachine):
         # consumed message becomes deliverable again at the destination.
         insort(self.pending[dst], (ts, body))
 
+    @rule(key=st.sampled_from(QUEUE_KEYS))
+    def purge(self, key: str) -> None:
+        had_rows = bool(self._entries(key))
+        assert self._queues[key].delete() == had_rows
+        self.pending[key].clear()
+        self.claimed[key].clear()
+
+    @precondition(lambda self: any(self._entries(k) for k in QUEUE_KEYS))
+    @rule(data=st.data())
+    def delete_exact_ids(self, data: st.DataObject) -> None:
+        key = data.draw(
+            st.sampled_from([k for k in QUEUE_KEYS if self._entries(k)]),
+            label="queue",
+        )
+        chosen = data.draw(
+            st.lists(st.sampled_from(self._entries(key)), min_size=1, unique=True),
+            label="targets",
+        )
+        ids = [ts for ts, _ in chosen]
+        if data.draw(st.booleans(), label="also pass a missing id"):
+            # 1 is never a real hybrid timestamp (real ones are ~1.8e18);
+            # missing ids must be ignored, not counted.
+            ids.append(1)
+        assert self._queues[key].delete_many(ids) == len(chosen)
+        for entry in chosen:
+            bucket = (
+                self.pending[key] if entry in self.pending[key] else self.claimed[key]
+            )
+            bucket.remove(entry)
+
+    @precondition(lambda self: any(self._entries(k) for k in QUEUE_KEYS))
+    @rule(data=st.data())
+    def read_after_bound(self, data: st.DataObject) -> None:
+        key = data.draw(st.sampled_from(QUEUE_KEYS), label="queue")
+        known_ts = [ts for k in QUEUE_KEYS for ts, _ in self._entries(k)]
+        bound = data.draw(st.sampled_from(known_ts), label="bound")
+        got = self._queues[key].read(after_timestamp=bound, with_timestamps=True)
+        matches = [(ts, body) for ts, body in self.pending[key] if ts > bound]
+        if not matches:
+            assert got is None
+        else:
+            ts, body = matches[0]
+            assert got == (body, ts)
+            self.pending[key].remove((ts, body))
+            insort(self.claimed[key], (ts, body))
+
     # ---------- invariants ----------
 
     @invariant()
