@@ -5,6 +5,18 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Added
+- Property-based test suite (Hypothesis): timestamp-parser totality and
+  round-trip properties, cross-backend queue-name/body round-trip properties,
+  and a stateful reference-model test that runs identical operation sequences
+  against the SQLite, Postgres, and Redis backends.
+
+### Fixed
+- `TimestampGenerator.validate()` now raises `TimestampError` (as documented)
+  instead of leaking `ValueError` for ISO dates beyond the year-2262
+  timestamp horizon. CLI behavior is unchanged.
+
 ## [4.6.0] - 2026-06-10
 ### Added
 - Added `include_claimed` to the public peek surface — `Queue.peek/peek_one/

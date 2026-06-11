@@ -1855,7 +1855,8 @@ uv run pytest              # Fast tests only
 uv run pytest -m ""        # All tests including slow ones
 PHASELOCK_ENABLE_XATTRS=0 uv run pytest tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
 uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
-uv run ./bin/pytest-redis  # Redis/Valkey extension tests; requires a local test server
+uv run ./bin/pytest-redis  # All Redis-backed tests with automatic Docker setup/teardown (Valkey)
+HYPOTHESIS_PROFILE=ci uv run pytest tests/test_property_*.py  # deeper property-test run (50 -> 200 examples per property)
 uv run ./bin/pytest-pg -q tests/test_watcher_metrics.py -k basic
 uv run ./bin/packaging-smoke --python 3.11
 
@@ -1864,6 +1865,11 @@ uv run ruff check --fix simplebroker tests bin
 uv run ruff format simplebroker tests bin
 uv run mypy simplebroker bin/release.py
 ```
+
+Property-based tests (`tests/test_property_*.py`, powered by Hypothesis)
+check parser totality/round-trips and run a stateful model of queue
+semantics against every backend; failures print a `@reproduce_failure`
+blob that replays the exact case.
 
 **Contributing guidelines:**
 1. Keep it simple - the entire codebase should stay understandable
