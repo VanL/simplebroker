@@ -22,6 +22,7 @@ from hypothesis import strategies as st
 from hypothesis.stateful import (
     RuleBasedStateMachine,
     invariant,
+    precondition,
     rule,
     run_state_machine_as_test,
 )
@@ -128,6 +129,46 @@ class QueueModelMachine(RuleBasedStateMachine):
         assert got == [(body, ts) for ts, body in sorted(rows)]
         # Deliberately no model mutation: if a peek ever claimed or deleted
         # anything, the very next counts_match_the_model invariant fails.
+
+    def _claimed_triples(self) -> list[tuple[str, int, str]]:
+        return [(key, ts, body) for key in QUEUE_KEYS for ts, body in self.claimed[key]]
+
+    @rule(data=st.data())
+    def move_oldest_pending(self, data: st.DataObject) -> None:
+        src = data.draw(st.sampled_from(QUEUE_KEYS), label="src")
+        dst = data.draw(
+            st.sampled_from([k for k in QUEUE_KEYS if k != src]), label="dst"
+        )
+        got = self._queues[src].move_one(self._queues[dst].name, with_timestamps=True)
+        if not self.pending[src]:
+            assert got is None
+        else:
+            ts, body = self.pending[src].pop(0)
+            assert got == (body, ts)
+            # The message keeps its original timestamp, so an old message can
+            # jump ahead of newer ones at the destination — insort, not append.
+            insort(self.pending[dst], (ts, body))
+
+    @precondition(lambda self: self._claimed_triples())
+    @rule(data=st.data())
+    def move_claimed_by_id_redelivers(self, data: st.DataObject) -> None:
+        src, ts, body = data.draw(
+            st.sampled_from(self._claimed_triples()), label="claimed message"
+        )
+        dst = data.draw(
+            st.sampled_from([k for k in QUEUE_KEYS if k != src]), label="dst"
+        )
+        got = self._queues[src].move_one(
+            self._queues[dst].name,
+            exact_timestamp=ts,
+            require_unclaimed=False,
+            with_timestamps=True,
+        )
+        assert got == (body, ts)
+        self.claimed[src].remove((ts, body))
+        # Moving resets the claim (SQL: SET queue = ?, claimed = 0), i.e. a
+        # consumed message becomes deliverable again at the destination.
+        insort(self.pending[dst], (ts, body))
 
     # ---------- invariants ----------
 
