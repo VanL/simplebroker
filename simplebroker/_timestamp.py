@@ -297,7 +297,12 @@ class TimestampGenerator:
 
         # Try formats in order of precedence
         # 1. ISO format (unambiguous)
-        ts = TimestampGenerator._parse_iso8601(timestamp_str)
+        try:
+            ts = TimestampGenerator._parse_iso8601(timestamp_str)
+        except ValueError as e:
+            # _parse_iso8601 raises bare ValueError for out-of-range dates;
+            # validate()'s contract is TimestampError for any invalid input.
+            raise TimestampError(str(e)) from None
         if ts is not None:
             return ts
 
