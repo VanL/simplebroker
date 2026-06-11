@@ -215,6 +215,8 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `broadcast <message\|->` | Send message to all existing queues |
 | `watch <queue> [options]` | Watch queue for new messages |
 | `alias <add\|remove\|list\|->` | Manage queue aliases |
+| `dump [--include <glob>] [--exclude <glob>]` | Write all queues to stdout as ndjson (pending messages only, deterministic; globs match queue names, aliases match on their own name or their target, exclude wins, the flags compose) |
+| `load` | Restore a dump from stdin into a fresh broker (duplicate message IDs fail loudly); exit codes 0/1 |
 | `init [--force]` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
 
 #### Queue Aliases
@@ -394,6 +396,14 @@ $ broker peek tasks --all --include-claimed
 
 Claimed rows are deletion-pending — vacuum may remove them at any time;
 `--include-claimed` is an inspection tool, not delivery state.
+
+```bash
+# Back up, restore, or migrate between backends — dumps are plain ndjson.
+# Load targets a FRESH broker (duplicate message IDs fail loudly).
+$ broker dump > backup.ndjson
+$ broker dump --include 'tasks*' --exclude 'tasks_tmp' | (cd /fresh/dir && broker load)
+$ broker dump | BROKER_BACKEND=postgres BROKER_BACKEND_TARGET="$DSN" broker load
+```
 
 ## Common Patterns
 
@@ -718,6 +728,15 @@ q.peek_many(10, include_claimed=True)   # pending + claimed, in message-ID order
 
 Claimed rows are deletion-pending — vacuum may remove them at any time — so
 `include_claimed` is an inspection tool, not delivery state.
+
+Whole-broker backup and migration mirror the CLI:
+
+```python
+from simplebroker import dump_lines, load_lines, open_broker
+
+with open_broker("src.db") as src, open_broker("dst.db") as dst:
+    load_lines(dst, dump_lines(src, include=["tasks*"]))
+```
 
 ### Queue metadata
 

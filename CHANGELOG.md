@@ -5,7 +5,7 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.7.0] - 2026-06-11
 ### Changed
 - Pre-epoch ISO dates passed to timestamp parsing (e.g. `--after 1950-01-01`)
   now clamp to the Unix epoch, uniformly meaning "everything". Previously
@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while API bound checks rejected them.
 
 ### Added
+- Added `broker dump` and `broker load`: a versioned ndjson backup/restore and
+  backend-migration format on stdout/stdin, with repeatable `--include`/`--exclude`
+  queue-name globs on dump (aliases match on either their own name or their
+  target; exclude wins; the flags compose). Mirrored Python APIs:
+  `dump_lines(broker, *, include, exclude)` and `load_lines(broker, lines)`
+  (plus `LoadResult`). Dumps are deterministic (header, sorted aliases, sorted
+  queues, ascending message-ID order; pending messages only) and restore with
+  exact message IDs on any backend — `broker dump | BROKER_BACKEND=postgres
+  broker load` migrates a broker in one pipeline. Built entirely on the public
+  connection surface; no backend changes.
 - Property-based test suite (Hypothesis): timestamp-parser totality and
   round-trip properties, cross-backend queue-name/body round-trip properties,
   and a stateful reference-model test that runs identical operation sequences
