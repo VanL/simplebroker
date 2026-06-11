@@ -32,9 +32,10 @@ pytestmark = pytest.mark.shared
 # must use a queue name nobody else wrote to. See Part I section 4 caveat.
 _uniq = itertools.count()
 
-# Trailing-"\n" names are accepted by the validator (finding F4, pinned in a
-# dedicated test below) but would corrupt our "_<n>" suffixing, so the
-# strategy filters them out. Length cap leaves room for the suffix.
+# st.from_regex deliberately exploits '$'-before-newline and can generate
+# trailing-"\n" strings; the validator uses fullmatch (finding F4, resolved)
+# and rejects those, so the strategy filters them out of the VALID set.
+# Length cap leaves room for the "_<n>" suffix.
 VALID_NAMES = st.from_regex(QUEUE_NAME_PATTERN).filter(
     lambda s: len(s) <= MAX_QUEUE_NAME_LENGTH - 24 and not s.endswith("\n")
 )
@@ -54,7 +55,7 @@ def _validator_accepts(s: str) -> bool:
     return (
         bool(s)
         and len(s) <= MAX_QUEUE_NAME_LENGTH
-        and bool(QUEUE_NAME_PATTERN.match(s))
+        and bool(QUEUE_NAME_PATTERN.fullmatch(s))
     )
 
 
@@ -96,9 +97,11 @@ def test_queue_name_error_is_a_value_error() -> None:
     assert issubclass(QueueNameError, ValueError)
 
 
-def test_known_quirk_trailing_newline_name_accepted(queue_factory) -> None:
-    """FINDING F4 (pinned, not endorsed): '$' with .match() matches before a
-    trailing newline, so 'name\\n' validates AND functions on every backend."""
+def test_trailing_newline_name_rejected(queue_factory) -> None:
+    """Names with a trailing newline are rejected (finding F4, resolved):
+    validation uses fullmatch, so '$'-before-newline acceptance is closed and
+    the validator matches its documented charset (and the prefix validator,
+    which always used fullmatch)."""
     q = queue_factory("nl_quirk\n")
-    q.write("hello")
-    assert q.read_one() == "hello"
+    with pytest.raises(QueueNameError):
+        q.write("hello")

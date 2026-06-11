@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (oversize, or not UTF-8 encodable) raise `MessageError`, as the docstrings
   always promised. Both exception types now subclass `ValueError`, so
   existing `except ValueError` handlers keep working unchanged.
+- Queue-name validation now uses `fullmatch`, closing a regex quirk where a
+  name with a trailing newline (e.g. `"jobs\n"`) was accepted despite the
+  documented character set. Such names — previously creatable only through
+  the Python API — are now rejected at first use, matching the prefix
+  validator's existing strictness.
 
 ## [4.6.0] - 2026-06-10
 ### Added

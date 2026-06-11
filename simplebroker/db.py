@@ -184,7 +184,7 @@ def _validate_queue_name_cached(queue: str) -> str | None:
     if len(queue) > MAX_QUEUE_NAME_LENGTH:
         return f"Invalid queue name: exceeds {MAX_QUEUE_NAME_LENGTH} characters"
 
-    if not QUEUE_NAME_PATTERN.match(queue):
+    if not QUEUE_NAME_PATTERN.fullmatch(queue):
         return (
             "Invalid queue name: must contain only letters, numbers, periods, "
             "underscores, and hyphens. Cannot begin with a hyphen or a period"
