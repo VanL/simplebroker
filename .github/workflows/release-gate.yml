@@ -13,6 +13,11 @@ concurrency:
   group: release-gate-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  UV_VERSION: "0.11.11"
+  PACKAGE_NAME: simplebroker
+  PACKAGE_DIR: .
+
 jobs:
   require-tests:
     runs-on: ubuntu-latest
@@ -55,21 +60,122 @@ jobs:
             exit 1
           fi
 
-  publish-release:
+  build:
     needs:
       - require-tests
       - verify-tag-current
-    uses: ./.github/workflows/release.yml
-    with:
-      package_name: simplebroker
-      package_dir: .
-      tag_name: ${{ github.ref_name }}
-      release_ref: ${{ github.sha }}
-      expected_tag_commit: ${{ github.sha }}
-      create_github_release: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
     permissions:
-      actions: read
       attestations: write
       artifact-metadata: write
-      contents: write
+      contents: read
       id-token: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Verify checked out commit matches tested release commit
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - name: Build package
+        working-directory: ${{ env.PACKAGE_DIR }}
+        run: |
+          uv build
+
+      - name: Generate artifact attestation
+        id: attest
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: ${{ env.PACKAGE_DIR }}/dist/*
+
+      - name: Stage attestation bundle
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          PACKAGE_NAME: ${{ env.PACKAGE_NAME }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p attestations
+          safe_tag="$(printf '%s' "${TAG_NAME}" | tr '/:' '--')"
+          cp "${BUNDLE_PATH}" "attestations/${PACKAGE_NAME}-${safe_tag}.sigstore.json"
+
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PACKAGE_NAME }}-python-package-distributions
+          path: ${{ env.PACKAGE_DIR }}/dist/
+
+      - name: Store the attestation bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ env.PACKAGE_NAME }}-attestations
+          path: attestations/*.sigstore.json
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    environment:
+      name: pypi
+      url: https://pypi.org/p/simplebroker
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.PACKAGE_NAME }}-python-package-distributions
+          path: dist/
+
+      - name: Publish distribution to PyPI
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+
+  github-release:
+    name: Upload to GitHub Release
+    needs:
+      - publish-to-pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.PACKAGE_NAME }}-python-package-distributions
+          path: dist/
+
+      - name: Download attestation bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.PACKAGE_NAME }}-attestations
+          path: attestations/
+
+      - name: Create GitHub Release and upload artifacts
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/*.whl
+            attestations/*.sigstore.json
