@@ -1920,9 +1920,15 @@ The helper checks the target version against GitHub Releases and PyPI, runs the
 release checks, updates version files when needed, commits release-file changes,
 pushes the branch, and then pushes the release tag. The tag workflow waits for
 the relevant normal test workflows on the same commit to finish green, and only
-then creates the GitHub release with built artifacts. Core releases wait for
-`Test`, `Test Postgres Extension`, and `Test Redis Extension`; extension
-releases wait for `Test` plus their matching backend workflow.
+then invokes the reusable `release.yml` workflow, which builds the distributions,
+publishes them to PyPI with trusted publishing, and creates the GitHub Release.
+Core releases wait for `Test`, `Test Postgres Extension`, and
+`Test Redis Extension`; extension releases wait for `Test` plus their matching
+backend workflow.
+
+PyPI trusted publisher entries should use repository `VanL/simplebroker`, the
+`pypi` environment, and the GitHub Actions workflows `release.yml` and
+`release-gate.yml`.
 
 Use `python bin/release.py all` after version files have already been bumped
 across packages. It scans `simplebroker`, `simplebroker-pg`, and

@@ -28,9 +28,9 @@ REDIS_EXTENSION_PYPROJECT_PATH: Final[Path] = REDIS_EXTENSION_DIR / "pyproject.t
 UV_LOCK_PATH: Final[Path] = PROJECT_ROOT / "uv.lock"
 PG_EXTENSION_UV_LOCK_PATH: Final[Path] = PG_EXTENSION_DIR / "uv.lock"
 REDIS_EXTENSION_UV_LOCK_PATH: Final[Path] = REDIS_EXTENSION_DIR / "uv.lock"
-ROOT_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-simplebroker.yml"
-PG_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-simplebroker-pg.yml"
-REDIS_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-simplebroker-redis.yml"
+ROOT_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-gate.yml"
+PG_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-gate-pg.yml"
+REDIS_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-gate-redis.yml"
 GITHUB_API_BASE: Final[str] = "https://api.github.com"
 PYPI_API_BASE: Final[str] = "https://pypi.org/pypi"
 HTTP_TIMEOUT_SECONDS: Final[float] = 10.0
@@ -1283,7 +1283,7 @@ def _remote_tag_reuse_note(state: ReleaseState) -> str:
     return (
         f"Tag {state.tag_name} already exists on origin at HEAD. Pushing the same tag "
         f"again will not retrigger {state.target.release_workflow}; rerun the "
-        "existing release workflow manually in GitHub Actions if needed."
+        "existing release-gate workflow manually in GitHub Actions if needed."
     )
 
 
@@ -1313,8 +1313,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--publish",
         action="store_true",
         help=(
-            "Deprecated compatibility flag. Tag-push workflows create GitHub "
-            "Release artifacts; this helper does not publish directly to PyPI."
+            "Deprecated compatibility flag. Tag-push release-gate workflows "
+            "build, publish to PyPI via Trusted Publishing, and create GitHub "
+            "Releases; this helper does not publish directly."
         ),
     )
     parser.add_argument(
@@ -1378,8 +1379,9 @@ def _push_tag_action(
 
 def _print_publish_note() -> None:
     print(
-        "--publish is ignored: tag-push workflows create GitHub Release artifacts; "
-        "this helper does not publish directly to PyPI"
+        "--publish is ignored: tag-push release-gate workflows publish to PyPI "
+        "(via Trusted Publishing) and create GitHub Releases; this helper does "
+        "not publish directly."
     )
 
 
@@ -1525,9 +1527,9 @@ def _run_batch_release(args: argparse.Namespace) -> int:
         )
 
     print(
-        "Next step: wait for release workflows on "
+        "Next step: wait for release-gate workflows on "
         + ", ".join(candidate.state.tag_name for candidate in candidates)
-        + ". PyPI publication is not performed by this helper."
+        + ". They will publish to PyPI (Trusted Publishing) and create GitHub Releases."
     )
     return 0
 
@@ -1714,7 +1716,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "Next step: wait for "
         f"{target.release_workflow} on {release_state.tag_name}. "
-        "PyPI publication is not performed by this helper."
+        "It will publish to PyPI via Trusted Publishing and create the GitHub Release."
     )
     return 0
 

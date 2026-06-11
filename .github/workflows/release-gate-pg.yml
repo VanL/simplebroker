@@ -1,0 +1,90 @@
+name: Release Gate (simplebroker-pg)
+
+on:
+  push:
+    tags:
+      - "simplebroker_pg/v*"
+
+permissions:
+  contents: write
+  actions: read
+  id-token: write
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extract-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      release_name: ${{ steps.release.outputs.name }}
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#simplebroker_pg/}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute GitHub release name
+        id: release
+        run: echo "name=simplebroker-pg ${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+  require-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Require all test workflows to be green
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python .github/scripts/require_green_workflows.py \
+            --workflow "Test" \
+            --workflow "Test Postgres Extension"
+
+  verify-tag-current:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    needs:
+      - extract-version
+      - require-tests
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Verify tag still points at tested commit
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          remote_sha="$(git ls-remote --tags origin "refs/tags/${TAG_NAME}" "refs/tags/${TAG_NAME}^{}" | awk 'NR==1 { sha=$1 } END { print $1 ? $1 : sha }')"
+          if [ -z "${remote_sha}" ]; then
+            echo "Tag ${TAG_NAME} no longer exists on origin"
+            exit 1
+          fi
+          if [ "${remote_sha}" != "${EXPECTED_SHA}" ]; then
+            echo "Tag ${TAG_NAME} moved while the release gate was running"
+            echo "expected: ${EXPECTED_SHA}"
+            echo "actual:   ${remote_sha}"
+            exit 1
+          fi
+
+  publish-release:
+    needs:
+      - extract-version
+      - require-tests
+      - verify-tag-current
+    uses: ./.github/workflows/release.yml
+    with:
+      package_name: simplebroker-pg
+      package_dir: extensions/simplebroker_pg
+      tag_name: ${{ github.ref_name }}
+      release_ref: ${{ github.sha }}
+      expected_tag_commit: ${{ github.sha }}
+      create_github_release: true
+      github_release_name: ${{ needs.extract-version.outputs.release_name }}
+    permissions:
+      actions: read
+      contents: write
+      id-token: write

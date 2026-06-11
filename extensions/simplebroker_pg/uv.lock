@@ -158,12 +158,13 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "4.5.0"
+version = "4.7.0"
 source = { editable = "../../" }
 
 [package.metadata]
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3" },
     { name = "psycopg-pool", marker = "extra == 'dev'", specifier = ">=3.1" },
