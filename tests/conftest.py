@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from hypothesis import settings as hypothesis_settings
 
 from simplebroker import Queue
 from simplebroker._project_config import (
@@ -47,6 +48,21 @@ from .helper_scripts.timing import scale_timeout_for_ci
 
 # Import watcher patching
 from .helper_scripts.watcher_patch import patch_watchers
+
+# --------------------------------------------------------------------------- #
+# Hypothesis configuration (used by tests/test_property_*.py)
+# --------------------------------------------------------------------------- #
+# deadline=None: per-example deadlines measure wall time and would flake for
+# DB-backed properties on slow CI; correctness, not latency, is what these
+# tests check. print_blob=True makes every failure replayable via the printed
+# @reproduce_failure decorator.
+hypothesis_settings.register_profile(
+    "dev", max_examples=50, deadline=None, print_blob=True
+)
+hypothesis_settings.register_profile(
+    "ci", max_examples=200, deadline=None, print_blob=True
+)
+hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 
 RunSubprocess = Callable[..., subprocess.CompletedProcess[Any]]
 run_with_coverage: RunSubprocess | None
