@@ -11,6 +11,8 @@ __pycache__/
 .codex
 .claude
 .agents
+.claude/
+.agents/
 docs/
 build/
 develop-eggs/
