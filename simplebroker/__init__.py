@@ -4,6 +4,7 @@
 # Import BrokerDB for backward compatibility (but don't export it)
 from ._backend_plugins import ActivityWaiter
 from ._constants import __version__, resolve_config
+from ._dump import LoadResult, dump_lines, load_lines
 from .db import BrokerDB as _BrokerDB  # noqa: F401
 from .db import open_broker
 from .metadata import QueueStats
@@ -22,6 +23,7 @@ from .watcher import QueueMoveWatcher, QueueWatcher
 __all__ = [
     "BrokerTarget",
     "ActivityWaiter",
+    "LoadResult",
     "Queue",
     "QueueStats",
     "QueueWatcher",
@@ -30,6 +32,8 @@ __all__ = [
     "broker_root",
     "create_activity_waiter_for_queues",
     "deserialize_broker_target",
+    "dump_lines",
+    "load_lines",
     "open_broker",
     "resolve_config",
     "resolve_broker_target",
