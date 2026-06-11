@@ -301,6 +301,7 @@ Messages can contain any characters including newlines, control characters, and 
 - **Special characters** - Messages containing newlines or other special characters can break shell pipelines that expect single-line output
 - **Queue names** - Limited to alphanumeric + underscore/hyphen/period (cannot start with hyphen or period)
 - **Message size** - Limited to 10MB by default; override with `BROKER_MAX_MESSAGE_SIZE`
+- **NUL characters** - Message bodies are UTF-8 text. The Postgres backend cannot store a raw NUL (`\x00`) character: `write()` raises `OperationalError` there, while SQLite and Redis round-trip it. JSON-encoded payloads are unaffected (compliant serializers escape NUL as `\u0000`), but avoid casting bodies to `jsonb` in sidecar queries: jsonb rejects `\u0000` even escaped.
 
 **Always use `--json` for safe handling** - see examples below.
 

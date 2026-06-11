@@ -269,6 +269,14 @@ class TimestampGenerator:
                 - Unix timestamp in seconds, milliseconds, or nanoseconds (e.g., "1705329000")
                 - Explicit units: "1705329000s" (seconds), "1705329000000ms" (milliseconds),
                   "1705329000000000000ns" (nanoseconds)
+
+                Precedence notes: ISO parsing runs before the numeric
+                heuristics, so a bare 8-digit number that forms a valid
+                calendar date (e.g. "10550401") is read as compact YYYYMMDD,
+                not as unix seconds — use an explicit suffix ("10550401s")
+                for second counts of that size. Pre-epoch dates clamp to 0
+                (the Unix epoch). Digits may be any Unicode decimal digits
+                accepted by int().
             exact: If True, only accept exact 19-digit message IDs (for strict validation)
 
         Returns:
