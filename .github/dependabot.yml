@@ -1,10 +1,50 @@
 version: 2
 updates:
-  # Enable version updates for Python dependencies
-  - package-ecosystem: "pip"
+  # Maintain uv-managed root dependencies.
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    open-pull-requests-limit: 10
+    assignees:
+      - "VanL"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # Maintain the Postgres extension lockfile.
+  - package-ecosystem: "uv"
+    directory: "/extensions/simplebroker_pg"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    open-pull-requests-limit: 10
+    assignees:
+      - "VanL"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # Maintain the Redis extension lockfile.
+  - package-ecosystem: "uv"
+    directory: "/extensions/simplebroker_redis"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     open-pull-requests-limit: 10
     assignees:
       - "VanL"
@@ -19,6 +59,10 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     open-pull-requests-limit: 10
     assignees:
       - "VanL"

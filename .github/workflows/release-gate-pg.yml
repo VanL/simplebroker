@@ -6,9 +6,8 @@ on:
       - "simplebroker_pg/v*"
 
 permissions:
-  contents: write
+  contents: read
   actions: read
-  id-token: write
 
 concurrency:
   group: release-gate-${{ github.ref }}
@@ -86,5 +85,7 @@ jobs:
       github_release_name: ${{ needs.extract-version.outputs.release_name }}
     permissions:
       actions: read
+      attestations: write
+      artifact-metadata: write
       contents: write
       id-token: write

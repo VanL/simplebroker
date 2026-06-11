@@ -6,9 +6,8 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
   actions: read
-  id-token: write
 
 concurrency:
   group: release-gate-${{ github.ref }}
@@ -70,5 +69,7 @@ jobs:
       create_github_release: true
     permissions:
       actions: read
+      attestations: write
+      artifact-metadata: write
       contents: write
       id-token: write
