@@ -462,6 +462,11 @@ class TimestampGenerator:
 
         # Convert to nanoseconds after epoch
         ns_after_epoch = int(dt.timestamp() * 1_000_000_000)
+        if ns_after_epoch < 0:
+            # Pre-epoch dates clamp to the epoch: a bound like
+            # "--after 1950-01-01" means "everything", and negative hybrid
+            # timestamps are rejected by downstream bound validation.
+            return 0
         # Clear bottom bits for counter (hybrid timestamp format)
         time_mask = ~LOGICAL_COUNTER_MASK
         hybrid_ts = ns_after_epoch & time_mask

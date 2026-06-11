@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+- Pre-epoch ISO dates passed to timestamp parsing (e.g. `--after 1950-01-01`)
+  now clamp to the Unix epoch, uniformly meaning "everything". Previously
+  they parsed to negative internal values that the CLI accepted by accident
+  while API bound checks rejected them.
+
 ### Added
 - Property-based test suite (Hypothesis): timestamp-parser totality and
   round-trip properties, cross-backend queue-name/body round-trip properties,

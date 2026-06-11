@@ -38,7 +38,7 @@ QUANTUM = LOGICAL_COUNTER_MASK + 1
 
 @given(st.text(max_size=64))
 @example("9999-01-01")  # F1: leaked ValueError before the Task 4 fix
-@example("0001-01-01")  # F2: parses to a negative int (pinned below)
+@example("0001-01-01")  # F2 (resolved): pre-epoch clamps to 0 (pinned below)
 @example("١٢٣s")  # F3: non-ASCII digits accepted (pinned below)
 @example("  5s  ")  # whitespace is stripped first (documented behavior)
 @example("1e9")  # scientific notation is rejected
@@ -136,14 +136,19 @@ def test_far_future_iso_raises_timestamp_error(d: date) -> None:
         TimestampGenerator.validate(d.isoformat())
 
 
-def test_known_quirk_pre_epoch_iso_returns_negative_int() -> None:
-    """FINDING F2 (pinned, not endorsed): pre-epoch ISO dates parse to
-    negative ints, which every downstream bound check then rejects
-    (validate_timestamp_bound requires >= 0). If this starts failing, the
-    parser's pre-epoch behavior changed — update the findings log."""
-    result = TimestampGenerator.validate("0001-01-01")
-    assert isinstance(result, int)
-    assert result < 0
+@given(st.dates(min_value=date(1, 1, 1), max_value=date(1969, 12, 31)))
+def test_pre_epoch_iso_dates_clamp_to_epoch(d: date) -> None:
+    """Pre-epoch ISO dates clamp to the Unix epoch (finding F2, resolved):
+    a bound like "--after 1950-01-01" means "everything". Previously these
+    parsed to negative values that the CLI silently accepted while API bound
+    checks rejected them; clamping unifies both on the sensible reading."""
+    assert TimestampGenerator.validate(d.isoformat()) == 0
+
+
+def test_pre_epoch_iso_datetimes_clamp_to_epoch() -> None:
+    """The clamp covers datetimes too, including the last pre-epoch second."""
+    assert TimestampGenerator.validate("1969-12-31T23:59:59Z") == 0
+    assert TimestampGenerator.validate("0001-01-01T00:00:00") == 0
 
 
 def test_known_quirk_non_ascii_digits_accepted() -> None:
@@ -161,8 +166,9 @@ def test_known_quirk_8_digit_bare_numbers_can_parse_as_yyyymmdd() -> None:
     (_timestamp.py, _parse_iso8601's len==8 check) BEFORE the documented
     unix-seconds heuristic ever sees it. So some legal 1970–1973 unix-seconds
     inputs are silently reinterpreted as ancient or far-future dates."""
-    # 10550401 (unix seconds in 1973) parses as 1055-04-01 -> negative (F2).
-    assert TimestampGenerator.validate("10550401") < 0
+    # 10550401 (unix seconds in 1973) parses as 1055-04-01, a pre-epoch date
+    # that now clamps to the epoch (F2) — still a date, not seconds.
+    assert TimestampGenerator.validate("10550401") == 0
     # 25980801 parses as 2598-08-01 -> beyond the 2262 horizon -> rejected.
     with pytest.raises(TimestampError):
         TimestampGenerator.validate("25980801")
