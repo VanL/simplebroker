@@ -16,16 +16,19 @@ this module sqlite_only, which is intended: nothing here touches a backend.
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
+
+import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
-from simplebroker._constants import LOGICAL_COUNTER_MASK
+from simplebroker._constants import (
+    LOGICAL_COUNTER_MASK,
+    SQLITE_MAX_INT64,
+    UNIX_NATIVE_BOUNDARY,
+)
 from simplebroker._exceptions import TimestampError
 from simplebroker._timestamp import TimestampGenerator
-
-# Imports stay minimal here on purpose: ruff --fix strips unused imports at
-# commit time, so each task adds imports only when its code first uses them
-# (Task 5 extends this block).
 
 NS_PER_S = 1_000_000_000
 # Hybrid timestamps zero their bottom 12 bits for a logical counter; parsed
@@ -49,3 +52,99 @@ def test_validate_is_total(s: str) -> None:
     except TimestampError:
         return
     assert isinstance(result, int)
+
+
+@given(st.integers(min_value=10**18, max_value=SQLITE_MAX_INT64 - 1))
+def test_exact_mode_round_trips_in_range_ids(ts: int) -> None:
+    """Contract: every real message ID (19 digits, < 2**63) survives
+    str() -> validate(exact=True) unchanged. This is the -m flag's path."""
+    assert TimestampGenerator.validate(str(ts), exact=True) == ts
+
+
+@given(st.integers(min_value=SQLITE_MAX_INT64, max_value=10**19 - 1))
+def test_exact_mode_rejects_out_of_range_19_digit_ids(ts: int) -> None:
+    """19-digit strings at or above 2**63 are not valid IDs."""
+    with pytest.raises(TimestampError):
+        TimestampGenerator.validate(str(ts), exact=True)
+
+
+@given(
+    st.text(max_size=30).filter(
+        # Mirror the implementation gate (len==19 and str.isdigit() after
+        # strip) exactly, so this property is the complement of acceptance.
+        # str.isdigit (not an ASCII check) is intentional — see finding F3.
+        lambda s: not (len(s.strip()) == 19 and s.strip().isdigit())
+    )
+)
+def test_exact_mode_rejects_everything_else(s: str) -> None:
+    with pytest.raises(TimestampError):
+        TimestampGenerator.validate(s, exact=True)
+
+
+@given(st.integers(min_value=UNIX_NATIVE_BOUNDARY, max_value=SQLITE_MAX_INT64 - 1))
+def test_native_ids_round_trip_in_default_mode(ts: int) -> None:
+    """Bare integers at or above 2**44 are treated as native IDs and returned
+    verbatim (the digit-count heuristic only applies below that boundary)."""
+    assert TimestampGenerator.validate(str(ts)) == ts
+
+
+@given(st.integers(min_value=0, max_value=9_000_000_000))
+def test_unit_suffixes_and_bare_seconds_agree(n: int) -> None:
+    """The same instant expressed as Ns / N*1000ms / N*1e9ns / bare N parses
+    to one identical hybrid timestamp (integer math end-to-end). Bare numbers
+    of <= 11 digits are read as seconds by the documented heuristic; 9e9 stays
+    inside both that heuristic and the 2**63 ns range (~year 2255)."""
+    expected = (n * NS_PER_S) & ~LOGICAL_COUNTER_MASK
+    assert TimestampGenerator.validate(f"{n}s") == expected
+    assert TimestampGenerator.validate(f"{n * 1000}ms") == expected
+    assert TimestampGenerator.validate(f"{n * NS_PER_S}ns") == expected
+    assert TimestampGenerator.validate(str(n)) == expected
+
+
+@given(st.integers(min_value=0, max_value=4_102_444_800))  # 1970 .. 2100-01-01
+def test_iso_datetimes_agree_with_unix_seconds(n: int) -> None:
+    """An ISO datetime and its unix-seconds form agree to within one logical
+    quantum. NOT exact equality: the ISO path multiplies a float (datetime
+    .timestamp() * 1e9, _timestamp.py:459) whose rounding can land one 4096ns
+    quantum away from the integer-math suffix path. Asserting exact equality
+    here WILL flake — do not 'fix' a failure by tightening this."""
+    iso = datetime.fromtimestamp(n, tz=UTC).isoformat()
+    assert (
+        abs(TimestampGenerator.validate(iso) - TimestampGenerator.validate(f"{n}s"))
+        <= QUANTUM
+    )
+
+
+@given(st.dates(min_value=date(1970, 1, 1), max_value=date(2200, 12, 31)))
+def test_date_only_iso_means_midnight_utc(d: date) -> None:
+    """A bare YYYY-MM-DD parses identically to its explicit midnight-UTC
+    datetime (both run through the same float path, so equality is exact)."""
+    assert TimestampGenerator.validate(d.isoformat()) == TimestampGenerator.validate(
+        f"{d.isoformat()}T00:00:00Z"
+    )
+
+
+@given(st.dates(min_value=date(2263, 1, 1), max_value=date(9999, 12, 31)))
+def test_far_future_iso_raises_timestamp_error(d: date) -> None:
+    """Dates beyond the 2**63-ns horizon (April 2262) are invalid. Guards the
+    Task 4 fix; the boundary year 2262 itself is deliberately excluded."""
+    with pytest.raises(TimestampError):
+        TimestampGenerator.validate(d.isoformat())
+
+
+def test_known_quirk_pre_epoch_iso_returns_negative_int() -> None:
+    """FINDING F2 (pinned, not endorsed): pre-epoch ISO dates parse to
+    negative ints, which every downstream bound check then rejects
+    (validate_timestamp_bound requires >= 0). If this starts failing, the
+    parser's pre-epoch behavior changed — update the findings log."""
+    result = TimestampGenerator.validate("0001-01-01")
+    assert isinstance(result, int)
+    assert result < 0
+
+
+def test_known_quirk_non_ascii_digits_accepted() -> None:
+    """FINDING F3 (pinned, not endorsed): int() accepts any Unicode decimal
+    digits, so Eastern Arabic numerals parse like ASCII ones."""
+    assert (
+        TimestampGenerator.validate("١٢٣s") == (123 * NS_PER_S) & ~LOGICAL_COUNTER_MASK
+    )
