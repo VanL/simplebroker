@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   invocations (`pytest-pg -q` previously made the extension phase collect
   zero tests and exit 5).
 
+### simplebroker-redis 2.4.1
+- Aligned validation errors with simplebroker 4.7.0: invalid queue names
+  raise `QueueNameError` and oversize or non-UTF-8-encodable bodies raise
+  `MessageError` (both `ValueError` subclasses), matching the SQLite and
+  Postgres backends. Caught by the new cross-backend property suite.
+  Requires simplebroker>=4.7.0 (where those exception types gained their
+  `ValueError` base).
+
 ## [4.6.0] - 2026-06-10
 ### Added
 - Added `include_claimed` to the public peek surface — `Queue.peek/peek_one/
