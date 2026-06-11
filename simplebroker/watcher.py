@@ -89,7 +89,7 @@ from ._constants import (
 from ._exceptions import OperationalError, StopException
 from ._targets import ResolvedTarget
 from .db import BrokerDB
-from .helpers import interruptible_sleep
+from .helpers import _retry_jitter, interruptible_sleep
 from .sbqueue import Queue
 
 if TYPE_CHECKING:
@@ -451,8 +451,7 @@ class BaseWatcher(ABC):
     def _calculate_retry_wait_time(self, attempt: int) -> float:
         """Calculate retry wait time with exponential backoff and jitter."""
         base_wait: float = 0.05 * (2**attempt)
-        jitter: float = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
-        return float(base_wait + jitter)
+        return base_wait + _retry_jitter()
 
     def _handle_handler_error(
         self,

@@ -17,6 +17,9 @@ import warnings
 
 import pytest
 
+from simplebroker import helpers
+from simplebroker._exceptions import OperationalError, TimestampError
+from simplebroker._timestamp import TimestampGenerator
 from simplebroker.db import BrokerDB
 
 
@@ -280,6 +283,73 @@ def test_concurrent_writes_simple(workdir):
             assert len(messages) == 5
     finally:
         db.close()
+
+
+class _LockedAdvancePlugin:
+    """Direct-backend plugin stub whose advance_last_ts hits lock contention."""
+
+    name = "locked-advance-stub"
+    sql = None
+    schema_version = 1
+    is_direct_backend = True
+
+    def __init__(self, fail_times: int) -> None:
+        self.fail_times = fail_times
+        self.advance_attempts = 0
+
+    def create_core(self, *args, **kwargs):
+        raise NotImplementedError("capability probe only")
+
+    def read_last_ts(self, runner) -> int:
+        return 0
+
+    def advance_last_ts(self, runner, *, new_ts: int) -> bool:
+        self.advance_attempts += 1
+        if self.advance_attempts <= self.fail_times:
+            raise OperationalError("database is locked")
+        return True
+
+
+def test_timestamp_retry_survives_more_than_fifteen_lock_errors(monkeypatch):
+    """A contention burst longer than 15 attempts must not kill the writer;
+    the retry budget is a wall-clock window, not a fixed attempt count."""
+    monkeypatch.setattr(
+        helpers, "interruptible_sleep", lambda wait, stop_event=None: True
+    )
+
+    plugin = _LockedAdvancePlugin(fail_times=20)
+    gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
+
+    ts = gen.generate()
+
+    assert ts > 0
+    assert plugin.advance_attempts == 21
+
+
+def test_timestamp_retry_gives_up_after_elapsed_budget(monkeypatch):
+    """Persistent contention must fail within the elapsed budget, probed at a
+    bounded interval (many cheap attempts, no multi-second backoff gaps)."""
+    monotonic_time = 0.0
+
+    def fake_monotonic() -> float:
+        return monotonic_time
+
+    def fake_sleep(wait: float, stop_event=None) -> bool:
+        nonlocal monotonic_time
+        monotonic_time += wait
+        return True
+
+    monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+
+    plugin = _LockedAdvancePlugin(fail_times=10**9)
+    gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
+
+    with pytest.raises(TimestampError, match="database busy while writing timestamp"):
+        gen.generate()
+
+    assert plugin.advance_attempts > 15
+    assert monotonic_time <= 31.0
 
 
 if __name__ == "__main__":

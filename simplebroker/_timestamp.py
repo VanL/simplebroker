@@ -28,6 +28,14 @@ from .helpers import _execute_with_retry
 if TYPE_CHECKING:
     from ._runner import SQLRunner
 
+# Retry budget for the meta.last_ts compare-and-swap under write-lock
+# contention: probe at a bounded interval for a bounded wall-clock window.
+# A fixed attempt count with uncapped exponential backoff concentrates most
+# of its budget in the final two multi-second sleeps, so sustained contention
+# gets only a couple of late probes and the write dies spuriously.
+TS_RETRY_MAX_ELAPSED = 30.0
+TS_RETRY_MAX_DELAY = 0.25
+
 
 def validate_timestamp_bound(name: str, value: int | None) -> int | None:
     """Validate an integer timestamp filter bound."""
@@ -245,7 +253,13 @@ class TimestampGenerator:
             )
 
         try:
-            return _execute_with_retry(_op, max_retries=15, retry_delay=0.002)
+            return _execute_with_retry(
+                _op,
+                max_retries=None,
+                retry_delay=0.002,
+                max_elapsed=TS_RETRY_MAX_ELAPSED,
+                max_retry_delay=TS_RETRY_MAX_DELAY,
+            )
         except OperationalError as e:  # pragma busy_timeout etc.
             raise TimestampError(f"database busy while writing timestamp: {e}") from e
 

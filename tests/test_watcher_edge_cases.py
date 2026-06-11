@@ -751,3 +751,16 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
         # Check count should reset on activity
         strategy.notify_activity()
         assert strategy._check_count == 0
+
+
+def test_calculate_retry_wait_time_jitter_decorrelates() -> None:
+    # Rapid successive computations must span the 0-25ms jitter range;
+    # clock-derived jitter keeps simultaneous retriers in lockstep.
+    base = 0.05 * (2**2)
+    jitters = [
+        watcher_module.BaseWatcher._calculate_retry_wait_time(None, 2) - base  # type: ignore[arg-type]
+        for _ in range(12)
+    ]
+
+    assert all(-1e-9 <= j <= 0.0251 for j in jitters)
+    assert max(jitters) - min(jitters) > 0.005

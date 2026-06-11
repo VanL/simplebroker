@@ -1,6 +1,7 @@
 """Helper functions and classes for SimpleBroker."""
 
 import os
+import random
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -86,6 +87,16 @@ def interruptible_sleep(
     return True
 
 
+def _retry_jitter() -> float:
+    """Return 0-25ms of jitter for retry backoff.
+
+    Must be random per call rather than clock-derived: retriers that wake at
+    the same instant would otherwise compute identical jitter and stay
+    synchronized through the whole backoff ladder, re-colliding every attempt.
+    """
+    return random.uniform(0.0, 0.025)
+
+
 def _execute_with_retry(
     operation: Callable[[], T],
     *,
@@ -126,9 +137,8 @@ def _execute_with_retry(
                 elapsed = time.monotonic() - start
                 elapsed_available = max_elapsed is None or elapsed < max_elapsed
                 if retry_count_available and elapsed_available:
-                    # exponential back-off + 0-25 ms jitter using time-based pseudo-random
-                    jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
-                    wait = retry_delay * (2**attempt) + jitter
+                    # exponential back-off + jitter to decorrelate retriers
+                    wait = retry_delay * (2**attempt) + _retry_jitter()
                     if max_retry_delay is not None:
                         wait = min(wait, max_retry_delay)
                     if max_elapsed is not None:

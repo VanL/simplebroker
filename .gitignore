@@ -9,6 +9,8 @@ __pycache__/
 .Python
 .code
 .codex
+.claude
+.agents
 docs/
 build/
 develop-eggs/
