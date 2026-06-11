@@ -1877,6 +1877,7 @@ PHASELOCK_ENABLE_XATTRS=0 uv run pytest tests/test_phaselock.py tests/test_runne
 uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
 uv run ./bin/pytest-redis  # All Redis-backed tests with automatic Docker setup/teardown (Valkey)
 HYPOTHESIS_PROFILE=ci uv run pytest tests/test_property_*.py  # deeper property-test run (50 -> 200 examples per property)
+python fuzz/fuzz_timestamp_validate.py  # coverage-guided fuzzing via Atheris (Linux only; see fuzz/*.py)
 uv run ./bin/pytest-pg -q tests/test_watcher_metrics.py -k basic
 uv run ./bin/packaging-smoke --python 3.11
 
@@ -1889,7 +1890,9 @@ uv run mypy simplebroker bin/release.py
 Property-based tests (`tests/test_property_*.py`, powered by Hypothesis)
 check parser totality/round-trips and run a stateful model of queue
 semantics against every backend; failures print a `@reproduce_failure`
-blob that replays the exact case.
+blob that replays the exact case. The `fuzz/` harnesses drive the same
+properties coverage-guided under Atheris (weekly via the Fuzz workflow);
+a fuzz crash is a real property violation, replayable with plain pytest.
 
 **Contributing guidelines:**
 1. Keep it simple - the entire codebase should stay understandable

@@ -5,6 +5,14 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+### Added
+- Coverage-guided fuzzing (Atheris) of the timestamp parser and the
+  dump/load parser, reusing the existing Hypothesis properties through
+  their external-fuzzer hook (`fuzz/`, weekly `Fuzz` workflow with a
+  persistent corpus). Verified to rediscover the known YYYYMMDD parsing
+  quirk from a cold corpus in seconds.
+
 ## [4.7.0] - 2026-06-11
 ### Changed
 - Pre-epoch ISO dates passed to timestamp parsing (e.g. `--after 1950-01-01`)
