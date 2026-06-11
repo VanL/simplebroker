@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `TimestampGenerator.validate()` now raises `TimestampError` (as documented)
   instead of leaking `ValueError` for ISO dates beyond the year-2262
   timestamp horizon. CLI behavior is unchanged.
+- Invalid queue names now raise `QueueNameError` and invalid message bodies
+  (oversize, or not UTF-8 encodable) raise `MessageError`, as the docstrings
+  always promised. Both exception types now subclass `ValueError`, so
+  existing `except ValueError` handlers keep working unchanged.
 
 ## [4.6.0] - 2026-06-10
 ### Added

@@ -22,6 +22,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from simplebroker._constants import MAX_QUEUE_NAME_LENGTH
+from simplebroker._exceptions import QueueNameError
 from simplebroker.db import QUEUE_NAME_PATTERN
 
 pytestmark = pytest.mark.shared
@@ -80,13 +81,19 @@ def test_grammar_valid_names_work_end_to_end(
 def test_grammar_invalid_names_are_rejected_at_first_use(
     queue_factory, name: str
 ) -> None:
-    """FINDING F5 (pinned): rejection raises ValueError, although docstrings
-    advertise QueueNameError (which is not a ValueError subclass). If this
-    starts failing with QueueNameError, the implementation moved to match its
-    docs — update the findings log and flip this assertion deliberately."""
+    """Invalid names raise QueueNameError, as the docstrings promise
+    (finding F5, resolved: QueueNameError also subclasses ValueError so
+    pre-existing `except ValueError` callers keep working)."""
     q = queue_factory(name)  # construction does not validate ...
-    with pytest.raises(ValueError):
+    with pytest.raises(QueueNameError):
         q.write("x")  # ... first use does
+
+
+def test_queue_name_error_is_a_value_error() -> None:
+    """Backward-compat contract for finding F5: QueueNameError must remain a
+    ValueError subclass so callers that caught the old exception type keep
+    working."""
+    assert issubclass(QueueNameError, ValueError)
 
 
 def test_known_quirk_trailing_newline_name_accepted(queue_factory) -> None:

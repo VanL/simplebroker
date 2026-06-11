@@ -69,19 +69,26 @@ class TimestampError(BrokerError):
     pass
 
 
-class QueueNameError(BrokerError):
+class QueueNameError(BrokerError, ValueError):
     """Invalid queue name.
 
-    This is SimpleBroker-specific and doesn't map to sqlite3.
+    This is SimpleBroker-specific and doesn't map to sqlite3. Subclasses
+    ValueError for backward compatibility: queue-name rejection raised a
+    plain ValueError before this class was put into use, so existing
+    ``except ValueError`` handlers keep working.
     """
 
     pass
 
 
-class MessageError(BrokerError):
+class MessageError(BrokerError, ValueError):
     """Invalid message content.
 
-    This is SimpleBroker-specific and doesn't map to sqlite3.
+    This is SimpleBroker-specific and doesn't map to sqlite3. Subclasses
+    ValueError for backward compatibility: message rejection raised a plain
+    ValueError (or UnicodeEncodeError, itself a ValueError subclass) before
+    this class was put into use, so existing ``except ValueError`` handlers
+    keep working.
     """
 
     pass

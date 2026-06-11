@@ -25,7 +25,7 @@ import pytest
 from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
-from simplebroker._exceptions import OperationalError
+from simplebroker._exceptions import MessageError, OperationalError
 
 from .helper_scripts.broker_factory import active_backend, make_queue
 
@@ -81,7 +81,9 @@ def test_size_limit_counts_utf8_bytes(broker_target, body: str) -> None:
             q.write(body)
             assert q.read_one() == body
         else:
-            with pytest.raises(ValueError):
+            # MessageError subclasses ValueError, so older callers that
+            # caught ValueError for oversize writes keep working.
+            with pytest.raises(MessageError):
                 q.write(body)
             assert q.read_one() is None  # the rejected write stored nothing
     finally:
@@ -104,15 +106,20 @@ def test_nul_byte_bodies_pinned_per_backend(queue_factory) -> None:
         assert q.read_one() == "a\x00b"
 
 
-def test_known_quirk_lone_surrogate_bodies_raise_unicode_error(
-    queue_factory,
-) -> None:
-    """FINDING F8 (pinned, not endorsed; discovered when property shrinking
-    surfaced body='\\ud800'): lone surrogates are not UTF-8 encodable, so the
-    byte-size check (db.py:_validate_message_size) raises UnicodeEncodeError
-    before any storage — an exception type write()'s docstring never
-    mentions. Backend-independent: the error fires client-side."""
+def test_lone_surrogate_bodies_raise_message_error(queue_factory) -> None:
+    """Lone surrogates are not UTF-8 encodable; write() rejects them with
+    MessageError, as its docstring promises (finding F8, resolved — the
+    original UnicodeEncodeError is preserved as the cause). Backend
+    independent: the error fires client-side, before any storage."""
     q = queue_factory("surrogate_probe")
-    with pytest.raises(UnicodeEncodeError):
+    with pytest.raises(MessageError) as exc_info:
         q.write("\ud800")
+    assert isinstance(exc_info.value.__cause__, UnicodeEncodeError)
     assert q.read_one() is None
+
+
+def test_message_error_is_a_value_error() -> None:
+    """Backward-compat contract for finding F8: MessageError must remain a
+    ValueError subclass so callers that caught the old exception type keep
+    working."""
+    assert issubclass(MessageError, ValueError)

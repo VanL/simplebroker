@@ -41,7 +41,9 @@ from ._constants import (
 )
 from ._exceptions import (
     IntegrityError,
+    MessageError,
     OperationalError,
+    QueueNameError,
     StopException,
 )
 from ._message_insert import (
@@ -941,12 +943,12 @@ class BrokerCore:
             queue: Queue name to validate
 
         Raises:
-            ValueError: If queue name is invalid
+            QueueNameError: If queue name is invalid (subclasses ValueError)
         """
         # Use cached validation function
         error = _validate_queue_name_cached(queue)
         if error:
-            raise ValueError(error)
+            raise QueueNameError(error)
 
     def _set_active_generator_batch(
         self, operation: Literal["claim", "move"] | None
@@ -1078,9 +1080,14 @@ class BrokerCore:
         return physical_ns_base, logical_counter
 
     def _validate_message_size(self, message: str) -> None:
-        message_size = len(message.encode("utf-8"))
+        try:
+            message_size = len(message.encode("utf-8"))
+        except UnicodeEncodeError as e:
+            raise MessageError(
+                "Message must be UTF-8 encodable (lone surrogates are not allowed)"
+            ) from e
         if message_size > self._max_message_size:
-            raise ValueError(
+            raise MessageError(
                 f"Message size ({message_size} bytes) exceeds maximum allowed size "
                 f"({self._max_message_size} bytes). Adjust BROKER_MAX_MESSAGE_SIZE if needed."
             )
