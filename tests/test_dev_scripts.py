@@ -25,7 +25,30 @@ from simplebroker._scripts import (
     _require_single_wheel,
     _route_pytest_args,
     _venv_python,
+    _with_default_suite_path,
 )
+
+
+def test_with_default_suite_path_applies_default_for_flag_only_args() -> None:
+    """Regression for finding F9: ``pytest-pg -q`` routed the flag into both
+    phases, which suppressed the extension phase's default path, so that
+    phase collected zero tests and the wrapper exited 5."""
+    assert _with_default_suite_path(["-q"], "extensions/simplebroker_pg/tests") == [
+        "-q",
+        "extensions/simplebroker_pg/tests",
+    ]
+    assert _with_default_suite_path([], "tests") == ["tests"]
+
+
+def test_with_default_suite_path_keeps_explicit_targets() -> None:
+    args = ["-q", "tests/test_smoke.py"]
+    assert _with_default_suite_path(args, "tests") == args
+
+
+def test_with_default_suite_path_ignores_flag_values() -> None:
+    """A flag value like the pattern in ``-k foo`` is not a test target; the
+    default path must still be applied."""
+    assert _with_default_suite_path(["-k", "foo"], "tests") == ["-k", "foo", "tests"]
 
 
 def test_route_pytest_args_limits_run_to_shared_suite() -> None:

@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented character set. Such names — previously creatable only through
   the Python API — are now rejected at first use, matching the prefix
   validator's existing strictness.
+- `bin/pytest-pg` now applies the default suite paths for flag-only
+  invocations (`pytest-pg -q` previously made the extension phase collect
+  zero tests and exit 5).
 
 ## [4.6.0] - 2026-06-10
 ### Added

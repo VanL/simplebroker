@@ -313,6 +313,20 @@ def _classify_pytest_target(arg: str) -> str | None:
     return None
 
 
+def _with_default_suite_path(args: list[str], default_path: str) -> list[str]:
+    """Append the suite's default test path unless a target was routed.
+
+    Flag-only invocations (e.g. ``pytest-pg -q``) route the flags into both
+    suites' argument lists; a bare ``args or [default]`` then skips the
+    default path and the suite collects nothing. Flag values (``-k foo``)
+    do not classify as targets, so they do not suppress the default either.
+    """
+
+    if any(_classify_pytest_target(arg) is not None for arg in args):
+        return list(args)
+    return [*args, default_path]
+
+
 def _extract_pytest_runner_overrides(
     pytest_args: list[str],
 ) -> tuple[list[str], str | None, str | None, str | None]:
@@ -464,7 +478,7 @@ def pytest_pg_main() -> int:
             _run(
                 _pg_test_uv_command(
                     "pytest",
-                    *(shared_pytest_args or ["tests"]),
+                    *_with_default_suite_path(shared_pytest_args, "tests"),
                     "-m",
                     shared_marker,
                     "-n",
@@ -479,7 +493,9 @@ def pytest_pg_main() -> int:
             _run(
                 _pg_test_uv_command(
                     "pytest",
-                    *(extension_pytest_args or ["extensions/simplebroker_pg/tests"]),
+                    *_with_default_suite_path(
+                        extension_pytest_args, "extensions/simplebroker_pg/tests"
+                    ),
                     "-m",
                     extension_marker,
                     "-n",
