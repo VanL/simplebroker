@@ -95,9 +95,7 @@ def test_postgres_rename_waits_for_write_like_table_lock(
         assert errors == []
         assert len(results) == 1
         assert pg_core.peek_many("old", limit=10, with_timestamps=False) == []
-        assert pg_core.peek_many("new", limit=10, with_timestamps=False) == [
-            "payload"
-        ]
+        assert pg_core.peek_many("new", limit=10, with_timestamps=False) == ["payload"]
     finally:
         rename_core.close()
         rename_runner.shutdown()

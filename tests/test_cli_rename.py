@@ -94,9 +94,7 @@ def test_rename_no_retarget_aliases(workdir: Path) -> None:
     assert run_cli("alias", "add", "a1", "old", cwd=workdir)[0] == 0
     assert run_cli("write", "old", "payload", cwd=workdir)[0] == 0
 
-    rc, _, err = run_cli(
-        "rename", "old", "new", "--no-retarget-aliases", cwd=workdir
-    )
+    rc, _, err = run_cli("rename", "old", "new", "--no-retarget-aliases", cwd=workdir)
 
     assert rc == 0, err
     rc, out, err = run_cli("alias", "list", "--target", "old", cwd=workdir)

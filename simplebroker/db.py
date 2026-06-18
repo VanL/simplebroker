@@ -2476,7 +2476,9 @@ class BrokerCore:
 
     def _queue_exists_locked(self, queue: str) -> bool:
         """Return whether a queue has rows. Caller must hold self._lock."""
-        rows = list(self._runner.run(self._sql.CHECK_QUEUE_EXISTS, (queue,), fetch=True))
+        rows = list(
+            self._runner.run(self._sql.CHECK_QUEUE_EXISTS, (queue,), fetch=True)
+        )
         return bool(rows[0][0]) if rows else False
 
     def rename_queue(

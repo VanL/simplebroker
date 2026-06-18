@@ -179,9 +179,12 @@ def test_redis_rename_missing_source_does_not_create_new_keys(
         result = core.rename_queue("missing", "new")
 
         assert result.messages_renamed == 0
-        assert core._runner.client.exists(
-            keys.pending("new"), keys.claimed("new"), keys.reserved("new")
-        ) == 0
+        assert (
+            core._runner.client.exists(
+                keys.pending("new"), keys.claimed("new"), keys.reserved("new")
+            )
+            == 0
+        )
         assert "new" not in core._runner.client.smembers(keys.queues)
     finally:
         core.close()
