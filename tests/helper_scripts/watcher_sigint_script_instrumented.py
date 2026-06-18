@@ -5,8 +5,9 @@ import sys
 import time
 from pathlib import Path
 
-# Add parent directory to path so we can import simplebroker
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add repository root to path so subprocesses import this checkout even when
+# PYTHONPATH contains another SimpleBroker install.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher

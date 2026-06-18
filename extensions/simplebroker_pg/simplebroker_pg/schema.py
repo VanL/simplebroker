@@ -197,6 +197,24 @@ def meta_table_exists(runner: SQLRunner) -> bool:
     return bool(rows and rows[0][0])
 
 
+def queue_ts_order_unclaimed_index_exists(runner: SQLRunner) -> bool:
+    """Return whether the pending queue/timestamp index exists."""
+    rows = list(
+        runner.run(
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = current_schema()
+                  AND indexname = 'idx_messages_queue_ts_order_unclaimed'
+            )
+            """,
+            fetch=True,
+        )
+    )
+    return bool(rows and rows[0][0])
+
+
 def migrate_schema(
     runner: SQLRunner,
     *,
@@ -205,6 +223,8 @@ def migrate_schema(
 ) -> None:
     """Apply any missing Postgres schema migrations in order."""
     if current_version >= POSTGRES_SCHEMA_VERSION:
+        if queue_ts_order_unclaimed_index_exists(runner):
+            return
         runner.begin_immediate()
         try:
             runner.run(CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX)
