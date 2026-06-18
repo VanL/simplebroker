@@ -87,6 +87,13 @@ ON messages(queue, claimed, id)
 WHERE claimed = 0
 """
 
+# Partial queue/timestamp index for newest pending timestamp lookups.
+CREATE_PENDING_QUEUE_TS_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_messages_pending_queue_ts
+ON messages(queue, ts)
+WHERE claimed = 0
+"""
+
 # Unique index on timestamp column (for schema v3)
 CREATE_TS_UNIQUE_INDEX = """
 CREATE UNIQUE INDEX idx_messages_ts_unique
@@ -117,6 +124,12 @@ WHERE type='table' AND name='messages'
 CHECK_TS_UNIQUE_INDEX = """
 SELECT COUNT(*) FROM sqlite_master
 WHERE type='index' AND name='idx_messages_ts_unique'
+"""
+
+# Check for pending queue/timestamp index
+CHECK_PENDING_QUEUE_TS_INDEX = """
+SELECT COUNT(*) FROM sqlite_master
+WHERE type='index' AND name='idx_messages_pending_queue_ts'
 """
 
 # Check whether the meta table exists
@@ -180,6 +193,14 @@ CHECK_PENDING_MESSAGES = (
 
 # Check for pending messages after a timestamp
 CHECK_PENDING_MESSAGES_AFTER = "SELECT EXISTS(SELECT 1 FROM messages WHERE queue = ? AND claimed = 0 AND ts > ? LIMIT 1)"
+
+GET_LATEST_PENDING_TIMESTAMP = """
+SELECT ts
+FROM messages
+WHERE queue = ? AND claimed = 0
+ORDER BY ts DESC
+LIMIT 1
+"""
 
 # Get data version (SQLite only)
 GET_DATA_VERSION = "PRAGMA data_version"

@@ -21,9 +21,20 @@ Any libFuzzer flags (-max_total_time, -runs, ...) pass through. See
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol, cast
 
-import atheris
+import atheris  # type: ignore[import-untyped]
+
+
+class _HypothesisFuzzer(Protocol):
+    fuzz_one_input: Callable[[bytes], None]
+
+
+class _HypothesisTest(Protocol):
+    hypothesis: _HypothesisFuzzer
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -36,7 +47,10 @@ from tests.test_property_timestamp_validate import test_validate_is_total  # noq
 
 
 def main() -> None:
-    atheris.Setup(sys.argv, test_validate_is_total.hypothesis.fuzz_one_input)
+    fuzz_one_input = cast(
+        _HypothesisTest, test_validate_is_total
+    ).hypothesis.fuzz_one_input
+    atheris.Setup(sys.argv, fuzz_one_input)
     atheris.Fuzz()
 
 

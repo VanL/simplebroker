@@ -35,7 +35,7 @@ from typing import Any, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "4.7.1"
+__version__: Final[str] = "4.8.0"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
@@ -61,7 +61,7 @@ DEFAULT_PROJECT_CONFIG_NAME: Final[str] = ".broker.toml"
 SIMPLEBROKER_MAGIC: Final[str] = "simplebroker-v1"
 """Magic string stored in database to verify it's a SimpleBroker database."""
 
-SCHEMA_VERSION: Final[int] = 4
+SCHEMA_VERSION: Final[int] = 5
 """Current database schema version for migration compatibility."""
 
 # ==============================================================================

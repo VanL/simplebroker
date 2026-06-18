@@ -12,10 +12,12 @@ from simplebroker._backends.sqlite.schema import (
     ensure_schema_v2,
     ensure_schema_v3,
     ensure_schema_v4,
+    ensure_schema_v5,
     initialize_database,
     messages_has_claimed_column,
     meta_table_exists,
     migrate_schema,
+    pending_queue_ts_index_exists,
     ts_unique_index_exists,
 )
 from simplebroker._constants import SCHEMA_VERSION, SIMPLEBROKER_MAGIC
@@ -63,6 +65,7 @@ def test_initialize_database_bootstraps_core_schema_and_metadata(
 
         assert meta_table_exists(runner) is True
         assert messages_has_claimed_column(runner) is True
+        assert pending_queue_ts_index_exists(runner) is True
         rows = dict(runner.run("SELECT key, value FROM meta", fetch=True))
         assert rows["magic"] == SIMPLEBROKER_MAGIC
         assert int(rows["schema_version"]) == SCHEMA_VERSION
@@ -79,7 +82,7 @@ def test_initialize_database_bootstraps_core_schema_and_metadata(
         runner.close()
 
 
-def test_migrate_schema_applies_v2_v3_and_v4_in_order(tmp_path: Path) -> None:
+def test_migrate_schema_applies_v2_v3_v4_and_v5_in_order(tmp_path: Path) -> None:
     db_path = tmp_path / "old.db"
     _create_v1_messages_table(db_path)
     runner = _runner(db_path)
@@ -91,9 +94,10 @@ def test_migrate_schema_applies_v2_v3_and_v4_in_order(tmp_path: Path) -> None:
             write_schema_version=versions.append,
         )
 
-        assert versions == [2, 3, 4]
+        assert versions == [2, 3, 4, 5]
         assert messages_has_claimed_column(runner) is True
         assert ts_unique_index_exists(runner) is True
+        assert pending_queue_ts_index_exists(runner) is True
         assert list(
             runner.run(
                 "SELECT name FROM sqlite_master WHERE type='table' "
@@ -101,6 +105,89 @@ def test_migrate_schema_applies_v2_v3_and_v4_in_order(tmp_path: Path) -> None:
                 fetch=True,
             )
         ) == [("queue_aliases",)]
+    finally:
+        runner.close()
+
+
+def test_migrate_schema_v4_to_v5_creates_pending_queue_ts_index(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v4.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    versions: list[int] = []
+    try:
+        ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
+        ensure_schema_v3(runner, current_version=2, write_schema_version=lambda _: None)
+        ensure_schema_v4(runner, current_version=3, write_schema_version=lambda _: None)
+
+        assert pending_queue_ts_index_exists(runner) is False
+
+        migrate_schema(
+            runner,
+            current_version=4,
+            write_schema_version=versions.append,
+        )
+
+        assert versions == [5]
+        assert pending_queue_ts_index_exists(runner) is True
+    finally:
+        runner.close()
+
+
+def test_ensure_schema_v5_backfills_pending_queue_ts_index_idempotently(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v5.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    versions: list[int] = []
+    try:
+        ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
+        ensure_schema_v3(runner, current_version=2, write_schema_version=lambda _: None)
+        ensure_schema_v4(runner, current_version=3, write_schema_version=lambda _: None)
+
+        ensure_schema_v5(
+            runner,
+            current_version=5,
+            write_schema_version=versions.append,
+        )
+        ensure_schema_v5(
+            runner,
+            current_version=5,
+            write_schema_version=versions.append,
+        )
+
+        assert versions == []
+        assert pending_queue_ts_index_exists(runner) is True
+    finally:
+        runner.close()
+
+
+def test_latest_pending_timestamp_query_uses_pending_queue_ts_index(
+    tmp_path: Path,
+) -> None:
+    runner = _runner(tmp_path / "broker.db")
+    try:
+        initialize_database(runner, run_with_retry=_run_direct)
+
+        rows = list(
+            runner.run(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT ts
+                FROM messages
+                WHERE queue = ? AND claimed = 0
+                ORDER BY ts DESC
+                LIMIT 1
+                """,
+                ("jobs",),
+                fetch=True,
+            )
+        )
+
+        plan_text = "\n".join(str(row) for row in rows)
+        assert "idx_messages_pending_queue_ts" in plan_text
     finally:
         runner.close()
 

@@ -205,6 +205,13 @@ def migrate_schema(
 ) -> None:
     """Apply any missing Postgres schema migrations in order."""
     if current_version >= POSTGRES_SCHEMA_VERSION:
+        runner.begin_immediate()
+        try:
+            runner.run(CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX)
+            runner.commit()
+        except Exception:
+            runner.rollback()
+            raise
         return
 
     runner.begin_immediate()

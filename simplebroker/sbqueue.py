@@ -1094,6 +1094,20 @@ class Queue:
         with self.get_connection() as connection:
             return connection.has_pending_messages(self.name, after_timestamp)
 
+    def latest_pending_timestamp(self) -> int | None:
+        """Return the newest pending message timestamp in this queue.
+
+        Returns:
+            Largest timestamp for an unclaimed message in this queue, or
+            ``None`` when the queue has no pending messages.
+
+        Raises:
+            QueueNameError: If the queue name is invalid
+            OperationalError: If the backend operation fails
+        """
+        with self.get_connection() as connection:
+            return connection.latest_pending_timestamp(self.name)
+
     def exists(self) -> bool:
         """Return whether this queue has any messages, including claimed rows."""
         with self.get_connection() as connection:

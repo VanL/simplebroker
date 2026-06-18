@@ -1251,6 +1251,42 @@ class RedisBrokerCore:
                 return True
             offset += len(ids)
 
+    def latest_pending_timestamp(self, queue: str) -> int | None:
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+        pending = self._qkey(queue, "pending")
+        reserved = self._qkey(queue, "reserved")
+        offset = 0
+        batch_size = 64
+
+        while True:
+            ids = [
+                str(encoded)
+                for encoded in response_list(
+                    self._client.execute_command(
+                        "ZREVRANGEBYLEX",
+                        pending,
+                        "+",
+                        "-",
+                        "LIMIT",
+                        offset,
+                        batch_size,
+                    )
+                )
+            ]
+            if not ids:
+                return None
+
+            with self._client.pipeline(transaction=False) as pipe:
+                for encoded in ids:
+                    pipe.zscore(reserved, encoded)
+                reserved_scores = response_list(pipe.execute())
+
+            for encoded, reserved_score in zip(ids, reserved_scores, strict=False):
+                if reserved_score is None:
+                    return decode_id(encoded)
+            offset += len(ids)
+
     def get_data_version(self) -> int | None:
         return None
 

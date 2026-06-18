@@ -10,11 +10,13 @@ from ..._exceptions import IntegrityError
 from ..._sql import (
     ALTER_MESSAGES_ADD_CLAIMED,
     CHECK_CLAIMED_COLUMN,
+    CHECK_PENDING_QUEUE_TS_INDEX,
     CHECK_TS_UNIQUE_INDEX,
     CREATE_ALIAS_TARGET_INDEX,
     CREATE_ALIASES_TABLE,
     CREATE_MESSAGES_TABLE,
     CREATE_META_TABLE,
+    CREATE_PENDING_QUEUE_TS_INDEX,
     CREATE_QUEUE_TS_ID_INDEX,
     CREATE_TS_UNIQUE_INDEX,
     CREATE_UNCLAIMED_INDEX,
@@ -50,6 +52,7 @@ def initialize_database(
     )
     if has_claimed_column:
         run_with_retry(lambda: runner.run(CREATE_UNCLAIMED_INDEX))
+        run_with_retry(lambda: runner.run(CREATE_PENDING_QUEUE_TS_INDEX))
 
     run_with_retry(lambda: runner.run(CREATE_META_TABLE))
     run_with_retry(lambda: runner.run(INIT_LAST_TS))
@@ -101,6 +104,12 @@ def migrate_schema(
         current_version=version_after_v3,
         write_schema_version=write_schema_version,
     )
+    version_after_v4 = max(current_version, 4) if current_version >= 4 else 4
+    ensure_schema_v5(
+        runner,
+        current_version=version_after_v4,
+        write_schema_version=write_schema_version,
+    )
 
 
 def messages_has_claimed_column(runner: SQLRunner) -> bool:
@@ -112,6 +121,12 @@ def messages_has_claimed_column(runner: SQLRunner) -> bool:
 def ts_unique_index_exists(runner: SQLRunner) -> bool:
     """Return whether the SQLite timestamp unique index exists."""
     rows = list(runner.run(CHECK_TS_UNIQUE_INDEX, fetch=True))
+    return bool(rows and rows[0][0])
+
+
+def pending_queue_ts_index_exists(runner: SQLRunner) -> bool:
+    """Return whether the SQLite pending queue/timestamp index exists."""
+    rows = list(runner.run(CHECK_PENDING_QUEUE_TS_INDEX, fetch=True))
     return bool(rows and rows[0][0])
 
 
@@ -237,6 +252,36 @@ def ensure_schema_v4(
         runner.run(CREATE_ALIAS_TARGET_INDEX)
         runner.run(INSERT_ALIAS_VERSION_META)
         write_schema_version(4)
+        runner.commit()
+    except Exception:
+        runner.rollback()
+        raise
+
+
+def ensure_schema_v5(
+    runner: SQLRunner,
+    *,
+    current_version: int,
+    write_schema_version: Callable[[int], None],
+) -> None:
+    """Ensure SQLite schema v5 (pending queue/timestamp index)."""
+    if current_version >= 5:
+        runner.begin_immediate()
+        try:
+            runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
+            runner.commit()
+        except Exception:
+            runner.rollback()
+            raise
+        return
+
+    if current_version < 4:
+        return
+
+    try:
+        runner.begin_immediate()
+        runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
+        write_schema_version(5)
         runner.commit()
     except Exception:
         runner.rollback()

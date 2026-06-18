@@ -62,6 +62,8 @@ dependencies and stores its state in one SQLite database.
   - [Real-time Queue Watching](#real-time-queue-watching)
     - [Move Mode (`--move`)](#move-mode---move)
   - [Python API](#python-api)
+    - [Queue metadata](#queue-metadata)
+    - [Latest pending timestamp](#latest-pending-timestamp)
     - [Generating timestamps without writing](#generating-timestamps-without-writing)
     - [Tracking the last generated timestamp](#tracking-the-last-generated-timestamp)
     - [Thread-Based Background Processing](#thread-based-background-processing)
@@ -759,6 +761,25 @@ is true when `total > 0`.
 For cross-queue metadata, `open_broker(...).list_queues()` returns queue names
 only, including claimed-only queues. Use `list_queue_stats()` when you need
 counts.
+
+### Latest pending timestamp
+
+Use `Queue.latest_pending_timestamp()` when you need the newest pending
+timestamp in one queue without scanning the queue:
+
+```python
+queue = Queue("tasks")
+latest = queue.latest_pending_timestamp()
+if latest is None:
+    print("no pending messages")
+```
+
+This returns the largest timestamp for pending, unclaimed messages in that
+queue. It does not consume, claim, reserve, move, or mutate messages.
+
+This is different from `queue.last_ts`, which is the broker-global generated
+timestamp high-water mark and may refer to another queue or to a generated
+timestamp with no message row.
 
 ### Generating timestamps without writing
 

@@ -2634,6 +2634,40 @@ class BrokerCore:
         # Execute with retry logic
         return self._run_with_retry(_do_check)
 
+    def latest_pending_timestamp(self, queue: str) -> int | None:
+        """Return the newest pending message timestamp in one queue.
+
+        Args:
+            queue: Name of the queue to inspect
+
+        Returns:
+            Largest timestamp for an unclaimed message in the queue, or
+            ``None`` when the queue has no pending messages.
+
+        Raises:
+            RuntimeError: If called from a forked process
+            ValueError: If queue name is invalid
+            OperationalError: If database operation fails
+        """
+        self._check_fork_safety()
+        self._validate_queue_name(queue)
+
+        def _do_lookup() -> int | None:
+            with self._lock:
+                rows = list(
+                    self._runner.run(
+                        self._sql.GET_LATEST_PENDING_TIMESTAMP,
+                        (queue,),
+                        fetch=True,
+                    )
+                )
+                if not rows:
+                    return None
+                value = rows[0][0]
+                return None if value is None else int(value)
+
+        return self._run_with_retry(_do_lookup)
+
     def get_data_version(self) -> int | None:
         """Get the data version from SQLite PRAGMA.
 

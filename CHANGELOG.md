@@ -6,12 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [4.8.0] - 2026-06-18
 ### Added
+- Added `Queue.latest_pending_timestamp()` and
+  `BrokerConnection.latest_pending_timestamp(queue)` to retrieve the newest
+  pending message timestamp for one queue without scanning message history.
+  SQLite, Postgres, and Redis backends implement the API; SQLite schema v5 adds
+  `idx_messages_pending_queue_ts` for the lookup.
 - Coverage-guided fuzzing (Atheris) of the timestamp parser and the
   dump/load parser, reusing the existing Hypothesis properties through
   their external-fuzzer hook (`fuzz/`, weekly `Fuzz` workflow with a
   persistent corpus). Verified to rediscover the known YYYYMMDD parsing
   quirk from a cold corpus in seconds.
+
+### Fixed
+- Postgres schema migration now idempotently recreates
+  `idx_messages_queue_ts_order_unclaimed` even when the schema already reports
+  the current version, repairing drifted schemas without a version bump.
+
+### simplebroker-pg 2.3.0
+- Added Postgres backend support for
+  `BrokerConnection.latest_pending_timestamp(queue)`, using the existing
+  pending queue/timestamp index.
+- Postgres schema migration now idempotently recreates
+  `idx_messages_queue_ts_order_unclaimed` for current-version schemas when the
+  index is missing. Requires simplebroker>=4.8.0.
+
+### simplebroker-redis 2.5.0
+- Added Redis backend support for
+  `BrokerConnection.latest_pending_timestamp(queue)`, returning the newest
+  pending timestamp while skipping IDs reserved by active at-least-once
+  batches. Requires simplebroker>=4.8.0.
 
 ## [4.7.0] - 2026-06-11
 ### Changed
