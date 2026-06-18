@@ -7,7 +7,7 @@ from ._constants import __version__, resolve_config
 from ._dump import LoadResult, dump_lines, load_lines
 from .db import BrokerDB as _BrokerDB  # noqa: F401
 from .db import open_broker
-from .metadata import QueueStats
+from .metadata import QueueRenameResult, QueueStats
 from .project import (
     BrokerTarget,
     broker_root,
@@ -25,6 +25,7 @@ __all__ = [
     "ActivityWaiter",
     "LoadResult",
     "Queue",
+    "QueueRenameResult",
     "QueueStats",
     "QueueWatcher",
     "QueueMoveWatcher",

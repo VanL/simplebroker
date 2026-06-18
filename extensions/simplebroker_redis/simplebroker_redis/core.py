@@ -45,7 +45,7 @@ from simplebroker.db import (
     _validate_queue_name_cached,
     _validate_queue_prefix,
 )
-from simplebroker.metadata import QueueStats
+from simplebroker.metadata import QueueRenameResult, QueueStats
 
 from . import scripts
 from .keys import RedisKeys, decode_id, encode_id, exact_bound, max_bound, min_bound
@@ -1140,6 +1140,67 @@ class RedisBrokerCore:
                 "Cannot delete message while an at_least_once batch is active"
             )
         return result_int
+
+    def rename_queue(
+        self,
+        old_queue: str,
+        new_queue: str,
+        *,
+        retarget_aliases: bool = True,
+    ) -> QueueRenameResult:
+        """Rename all Redis queue state from one queue name to another."""
+        self._check_fork_safety()
+        self._validate_queue_name(old_queue)
+        self._validate_queue_name(new_queue)
+        if old_queue == new_queue:
+            raise ValueError("Source and target queues cannot be the same")
+        self._assert_no_reentrant_mutation_during_batch("rename_queue")
+        self.recover_stale_batches(max_age_seconds=self._runner.stale_batch_seconds)
+
+        try:
+            result = response_list(
+                self._client.eval(
+                    scripts.RENAME_QUEUE,
+                    9,
+                    self._qkey(old_queue, "pending"),
+                    self._qkey(old_queue, "claimed"),
+                    self._qkey(old_queue, "reserved"),
+                    self._qkey(new_queue, "pending"),
+                    self._qkey(new_queue, "claimed"),
+                    self._qkey(new_queue, "reserved"),
+                    self._key("queues"),
+                    self._key("aliases"),
+                    self._key("meta"),
+                    old_queue,
+                    new_queue,
+                    "1" if retarget_aliases else "0",
+                    str(time.time_ns()),
+                )
+            )
+        except redis.RedisError as exc:
+            raise _translate_redis_error(exc) from exc
+
+        status = int(result[0]) if result else 0
+        if status == -1:
+            raise OperationalError(
+                "Cannot rename queue while an at_least_once batch is active"
+            )
+        if status == -2:
+            raise ValueError("Target queue already exists")
+        if status != 1:
+            raise OperationalError(f"Unexpected Redis rename result: {status}")
+
+        messages_renamed = int(result[1])
+        aliases_retargeted = int(result[2])
+        if messages_renamed > 0:
+            self._publish(old_queue)
+            self._publish(new_queue)
+        return QueueRenameResult(
+            old_queue=old_queue,
+            new_queue=new_queue,
+            messages_renamed=messages_renamed,
+            aliases_retargeted=aliases_retargeted,
+        )
 
     def find_message_ids(
         self,

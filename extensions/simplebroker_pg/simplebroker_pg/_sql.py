@@ -86,6 +86,40 @@ WITH deleted AS (
 )
 SELECT COUNT(*) FROM deleted
 """
+RENAME_QUEUE_MESSAGES_COUNT = """
+WITH renamed AS (
+    UPDATE messages
+    SET queue = ?
+    WHERE queue = ?
+    RETURNING 1
+),
+renamed_count AS (
+    SELECT COUNT(*) AS count FROM renamed
+),
+notified AS (
+    SELECT pg_notify(
+        'simplebroker_' || substr(md5(current_schema()), 1, 24),
+        notifications.payload
+    )
+    FROM renamed_count
+    CROSS JOIN (VALUES (?::text), (?::text)) AS notifications(payload)
+    WHERE renamed_count.count > 0
+)
+SELECT
+    renamed_count.count,
+    notification_count.count
+FROM renamed_count
+CROSS JOIN (SELECT COUNT(*) AS count FROM notified) AS notification_count
+"""
+RETARGET_ALIASES_COUNT = """
+WITH updated AS (
+    UPDATE aliases
+    SET target = ?
+    WHERE target = ?
+    RETURNING 1
+)
+SELECT COUNT(*) FROM updated
+"""
 GET_ALIAS_VERSION = "SELECT alias_version FROM meta WHERE singleton = TRUE"
 GET_DISTINCT_QUEUES = "SELECT DISTINCT queue FROM messages ORDER BY queue"
 LIST_QUEUES_PREFIX = """
@@ -215,6 +249,7 @@ WHERE n.nspname = ?
 """
 
 LOCK_BROADCAST_SCOPE = "LOCK TABLE messages IN SHARE ROW EXCLUSIVE MODE"
+LOCK_RENAME_SCOPE = "LOCK TABLE messages IN SHARE ROW EXCLUSIVE MODE"
 
 COMPACT_TABLE_MESSAGES = "VACUUM (ANALYZE) messages"
 COMPACT_TABLE_META = "VACUUM (ANALYZE) meta"

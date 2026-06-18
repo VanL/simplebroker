@@ -28,6 +28,8 @@ from ..._sql.sqlite import (
     DELETE_STAGED_MESSAGE_IDS,
     DELETE_STAGED_QUEUE_NAMES,
     DELETE_STAGED_QUEUE_NAMES_BEFORE,
+    RENAME_QUEUE_MESSAGES,
+    RETARGET_ALIASES,
     SELECT_CHANGES,
     build_insert_delete_message_ids_query,
     build_insert_delete_queue_names_query,
@@ -91,6 +93,28 @@ def delete_from_queues(
     deleted_count = _changes_on_same_connection(runner)
     runner.run(CLEAR_TEMP_DELETE_QUEUE_NAMES)
     return deleted_count
+
+
+def rename_queue_messages(
+    runner: SQLRunner,
+    *,
+    old_queue: str,
+    new_queue: str,
+) -> int:
+    """Retag all messages from one queue to another."""
+    runner.run(RENAME_QUEUE_MESSAGES, (new_queue, old_queue))
+    return _changes_on_same_connection(runner)
+
+
+def retarget_aliases(
+    runner: SQLRunner,
+    *,
+    old_target: str,
+    new_target: str,
+) -> int:
+    """Retarget aliases that point at one queue."""
+    runner.run(RETARGET_ALIASES, (new_target, old_target))
+    return _changes_on_same_connection(runner)
 
 
 def _changes_on_same_connection(runner: SQLRunner) -> int:

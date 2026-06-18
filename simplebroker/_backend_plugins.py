@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
     from ._runner import SQLRunner
     from ._sidecar import SidecarSession
-    from .metadata import QueueStats
+    from .metadata import QueueRenameResult, QueueStats
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
 DEFAULT_BACKEND_NAME = "sqlite"
@@ -147,6 +147,22 @@ class BackendPlugin(Protocol):
         *,
         queue_names: Sequence[str],
         before_timestamp: int | None = None,
+    ) -> int: ...
+
+    def rename_queue_messages(
+        self,
+        runner: SQLRunner,
+        *,
+        old_queue: str,
+        new_queue: str,
+    ) -> int: ...
+
+    def retarget_aliases(
+        self,
+        runner: SQLRunner,
+        *,
+        old_target: str,
+        new_target: str,
     ) -> int: ...
 
     def find_message_ids(
@@ -345,6 +361,14 @@ class BrokerConnection(Protocol):
         *,
         before_timestamp: int | None = None,
     ) -> int: ...
+
+    def rename_queue(
+        self,
+        old_queue: str,
+        new_queue: str,
+        *,
+        retarget_aliases: bool = True,
+    ) -> QueueRenameResult: ...
 
     def find_message_ids(
         self,

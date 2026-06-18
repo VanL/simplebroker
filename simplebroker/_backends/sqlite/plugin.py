@@ -17,6 +17,8 @@ from .maintenance import (
     delete_message_ids,
     delete_messages,
     get_data_version,
+    rename_queue_messages,
+    retarget_aliases,
     vacuum,
 )
 from .runtime import (
@@ -194,6 +196,32 @@ class SQLiteBackendPlugin:
             runner,
             queue_names=queue_names,
             before_timestamp=before_timestamp,
+        )
+
+    def rename_queue_messages(
+        self,
+        runner: SQLRunner,
+        *,
+        old_queue: str,
+        new_queue: str,
+    ) -> int:
+        return rename_queue_messages(
+            runner,
+            old_queue=old_queue,
+            new_queue=new_queue,
+        )
+
+    def retarget_aliases(
+        self,
+        runner: SQLRunner,
+        *,
+        old_target: str,
+        new_target: str,
+    ) -> int:
+        return retarget_aliases(
+            runner,
+            old_target=old_target,
+            new_target=new_target,
         )
 
     def find_message_ids(

@@ -251,6 +251,66 @@ end
 return deleted
 """
 
+RENAME_QUEUE = """
+local old_pending = KEYS[1]
+local old_claimed = KEYS[2]
+local old_reserved = KEYS[3]
+local new_pending = KEYS[4]
+local new_claimed = KEYS[5]
+local new_reserved = KEYS[6]
+local queues = KEYS[7]
+local aliases = KEYS[8]
+local meta = KEYS[9]
+local old_queue = ARGV[1]
+local new_queue = ARGV[2]
+local retarget_aliases = ARGV[3] == '1'
+local alias_version = ARGV[4]
+
+if redis.call('ZCARD', old_reserved) > 0 then
+  return {-1, 0, 0}
+end
+if redis.call('ZCARD', new_pending) > 0 or redis.call('ZCARD', new_claimed) > 0 or redis.call('ZCARD', new_reserved) > 0 then
+  return {-2, 0, 0}
+end
+
+local pending_count = redis.call('ZCARD', old_pending)
+local claimed_count = redis.call('ZCARD', old_claimed)
+local messages_renamed = pending_count + claimed_count
+if messages_renamed == 0 then
+  return {1, 0, 0}
+end
+
+if pending_count > 0 then
+  redis.call('RENAME', old_pending, new_pending)
+else
+  redis.call('DEL', old_pending)
+end
+if claimed_count > 0 then
+  redis.call('RENAME', old_claimed, new_claimed)
+else
+  redis.call('DEL', old_claimed)
+end
+redis.call('DEL', old_reserved)
+redis.call('SREM', queues, old_queue)
+redis.call('SADD', queues, new_queue)
+
+local aliases_retargeted = 0
+if retarget_aliases then
+  local alias_items = redis.call('HGETALL', aliases)
+  for index = 1, #alias_items, 2 do
+    if alias_items[index + 1] == old_queue then
+      redis.call('HSET', aliases, alias_items[index], new_queue)
+      aliases_retargeted = aliases_retargeted + 1
+    end
+  end
+  if aliases_retargeted > 0 then
+    redis.call('HSET', meta, 'alias_version', alias_version)
+  end
+end
+
+return {1, messages_renamed, aliases_retargeted}
+"""
+
 BEGIN_BATCH = """
 local pending = KEYS[1]
 local reserved = KEYS[2]

@@ -135,7 +135,12 @@ class _SharedActivityListener:
             self._ready.set()
 
             while not self._stop_event.is_set():
-                for notify in conn.notifies(timeout=0.1, stop_after=1):
+                # A single commit can emit several notifications (rename fires
+                # old + new), and psycopg drains them into one batch. Consume the
+                # whole batch each pass: breaking early closes the generator and
+                # discards notifications already pulled from libpq but not yet
+                # yielded, so those waiters would never wake.
+                for notify in conn.notifies(timeout=0.1, stop_after=64):
                     with self._lock:
                         if notify.payload == "*":
                             self._wildcard_version += 1
@@ -149,7 +154,6 @@ class _SharedActivityListener:
                             for entry in self._fan_in_entries.values():
                                 if notify.payload in entry.queue_set:
                                     entry.condition.notify_all()
-                    break
         except Exception as exc:
             if not self._stop_event.is_set():
                 self._error = exc

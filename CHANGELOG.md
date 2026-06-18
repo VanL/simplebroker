@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.9.0] - 2026-06-18
+### Added
+- Added `BrokerConnection.rename_queue(...)`, `QueueRenameResult`, and
+  `broker rename <old> <new> [--json]` for retagging existing queue state
+  without a schema migration. SQLite, Postgres, and Redis support the API;
+  claimed messages are included, target queues must be empty, and aliases
+  targeting the old queue retarget by default.
+
+### Fixed
+- Postgres activity listeners now drain batched notifications from one poll,
+  ensuring queue-specific notifications emitted in the same transaction are not
+  dropped.
+
+### simplebroker-pg 2.4.0
+- Added Postgres backend support for
+  `BrokerConnection.rename_queue(...)`, including table-level serialization and
+  old/new queue LISTEN/NOTIFY wakeups. Requires simplebroker>=4.9.0.
+
+### simplebroker-redis 2.6.0
+- Added Redis backend support for
+  `BrokerConnection.rename_queue(...)`, implemented as one atomic Lua script
+  that preserves pending/claimed state, rejects active source reservations, and
+  publishes old/new queue activity. Requires simplebroker>=4.9.0.
+
 ## [4.8.0] - 2026-06-18
 ### Added
 - Added `Queue.latest_pending_timestamp()` and

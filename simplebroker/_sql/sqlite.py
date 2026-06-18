@@ -268,6 +268,18 @@ WHERE queue IN (
 AND ts < ?
 """
 
+RENAME_QUEUE_MESSAGES = """
+UPDATE messages
+SET queue = ?
+WHERE queue = ?
+"""
+
+RETARGET_ALIASES = """
+UPDATE queue_aliases
+SET target = ?
+WHERE target = ?
+"""
+
 # Delete claimed messages in batches (for vacuum)
 DELETE_CLAIMED_BATCH = """
 DELETE FROM messages

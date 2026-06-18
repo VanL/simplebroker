@@ -66,7 +66,7 @@ from .helpers import (
     execute_setup_with_retry,
     interruptible_sleep,
 )
-from .metadata import QueueStats
+from .metadata import QueueRenameResult, QueueStats
 
 if TYPE_CHECKING:
     from ._broker_session import _ProcessBrokerSession, _SessionKey
@@ -2473,6 +2473,85 @@ class BrokerCore:
                     raise
 
         return self._run_with_retry(_do_delete_from_queues)
+
+    def _queue_exists_locked(self, queue: str) -> bool:
+        """Return whether a queue has rows. Caller must hold self._lock."""
+        rows = list(self._runner.run(self._sql.CHECK_QUEUE_EXISTS, (queue,), fetch=True))
+        return bool(rows[0][0]) if rows else False
+
+    def rename_queue(
+        self,
+        old_queue: str,
+        new_queue: str,
+        *,
+        retarget_aliases: bool = True,
+    ) -> QueueRenameResult:
+        """Rename all existing messages from one queue to another."""
+        self._check_fork_safety()
+        self._validate_queue_name(old_queue)
+        self._validate_queue_name(new_queue)
+        if old_queue == new_queue:
+            raise ValueError("Source and target queues cannot be the same")
+        self._assert_no_reentrant_mutation_during_batch("rename_queue")
+
+        def _do_rename_queue() -> QueueRenameResult:
+            transaction_open = False
+            with self._lock:
+                self._runner.begin_immediate()
+                transaction_open = True
+                try:
+                    self._backend_plugin.prepare_queue_operation(
+                        self._runner,
+                        operation="rename",
+                        queue=old_queue,
+                    )
+                    if self._queue_exists_locked(new_queue):
+                        raise ValueError("Target queue already exists")
+                    if not self._queue_exists_locked(old_queue):
+                        self._runner.rollback()
+                        transaction_open = False
+                        return QueueRenameResult(
+                            old_queue=old_queue,
+                            new_queue=new_queue,
+                            messages_renamed=0,
+                            aliases_retargeted=0,
+                        )
+
+                    messages_renamed = self._backend_plugin.rename_queue_messages(
+                        self._runner,
+                        old_queue=old_queue,
+                        new_queue=new_queue,
+                    )
+                    aliases_retargeted = 0
+                    if messages_renamed > 0 and retarget_aliases:
+                        prepare_alias_mutation = getattr(
+                            self._backend_plugin, "prepare_alias_mutation", None
+                        )
+                        if callable(prepare_alias_mutation):
+                            prepare_alias_mutation(self._runner)
+                        aliases_retargeted = self._backend_plugin.retarget_aliases(
+                            self._runner,
+                            old_target=old_queue,
+                            new_target=new_queue,
+                        )
+                        if aliases_retargeted:
+                            self._increment_alias_version_locked()
+                            self._load_aliases_locked()
+
+                    self._runner.commit()
+                    transaction_open = False
+                    return QueueRenameResult(
+                        old_queue=old_queue,
+                        new_queue=new_queue,
+                        messages_renamed=messages_renamed,
+                        aliases_retargeted=aliases_retargeted,
+                    )
+                except Exception:
+                    if transaction_open:
+                        self._runner.rollback()
+                    raise
+
+        return self._run_with_retry(_do_rename_queue)
 
     def broadcast(self, message: str, *, pattern: str | None = None) -> int:
         """Broadcast a message to all existing queues atomically.

@@ -566,6 +566,38 @@ class PostgresBackendPlugin:
             )
         return int(rows[0][0]) if rows else 0
 
+    def rename_queue_messages(
+        self,
+        runner: SQLRunner,
+        *,
+        old_queue: str,
+        new_queue: str,
+    ) -> int:
+        rows = list(
+            runner.run(
+                pg_sql.RENAME_QUEUE_MESSAGES_COUNT,
+                (new_queue, old_queue, old_queue, new_queue),
+                fetch=True,
+            )
+        )
+        return int(rows[0][0]) if rows else 0
+
+    def retarget_aliases(
+        self,
+        runner: SQLRunner,
+        *,
+        old_target: str,
+        new_target: str,
+    ) -> int:
+        rows = list(
+            runner.run(
+                pg_sql.RETARGET_ALIASES_COUNT,
+                (new_target, old_target),
+                fetch=True,
+            )
+        )
+        return int(rows[0][0]) if rows else 0
+
     def find_message_ids(
         self,
         runner: SQLRunner,
@@ -673,6 +705,11 @@ class PostgresBackendPlugin:
         operation: str,
         queue: str,
     ) -> None:
+        if operation == "rename":
+            del queue
+            runner.run(pg_sql.LOCK_RENAME_SCOPE)
+            return
+
         # claim/move serialize through row locking in the main retrieve query,
         # which avoids an extra round-trip for a separate advisory lock call.
         if operation in {"claim", "move"}:

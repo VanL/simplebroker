@@ -39,8 +39,8 @@ dependencies and stores its state in one SQLite database.
 ## Table of Contents
 
 - [SimpleBroker](#simplebroker)
-  - [Table of Contents](#table-of-contents)
   - [Recommended For](#recommended-for)
+  - [Table of Contents](#table-of-contents)
   - [Features](#features)
   - [Use Cases](#use-cases)
   - [Installation](#installation)
@@ -62,9 +62,11 @@ dependencies and stores its state in one SQLite database.
   - [Real-time Queue Watching](#real-time-queue-watching)
     - [Move Mode (`--move`)](#move-mode---move)
   - [Python API](#python-api)
+    - [Delivery guarantees](#delivery-guarantees)
     - [Queue metadata](#queue-metadata)
     - [Latest pending timestamp](#latest-pending-timestamp)
     - [Generating timestamps without writing](#generating-timestamps-without-writing)
+    - [Inserting messages with exact IDs](#inserting-messages-with-exact-ids)
     - [Tracking the last generated timestamp](#tracking-the-last-generated-timestamp)
     - [Thread-Based Background Processing](#thread-based-background-processing)
     - [Context Manager Support](#context-manager-support)
@@ -163,6 +165,10 @@ $ broker peek myqueue
 $ broker move myqueue processed
 $ broker move errors retry --all
 
+# Rename existing queue state
+$ broker rename processed archive.ready
+$ broker rename @legacy archive.ready --json
+
 # list all queue names
 $ broker list
 myqueue
@@ -209,6 +215,7 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `read <queue> [options]` | Remove and return message(s) |
 | `peek <queue> [options]` | Return message(s) without removing |
 | `move <source> <dest> [options]` | Atomically transfer messages between queues |
+| `rename <old> <new> [--json]` | Retag all existing messages from one queue name to another |
 | `exists <queue> [--json]` | Check whether a queue has any messages, including claimed rows |
 | `stats <queue> [--json]` | Show pending, claimed, and total counts for one queue |
 | `list [--stats] [--prefix PREFIX \| --pattern GLOB] [--json]` | Show queue names; `--stats` adds counts |
@@ -250,6 +257,8 @@ $ broker alias remove task1.outbox
 - Use `alias list --target <queue>` to see which aliases point to a specific queue (reverse lookup).
 - A target must be a real queue name (not another alias). Attempts to alias an alias or create cycles raise `ValueError`.
 - Removing an alias does not affect stored messages; they remain under the canonical queue name.
+- `rename` accepts `@alias` operands on the CLI and records canonical queue
+  names in JSON output. The Python API uses literal queue names only.
 
 ### Command Options
 
@@ -1001,6 +1010,9 @@ with open_broker(target) as broker:
         before_timestamp=cutoff_ts,
     )
 
+    renamed = broker.rename_queue("jobs.pending", "jobs.ready")
+    print(f"renamed {renamed.messages_renamed} messages")
+
     matching_ids = broker.find_message_ids(
         "jobs.high",
         body_contains="customer-123",
@@ -1013,6 +1025,11 @@ with open_broker(target) as broker:
 queues. Claimed and unclaimed messages are both eligible. When
 `before_timestamp` is provided, the bound is strict: only messages with
 `ts < before_timestamp` are deleted.
+
+`rename_queue()` retags all existing messages, including claimed rows, from the
+old queue name to the new queue name. The target queue must not already have
+messages. Aliases targeting the old queue are retargeted by default; pass
+`retarget_aliases=False` to leave them pointing at the old name.
 
 `find_message_ids()` returns message IDs from one queue whose body contains a
 literal, case-sensitive substring. It does not delete or mutate messages.
@@ -1979,6 +1996,3 @@ MIT © Van Lindberg
 ## Acknowledgments
 
 Built with Python, SQLite, and the Unix philosophy.
-
-SimpleBroker's bias is intentional: make the simple path operationally boring,
-then expose the deeper contracts only when the reader is ready for them.

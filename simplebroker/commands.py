@@ -23,7 +23,7 @@ from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
 from .db import BrokerDB, DBConnection
 from .helpers import _is_valid_sqlite_db
-from .metadata import QueueStats
+from .metadata import QueueRenameResult, QueueStats
 from .sbqueue import Queue
 from .watcher import QueueMoveWatcher, QueueWatcher
 
@@ -615,6 +615,16 @@ def _queue_stats_payload(stats: QueueStats) -> dict[str, object]:
     }
 
 
+def _queue_rename_payload(result: QueueRenameResult) -> dict[str, object]:
+    return {
+        "old_queue": result.old_queue,
+        "new_queue": result.new_queue,
+        "messages_renamed": result.messages_renamed,
+        "aliases_retargeted": result.aliases_retargeted,
+        "renamed": result.renamed,
+    }
+
+
 def cmd_exists(db_path: DBTarget, queue_name: str, *, json_output: bool = False) -> int:
     """Check whether a queue exists."""
     canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
@@ -711,6 +721,32 @@ def cmd_delete(
         db.delete(canonical_queue)
 
     return EXIT_SUCCESS
+
+
+def cmd_rename(
+    db_path: DBTarget,
+    old_queue: str,
+    new_queue: str,
+    *,
+    json_output: bool = False,
+    retarget_aliases: bool = True,
+) -> int:
+    """Rename a queue using the broker admin API."""
+    canonical_old, _ = _resolve_alias_name(db_path, old_queue)
+    canonical_new, _ = _resolve_alias_name(db_path, new_queue)
+
+    with DBConnection(db_path) as conn:
+        db = cast(BrokerDB, conn.get_connection())
+        result = db.rename_queue(
+            canonical_old,
+            canonical_new,
+            retarget_aliases=retarget_aliases,
+        )
+
+    if json_output:
+        print(json.dumps(_queue_rename_payload(result)))
+
+    return EXIT_SUCCESS if result.renamed else EXIT_QUEUE_EMPTY
 
 
 def cmd_move(

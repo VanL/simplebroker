@@ -321,6 +321,16 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         help="include timestamps in output",
     )
 
+    rename_parser = subparsers.add_parser("rename", help="rename a queue")
+    rename_parser.add_argument("old_queue", help="queue name to rename")
+    rename_parser.add_argument("new_queue", help="new queue name")
+    rename_parser.add_argument("--json", action="store_true", help="output JSON")
+    rename_parser.add_argument(
+        "--no-retarget-aliases",
+        action="store_true",
+        help="leave aliases pointing at the old queue name",
+    )
+
     # Broadcast command
     broadcast_parser = subparsers.add_parser(
         "broadcast", help="send message to all queues"
@@ -485,6 +495,7 @@ class ArgumentProcessor:
             "list",
             "delete",
             "move",
+            "rename",
             "broadcast",
             "watch",
             "init",
@@ -1197,6 +1208,14 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 message_id_str=message_id_str,
                 after_str=after_str,
                 before_str=before_str,
+            )
+        elif args.command == "rename":
+            return commands.cmd_rename(
+                resolved_target,
+                args.old_queue,
+                args.new_queue,
+                json_output=getattr(args, "json", False),
+                retarget_aliases=not getattr(args, "no_retarget_aliases", False),
             )
         elif args.command == "broadcast":
             return commands.cmd_broadcast(
