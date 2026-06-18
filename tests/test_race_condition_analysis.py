@@ -1,5 +1,6 @@
 """Race condition analysis for SimpleBroker watcher tests."""
 
+import queue as queue_module
 import signal
 import subprocess
 import sys
@@ -118,30 +119,44 @@ class TestRaceConditionAnalysis:
 
         monitor.process = process
         output_lines = []
+        output_queue: queue_module.Queue[str] = queue_module.Queue()
+
+        def read_subprocess_output() -> None:
+            assert process.stdout is not None
+            for line in process.stdout:
+                output_queue.put(line)
+
+        def drain_subprocess_output() -> None:
+            while True:
+                try:
+                    line = output_queue.get_nowait()
+                except queue_module.Empty:
+                    break
+                output_lines.append(line.strip())
+                monitor.parse_step_output(line)
+                print(f"SUBPROCESS: {line.strip()}")
+
+        reader_thread = threading.Thread(target=read_subprocess_output, daemon=True)
+        reader_thread.start()
 
         try:
-            # Read output in real-time and parse steps
-            while process.poll() is None:
-                line = process.stdout.readline()
-                if line:
-                    output_lines.append(line.strip())
-                    monitor.parse_step_output(line)
-                    print(f"SUBPROCESS: {line.strip()}")
-
-                # Check if ready file exists
-                if ready_file.exists():
+            # Read output concurrently so readiness checks do not block behind
+            # subprocess pipe timing under xdist load.
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                drain_subprocess_output()
+                if ready_file.exists() or process.poll() is not None:
                     break
-
-                # Timeout after 30 seconds
-                if len(output_lines) == 0 and time.time() > time.time() + 30:
-                    break
+                time.sleep(0.01)
+            drain_subprocess_output()
 
             # Send SIGINT after ready
             if ready_file.exists():
-                if sys.platform == "win32":
-                    process.terminate()
-                else:
-                    process.send_signal(signal.SIGINT)
+                if process.poll() is None:
+                    if sys.platform == "win32":
+                        process.terminate()
+                    else:
+                        process.send_signal(signal.SIGINT)
 
                 # Wait for graceful exit
                 try:
@@ -151,10 +166,15 @@ class TestRaceConditionAnalysis:
                     exit_code = -9
             else:
                 # Process never became ready
-                process.kill()
-                exit_code = -1
+                if process.poll() is None:
+                    process.kill()
+                    exit_code = -1
+                else:
+                    exit_code = process.returncode
 
         finally:
+            reader_thread.join(timeout=1.0)
+            drain_subprocess_output()
             # Ensure db monitoring thread completes
             db_thread.join(timeout=1.0)
 
