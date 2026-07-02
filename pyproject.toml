@@ -95,7 +95,7 @@ markers = [
 ]
 
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.11"
 exclude = [
     "^examples/",
     "^extensions/simplebroker_pg/tests/",
