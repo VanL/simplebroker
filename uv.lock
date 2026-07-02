@@ -629,7 +629,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "simplebroker-redis"
-version = "2.6.0"
+version = "2.7.0"
 source = { editable = "extensions/simplebroker_redis" }
 dependencies = [
     { name = "redis" },

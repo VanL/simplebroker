@@ -28,6 +28,7 @@ from simplebroker._exceptions import (
     SidecarUnavailableError,
     TimestampError,
 )
+from simplebroker._message_id import MessageIdInput, normalize_message_id
 from simplebroker._message_insert import (
     MessageInsertRecord,
     normalize_insert_records,
@@ -322,20 +323,41 @@ class RedisBrokerCore:
             for index in range(0, len(flat), 2)
         ]
 
+    def _normalize_exact_timestamp(
+        self, exact_timestamp: MessageIdInput | None
+    ) -> int | None:
+        if exact_timestamp is None:
+            return None
+        return normalize_message_id(exact_timestamp, name="exact_timestamp")
+
+    def _normalize_timestamp_bounds(
+        self,
+        after_timestamp: int | None,
+        before_timestamp: int | None,
+    ) -> tuple[int | None, int | None]:
+        return (
+            validate_timestamp_bound("after_timestamp", after_timestamp),
+            validate_timestamp_bound("before_timestamp", before_timestamp),
+        )
+
     def _zrange_pending(
         self,
         queue: str,
         *,
         limit: int,
         offset: int = 0,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         state: str = "pending",
     ) -> list[str]:
         zset = self._qkey(queue, state)
-        if exact_timestamp is not None:
-            encoded = encode_id(exact_timestamp)
+        normalized_exact_timestamp = self._normalize_exact_timestamp(exact_timestamp)
+        after_timestamp, before_timestamp = self._normalize_timestamp_bounds(
+            after_timestamp, before_timestamp
+        )
+        if normalized_exact_timestamp is not None:
+            encoded = encode_id(normalized_exact_timestamp)
             return [encoded] if self._client.zscore(zset, encoded) is not None else []
         return [
             str(encoded)
@@ -356,7 +378,7 @@ class RedisBrokerCore:
         *,
         limit: int,
         offset: int = 0,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         include_claimed: bool = False,
@@ -404,19 +426,23 @@ class RedisBrokerCore:
         queue: str,
         *,
         limit: int,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
     ) -> list[tuple[str, int]]:
         self._maybe_recover_stale_batches()
+        normalized_exact_timestamp = self._normalize_exact_timestamp(exact_timestamp)
+        after_timestamp, before_timestamp = self._normalize_timestamp_bounds(
+            after_timestamp, before_timestamp
+        )
         minb = (
-            exact_bound(exact_timestamp)
-            if exact_timestamp is not None
+            exact_bound(normalized_exact_timestamp)
+            if normalized_exact_timestamp is not None
             else min_bound(after_timestamp)
         )
         maxb = (
-            exact_bound(exact_timestamp)
-            if exact_timestamp is not None
+            exact_bound(normalized_exact_timestamp)
+            if normalized_exact_timestamp is not None
             else max_bound(before_timestamp)
         )
         try:
@@ -445,20 +471,24 @@ class RedisBrokerCore:
         target_queue: str,
         *,
         limit: int,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
     ) -> list[tuple[str, int]]:
         self._maybe_recover_stale_batches()
+        normalized_exact_timestamp = self._normalize_exact_timestamp(exact_timestamp)
+        after_timestamp, before_timestamp = self._normalize_timestamp_bounds(
+            after_timestamp, before_timestamp
+        )
         minb = (
-            exact_bound(exact_timestamp)
-            if exact_timestamp is not None
+            exact_bound(normalized_exact_timestamp)
+            if normalized_exact_timestamp is not None
             else min_bound(after_timestamp)
         )
         maxb = (
-            exact_bound(exact_timestamp)
-            if exact_timestamp is not None
+            exact_bound(normalized_exact_timestamp)
+            if normalized_exact_timestamp is not None
             else max_bound(before_timestamp)
         )
         try:
@@ -477,7 +507,9 @@ class RedisBrokerCore:
                     str(limit),
                     minb,
                     maxb,
-                    encode_id(exact_timestamp) if exact_timestamp is not None else "",
+                    encode_id(normalized_exact_timestamp)
+                    if normalized_exact_timestamp is not None
+                    else "",
                     "1" if require_unclaimed else "0",
                 )
             )
@@ -492,7 +524,7 @@ class RedisBrokerCore:
         self,
         queue: str,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
     ) -> tuple[str, int] | str | None:
         self._validate_queue_name(queue)
@@ -534,7 +566,7 @@ class RedisBrokerCore:
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         config: dict[str, Any] = _config,
     ) -> Generator[tuple[str, int] | str, None, None]:
         self._validate_queue_name(queue)
@@ -569,20 +601,24 @@ class RedisBrokerCore:
         batch_size: int,
         after_timestamp: int | None,
         before_timestamp: int | None,
-        exact_timestamp: int | None,
+        exact_timestamp: MessageIdInput | None,
         op: Literal["claim", "move"],
         target_queue: str | None = None,
     ) -> tuple[str, list[tuple[str, int]]]:
         self.recover_stale_batches(max_age_seconds=self._runner.stale_batch_seconds)
         token = uuid.uuid4().hex
+        normalized_exact_timestamp = self._normalize_exact_timestamp(exact_timestamp)
+        after_timestamp, before_timestamp = self._normalize_timestamp_bounds(
+            after_timestamp, before_timestamp
+        )
         minb = (
-            exact_bound(exact_timestamp)
-            if exact_timestamp is not None
+            exact_bound(normalized_exact_timestamp)
+            if normalized_exact_timestamp is not None
             else min_bound(after_timestamp)
         )
         maxb = (
-            exact_bound(exact_timestamp)
-            if exact_timestamp is not None
+            exact_bound(normalized_exact_timestamp)
+            if normalized_exact_timestamp is not None
             else max_bound(before_timestamp)
         )
         try:
@@ -686,7 +722,7 @@ class RedisBrokerCore:
         batch_size: int,
         after_timestamp: int | None,
         before_timestamp: int | None,
-        exact_timestamp: int | None,
+        exact_timestamp: MessageIdInput | None,
     ) -> Generator[tuple[str, int] | str, None, None]:
         self._validate_queue_name(queue)
         while True:
@@ -717,7 +753,7 @@ class RedisBrokerCore:
         self,
         queue: str,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
         include_claimed: bool = False,
     ) -> tuple[str, int] | str | None:
@@ -798,7 +834,7 @@ class RedisBrokerCore:
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
     ) -> Generator[tuple[str, int] | str, None, None]:
         effective_batch_size = batch_size or PEEK_BATCH_SIZE
@@ -826,7 +862,7 @@ class RedisBrokerCore:
         source_queue: str,
         target_queue: str,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = True,
     ) -> tuple[str, int] | str | None:
@@ -886,7 +922,7 @@ class RedisBrokerCore:
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         config: dict[str, Any] = _config,
     ) -> Generator[tuple[str, int] | str, None, None]:
         if source_queue == target_queue:
@@ -1059,13 +1095,19 @@ class RedisBrokerCore:
                 pipe.execute()
         return deleted
 
-    def delete_message_ids(self, queue: str, message_ids: Sequence[int]) -> int:
+    def delete_message_ids(
+        self, queue: str, message_ids: Sequence[MessageIdInput]
+    ) -> int:
         self._validate_queue_name(queue)
         self._assert_no_reentrant_mutation_during_batch("delete_message_ids")
         if not message_ids:
             return 0
 
-        deduped = tuple(dict.fromkeys(message_ids))
+        deduped = tuple(
+            dict.fromkeys(
+                normalize_message_id(message_id) for message_id in message_ids
+            )
+        )
         if self._runner.stale_batch_seconds >= 0:
             self.recover_stale_batches(max_age_seconds=self._runner.stale_batch_seconds)
         encoded_ids = [encode_id(message_id) for message_id in deduped]
