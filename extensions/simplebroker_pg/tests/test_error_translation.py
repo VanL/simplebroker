@@ -2,9 +2,9 @@
 
 import psycopg
 import pytest
+from simplebroker_pg.runner import _translate_error
 
 from simplebroker._exceptions import DataError, IntegrityError, OperationalError
-from simplebroker_pg.runner import _translate_error
 
 pytestmark = pytest.mark.pg_only
 
