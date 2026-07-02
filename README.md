@@ -203,6 +203,7 @@ Global options must appear before the command, for example `broker -f queue.db r
 - `-q, --quiet` - Suppress non-error output
 - `--cleanup` - Delete the database file and exit
 - `--vacuum` - Remove claimed messages and exit
+- `--compact` - With `--vacuum`, also run SQLite VACUUM to reclaim disk space
 - `--status` - Show global message count, last timestamp, and DB size (`--status --json` for JSON output)
 - `--version` - Show version information
 - `--help` - Show help message
@@ -223,7 +224,7 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `delete --all` | Delete all queues immediately |
 | `broadcast <message\|->` | Send message to all existing queues |
 | `watch <queue> [options]` | Watch queue for new messages |
-| `alias <add\|remove\|list\|->` | Manage queue aliases |
+| `alias <add\|remove\|list>` | Manage queue aliases |
 | `dump [--include <glob>] [--exclude <glob>]` | Write all queues to stdout as ndjson (pending messages only, deterministic; globs match queue names, aliases match on their own name or their target, exclude wins, the flags compose) |
 | `load` | Restore a dump from stdin into a fresh broker (duplicate message IDs fail loudly); exit codes 0/1 |
 | `init [--force]` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
@@ -273,7 +274,7 @@ $ broker alias remove task1.outbox
 **Watch options:**
 - `--peek` - Monitor without consuming
 - `--move <dest>` - Continuously drain to destination queue
-- `--quiet` - Suppress startup message
+- Use the global `-q` flag (`broker -q watch ...`) to suppress the startup message
 
 **Queue metadata options:**
 - `stats <queue>` reports counts for exactly one queue without scanning all queues.
@@ -1352,7 +1353,11 @@ export BROKER_DEFAULT_DB_LOCATION=/var/lib/myapp
 
 **Use cases:**
 - **System-wide queues**: Central message broker for multiple applications
-- **Shared storage**: Use network-mounted directories for distributed access
+- **Shared storage warning**: Do not point the database at a network filesystem
+  (NFS/SMB). SimpleBroker forces SQLite WAL mode, which requires shared memory
+  between all processes on the same host; cross-host access over a network
+  mount risks corruption and silent lock failures. For multi-host access, use
+  the Postgres or Redis backend extensions instead.
 - **Privilege separation**: Store databases in controlled system directories
 
 **Note:** `BROKER_DEFAULT_DB_LOCATION` corresponds to the `-d/--dir` command line argument and is ignored when `BROKER_PROJECT_SCOPE=true`.
