@@ -548,9 +548,12 @@ def build_move_by_id_query(where_conditions: list[str]) -> str:
     return f"""
         UPDATE messages
         SET queue = ?, claimed = 0
-        WHERE {where_clause}
+        WHERE id IN (
+            SELECT id FROM messages
+            WHERE {where_clause}
+            ORDER BY id
+        )
         RETURNING id, body, ts
-        ORDER BY id
         """
 
 
