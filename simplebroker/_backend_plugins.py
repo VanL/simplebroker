@@ -22,7 +22,15 @@ DEFAULT_BACKEND_NAME = "sqlite"
 
 
 class BackendPlugin(Protocol):
-    """Public contract for backend plugins."""
+    """Public contract for backend plugins.
+
+    Optional hooks (probed via getattr, no-op if absent):
+    - prepare_alias_mutation(runner) -- called inside the alias-mutation
+      transaction before validation (probed in db.py BrokerCore.add_alias
+      and the rename path); Postgres uses it to take a stable advisory
+      lock ordering.  Note: prepare_broadcast is NOT optional -- it is a
+      required protocol member, called directly by BrokerCore.broadcast.
+    """
 
     name: str
     sql: BackendSQLNamespace | None
