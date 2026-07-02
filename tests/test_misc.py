@@ -4,6 +4,10 @@ Miscellaneous tests for SimpleBroker.
 T5 – list queues and delete operations
 """
 
+import os
+
+import pytest
+
 from .conftest import run_cli
 
 
@@ -113,3 +117,19 @@ def test_exit_codes(workdir):
     assert rc == 0
     rc, _, _ = run_cli("read", "empty", cwd=workdir)
     assert rc == 2  # EXIT_QUEUE_EMPTY
+
+
+@pytest.mark.sqlite_only
+def test_ambient_broker_env_is_sanitized():
+    """pytest_configure strips developer-ambient BROKER_* vars.
+
+    BROKER_TEST_BACKEND is the bin/pytest-pg|redis channel and is
+    allowlisted; anything else BROKER_-prefixed at session start is
+    developer machine state that would leak into every run_cli
+    subprocess.  Per-test monkeypatch.setenv still works (it runs after
+    the scrub).
+    """
+    leaked = {k for k in os.environ if k.startswith("BROKER_")} - {
+        "BROKER_TEST_BACKEND"
+    }
+    assert leaked == set(), f"ambient BROKER_* vars leaked into the suite: {leaked}"

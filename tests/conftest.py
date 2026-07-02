@@ -850,6 +850,27 @@ def _module_uses_run_cli(path: str) -> bool:
     return "run_cli(" in text
 
 
+_AMBIENT_BROKER_ENV_ALLOWLIST = frozenset({"BROKER_TEST_BACKEND"})
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Strip developer-ambient BROKER_* configuration before any test runs.
+
+    Exported BROKER_* vars otherwise flow into every run_cli subprocess
+    (build_cli_env copies os.environ) and into lazy config reads, causing
+    spurious machine-dependent failures.  BROKER_TEST_BACKEND is the
+    channel bin/pytest-pg / bin/pytest-redis use to select the backend and
+    must survive.  Per-test monkeypatch.setenv("BROKER_...") is unaffected
+    (it runs long after this hook).  Known limitation: module-level
+    ``_config = load_config()`` snapshots in THIS process were taken at
+    import, before this hook -- same as the production CLI, and not the
+    subprocess failure mode this scrub exists to prevent.
+    """
+    for key in [k for k in os.environ if k.startswith("BROKER_")]:
+        if key not in _AMBIENT_BROKER_ENV_ALLOWLIST:
+            del os.environ[key]
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     """Mark tests by backend scope.
 
