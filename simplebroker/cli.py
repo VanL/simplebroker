@@ -439,6 +439,9 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     return parser
 
 
+_HELP_TOKENS = frozenset({"-h", "--help"})
+
+
 def rearrange_args(argv: list[str]) -> list[str]:
     """Normalize CLI arguments before argparse handles them.
 
@@ -487,6 +490,7 @@ class ArgumentProcessor:
 
         # Find subcommands
         self.subcommands = {
+            "alias",
             "write",
             "read",
             "peek",
@@ -583,16 +587,25 @@ class ArgumentProcessor:
         values when parent parser options share the same spelling.  Inserting
         '--' at the start of the free-form operand preserves literal messages
         such as '--cleanup' without letting them trigger global behavior.
+
+        Help flags are exempt: protecting them would turn a help request into
+        a state-mutating command ('broadcast --help' used to enqueue the
+        literal string '--help').  Use an explicit '--' to write a literal
+        '--help' message.
         """
         if not command_args:
             return command_args
 
         command = command_args[0]
+        if command not in ("write", "broadcast"):
+            return command_args
+
+        if any(arg in _HELP_TOKENS for arg in command_args[1:]):
+            return command_args
+
         if command == "write":
             return self._protect_write_operands(command_args)
-        if command == "broadcast":
-            return self._protect_broadcast_operands(command_args)
-        return command_args
+        return self._protect_broadcast_operands(command_args)
 
     def _protect_write_operands(self, command_args: list[str]) -> list[str]:
         """Protect the write queue/message positionals."""
@@ -850,6 +863,14 @@ def main(*, config: dict[str, Any] = _config) -> int:
     if getattr(args, "vacuum", False) and args.command:
         print(
             f"{PROG_NAME}: error: --vacuum cannot be used with commands",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+
+    # --cleanup is mutually exclusive with subcommands
+    if getattr(args, "cleanup", False) and args.command:
+        print(
+            f"{PROG_NAME}: error: --cleanup cannot be used with commands",
             file=sys.stderr,
         )
         return EXIT_ERROR

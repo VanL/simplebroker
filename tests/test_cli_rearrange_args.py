@@ -143,6 +143,46 @@ class TestRearrangeArgs:
             "message",
         ]
 
+    def test_write_help_flag_is_not_protected(self):
+        """--help/-h must reach argparse so help is shown, not enqueued."""
+        assert rearrange_args(["write", "--help"]) == ["write", "--help"]
+        assert rearrange_args(["write", "-h"]) == ["write", "-h"]
+        assert rearrange_args(["write", "q", "--help"]) == ["write", "q", "--help"]
+
+    def test_broadcast_help_flag_is_not_protected(self):
+        assert rearrange_args(["broadcast", "--help"]) == ["broadcast", "--help"]
+        assert rearrange_args(["broadcast", "-h"]) == ["broadcast", "-h"]
+
+    def test_explicit_double_dash_still_writes_literal_help(self):
+        """An explicit -- keeps the escape hatch for literal '--help' messages."""
+        assert rearrange_args(["write", "q", "--", "--help"]) == [
+            "write",
+            "q",
+            "--",
+            "--help",
+        ]
+
+    def test_alias_is_a_recognized_subcommand(self):
+        """Tokens after 'alias' must never be hoisted to global position.
+
+        'alias' was missing from the subcommands set, so a trailing
+        global-looking flag was hoisted in front of the command:
+        'broker alias add a b --cleanup' deleted the database.
+        """
+        assert rearrange_args(["alias", "add", "a", "b", "--cleanup"]) == [
+            "alias",
+            "add",
+            "a",
+            "b",
+            "--cleanup",
+        ]
+        assert rearrange_args(["alias", "remove", "a", "-q"]) == [
+            "alias",
+            "remove",
+            "a",
+            "-q",
+        ]
+
 
 class TestCLIMissingValues:
     """Test CLI behavior with missing option values."""
@@ -227,3 +267,78 @@ class TestCLIMissingValues:
         code, stdout, stderr = run_cli("read", "q", cwd=workdir)
         assert code == 0
         assert stdout.strip() == "--cleanup"
+
+
+class TestHelpHasNoSideEffects:
+    """A help request must never write to the database (evaluation finding #2)."""
+
+    def test_write_help_shows_usage_and_exits_zero(self, workdir: Path):
+        rc, stdout, stderr = run_cli("write", "--help", cwd=workdir)
+        assert rc == 0
+        assert "usage:" in stdout.lower()
+        # Help must not touch the filesystem: argparse exits before any
+        # database path is resolved or created.
+        assert not (workdir / ".broker.db").exists()
+
+    def test_write_h_shows_usage_and_exits_zero(self, workdir: Path):
+        rc, stdout, _ = run_cli("write", "-h", cwd=workdir)
+        assert rc == 0
+        assert "usage:" in stdout.lower()
+
+    def test_broadcast_help_does_not_broadcast(self, workdir: Path):
+        rc, _, _ = run_cli("write", "tasks", "hello", cwd=workdir)
+        assert rc == 0
+        rc, stdout, _ = run_cli("broadcast", "--help", cwd=workdir)
+        assert rc == 0
+        assert "usage:" in stdout.lower()
+        # The queue still holds exactly the original message.
+        rc, stdout, _ = run_cli("peek", "tasks", "--all", cwd=workdir)
+        assert stdout == "hello"
+
+    def test_double_dash_escape_hatch_writes_literal_help(self, workdir: Path):
+        rc, _, _ = run_cli("write", "tasks", "--", "--help", cwd=workdir)
+        assert rc == 0
+        rc, stdout, _ = run_cli("read", "tasks", cwd=workdir)
+        assert stdout == "--help"
+
+    def test_dash_messages_are_still_protected(self, workdir: Path):
+        """Regression guard: the original protection must keep working."""
+        rc, _, _ = run_cli("write", "tasks", "--cleanup", cwd=workdir)
+        assert rc == 0
+        rc, stdout, _ = run_cli("read", "tasks", cwd=workdir)
+        assert stdout == "--cleanup"
+
+
+class TestDestructiveGlobalFlagHoisting:
+    """Global-looking flags after a command must never execute as globals.
+
+    Backend-portability note: this module is auto-classified `shared`
+    (it uses run_cli), so these tests also run under bin/pytest-pg and
+    bin/pytest-redis, where there is no .broker.db file (--cleanup drops
+    a schema/namespace there instead).  Assert the behavioral invariant
+    -- the command fails and the data survives -- NOT filesystem state.
+    """
+
+    def test_alias_trailing_cleanup_does_not_delete_data(self, workdir: Path):
+        rc, _, _ = run_cli("write", "tasks", "hello", cwd=workdir)
+        assert rc == 0
+        rc, _, stderr = run_cli(
+            "alias", "add", "foo", "tasks", "--cleanup", cwd=workdir
+        )
+        assert rc != 0
+        # The message must have survived: pre-fix, --cleanup was hoisted
+        # and executed, destroying the broker state (rc 0, read fails).
+        rc, stdout, _ = run_cli("read", "tasks", cwd=workdir)
+        assert rc == 0
+        assert stdout == "hello"
+
+    def test_cleanup_cannot_be_combined_with_a_command(self, workdir: Path):
+        rc, _, _ = run_cli("write", "tasks", "hello", cwd=workdir)
+        assert rc == 0
+        rc, _, stderr = run_cli("--cleanup", "read", "tasks", cwd=workdir)
+        assert rc != 0
+        # This message is OUR guard's text (stable), not argparse wording.
+        assert "--cleanup cannot be used with commands" in stderr
+        rc, stdout, _ = run_cli("read", "tasks", cwd=workdir)
+        assert rc == 0
+        assert stdout == "hello"
