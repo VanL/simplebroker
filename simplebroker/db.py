@@ -1235,14 +1235,8 @@ class BrokerCore:
         self, queue: str, message: str, *, config: dict[str, Any] = _config
     ) -> None:
         """Execute write within retry context. Separates retry logic from transaction logic."""
-        # Generate timestamp outside transaction for better concurrency
-        # The timestamp generator has its own internal transaction for atomicity
-        timestamp = self.generate_timestamp()
-
         # Use retry helper with stop-aware behavior for database lock handling
-        self._run_with_retry(
-            lambda: self._do_write_transaction(queue, message, timestamp)
-        )
+        self._run_with_retry(lambda: self._do_write_transaction(queue, message))
 
         # Increment write counter and check vacuum need
         # Only check if auto vacuum is enabled
@@ -1253,11 +1247,22 @@ class BrokerCore:
                 if self._should_vacuum():
                     self._vacuum_claimed_messages()
 
-    def _do_write_transaction(self, queue: str, message: str, timestamp: int) -> None:
-        """Core write transaction logic."""
+    def _do_write_transaction(self, queue: str, message: str) -> None:
+        """Allocate the timestamp and insert the message in ONE transaction.
+
+        The meta.last_ts advance and the message row must become visible in
+        the same commit.  Allocating in a separate autocommit statement lets
+        a concurrent writer commit a higher timestamp during this writer's
+        lock wait, so checkpoint readers (peek --after, peek-mode watchers)
+        advance past this message before it exists and permanently skip it.
+        The CAS UPDATE has no BEGIN of its own, so it joins this transaction;
+        _do_insert_messages_transaction and broadcast already use the same
+        allocate-inside-transaction pattern.
+        """
         with self._lock:
             self._runner.begin_immediate()
             try:
+                timestamp = self.generate_timestamp()
                 self._runner.run(
                     self._sql.INSERT_MESSAGE,
                     (queue, message, timestamp),

@@ -248,6 +248,11 @@ WHERE n.nspname = ?
   AND c.relname IN ('messages', 'meta', 'aliases')
 """
 
+# Broadcast must take the meta last_ts row lock BEFORE the messages table
+# lock: writers allocate their timestamp (meta row lock) inside the insert
+# transaction before INSERT touches messages.  Acquiring in the opposite
+# order deadlocks against any in-flight write.
+LOCK_LAST_TS_ROW = "SELECT last_ts FROM meta WHERE singleton = TRUE FOR UPDATE"
 LOCK_BROADCAST_SCOPE = "LOCK TABLE messages IN SHARE ROW EXCLUSIVE MODE"
 LOCK_RENAME_SCOPE = "LOCK TABLE messages IN SHARE ROW EXCLUSIVE MODE"
 

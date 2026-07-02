@@ -722,6 +722,11 @@ class PostgresBackendPlugin:
         )
 
     def prepare_broadcast(self, runner: SQLRunner) -> None:
+        # Lock order must match writers: meta last_ts row first, then the
+        # messages table.  Writers hold the meta row lock (timestamp CAS)
+        # when they request the messages RowExclusiveLock; taking the
+        # broadcast table lock first inverts the order and deadlocks.
+        runner.run(pg_sql.LOCK_LAST_TS_ROW, fetch=True)
         runner.run(pg_sql.LOCK_BROADCAST_SCOPE)
 
     def prepare_alias_mutation(self, runner: SQLRunner) -> None:
