@@ -5,18 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from ._exceptions import IntegrityError
+from ._message_id import MessageIdInput, normalize_message_id
 from ._timestamp import validate_timestamp_bound
 
-MessageInsertRecord = tuple[str, str, int]
-
-
-def normalize_message_id(message_id: int) -> int:
-    """Validate and normalize a required message ID."""
-
-    normalized_id = validate_timestamp_bound("message_id", message_id)
-    if normalized_id is None:
-        raise TypeError("message_id must be an int")
-    return normalized_id
+MessageInsertRecord = tuple[str, str, MessageIdInput]
+NormalizedMessageInsertRecord = tuple[str, str, int]
 
 
 def normalize_insert_records(
@@ -24,10 +17,10 @@ def normalize_insert_records(
     *,
     validate_queue_name: Callable[[str], None],
     validate_message_size: Callable[[str], None],
-) -> tuple[list[MessageInsertRecord], int | None]:
+) -> tuple[list[NormalizedMessageInsertRecord], int | None]:
     """Validate exact-ID insert records and return the required last_ts value."""
 
-    normalized_records: list[MessageInsertRecord] = []
+    normalized_records: list[NormalizedMessageInsertRecord] = []
     seen_ids: set[int] = set()
     max_message_id: int | None = None
 

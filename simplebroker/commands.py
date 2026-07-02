@@ -19,6 +19,7 @@ from ._constants import (
 )
 from ._dump import dump_lines, load_lines
 from ._exceptions import IntegrityError, TimestampError
+from ._message_id import INVALID_MESSAGE_ID_MESSAGE, normalize_message_id
 from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator
 from .db import BrokerDB, DBConnection
@@ -145,12 +146,9 @@ def parse_exact_message_id(message_id_str: str) -> int | None:
     Returns:
         The parsed timestamp as int if valid, None if invalid format
     """
-    if not message_id_str:
-        return None
-
     try:
-        return TimestampGenerator.validate(message_id_str, exact=True)
-    except TimestampError:
+        return normalize_message_id(message_id_str)
+    except (TypeError, ValueError):
         return None
 
 
@@ -324,14 +322,14 @@ def _resolve_timestamp_filters(
 
     exact_timestamp = None
     if message_id_str is not None:
-        exact_timestamp = parse_exact_message_id(message_id_str)
-        if exact_timestamp is None:
-            if json_output:
-                _emit_error(
-                    "invalid message ID: expected exactly 19 digits within range",
-                    json_output=True,
-                    code="INVALID_MESSAGE_ID",
-                )
+        try:
+            exact_timestamp = normalize_message_id(message_id_str)
+        except (TypeError, ValueError):
+            _emit_error(
+                INVALID_MESSAGE_ID_MESSAGE,
+                json_output=json_output,
+                code="INVALID_MESSAGE_ID",
+            )
             return EXIT_ERROR, None, None, None
 
     return None, after_timestamp, before_timestamp, exact_timestamp
@@ -703,10 +701,15 @@ def cmd_delete(
 
     # Handle exact physical delete by message ID.
     if message_id_str is not None and canonical_queue is not None:
-        # Validate exact timestamp
-        exact_timestamp = parse_exact_message_id(message_id_str)
-        if exact_timestamp is None:
-            return EXIT_QUEUE_EMPTY
+        error_code, _after, _before, exact_timestamp = _resolve_timestamp_filters(
+            None,
+            None,
+            message_id_str,
+            json_output=False,
+        )
+        if error_code is not None:
+            return error_code
+        assert exact_timestamp is not None
 
         # Use Queue API to delete the specific message.
         with Queue(canonical_queue, db_path=db_path) as queue:

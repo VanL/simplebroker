@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from ._message_id import INVALID_MESSAGE_ID_MESSAGE, normalize_message_id
+
 if TYPE_CHECKING:
     from ._backend_plugins import BrokerConnection
 
@@ -226,12 +228,11 @@ def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:
                     line_number,
                     "message record requires string 'queue' and 'body' fields",
                 )
-            # bool is an int subclass; exclude it explicitly.
-            if isinstance(message_id, bool) or not isinstance(message_id, int):
-                raise _error(
-                    line_number, "message record requires an integer 'id' field"
-                )
-            batch.append((queue, body, message_id))
+            try:
+                normalized_id = normalize_message_id(message_id)
+            except (TypeError, ValueError) as exc:
+                raise _error(line_number, INVALID_MESSAGE_ID_MESSAGE) from exc
+            batch.append((queue, body, normalized_id))
             if len(batch) >= LOAD_BATCH_SIZE:
                 flush()
         elif kind == "header":

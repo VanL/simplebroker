@@ -46,8 +46,10 @@ from ._exceptions import (
     QueueNameError,
     StopException,
 )
+from ._message_id import MessageIdInput, normalize_message_id
 from ._message_insert import (
     MessageInsertRecord,
+    NormalizedMessageInsertRecord,
     normalize_insert_records,
 )
 from ._message_search import (
@@ -1177,7 +1179,8 @@ class BrokerCore:
 
         Exact-ID insert advances ``last_ts`` above the highest inserted ID inside
         the same transaction, so a fresh destination can restore a dump without
-        a caller-visible priming write.
+        a caller-visible priming write. IDs may be ints or exact 19-digit
+        strings; malformed strings raise ``ValueError``.
         """
         self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("insert_messages")
@@ -1274,7 +1277,7 @@ class BrokerCore:
 
     def _do_insert_messages_transaction(
         self,
-        records: Sequence[MessageInsertRecord],
+        records: Sequence[NormalizedMessageInsertRecord],
         required_last_ts: int,
     ) -> None:
         """Insert exact-ID messages and advance last_ts in one transaction."""
@@ -1302,17 +1305,26 @@ class BrokerCore:
         *,
         offset: int = 0,
         target_queue: str | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
     ) -> RetrieveQuerySpec:
         """Build the backend-neutral retrieve-query specification."""
+        normalized_exact_timestamp = (
+            None
+            if exact_timestamp is None
+            else normalize_message_id(exact_timestamp, name="exact_timestamp")
+        )
+        after_timestamp = validate_timestamp_bound("after_timestamp", after_timestamp)
+        before_timestamp = validate_timestamp_bound(
+            "before_timestamp", before_timestamp
+        )
         return RetrieveQuerySpec(
             queue=queue,
             limit=limit,
             offset=offset,
-            exact_timestamp=exact_timestamp,
+            exact_timestamp=normalized_exact_timestamp,
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
             require_unclaimed=require_unclaimed,
@@ -1403,7 +1415,7 @@ class BrokerCore:
         target_queue: str | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
     ) -> Iterator[tuple[str, int] | str]:
         """Yield claim/move results while keeping each batch transactional.
@@ -1479,7 +1491,7 @@ class BrokerCore:
         target_queue: str | None = None,
         limit: int = 1,
         offset: int = 0,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         commit_before_yield: bool = True,
@@ -1494,7 +1506,7 @@ class BrokerCore:
             operation: Type of operation - "peek", "claim", or "move"
             target_queue: Destination queue (required for move)
             limit: Maximum number of messages to retrieve
-            exact_timestamp: Retrieve specific message by timestamp
+            exact_timestamp: Retrieve a specific message by exact ID
             after_timestamp: Only retrieve messages after this timestamp
             before_timestamp: Only retrieve messages before this timestamp
             commit_before_yield: If True, commit before returning (exactly-once)
@@ -1544,7 +1556,7 @@ class BrokerCore:
         self,
         queue: str,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
     ) -> tuple[str, int] | str | None:
         """Claim and return exactly one message from a queue.
@@ -1553,7 +1565,7 @@ class BrokerCore:
 
         Args:
             queue: Name of the queue
-            exact_timestamp: If provided, claim only message with this timestamp
+            exact_timestamp: If provided, claim only message with this exact ID
             with_timestamps: If True, return (body, timestamp) tuple; if False, return just body
 
         Returns:
@@ -1637,7 +1649,7 @@ class BrokerCore:
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         config: dict[str, Any] = _config,
     ) -> Iterator[tuple[str, int] | str]:
         """Generator that claims messages from a queue.
@@ -1650,7 +1662,7 @@ class BrokerCore:
                 - at_least_once: Commit each batch only after it is fully yielded
             after_timestamp: If provided, only claim messages after this timestamp
             before_timestamp: If provided, only claim messages before this timestamp
-            exact_timestamp: If provided, only claim message with this exact timestamp
+            exact_timestamp: If provided, only claim message with this exact ID
 
         Yields:
             (message_body, timestamp) tuples if with_timestamps=True,
@@ -1699,7 +1711,7 @@ class BrokerCore:
         self,
         queue: str,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
         include_claimed: bool = False,
     ) -> tuple[str, int] | str | None:
@@ -1709,7 +1721,7 @@ class BrokerCore:
 
         Args:
             queue: Name of the queue
-            exact_timestamp: If provided, peek only at message with this timestamp
+            exact_timestamp: If provided, peek only at message with this exact ID
             with_timestamps: If True, return (body, timestamp) tuple; if False, return just body
             include_claimed: If True, also return claimed (consumed but not
                 yet vacuumed) messages, merged in message-ID order. Claimed
@@ -1799,7 +1811,7 @@ class BrokerCore:
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
     ) -> Iterator[tuple[str, int] | str]:
         """Generator that peeks at messages in a queue without claiming them.
@@ -1810,7 +1822,7 @@ class BrokerCore:
             batch_size: Batch size for pagination (uses configured default if None)
             after_timestamp: If provided, only peek at messages after this timestamp
             before_timestamp: If provided, only peek at messages before this timestamp
-            exact_timestamp: If provided, only peek at message with this exact timestamp
+            exact_timestamp: If provided, only peek at message with this exact ID
             include_claimed: If True, also return claimed (consumed but not
                 yet vacuumed) messages, merged in message-ID order. Claimed
                 rows are deletion-pending: vacuum may remove them at any
@@ -1863,7 +1875,7 @@ class BrokerCore:
         source_queue: str,
         target_queue: str,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = True,
     ) -> tuple[str, int] | str | None:
@@ -1874,7 +1886,7 @@ class BrokerCore:
         Args:
             source_queue: Queue to move from
             target_queue: Queue to move to
-            exact_timestamp: If provided, move only message with this timestamp
+            exact_timestamp: If provided, move only message with this exact ID
             require_unclaimed: If True (default), only move unclaimed messages.
                              If False, move any message (including claimed).
             with_timestamps: If True, return (body, timestamp) tuple; if False, return just body
@@ -1976,7 +1988,7 @@ class BrokerCore:
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         config: dict[str, Any] = _config,
     ) -> Iterator[tuple[str, int] | str]:
         """Generator that moves messages from source queue to target queue.
@@ -1991,7 +2003,7 @@ class BrokerCore:
             batch_size: Batch size for at_least_once mode (uses configured default if None)
             after_timestamp: If provided, only move messages after this timestamp
             before_timestamp: If provided, only move messages before this timestamp
-            exact_timestamp: If provided, move only message with this timestamp
+            exact_timestamp: If provided, move only message with this exact ID
 
         Yields:
             (message_body, timestamp) tuples if with_timestamps=True,
@@ -2364,11 +2376,14 @@ class BrokerCore:
         # Execute with retry logic
         return self._run_with_retry(_do_delete)
 
-    def delete_message_ids(self, queue: str, message_ids: Sequence[int]) -> int:
+    def delete_message_ids(
+        self, queue: str, message_ids: Sequence[MessageIdInput]
+    ) -> int:
         """Physically delete exact message IDs from one queue.
 
         Claimed and unclaimed messages are both eligible for deletion. Missing
-        IDs and IDs belonging to other queues are ignored.
+        IDs and IDs belonging to other queues are ignored. IDs may be ints or
+        exact 19-digit strings; malformed strings raise ``ValueError``.
         """
         self._check_fork_safety()
         self._validate_queue_name(queue)
@@ -2376,7 +2391,11 @@ class BrokerCore:
         if not message_ids:
             return 0
 
-        deduped = tuple(dict.fromkeys(message_ids))
+        deduped = tuple(
+            dict.fromkeys(
+                normalize_message_id(message_id) for message_id in message_ids
+            )
+        )
 
         def _do_delete_message_ids() -> int:
             transaction_open = False

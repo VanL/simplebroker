@@ -172,9 +172,32 @@ def test_peek_json_invalid_message_id_error_is_json(workdir):
     assert rc == 1
     assert out == ""
     payload = json.loads(err)
-    assert payload["error"] == "INVALID_MESSAGE_ID"
-    assert payload["retryable"] is False
-    assert "invalid message ID" in payload["message"]
+    assert payload == {
+        "error": "INVALID_MESSAGE_ID",
+        "message": "invalid message ID: expected exactly 19 digits within range",
+        "retryable": False,
+    }
+
+
+def test_move_json_invalid_message_id_error_is_json(workdir):
+    """Move uses the same malformed message-ID JSON diagnostic."""
+    rc, out, err = run_cli(
+        "move",
+        "source",
+        "dest",
+        "--json",
+        "-m",
+        "9223372036854775808",
+        cwd=workdir,
+    )
+
+    assert rc == 1
+    assert out == ""
+    assert json.loads(err) == {
+        "error": "INVALID_MESSAGE_ID",
+        "message": "invalid message ID: expected exactly 19 digits within range",
+        "retryable": False,
+    }
 
 
 def test_move_json_argument_error_is_json(workdir):

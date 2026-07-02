@@ -121,11 +121,17 @@ def test_broker_insert_messages_rejects_unadvanceable_high_water(
     assert broker.peek_one("jobs") is None
 
 
+def test_broker_insert_messages_accepts_exact_string_message_id(broker: Any) -> None:
+    broker.insert_messages([("jobs", "body", "0000000000000001000")])
+
+    assert broker.peek_one("jobs", exact_timestamp=1000) == ("body", 1000)
+
+
 @pytest.mark.parametrize(
     ("message_id", "exception_type"),
     [
         (True, TypeError),
-        ("123", TypeError),
+        ("123", ValueError),
         (-1, ValueError),
         (SQLITE_MAX_INT64, ValueError),
     ],

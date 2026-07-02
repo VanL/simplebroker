@@ -99,11 +99,53 @@ def test_valid_format_proceeds_to_database(workdir: Path):
     # Should get exit code 2 because queue doesn't exist, not because of format
     rc, out, err = run_cli("read", "nonexistent_queue", "-m", valid_ts, cwd=workdir)
     assert rc == 2
+    assert out == ""
+    assert err == ""
 
     # Create queue and verify we still get exit code 2 (timestamp not found)
     run_cli("write", "test_queue", "message1", cwd=workdir)
     rc, out, err = run_cli("read", "test_queue", "-m", valid_ts, cwd=workdir)
     assert rc == 2  # Not found, but format was valid
+    assert out == ""
+    assert err == ""
+
+
+def test_malformed_message_id_reports_error_but_absent_id_is_silent(
+    workdir: Path,
+) -> None:
+    """Malformed IDs are diagnostics; valid absent IDs remain no-message."""
+    run_cli("write", "test_queue", "message1", cwd=workdir)
+
+    for command in ("read", "peek", "delete"):
+        rc, out, err = run_cli(command, "test_queue", "-m", "not-an-id", cwd=workdir)
+        assert rc == 1
+        assert out == ""
+        assert err == (
+            "simplebroker: error: invalid message ID: "
+            "expected exactly 19 digits within range"
+        )
+
+        rc, out, err = run_cli(
+            command, "test_queue", "-m", "1234567890123456789", cwd=workdir
+        )
+        assert rc == 2
+        assert out == ""
+        assert err == ""
+
+    rc, out, err = run_cli("move", "test_queue", "dest", "-m", "not-an-id", cwd=workdir)
+    assert rc == 1
+    assert out == ""
+    assert err == (
+        "simplebroker: error: invalid message ID: "
+        "expected exactly 19 digits within range"
+    )
+
+    rc, out, err = run_cli(
+        "move", "test_queue", "dest", "-m", "1234567890123456789", cwd=workdir
+    )
+    assert rc == 2
+    assert out == ""
+    assert err == ""
 
 
 def test_other_valid_timestamp_formats_rejected(workdir: Path):

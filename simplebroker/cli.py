@@ -12,7 +12,6 @@ from ._constants import (
     EXIT_ERROR,
     EXIT_SUCCESS,
     PROG_NAME,
-    TIMESTAMP_EXACT_NUM_DIGITS,
     load_config,
 )
 from ._exceptions import DatabaseError
@@ -1085,21 +1084,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
             before_str = getattr(args, "before", None)
             message_id_str = getattr(args, "message_id", None)
 
-            # Validate message_id format early (fail fast)
             if message_id_str is not None:
-                if (
-                    len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
-                    or not message_id_str.isdigit()
-                ):
-                    if args.json:
-                        commands._emit_error(
-                            "invalid message ID: expected exactly 19 digits",
-                            code="INVALID_MESSAGE_ID",
-                            json_output=True,
-                        )
-                    return commands.EXIT_ERROR
-
-                # Check mutual exclusivity
                 if args.all or after_str or before_str:
                     parser.error(
                         "--message cannot be used with --all, --after, or --before"
@@ -1120,21 +1105,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
             before_str = getattr(args, "before", None)
             message_id_str = getattr(args, "message_id", None)
 
-            # Validate message_id format early (fail fast)
             if message_id_str is not None:
-                if (
-                    len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
-                    or not message_id_str.isdigit()
-                ):
-                    if args.json:
-                        commands._emit_error(
-                            "invalid message ID: expected exactly 19 digits",
-                            code="INVALID_MESSAGE_ID",
-                            json_output=True,
-                        )
-                    return commands.EXIT_ERROR
-
-                # Check mutual exclusivity
                 if args.all or after_str or before_str:
                     parser.error(
                         "--message cannot be used with --all, --after, or --before"
@@ -1179,15 +1150,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
             queue = None if args.all else args.queue
             message_id_str = getattr(args, "message_id", None)
 
-            # Validate message_id format early (fail fast)
             if message_id_str is not None:
-                if (
-                    len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
-                    or not message_id_str.isdigit()
-                ):
-                    return commands.EXIT_ERROR
-
-                # Require queue when using --message
                 if queue is None:
                     parser.error("--message requires a queue name")
 
@@ -1201,21 +1164,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
             after_str = getattr(args, "after", None)
             before_str = getattr(args, "before", None)
 
-            # Validate message_id format early (fail fast)
             if message_id_str is not None:
-                if (
-                    len(message_id_str) != TIMESTAMP_EXACT_NUM_DIGITS
-                    or not message_id_str.isdigit()
-                ):
-                    if json_output:
-                        commands._emit_error(
-                            "invalid message ID: expected exactly 19 digits",
-                            code="INVALID_MESSAGE_ID",
-                            json_output=True,
-                        )
-                    return commands.EXIT_ERROR
-
-                # Check mutual exclusivity
                 if after_str or before_str:
                     parser.error("--message cannot be used with --after or --before")
 

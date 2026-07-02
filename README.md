@@ -267,7 +267,7 @@ $ broker alias remove task1.outbox
 - `--all` - Process all messages (CLI moves up to 1,000,000 per invocation; rerun for larger queues or use the Python API generators)
 - `--json` - Output as line-delimited JSON (includes timestamps)
 - `-t, --timestamps` - Include timestamps in output
-- `-m <id>` - Target specific message by its 19-digit timestamp ID
+- `-m <id>` - Target a specific message by its exact 19-digit message ID
 - `--after <timestamp>` - Process messages newer than timestamp
 - `--before <timestamp>` - Process messages older than timestamp (`read`, `peek`, and `move`; not `watch`)
 
@@ -298,6 +298,12 @@ claimed-only queue no longer exists.
 
 `--after` and `--before` use strict open bounds. Combined together, they select
 messages where `after_timestamp < message_timestamp < before_timestamp`.
+
+`-m` / `--message` is stricter than `--after` and `--before`: it accepts only
+the exact 19-digit broker message ID. A malformed `-m` value prints
+`invalid message ID: expected exactly 19 digits within range` on stderr and
+exits `1`. A well-formed ID that does not match a message is silent and exits
+`2`.
 
 ### Exit Codes
 - `0` - Success
@@ -361,6 +367,16 @@ The format:
 - Low 12 bits: logical counter for sub-microsecond ordering
 - Similar to Twitter's Snowflake IDs or UUID7
 - The format is compatible with time.time_ns(), but the precision is closer to microseconds (~4 μs) due to limits on the precision of the host clock
+
+Python APIs that target one exact message ID, such as
+`Queue.read(message_id=...)`, `Queue.peek(message_id=...)`,
+`Queue.move(message_id=...)`, `Queue.delete(message_id=...)`,
+`Queue.delete_many(...)`, and exact-ID granular methods, accept either an
+integer ID or an exact 19-digit string ID. Malformed string IDs raise
+`ValueError`; unsupported types, including `bool`, raise `TypeError`.
+
+Python `after_timestamp` and `before_timestamp` arguments are integer bounds.
+The CLI's date and unit-suffix timestamp parsing is only for CLI flags.
 
 
 ### JSON for Safe Processing
@@ -697,7 +713,8 @@ def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
 
 For cleanup paths that already know many exact message IDs, use
 `Queue.delete_many(message_ids)` to physically delete them in one backend-level
-batch.
+batch. IDs may be integers or exact 19-digit strings; duplicate IDs are counted
+once after normalization.
 
 For diagnostic or administrative paths that need to locate messages by body
 content, use `Queue.find_message_ids(...)` and then pass the returned IDs to
@@ -836,16 +853,18 @@ with open_broker("/path/to/.broker.db") as broker:
     broker.insert_messages(records)
 ```
 
-`insert_messages(...)` validates the full batch, rejects duplicate IDs, advances
-`last_ts` above the largest supplied ID inside the same transaction, and inserts
-pending messages with their exact IDs. Normal producers should still use
-`write(...)`, which allocates IDs through the broker timestamp generator.
+`insert_messages(...)` accepts integer IDs or exact 19-digit string IDs,
+validates the full batch, rejects duplicate IDs after normalization, advances
+`last_ts` above the largest supplied ID inside the same transaction, and
+inserts pending messages with their exact IDs. Normal producers should still
+use `write(...)`, which allocates IDs through the broker timestamp generator.
 
 > **Supply IDs that came from a SimpleBroker timestamp generator** (your own
 > reserved ID, or the source broker's dump). Because `insert_messages(...)` moves
 > `last_ts` to just above the largest ID in the batch, an arbitrarily large ID
 > pushes the high-water mark far into the future and stalls later `write()` calls
-> until the wall clock catches up. IDs must be non-negative and below `2**63 - 1`.
+> until the wall clock catches up. IDs must be non-negative and below `2**63`;
+> inserted IDs must also leave room for `last_ts` to advance above them.
 
 For a single queue handle, pass `(message, message_id)` pairs:
 

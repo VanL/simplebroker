@@ -48,7 +48,7 @@ class IntegrityError(BrokerError, sqlite3.IntegrityError):
     pass
 
 
-class DataError(BrokerError, sqlite3.DataError):
+class DataError(BrokerError, sqlite3.DataError, ValueError):
     """Invalid data format or type.
 
     Inherits from sqlite3.DataError for compatibility.

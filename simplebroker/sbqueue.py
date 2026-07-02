@@ -22,6 +22,7 @@ from ._backend_plugins import (
     get_backend_plugin,
 )
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
+from ._message_id import MessageIdInput
 from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
 from ._sidecar import SidecarSession
@@ -322,8 +323,8 @@ class Queue:
 
     def _insert_records_for_queue(
         self,
-        records: Iterable[tuple[str, int]],
-    ) -> Iterator[tuple[str, str, int]]:
+        records: Iterable[tuple[str, MessageIdInput]],
+    ) -> Iterator[tuple[str, str, MessageIdInput]]:
         for record in records:
             try:
                 message, message_id = record
@@ -333,8 +334,11 @@ class Queue:
                 ) from exc
             yield self.name, message, message_id
 
-    def insert_messages(self, records: Iterable[tuple[str, int]]) -> None:
-        """Insert pending messages into this queue with exact existing IDs."""
+    def insert_messages(self, records: Iterable[tuple[str, MessageIdInput]]) -> None:
+        """Insert pending messages into this queue with exact existing IDs.
+
+        IDs may be ints or exact 19-digit strings.
+        """
         with self.get_connection() as connection:
             connection.insert_messages(self._insert_records_for_queue(records))
             self._update_last_ts_hint(connection)
@@ -360,7 +364,7 @@ class Queue:
         with_timestamps: bool = False,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        message_id: int | None = None,
+        message_id: MessageIdInput | None = None,
     ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None:
         """Read and remove message(s) from the queue (CLI-mirroring method).
 
@@ -372,7 +376,8 @@ class Queue:
             with_timestamps: If True, include timestamps in results
             after_timestamp: Only read messages newer than this timestamp
             before_timestamp: Only read messages older than this timestamp
-            message_id: Read specific message by ID (cannot be used with other filters)
+            message_id: Read specific message by ID as an int or exact 19-digit string
+                (cannot be used with other filters)
 
         Returns:
             Depends on parameters:
@@ -423,7 +428,10 @@ class Queue:
     # ========== Granular Read API (maps to internal claim methods) ==========
 
     def read_one(
-        self, *, exact_timestamp: int | None = None, with_timestamps: bool = False
+        self,
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        with_timestamps: bool = False,
     ) -> str | tuple[str, int] | None:
         """Read and remove exactly one message from the queue.
 
@@ -431,7 +439,7 @@ class Queue:
         committed before being returned.
 
         Args:
-            exact_timestamp: If provided, read only message with this timestamp
+            exact_timestamp: If provided, read only message with this exact ID
             with_timestamps: If True, return (message, timestamp) tuple
 
         Returns:
@@ -496,7 +504,7 @@ class Queue:
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
     ) -> Iterator[str | tuple[str, int]]:
         """Generator that reads and removes messages from the queue.
 
@@ -509,7 +517,7 @@ class Queue:
                 - at_least_once: Commit each batch after it is fully yielded
             after_timestamp: Only read messages newer than this timestamp
             before_timestamp: Only read messages older than this timestamp
-            exact_timestamp: Only read message with this exact timestamp
+            exact_timestamp: Only read message with this exact ID
 
         Yields:
             Messages or (message, timestamp) tuples if with_timestamps=True
@@ -535,7 +543,7 @@ class Queue:
         with_timestamps: bool = False,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        message_id: int | None = None,
+        message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
     ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None:
         """View message(s) without removing them from the queue (CLI-mirroring method).
@@ -548,7 +556,8 @@ class Queue:
             with_timestamps: If True, include timestamps in results
             after_timestamp: Only peek at messages newer than this timestamp
             before_timestamp: Only peek at messages older than this timestamp
-            message_id: Peek at specific message by ID (cannot be used with other filters)
+            message_id: Peek at specific message by ID as an int or exact 19-digit
+                string (cannot be used with other filters)
             include_claimed: If True, also return claimed (consumed but not
                 yet vacuumed) messages, merged in message-ID order. Claimed
                 rows are deletion-pending: vacuum may remove them at any
@@ -613,14 +622,14 @@ class Queue:
     def peek_one(
         self,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = False,
         include_claimed: bool = False,
     ) -> str | tuple[str, int] | None:
         """Peek at exactly one message without removing it from the queue.
 
         Args:
-            exact_timestamp: If provided, peek only at message with this timestamp
+            exact_timestamp: If provided, peek only at message with this exact ID
             with_timestamps: If True, return (message, timestamp) tuple
             include_claimed: If True, also return claimed (consumed but not
                 yet vacuumed) messages, merged in message-ID order. Claimed
@@ -690,7 +699,7 @@ class Queue:
         with_timestamps: bool = False,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
     ) -> Iterator[str | tuple[str, int]]:
         """Generator that peeks at messages without removing them from the queue.
@@ -701,7 +710,7 @@ class Queue:
             with_timestamps: If True, yield (message, timestamp) tuples
             after_timestamp: Only peek at messages newer than this timestamp
             before_timestamp: Only peek at messages older than this timestamp
-            exact_timestamp: Only peek at message with this exact timestamp
+            exact_timestamp: Only peek at message with this exact ID
             include_claimed: If True, also return claimed (consumed but not
                 yet vacuumed) messages, merged in message-ID order. Claimed
                 rows are deletion-pending: vacuum may remove them at any
@@ -729,7 +738,7 @@ class Queue:
         self,
         destination: Union[str, "Queue"],
         *,
-        message_id: int | None = None,
+        message_id: MessageIdInput | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: bool = False,
@@ -741,7 +750,8 @@ class Queue:
 
         Args:
             destination: Target queue (name or Queue instance).
-            message_id: If provided, move only this specific message.
+            message_id: If provided, move only this specific message by int ID
+                or exact 19-digit string.
             after_timestamp: If provided, only move messages newer than this timestamp.
             before_timestamp: If provided, only move messages older than this timestamp.
             all_messages: If True, move all messages. Cannot be used with message_id.
@@ -825,7 +835,7 @@ class Queue:
         self,
         destination: Union[str, "Queue"],
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = False,
     ) -> str | tuple[str, int] | None:
@@ -835,7 +845,7 @@ class Queue:
 
         Args:
             destination: Target queue (name or Queue instance)
-            exact_timestamp: If provided, move only message with this timestamp
+            exact_timestamp: If provided, move only message with this exact ID
             require_unclaimed: If True (default), only move unclaimed messages.
                              If False, move any message (including claimed).
             with_timestamps: If True, return (message, timestamp) tuple
@@ -922,7 +932,7 @@ class Queue:
         delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
     ) -> Iterator[str | tuple[str, int]]:
         """Generator that moves messages from this queue to another.
 
@@ -934,7 +944,7 @@ class Queue:
                 - at_least_once: Commit each batch after it is fully yielded
             after_timestamp: Only move messages newer than this timestamp
             before_timestamp: Only move messages older than this timestamp
-            exact_timestamp: Only move message with this exact timestamp
+            exact_timestamp: Only move message with this exact ID
 
         Yields:
             Messages or (message, timestamp) tuples if with_timestamps=True
@@ -959,11 +969,12 @@ class Queue:
                 exact_timestamp=exact_timestamp,
             )
 
-    def delete(self, *, message_id: int | None = None) -> bool:
+    def delete(self, *, message_id: MessageIdInput | None = None) -> bool:
         """Delete messages from this queue.
 
         Args:
-            message_id: If provided, delete only the message with this specific ID.
+            message_id: If provided, delete only the message with this specific
+                       int ID or exact 19-digit string ID.
                        If None, delete all messages in the queue.
 
         Returns:
@@ -981,14 +992,15 @@ class Queue:
                 # Delete all messages in the queue
                 return connection.delete(self.name) > 0
 
-    def delete_many(self, message_ids: Sequence[int]) -> int:
+    def delete_many(self, message_ids: Sequence[MessageIdInput]) -> int:
         """Physically delete exact message IDs from this queue.
 
         Claimed and unclaimed messages are both eligible for deletion. Missing
         IDs and IDs belonging to other queues are ignored.
 
         Args:
-            message_ids: Message IDs to delete from this queue.
+            message_ids: Message IDs to delete from this queue as ints or exact
+                19-digit strings.
 
         Returns:
             Number of messages physically deleted.

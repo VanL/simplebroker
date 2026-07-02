@@ -64,7 +64,11 @@ class TestResolveTimestampFilters:
 
         assert error == EXIT_ERROR
         assert after_ts is None and before_ts is None and exact_ts is None
-        assert capsys.readouterr().err == ""
+        captured = capsys.readouterr()
+        assert (
+            captured.err
+            == "simplebroker: error: invalid message ID: expected exactly 19 digits within range\n"
+        )
 
 
 class TestGetMessageContent:

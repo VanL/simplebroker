@@ -58,6 +58,34 @@ def test_delete_message_ids_counts_duplicates_once(broker) -> None:
     assert broker.peek_many("jobs", limit=10, with_timestamps=False) == ["message2"]
 
 
+def test_delete_message_ids_accepts_exact_string_ids(broker) -> None:
+    broker.write("jobs", "message1")
+    broker.write("jobs", "message2")
+    timestamps = _timestamp_by_body(broker.peek_many("jobs", limit=10))
+
+    deleted = broker.delete_message_ids(
+        "jobs", [f"{timestamps['message1']:019d}", timestamps["message2"]]
+    )
+
+    assert deleted == 2
+    assert broker.get_queue_stat("jobs").total == 0
+
+
+def test_delete_message_ids_rejects_malformed_ids_before_mutation(broker) -> None:
+    broker.write("jobs", "message1")
+    before = broker.get_queue_stat("jobs")
+
+    with pytest.raises(ValueError, match="invalid message ID"):
+        broker.delete_message_ids("jobs", ["not-an-id"])
+
+    after = broker.get_queue_stat("jobs")
+    assert (after.pending, after.claimed, after.total) == (
+        before.pending,
+        before.claimed,
+        before.total,
+    )
+
+
 def test_delete_message_ids_empty_batch_is_noop(broker) -> None:
     broker.write("jobs", "message1")
     before = broker.get_queue_stat("jobs")

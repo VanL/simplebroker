@@ -2,6 +2,8 @@
 
 import pytest
 
+from simplebroker._constants import SQLITE_MAX_INT64
+
 pytestmark = [pytest.mark.shared]
 
 
@@ -49,6 +51,15 @@ class TestQueueReadMethods:
         # Other messages still there
         remaining = list(q.peek_generator(with_timestamps=False))
         assert remaining == ["message1", "message3"]
+
+    def test_read_one_exact_timestamp_accepts_exact_string(self, queue_factory):
+        """Exact IDs may be passed as exact 19-digit strings."""
+        q = queue_factory("test")
+
+        q.write("message1")
+        target_ts = list(q.peek_generator(with_timestamps=True))[0][1]
+
+        assert q.read_one(exact_timestamp=f"{target_ts:019d}") == "message1"
 
     def test_read_many_basic(self, queue_factory):
         """Test read_many method."""
@@ -921,3 +932,77 @@ class TestQueueHighLevelMethods:
         dest = queue_factory("dest")
         messages = list(dest.peek(all_messages=True))
         assert len(messages) == 5
+
+
+class TestQueueMessageIdValidation:
+    """Queue API exact-ID validation uses the same rules as the CLI."""
+
+    def test_exact_string_ids_work_across_high_level_queue_methods(self, queue_factory):
+        q = queue_factory("source")
+
+        q.write("peek-me")
+        peek_ts = list(q.peek_generator(with_timestamps=True))[0][1]
+        assert q.peek(message_id=f"{peek_ts:019d}") == "peek-me"
+
+        q.write("move-me")
+        move_ts = dict(q.peek_generator(with_timestamps=True))["move-me"]
+        moved = q.move("dest", message_id=f"{move_ts:019d}")
+        assert moved == {"message": "move-me", "timestamp": move_ts}
+
+        q.write("delete-me")
+        delete_ts = dict(q.peek_generator(with_timestamps=True))["delete-me"]
+        assert q.delete(message_id=f"{delete_ts:019d}") is True
+
+        assert list(q.peek_generator(with_timestamps=False)) == ["peek-me"]
+        dest = queue_factory("dest")
+        assert dest.peek(message_id=f"{move_ts:019d}") == "move-me"
+
+    def test_malformed_exact_ids_raise_value_error_before_mutation(self, queue_factory):
+        q = queue_factory("source")
+        q.write("message1")
+
+        with pytest.raises(ValueError, match="invalid message ID"):
+            q.peek_one(exact_timestamp="not-an-id")
+        with pytest.raises(ValueError, match="invalid message ID"):
+            q.read(message_id="not-an-id")
+        with pytest.raises(ValueError, match="invalid message ID"):
+            q.move("dest", message_id="not-an-id")
+        with pytest.raises(ValueError, match="invalid message ID"):
+            q.delete(message_id="not-an-id")
+        with pytest.raises(ValueError, match="invalid message ID"):
+            q.delete_many(["not-an-id"])
+
+        assert list(q.peek_generator(with_timestamps=False)) == ["message1"]
+        assert queue_factory("dest").peek() is None
+
+    def test_generators_validate_malformed_exact_ids_when_iterated(self, queue_factory):
+        q = queue_factory("source")
+        q.write("message1")
+
+        with pytest.raises(ValueError, match="invalid message ID"):
+            list(q.peek_generator(exact_timestamp="not-an-id"))
+        with pytest.raises(ValueError, match="invalid message ID"):
+            list(q.read_generator(exact_timestamp="not-an-id"))
+        with pytest.raises(ValueError, match="invalid message ID"):
+            list(q.move_generator("dest", exact_timestamp="not-an-id"))
+
+        assert list(q.peek_generator(with_timestamps=False)) == ["message1"]
+        assert queue_factory("dest").peek() is None
+
+    def test_timestamp_bounds_stay_int_only_and_validate_before_mutation(
+        self, queue_factory
+    ):
+        q = queue_factory("source")
+        q.write("message1")
+
+        with pytest.raises(ValueError, match="after_timestamp"):
+            q.peek_many(after_timestamp=-1)
+        with pytest.raises(TypeError, match="after_timestamp"):
+            q.read_many(1, after_timestamp="0000000000000000001")
+        with pytest.raises(ValueError, match="before_timestamp"):
+            list(q.move_generator("dest", before_timestamp=SQLITE_MAX_INT64))
+        with pytest.raises(TypeError, match="before_timestamp"):
+            list(q.peek_generator(before_timestamp=True))
+
+        assert list(q.peek_generator(with_timestamps=False)) == ["message1"]
+        assert queue_factory("dest").peek() is None

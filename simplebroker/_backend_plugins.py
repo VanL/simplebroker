@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
 DEFAULT_BACKEND_NAME = "sqlite"
+MessageIdInput = int | str
 
 
 class BackendPlugin(Protocol):
@@ -255,14 +256,14 @@ class BrokerConnection(Protocol):
 
     def insert_messages(
         self,
-        records: Iterable[tuple[str, str, int]],
+        records: Iterable[tuple[str, str, MessageIdInput]],
     ) -> None: ...
 
     def claim_one(
         self,
         queue: str,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
     ) -> tuple[str, int] | str | None: ...
 
@@ -286,7 +287,7 @@ class BrokerConnection(Protocol):
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         config: dict[str, Any] = ...,
     ) -> Iterator[tuple[str, int] | str]: ...
 
@@ -294,7 +295,7 @@ class BrokerConnection(Protocol):
         self,
         queue: str,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         with_timestamps: bool = True,
         include_claimed: bool = False,
     ) -> tuple[str, int] | str | None: ...
@@ -318,7 +319,7 @@ class BrokerConnection(Protocol):
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
     ) -> Iterator[tuple[str, int] | str]: ...
 
@@ -327,7 +328,7 @@ class BrokerConnection(Protocol):
         source_queue: str,
         target_queue: str,
         *,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         require_unclaimed: bool = True,
         with_timestamps: bool = True,
     ) -> tuple[str, int] | str | None: ...
@@ -355,13 +356,15 @@ class BrokerConnection(Protocol):
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        exact_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
         config: dict[str, Any] = ...,
     ) -> Iterator[tuple[str, int] | str]: ...
 
     def delete(self, queue: str | None = None) -> int: ...
 
-    def delete_message_ids(self, queue: str, message_ids: Sequence[int]) -> int: ...
+    def delete_message_ids(
+        self, queue: str, message_ids: Sequence[MessageIdInput]
+    ) -> int: ...
 
     def delete_from_queues(
         self,

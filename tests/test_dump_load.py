@@ -108,6 +108,43 @@ def test_round_trip_fixed_point(tmp_path: Path) -> None:
     assert new_ids and min(new_ids) > max(restored_ids)
 
 
+def test_load_accepts_exact_string_message_id(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    lines = [
+        json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1}),
+        json.dumps(
+            {
+                "type": "message",
+                "queue": "jobs",
+                "body": "restored",
+                "id": "0000000000000001000",
+            }
+        ),
+    ]
+
+    with open_broker(db) as broker:
+        result = load_lines(broker, lines)
+
+    assert result == LoadResult(messages=1, aliases=0)
+    assert Queue("jobs", db_path=db).peek(message_id=1000) == "restored"
+
+
+def test_load_rejects_malformed_message_id_with_line_context(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    lines = [
+        json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1}),
+        json.dumps(
+            {"type": "message", "queue": "jobs", "body": "bad", "id": "not-an-id"}
+        ),
+    ]
+
+    with open_broker(db) as broker:
+        with pytest.raises(ValueError, match="line 2: invalid message ID"):
+            load_lines(broker, lines)
+
+    assert Queue("jobs", db_path=db).peek() is None
+
+
 def test_dump_canonicalizes_shuffled_exact_id_inserts(tmp_path: Path) -> None:
     """Exact-ID inserts make rowid order diverge from ID order; dump sorts."""
     db = _db(tmp_path)
@@ -212,18 +249,18 @@ def test_load_rejects_bad_input(tmp_path: Path) -> None:
             load_lines(broker, [header, "not json"])
         with pytest.raises(ValueError, match="line 2"):
             load_lines(broker, [header, '{"type": "mystery"}'])
-        # field validation is strict: no coercion of nulls, bools, or strings
+        # field validation is strict: no coercion of nulls, bools, or malformed IDs
         with pytest.raises(ValueError, match="line 2"):
             load_lines(
                 broker,
                 [header, '{"type": "message", "queue": "q", "body": null, "id": 1}'],
             )
-        with pytest.raises(ValueError, match="integer 'id'"):
+        with pytest.raises(ValueError, match="invalid message ID"):
             load_lines(
                 broker,
                 [header, '{"type": "message", "queue": "q", "body": "b", "id": true}'],
             )
-        with pytest.raises(ValueError, match="integer 'id'"):
+        with pytest.raises(ValueError, match="invalid message ID"):
             load_lines(
                 broker,
                 [header, '{"type": "message", "queue": "q", "body": "b", "id": "1"}'],

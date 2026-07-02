@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `watch --after` now applies its strict checkpoint filter in consume mode, not
   only peek mode. Consume-mode watchers no longer claim and deliver messages at
   or before the checkpoint boundary.
+- Malformed `-m` / `--message` IDs now use the shared command error path:
+  plain mode prints `invalid message ID: expected exactly 19 digits within range`
+  on stderr and exits `1`, while `--json` emits the same diagnostic as a
+  structured `INVALID_MESSAGE_ID` error. Valid but absent IDs still remain the
+  silent "no matching message" case and exit `2`.
+
+### Changed
+- Exact message-ID APIs now share one validator. Python APIs that target exact
+  IDs accept integer IDs or exact 19-digit string IDs; malformed string IDs
+  raise `ValueError`, unsupported types such as `bool` raise `TypeError`, and
+  `after_timestamp` / `before_timestamp` remain int-only bounds.
 
 ### simplebroker-pg
 - `rename_queue()` now takes the singleton meta row before the `messages` table,
