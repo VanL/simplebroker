@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- `write()` now allocates its timestamp inside the insert transaction, so the
+  `last_ts` advance and the message row become visible atomically. Previously
+  a concurrent writer could commit a higher timestamp during another writer's
+  lock wait, letting checkpoint readers (`peek --after`, peek-mode watchers)
+  permanently skip a message. Applies to SQLite and Postgres; the Redis
+  backend was already atomic. On Postgres, `prepare_broadcast` now takes the
+  meta `last_ts` row lock before the messages table lock so broadcast's lock
+  order matches writers.
+- `broker write --help` and `broker broadcast --help` now show help.
+  Previously `write --help` failed with a queue-name error and
+  `broadcast --help` silently broadcast the literal message `--help` to every
+  queue. Use `-- --help` to write a literal `--help` message.
+- `alias` is registered in the argument rearranger's subcommand set. Previously
+  global-looking flags after `alias` were hoisted to global position:
+  `broker alias add a b --cleanup` deleted the database. Such flags now fail
+  with "unrecognized arguments".
+- `--cleanup` combined with a command is now rejected ("--cleanup cannot be
+  used with commands"), matching the existing `--status`/`--vacuum` guards.
+  Previously the command was silently dropped and the database deleted.
+- Retry classification is backend-neutral: runners can set
+  `OperationalError.retryable` instead of relying on SQLite lock-message
+  matching. `simplebroker-pg` now marks Postgres contention SQLSTATEs
+  (55P03, 40001, 40P01) retryable. Requires a matching `simplebroker-pg`
+  release.
+- `build_move_by_id_query` (private `_sql` module, used by
+  `examples/async_pooled_broker.py`) emitted invalid SQL (`ORDER BY` after
+  `RETURNING`); the example's move-by-ID path crashed. All four legacy
+  builders now have executable-SQL tests.
+- README: removed the nonexistent `watch --quiet` flag (use global `-q`),
+  documented the `--compact` global option, fixed the `alias` command row,
+  and replaced the network-filesystem recommendation with a corruption
+  warning (WAL mode is single-host).
+
+### Removed
+- Internal: byte-identical duplicated alias methods on `BrokerDB` (behavior
+  unchanged; `BrokerCore` remains the single implementation).
+
+### Internal
+- Test harness scrubs ambient `BROKER_*` environment variables in
+  `pytest_configure`, before any test runs (`BROKER_TEST_BACKEND`
+  allowlisted).
+- mypy now type-checks against the Python 3.11 floor instead of 3.14.
+- `ext.py`, `SQLRunner`, and `BackendPlugin` now document the real
+  backend-author contract, including the getattr-probed optional hooks.
 
 ## [4.9.0] - 2026-06-18
 ### Added
