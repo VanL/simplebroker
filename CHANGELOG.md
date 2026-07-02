@@ -11,10 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `last_ts` advance and the message row become visible atomically. Previously
   a concurrent writer could commit a higher timestamp during another writer's
   lock wait, letting checkpoint readers (`peek --after`, peek-mode watchers)
-  permanently skip a message. Applies to SQLite and Postgres; the Redis
-  backend was already atomic. On Postgres, `prepare_broadcast` now takes the
-  meta `last_ts` row lock before the messages table lock so broadcast's lock
-  order matches writers.
+  permanently skip a message. Applies to SQLite and Postgres (see the
+  simplebroker-pg entry below); the Redis backend was already atomic.
 - `broker write --help` and `broker broadcast --help` now show help.
   Previously `write --help` failed with a queue-name error and
   `broadcast --help` silently broadcast the literal message `--help` to every
@@ -28,9 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Previously the command was silently dropped and the database deleted.
 - Retry classification is backend-neutral: runners can set
   `OperationalError.retryable` instead of relying on SQLite lock-message
-  matching. `simplebroker-pg` now marks Postgres contention SQLSTATEs
-  (55P03, 40001, 40P01) retryable. Requires a matching `simplebroker-pg`
-  release.
+  matching (`True` forces retry, `False` forbids it, `None` keeps the
+  SQLite marker fallback). See the simplebroker-pg entry below for the
+  Postgres side.
 - `build_move_by_id_query` (private `_sql` module, used by
   `examples/async_pooled_broker.py`) emitted invalid SQL (`ORDER BY` after
   `RETURNING`); the example's move-by-ID path crashed. All four legacy
@@ -51,6 +49,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - mypy now type-checks against the Python 3.11 floor instead of 3.14.
 - `ext.py`, `SQLRunner`, and `BackendPlugin` now document the real
   backend-author contract, including the getattr-probed optional hooks.
+
+### simplebroker-pg 2.5.0
+- Postgres contention SQLSTATEs (`55P03` lock_not_available, `40001`
+  serialization_failure, `40P01` deadlock_detected) are now marked
+  `retryable`, so the core retry machinery retries them instead of failing
+  immediately.
+- `prepare_broadcast` takes the meta `last_ts` row lock before the messages
+  table lock, matching the write path's lock order now that writers allocate
+  their timestamp inside the insert transaction. The old order deadlocked
+  against in-flight writes. Requires simplebroker>=4.10.0.
 
 ## [4.9.0] - 2026-06-18
 ### Added
