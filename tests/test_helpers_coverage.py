@@ -16,6 +16,7 @@ from simplebroker.helpers import (
     _find_project_database,
     _is_compound_db_name,
     _is_filesystem_root,
+    _is_locked_operational_error,
     _resolve_symlinks_safely,
     _validate_database_parent_directory,
     _validate_path_containment,
@@ -565,3 +566,40 @@ def test_execute_with_retry_jitter_decorrelates_rapid_retries(
     # Sleeps computed microseconds apart must still span the jitter range,
     # otherwise synchronized writers back off in lockstep and re-collide.
     assert max(jitters) - min(jitters) > 0.005
+
+
+class TestRetryableClassification:
+    """OperationalError.retryable overrides marker matching (backend-neutral)."""
+
+    def test_default_falls_back_to_sqlite_markers(self):
+        assert _is_locked_operational_error(OperationalError("database is locked"))
+        assert not _is_locked_operational_error(OperationalError("syntax error"))
+
+    def test_retryable_true_forces_retry_without_markers(self):
+        exc = OperationalError("canceling statement due to lock timeout")
+        exc.retryable = True
+        assert _is_locked_operational_error(exc)
+
+    def test_retryable_false_blocks_retry_despite_markers(self):
+        exc = OperationalError("database is locked")
+        exc.retryable = False
+        assert not _is_locked_operational_error(exc)
+
+    def test_stop_exception_is_never_retryable(self):
+        assert not _is_locked_operational_error(
+            StopException("Operation interrupted by stop event")
+        )
+
+    def test_execute_with_retry_honors_retryable_flag(self):
+        attempts = []
+
+        def flaky():
+            attempts.append(1)
+            if len(attempts) < 3:
+                exc = OperationalError("pg-style contention, no sqlite words")
+                exc.retryable = True
+                raise exc
+            return "done"
+
+        assert _execute_with_retry(flaky, retry_delay=0.001) == "done"
+        assert len(attempts) == 3

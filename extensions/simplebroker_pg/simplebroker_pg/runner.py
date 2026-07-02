@@ -72,6 +72,17 @@ def _should_prepare(sql: str) -> bool:
     return False
 
 
+# Postgres contention SQLSTATEs that must be retried even though their
+# messages do not contain SQLite's lock/busy phrases.
+_RETRYABLE_SQLSTATES = frozenset(
+    {
+        "40001",  # serialization_failure
+        "40P01",  # deadlock_detected
+        "55P03",  # lock_not_available
+    }
+)
+
+
 def _translate_error(exc: psycopg.Error) -> Exception:
     """Translate psycopg errors into SimpleBroker exceptions."""
     sqlstate = getattr(exc, "sqlstate", None) or ""
@@ -79,7 +90,10 @@ def _translate_error(exc: psycopg.Error) -> Exception:
         return IntegrityError(str(exc))
     if sqlstate.startswith("22"):
         return DataError(str(exc))
-    return OperationalError(str(exc))
+    err = OperationalError(str(exc))
+    if sqlstate in _RETRYABLE_SQLSTATES:
+        err.retryable = True
+    return err
 
 
 def _invalidates_bootstrap(exc: psycopg.Error) -> bool:

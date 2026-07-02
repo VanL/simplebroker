@@ -48,7 +48,10 @@ class SQLRunner(Protocol):
     Contract requirements:
     - Must handle thread-local or concurrency-safe connections
     - Must guarantee transactional boundaries as BrokerCore expects
-    - Must raise OperationalError on locking for retry logic
+    - Must raise OperationalError on locking for retry logic; backends
+      whose messages do not contain SQLite's lock/busy phrases must set
+      OperationalError.retryable = True on contention errors (see
+      simplebroker._exceptions.OperationalError)
     - Must be fork-safe (recreate connections after os.fork())
     - Must handle connection lifecycle (open/close)
     """

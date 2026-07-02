@@ -156,8 +156,15 @@ def _execute_with_retry(
 
 
 def _is_locked_operational_error(exc: OperationalError) -> bool:
-    """Return whether an OperationalError represents lock or busy contention."""
+    """Return whether an OperationalError represents lock or busy contention.
 
+    Backends whose drivers do not emit SQLite-style messages mark
+    contention explicitly via ``OperationalError.retryable``; the message
+    markers remain the fallback for plain SQLite errors.
+    """
+    retryable = getattr(exc, "retryable", None)
+    if retryable is not None:
+        return bool(retryable)
     message = str(exc).lower()
     return any(marker in message for marker in _LOCKED_ERROR_MARKERS)
 

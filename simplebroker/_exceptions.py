@@ -21,15 +21,21 @@ class OperationalError(BrokerError, sqlite3.OperationalError):
 
     Runners should raise this for retryable conditions.
     Inherits from sqlite3.OperationalError for compatibility.
+
+    The optional ``retryable`` attribute lets non-SQLite backends classify
+    contention explicitly: ``True`` forces the retry machinery to retry,
+    ``False`` forbids retrying, and ``None`` (the default) falls back to
+    matching SQLite lock/busy phrases in the message.
     """
 
-    pass
+    retryable: bool | None = None
 
 
 class StopException(OperationalError):
     """Exception raised when an operation is interrupted by a stop signal."""
 
-    pass
+    # A user-initiated stop must never be retried.
+    retryable = False
 
 
 class IntegrityError(BrokerError, sqlite3.IntegrityError):
