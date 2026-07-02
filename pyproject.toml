@@ -46,7 +46,7 @@ dev = [
     "pytest-timeout>=2.4.0",
 ]
 pg = [
-    "simplebroker-pg>=2.4.0",
+    "simplebroker-pg>=2.5.0",
 ]
 redis = [
     "simplebroker-redis>=2.6.0",
