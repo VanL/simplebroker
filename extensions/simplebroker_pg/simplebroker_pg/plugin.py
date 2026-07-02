@@ -707,6 +707,10 @@ class PostgresBackendPlugin:
     ) -> None:
         if operation == "rename":
             del queue
+            # The singleton meta row also stores alias_version. Rename may bump
+            # it after retargeting aliases, so match writer/broadcast order:
+            # meta row first, then messages table.
+            runner.run(pg_sql.LOCK_LAST_TS_ROW, fetch=True)
             runner.run(pg_sql.LOCK_RENAME_SCOPE)
             return
 

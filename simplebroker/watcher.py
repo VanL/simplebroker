@@ -1533,7 +1533,7 @@ class QueueWatcher(BaseWatcher):
         for body, ts in self._queue_obj.stream_messages(
             peek=True,
             all_messages=self._batch_processing,
-            after_timestamp=self._last_seen_ts,
+            after_timestamp=self._after_timestamp_filter(),
             commit_interval=1,
         ):
             if self._try_dispatch_message(body, ts):
@@ -1547,6 +1547,9 @@ class QueueWatcher(BaseWatcher):
 
         return found_messages
 
+    def _after_timestamp_filter(self) -> int | None:
+        return self._last_seen_ts if self._last_seen_ts > 0 else None
+
     def _process_single_message(self) -> bool:
         """Process exactly one message in consume mode."""
         return bool(
@@ -1558,14 +1561,19 @@ class QueueWatcher(BaseWatcher):
 
     def _consume_one_message(self) -> bool:
         """Consume and process a single message."""
-        result = self._queue_obj.read_one(with_timestamps=True)
-        if result:
-            # Type narrowing: with_timestamps=True always returns tuple
-            if isinstance(result, tuple):
-                body, ts = result
-                self._try_dispatch_message(body, ts)
-                return True  # Found and processed one message
-        return False  # No messages found
+        messages = self._queue_obj.read_many(
+            1,
+            with_timestamps=True,
+            after_timestamp=self._after_timestamp_filter(),
+        )
+        if not messages:
+            return False
+
+        result = messages[0]
+        assert isinstance(result, tuple)
+        body, ts = result
+        self._try_dispatch_message(body, ts)
+        return True
 
     def _process_batch_messages(self) -> bool:
         """Process all available messages in batch mode."""
@@ -1587,6 +1595,7 @@ class QueueWatcher(BaseWatcher):
             for body, ts in self._queue_obj.stream_messages(
                 peek=False,
                 all_messages=True,
+                after_timestamp=self._after_timestamp_filter(),
                 commit_interval=1,
             ):
                 self._try_dispatch_message(body, ts)

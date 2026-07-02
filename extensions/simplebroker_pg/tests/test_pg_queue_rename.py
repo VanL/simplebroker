@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
+import time
 
 import psycopg
 import pytest
@@ -14,6 +16,42 @@ from simplebroker._backend_plugins import BackendPlugin
 from simplebroker.db import BrokerCore
 
 pytestmark = [pytest.mark.pg_only]
+
+
+class _RecordingRunner:
+    schema = "test_schema"
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, bool]] = []
+
+    def run(
+        self,
+        sql: str,
+        params: tuple[object, ...] = (),
+        *,
+        fetch: bool = False,
+    ) -> list[tuple[object, ...]]:
+        del params
+        self.calls.append((sql, fetch))
+        return []
+
+
+def _set_search_path(conn: psycopg.Connection[object], pg_schema: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(f"SET search_path TO {quote_ident(pg_schema)}, public")
+
+
+def _lock_messages_nowait(pg_dsn: str, pg_schema: str) -> bool:
+    with psycopg.connect(pg_dsn, autocommit=False) as conn:
+        _set_search_path(conn, pg_schema)
+        with conn.cursor() as cur:
+            try:
+                cur.execute("LOCK TABLE messages IN ROW EXCLUSIVE MODE NOWAIT")
+            except psycopg.errors.LockNotAvailable:
+                conn.rollback()
+                return False
+        conn.rollback()
+        return True
 
 
 def test_postgres_rename_notifies_old_and_new_waiters(
@@ -55,6 +93,79 @@ def test_postgres_rename_notifies_old_and_new_waiters(
         old_queue.close()
         new_queue.close()
         other_queue.close()
+
+
+def test_postgres_prepare_rename_locks_meta_before_messages(
+    pg_plugin: BackendPlugin,
+) -> None:
+    runner = _RecordingRunner()
+
+    pg_plugin.prepare_queue_operation(runner, operation="rename", queue="old")
+
+    assert runner.calls == [
+        (pg_plugin.sql.LOCK_LAST_TS_ROW, True),
+        (pg_plugin.sql.LOCK_RENAME_SCOPE, False),
+    ]
+
+
+def test_postgres_prepare_rename_waits_for_meta_before_messages_lock(
+    pg_core: BrokerCore,
+    pg_dsn: str,
+    pg_schema: str,
+    pg_plugin: BackendPlugin,
+) -> None:
+    pg_core.write("old", "payload")
+    rename_runner = PostgresRunner(pg_dsn, schema=pg_schema)
+    prepare_started = threading.Event()
+    prepare_returned = threading.Event()
+    release_prepare = threading.Event()
+    errors: list[BaseException] = []
+
+    def run_prepare() -> None:
+        try:
+            rename_runner.begin_immediate()
+            prepare_started.set()
+            pg_plugin.prepare_queue_operation(
+                rename_runner,
+                operation="rename",
+                queue="old",
+            )
+            prepare_returned.set()
+            release_prepare.wait(timeout=3.0)
+            rename_runner.rollback()
+        except BaseException as exc:
+            errors.append(exc)
+            with contextlib.suppress(Exception):
+                rename_runner.rollback()
+
+    try:
+        with psycopg.connect(pg_dsn, autocommit=False) as conn:
+            _set_search_path(conn, pg_schema)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT last_ts FROM meta WHERE singleton = TRUE FOR UPDATE"
+                )
+
+            thread = threading.Thread(target=run_prepare, daemon=True)
+            thread.start()
+            assert prepare_started.wait(timeout=3.0)
+
+            deadline = time.monotonic() + 0.5
+            while time.monotonic() < deadline:
+                assert not prepare_returned.is_set()
+                assert _lock_messages_nowait(pg_dsn, pg_schema)
+                time.sleep(0.01)
+
+            conn.rollback()
+            assert prepare_returned.wait(timeout=3.0)
+            release_prepare.set()
+            thread.join(timeout=3.0)
+            assert not thread.is_alive()
+
+        assert errors == []
+    finally:
+        release_prepare.set()
+        rename_runner.shutdown()
 
 
 def test_postgres_rename_waits_for_write_like_table_lock(

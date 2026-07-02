@@ -854,6 +854,65 @@ class TestQueueWatcher(WatcherTestBase):
             assert msg == f"msg{i + 50:03d}"
             assert ts > ts_mid
 
+    def test_after_timestamp_filters_consume_single_message_drain(
+        self, broker, broker_target
+    ):
+        """Consume mode must not claim rows at or before the checkpoint."""
+        broker.write("test_queue", "old-1")
+        broker.write("test_queue", "boundary")
+        boundary_ts = list(broker.peek_generator("test_queue"))[-1][1]
+        broker.write("test_queue", "new-1")
+
+        collector = MessageCollector()
+        watcher = QueueWatcher(
+            "test_queue",
+            collector.handler,
+            db=broker_target,
+            peek=False,
+            after_timestamp=boundary_ts,
+        )
+
+        try:
+            watcher._drain_queue()
+        finally:
+            watcher.stop(join=False)
+
+        messages = collector.get_messages()
+        assert len(messages) == 1
+        assert messages[0][0] == "new-1"
+        assert messages[0][1] > boundary_ts
+        remaining = list(broker.peek_generator("test_queue", with_timestamps=False))
+        assert remaining == ["old-1", "boundary"]
+
+    def test_after_timestamp_filters_consume_batch_drain(self, broker, broker_target):
+        """Batch consume mode must use the same exclusive after filter."""
+        broker.write("test_queue", "old-1")
+        broker.write("test_queue", "boundary")
+        boundary_ts = list(broker.peek_generator("test_queue"))[-1][1]
+        broker.write("test_queue", "new-1")
+        broker.write("test_queue", "new-2")
+
+        collector = MessageCollector()
+        watcher = QueueWatcher(
+            "test_queue",
+            collector.handler,
+            db=broker_target,
+            peek=False,
+            after_timestamp=boundary_ts,
+            batch_processing=True,
+        )
+
+        try:
+            watcher._drain_queue()
+        finally:
+            watcher.stop(join=False)
+
+        messages = collector.get_messages()
+        assert [body for body, _ in messages] == ["new-1", "new-2"]
+        assert all(ts > boundary_ts for _, ts in messages)
+        remaining = list(broker.peek_generator("test_queue", with_timestamps=False))
+        assert remaining == ["old-1", "boundary"]
+
 
 class TestPollingStrategy:
     """Test polling strategy behavior."""

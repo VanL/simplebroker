@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Fixed
+- `watch --after` now applies its strict checkpoint filter in consume mode, not
+  only peek mode. Consume-mode watchers no longer claim and deliver messages at
+  or before the checkpoint boundary.
+
+### simplebroker-pg
+- `rename_queue()` now takes the singleton meta row before the `messages` table,
+  matching writer and broadcast lock order. This avoids a retryable `40P01`
+  deadlock when aliases are retargeted during a concurrent write.
 
 ## [4.10.0] - 2026-07-02
 ### Fixed
