@@ -240,29 +240,25 @@ def test_cleanup_with_custom_location(tmp_path):
     assert str(custom_db_path) in err
 
 
-def test_cleanup_exits_before_commands(workdir):
-    """Test that cleanup exits without processing commands."""
-    # This should cleanup and NOT write a message
+def test_cleanup_with_command_is_rejected(workdir):
+    """--cleanup combined with a command errors before anything runs.
+
+    The historical behavior ran the cleanup and silently dropped the
+    command; it is now rejected loudly, matching the --status/--vacuum
+    guards.  Either way, the command must never execute.
+    """
     rc, out, err = run_cli("--cleanup", "write", "test", "message", cwd=workdir)
 
-    assert rc == 0
-    assert out == ""
-    assert "Database cleaned up" in err or "Database not found" in err
+    assert rc == 1
+    assert "--cleanup cannot be used with commands" in err
 
-    # Verify no database was created (write command was not executed)
-    db_path = workdir / ".broker.db"
+    # Neither the cleanup nor the write ran.
     if _uses_sqlite_backend():
+        db_path = workdir / ".broker.db"
         assert not db_path.exists()
 
-    # Double-check by trying to read - should get empty queue error
-    if _uses_sqlite_backend():
-        rc, _, _ = run_cli("read", "test", cwd=workdir)
-        assert rc == 2  # EXIT_QUEUE_EMPTY
-    else:
-        # On PG, the schema was dropped by --cleanup, so read fails with
-        # "schema does not exist" (rc=1), not EXIT_QUEUE_EMPTY (rc=2).
-        rc, _, _ = run_cli("read", "test", cwd=workdir)
-        assert rc in (1, 2)
+    rc, _, _ = run_cli("read", "test", cwd=workdir)
+    assert rc == 2  # EXIT_QUEUE_EMPTY -- nothing was written
 
 
 @pytest.mark.sqlite_only
