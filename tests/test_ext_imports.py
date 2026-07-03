@@ -77,6 +77,7 @@ def test_ext_all_exports():
         "get_backend_plugin",
         "TimestampGenerator",
         "BrokerError",
+        "DatabaseError",
         "OperationalError",
         "IntegrityError",
         "DataError",

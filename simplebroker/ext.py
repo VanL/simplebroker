@@ -37,6 +37,7 @@ from ._backend_plugins import (
 )
 from ._exceptions import (
     BrokerError,
+    DatabaseError,
     DataError,
     IntegrityError,
     MessageError,
@@ -77,6 +78,7 @@ __all__ = [
     "default_error_handler",
     # Exceptions
     "BrokerError",
+    "DatabaseError",
     "OperationalError",
     "IntegrityError",
     "DataError",

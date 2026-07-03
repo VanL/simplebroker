@@ -1,4 +1,13 @@
-"""Command implementations for SimpleBroker CLI using Queue API."""
+"""Command implementations for SimpleBroker CLI using Queue API.
+
+Public embedding surface. ``simplebroker.commands`` exposes the CLI-equivalent
+operations as importable functions (import path ``simplebroker.commands``).
+Each ``cmd_*`` function has print-to-stdout, exit-code-returning semantics
+matching the CLI; ``parse_exact_message_id`` parses an exact 19-digit message
+ID. The names in ``__all__`` are stable under the same compatibility policy as
+the package's public exports. See the README "Command layer" subsection for
+usage and the ``DatabaseError`` note.
+"""
 
 import json
 import sys
@@ -1248,6 +1257,12 @@ __all__ = [
     "cmd_watch",
     "cmd_init",
     "cmd_status",
+    "cmd_alias_list",
+    "cmd_alias_add",
+    "cmd_alias_remove",
+    "cmd_rename",
+    "cmd_dump",
+    "cmd_load",
     "parse_exact_message_id",
 ]
 

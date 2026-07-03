@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Added
+- `simplebroker.commands` is now documented public embedding surface: the
+  programmatic CLI equivalent (each `cmd_*` prints to stdout and returns an exit
+  code). Its `__all__` is completed to all 19 `cmd_*` functions plus
+  `parse_exact_message_id` (the previous list omitted `cmd_alias_list`,
+  `cmd_alias_add`, `cmd_alias_remove`, `cmd_rename`, `cmd_dump`, `cmd_load`).
+- `DatabaseError` is now re-exported from `simplebroker.ext`. It is the base
+  exception class embedders and both first-party extensions must catch for
+  storage failures; this narrowly overrides the earlier "extension seam is
+  documentation only" decision for exception-handling surface.
+
 ### Fixed
 - Fork-safety guards now cover five previously-unguarded core entry points
   (`generate_timestamp`, `get_cached_last_timestamp`, `refresh_last_timestamp`,

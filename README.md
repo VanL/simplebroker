@@ -1242,6 +1242,40 @@ application needs its own environment namespace, translate those values into a
 config dict and pass it through `resolve_config()`; avoid importing
 `simplebroker._constants` or guessing database paths.
 
+### Command layer
+
+`simplebroker.commands` is supported public embedding surface: the programmatic
+equivalent of the CLI. Each `cmd_*` function mirrors one CLI subcommand — it
+prints to stdout and returns an integer exit code (`0` success, `1` error, `2`
+not found / queue empty; `124` for a watch timeout) rather than raising for
+expected outcomes. Import them directly and drive the broker without shelling
+out:
+
+```python
+from simplebroker.commands import cmd_write, cmd_read, cmd_list
+
+db = "/srv/myapp/.myapp/broker.db"
+
+cmd_write(db, "jobs", "render invoice")   # -> 0
+rc = cmd_read(db, "jobs")                 # prints the message, returns 0 (or 2 if empty)
+cmd_list(db)                              # prints queue names, returns 0
+```
+
+The names in `simplebroker.commands.__all__` are stable under the same
+compatibility policy as the package's other public exports.
+
+`DatabaseError` (the base class your error handling must catch for storage
+failures) is importable from `simplebroker.ext`:
+
+```python
+from simplebroker.ext import DatabaseError
+```
+
+This narrowly overrides the earlier "extension seam is documentation only, no
+exports are added" decision: `DatabaseError` is error-handling surface that both
+first-party extensions and any embedder need to catch, not backend-author
+surface. Nothing else is promoted.
+
 ## Performance & Tuning
 
 - **Throughput**: 1000+ messages/second on typical hardware
