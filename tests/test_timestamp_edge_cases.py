@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from simplebroker import open_broker, target_for_directory
+from simplebroker._backend_plugins import BACKEND_API_VERSION
 from simplebroker._exceptions import IntegrityError, TimestampError
 from simplebroker._runner import SQLRunner
 from simplebroker._timestamp import TimestampGenerator
@@ -20,6 +21,7 @@ class AtomicLastTimestampPlugin:
 
     name = "atomic-test"
     sql = None
+    backend_api_version = BACKEND_API_VERSION
     schema_version = 1
     is_direct_backend = True
 

@@ -23,8 +23,12 @@ connection leasing), ``simplebroker._message_insert`` /
 ``simplebroker._message_search``, and private validators in
 ``simplebroker.db``. Those private modules may change in any release.
 The first-party extensions absorb this through lockstep version pins
-maintained by the release tooling. Third-party backend authors must pin
-an exact simplebroker version and re-verify on every upgrade.
+maintained by the release tooling and a code-level ``backend_api_version``
+handshake that is checked during backend resolution. The handshake is not stored
+in broker databases or backend metadata. Third-party backend extensions are
+welcome as proposed PRs or maintained packages, but authors must pin an exact
+simplebroker version and re-verify on every upgrade until there is a stable
+standalone backend SDK.
 """
 
 from ._backend_plugins import (

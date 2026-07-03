@@ -18,6 +18,7 @@ import warnings
 import pytest
 
 from simplebroker import helpers
+from simplebroker._backend_plugins import BACKEND_API_VERSION
 from simplebroker._exceptions import OperationalError, TimestampError
 from simplebroker._timestamp import TimestampGenerator
 from simplebroker.db import BrokerDB
@@ -290,6 +291,7 @@ class _LockedAdvancePlugin:
 
     name = "locked-advance-stub"
     sql = None
+    backend_api_version = BACKEND_API_VERSION
     schema_version = 1
     is_direct_backend = True
 

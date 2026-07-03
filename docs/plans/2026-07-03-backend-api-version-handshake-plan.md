@@ -18,16 +18,19 @@ and the first-party backend extension packages:
 - `simplebroker-redis`
 
 These extensions are first-party components shipped as separate distributions
-so the core package can stay dependency-free. They are not a promised
-third-party backend SDK. The current artifacts make that easy to misread,
+so the core package can stay dependency-free. Third-party backend extensions are
+welcome as proposed PRs or maintained packages, but there is not yet a promised
+stable standalone backend SDK. The current artifacts make that easy to misread,
 because the repo exposes a backend entry-point group and documents backend
 plugins without a clear "first-party seam, exact-pin if external" warning.
 
-The concrete bug is packaging compatibility:
+The concrete bug at plan-writing time was packaging compatibility: older
+first-party extension releases allowed installation with future core releases.
+The 5.0 release branch fixes that by making the current package floors explicit:
 
 ```text
-simplebroker-pg 2.5.0 declares:    simplebroker>=4.10.0
-simplebroker-redis 2.7.0 declares: simplebroker>=4.10.0
+simplebroker-pg 3.0.0 declares:    simplebroker>=5.0.0
+simplebroker-redis 3.0.0 declares: simplebroker>=5.0.0
 ```
 
 Those floor dependencies let `pip` legally install an old extension with a
@@ -47,10 +50,8 @@ core refuses to load a backend plugin unless the values are exactly equal
 
 It also creates the mechanism for the other direction, "new extension + old
 core", by requiring extension dependency floors and release-tooling checks to
-move together with future incompatible backend API bumps. For API v1, the
-existing seam baseline is `simplebroker>=4.10.0`; adding the handshake field
-does not itself make the extensions incompatible with 4.10.x because older
-cores ignore unknown plugin attributes.
+move together with backend API bumps. For API v1 in the 5.0 release line, the
+minimum supported core is `simplebroker>=5.0.0`.
 
 ## Non-goals
 
@@ -60,9 +61,16 @@ cores ignore unknown plugin attributes.
 - No narrowing of the wide backend protocol.
 - No generalized test harness for arbitrary third-party backends.
 - No new runtime dependency.
-- No change to stored data schema versions.
-- No version-number release bump in this implementation PR. Release version
-  bumps happen through the existing release process.
+- No database-level state, schema migration, metadata column, Redis/Valkey key,
+  dump/load field, or stored data schema-version change. `BACKEND_API_VERSION`
+  is a Python package compatibility check only.
+
+Implementation amendment after plan review: the maintainer requested a major
+version bump in the same branch. Apply it mechanically to all three packages:
+`simplebroker` 5.0.0, `simplebroker-pg` 3.0.0, and `simplebroker-redis` 3.0.0.
+Raise the first-party extension floors to `simplebroker>=5.0.0`; keep
+`BACKEND_API_MIN_CORE_VERSION[1] = "5.0.0"` so release tooling and package
+metadata enforce the same minimum.
 
 YAGNI rule: if a change starts looking like a plugin framework, stop. This PR
 is a compatibility tripwire and documentation correction.
@@ -85,7 +93,7 @@ Important files:
 | `bin/release.py` | Release helper. It already synchronizes root extras; extend that pattern for backend API version checks. |
 | `tests/test_backend_plugin_resolution.py` | Existing tests for entry-point resolution and plugin capability validation. Most new core tests belong here. |
 | `tests/test_release_script.py` | Existing tests for release helper mechanics. New release guard tests belong here. |
-| `README.md` | Current "Advanced: External Backend Plugins" section oversells the seam. Revise it. |
+| `README.md` | Current backend extension section can oversell the seam. Revise it. |
 | `simplebroker/ext.py` | Public extension surface docstring. Add one intent line and backend API warning. |
 | `CHANGELOG.md` | Add `[Unreleased]` entries. |
 
@@ -120,6 +128,17 @@ _ensure_backend_plugin_capabilities(plugin)
 ```
 
 The new backend API validation must run before that shape validation.
+
+Important blast radius:
+
+- `_ensure_backend_plugin_capabilities()` is called by `get_backend_plugin()` for
+  built-in SQLite and entry-point plugins.
+- It is also called by `resolve_runner_backend_plugin()`, which is used by
+  connection setup and timestamp resolution paths. At plan-writing time, inspect
+  `simplebroker/db.py` and `simplebroker/_timestamp.py` before editing.
+- This is intentional: every backend resolver route must enforce the same seam.
+  The check is a tiny attribute read and integer comparison, so the hot-path cost
+  is negligible. Do not describe or implement it as entry-point load-only.
 
 ## Engineering rules
 
@@ -173,7 +192,11 @@ plugin shape is valid
 get_backend_plugin(name) returns plugin
 ```
 
-Mismatch:
+This is code-level only. `backend_api_version` must exist as Python constants
+and class attributes. It must not be written to SQLite meta tables, Postgres
+meta tables, Redis/Valkey keys, dump/load data, or any migration path.
+
+Mismatch, illustrative future example:
 
 ```text
 simplebroker-pg was built against backend API v1 but simplebroker 4.11.0
@@ -200,7 +223,7 @@ Missing or non-integer plugin field:
 Backend plugin 'dummy' must declare integer backend_api_version.
 ```
 
-Entry-point import failure:
+Entry-point import failure, illustrative future example:
 
 ```text
 Backend plugin 'postgres' could not be loaded under simplebroker 4.11.0
@@ -236,10 +259,22 @@ get_backend_plugin(name)
               |
               +-- _ensure_backend_api_version(plugin)
               +-- validate SQL namespace or direct-core shape
+
+resolve_runner_backend_plugin(runner, explicit_plugin=None, fallback_plugin=None)
+  |
+  +-- explicit plugin, BackendAwareRunner.backend_plugin, fallback plugin,
+      or get_backend_plugin("sqlite")
+  +-- _ensure_backend_plugin_capabilities(plugin)
+        |
+        +-- _ensure_backend_api_version(plugin)
+        +-- validate SQL namespace or direct-core shape
 ```
 
 Do not add a second validation path. The handshake belongs in the existing
-capability validation path so every resolver route gets it.
+capability validation path so every resolver route gets it. This means local
+test doubles used with `DBConnection`, `Queue`, timestamp helpers, or explicit
+runner resolution need `backend_api_version`, even when they are not loaded
+through entry points.
 
 ## Bite-sized tasks
 
@@ -264,7 +299,9 @@ Checklist:
 - [ ] Confirm `_ensure_backend_plugin_capabilities()` is still the shared validation path.
 - [ ] Confirm PG and Redis plugin classes still sit in `plugin.py`.
 - [ ] Confirm extension pyprojects still declare `simplebroker>=...`.
-- [ ] Confirm the README still has "Advanced: External Backend Plugins".
+- [ ] Confirm the README has the backend extension section to revise.
+- [ ] Confirm current `_ensure_backend_plugin_capabilities()` call sites with:
+  `rg -n "_ensure_backend_plugin_capabilities\\(" simplebroker tests extensions -g '*.py'`
 - [ ] Run `git status --short` and protect unrelated work.
 
 Expected current dirty state at plan-writing time:
@@ -328,6 +365,15 @@ Write these failing tests before production code:
   - Dummy plugin sets `backend_api_version = BACKEND_API_VERSION + 1`.
   - Assert message includes both versions and the upgrade/pin remedy.
 
+- [ ] `test_first_party_backend_api_mismatch_mentions_package_and_core_version`
+  - Use a fake entry point named `postgres` whose plugin has
+    `name = "postgres"` and `backend_api_version = 0`.
+  - Assert the error includes `postgres`, `simplebroker-pg`,
+    `SIMPLEBROKER_VERSION`, both backend API versions, and the upgrade/pin
+    remedy.
+  - This test exists because dummy plugins are allowed to omit package names;
+    first-party backends are not.
+
 - [ ] `test_external_backend_plugin_non_integer_backend_api_version_is_rejected`
   - Dummy plugin sets `backend_api_version = "1"`.
   - Assert message says it must be an integer.
@@ -344,6 +390,13 @@ Write these failing tests before production code:
   - `get_backend_plugin("dummy")` raises `RuntimeError`.
   - Assert message includes `dummy`, `simplebroker`, `backend API`, original
     error text, and remedy.
+
+- [ ] `test_first_party_entry_point_load_failure_mentions_package`
+  - Use a tiny fake entry point named `postgres` whose `load()` raises
+    `ImportError("cannot import name 'BackendPlugin'")`.
+  - Assert message includes `postgres`, `simplebroker-pg`,
+    `SIMPLEBROKER_VERSION`, `BACKEND_API_VERSION`, original error text, and
+    remedy.
 
 Red run:
 
@@ -368,15 +421,22 @@ Secondary file:
 Implementation steps:
 
 - [ ] Import `Final` from `typing` if not already imported.
+- [ ] Import the local package version for diagnostics:
+  `from ._constants import __version__ as SIMPLEBROKER_VERSION`.
 - [ ] Add `BACKEND_API_VERSION: Final[int] = 1` near
   `BACKEND_ENTRY_POINT_GROUP`.
+- [ ] Add a deterministic first-party package-name mapping near the constants:
+  `FIRST_PARTY_BACKEND_PACKAGES: Final[dict[str, str]] = {"postgres": "simplebroker-pg", "redis": "simplebroker-redis"}`.
 - [ ] Add `backend_api_version: int` to `BackendPlugin` directly beside
   `schema_version`.
 - [ ] Update the `BackendPlugin` docstring with the distinction:
   - `schema_version` versions stored data.
   - `backend_api_version` versions the Python seam between core and backend.
+  - Changing `backend_api_version` must not change stored database schema.
 - [ ] Add helper `_plugin_display_name(plugin: object) -> str` if it keeps error
   messages DRY.
+- [ ] Add helper `_backend_package_hint(name: str) -> str` or equivalent if it
+  keeps the mismatch and load-failure messages DRY.
 - [ ] Add helper `_ensure_backend_api_version(plugin: object) -> None`.
 - [ ] Call `_ensure_backend_api_version(plugin)` as the first line of
   `_ensure_backend_plugin_capabilities()`.
@@ -387,6 +447,11 @@ Do not:
 
 - Do not put version ranges in the protocol.
 - Do not make `backend_api_version` optional.
+- Do not modify `SCHEMA_VERSION`, `POSTGRES_SCHEMA_VERSION`, or
+  `REDIS_SCHEMA_VERSION`.
+- Do not add `backend_api_version` to SQLite, Postgres, or Redis metadata.
+- Do not add migrations, dump/load fields, SQL columns, Lua keys, or stored
+  config for this handshake.
 - Do not catch broad exceptions around shape validation. Only entry-point
   loading needs wrapping.
 - Do not special-case SQLite out of the handshake.
@@ -397,6 +462,8 @@ Suggested helper shape:
 def _ensure_backend_api_version(plugin: object) -> None:
     plugin_name = getattr(plugin, "name", "<unknown>")
     plugin_version = getattr(plugin, "backend_api_version", None)
+    package_name = FIRST_PARTY_BACKEND_PACKAGES.get(str(plugin_name))
+    package_context = f" ({package_name})" if package_name is not None else ""
     if type(plugin_version) is not int:
         raise RuntimeError(
             f"Backend plugin '{plugin_name}' must declare integer "
@@ -404,18 +471,12 @@ def _ensure_backend_api_version(plugin: object) -> None:
         )
     if plugin_version != BACKEND_API_VERSION:
         raise RuntimeError(
-            f"Backend plugin '{plugin_name}' was built against backend API "
-            f"v{plugin_version} but simplebroker {__version__} provides "
-            f"backend API v{BACKEND_API_VERSION}; upgrade the backend "
-            "extension, or pin simplebroker to a compatible release"
+            f"Backend plugin '{plugin_name}'{package_context} was built "
+            f"against backend API v{plugin_version} but simplebroker "
+            f"{SIMPLEBROKER_VERSION} provides backend API "
+            f"v{BACKEND_API_VERSION}; upgrade the backend extension, or pin "
+            "simplebroker to a compatible release"
         )
-```
-
-For the installed core version in diagnostics, import the local constant in
-`simplebroker/_backend_plugins.py`:
-
-```python
-from ._constants import __version__ as SIMPLEBROKER_VERSION
 ```
 
 `simplebroker._constants` does not import `_backend_plugins`, so this does not
@@ -453,22 +514,25 @@ Implementation steps:
 - [ ] Wrap `entry_point.load()` and plugin construction in `try/except Exception`.
 - [ ] Re-raise `RuntimeError` with actionable context.
 - [ ] Chain the original exception with `from exc`.
-- [ ] Include the backend entry-point name and original exception text.
+- [ ] Include the backend entry-point name, first-party package hint when known,
+  installed core version, backend API version, and original exception text.
 - [ ] Do not wrap the deliberate validation errors after plugin construction.
   Missing/mismatched `backend_api_version` should keep their specific messages.
 
 Suggested structure:
 
 ```python
+package_name = FIRST_PARTY_BACKEND_PACKAGES.get(name)
+package_context = f" ({package_name})" if package_name is not None else ""
 try:
     loaded = entry_point.load()
     plugin = loaded() if callable(loaded) else loaded
 except Exception as exc:
     raise RuntimeError(
-        f"Backend plugin '{name}' could not be loaded under simplebroker "
-        f"{SIMPLEBROKER_VERSION} backend API v{BACKEND_API_VERSION}: {exc}. "
-        "Upgrade the backend extension, or pin simplebroker to a compatible "
-        "release."
+        f"Backend plugin '{name}'{package_context} could not be loaded under "
+        f"simplebroker {SIMPLEBROKER_VERSION} backend API "
+        f"v{BACKEND_API_VERSION}: {exc}. Upgrade the backend extension, or "
+        "pin simplebroker to a compatible release."
     ) from exc
 ```
 
@@ -492,7 +556,9 @@ Primary files:
 
 Implementation steps:
 
-- [ ] Add `backend_api_version = 1` beside `schema_version`.
+- [ ] Add `backend_api_version = 1` beside `schema_version` as a class-level
+  Python attribute only. "Beside" means source-code proximity, not a database
+  schema change.
 - [ ] Keep it a literal integer or extension-local constant.
 - [ ] Do not write `from simplebroker._backend_plugins import BACKEND_API_VERSION`
   and do not assign `backend_api_version = BACKEND_API_VERSION`.
@@ -547,7 +613,7 @@ later backend CI gate. Do not fake Redis just to check a class attribute.
 Primary search:
 
 ```bash
-rg -n "schema_version\\s*=" tests simplebroker extensions -g '*.py'
+rg -n "schema_version\\s*=|sql\\s*=|is_direct_backend|BackendAwareRunner|resolve_runner_backend_plugin|class .*Plugin|RecordingPlugin|DummyPlugin" tests simplebroker extensions -g '*.py'
 ```
 
 Expected current locations include:
@@ -564,6 +630,20 @@ Implementation steps:
 
 - [ ] For each fake plugin that flows through `_ensure_backend_plugin_capabilities()`,
   add `backend_api_version = BACKEND_API_VERSION`.
+- [ ] Do not limit the sweep to classes that already set `schema_version`.
+  Some fakes reach `resolve_runner_backend_plugin()` through `DBConnection`,
+  `Queue`, or timestamp paths and will now fail before their old assertion point.
+- [ ] In `tests/test_backend_plugin_resolution.py`, explicitly update:
+  - `test_external_backend_plugin_resolves_via_entry_point`: matching dummy
+    plugin gets `backend_api_version = BACKEND_API_VERSION`.
+  - `test_external_backend_plugin_with_invalid_sql_namespace_is_rejected`:
+    dummy plugin also gets `backend_api_version = BACKEND_API_VERSION` so the
+    test still reaches SQL namespace validation. Do not "fix" this by moving
+    API validation after SQL validation.
+  - `test_non_aware_runner_with_resolved_target_uses_target_plugin`:
+    `RecordingPlugin` gets `backend_api_version = BACKEND_API_VERSION` because
+    this path validates through `resolve_runner_backend_plugin()`, not entry
+    points.
 - [ ] Prefer importing `BACKEND_API_VERSION` in tests over hard-coding `1`, except
   for the deliberate source-text guard in extension plugin files.
 - [ ] Do not add the attribute to objects that are not backend plugins and never
@@ -588,10 +668,10 @@ Primary files:
 
 Why this task exists:
 
-The load-time handshake catches "future core + old extension" at runtime. Old
-cores do not know about `backend_api_version`, so future extensions that depend
-on a newer seam must also raise their `simplebroker>=...` floor. Release
-tooling needs to enforce that relationship.
+The runtime handshake catches "future core + old extension" when a plugin is
+resolved. Old cores do not know about `backend_api_version`, so future
+extensions that depend on a newer seam must also raise their
+`simplebroker>=...` floor. Release tooling needs to enforce that relationship.
 
 Implement the smallest mechanical release guard. Do not create a general package
 metadata framework.
@@ -619,7 +699,9 @@ Implementation plan:
 - [ ] Add `require_backend_api_versions_match() -> None`.
 - [ ] Add `require_extension_core_floors_for_backend_api() -> None`.
 - [ ] Add `require_backend_api_release_invariants(targets: tuple[ReleaseTarget, ...]) -> None`
-  that calls both helpers when any selected target is `core`, `pg`, or `redis`.
+  that calls both helpers. Today the release targets are only `core`, `pg`, and
+  `redis`, so filtering by target buys nothing. Keep the `targets` parameter
+  only if it helps future-proof error messages or tests.
 - [ ] Call `require_backend_api_release_invariants(...)` in both release entry
   paths:
   - `_run_batch_release(...)`: after `release_targets = _candidate_targets(...)`
@@ -632,23 +714,20 @@ Implementation plan:
 Keep floor policy explicit and boring:
 
 ```text
-For API v1, PG and Redis extension floors must be at least 4.10.0, the current
-documented seam baseline. When BACKEND_API_VERSION is bumped in the future,
-the mapping must be extended to the first core version that contains that
-incompatible seam change.
+For API v1, PG and Redis extension floors must be at least 5.0.0, the first
+release that enforces the handshake. When `BACKEND_API_VERSION` is bumped in
+the future, the mapping must be extended to the first core version that contains
+that incompatible seam change.
 ```
 
 Define a tiny mapping in `bin/release.py`:
 
 ```python
-BACKEND_API_MIN_CORE_VERSION: Final[dict[int, str]] = {1: "4.10.0"}
+BACKEND_API_MIN_CORE_VERSION: Final[dict[int, str]] = {1: "5.0.0"}
 ```
 
-Do not map API v1 to `4.11.0` just because the handshake ships after 4.10.0.
-That would force extension pyproject floors above the root package version in
-this implementation PR and can break local resolver behavior before the release
-version bump happens. API v1 names the existing seam; future incompatible seam
-changes get API v2, API v3, and so on.
+Do not leave API v1 mapped to a pre-5.0 core release. The release policy is that
+first-party backend packages declaring this handshake require the 5.0 core line.
 
 Tests in `tests/test_release_script.py`:
 
@@ -660,9 +739,10 @@ Tests in `tests/test_release_script.py`:
 - [ ] `test_extension_core_floor_guard_accepts_required_floor`
 - [ ] `test_extension_core_floor_guard_rejects_too_low_floor`
 - [ ] `test_extension_core_floor_guard_compares_versions_numerically`
-  - Use `4.10.0` as required and `4.9.9` as too low.
+  - Use a two-digit minor example such as required `5.10.0` and too-low
+    `5.9.9`.
   - This catches the common bug of comparing version strings lexicographically.
-- [ ] `test_backend_api_release_invariants_run_for_core_pg_and_redis_targets`
+- [ ] `test_backend_api_release_invariants_run_for_release_paths`
 - [ ] `test_backend_api_release_invariants_do_not_depend_on_skip_checks`
 
 Use `tmp_path` files for reader tests. Do not patch the real repo files in
@@ -676,7 +756,7 @@ uv run pytest tests/test_release_script.py -n0 -v
 
 Then implement and rerun.
 
-### Task 7: Confirm extension dependency floors
+### Task 7: Update extension dependency floors for the major release bump
 
 Primary files:
 
@@ -684,11 +764,11 @@ Primary files:
 - `extensions/simplebroker_redis/pyproject.toml`
 
 Confirm both extension floors satisfy `BACKEND_API_MIN_CORE_VERSION[1]`, which
-is `simplebroker>=4.10.0`.
+is `simplebroker>=5.0.0`.
 
 ```toml
 dependencies = [
-    "simplebroker>=4.10.0",
+    "simplebroker>=5.0.0",
     "psycopg[binary]>=3",
     "psycopg-pool>=3.1",
 ]
@@ -698,17 +778,16 @@ and:
 
 ```toml
 dependencies = [
-    "simplebroker>=4.10.0",
+    "simplebroker>=5.0.0",
     "redis>=5",
 ]
 ```
 
-No pyproject floor edit is expected for API v1 if the files already match the
-examples above. Future API bumps must update `BACKEND_API_MIN_CORE_VERSION`,
-the extension floors, and release-helper tests in the same PR.
+Future API bumps must update `BACKEND_API_MIN_CORE_VERSION`, the extension
+floors, and release-helper tests in the same PR.
 
-Do not update package `version = ...` fields here. This plan is not a release
-commit.
+Update package `version = ...` fields in this branch because the maintainer
+explicitly requested the 5.0/3.0/3.0 major release bump.
 
 ### Task 8: Revise README to stop implying a third-party SDK
 
@@ -718,7 +797,7 @@ Primary file:
 
 Current section:
 
-- `<summary>Advanced: External Backend Plugins</summary>`
+- `<summary>Advanced: First-Party Backend Extensions</summary>`
 
 Problem:
 
@@ -738,7 +817,8 @@ Implementation steps:
 The extension packages (`simplebroker-pg`, `simplebroker-redis`) are
 first-party components shipped separately so the core package stays
 dependency-free. The backend seam is an internal architecture boundary guarded
-by `BACKEND_API_VERSION`, not a stable third-party SDK.
+by `BACKEND_API_VERSION`; third-party extension PRs are welcome, but there is
+not yet a stable standalone backend SDK.
 ```
 
 - [ ] Keep useful end-user install examples.
@@ -779,7 +859,8 @@ Add near the "Authoring a full alternative backend" paragraph:
 ```text
 The first-party extension packages are shipped separately so the core package
 can stay dependency-free. Their backend seam is guarded by
-`BACKEND_API_VERSION`; it is not a stable third-party SDK.
+`BACKEND_API_VERSION`. Third-party backend extensions are welcome as PRs or
+maintained packages, but there is not yet a stable standalone backend SDK.
 ```
 
 Do not re-export `BACKEND_API_VERSION` from `simplebroker.ext` unless a test or
@@ -803,8 +884,8 @@ Suggested entries:
 ### Added
 - Added a backend API version handshake between `simplebroker` core and
   first-party backend extension packages. Backend plugins must now declare
-  `backend_api_version`, and core rejects mismatches at load time with an
-  upgrade-or-pin diagnostic.
+  `backend_api_version`, and core rejects mismatches during backend resolution
+  with an upgrade-or-pin diagnostic.
 
 ### Changed
 - Release tooling now verifies first-party backend extension API versions match
@@ -813,8 +894,8 @@ Suggested entries:
 ### Documented
 - Clarified that `simplebroker-pg` and `simplebroker-redis` are first-party
   extension packages shipped separately for dependency isolation; the backend
-  seam is guarded by `BACKEND_API_VERSION`, not promised as a stable third-party
-  SDK.
+  seam is guarded by `BACKEND_API_VERSION`. Third-party backend extension PRs
+  are welcome, but there is not yet a stable standalone backend SDK.
 ```
 
 If matched-version installs behave the same, do not claim a user-visible
@@ -839,6 +920,17 @@ uv run ruff check simplebroker tests bin extensions/simplebroker_pg/simplebroker
 uv run ruff format --check simplebroker tests bin extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis
 uv run mypy simplebroker bin/release.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis --config-file pyproject.toml
 ```
+
+Run a storage-boundary source audit:
+
+```bash
+rg -n "backend_api_version|BACKEND_API_VERSION" simplebroker extensions bin tests README.md CHANGELOG.md
+```
+
+Every hit must be code, tests, release tooling, or docs for the Python package
+compatibility handshake. There must be no hits in SQL schema strings, migration
+paths, SQLite/Postgres meta-table definitions, Redis Lua scripts, dump/load
+payload formats, or stored config handling.
 
 Run package/backends if available:
 
@@ -866,6 +958,9 @@ The implementing engineer must be able to answer "yes" to every item:
 - [ ] SQLite plugin declares `backend_api_version`.
 - [ ] PG plugin declares a literal `backend_api_version`.
 - [ ] Redis plugin declares a literal `backend_api_version`.
+- [ ] No database schema version constants changed.
+- [ ] No SQLite/Postgres/Redis metadata schema, migration, SQL, Lua, dump/load,
+  or stored config writes `backend_api_version`.
 - [ ] Missing backend API version fails before SQL namespace validation.
 - [ ] Mismatched backend API version fails before any backend connection opens.
 - [ ] Entry-point import failure is wrapped with upgrade/pin context.
@@ -905,9 +1000,10 @@ Round 1 findings while drafting:
   a `BACKEND_API_MIN_CORE_VERSION` mapping and floor checks so future API bumps
   carry their minimum compatible core version mechanically.
 - The initial error-message requirement wanted package names for all plugins.
-  Core only reliably knows the entry-point name at load time. This plan requires
-  backend name always, and first-party package names through an explicit mapping,
-  avoiding fragile metadata lookups for arbitrary third-party distributions.
+  Core only reliably knows the entry-point name during entry-point resolution.
+  This plan requires backend name always, and first-party package names through
+  an explicit mapping, avoiding fragile metadata lookups for arbitrary
+  third-party distributions.
 
 Round 2 findings while checking against the repository:
 
@@ -915,12 +1011,26 @@ Round 2 findings while checking against the repository:
   `_backend_plugins.py` is safe: `_constants` does not import `_backend_plugins`.
   The plan now requires that explicit relative import for diagnostics instead
   of leaving the version source to taste.
-- A bad intermediate draft mapped backend API v1 to `4.11.0`. That was wrong:
-  it would raise extension floors above the current root package version before
-  a release bump, risking resolver failures in local development. The corrected
-  mapping is `{1: "4.10.0"}` because API v1 describes the already-existing
-  backend seam that the current extensions require. Future incompatible seam
-  changes must bump both `BACKEND_API_VERSION` and the minimum-core mapping.
+- A bad intermediate draft mapped backend API v1 to a pre-5.0 core release. That
+  was too permissive for the final 5.0 release policy. The corrected mapping is
+  `{1: "5.0.0"}` so release tooling and extension package floors agree.
+  Future incompatible seam changes must bump both `BACKEND_API_VERSION` and the
+  minimum-core mapping.
 - If source-text tests for literal plugin assignment become brittle, prefer a
   smaller assertion over deleting the invariant. The invariant is real: importing
   the core constant in extension plugin modules defeats the handshake.
+
+Round 3 findings after implementation-review feedback:
+
+- The handshake is intentionally code-level only. It must not be stored in
+  SQLite, Postgres, Redis/Valkey, dump/load payloads, migrations, or schema
+  version constants. The plan now repeats this at non-goals, implementation
+  steps, storage-boundary audit, and invariants because mixing it into database
+  metadata would confuse two different version domains.
+- `_ensure_backend_plugin_capabilities()` also runs through
+  `resolve_runner_backend_plugin()`, not just `get_backend_plugin()`. The plan
+  now calls out the connection and timestamp paths and widens the test-double
+  sweep accordingly.
+- First-party package names must be tested, not just specified. The plan now
+  adds mismatch and load-failure tests that require `simplebroker-pg` for a
+  fake `postgres` entry point.

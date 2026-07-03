@@ -73,7 +73,7 @@ def test_leftover_lockfile_does_not_block_vacuum(workdir: Path) -> None:
     db_path = workdir / "test.db"
     _write_and_claim(db_path)
 
-    # Fresh leftover file (mtime now, younger than BROKER_VACUUM_LOCK_TIMEOUT),
+    # Fresh leftover file (mtime now; the old mtime-staleness window),
     # PID content, but NO flock held -- the SIGKILL-leftover shape.
     lock_path = vacuum_lock_path(db_path)
     lock_path.write_text("999999\n", encoding="utf-8")

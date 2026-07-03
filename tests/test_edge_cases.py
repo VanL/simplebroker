@@ -91,41 +91,31 @@ def test_vacuum_lock_cleanup_after_crash(workdir: Path) -> None:
     assert lock_path.exists()
 
 
-def test_vacuum_lock_timeout_environment_variable(workdir: Path) -> None:
-    """BROKER_VACUUM_LOCK_TIMEOUT is now inert: still parsed, gates nothing.
+def test_vacuum_lock_timeout_key_is_removed(workdir: Path) -> None:
+    """BROKER_VACUUM_LOCK_TIMEOUT was removed in 5.0 (no backwards compat).
 
-    The kernel-released flock made mtime-staleness detection unnecessary, so
-    the timeout no longer influences vacuum at all. This pins that it is still
-    accepted/parsed without error and that adjusting it does not change vacuum
-    behavior.
+    The kernel-released vacuum flock made mtime-staleness detection
+    unnecessary. Guard against reintroduction: the key is absent from config,
+    and setting the env var has no effect on vacuum.
     """
-    from simplebroker.db import _config
+    import os as _os
+    from unittest.mock import patch as _patch
 
-    original_timeout = _config["BROKER_VACUUM_LOCK_TIMEOUT"]
+    from simplebroker._constants import load_config
 
-    # It is parsed to an int (no error) at import time.
-    assert isinstance(int(original_timeout), int)
+    with _patch.dict(_os.environ, {"BROKER_VACUUM_LOCK_TIMEOUT": "0"}):
+        config = load_config()
+    assert "BROKER_VACUUM_LOCK_TIMEOUT" not in config
 
     db_path = workdir / "test.db"
-
     with BrokerDB(str(db_path)) as db:
         for i in range(5):
             db.write("test_queue", f"message{i}")
         db.claim_many("test_queue", limit=100)
 
-    # A tiny timeout value must NOT gate anything: vacuum still proceeds.
-    _config["BROKER_VACUUM_LOCK_TIMEOUT"] = 0
-    try:
+    with _patch.dict(_os.environ, {"BROKER_VACUUM_LOCK_TIMEOUT": "0"}):
         with BrokerDB(str(db_path)) as db:
             db.vacuum()
-    finally:
-        _config["BROKER_VACUUM_LOCK_TIMEOUT"] = original_timeout
-
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    assert cursor.fetchone()[0] == 0
-    conn.close()
 
 
 def _schema_migration_worker(db_path: str, worker_id: int, results: list) -> None:

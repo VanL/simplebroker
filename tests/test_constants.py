@@ -188,7 +188,6 @@ class TestLoadConfig:
             assert config["BROKER_AUTO_VACUUM_INTERVAL"] == 100
             assert config["BROKER_VACUUM_THRESHOLD"] == 0.1  # 10%
             assert config["BROKER_VACUUM_BATCH_SIZE"] == 1000
-            assert config["BROKER_VACUUM_LOCK_TIMEOUT"] == 300
 
             # Watcher settings
             assert config["BROKER_SKIP_IDLE_CHECK"] is False
@@ -303,7 +302,6 @@ class TestLoadConfig:
             "BROKER_AUTO_VACUUM_INTERVAL": "50",
             "BROKER_VACUUM_THRESHOLD": "20",  # 20%
             "BROKER_VACUUM_BATCH_SIZE": "500",
-            "BROKER_VACUUM_LOCK_TIMEOUT": "600",
         }
 
         with patch.dict(os.environ, env_vars):
@@ -313,7 +311,6 @@ class TestLoadConfig:
             assert config["BROKER_AUTO_VACUUM_INTERVAL"] == 50
             assert config["BROKER_VACUUM_THRESHOLD"] == 0.2  # Converted to decimal
             assert config["BROKER_VACUUM_BATCH_SIZE"] == 500
-            assert config["BROKER_VACUUM_LOCK_TIMEOUT"] == 600
 
     def test_watcher_settings(self) -> None:
         """Test watcher-related environment variables."""
@@ -412,7 +409,6 @@ class TestLoadConfig:
             "BROKER_AUTO_VACUUM_INTERVAL",
             "BROKER_VACUUM_THRESHOLD",
             "BROKER_VACUUM_BATCH_SIZE",
-            "BROKER_VACUUM_LOCK_TIMEOUT",
             # Watcher settings
             "BROKER_SKIP_IDLE_CHECK",
             "BROKER_JITTER_FACTOR",

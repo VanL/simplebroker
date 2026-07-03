@@ -3,19 +3,66 @@
 from __future__ import annotations
 
 import threading
-from importlib.metadata import EntryPoint
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 import simplebroker._sql as sqlite_sql
 from simplebroker import Queue
+from simplebroker._backend_plugins import BACKEND_API_VERSION
+from simplebroker._constants import __version__ as SIMPLEBROKER_VERSION
 from simplebroker._runner import SetupPhase
 from simplebroker._targets import ResolvedTarget
 from simplebroker.db import DBConnection
 from simplebroker.ext import BackendAwareRunner, get_backend_plugin
 
 pytestmark = [pytest.mark.shared]
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+class EntryPointStub:
+    def __init__(
+        self, name: str, loaded: Any = None, *, error: BaseException | None = None
+    ):
+        self.name = name
+        self._loaded = loaded
+        self._error = error
+
+    def load(self) -> Any:
+        if self._error is not None:
+            raise self._error
+        return self._loaded
+
+
+class EntryPointsMock(list[EntryPointStub]):
+    def select(self, *, group: str, name: str) -> EntryPointsMock:
+        if group != "simplebroker.backends":
+            return EntryPointsMock()
+        return EntryPointsMock(
+            entry_point for entry_point in self if entry_point.name == name
+        )
+
+
+def _install_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    loaded: Any = None,
+    *,
+    error: BaseException | None = None,
+) -> None:
+    monkeypatch.setattr(
+        "simplebroker._backend_plugins.metadata.entry_points",
+        lambda: EntryPointsMock([EntryPointStub(name, loaded, error=error)]),
+    )
+
+
+class ValidDummyPlugin:
+    name = "dummy"
+    sql = sqlite_sql
+    backend_api_version = BACKEND_API_VERSION
+    schema_version = 1
 
 
 @pytest.mark.sqlite_only
@@ -26,6 +73,7 @@ def test_builtin_sqlite_backend_plugin_resolves() -> None:
     plugin = get_backend_plugin("sqlite")
 
     assert plugin.name == "sqlite"
+    assert plugin.backend_api_version == BACKEND_API_VERSION
     assert plugin.sql is not None
     assert isinstance(plugin.create_runner(":memory:"), SQLiteRunner)
 
@@ -39,98 +87,7 @@ def test_unknown_backend_plugin_raises_clear_error() -> None:
 def test_external_backend_plugin_resolves_via_entry_point(monkeypatch) -> None:
     """Entry-point plugins should be loaded by name."""
 
-    class DummyPlugin:
-        name = "dummy"
-        sql = sqlite_sql
-        schema_version = 1
-
-        def init_backend(self, config, **kwargs):
-            raise NotImplementedError
-
-        def create_runner(self, target: str, **kwargs):  # pragma: no cover - unused
-            raise NotImplementedError
-
-        def initialize_target(self, target: str, **kwargs) -> None:
-            raise NotImplementedError
-
-        def validate_target(self, target: str, **kwargs) -> None:
-            raise NotImplementedError
-
-        def cleanup_target(self, target: str, **kwargs) -> None:
-            raise NotImplementedError
-
-        def check_version(self) -> None:
-            raise NotImplementedError
-
-        def apply_connection_settings(self, conn, **kwargs) -> None:
-            raise NotImplementedError
-
-        def apply_optimization_settings(self, conn, **kwargs) -> None:
-            raise NotImplementedError
-
-        def setup_connection_phase(self, target: str, **kwargs) -> None:
-            raise NotImplementedError
-
-        def initialize_database(self, runner, **kwargs) -> None:
-            raise NotImplementedError
-
-        def meta_table_exists(self, runner) -> bool:
-            raise NotImplementedError
-
-        def migrate_schema(self, runner, **kwargs) -> None:
-            raise NotImplementedError
-
-        def delete_messages(self, runner, *, queue: str | None) -> int:
-            raise NotImplementedError
-
-        def database_size_bytes(self, runner) -> int:
-            raise NotImplementedError
-
-        def get_data_version(self, runner) -> int | None:
-            raise NotImplementedError
-
-        def prepare_queue_operation(
-            self, runner, *, operation: str, queue: str
-        ) -> None:
-            raise NotImplementedError
-
-        def prepare_broadcast(self, runner) -> None:
-            raise NotImplementedError
-
-        def vacuum(self, runner, *, compact: bool, config) -> None:
-            raise NotImplementedError
-
-        def create_activity_waiter(
-            self,
-            *,
-            target: str | None,
-            backend_options=None,
-            runner=None,
-            queue_name: str,
-            stop_event,
-        ):
-            raise NotImplementedError
-
-    class EntryPointsMock(list[EntryPoint]):
-        def select(self, *, group: str, name: str):
-            if group == "simplebroker.backends" and name == "dummy":
-                return self
-            return EntryPointsMock()
-
-    def build_plugin() -> DummyPlugin:
-        return DummyPlugin()
-
-    entry_point = EntryPoint(
-        name="dummy",
-        value="tests.test_backend_plugin_resolution:build_plugin",
-        group="simplebroker.backends",
-    )
-
-    monkeypatch.setattr(
-        "simplebroker._backend_plugins.metadata.entry_points",
-        lambda: EntryPointsMock([entry_point]),
-    )
-    monkeypatch.setitem(globals(), "build_plugin", build_plugin)
+    _install_entry_point(monkeypatch, "dummy", ValidDummyPlugin)
 
     plugin = get_backend_plugin("dummy")
     assert plugin.name == "dummy"
@@ -144,34 +101,163 @@ def test_external_backend_plugin_with_invalid_sql_namespace_is_rejected(
     class DummyPlugin:
         name = "dummy"
         sql = object()
+        backend_api_version = BACKEND_API_VERSION
         schema_version = 1
 
         def init_backend(self, config, **kwargs):
             raise NotImplementedError
 
-    class EntryPointsMock(list[EntryPoint]):
-        def select(self, *, group: str, name: str):
-            if group == "simplebroker.backends" and name == "dummy":
-                return self
-            return EntryPointsMock()
-
-    def build_plugin() -> DummyPlugin:
-        return DummyPlugin()
-
-    entry_point = EntryPoint(
-        name="dummy",
-        value="tests.test_backend_plugin_resolution:build_plugin",
-        group="simplebroker.backends",
-    )
-
-    monkeypatch.setattr(
-        "simplebroker._backend_plugins.metadata.entry_points",
-        lambda: EntryPointsMock([entry_point]),
-    )
-    monkeypatch.setitem(globals(), "build_plugin", build_plugin)
+    _install_entry_point(monkeypatch, "dummy", DummyPlugin)
 
     with pytest.raises(RuntimeError, match="Backend SQL namespace is missing"):
         get_backend_plugin("dummy")
+
+
+def test_external_backend_plugin_missing_backend_api_version_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingVersionPlugin:
+        name = "dummy"
+        sql = sqlite_sql
+        schema_version = 1
+
+    _install_entry_point(monkeypatch, "dummy", MissingVersionPlugin)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        get_backend_plugin("dummy")
+
+    message = str(excinfo.value)
+    assert "dummy" in message
+    assert "backend_api_version" in message
+
+
+def test_external_backend_plugin_with_stale_backend_api_version_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StaleVersionPlugin(ValidDummyPlugin):
+        backend_api_version = 0
+
+    _install_entry_point(monkeypatch, "dummy", StaleVersionPlugin)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        get_backend_plugin("dummy")
+
+    message = str(excinfo.value)
+    assert "dummy" in message
+    assert "backend API v0" in message
+    assert f"backend API v{BACKEND_API_VERSION}" in message
+    assert "upgrade" in message.lower()
+    assert "pin simplebroker" in message
+
+
+def test_external_backend_plugin_with_future_backend_api_version_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    future_version = BACKEND_API_VERSION + 1
+
+    class FutureVersionPlugin(ValidDummyPlugin):
+        backend_api_version = future_version
+
+    _install_entry_point(monkeypatch, "dummy", FutureVersionPlugin)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        get_backend_plugin("dummy")
+
+    message = str(excinfo.value)
+    assert "dummy" in message
+    assert f"backend API v{future_version}" in message
+    assert f"backend API v{BACKEND_API_VERSION}" in message
+    assert "upgrade" in message.lower()
+    assert "pin simplebroker" in message
+
+
+def test_first_party_backend_api_mismatch_mentions_package_and_core_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StalePostgresPlugin(ValidDummyPlugin):
+        name = "postgres"
+        backend_api_version = 0
+
+    _install_entry_point(monkeypatch, "postgres", StalePostgresPlugin)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        get_backend_plugin("postgres")
+
+    message = str(excinfo.value)
+    assert "postgres" in message
+    assert "simplebroker-pg" in message
+    assert SIMPLEBROKER_VERSION in message
+    assert "backend API v0" in message
+    assert f"backend API v{BACKEND_API_VERSION}" in message
+    assert "upgrade" in message.lower()
+    assert "pin simplebroker" in message
+
+
+def test_external_backend_plugin_non_integer_backend_api_version_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StringVersionPlugin(ValidDummyPlugin):
+        backend_api_version = "1"
+
+    _install_entry_point(monkeypatch, "dummy", StringVersionPlugin)
+
+    with pytest.raises(RuntimeError, match="integer backend_api_version"):
+        get_backend_plugin("dummy")
+
+
+def test_external_backend_plugin_bool_backend_api_version_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BoolVersionPlugin(ValidDummyPlugin):
+        backend_api_version = True
+
+    _install_entry_point(monkeypatch, "dummy", BoolVersionPlugin)
+
+    with pytest.raises(RuntimeError, match="integer backend_api_version"):
+        get_backend_plugin("dummy")
+
+
+def test_entry_point_load_failure_gets_actionable_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_entry_point(
+        monkeypatch,
+        "dummy",
+        error=ImportError("cannot import name 'BackendPlugin'"),
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        get_backend_plugin("dummy")
+
+    message = str(excinfo.value)
+    assert "dummy" in message
+    assert "simplebroker" in message
+    assert f"backend API v{BACKEND_API_VERSION}" in message
+    assert "cannot import name 'BackendPlugin'" in message
+    assert "upgrade" in message.lower()
+    assert "pin simplebroker" in message
+
+
+def test_first_party_entry_point_load_failure_mentions_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_entry_point(
+        monkeypatch,
+        "postgres",
+        error=ImportError("cannot import name 'BackendPlugin'"),
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        get_backend_plugin("postgres")
+
+    message = str(excinfo.value)
+    assert "postgres" in message
+    assert "simplebroker-pg" in message
+    assert SIMPLEBROKER_VERSION in message
+    assert f"backend API v{BACKEND_API_VERSION}" in message
+    assert "cannot import name 'BackendPlugin'" in message
+    assert "upgrade" in message.lower()
+    assert "pin simplebroker" in message
 
 
 @pytest.mark.sqlite_only
@@ -233,6 +319,7 @@ def test_non_aware_runner_with_resolved_target_uses_target_plugin(
 
     class RecordingPlugin:
         sql = sqlite_sql
+        backend_api_version = BACKEND_API_VERSION
         schema_version = 1
 
         def __init__(self, name: str) -> None:
@@ -311,3 +398,19 @@ def test_sqlite_plugin_has_init_backend() -> None:
 
     assert "target" in result
     assert "backend_options" in result
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "extensions/simplebroker_pg/simplebroker_pg/plugin.py",
+        "extensions/simplebroker_redis/simplebroker_redis/plugin.py",
+    ],
+)
+def test_first_party_extension_plugins_declare_literal_backend_api_version(
+    relative_path: str,
+) -> None:
+    plugin_source = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
+
+    assert "backend_api_version = 1" in plugin_source
+    assert "backend_api_version = BACKEND_API_VERSION" not in plugin_source

@@ -35,7 +35,7 @@ from typing import Any, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "4.10.0"
+__version__: Final[str] = "5.0.0"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
@@ -479,7 +479,6 @@ _CONFIG_NORMALIZERS: Final[dict[str, Any]] = {
     "BROKER_AUTO_VACUUM_INTERVAL": int,
     "BROKER_VACUUM_THRESHOLD": _parse_vacuum_threshold,
     "BROKER_VACUUM_BATCH_SIZE": int,
-    "BROKER_VACUUM_LOCK_TIMEOUT": int,
     "BROKER_SKIP_IDLE_CHECK": _parse_strict_one_bool,
     "BROKER_JITTER_FACTOR": float,
     "BROKER_INITIAL_CHECKS": int,
@@ -591,12 +590,6 @@ def load_config() -> dict[str, Any]:
             BROKER_VACUUM_BATCH_SIZE (int): Messages to delete per vacuum batch.
                 Default: 1000
                 Larger batches are faster but hold locks longer.
-
-            BROKER_VACUUM_LOCK_TIMEOUT (int): Deprecated and inert.
-                Default: 300 (5 minutes)
-                The vacuum lock now uses a kernel-released advisory flock, so
-                mtime-staleness detection is unnecessary and this value no
-                longer gates anything. Still parsed for config compatibility.
 
         Watcher Settings:
             BROKER_SKIP_IDLE_CHECK (bool): Skip idle queue optimization check.
@@ -717,9 +710,6 @@ def load_config() -> dict[str, Any]:
         / 100,
         "BROKER_VACUUM_BATCH_SIZE": int(
             os.environ.get("BROKER_VACUUM_BATCH_SIZE", "1000"),
-        ),
-        "BROKER_VACUUM_LOCK_TIMEOUT": int(
-            os.environ.get("BROKER_VACUUM_LOCK_TIMEOUT", "300"),
         ),
         # Watcher settings
         "BROKER_SKIP_IDLE_CHECK": os.environ.get("BROKER_SKIP_IDLE_CHECK", "0") == "1",

@@ -30,6 +30,7 @@ class DummyWaiter:
 class RecordingPlugin:
     name = "dummy"
     sql = sqlite_sql
+    backend_api_version = backend_plugins.BACKEND_API_VERSION
     schema_version = 1
     waiter = DummyWaiter()
     calls: list[dict[str, Any]] = []

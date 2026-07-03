@@ -11,7 +11,10 @@ from urllib.parse import quote
 
 import redis
 
-from simplebroker._backend_plugins import ActivityWaiter
+from simplebroker._backend_plugins import (
+    ActivityWaiter,
+    _ensure_backend_api_version,
+)
 from simplebroker._constants import SIMPLEBROKER_MAGIC
 from simplebroker._exceptions import DatabaseError, OperationalError
 
@@ -297,6 +300,7 @@ class RedisBackendPlugin:
     """SimpleBroker backend plugin for Valkey/Redis."""
 
     name = "redis"
+    backend_api_version = 1
     schema_version = REDIS_SCHEMA_VERSION
     sql = None
     is_direct_backend = True
@@ -341,6 +345,12 @@ class RedisBackendPlugin:
         config: Mapping[str, Any] | None = None,
         stop_event: threading.Event | None = None,
     ) -> RedisBrokerCore:
+        # Handshake BEFORE construction: RedisBrokerCore.__init__ opens the
+        # Redis connection, and core-side validation (in
+        # resolve_runner_backend_plugin) only runs later, during timestamp
+        # generator setup. A hand-instantiated or subclassed plugin must fail
+        # the backend API check before any connection is attempted.
+        _ensure_backend_api_version(self)
         runner = self.create_runner(
             target, backend_options=backend_options, config=config
         )
@@ -353,6 +363,8 @@ class RedisBackendPlugin:
         config: Mapping[str, Any] | None = None,
         stop_event: threading.Event | None = None,
     ) -> RedisBrokerCore:
+        # See create_core: validate before the core opens its connection.
+        _ensure_backend_api_version(self)
         return RedisBrokerCore(runner, config=config, stop_event=stop_event)
 
     def initialize_target(

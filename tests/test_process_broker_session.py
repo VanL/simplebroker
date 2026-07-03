@@ -98,6 +98,7 @@ class CountingBackendPlugin:
 
     name = "counting"
     sql = sqlite_backend_plugin.sql
+    backend_api_version = sqlite_backend_plugin.backend_api_version
     schema_version = sqlite_backend_plugin.schema_version
 
     def __init__(self) -> None:

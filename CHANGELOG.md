@@ -6,7 +6,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Migration notes (5.0)
+
+What breaks or changes behavior when upgrading from 4.x, gathered in one
+place; details in the sections below and in the 4.x→5.0 entries:
+
+- **Old backend extension packages are rejected at runtime.** simplebroker
+  5.0 requires backend plugins to declare `backend_api_version`;
+  `simplebroker-pg` < 3.0.0 and `simplebroker-redis` < 3.0.0 fail backend
+  resolution with a `RuntimeError`. Upgrade the extension packages together
+  with core (the `[pg]`/`[redis]` extras do this automatically); projects
+  depending on the extension packages directly should floor them at 3.0.0
+  alongside `simplebroker>=5.0.0`.
+- **Phase-lock sidecar files are renamed** (append-style: `mydb.db.lock`,
+  not `mydb.lock`). Setup re-runs once per database after upgrade
+  (idempotent); old-style `.lock`/`.status` files are orphaned and never
+  read again — delete them at leisure.
+- **The vacuum lock file is renamed the same way** (`mydb.db.vacuum.lock`,
+  not `mydb.vacuum.lock`) and is now a permanent, kernel-released advisory
+  flock: it is never unlinked, and its existence no longer means anything.
+  Old-style `.vacuum.lock` files are orphaned and can be deleted.
+- **`BROKER_VACUUM_LOCK_TIMEOUT` is removed** (no backwards compatibility;
+  setting it has no effect): crash recovery is via kernel lock release, not
+  mtime staleness. Note for weft users: weft's `WEFT_VACUUM_LOCK_TIMEOUT`
+  passthrough maps to this key and becomes a no-op against simplebroker 5.0.
+- **The `slow` pytest marker is gone**; timing tests use `benchmark`.
+  Scripts using `-m "not slow"` should switch to `-m "not benchmark"`.
+- **Fork misuse now fails loudly**: five previously-unguarded entry points
+  (`generate_timestamp`, `get_cached_last_timestamp`,
+  `refresh_last_timestamp`, `sidecar`, `get_data_version`) raise
+  `RuntimeError` when called on a connection inherited across `fork()`,
+  and the fork fallback abandons inherited connections instead of closing
+  them.
+
 ### Changed
+- Bumped the next release versions to `simplebroker` 5.0.0,
+  `simplebroker-pg` 3.0.0, and `simplebroker-redis` 3.0.0. The first-party
+  extension packages now require `simplebroker>=5.0.0`.
+- Release tooling now verifies first-party backend extension API versions match
+  the core backend API version and that extension core dependency floors cover
+  the backend API minimum before release.
 - Test-marker split: the `slow` marker is replaced by `benchmark`, and the
   policy is now self-documenting -- the 14 timing/performance tests are marked
   `benchmark` and never gate CI (run locally with `pytest -m benchmark` or the
@@ -19,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-m "not slow"` should switch to `-m "not benchmark"`.
 
 ### Added
+- Added a code-level backend API version handshake between `simplebroker` core
+  and first-party backend extension packages. Backend plugins now declare
+  `backend_api_version`, and core rejects mismatches during backend resolution
+  with an upgrade-or-pin diagnostic.
 - `simplebroker.commands` is now documented public embedding surface: the
   programmatic CLI equivalent (each `cmd_*` prints to stdout and returns an exit
   code). Its `__all__` is completed to all 19 `cmd_*` functions plus
@@ -28,6 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exception class embedders and both first-party extensions must catch for
   storage failures; this narrowly overrides the earlier "extension seam is
   documentation only" decision for exception-handling surface.
+
+### Documented
+- Clarified that `simplebroker-pg` and `simplebroker-redis` are first-party
+  extension packages shipped separately for dependency isolation; the backend
+  seam is guarded by `BACKEND_API_VERSION`. Third-party backend extension PRs
+  are welcome, but there is not yet a stable standalone backend SDK.
 
 ### Fixed
 - Fork-safety guards now cover five previously-unguarded core entry points
@@ -91,10 +140,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp filter or rescan from `--after 0`. Added a README caveat, watcher
   docstring caveats, and characterization tests pinning the behavior.
 
-### Deprecated
-- `BROKER_VACUUM_LOCK_TIMEOUT` is now inert. The kernel-released vacuum flock
-  made mtime-staleness detection unnecessary, so the value no longer gates
-  vacuum. It is still parsed for config compatibility.
+### Removed
+- `BROKER_VACUUM_LOCK_TIMEOUT`. The kernel-released vacuum flock made
+  mtime-staleness detection unnecessary; the config key is gone and setting
+  the environment variable has no effect.
 
 ### simplebroker-pg
 - `rename_queue()` now takes the singleton meta row before the `messages` table,

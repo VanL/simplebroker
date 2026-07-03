@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from importlib import metadata
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
 
+from ._constants import __version__ as SIMPLEBROKER_VERSION
 from ._exceptions import DatabaseError
 from ._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 
@@ -18,12 +19,21 @@ if TYPE_CHECKING:
     from .metadata import QueueRenameResult, QueueStats
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
+BACKEND_API_VERSION: Final[int] = 1
 DEFAULT_BACKEND_NAME = "sqlite"
+FIRST_PARTY_BACKEND_PACKAGES: Final[dict[str, str]] = {
+    "postgres": "simplebroker-pg",
+    "redis": "simplebroker-redis",
+}
 MessageIdInput = int | str
 
 
 class BackendPlugin(Protocol):
     """Public contract for backend plugins.
+
+    ``schema_version`` versions stored data. ``backend_api_version`` versions the
+    Python seam between core and backend plugin packages; it is not persisted in
+    backend metadata.
 
     Optional hooks (probed via getattr, no-op if absent):
     - prepare_alias_mutation(runner) -- called inside the alias-mutation
@@ -35,6 +45,7 @@ class BackendPlugin(Protocol):
 
     name: str
     sql: BackendSQLNamespace | None
+    backend_api_version: int
     schema_version: int
     is_direct_backend: bool
 
@@ -492,6 +503,8 @@ class BackendAwareRunner(Protocol):
 def _ensure_backend_plugin_capabilities(plugin: BackendPlugin) -> None:
     """Validate that a plugin exposes either SQL hooks or a direct core hook."""
 
+    _ensure_backend_api_version(plugin)
+
     sql_namespace = getattr(plugin, "sql", None)
     if sql_namespace is not None:
         ensure_backend_sql_namespace(sql_namespace)
@@ -508,6 +521,28 @@ def _ensure_backend_plugin_capabilities(plugin: BackendPlugin) -> None:
         raise RuntimeError(
             f"Backend plugin '{getattr(plugin, 'name', '<unknown>')}' must expose "
             "create_core() when sql is None"
+        )
+
+
+def _backend_package_context(name: str) -> str:
+    package_name = FIRST_PARTY_BACKEND_PACKAGES.get(name)
+    return f" ({package_name})" if package_name is not None else ""
+
+
+def _ensure_backend_api_version(plugin: object) -> None:
+    plugin_name = str(getattr(plugin, "name", "<unknown>"))
+    plugin_version = getattr(plugin, "backend_api_version", None)
+    if type(plugin_version) is not int:
+        raise RuntimeError(
+            f"Backend plugin '{plugin_name}' must declare integer backend_api_version"
+        )
+    if plugin_version != BACKEND_API_VERSION:
+        raise RuntimeError(
+            f"Backend plugin '{plugin_name}'{_backend_package_context(plugin_name)} "
+            f"was built against backend API v{plugin_version} but simplebroker "
+            f"{SIMPLEBROKER_VERSION} provides backend API "
+            f"v{BACKEND_API_VERSION}; upgrade the backend extension, or pin "
+            "simplebroker to a compatible release"
         )
 
 
@@ -539,8 +574,16 @@ def _load_entry_point_plugin(name: str) -> BackendPlugin:
     )
 
     for entry_point in matches:
-        loaded = entry_point.load()
-        plugin = loaded() if callable(loaded) else loaded
+        try:
+            loaded = entry_point.load()
+            plugin = loaded() if callable(loaded) else loaded
+        except Exception as exc:
+            raise RuntimeError(
+                f"Backend plugin '{name}'{_backend_package_context(name)} could not "
+                f"be loaded under simplebroker {SIMPLEBROKER_VERSION} backend API "
+                f"v{BACKEND_API_VERSION}: {exc}. Upgrade the backend extension, or "
+                "pin simplebroker to a compatible release."
+            ) from exc
         if getattr(plugin, "name", None) != name:
             raise RuntimeError(
                 f"Backend plugin '{name}' resolved to object with mismatched name "
@@ -591,6 +634,7 @@ def target_parent_directory(target: str) -> Path:
 
 __all__ = [
     "ActivityWaiter",
+    "BACKEND_API_VERSION",
     "BACKEND_ENTRY_POINT_GROUP",
     "BackendAwareRunner",
     "BrokerConnection",

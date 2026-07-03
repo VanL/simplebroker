@@ -21,10 +21,17 @@ from urllib import request as urllib_request
 PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH: Final[Path] = PROJECT_ROOT / "pyproject.toml"
 CONSTANTS_PATH: Final[Path] = PROJECT_ROOT / "simplebroker" / "_constants.py"
+BACKEND_PLUGINS_PATH: Final[Path] = (
+    PROJECT_ROOT / "simplebroker" / "_backend_plugins.py"
+)
 PG_EXTENSION_DIR: Final[Path] = PROJECT_ROOT / "extensions" / "simplebroker_pg"
 PG_EXTENSION_PYPROJECT_PATH: Final[Path] = PG_EXTENSION_DIR / "pyproject.toml"
+PG_PLUGIN_PATH: Final[Path] = PG_EXTENSION_DIR / "simplebroker_pg" / "plugin.py"
 REDIS_EXTENSION_DIR: Final[Path] = PROJECT_ROOT / "extensions" / "simplebroker_redis"
 REDIS_EXTENSION_PYPROJECT_PATH: Final[Path] = REDIS_EXTENSION_DIR / "pyproject.toml"
+REDIS_PLUGIN_PATH: Final[Path] = (
+    REDIS_EXTENSION_DIR / "simplebroker_redis" / "plugin.py"
+)
 UV_LOCK_PATH: Final[Path] = PROJECT_ROOT / "uv.lock"
 PG_EXTENSION_UV_LOCK_PATH: Final[Path] = PG_EXTENSION_DIR / "uv.lock"
 REDIS_EXTENSION_UV_LOCK_PATH: Final[Path] = REDIS_EXTENSION_DIR / "uv.lock"
@@ -41,6 +48,16 @@ PYPROJECT_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(
 CONSTANTS_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(
     r'(?m)^__version__:\s*Final\[str\]\s*=\s*"([^"]+)"$'
 )
+BACKEND_API_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?m)^\s*(?:BACKEND_API_VERSION:\s*Final\[int\]|backend_api_version)"
+    r"\s*=\s*(\d+)\s*$"
+)
+PG_CORE_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r'(?m)^\s*"simplebroker>=([^",]+)",\s*$'
+)
+REDIS_CORE_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r'(?m)^\s*"simplebroker>=([^",]+)",\s*$'
+)
 PG_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
     r'(?m)^(\s*)"simplebroker-pg>=([^",]+)",(\s*)$'
 )
@@ -49,6 +66,10 @@ REDIS_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
 ALL_RELEASE_TARGET_KEY: Final[str] = "all"
+# Minimum simplebroker release allowed for each backend API version.
+# API v1 is first enforced in the 5.0 release line, so first-party backend
+# packages that declare it must require simplebroker>=5.0.0.
+BACKEND_API_MIN_CORE_VERSION: Final[dict[int, str]] = {1: "5.0.0"}
 
 ROOT_TEST_COMMAND_PREFIX: Final[tuple[str, ...]] = (
     "uv",
@@ -343,6 +364,122 @@ def read_target_version(target: ReleaseTarget) -> str:
         PYPROJECT_VERSION_PATTERN,
         label=_display_path(target.pyproject_path),
     )
+
+
+def read_core_backend_api_version(path: Path = BACKEND_PLUGINS_PATH) -> int:
+    """Read the core backend API version from the source constant."""
+
+    return int(
+        _extract_version(
+            path,
+            BACKEND_API_VERSION_PATTERN,
+            label=_display_path(path),
+        )
+    )
+
+
+def read_plugin_backend_api_version(path: Path, label: str) -> int:
+    """Read a backend plugin's literal backend API declaration."""
+
+    return int(_extract_version(path, BACKEND_API_VERSION_PATTERN, label=label))
+
+
+def read_extension_core_floor(
+    path: Path,
+    pattern: re.Pattern[str],
+    label: str,
+) -> str:
+    """Read the extension package's minimum simplebroker dependency."""
+
+    return _extract_version(path, pattern, label=label)
+
+
+def version_tuple(version: str) -> tuple[int, int, int]:
+    """Return a numerically comparable X.Y.Z version tuple."""
+
+    normalized = validate_version(version)
+    major, minor, patch = normalized.split(".")
+    return (int(major), int(minor), int(patch))
+
+
+def require_backend_api_versions_match(
+    *,
+    core_path: Path = BACKEND_PLUGINS_PATH,
+    pg_plugin_path: Path = PG_PLUGIN_PATH,
+    redis_plugin_path: Path = REDIS_PLUGIN_PATH,
+) -> None:
+    """Require first-party backend plugins to match the core backend API."""
+
+    core_version = read_core_backend_api_version(core_path)
+    plugin_versions = {
+        "simplebroker-pg": read_plugin_backend_api_version(
+            pg_plugin_path,
+            "simplebroker-pg plugin",
+        ),
+        "simplebroker-redis": read_plugin_backend_api_version(
+            redis_plugin_path,
+            "simplebroker-redis plugin",
+        ),
+    }
+    mismatches = [
+        f"{package}={plugin_version}"
+        for package, plugin_version in plugin_versions.items()
+        if plugin_version != core_version
+    ]
+    if mismatches:
+        raise RuntimeError(
+            "Backend API version mismatch: core "
+            f"BACKEND_API_VERSION={core_version}; " + ", ".join(mismatches)
+        )
+
+
+def require_extension_core_floors_for_backend_api(
+    *,
+    core_path: Path = BACKEND_PLUGINS_PATH,
+    pg_pyproject_path: Path = PG_EXTENSION_PYPROJECT_PATH,
+    redis_pyproject_path: Path = REDIS_EXTENSION_PYPROJECT_PATH,
+) -> None:
+    """Require extension simplebroker floors to cover the backend API version."""
+
+    core_backend_api_version = read_core_backend_api_version(core_path)
+    required_floor = BACKEND_API_MIN_CORE_VERSION.get(core_backend_api_version)
+    if required_floor is None:
+        raise RuntimeError(
+            "No minimum simplebroker version is configured for backend API "
+            f"v{core_backend_api_version}"
+        )
+
+    floors = {
+        "simplebroker-pg": read_extension_core_floor(
+            pg_pyproject_path,
+            PG_CORE_DEPENDENCY_PATTERN,
+            "simplebroker-pg pyproject.toml",
+        ),
+        "simplebroker-redis": read_extension_core_floor(
+            redis_pyproject_path,
+            REDIS_CORE_DEPENDENCY_PATTERN,
+            "simplebroker-redis pyproject.toml",
+        ),
+    }
+    required_tuple = version_tuple(required_floor)
+    for package, floor in floors.items():
+        if version_tuple(floor) < required_tuple:
+            raise RuntimeError(
+                f"{package} requires simplebroker>={floor}, but backend API "
+                f"v{core_backend_api_version} requires simplebroker>="
+                f"{required_floor}"
+            )
+
+
+def require_backend_api_release_invariants(
+    targets: tuple[ReleaseTarget, ...],
+) -> None:
+    """Require backend API source and dependency invariants before release."""
+
+    if not targets:
+        raise RuntimeError("At least one release target is required")
+    require_backend_api_versions_match()
+    require_extension_core_floors_for_backend_api()
 
 
 def _replace_version(
@@ -1407,6 +1544,9 @@ def _run_batch_release(args: argparse.Namespace) -> int:
         print("No unpublished release targets found.")
         return 0
 
+    release_targets = _candidate_targets(candidates)
+    require_backend_api_release_invariants(release_targets)
+
     initial_head_commit = current_head_commit()
     tag_actions = _plan_candidate_tag_actions(
         candidates,
@@ -1414,8 +1554,6 @@ def _run_batch_release(args: argparse.Namespace) -> int:
         version_changed=False,
         allow_retag=args.retag,
     )
-    release_targets = _candidate_targets(candidates)
-
     _print_batch_release_plan(candidates, tag_actions)
 
     if args.dry_run:
@@ -1541,6 +1679,7 @@ def main(argv: list[str] | None = None) -> int:
         return _run_batch_release(args)
 
     target = RELEASE_TARGETS[args.target]
+    require_backend_api_release_invariants((target,))
 
     current_version = read_target_version(target)
     dirty = is_dirty_worktree()

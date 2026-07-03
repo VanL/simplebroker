@@ -10,9 +10,16 @@ from psycopg import conninfo as pg_conninfo
 from simplebroker_pg.plugin import PostgresBackendPlugin, verify_env
 from simplebroker_pg.validation import connect
 
+from simplebroker._backend_plugins import BACKEND_API_VERSION
 from simplebroker._exceptions import DatabaseError
 
 pytestmark = [pytest.mark.pg_only]
+
+
+def test_backend_plugin_declares_backend_api_version() -> None:
+    plugin = PostgresBackendPlugin()
+
+    assert plugin.backend_api_version == BACKEND_API_VERSION
 
 
 def test_init_backend_constructs_dsn_from_individual_vars() -> None:

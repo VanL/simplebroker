@@ -1121,8 +1121,9 @@ class PriorityQueueSystem:
         return None
 ```
 
-Backend authors should use the explicit extension contracts in
-`simplebroker.ext`; see [Advanced: External Backend Plugins](#advanced-external-backend-plugins).
+The first-party backend packages use the explicit extension contracts in
+`simplebroker.ext`; see
+[Advanced: First-Party Backend Extensions](#advanced-first-party-backend-extensions).
 See [`examples/`](examples/) for application-level patterns.
 
 ### Sidecar tables (advanced)
@@ -1337,7 +1338,6 @@ The harness measures end-to-end CLI behavior for repeated single-message
 - `BROKER_AUTO_VACUUM` - Enable automatic vacuum of claimed messages (default: true)
 - `BROKER_VACUUM_THRESHOLD` - Claimed-message ratio that triggers auto-vacuum (default: 10%)
 - `BROKER_VACUUM_BATCH_SIZE` - Number of messages to delete per vacuum batch (default: 1000)
-- `BROKER_VACUUM_LOCK_TIMEOUT` - Deprecated and inert; still parsed but no longer gates vacuum. The vacuum lock now uses a kernel-released advisory flock, so staleness detection is unnecessary (default: 300)
 
 **Watcher Tuning:**
 - `BROKER_INITIAL_CHECKS` - Number of checks with zero delay (default: 100)
@@ -1835,21 +1835,30 @@ This optimization is transparent - messages are still delivered exactly once.
 </details>
 
 <details>
-<summary>Advanced: External Backend Plugins</summary>
+<summary>Advanced: First-Party Backend Extensions</summary>
 
 SimpleBroker core remains SQLite-first so that basic usage has no dependencies outside 
 the Python standard library.
 
-If you need a different backend, use an external plugin package through
-`simplebroker.ext`. This repository includes sibling Postgres and Valkey/Redis
-packages. `simplebroker[pg]` is a convenience extra that installs the external
-`simplebroker-pg` plugin package for you; the Redis package is developed under
-`extensions/simplebroker_redis`.
+If you need a different backend, use one of the first-party extension packages.
+This repository includes sibling Postgres and Valkey/Redis packages.
+`simplebroker[pg]` and `simplebroker[redis]` are convenience extras that
+install the `simplebroker-pg` / `simplebroker-redis` plugin packages for you;
+both are developed in this repository under `extensions/`.
+
+Third-party backend extensions are welcome as proposed PRs or maintained
+packages, but there is not yet a stable standalone backend SDK.
+`simplebroker.ext` is the public surface for embedders and custom runners, while
+full backend packages also use private core modules. Backend plugins declare a
+code-level `backend_api_version`; core checks it during backend resolution and
+release tooling verifies the first-party packages move with the core backend
+seam. That handshake is not stored in broker databases or backend metadata.
 
 For end users:
 
 ```bash
-uv add "simplebroker[pg]"
+uv add "simplebroker[pg]"     # Postgres backend
+uv add "simplebroker[redis]"  # Valkey/Redis backend
 ```
 
 For local development against the sibling extension in this repository:
@@ -1869,6 +1878,10 @@ There are two backend shapes:
    implementation: it uses Redis data structures and Lua scripts, so forcing it
    through the SQL runner abstraction would make both correctness and
    operations worse.
+
+The shared backend tests in this repository document expected behavior for
+SimpleBroker backends. They are a useful reference for extension PRs, not a
+turnkey certification kit for arbitrary external packages.
 
 Explicit Python usage:
 

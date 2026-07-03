@@ -397,6 +397,195 @@ redis = [
     assert root_pyproject.read_text(encoding="utf-8") == root_text
 
 
+def test_read_core_backend_api_version_reads_final_int(tmp_path: Path) -> None:
+    backend_plugins = tmp_path / "_backend_plugins.py"
+    backend_plugins.write_text(
+        "from typing import Final\nBACKEND_API_VERSION: Final[int] = 7\n",
+        encoding="utf-8",
+    )
+
+    assert release.read_core_backend_api_version(backend_plugins) == 7
+
+
+def test_read_plugin_backend_api_version_reads_literal_assignment(
+    tmp_path: Path,
+) -> None:
+    plugin = tmp_path / "plugin.py"
+    plugin.write_text(
+        "class BackendPlugin:\n    backend_api_version = 7\n",
+        encoding="utf-8",
+    )
+
+    assert release.read_plugin_backend_api_version(plugin, "test plugin") == 7
+
+
+def test_backend_api_version_guard_accepts_matching_versions(
+    tmp_path: Path,
+) -> None:
+    core = tmp_path / "_backend_plugins.py"
+    pg_plugin = tmp_path / "pg_plugin.py"
+    redis_plugin = tmp_path / "redis_plugin.py"
+    core.write_text("BACKEND_API_VERSION: Final[int] = 1\n", encoding="utf-8")
+    pg_plugin.write_text("backend_api_version = 1\n", encoding="utf-8")
+    redis_plugin.write_text("backend_api_version = 1\n", encoding="utf-8")
+
+    release.require_backend_api_versions_match(
+        core_path=core,
+        pg_plugin_path=pg_plugin,
+        redis_plugin_path=redis_plugin,
+    )
+
+
+def test_backend_api_version_guard_rejects_pg_mismatch(tmp_path: Path) -> None:
+    core = tmp_path / "_backend_plugins.py"
+    pg_plugin = tmp_path / "pg_plugin.py"
+    redis_plugin = tmp_path / "redis_plugin.py"
+    core.write_text("BACKEND_API_VERSION: Final[int] = 2\n", encoding="utf-8")
+    pg_plugin.write_text("backend_api_version = 1\n", encoding="utf-8")
+    redis_plugin.write_text("backend_api_version = 2\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="simplebroker-pg"):
+        release.require_backend_api_versions_match(
+            core_path=core,
+            pg_plugin_path=pg_plugin,
+            redis_plugin_path=redis_plugin,
+        )
+
+
+def test_backend_api_version_guard_rejects_redis_mismatch(tmp_path: Path) -> None:
+    core = tmp_path / "_backend_plugins.py"
+    pg_plugin = tmp_path / "pg_plugin.py"
+    redis_plugin = tmp_path / "redis_plugin.py"
+    core.write_text("BACKEND_API_VERSION: Final[int] = 2\n", encoding="utf-8")
+    pg_plugin.write_text("backend_api_version = 2\n", encoding="utf-8")
+    redis_plugin.write_text("backend_api_version = 1\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="simplebroker-redis"):
+        release.require_backend_api_versions_match(
+            core_path=core,
+            pg_plugin_path=pg_plugin,
+            redis_plugin_path=redis_plugin,
+        )
+
+
+def test_extension_core_floor_guard_accepts_required_floor(tmp_path: Path) -> None:
+    core = tmp_path / "_backend_plugins.py"
+    pg_pyproject = tmp_path / "pg.toml"
+    redis_pyproject = tmp_path / "redis.toml"
+    core.write_text("BACKEND_API_VERSION: Final[int] = 1\n", encoding="utf-8")
+    pg_pyproject.write_text('"simplebroker>=5.0.0",\n', encoding="utf-8")
+    redis_pyproject.write_text('"simplebroker>=5.0.0",\n', encoding="utf-8")
+
+    release.require_extension_core_floors_for_backend_api(
+        core_path=core,
+        pg_pyproject_path=pg_pyproject,
+        redis_pyproject_path=redis_pyproject,
+    )
+
+
+def test_extension_core_floor_guard_rejects_too_low_floor(tmp_path: Path) -> None:
+    core = tmp_path / "_backend_plugins.py"
+    pg_pyproject = tmp_path / "pg.toml"
+    redis_pyproject = tmp_path / "redis.toml"
+    core.write_text("BACKEND_API_VERSION: Final[int] = 1\n", encoding="utf-8")
+    pg_pyproject.write_text('"simplebroker>=4.9.9",\n', encoding="utf-8")
+    redis_pyproject.write_text('"simplebroker>=5.0.0",\n', encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="simplebroker-pg"):
+        release.require_extension_core_floors_for_backend_api(
+            core_path=core,
+            pg_pyproject_path=pg_pyproject,
+            redis_pyproject_path=redis_pyproject,
+        )
+
+
+def test_extension_core_floor_guard_compares_versions_numerically(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    core = tmp_path / "_backend_plugins.py"
+    pg_pyproject = tmp_path / "pg.toml"
+    redis_pyproject = tmp_path / "redis.toml"
+    core.write_text("BACKEND_API_VERSION: Final[int] = 1\n", encoding="utf-8")
+    pg_pyproject.write_text('"simplebroker>=5.10.0",\n', encoding="utf-8")
+    redis_pyproject.write_text('"simplebroker>=5.9.9",\n', encoding="utf-8")
+    monkeypatch.setattr(release, "BACKEND_API_MIN_CORE_VERSION", {1: "5.10.0"})
+
+    with pytest.raises(RuntimeError, match="5\\.10\\.0"):
+        release.require_extension_core_floors_for_backend_api(
+            core_path=core,
+            pg_pyproject_path=pg_pyproject,
+            redis_pyproject_path=redis_pyproject,
+        )
+
+
+def test_backend_api_release_invariants_run_for_release_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def record(targets):
+        calls.append(tuple(target.key for target in targets))
+        raise RuntimeError("backend invariant")
+
+    monkeypatch.setattr(release, "require_backend_api_release_invariants", record)
+
+    with pytest.raises(RuntimeError, match="backend invariant"):
+        release.main(["core", "--dry-run"])
+
+    assert calls == [("core",)]
+
+
+def test_backend_api_release_invariants_do_not_depend_on_skip_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def record(targets):
+        calls.append(tuple(target.key for target in targets))
+        raise RuntimeError("backend invariant")
+
+    monkeypatch.setattr(release, "require_backend_api_release_invariants", record)
+
+    with pytest.raises(RuntimeError, match="backend invariant"):
+        release.main(["core", "--dry-run", "--skip-checks"])
+
+    assert calls == [("core",)]
+
+
+def test_backend_api_release_invariants_run_for_batch_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    candidates = (
+        release.ReleaseCandidate(
+            target=release.PG_RELEASE_TARGET,
+            current_version="1.5.0",
+            release_version="1.5.0",
+            state=_state(),
+        ),
+        release.ReleaseCandidate(
+            target=release.REDIS_RELEASE_TARGET,
+            current_version="1.0.0",
+            release_version="1.0.0",
+            state=_state(),
+        ),
+    )
+
+    def record(targets):
+        calls.append(tuple(target.key for target in targets))
+        raise RuntimeError("backend invariant")
+
+    monkeypatch.setattr(release, "discover_unpublished_releases", lambda: candidates)
+    monkeypatch.setattr(release, "is_dirty_worktree", lambda: False)
+    monkeypatch.setattr(release, "require_backend_api_release_invariants", record)
+
+    with pytest.raises(RuntimeError, match="backend invariant"):
+        release.main(["all", "--dry-run", "--skip-checks"])
+
+    assert calls == [("pg", "redis")]
+
+
 def test_require_published_pg_baseline_accepts_published_version(monkeypatch) -> None:
     calls: list[tuple[str, str]] = []
 
