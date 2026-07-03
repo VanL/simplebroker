@@ -144,7 +144,7 @@ def main() -> int:
     parser.add_argument(
         "--fast",
         action="store_true",
-        help="Run shared non-slow tests plus Redis extension tests.",
+        help="Run shared non-benchmark tests plus Redis extension tests.",
     )
     parser.add_argument(
         "--keep-container",
