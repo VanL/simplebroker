@@ -271,6 +271,15 @@ $ broker alias remove task1.outbox
 - `--after <timestamp>` - Process messages newer than timestamp
 - `--before <timestamp>` - Process messages older than timestamp (`read`, `peek`, and `move`; not `watch`)
 
+> **Moved messages and checkpoints.** `move` preserves the message's
+> original timestamp (stable IDs). Any timestamp-checkpoint consumer —
+> `peek --after`, `read --after`, a peek-mode watcher, a consume-mode
+> watcher started with `after_timestamp`, or any hand-rolled
+> `ts > last_seen` filter — will **permanently skip** messages moved into
+> its queue behind its checkpoint. If a queue receives `move` traffic,
+> consume it without a timestamp filter, or periodically rescan from
+> `--after 0`.
+
 **Watch options:**
 - `--peek` - Monitor without consuming
 - `--move <dest>` - Continuously drain to destination queue
@@ -424,6 +433,15 @@ $ broker peek tasks --all --include-claimed
 
 Claimed rows are deletion-pending — vacuum may remove them at any time;
 `--include-claimed` is an inspection tool, not delivery state.
+
+> **Moved messages and checkpoints.** `move` preserves the message's
+> original timestamp (stable IDs). Any timestamp-checkpoint consumer —
+> `peek --after`, `read --after`, a peek-mode watcher, a consume-mode
+> watcher started with `after_timestamp`, or any hand-rolled
+> `ts > last_seen` filter — will **permanently skip** messages moved into
+> its queue behind its checkpoint. If a queue receives `move` traffic,
+> consume it without a timestamp filter, or periodically rescan from
+> `--after 0`.
 
 ```bash
 # Back up, restore, or migrate between backends — dumps are plain ndjson.

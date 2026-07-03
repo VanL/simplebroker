@@ -22,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raise `ValueError`, unsupported types such as `bool` raise `TypeError`, and
   `after_timestamp` / `before_timestamp` remain int-only bounds.
 
+### Documented
+- Documented the move-vs-checkpoint skip: `move` preserves a message's original
+  timestamp (stable IDs), so any timestamp-checkpoint consumer — `peek --after`,
+  `read --after`, a peek-mode watcher, a consume-mode watcher started with
+  `after_timestamp`, or a hand-rolled `ts > last_seen` filter — permanently
+  skips messages moved into its queue behind its checkpoint. Consume without a
+  timestamp filter or rescan from `--after 0`. Added a README caveat, watcher
+  docstring caveats, and characterization tests pinning the behavior.
+
 ### simplebroker-pg
 - `rename_queue()` now takes the singleton meta row before the `messages` table,
   matching writer and broadcast lock order. This avoids a retryable `40P01`

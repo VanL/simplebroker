@@ -1354,6 +1354,12 @@ class QueueWatcher(BaseWatcher):
     3. Using the checkpoint pattern with timestamps to track processing progress
 
     See the README for detailed examples of safe message processing patterns.
+
+    ⚠️ Moved messages and checkpoints: ``move`` preserves a message's original
+    timestamp, so a timestamp-checkpoint consumer (peek mode, or consume mode
+    started with ``after_timestamp``) permanently skips messages moved into its
+    queue behind its checkpoint. See the README "Checkpoint-based Processing"
+    section; consume without a timestamp filter or rescan from ``--after 0``.
     """
 
     def __init__(
@@ -1537,7 +1543,11 @@ class QueueWatcher(BaseWatcher):
             commit_interval=1,
         ):
             if self._try_dispatch_message(body, ts):
-                # Only update timestamp after successful dispatch
+                # Only update timestamp after successful dispatch.
+                # Caveat: advancing the checkpoint here means a message later
+                # moved into this queue with an older ts (move preserves the
+                # original timestamp) is permanently skipped. See the README
+                # "Checkpoint-based Processing" section.
                 self._last_seen_ts = max(self._last_seen_ts, ts)
                 found_messages = True
 
