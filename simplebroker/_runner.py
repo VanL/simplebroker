@@ -231,7 +231,9 @@ class SQLiteRunner:
             with self._connections_lock:
                 to_abandon.extend(self._all_connections)
             for conn in to_abandon:
-                if not any(conn is existing for existing in _ABANDONED_FORK_CONNECTIONS):
+                if not any(
+                    conn is existing for existing in _ABANDONED_FORK_CONNECTIONS
+                ):
                     _ABANDONED_FORK_CONNECTIONS.append(conn)
             # Clear thread-local storage for the new process
             self._thread_local = threading.local()
