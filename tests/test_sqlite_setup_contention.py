@@ -9,6 +9,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -255,12 +256,21 @@ def _mixed_version_child_new_paths(
             # runs when the first operation opens the connection).
             barrier.wait(timeout=30.0)
             queue.write("child-a")
-            assert queue.read() == "child-a"
+            read_message = queue.read(with_timestamps=True)
         finally:
             queue.close()
-        result_queue.put(("child-a", 0, _os.getpid()))
-    except BaseException as exc:  # pragma: no cover - child failure path
-        result_queue.put(("child-a", 1, repr(exc)))
+        result_queue.put(
+            (
+                "child-a",
+                0,
+                {
+                    "pid": _os.getpid(),
+                    "read": read_message,
+                },
+            )
+        )
+    except BaseException:  # pragma: no cover - child failure path
+        result_queue.put(("child-a", 1, traceback.format_exc()))
         raise
 
 
@@ -296,12 +306,21 @@ def _mixed_version_child_old_paths(
         try:
             barrier.wait(timeout=30.0)
             queue.write("child-b")
-            assert queue.read() == "child-b"
+            read_message = queue.read(with_timestamps=True)
         finally:
             queue.close()
-        result_queue.put(("child-b", 0, _os.getpid()))
-    except BaseException as exc:  # pragma: no cover - child failure path
-        result_queue.put(("child-b", 1, repr(exc)))
+        result_queue.put(
+            (
+                "child-b",
+                0,
+                {
+                    "pid": _os.getpid(),
+                    "read": read_message,
+                },
+            )
+        )
+    except BaseException:  # pragma: no cover - child failure path
+        result_queue.put(("child-b", 1, traceback.format_exc()))
         raise
     finally:
         _runner_module.SQLiteRunner._phase_lock_service = original  # type: ignore[method-assign]
@@ -355,10 +374,12 @@ def test_mixed_version_lock_paths_setup_is_idempotent_safe(
 
     try:
         assert results.get("child-a", (None,))[0] == 0, (
-            f"child-a failed: {results.get('child-a')}"
+            f"child-a failed: result={results.get('child-a')!r}, "
+            f"exitcode={child_a.exitcode}, all_results={results!r}"
         )
         assert results.get("child-b", (None,))[0] == 0, (
-            f"child-b failed: {results.get('child-b')}"
+            f"child-b failed: result={results.get('child-b')!r}, "
+            f"exitcode={child_b.exitcode}, all_results={results!r}"
         )
         assert child_a.exitcode == 0, f"child-a exitcode={child_a.exitcode}"
         assert child_b.exitcode == 0, f"child-b exitcode={child_b.exitcode}"
@@ -374,13 +395,54 @@ def test_mixed_version_lock_paths_setup_is_idempotent_safe(
     assert old_status.exists(), "child-b (old scheme) status file missing"
     assert new_status.exists(), "child-a (new scheme) status file missing"
 
+    read_pairs = []
+    for child_name in ("child-a", "child-b"):
+        detail = results[child_name][1]
+        assert isinstance(detail, dict), f"{child_name} detail={detail!r}"
+        read = detail.get("read")
+        assert (
+            isinstance(read, tuple)
+            and len(read) == 2
+            and isinstance(read[0], str)
+            and isinstance(read[1], int)
+        ), f"{child_name} read detail={read!r}"
+        read_pairs.append(read)
+
     # Database is in WAL mode with an intact schema (fresh Queue can r/w).
+    # Also assert two-in/two-out/nothing-left conservation. The rows are read
+    # directly so the ID source is the production write path, not a test-only
+    # preallocated timestamp.
     conn = sqlite3.connect(str(db_path))
     try:
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        stored_pairs = conn.execute(
+            "SELECT body, ts FROM messages WHERE queue = ? ORDER BY id",
+            ("mixed_version",),
+        ).fetchall()
+        # claimed=0 only: read() claims rows (deletion-pending until vacuum),
+        # so claimed rows legitimately remain in the table after delivery.
+        leftover = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE queue = ? AND claimed = 0",
+            ("mixed_version",),
+        ).fetchone()[0]
     finally:
         conn.close()
     assert str(mode).lower() == "wal", f"journal_mode={mode!r}"
+    assert len(stored_pairs) == 2, (
+        f"expected exactly two stored rows: stored={stored_pairs!r}; "
+        f"results={results!r}"
+    )
+    assert sorted(pair[1] for pair in read_pairs) == sorted(
+        pair[1] for pair in stored_pairs
+    ), (
+        f"read IDs do not match stored IDs exactly: "
+        f"stored={stored_pairs!r}; read={read_pairs!r}; results={results!r}"
+    )
+    assert set(read_pairs) == set(stored_pairs), (
+        f"read messages do not match stored messages exactly: "
+        f"stored={stored_pairs!r}; read={read_pairs!r}; results={results!r}"
+    )
+    assert leftover == 0, f"queue not drained: {leftover} row(s) left behind"
 
     verify = Queue("mixed_version_verify", persistent=True, db_path=str(db_path))
     try:
