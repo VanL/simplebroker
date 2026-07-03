@@ -432,7 +432,7 @@ def pytest_pg_main() -> int:
         "--fast",
         action="store_true",
         help=(
-            "Run the release-gate subset (shared and not slow) instead of all "
+            "Run the release-gate subset (shared and not benchmark) instead of all "
             "shared tests."
         ),
     )
@@ -450,7 +450,7 @@ def pytest_pg_main() -> int:
         print("uv is required to run PG-backed tests", file=sys.stderr)
         return 1
 
-    shared_marker = "shared and not slow" if args.fast else "shared"
+    shared_marker = "shared and not benchmark" if args.fast else "shared"
     (
         shared_pytest_args,
         extension_pytest_args,
