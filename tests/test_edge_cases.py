@@ -7,7 +7,6 @@ in production environments.
 from __future__ import annotations
 
 import multiprocessing
-import os
 import sqlite3
 import time
 import unittest.mock
@@ -55,7 +54,13 @@ def test_clock_regression_during_claim(workdir: Path) -> None:
 
 
 def test_vacuum_lock_cleanup_after_crash(workdir: Path) -> None:
-    """Test that stale vacuum lock files are handled gracefully."""
+    """A post-crash leftover vacuum lock file must not block the next vacuum.
+
+    Crash recovery is now "the kernel released the flock when the holder died",
+    not "an mtime-staleness sweep removes the file". A leftover lock file with
+    no live flock holder must therefore let the very next vacuum proceed
+    immediately -- no staleness timeout, no warning.
+    """
     db_path = workdir / "test.db"
     lock_path = vacuum_lock_path(db_path)
 
@@ -66,24 +71,13 @@ def test_vacuum_lock_cleanup_after_crash(workdir: Path) -> None:
         # Read all to claim them
         db.claim_many("test_queue", limit=100)
 
-    # Create a stale lock file (6 minutes old)
-    with open(lock_path, "w") as f:
-        f.write("12345\n")  # Fake PID
+    # Simulate a SIGKILL-leftover lock file: it exists (with fresh mtime and a
+    # dead PID) but NO process holds the flock.
+    lock_path.write_text("12345\n", encoding="utf-8")
 
-    # Make lock file appear old
-    old_time = time.time() - 360  # 6 minutes ago
-    os.utime(lock_path, (old_time, old_time))
-
-    # Vacuum should remove stale lock and proceed
-    # Need to patch at the module level where it's imported
-    with unittest.mock.patch("simplebroker.db.warnings.warn") as mock_warn:
-        with BrokerDB(str(db_path)) as db:
-            db.vacuum()
-
-            # Check that warning was issued about stale lock
-            mock_warn.assert_called()
-            warning_msg = str(mock_warn.call_args[0][0])
-            assert "stale vacuum lock" in warning_msg.lower()
+    # Vacuum proceeds immediately (kernel already released any flock).
+    with BrokerDB(str(db_path)) as db:
+        db.vacuum()
 
     # Verify vacuum succeeded
     conn = sqlite3.connect(str(db_path))
@@ -92,61 +86,46 @@ def test_vacuum_lock_cleanup_after_crash(workdir: Path) -> None:
     assert cursor.fetchone()[0] == 0  # All claimed messages removed
     conn.close()
 
-    # Lock file should be cleaned up
-    assert not lock_path.exists()
+    # The lock file is never unlinked (flock is ownership, the file is
+    # permanent), so it remains after a successful vacuum.
+    assert lock_path.exists()
 
 
 def test_vacuum_lock_timeout_environment_variable(workdir: Path) -> None:
-    """Test that BROKER_VACUUM_LOCK_TIMEOUT configuration works."""
-    # Import _config from the db module
+    """BROKER_VACUUM_LOCK_TIMEOUT is now inert: still parsed, gates nothing.
+
+    The kernel-released flock made mtime-staleness detection unnecessary, so
+    the timeout no longer influences vacuum at all. This pins that it is still
+    accepted/parsed without error and that adjusting it does not change vacuum
+    behavior.
+    """
     from simplebroker.db import _config
 
-    # Save original timeout value
     original_timeout = _config["BROKER_VACUUM_LOCK_TIMEOUT"]
 
-    db_path = workdir / "test.db"
-    lock_path = vacuum_lock_path(db_path)
+    # It is parsed to an int (no error) at import time.
+    assert isinstance(int(original_timeout), int)
 
-    # Create some claimed messages
+    db_path = workdir / "test.db"
+
     with BrokerDB(str(db_path)) as db:
         for i in range(5):
             db.write("test_queue", f"message{i}")
         db.claim_many("test_queue", limit=100)
 
-    # Create a lock file that's 31 seconds old
-    with open(lock_path, "w") as f:
-        f.write("99999\n")
-    old_time = time.time() - 31
-    os.utime(lock_path, (old_time, old_time))
-
-    # With default timeout (300s), lock should NOT be removed
-    with unittest.mock.patch("simplebroker.db.warnings.warn") as mock_warn:
+    # A tiny timeout value must NOT gate anything: vacuum still proceeds.
+    _config["BROKER_VACUUM_LOCK_TIMEOUT"] = 0
+    try:
         with BrokerDB(str(db_path)) as db:
             db.vacuum()
-            # Should not warn about stale lock
-            if mock_warn.called:
-                warning_msg = str(mock_warn.call_args[0][0])
-                assert "stale vacuum lock" not in warning_msg.lower()
-
-    # Lock should still exist
-    assert lock_path.exists()
-
-    # Now set timeout to 30 seconds by updating _config directly
-    _config["BROKER_VACUUM_LOCK_TIMEOUT"] = 30
-    try:
-        with unittest.mock.patch("simplebroker.db.warnings.warn") as mock_warn:
-            with BrokerDB(str(db_path)) as db:
-                db.vacuum()
-                # Should warn about stale lock
-                mock_warn.assert_called()
-                warning_msg = str(mock_warn.call_args[0][0])
-                assert "stale vacuum lock" in warning_msg.lower()
     finally:
-        # Restore original timeout value
         _config["BROKER_VACUUM_LOCK_TIMEOUT"] = original_timeout
 
-    # Lock should be removed now
-    assert not lock_path.exists()
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
+    assert cursor.fetchone()[0] == 0
+    conn.close()
 
 
 def _schema_migration_worker(db_path: str, worker_id: int, results: list) -> None:

@@ -592,9 +592,11 @@ def load_config() -> dict[str, Any]:
                 Default: 1000
                 Larger batches are faster but hold locks longer.
 
-            BROKER_VACUUM_LOCK_TIMEOUT (int): Seconds before vacuum lock is considered stale.
+            BROKER_VACUUM_LOCK_TIMEOUT (int): Deprecated and inert.
                 Default: 300 (5 minutes)
-                Prevents stuck vacuum operations from blocking others.
+                The vacuum lock now uses a kernel-released advisory flock, so
+                mtime-staleness detection is unnecessary and this value no
+                longer gates anything. Still parsed for config compatibility.
 
         Watcher Settings:
             BROKER_SKIP_IDLE_CHECK (bool): Skip idle queue optimization check.

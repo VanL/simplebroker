@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import os
 import time
-import warnings
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from ..._phaselock import AdvisoryFileLock, PhaseLockTimeout
 from ..._sql import (
     DELETE_ALL_MESSAGES,
     DELETE_CLAIMED_BATCH,
@@ -156,53 +156,35 @@ def vacuum(
     compact: bool,
     config: dict[str, Any],
 ) -> None:
-    """Delete claimed rows and compact the SQLite database when requested."""
+    """Delete claimed rows and compact the SQLite database when requested.
+
+    Vacuum is opportunistic maintenance: it serializes through a
+    kernel-released advisory flock on the vacuum lock sidecar. If another
+    process holds the lock (or the lock file cannot be opened), this pass skips
+    silently and a later call retries -- nothing is lost. The lock file is
+    never unlinked (phaselock doctrine: the flock is ownership, the file is
+    permanent), so a SIGKILL cannot strand the lock: the kernel releases the
+    flock when the holder dies.
+    """
     db_path = getattr(runner, "_db_path", None)
     if not db_path:
         return
 
-    lock_path = vacuum_lock_path(db_path)
-    lock_acquired = False
-    stale_lock_timeout = int(config["BROKER_VACUUM_LOCK_TIMEOUT"])
-
-    if lock_path.exists():
-        try:
-            lock_age = time.time() - lock_path.stat().st_mtime
-            if lock_age > stale_lock_timeout:
-                lock_path.unlink(missing_ok=True)
-                _warn_stale_vacuum_lock(lock_path, lock_age)
-        except OSError:
-            pass
-
+    lock = AdvisoryFileLock(vacuum_lock_path(db_path), timeout=0.0, retry_delay=0.0)
     try:
-        lock_fd = os.open(
-            str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode=0o600
-        )
-        try:
-            os.write(lock_fd, f"{os.getpid()}\n".encode())
-            lock_acquired = True
-            _vacuum_without_lock(runner, compact=compact, config=config)
-        finally:
-            os.close(lock_fd)
-    except FileExistsError:
-        pass
+        acquired = lock.acquire()
+    except PhaseLockTimeout:
+        # PhaseLockTimeout covers both held-lock contention and lock-file open
+        # failures. Both mean "skip this opportunistic maintenance pass"; the
+        # next vacuum call retries. Any other exception (e.g.
+        # PhaseLockUnavailable) propagates.
+        return
+    if not acquired:
+        return
+    try:
+        _vacuum_without_lock(runner, compact=compact, config=config)
     finally:
-        if lock_acquired:
-            lock_path.unlink(missing_ok=True)
-
-
-def _warn_stale_vacuum_lock(lock_path: Path, lock_age: float) -> None:
-    """Warn when a stale SQLite vacuum lock file is discarded."""
-    message = (
-        f"Removed stale vacuum lock file: {lock_path} "
-        f"(age {lock_age:.1f}s exceeded timeout)"
-    )
-    try:
-        from ... import db as broker_db
-
-        broker_db.warnings.warn(message)
-    except Exception:
-        warnings.warn(message, stacklevel=2)
+        lock.release()
 
 
 def _vacuum_without_lock(

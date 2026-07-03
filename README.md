@@ -1303,7 +1303,7 @@ The harness measures end-to-end CLI behavior for repeated single-message
 - `BROKER_AUTO_VACUUM` - Enable automatic vacuum of claimed messages (default: true)
 - `BROKER_VACUUM_THRESHOLD` - Claimed-message ratio that triggers auto-vacuum (default: 10%)
 - `BROKER_VACUUM_BATCH_SIZE` - Number of messages to delete per vacuum batch (default: 1000)
-- `BROKER_VACUUM_LOCK_TIMEOUT` - Seconds before a vacuum lock is considered stale (default: 300)
+- `BROKER_VACUUM_LOCK_TIMEOUT` - Deprecated and inert; still parsed but no longer gates vacuum. The vacuum lock now uses a kernel-released advisory flock, so staleness detection is unnecessary (default: 300)
 
 **Watcher Tuning:**
 - `BROKER_INITIAL_CHECKS` - Number of checks with zero delay (default: 100)

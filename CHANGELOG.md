@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- SQLite vacuum now serializes through a kernel-released advisory flock
+  (`AdvisoryFileLock`) instead of an `O_CREAT|O_EXCL` PID/mtime lock file. This
+  removes the TOCTOU in stale-lock removal and the up-to-`BROKER_VACUUM_LOCK_TIMEOUT`
+  vacuum outage after a `SIGKILL`: a crashed holder's flock is released by the
+  kernel, so the next vacuum proceeds immediately. The vacuum lock file is now
+  never unlinked (the flock is ownership; the file is permanent) — a deliberate
+  behavior change. Concurrent vacuums still skip silently when the lock is held.
 - Phase-lock sidecar paths are now derived by appending to the full target name
   (`mydb.db` -> `mydb.db.lock`/`mydb.db.status`) instead of `with_suffix`, which
   collapsed same-stem targets (`mydb.db`, `mydb.backup`) onto one
@@ -43,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skips messages moved into its queue behind its checkpoint. Consume without a
   timestamp filter or rescan from `--after 0`. Added a README caveat, watcher
   docstring caveats, and characterization tests pinning the behavior.
+
+### Deprecated
+- `BROKER_VACUUM_LOCK_TIMEOUT` is now inert. The kernel-released vacuum flock
+  made mtime-staleness detection unnecessary, so the value no longer gates
+  vacuum. It is still parsed for config compatibility.
 
 ### simplebroker-pg
 - `rename_queue()` now takes the singleton meta row before the `messages` table,
