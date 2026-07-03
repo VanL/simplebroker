@@ -13,11 +13,6 @@ __pycache__/
 .agents
 .claude/
 .agents/
-# docs/ is tracked as of 2026-07-03 (design record published).
-# These two plans belong to a different project and stay untracked:
-docs/plans/2026-05-02-yc-transcript-scorer-cli-batch-scoring-plan.md
-docs/plans/2026-05-02-yc-transcript-scorer-deterministic-batch-plan.md
-docs/plans/2026-05-03-yc-transcript-scorer-subagent-backend-plan.md
 build/
 develop-eggs/
 dist/
