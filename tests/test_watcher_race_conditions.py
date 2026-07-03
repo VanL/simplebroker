@@ -686,7 +686,7 @@ def test_concurrent_pre_checks(broker_target) -> None:
     assert result.results.count(False) == 19
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_concurrent_pre_check_timing(broker_target) -> None:
     """Track pre-check latency separately from deterministic concurrency semantics."""
     pre_check_times: list[float] = []

@@ -1,45 +1,35 @@
 """Test streaming functionality for memory efficiency."""
 
 import json
-import os
 from pathlib import Path
-from typing import Any
 
-import pytest
+from simplebroker import Queue, target_for_directory
 
-from .conftest import POSTGRES_TEST_BACKEND, run_cli
-
-
-def _is_pg_backend() -> bool:
-    return os.environ.get("BROKER_TEST_BACKEND") == POSTGRES_TEST_BACKEND
+from .conftest import run_cli
 
 
-def _bulk_write_pg(runner: Any, queue: str, count: int) -> None:
-    """Write messages directly via the PG runner (no subprocess overhead)."""
-    from simplebroker._backend_plugins import get_backend_plugin
-    from simplebroker.db import BrokerCore
+def _bulk_write(workdir: Path, queue_name: str, count: int) -> None:
+    """Seed messages through the Python API, backend-agnostically.
 
-    plugin = get_backend_plugin("postgres")
-    core = BrokerCore(runner, backend_plugin=plugin)
+    ``target_for_directory(workdir)`` resolves the same broker the CLI
+    subprocesses resolve in *workdir* (the SQLite default db, or the pg/redis
+    project config the worker fixtures wrote there), so seeding takes one
+    connection instead of one subprocess per message. This is what lets these
+    tests run in the regular suite instead of being marked slow.
+    """
+    target = target_for_directory(workdir)
+    q = Queue(queue_name, db_path=target)
     try:
         for i in range(count):
-            core.write(queue, f"message_{i}")
+            q.write(f"message_{i}")
     finally:
-        core.close()
+        q.close()
 
 
-@pytest.mark.slow
-def test_streaming_read_all(workdir: Path, pg_worker_runner):
+def test_streaming_read_all(workdir: Path):
     """Test that read --all uses streaming and doesn't blow memory."""
     count = 1000
-    if _is_pg_backend():
-        _bulk_write_pg(pg_worker_runner, "test_queue", count)
-    else:
-        for i in range(count):
-            code, _, stderr = run_cli(
-                "write", "test_queue", f"message_{i}", cwd=workdir
-            )
-            assert code == 0
+    _bulk_write(workdir, "test_queue", count)
 
     code, stdout, stderr = run_cli(
         "read", "test_queue", "--all", cwd=workdir, timeout=120.0
@@ -56,18 +46,10 @@ def test_streaming_read_all(workdir: Path, pg_worker_runner):
     assert stdout.splitlines()[0] == (f"test_queue: 0 ({count} total, {count} claimed)")
 
 
-@pytest.mark.slow
-def test_streaming_peek_all(workdir: Path, pg_worker_runner):
+def test_streaming_peek_all(workdir: Path):
     """Test that peek --all uses streaming and doesn't blow memory."""
     count = 1000
-    if _is_pg_backend():
-        _bulk_write_pg(pg_worker_runner, "test_queue", count)
-    else:
-        for i in range(count):
-            code, _, stderr = run_cli(
-                "write", "test_queue", f"message_{i}", cwd=workdir
-            )
-            assert code == 0
+    _bulk_write(workdir, "test_queue", count)
 
     code, stdout, stderr = run_cli(
         "peek", "test_queue", "--all", cwd=workdir, timeout=120.0

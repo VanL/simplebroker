@@ -51,13 +51,13 @@ jobs:
 
     - name: Run tests with pytest
       run: |
-        pytest -v --tb=short -m "not slow" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup"
+        pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup"
 
     - name: Run phaselock fallback-path gate
       env:
         PHASELOCK_ENABLE_XATTRS: "0"
       run: |
-        pytest -v --tb=short -m "not slow" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup" tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
+        pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup" tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
 
     - name: Test CLI installation
       run: |
@@ -164,7 +164,7 @@ jobs:
         COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
-        uv run pytest --cov=simplebroker --cov-report=term-missing --cov-report=xml -m "not slow"
+        uv run pytest --cov=simplebroker --cov-report=term-missing --cov-report=xml -m "not benchmark"
 
     - name: Upload coverage reports
       uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f

@@ -175,7 +175,7 @@ def main() -> int:
         shared_args, extension_args, run_shared, run_extension = _classify_targets(
             pytest_args
         )
-        marker = "shared and not slow" if args.fast else "shared"
+        marker = "shared and not benchmark" if args.fast else "shared"
         if run_shared:
             _run(
                 _uv_command(

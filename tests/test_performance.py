@@ -4,11 +4,9 @@ All performance-sensitive tests are collected here and assigned to one xdist
 group. That keeps the benchmarks from running on top of each other while still
 letting the suite exercise them under normal xdist worker contention.
 
-These tests are all marked as "slow" and do not run on a regular pytest/
-commit run, as timing on CI/CD machines is flaky and we want to emphasize
-correctness in those tests.
-
-Run these with pytest -m "" on your own machine to test performance.
+These tests are all marked as "benchmark" and never gate CI: timing on CI/CD
+machines is flaky, and CI emphasizes correctness. Run them on your own machine
+with `pytest -m benchmark` (or the full `pytest -m ""` suite).
 """
 
 import sqlite3
@@ -166,7 +164,7 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
 # ============================================================================
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_timestamp_performance_basic(workdir):
     """Basic performance check - not excessive writes."""
     db_path = workdir / "test.db"
@@ -202,7 +200,7 @@ def test_timestamp_performance_basic(workdir):
 # ============================================================================
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_queue_validation_performance():
     """Test that cached validation is faster than uncached."""
     cached_samples: list[float] = []
@@ -249,7 +247,7 @@ def test_queue_validation_performance():
 # ============================================================================
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_bulk_move_performance_5k_messages(workdir):
     """Test bulk move with BULK_MOVE_MESSAGE_COUNT messages maintains good performance."""
     # Write messages using CLI for consistency
@@ -296,7 +294,7 @@ def test_bulk_move_performance_5k_messages(workdir):
 # ============================================================================
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_large_batch_claim_rollback_performance(workdir: Path):
     """Test that rollback is fast when a large batch claim is interrupted."""
     db_path = workdir / "test.db"
@@ -385,7 +383,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
 # ============================================================================
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_after_large_queue_performance(workdir):
     """Test --after performance on large message queue."""
     queue_name = "large_queue"
@@ -462,7 +460,7 @@ def test_after_large_queue_performance(workdir):
 # ============================================================================
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_timestamp_lookup_performance(workdir: Path):
     """Test that timestamp lookups are efficient even with many messages."""
     db_path = workdir / "test.db"
@@ -523,7 +521,7 @@ def test_timestamp_lookup_performance(workdir: Path):
     )
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_concurrent_mixed_operations_performance(workdir: Path):
     """Test performance of mixed read/write/peek operations.
 
@@ -600,7 +598,7 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
 # ============================================================================
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_move_performance_with_large_batches(workdir: Path):
     """Test move performance with large number of messages."""
     db_path = workdir / "test.db"
@@ -648,7 +646,7 @@ def test_move_performance_with_large_batches(workdir: Path):
 # ============================================================================
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_performance_improvement_with_claims(workdir: Path):
     """Test performance improvement when using claimed vs delete operations."""
     db_path = workdir / "test.db"
@@ -688,7 +686,7 @@ def test_performance_improvement_with_claims(workdir: Path):
     conn.close()
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_batch_delete_many_performance(workdir: Path):
     """Physical batch delete should avoid per-ID cleanup loops."""
     db_path = workdir / "test.db"
@@ -715,7 +713,7 @@ def test_batch_delete_many_performance(workdir: Path):
     )
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_vacuum_batch_size_limits(workdir: Path):
     """Test that vacuum respects batch size limits for performance."""
     db_path = workdir / "test.db"
@@ -762,7 +760,7 @@ def test_vacuum_batch_size_limits(workdir: Path):
     conn.close()
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_write_performance_not_regressed(workdir: Path):
     """Test that write performance is not affected by claim feature."""
     db_path = workdir / "test.db"
@@ -810,7 +808,7 @@ def broker(tmp_path):
     return BrokerDB(str(db_path))
 
 
-@pytest.mark.slow
+@pytest.mark.benchmark
 def test_large_volume_move(broker, tmp_path):
     """Test moving a large number of messages."""
     num_messages = 100

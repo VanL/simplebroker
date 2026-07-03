@@ -199,9 +199,13 @@ class TestWorkerPool(WatcherTestBase):
         finally:
             db.close()
 
-    @pytest.mark.slow
     def test_worker_pool_with_slow_handlers(self, broker_target):
-        """Test worker pool with varying processing speeds."""
+        """Test worker pool with varying processing speeds.
+
+        Runs in the regular suite: the handler sleeps are deliberate (a
+        second or two total) and the assertions are behavioral, not
+        timing-based.
+        """
         num_messages = 20
 
         db = make_broker(broker_target)

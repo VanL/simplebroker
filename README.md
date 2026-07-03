@@ -1986,7 +1986,7 @@ uv sync --all-extras
 
 # Run tests
 uv run pytest              # Fast tests only
-uv run pytest -m ""        # All tests including slow ones
+uv run pytest -m ""        # All tests including benchmarks
 PHASELOCK_ENABLE_XATTRS=0 uv run pytest tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
 uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/teardown
 uv run ./bin/pytest-redis  # All Redis-backed tests with automatic Docker setup/teardown (Valkey)

@@ -85,9 +85,9 @@ exclude = [
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]
-addopts = "-ra -q --strict-markers -m 'not slow' -n auto --dist loadgroup"
+addopts = "-ra -q --strict-markers -m 'not benchmark' -n auto --dist loadgroup"
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "benchmark: performance measurement; never gates CI -- run locally with '-m benchmark' or the full '-m \"\"' suite",
     "shared: backend-agnostic black-box tests that should pass across supported backends",
     "sqlite_only: tests that validate built-in SQLite-specific behavior",
     "pg_only: tests that validate the Postgres extension package",

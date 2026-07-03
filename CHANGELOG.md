@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+- Test-marker split: the `slow` marker is replaced by `benchmark`, and the
+  policy is now self-documenting -- the 14 timing/performance tests are marked
+  `benchmark` and never gate CI (run locally with `pytest -m benchmark` or the
+  full `-m ""` suite); the 3 slow-by-construction correctness tests
+  (`test_streaming_read_all`, `test_streaming_peek_all`,
+  `test_worker_pool_with_slow_handlers`) are unmarked and now run in every CI
+  pass. The streaming pair seeds through the Python API
+  (`target_for_directory` + `Queue`) instead of 1,000 per-message CLI
+  subprocesses, on every backend. Operators with scripts using
+  `-m "not slow"` should switch to `-m "not benchmark"`.
+
 ### Added
 - `simplebroker.commands` is now documented public embedding surface: the
   programmatic CLI equivalent (each `cmd_*` prints to stdout and returns an exit
