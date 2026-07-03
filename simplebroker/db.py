@@ -989,6 +989,7 @@ class BrokerCore:
         Returns:
             64-bit hybrid timestamp that serves as both timestamp and unique message ID
         """
+        self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("generate_timestamp")
         with self._lock:
             return self._timestamp_gen.generate()
@@ -999,12 +1000,14 @@ class BrokerCore:
     def get_cached_last_timestamp(self) -> int:
         """Return the last timestamp observed by the generator without new I/O."""
 
+        self._check_fork_safety()
         with self._lock:
             return self._timestamp_gen.get_cached_last_ts()
 
     def refresh_last_timestamp(self) -> int:
         """Refresh and return the generator's cached timestamp via a meta-table peek."""
 
+        self._check_fork_safety()
         with self._lock:
             return self._timestamp_gen.refresh_last_ts()
 
@@ -1035,6 +1038,7 @@ class BrokerCore:
             SidecarUnavailableError: On backends without SQL storage.
             RuntimeError: If called during an open at-least-once batch.
         """
+        self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("sidecar")
         with self._lock:
             if not transaction:
@@ -2783,6 +2787,7 @@ class BrokerCore:
             This is SQLite-specific and returns None for other database backends.
             The data version changes whenever the database file is modified.
         """
+        self._check_fork_safety()
         with self._lock:
             return self._backend_plugin.get_data_version(self._runner)
 

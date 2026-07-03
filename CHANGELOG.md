@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Fork-safety guards now cover five previously-unguarded core entry points
+  (`generate_timestamp`, `get_cached_last_timestamp`, `refresh_last_timestamp`,
+  `sidecar`, `get_data_version`), including through the public
+  `Queue.generate_timestamp()` path: calling them on a connection inherited
+  across `fork()` now raises `RuntimeError` instead of touching the parent's
+  SQLite connection. The runner's fork fallback no longer *closes* inherited
+  connections (SQLite documents cross-fork close as unsafe — it implies
+  rollback and can touch the shared WAL-index while the parent is mid-write);
+  it abandons every inherited connection (holding a reference so GC never
+  finalizes it in the child) — a deliberate, bounded leak of one reference per
+  inherited connection.
 - SQLite vacuum now serializes through a kernel-released advisory flock
   (`AdvisoryFileLock`) instead of an `O_CREAT|O_EXCL` PID/mtime lock file. This
   removes the TOCTOU in stale-lock removal and the up-to-`BROKER_VACUUM_LOCK_TIMEOUT`

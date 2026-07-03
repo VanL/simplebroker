@@ -129,3 +129,196 @@ def test_multiprocessing_with_separate_instances(workdir: Path):
         for worker_id in range(3):
             worker_messages = [m for m in messages if f"worker{worker_id}_" in m]
             assert len(worker_messages) == 5
+
+
+# --------------------------------------------------------------------------- #
+# Task 4: fork guards on the five previously-unguarded entry points, and the
+# abandon-never-close fork fallback in SQLiteRunner.
+# --------------------------------------------------------------------------- #
+
+
+def _invoke_guarded_method(core: BrokerDB, method: str) -> None:
+    """Call one guarded method on a (possibly inherited) core."""
+    if method == "generate_timestamp":
+        core.generate_timestamp()
+    elif method == "get_cached_last_timestamp":
+        core.get_cached_last_timestamp()
+    elif method == "refresh_last_timestamp":
+        core.refresh_last_timestamp()
+    elif method == "sidecar":
+        with core.sidecar():
+            pass
+    elif method == "get_data_version":
+        core.get_data_version()
+    else:  # pragma: no cover - guard against typos
+        raise AssertionError(f"unknown method {method!r}")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+@pytest.mark.parametrize(
+    "method",
+    [
+        "generate_timestamp",
+        "get_cached_last_timestamp",
+        "refresh_last_timestamp",
+        "sidecar",
+        "get_data_version",
+    ],
+)
+def test_forked_child_guarded_methods_raise(workdir: Path, method: str) -> None:
+    """Each previously-unguarded method must raise in a forked child.
+
+    The child calls the method on the inherited core; the guard must raise
+    RuntimeError carrying the fork-safety message. FAILS today for these five.
+    """
+    db_path = workdir / "test.db"
+    core = BrokerDB(str(db_path))
+    # Bind a real connection pre-fork so the child inherits it.
+    core.write("q", "seed")
+    _invoke_guarded_method(core, method)  # exercise once pre-fork (parent)
+
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            _invoke_guarded_method(core, method)
+            os._exit(1)  # no guard fired
+        except RuntimeError as exc:
+            os._exit(0 if "forked process" in str(exc) else 3)
+        except BaseException:
+            os._exit(2)  # wrong exception type
+    else:
+        _, status = os.waitpid(pid, 0)
+        assert os.WEXITSTATUS(status) == 0
+        core.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_forked_child_queue_generate_timestamp_raises(workdir: Path) -> None:
+    """The public Queue path must also hit the guard on an inherited core.
+
+    Create a persistent Queue in the PARENT with a bound connection, exercise
+    it once pre-fork, then fork and call generate_timestamp() on the inherited
+    object in the child (a default per-call Queue would build a fresh child-side
+    connection and never hit the guard). FAILS today.
+    """
+    from simplebroker.sbqueue import Queue
+
+    db_path = workdir / "test.db"
+    queue = Queue("q", persistent=True, db_path=str(db_path))
+    # Bind the persistent connection/core pre-fork.
+    queue.generate_timestamp()
+
+    read_conn, write_conn = os.pipe()
+
+    pid = os.fork()
+    if pid == 0:  # child
+        os.close(read_conn)
+        try:
+            queue.generate_timestamp()
+            os.write(write_conn, b"no-guard")
+            os._exit(1)
+        except RuntimeError as exc:
+            os.write(write_conn, b"runtime" if "forked process" in str(exc) else b"x")
+            os._exit(0)
+        except BaseException:
+            os.write(write_conn, b"other")
+            os._exit(2)
+    else:
+        os.close(write_conn)
+        payload = os.read(read_conn, 64)
+        os.close(read_conn)
+        _, status = os.waitpid(pid, 0)
+        queue.close()
+        assert os.WEXITSTATUS(status) == 0
+        assert payload == b"runtime"
+
+
+def _abandon_fork_child(runner: object, result_w: object) -> None:
+    """Child target for the abandon-never-close test (top-level, picklable)."""
+    import sqlite3 as _sqlite3
+
+    import simplebroker._runner as _runner_module
+
+    # Snapshot inherited connections BEFORE triggering the fallback.
+    inherited = list(runner._all_connections)  # type: ignore[attr-defined]
+    try:
+        # Trigger the pid-check fallback by using the inherited runner.
+        new_conn = runner.get_connection()  # type: ignore[attr-defined]
+
+        abandoned = _runner_module._ABANDONED_FORK_CONNECTIONS
+        # All inherited connections abandoned exactly once (identity-deduped).
+        all_present = all(any(c is a for a in abandoned) for c in inherited)
+        counts_ok = all(sum(1 for a in abandoned if a is c) == 1 for c in inherited)
+        # New connection is live and distinct from every inherited one.
+        new_is_distinct = all(new_conn is not c for c in inherited)
+        # Abandoned (not closed): reading total_changes must NOT raise.
+        not_closed = True
+        for c in inherited:
+            try:
+                _ = c.total_changes
+            except _sqlite3.ProgrammingError:
+                not_closed = False
+        result_w.send(  # type: ignore[attr-defined]
+            {
+                "inherited_count": len(inherited),
+                "all_present": all_present,
+                "counts_ok": counts_ok,
+                "new_is_distinct": new_is_distinct,
+                "not_closed": not_closed,
+                "new_works": new_conn is not None,
+            }
+        )
+    except BaseException as exc:  # pragma: no cover - unexpected
+        result_w.send({"error": repr(exc)})  # type: ignore[attr-defined]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_fork_fallback_abandons_without_close(workdir: Path) -> None:
+    """The fork fallback abandons (never closes) ALL inherited connections.
+
+    Pin the abandon-ALL requirement: before forking, create a SECOND tracked
+    connection from another thread so _all_connections holds two inherited
+    connections. The child triggers the fallback and asserts BOTH objects are
+    present in _ABANDONED_FORK_CONNECTIONS exactly once and neither raises on
+    total_changes (i.e., neither was closed).
+    """
+    import threading as _threading
+
+    from simplebroker._runner import SQLiteRunner
+
+    db_path = workdir / "test.db"
+    runner = SQLiteRunner(str(db_path))
+    # Bind the current thread's connection.
+    runner.get_connection()
+
+    # Bind a SECOND connection from another thread -> two tracked connections.
+    def _bind_second() -> None:
+        runner.get_connection()
+
+    t = _threading.Thread(target=_bind_second)
+    t.start()
+    t.join()
+    assert len(runner._all_connections) == 2
+
+    read_r, write_w = multiprocessing.Pipe(duplex=False)
+
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            _abandon_fork_child(runner, write_w)
+        finally:
+            os._exit(0)
+    else:
+        result = read_r.recv()
+        os.waitpid(pid, 0)
+        runner.close()
+        assert "error" not in result, result
+        assert result["inherited_count"] == 2, result
+        assert result["all_present"] is True, result
+        assert result["counts_ok"] is True, result
+        assert result["new_is_distinct"] is True, result
+        assert result["not_closed"] is True, result
+        assert result["new_works"] is True, result

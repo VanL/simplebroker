@@ -33,6 +33,12 @@ _config = load_config()
 db_backend = get_configured_backend(_config)
 logger = logging.getLogger(__name__)
 
+# Connections inherited across a fork are abandoned here (never closed): see
+# get_connection's fork fallback. Holding a reference forever prevents CPython
+# from finalizing (and thus closing) an inherited connection in the child,
+# which SQLite documents as unsafe. Deliberate, bounded leak.
+_ABANDONED_FORK_CONNECTIONS: list[Any] = []
+
 
 class SetupPhase(Enum):
     """Generic setup phases that any SQL implementation might have."""
@@ -210,14 +216,23 @@ class SQLiteRunner:
         # Check if we've been forked
         current_pid = os.getpid()
         if current_pid != self._pid:
-            # Process was forked, need to clean up inherited connection
+            # Process was forked. Do NOT close inherited connections: sqlite3
+            # close() implies rollback and may touch the shared WAL-index the
+            # parent is still using (SQLite: a connection must not be used
+            # across a fork, including close). Abandon them: hold references
+            # forever so GC never finalizes them in this child. Bounded: one
+            # entry per inherited connection. Abandon the current thread-local
+            # conn AND every tracked connection (another thread-local
+            # generation may hold the last child-side reference), deduplicated
+            # by identity so the current thread's connection is not added twice.
+            to_abandon: list[Any] = []
             if hasattr(self._thread_local, "conn"):
-                try:
-                    # Close the stale connection from parent process
-                    self._thread_local.conn.close()
-                except Exception:
-                    # Ignore errors - connection might already be closed
-                    pass
+                to_abandon.append(self._thread_local.conn)
+            with self._connections_lock:
+                to_abandon.extend(self._all_connections)
+            for conn in to_abandon:
+                if not any(conn is existing for existing in _ABANDONED_FORK_CONNECTIONS):
+                    _ABANDONED_FORK_CONNECTIONS.append(conn)
             # Clear thread-local storage for the new process
             self._thread_local = threading.local()
             # Also reset setup phases for the new process
