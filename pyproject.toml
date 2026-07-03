@@ -27,7 +27,6 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Distributed Computing",
-    "Topic :: System :: Interprocess Communication",
     "Topic :: Utilities",
 ]
 dependencies = []
