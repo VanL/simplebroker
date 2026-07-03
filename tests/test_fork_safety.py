@@ -322,3 +322,74 @@ def test_fork_fallback_abandons_without_close(workdir: Path) -> None:
         assert result["new_is_distinct"] is True, result
         assert result["not_closed"] is True, result
         assert result["new_works"] is True, result
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_fork_recovery_does_not_block_on_inherited_locks(workdir: Path) -> None:
+    """Post-fork recovery must not acquire locks inherited from parent threads.
+
+    If a parent thread holds a runner-level lock (e.g. _connections_lock) at
+    the moment of fork(), the child has no thread that can ever release it —
+    so the recovery branch in get_connection() must not acquire inherited
+    locks. Parent: a thread acquires runner._connections_lock and holds it
+    across the fork point. Child: get_connection() must complete within a
+    bounded deadline and exit 0. Pre-fix this HANGS (watchdog kills the child
+    and the test fails); post-fix it passes.
+    """
+    import signal
+    import threading
+    import time
+
+    from simplebroker._runner import SQLiteRunner
+
+    db_path = workdir / "test.db"
+    runner = SQLiteRunner(str(db_path))
+    # Bind the parent connection so the child inherits state to recover from.
+    runner.get_connection()
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def _hold_connections_lock() -> None:
+        with runner._connections_lock:
+            lock_acquired.set()
+            release_lock.wait(30.0)
+
+    holder = threading.Thread(target=_hold_connections_lock)
+    holder.start()
+    assert lock_acquired.wait(5.0), "holder thread never acquired the lock"
+
+    # Fork while the lock is held. POSIX fork keeps only the calling thread,
+    # so in the child the lock is held forever by a thread that doesn't exist.
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            # Routes through the fork-recovery branch; must not block on the
+            # inherited (permanently held) lock.
+            runner.get_connection()
+            os._exit(0)
+        except BaseException:
+            os._exit(1)
+    else:
+        try:
+            deadline = time.monotonic() + 10.0
+            status: int | None = None
+            while time.monotonic() < deadline:
+                wpid, wstatus = os.waitpid(pid, os.WNOHANG)
+                if wpid == pid:
+                    status = wstatus
+                    break
+                time.sleep(0.05)
+            if status is None:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+                pytest.fail(
+                    "child hung in fork recovery: it blocked on a lock "
+                    "inherited from a parent thread"
+                )
+            assert os.WEXITSTATUS(status) == 0
+        finally:
+            release_lock.set()
+            holder.join(timeout=5.0)
+            runner.close()

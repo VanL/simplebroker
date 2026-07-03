@@ -225,19 +225,33 @@ class SQLiteRunner:
             # conn AND every tracked connection (another thread-local
             # generation may hold the last child-side reference), deduplicated
             # by identity so the current thread's connection is not added twice.
+            #
+            # Also do NOT acquire inherited locks here: a parent thread may
+            # have held _connections_lock/_setup_lock/_operation_lock at
+            # fork() time, and POSIX fork keeps only the calling thread — no
+            # thread in this child can ever release them. The child is
+            # single-threaded at this point, so an unlocked snapshot of
+            # _all_connections is safe (nothing in this process mutates it),
+            # and all runner-level locks are replaced with fresh objects
+            # before any child-side acquisition.
             to_abandon: list[Any] = []
             if hasattr(self._thread_local, "conn"):
                 to_abandon.append(self._thread_local.conn)
-            with self._connections_lock:
-                to_abandon.extend(self._all_connections)
+            to_abandon.extend(list(self._all_connections))
             for conn in to_abandon:
                 if not any(
                     conn is existing for existing in _ABANDONED_FORK_CONNECTIONS
                 ):
                     _ABANDONED_FORK_CONNECTIONS.append(conn)
+            # Replace inherited locks (possibly held forever by parent
+            # threads that do not exist in this child).
+            self._setup_lock = threading.Lock()
+            self._connections_lock = threading.Lock()
+            self._operation_lock = threading.RLock()
             # Clear thread-local storage for the new process
             self._thread_local = threading.local()
-            # Also reset setup phases for the new process
+            # Also reset setup phases for the new process (fresh locks; the
+            # child is single-threaded here)
             with self._setup_lock:
                 self._completed_phases.clear()
             # Clear tracked connections from parent process

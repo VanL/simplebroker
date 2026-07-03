@@ -28,7 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rollback and can touch the shared WAL-index while the parent is mid-write);
   it abandons every inherited connection (holding a reference so GC never
   finalizes it in the child) — a deliberate, bounded leak of one reference per
-  inherited connection.
+  inherited connection. Post-fork recovery also no longer acquires inherited
+  runner locks: it replaces `_setup_lock`, `_connections_lock`, and
+  `_operation_lock` with fresh objects, so a lock held by a parent thread at
+  `fork()` time can no longer hang the child.
 - SQLite vacuum now serializes through a kernel-released advisory flock
   (`AdvisoryFileLock`) instead of an `O_CREAT|O_EXCL` PID/mtime lock file. This
   removes the TOCTOU in stale-lock removal and the up-to-`BROKER_VACUUM_LOCK_TIMEOUT`
