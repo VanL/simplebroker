@@ -189,6 +189,7 @@ def test_forked_child_guarded_methods_raise(workdir: Path, method: str) -> None:
             os._exit(2)  # wrong exception type
     else:
         _, status = os.waitpid(pid, 0)
+        assert os.WIFEXITED(status), f"child did not exit normally: {status}"
         assert os.WEXITSTATUS(status) == 0
         core.close()
 
@@ -231,6 +232,7 @@ def test_forked_child_queue_generate_timestamp_raises(workdir: Path) -> None:
         os.close(read_conn)
         _, status = os.waitpid(pid, 0)
         queue.close()
+        assert os.WIFEXITED(status), f"child did not exit normally: {status}"
         assert os.WEXITSTATUS(status) == 0
         assert payload == b"runtime"
 
@@ -388,6 +390,74 @@ def test_fork_recovery_does_not_block_on_inherited_locks(workdir: Path) -> None:
                     "child hung in fork recovery: it blocked on a lock "
                     "inherited from a parent thread"
                 )
+            assert os.WIFEXITED(status), f"child did not exit normally: {status}"
+            assert os.WEXITSTATUS(status) == 0
+        finally:
+            release_lock.set()
+            holder.join(timeout=5.0)
+            runner.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fork() not available on Windows")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_fork_recovery_runs_before_operation_lock(workdir: Path) -> None:
+    """Entry points that take _operation_lock first must recover BEFORE locking.
+
+    run()/begin_immediate()/commit()/rollback()/close() acquire
+    _operation_lock before reaching get_connection()'s recovery branch, so a
+    forked child would hang on the inherited lock before recovery could
+    replace it. Parent: a thread holds runner._operation_lock across the fork
+    point. Child: runner.run("SELECT 1", fetch=True) must complete within a
+    bounded deadline and exit 0. Pre-fix this HANGS (watchdog kills the child
+    and the test fails); post-fix recovery runs before the lock is taken.
+    """
+    import signal
+    import threading
+    import time
+
+    from simplebroker._runner import SQLiteRunner
+
+    db_path = workdir / "test.db"
+    runner = SQLiteRunner(str(db_path))
+    runner.get_connection()
+
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def _hold_operation_lock() -> None:
+        with runner._operation_lock:
+            lock_acquired.set()
+            release_lock.wait(30.0)
+
+    holder = threading.Thread(target=_hold_operation_lock)
+    holder.start()
+    assert lock_acquired.wait(5.0), "holder thread never acquired the lock"
+
+    pid = os.fork()
+    if pid == 0:  # child
+        try:
+            rows = list(runner.run("SELECT 1", fetch=True))
+            os._exit(0 if rows == [(1,)] else 3)
+        except BaseException:
+            os._exit(1)
+    else:
+        try:
+            deadline = time.monotonic() + 10.0
+            status: int | None = None
+            while time.monotonic() < deadline:
+                wpid, wstatus = os.waitpid(pid, os.WNOHANG)
+                if wpid == pid:
+                    status = wstatus
+                    break
+                time.sleep(0.05)
+            if status is None:
+                os.kill(pid, signal.SIGKILL)
+                os.waitpid(pid, 0)
+                pytest.fail(
+                    "child hung: run() acquired the inherited _operation_lock "
+                    "before fork recovery could replace it"
+                )
+            assert os.WIFEXITED(status), f"child did not exit normally: {status}"
             assert os.WEXITSTATUS(status) == 0
         finally:
             release_lock.set()

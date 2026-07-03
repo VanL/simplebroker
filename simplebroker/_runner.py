@@ -206,6 +206,62 @@ class SQLiteRunner:
         """Backward compatibility property for accessing connection."""
         return self.get_connection()
 
+    def _recover_after_fork_if_needed(self) -> None:
+        """Recover runner state after a fork, before touching any runner lock.
+
+        Called at the TOP of every entry point that acquires a runner-level
+        lock (run/begin_immediate/commit/rollback/close/get_connection/
+        run_exclusive_setup/is_setup_complete): those locks may be held
+        forever by parent threads that do not exist in this child, so the
+        recovery must happen before any acquisition attempt. Cheap pid check
+        in the normal (non-forked) case; idempotent — the pid check makes
+        re-entry a no-op, and the child is single-threaded at recovery time.
+
+        Recovery does NOT close inherited connections: sqlite3 close()
+        implies rollback and may touch the shared WAL-index the parent is
+        still using (SQLite: a connection must not be used across a fork,
+        including close). It abandons them: holds references forever so GC
+        never finalizes them in this child. Bounded: one entry per inherited
+        connection. Abandons the current thread-local conn AND every tracked
+        connection (another thread-local generation may hold the last
+        child-side reference), deduplicated by identity.
+
+        It also does NOT acquire inherited locks: the child is
+        single-threaded at this point, so an unlocked snapshot of
+        _all_connections is safe (nothing in this process mutates it), and
+        all runner-level locks are replaced with fresh objects before any
+        child-side acquisition.
+        """
+        current_pid = os.getpid()
+        if current_pid == self._pid:
+            return
+        to_abandon: list[Any] = []
+        if hasattr(self._thread_local, "conn"):
+            to_abandon.append(self._thread_local.conn)
+        to_abandon.extend(list(self._all_connections))
+        for conn in to_abandon:
+            if not any(conn is existing for existing in _ABANDONED_FORK_CONNECTIONS):
+                _ABANDONED_FORK_CONNECTIONS.append(conn)
+        # Replace inherited locks (possibly held forever by parent threads
+        # that do not exist in this child).
+        self._setup_lock = threading.Lock()
+        self._connections_lock = threading.Lock()
+        self._operation_lock = threading.RLock()
+        # Clear thread-local storage for the new process
+        self._thread_local = threading.local()
+        # Also reset setup phases for the new process (fresh locks; the
+        # child is single-threaded here)
+        with self._setup_lock:
+            self._completed_phases.clear()
+        # Clear tracked connections from parent process
+        with self._connections_lock:
+            self._all_connections.clear()
+            self._connection_generation += 1
+        # Update the pid BEFORE marker recovery: is_setup_complete is itself
+        # fork-guarded, so the pid must already match to avoid re-entry.
+        self._pid = current_pid
+        self._recover_completed_phases_from_markers()
+
     def get_connection(self) -> sqlite3.Connection:
         """Get or create a thread-local connection.
 
@@ -213,53 +269,7 @@ class SQLiteRunner:
         potential deadlocks and following SQLite best practices for
         multi-threaded applications.
         """
-        # Check if we've been forked
-        current_pid = os.getpid()
-        if current_pid != self._pid:
-            # Process was forked. Do NOT close inherited connections: sqlite3
-            # close() implies rollback and may touch the shared WAL-index the
-            # parent is still using (SQLite: a connection must not be used
-            # across a fork, including close). Abandon them: hold references
-            # forever so GC never finalizes them in this child. Bounded: one
-            # entry per inherited connection. Abandon the current thread-local
-            # conn AND every tracked connection (another thread-local
-            # generation may hold the last child-side reference), deduplicated
-            # by identity so the current thread's connection is not added twice.
-            #
-            # Also do NOT acquire inherited locks here: a parent thread may
-            # have held _connections_lock/_setup_lock/_operation_lock at
-            # fork() time, and POSIX fork keeps only the calling thread — no
-            # thread in this child can ever release them. The child is
-            # single-threaded at this point, so an unlocked snapshot of
-            # _all_connections is safe (nothing in this process mutates it),
-            # and all runner-level locks are replaced with fresh objects
-            # before any child-side acquisition.
-            to_abandon: list[Any] = []
-            if hasattr(self._thread_local, "conn"):
-                to_abandon.append(self._thread_local.conn)
-            to_abandon.extend(list(self._all_connections))
-            for conn in to_abandon:
-                if not any(
-                    conn is existing for existing in _ABANDONED_FORK_CONNECTIONS
-                ):
-                    _ABANDONED_FORK_CONNECTIONS.append(conn)
-            # Replace inherited locks (possibly held forever by parent
-            # threads that do not exist in this child).
-            self._setup_lock = threading.Lock()
-            self._connections_lock = threading.Lock()
-            self._operation_lock = threading.RLock()
-            # Clear thread-local storage for the new process
-            self._thread_local = threading.local()
-            # Also reset setup phases for the new process (fresh locks; the
-            # child is single-threaded here)
-            with self._setup_lock:
-                self._completed_phases.clear()
-            # Clear tracked connections from parent process
-            with self._connections_lock:
-                self._all_connections.clear()
-                self._connection_generation += 1
-            self._pid = current_pid
-            self._recover_completed_phases_from_markers()
+        self._recover_after_fork_if_needed()
 
         if hasattr(self._thread_local, "conn"):
             conn_generation = getattr(self._thread_local, "conn_generation", None)
@@ -400,6 +410,7 @@ class SQLiteRunner:
         fetch: bool = False,
     ) -> Iterable[tuple[Any, ...]]:
         """Execute SQL and optionally return rows."""
+        self._recover_after_fork_if_needed()
         with self._operation_lock:
             try:
                 conn = self.get_connection()
@@ -422,6 +433,7 @@ class SQLiteRunner:
 
     def begin_immediate(self) -> None:
         """Start an immediate transaction."""
+        self._recover_after_fork_if_needed()
         with self._operation_lock:
             try:
                 conn = self.get_connection()
@@ -438,6 +450,7 @@ class SQLiteRunner:
 
     def commit(self) -> None:
         """Commit the current transaction."""
+        self._recover_after_fork_if_needed()
         with self._operation_lock:
             try:
                 conn = self.get_connection()
@@ -453,6 +466,7 @@ class SQLiteRunner:
 
     def rollback(self) -> None:
         """Rollback the current transaction."""
+        self._recover_after_fork_if_needed()
         with self._operation_lock:
             try:
                 conn = self.get_connection()
@@ -468,6 +482,10 @@ class SQLiteRunner:
 
     def close(self) -> None:
         """Close all connections created by this runner and release resources."""
+        # After a fork, recovery abandons inherited connections instead of
+        # closing them (cross-fork close is unsafe); this close then operates
+        # on the child's own (empty) state under fresh locks.
+        self._recover_after_fork_if_needed()
         with self._operation_lock:
             # Close ALL connections created by this runner instance across all threads.
             # Keep failed closes tracked so cleanup does not drop the last reference.
@@ -538,6 +556,7 @@ class SQLiteRunner:
         Returns True when this runner executed *operation*, or False when the
         phase had already been completed by this or another process.
         """
+        self._recover_after_fork_if_needed()
         service = self._phase_lock_service()
         phase_name = self._phase_marker_name(phase)
         if phase in self._completed_phases and not service.strict_marker_locking:
@@ -648,6 +667,9 @@ class SQLiteRunner:
             True if the phase has been completed
 
         """
+        # Fork-guarded: may acquire _setup_lock below. Recovery itself calls
+        # this only AFTER updating _pid, so re-entry is a no-op.
+        self._recover_after_fork_if_needed()
         if phase in self._completed_phases:
             return True
 
