@@ -145,6 +145,11 @@ def get_data_version(runner: SQLRunner) -> int | None:
     return None
 
 
+def vacuum_lock_path(db_path: str | Path) -> Path:
+    """Advisory lock sidecar for vacuum; appended, never with_suffix."""
+    return Path(str(db_path) + ".vacuum.lock")
+
+
 def vacuum(
     runner: SQLRunner,
     *,
@@ -156,22 +161,22 @@ def vacuum(
     if not db_path:
         return
 
-    vacuum_lock_path = Path(db_path).with_suffix(".vacuum.lock")
+    lock_path = vacuum_lock_path(db_path)
     lock_acquired = False
     stale_lock_timeout = int(config["BROKER_VACUUM_LOCK_TIMEOUT"])
 
-    if vacuum_lock_path.exists():
+    if lock_path.exists():
         try:
-            lock_age = time.time() - vacuum_lock_path.stat().st_mtime
+            lock_age = time.time() - lock_path.stat().st_mtime
             if lock_age > stale_lock_timeout:
-                vacuum_lock_path.unlink(missing_ok=True)
-                _warn_stale_vacuum_lock(vacuum_lock_path, lock_age)
+                lock_path.unlink(missing_ok=True)
+                _warn_stale_vacuum_lock(lock_path, lock_age)
         except OSError:
             pass
 
     try:
         lock_fd = os.open(
-            str(vacuum_lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode=0o600
+            str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode=0o600
         )
         try:
             os.write(lock_fd, f"{os.getpid()}\n".encode())
@@ -183,7 +188,7 @@ def vacuum(
         pass
     finally:
         if lock_acquired:
-            vacuum_lock_path.unlink(missing_ok=True)
+            lock_path.unlink(missing_ok=True)
 
 
 def _warn_stale_vacuum_lock(lock_path: Path, lock_age: float) -> None:

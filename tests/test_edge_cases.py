@@ -13,6 +13,7 @@ import time
 import unittest.mock
 from typing import TYPE_CHECKING
 
+from simplebroker._backends.sqlite.maintenance import vacuum_lock_path
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
@@ -56,7 +57,7 @@ def test_clock_regression_during_claim(workdir: Path) -> None:
 def test_vacuum_lock_cleanup_after_crash(workdir: Path) -> None:
     """Test that stale vacuum lock files are handled gracefully."""
     db_path = workdir / "test.db"
-    lock_path = db_path.with_suffix(".vacuum.lock")  # test.vacuum.lock
+    lock_path = vacuum_lock_path(db_path)
 
     # Create some claimed messages
     with BrokerDB(str(db_path)) as db:
@@ -104,7 +105,7 @@ def test_vacuum_lock_timeout_environment_variable(workdir: Path) -> None:
     original_timeout = _config["BROKER_VACUUM_LOCK_TIMEOUT"]
 
     db_path = workdir / "test.db"
-    lock_path = db_path.with_suffix(".vacuum.lock")  # test.vacuum.lock
+    lock_path = vacuum_lock_path(db_path)
 
     # Create some claimed messages
     with BrokerDB(str(db_path)) as db:
