@@ -199,9 +199,9 @@ class TestSQLiteRunnerValidation:
             queue.close()
 
         service = PhaseLockService(db_path)
-        assert service.lock_path == tmp_path / "broker.lock"
+        assert service.lock_path == tmp_path / "broker.db.lock"
         assert service.lock_path.exists()
-        assert service.status_base_path == tmp_path / "broker.status"
+        assert service.status_base_path == tmp_path / "broker.db.status"
         assert service.status_base_path.exists()
         assert _read_status_file(db_path) == list(_setup_phase_names())
 

@@ -863,19 +863,19 @@ def test_no_xattr_fallback_writes_single_status_file_and_no_done_files(
 
     assert first.completed == ("connection-v1", "schema-v4")
     assert first.xattrs_available is False
-    expected_status_paths = (tmp_path / "broker.status",)
+    expected_status_paths = (tmp_path / "broker.db.status",)
     assert first.status_paths == expected_status_paths
     assert second.completed == ()
     assert second.skipped == ("connection-v1", "schema-v4")
     assert second.status_paths == expected_status_paths
     assert calls == ["connection", "schema"]
-    assert service.lock_path == tmp_path / "broker.lock"
+    assert service.lock_path == tmp_path / "broker.db.lock"
     assert service.lock_path.exists()
     assert _read_status_file(service.status_base_path) == [
         "connection-v1",
         "schema-v4",
     ]
-    assert sorted(tmp_path.glob("broker.status.*")) == []
+    assert sorted(tmp_path.glob("broker.db.status.*")) == []
     assert not list(tmp_path.glob("*.done"))
 
 
@@ -1248,13 +1248,13 @@ def test_write_status_phases_removes_temp_file_when_fdopen_fails(
         service._write_status_phases(["connection-v1"])
 
     assert not service.status_base_path.exists()
-    assert list(tmp_path.glob("broker.status.tmp.*")) == []
+    assert list(tmp_path.glob("broker.db.status.tmp.*")) == []
 
 
 def test_discard_status_markers_removes_current_markers(tmp_path: Path) -> None:
     target = tmp_path / "broker.db"
     service = PhaseLockService(target, use_xattrs=False)
-    current_temp = tmp_path / "broker.status.tmp.1"
+    current_temp = tmp_path / "broker.db.status.tmp.1"
 
     service.status_base_path.touch()
     current_temp.touch()
@@ -1808,3 +1808,40 @@ def test_xattr_get_and_set_failure_modes_update_availability(
     assert unexpected._get_xattr("key") is None
     assert unexpected._set_xattr("key", b"value") is False
     assert unexpected.xattrs_available is False
+
+
+def test_same_stem_targets_get_distinct_sidecar_paths(tmp_path: Path) -> None:
+    """Same-stem targets must not collide on lock/status sidecar paths.
+
+    ``mydb.db`` and ``mydb.backup`` share a stem; deriving the sidecar with
+    ``with_suffix`` collapses both onto ``mydb.lock``/``mydb.status``. Sidecars
+    must instead append to the full target name so they stay distinct.
+    """
+    db_service = PhaseLockService(tmp_path / "mydb.db")
+    backup_service = PhaseLockService(tmp_path / "mydb.backup")
+
+    assert db_service.lock_path != backup_service.lock_path
+    assert db_service.status_base_path != backup_service.status_base_path
+
+
+def test_xattrless_status_not_inherited_across_same_stem_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On xattr-less filesystems, same-stem targets must not share status markers.
+
+    With status-file fallback, completing a phase for ``mydb.db`` must not make
+    ``mydb.backup`` appear to have that phase completed (which would skip its
+    setup). A colliding status path is exactly that hazard.
+    """
+    monkeypatch.setenv(phaselock_module.PHASELOCK_ENABLE_XATTRS, "0")
+
+    db_target = tmp_path / "mydb.db"
+    db_target.touch()
+    db_service = PhaseLockService(db_target)
+    db_result = db_service.run_phases((Phase("connection-v1", lambda: None),))
+    assert db_result.completed == ("connection-v1",)
+    assert db_service.has_phase("connection-v1")
+
+    backup_service = PhaseLockService(tmp_path / "mydb.backup")
+    assert not backup_service.has_phase("connection-v1")

@@ -503,8 +503,12 @@ class PhaseLockService:
     ) -> None:
         self.target = Path(target)
         self.namespace = namespace.strip(".")
-        self.lock_path = self.target.with_suffix(lock_suffix)
-        self.status_base_path = self.target.with_suffix(status_suffix)
+        # Append to the full target name (never with_suffix): with_suffix
+        # collapses same-stem targets (mydb.db, mydb.backup) onto one sidecar,
+        # so mydb.db -> mydb.db.lock and mydb.backup -> mydb.backup.lock stay
+        # distinct.
+        self.lock_path = Path(str(self.target) + lock_suffix)
+        self.status_base_path = Path(str(self.target) + status_suffix)
         self.timeout = timeout
         self.retry_delay = retry_delay
         self._use_xattrs = use_xattrs

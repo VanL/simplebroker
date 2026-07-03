@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Fixed
+- Phase-lock sidecar paths are now derived by appending to the full target name
+  (`mydb.db` -> `mydb.db.lock`/`mydb.db.status`) instead of `with_suffix`, which
+  collapsed same-stem targets (`mydb.db`, `mydb.backup`) onto one
+  `mydb.lock`/`mydb.status` pair. On xattr-less filesystems that collision could
+  make a sibling database inherit another's completion markers and skip WAL
+  enablement or schema creation. Behavior note: existing `mydb.lock`/`mydb.status`
+  sidecars from older versions are orphaned (never read, migrated, or cleaned up;
+  they are tiny), and setup re-runs exactly once per database after upgrade
+  because the status markers move to the new path once (setup phases are
+  idempotent).
+- The CI "phaselock fallback-path gate" now sets `PHASELOCK_ENABLE_XATTRS` (the
+  variable the code reads) instead of the misspelled `_ENABLE_PHASELOCK_XATTRS`,
+  so the xattr-less fallback path is actually exercised in CI.
 - `watch --after` now applies its strict checkpoint filter in consume mode, not
   only peek mode. Consume-mode watchers no longer claim and deliver messages at
   or before the checkpoint boundary.

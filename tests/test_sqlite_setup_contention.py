@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import multiprocessing
 import os
+import sqlite3
 import subprocess
 import sys
 import textwrap
 import time
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from simplebroker import Queue
 from simplebroker._phaselock import PhaseLockService
@@ -233,3 +238,153 @@ def test_first_write_retries_during_temporary_setup_lock(tmp_path: Path) -> None
         assert list(queue.read(all_messages=True)) == ["locked-setup-message"]
     finally:
         queue.close()
+
+
+def _mixed_version_child_new_paths(
+    db_path: str, barrier: Any, result_queue: Any
+) -> None:
+    """Child A: full runner setup using the new (post-fix) sidecar paths."""
+    import os as _os
+
+    from simplebroker import Queue as _Queue
+
+    try:
+        queue = _Queue("mixed_version", persistent=True, db_path=db_path)
+        try:
+            # Barrier immediately BEFORE the first queue op (setup is lazy and
+            # runs when the first operation opens the connection).
+            barrier.wait(timeout=30.0)
+            queue.write("child-a")
+            assert queue.read() == "child-a"
+        finally:
+            queue.close()
+        result_queue.put(("child-a", 0, _os.getpid()))
+    except BaseException as exc:  # pragma: no cover - child failure path
+        result_queue.put(("child-a", 1, repr(exc)))
+        raise
+
+
+def _mixed_version_child_old_paths(
+    db_path: str, barrier: Any, result_queue: Any
+) -> None:
+    """Child B: simulate a pre-fix process using old with_suffix sidecar paths.
+
+    Monkeypatch SQLiteRunner._phase_lock_service to override the returned
+    service's lock_path/status_base_path to the old with_suffix-style values,
+    so the two children coordinate through DIFFERENT lock/status files.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    import simplebroker._runner as _runner_module
+    from simplebroker import Queue as _Queue
+
+    original = _runner_module.SQLiteRunner._phase_lock_service
+
+    def _old_style(self: Any) -> Any:
+        service = original(self)
+        target = _Path(self._db_path)
+        # Pre-fix derivation: with_suffix collapses onto the stem.
+        service.lock_path = target.with_suffix(".lock")
+        service.status_base_path = target.with_suffix(".status")
+        return service
+
+    _runner_module.SQLiteRunner._phase_lock_service = _old_style  # type: ignore[method-assign]
+
+    try:
+        queue = _Queue("mixed_version", persistent=True, db_path=db_path)
+        try:
+            barrier.wait(timeout=30.0)
+            queue.write("child-b")
+            assert queue.read() == "child-b"
+        finally:
+            queue.close()
+        result_queue.put(("child-b", 0, _os.getpid()))
+    except BaseException as exc:  # pragma: no cover - child failure path
+        result_queue.put(("child-b", 1, repr(exc)))
+        raise
+    finally:
+        _runner_module.SQLiteRunner._phase_lock_service = original  # type: ignore[method-assign]
+
+
+def test_mixed_version_lock_paths_setup_is_idempotent_safe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mixed lock-path window (old vs new) must still yield a WAL DB + schema.
+
+    During an upgrade, an old process may hold mydb.lock while a new one holds
+    mydb.db.lock, so cross-version setup serialization is lost. With
+    PHASELOCK_ENABLE_XATTRS=0 each scheme writes to its own status file, so
+    neither child can observe the other's markers and BOTH must run full setup.
+    SQLite serializes the underlying DDL, so the accepted mixed-version window
+    is idempotent-safe: prove it rather than assume it.
+    """
+    monkeypatch.setenv("PHASELOCK_ENABLE_XATTRS", "0")
+
+    db_path = tmp_path / "mydb.db"
+
+    # Consistent spawn context: Process AND Barrier from the SAME context.
+    ctx = multiprocessing.get_context("spawn")
+    barrier = ctx.Barrier(2)
+    result_queue: Any = ctx.Queue()
+
+    child_a = ctx.Process(
+        target=_mixed_version_child_new_paths,
+        args=(str(db_path), barrier, result_queue),
+    )
+    child_b = ctx.Process(
+        target=_mixed_version_child_old_paths,
+        args=(str(db_path), barrier, result_queue),
+    )
+
+    child_a.start()
+    child_b.start()
+
+    results: dict[str, tuple[int, object]] = {}
+    deadline = time.monotonic() + scale_timeout_for_ci(45.0)
+    while len(results) < 2 and time.monotonic() < deadline:
+        try:
+            name, code, detail = result_queue.get(timeout=1.0)
+        except Exception:
+            continue
+        results[name] = (code, detail)
+
+    child_a.join(timeout=scale_timeout_for_ci(10.0))
+    child_b.join(timeout=scale_timeout_for_ci(10.0))
+
+    try:
+        assert results.get("child-a", (None,))[0] == 0, (
+            f"child-a failed: {results.get('child-a')}"
+        )
+        assert results.get("child-b", (None,))[0] == 0, (
+            f"child-b failed: {results.get('child-b')}"
+        )
+        assert child_a.exitcode == 0, f"child-a exitcode={child_a.exitcode}"
+        assert child_b.exitcode == 0, f"child-b exitcode={child_b.exitcode}"
+    finally:
+        for proc in (child_a, child_b):
+            if proc.is_alive():  # pragma: no cover - cleanup
+                proc.terminate()
+                proc.join(timeout=5.0)
+
+    # BOTH children must have executed full setup -> both status files exist.
+    old_status = db_path.with_suffix(".status")  # child B, pre-fix scheme
+    new_status = Path(str(db_path) + ".status")  # child A, post-fix scheme
+    assert old_status.exists(), "child-b (old scheme) status file missing"
+    assert new_status.exists(), "child-a (new scheme) status file missing"
+
+    # Database is in WAL mode with an intact schema (fresh Queue can r/w).
+    conn = sqlite3.connect(str(db_path))
+    try:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        conn.close()
+    assert str(mode).lower() == "wal", f"journal_mode={mode!r}"
+
+    verify = Queue("mixed_version_verify", persistent=True, db_path=str(db_path))
+    try:
+        verify.write("intact")
+        assert verify.read() == "intact"
+    finally:
+        verify.close()
