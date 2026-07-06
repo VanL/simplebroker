@@ -49,7 +49,7 @@ pg = [
     "simplebroker-pg>=3.0.0",
 ]
 redis = [
-    "simplebroker-redis>=3.0.1",
+    "simplebroker-redis>=3.0.2",
 ]
 
 [project.scripts]
