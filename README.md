@@ -1935,6 +1935,13 @@ waiter is only a wake hint: `wait(timeout)` means some watched queue may have
 changed, not that a message is guaranteed to be available. Close the returned
 waiter from the caller's watcher lifecycle; it is not owned by any one `Queue`.
 
+For watcher subclasses, `BaseWatcher` and `PollingStrategy` are exported from
+`simplebroker.ext`. If a subclass needs a custom native waiter, override
+`BaseWatcher._create_activity_waiter(queue)` instead of copying the watcher retry
+loop. If a caller-owned waiter is attached to a strategy and later closed by the
+caller, use `PollingStrategy.detach_activity_waiter(expected=waiter)` first so
+the strategy releases it without closing it.
+
 An explicitly injected `runner=` remains caller-owned. Reuse the same runner
 object yourself when you want several queues to share an injected backend.
 For `PostgresRunner`, call `runner.close()` or `runner.shutdown()` when you are

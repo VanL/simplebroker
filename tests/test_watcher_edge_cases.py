@@ -284,6 +284,43 @@ class TestWatcherEdgeCases(WatcherTestBase):
             assert drain_count >= 3
             assert retry_sleeps[:2] == [2, 4]
 
+    def test_stop_during_retry_sleep_exits_cleanly(
+        self, broker_target, monkeypatch
+    ) -> None:
+        """A stop signal during retry backoff should end the retry loop."""
+        retry_sleeps = []
+        drain_count = 0
+
+        def fake_interruptible_sleep(wait_time, stop_event) -> bool:
+            retry_sleeps.append(wait_time)
+            stop_event.set()
+            return False
+
+        monkeypatch.setattr(
+            watcher_module,
+            "interruptible_sleep",
+            fake_interruptible_sleep,
+        )
+
+        with self.create_test_watcher(
+            broker_target,
+            "queue",
+            lambda m, t: None,
+        ) as watcher:
+
+            def failing_drain() -> NoReturn:
+                nonlocal drain_count
+                drain_count += 1
+                raise Exception("retry sleep should be interrupted")
+
+            watcher._drain_queue = failing_drain
+
+            watcher.run_forever()
+
+            assert drain_count == 1
+            assert retry_sleeps == [2]
+            assert watcher._stop_event.is_set()
+
     def test_watcher_max_retries_exceeded(self, broker_target) -> None:
         """Test that watcher fails after max retries."""
         with self.create_test_watcher(

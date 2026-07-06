@@ -5,7 +5,13 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [5.1.0] - 2026-07-06
+### Added
+- Added protected `BaseWatcher` lifecycle hooks for embedders that need custom
+  activity waiters without cloning the watcher retry loop.
+- Added `PollingStrategy.detach_activity_waiter()` so embedder-owned activity
+  waiters can be released from the strategy without private attribute access.
+
 ### Changed
 - Bumped `simplebroker-redis` to 3.0.1 and raised the `simplebroker[redis]`
   extra floor to pull the fixed Redis backend.
@@ -26,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `broker move --all` warns if its materialized move cap is hit.
 - Release gate workflows now verify that the pushed tag version matches the
   package version in `pyproject.toml` before building or publishing.
+- `PollingStrategy.start()` no longer closes and reinstalls the same cached
+  activity waiter object.
 
 ## [5.0.1]
 ### Changed

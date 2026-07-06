@@ -18,7 +18,7 @@ from .helper_scripts.watcher_base import WatcherTestBase
 
 # Import will be available after implementation
 pytest.importorskip("simplebroker.watcher")
-from simplebroker.watcher import QueueWatcher
+from simplebroker.watcher import QueueWatcher, StopWatching
 
 pytestmark = [pytest.mark.shared]
 
@@ -64,6 +64,18 @@ class MessageCollector:
                     return True
             time.sleep(0.01)  # Small sleep to avoid busy waiting
         return False
+
+
+class FakeActivityWaiter:
+    def __init__(self) -> None:
+        self.close_calls = 0
+
+    def wait(self, timeout: float) -> bool:
+        del timeout
+        return False
+
+    def close(self) -> None:
+        self.close_calls += 1
 
 
 class TestQueueWatcher(WatcherTestBase):
@@ -220,6 +232,134 @@ class TestQueueWatcher(WatcherTestBase):
             watcher.stop()
             thread.join(timeout=2.0)
             queue_writer.close()
+
+    def test_run_with_retries_start_strategy_hook(self, broker_target):
+        """The retry loop should initialize strategy through the watcher hook."""
+
+        class StrategyHookWatcher(QueueWatcher):
+            def __init__(self, *args, **kwargs):
+                self.start_strategy_calls = 0
+                super().__init__(*args, **kwargs)
+
+            def _start_strategy(self) -> None:
+                self.start_strategy_calls += 1
+                super()._start_strategy()
+
+            def _process_messages(self) -> None:
+                raise StopWatching
+
+        watcher = StrategyHookWatcher(
+            "hooked_queue",
+            lambda msg, ts: None,
+            db=broker_target,
+        )
+        try:
+            watcher._run_with_retries()
+            assert watcher.start_strategy_calls == 1
+        finally:
+            watcher.stop(join=False)
+
+    def test_create_activity_waiter_hook_is_used_by_strategy_startup(
+        self, broker_target
+    ):
+        """Strategy startup should get native waiters through the watcher hook."""
+        waiter = FakeActivityWaiter()
+        seen_queue_names = []
+
+        class WaiterHookWatcher(QueueWatcher):
+            def _create_activity_waiter(self, queue):
+                seen_queue_names.append(queue.name)
+                return waiter
+
+        watcher = WaiterHookWatcher(
+            "hooked_queue",
+            lambda msg, ts: None,
+            db=broker_target,
+        )
+        try:
+            watcher._start_strategy()
+            assert seen_queue_names == ["hooked_queue"]
+            assert watcher._strategy.uses_native_activity() is True
+        finally:
+            watcher._strategy.close()
+            watcher.stop(join=False)
+
+    @pytest.mark.sqlite_only
+    def test_on_data_version_change_hook_runs_after_sqlite_change(self, tmp_path):
+        """The data-version callback should dispatch through the watcher hook."""
+        from .helper_scripts.broker_factory import make_target
+
+        broker_target = make_target(tmp_path, backend="sqlite")
+        hook_calls = []
+
+        class DataVersionHookWatcher(QueueWatcher):
+            def _on_data_version_change(self, queue) -> None:
+                hook_calls.append(queue.name)
+                super()._on_data_version_change(queue)
+
+        watcher = DataVersionHookWatcher(
+            "watched_queue",
+            lambda msg, ts: None,
+            db=broker_target,
+        )
+        writer_queue = Queue(
+            "watched_queue",
+            db_path=broker_target,
+            persistent=False,
+        )
+        try:
+            watcher._start_strategy()
+            watcher._strategy._check_data_version()
+            hook_calls.clear()
+
+            writer_queue.write("changed")
+
+            assert watcher._strategy._check_data_version() is True
+            assert hook_calls == ["watched_queue"]
+        finally:
+            writer_queue.close()
+            watcher._strategy.close()
+            watcher.stop(join=False)
+
+    @pytest.mark.sqlite_only
+    def test_default_start_strategy_keeps_cached_queue_activity_waiter(
+        self, tmp_path, monkeypatch
+    ):
+        """Restarting strategy should not close the cached Queue waiter."""
+        from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
+
+        from .helper_scripts.broker_factory import make_target
+
+        broker_target = make_target(tmp_path, backend="sqlite")
+        waiter = FakeActivityWaiter()
+
+        def create_activity_waiter(**kwargs):
+            del kwargs
+            return waiter
+
+        monkeypatch.setattr(
+            sqlite_backend_plugin,
+            "create_activity_waiter",
+            create_activity_waiter,
+        )
+
+        watcher = QueueWatcher(
+            "cached_waiter_queue",
+            lambda msg, ts: None,
+            db=broker_target,
+        )
+        try:
+            watcher._start_strategy()
+            watcher._start_strategy()
+
+            assert waiter.close_calls == 0
+            assert watcher._strategy.uses_native_activity() is True
+
+            watcher._strategy.close()
+            assert waiter.close_calls == 1
+        finally:
+            watcher._queue_obj._activity_waiter = None
+            watcher.stop(join=False)
 
     def test_graceful_shutdown_stop_method(self, broker_target):
         """Test graceful shutdown via stop() method."""
@@ -916,6 +1056,62 @@ class TestQueueWatcher(WatcherTestBase):
 
 class TestPollingStrategy:
     """Test polling strategy behavior."""
+
+    def test_detach_activity_waiter_returns_without_closing(self):
+        from simplebroker.watcher import PollingStrategy
+
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
+        waiter = FakeActivityWaiter()
+
+        strategy.start(activity_waiter=waiter)
+        detached = strategy.detach_activity_waiter()
+
+        assert detached is waiter
+        assert waiter.close_calls == 0
+        assert strategy.uses_native_activity() is False
+        assert strategy.detach_activity_waiter() is None
+
+    def test_detach_activity_waiter_expected_mismatch_is_noop(self):
+        from simplebroker.watcher import PollingStrategy
+
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
+        waiter_a = FakeActivityWaiter()
+        waiter_b = FakeActivityWaiter()
+
+        strategy.start(activity_waiter=waiter_a)
+
+        assert strategy.detach_activity_waiter(expected=waiter_b) is None
+        assert strategy.uses_native_activity() is True
+        assert waiter_a.close_calls == 0
+
+    def test_start_does_not_close_same_activity_waiter(self):
+        from simplebroker.watcher import PollingStrategy
+
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
+        waiter = FakeActivityWaiter()
+
+        strategy.start(activity_waiter=waiter)
+        strategy.start(activity_waiter=waiter)
+
+        assert waiter.close_calls == 0
+        assert strategy.uses_native_activity() is True
+
+    def test_start_closes_replaced_activity_waiter(self):
+        from simplebroker.watcher import PollingStrategy
+
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
+        waiter_a = FakeActivityWaiter()
+        waiter_b = FakeActivityWaiter()
+
+        strategy.start(activity_waiter=waiter_a)
+        strategy.start(activity_waiter=waiter_b)
+
+        assert waiter_a.close_calls == 1
+        assert waiter_b.close_calls == 0
 
     def test_polling_strategy_primes_last_ts_callback(self):
         """First observed data_version should still sync dependent caches."""

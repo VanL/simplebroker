@@ -395,6 +395,44 @@ class BaseWatcher(ABC):
             jitter_factor=config["BROKER_JITTER_FACTOR"],
         )
 
+    def _create_activity_waiter(self, queue: Queue) -> ActivityWaiter | None:
+        """Return the activity waiter passed into PollingStrategy.start()."""
+        return queue.create_activity_waiter(stop_event=self._stop_event)
+
+    def _on_data_version_change(self, queue: Queue) -> None:
+        """Refresh watcher-owned queue caches after data-version changes."""
+        queue.refresh_last_ts()
+
+    def _start_strategy(self) -> None:
+        """Initialize the polling strategy for this watcher instance."""
+        if hasattr(self._strategy, "start"):
+            queue = self._get_queue_for_data_version()
+            self._check_stop()
+
+            # Capture queue in closure to avoid B023 warning
+            def data_version_getter(q: Queue = queue) -> int | None:
+                return q.get_data_version()
+
+            # Seed last_ts before polling so watchers have an initial value
+            try:
+                queue.refresh_last_ts()
+            except Exception:
+                logger.debug("Initial last_ts refresh failed", exc_info=True)
+            self._check_stop()
+
+            def on_data_version_change(q: Queue = queue) -> None:
+                self._on_data_version_change(q)
+
+            activity_waiter = self._create_activity_waiter(queue)
+            self._check_stop()
+
+            self._strategy.start(
+                data_version_getter,
+                on_data_version_change=on_data_version_change,
+                activity_waiter=activity_waiter,
+            )
+            self._check_stop()
+
     def _process_with_retry(
         self,
         process_func: Callable[[], Any],
@@ -720,36 +758,7 @@ class BaseWatcher(ABC):
             try:
                 self._check_stop()
 
-                # Initialize strategy with data version getter
-                if hasattr(self._strategy, "start"):
-                    queue = self._get_queue_for_data_version()
-                    self._check_stop()
-
-                    # Capture queue in closure to avoid B023 warning
-                    def data_version_getter(q: Queue = queue) -> int | None:
-                        return q.get_data_version()
-
-                    # Seed last_ts before polling so watchers have an initial value
-                    try:
-                        queue.refresh_last_ts()
-                    except Exception:
-                        logger.debug("Initial last_ts refresh failed", exc_info=True)
-                    self._check_stop()
-
-                    def on_data_version_change(q: Queue = queue) -> None:
-                        q.refresh_last_ts()
-
-                    activity_waiter = queue.create_activity_waiter(
-                        stop_event=self._stop_event
-                    )
-                    self._check_stop()
-
-                    self._strategy.start(
-                        data_version_getter,
-                        on_data_version_change=on_data_version_change,
-                        activity_waiter=activity_waiter,
-                    )
-                    self._check_stop()
+                self._start_strategy()
 
                 # Initial drain of existing messages
                 self._in_initial_drain = True
@@ -1192,6 +1201,23 @@ class PollingStrategy:
         """Return whether this strategy is backed by a native activity waiter."""
         return self._activity_waiter is not None
 
+    def detach_activity_waiter(
+        self,
+        *,
+        expected: ActivityWaiter | None = None,
+    ) -> ActivityWaiter | None:
+        """Detach and return the current activity waiter without closing it."""
+        waiter = self._activity_waiter
+        if waiter is None:
+            return None
+        if expected is not None and waiter is not expected:
+            return None
+
+        self._activity_waiter = None
+        self._native_activity_pending = False
+        self._activity_burst_remaining = 0
+        return waiter
+
     def start(
         self,
         data_version_provider: Callable[[], int | None] | None = None,
@@ -1200,7 +1226,9 @@ class PollingStrategy:
         activity_waiter: ActivityWaiter | None = None,
     ) -> None:
         """Initialize the strategy."""
-        self.close()
+        old_waiter = self.detach_activity_waiter()
+        if old_waiter is not None and old_waiter is not activity_waiter:
+            old_waiter.close()
         self._data_version_provider = data_version_provider
         self._check_count = 0
         self._data_version = None
@@ -1211,9 +1239,9 @@ class PollingStrategy:
 
     def close(self) -> None:
         """Release any backend-native waiter owned by this strategy."""
-        if self._activity_waiter is not None:
-            self._activity_waiter.close()
-            self._activity_waiter = None
+        waiter = self.detach_activity_waiter()
+        if waiter is not None:
+            waiter.close()
 
     def _get_delay(self) -> float:
         """Calculate delay based on check count."""
