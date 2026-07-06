@@ -5,6 +5,9 @@ T6 – Concurrent writers do not deadlock and all messages arrive
 """
 
 import concurrent.futures as cf
+import sqlite3
+import threading
+import time
 
 import pytest
 
@@ -50,6 +53,54 @@ def _read_until_empty_helper(args):
         return messages
     finally:
         queue.close()
+
+
+@pytest.mark.sqlite_only
+def test_execute_with_retry_survives_real_sqlite_lock(tmp_path):
+    """A real SQLite write lock is waited out without changing CLI gates."""
+    from simplebroker import Queue
+
+    db_path = tmp_path / ".broker.db"
+    lock_ready = threading.Event()
+    holder_done = threading.Event()
+    holder_errors = []
+
+    def hold_write_lock():
+        try:
+            conn = sqlite3.connect(str(db_path), timeout=5.0)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                lock_ready.set()
+                time.sleep(0.5)
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:  # pragma: no cover - surfaced below
+            holder_errors.append(exc)
+            lock_ready.set()
+        finally:
+            holder_done.set()
+
+    holder = threading.Thread(target=hold_write_lock)
+    holder.start()
+    assert lock_ready.wait(timeout=2.0)
+    assert holder_errors == []
+
+    queue = Queue(
+        "lock-test",
+        db_path=str(db_path),
+        config={"BROKER_BUSY_TIMEOUT": 0},
+    )
+    try:
+        queue.write("payload")
+        assert queue.read() == "payload"
+    finally:
+        queue.close()
+        assert holder_done.wait(timeout=2.0)
+        holder.join(timeout=0.1)
+
+    assert holder_errors == []
+    assert not holder.is_alive()
 
 
 @pytest.mark.xdist_group(name="concurrency_serial")

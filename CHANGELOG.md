@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+### Changed
+- Bumped `simplebroker-redis` to 3.0.1 and raised the `simplebroker[redis]`
+  extra floor to pull the fixed Redis backend.
+- Removed the unused `broker init --force` CLI surface and updated `--cleanup`
+  help text to describe backend target cleanup instead of only SQLite files.
+
+### Fixed
+- Redis broadcast now inserts the matched queue set atomically, so timestamp
+  conflicts cannot leave only part of a broadcast delivered.
+- Redis activity waiters now honor stop events promptly and keep their shared
+  listener registry scoped by process ID.
+- `broker read --all` now honors `BROKER_READ_COMMIT_INTERVAL` from CLI config.
+- Timestamp validation now rejects only real scientific notation instead of
+  plain words containing `e`.
+- Backend target redaction now masks URL passwords containing reserved
+  characters.
+- Queue move APIs now reject cross-target `Queue` destinations, and
+  `broker move --all` warns if its materialized move cap is hit.
+- Release gate workflows now verify that the pushed tag version matches the
+  package version in `pyproject.toml` before building or publishing.
+
+## [5.0.1]
+### Changed
+- Consolidated internal retry/backoff logic into a vendorable
+  `simplebroker._retry` module. Lock-contention retries (helpers + watcher
+  operational retries) now use bounded jitter (uniform sleep between 5ms and
+  the computed backoff cap) instead of additive 0-25ms jitter. Connection open
+  and watcher crash-recovery pacing remain deterministic exponential sleeps.
+
+## [5.0.0]
 ### Migration notes (5.0)
 
 What breaks or changes behavior when upgrading from 4.x, gathered in one

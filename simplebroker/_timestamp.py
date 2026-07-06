@@ -6,6 +6,7 @@ that all SimpleBroker extensions must use to ensure consistency.
 
 import os
 import random
+import re
 import threading
 import time
 from datetime import UTC, date, datetime
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
 # gets only a couple of late probes and the write dies spuriously.
 TS_RETRY_MAX_ELAPSED = 30.0
 TS_RETRY_MAX_DELAY = 0.25
+_SCIENTIFIC_NOTATION_RE = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)[eE][+-]?\d+(?:ns|ms|s)?")
 
 
 def validate_timestamp_bound(name: str, value: int | None) -> int | None:
@@ -308,8 +310,8 @@ class TimestampGenerator:
         if exact:
             return TimestampGenerator._validate_exact_timestamp(timestamp_str)
 
-        # Reject scientific notation early for consistency
-        if "e" in timestamp_str.lower():
+        # Reject numeric scientific notation early for consistency.
+        if _SCIENTIFIC_NOTATION_RE.fullmatch(timestamp_str):
             raise TimestampError("Invalid timestamp: scientific notation not supported")
 
         # Check for explicit unit suffixes

@@ -185,7 +185,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     )
     parser.add_argument("--version", action="store_true", help="show version")
     parser.add_argument(
-        "--cleanup", action="store_true", help="delete the database file and exit"
+        "--cleanup", action="store_true", help="delete broker target state and exit"
     )
     parser.add_argument(
         "--vacuum", action="store_true", help="remove claimed messages and exit"
@@ -428,11 +428,8 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
 
     # Init command - does not inherit global -d/-f flags
     # Init creates project root database in current directory only
-    init_parser = subparsers.add_parser(
+    subparsers.add_parser(
         "init", help="initialize a SimpleBroker database in current directory"
-    )
-    init_parser.add_argument(
-        "--force", action="store_true", help="reinitialize if database already exists"
     )
 
     return parser
@@ -1099,6 +1096,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 after_str=after_str,
                 message_id_str=message_id_str,
                 before_str=before_str,
+                config=config,
             )
         elif args.command == "peek":
             after_str = getattr(args, "after", None)

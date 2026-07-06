@@ -64,9 +64,9 @@ from ._targets import ResolvedTarget
 from ._timestamp import TimestampGenerator, validate_timestamp_bound
 from .helpers import (
     SetupProgressBudget,
+    _execute_connection_retry,
     _execute_with_retry,
     execute_setup_with_retry,
-    interruptible_sleep,
 )
 from .metadata import QueueRenameResult, QueueStats
 
@@ -409,40 +409,39 @@ class DBConnection:
         if hasattr(self._thread_local, "db"):
             return cast("BrokerDB", self._thread_local.db)
 
-        # Create new connection with retry logic
         max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # For persistent connections in single-threaded use:
-                # Create one BrokerDB per thread, but cache it within the thread
-                # This avoids reconnection overhead within a thread
-                connection = self._create_managed_connection()
 
-                # Register the connection for cleanup tracking
-                with self._registry_lock:
-                    self._connection_registry.add(connection)
+        def _open() -> BrokerConnection:
+            # For persistent connections in single-threaded use: create one
+            # BrokerDB per thread, but cache it within the thread.
+            connection = self._create_managed_connection()
+            with self._registry_lock:
+                self._connection_registry.add(connection)
+            self._thread_local.db = connection
+            return connection
 
-                self._thread_local.db = connection
-                return connection
-            except Exception as e:
-                if attempt >= max_retries - 1:
-                    if config["BROKER_LOGGING_ENABLED"]:
-                        logger.exception(
-                            f"Failed to get database connection after {max_retries} retries: {e}"
-                        )
-                    raise RuntimeError(f"Failed to get database connection: {e}") from e
+        def _log_connection_retry(_state: Any, exc: Exception, wait: float) -> None:
+            if config["BROKER_LOGGING_ENABLED"]:
+                logger.debug(
+                    f"Database connection error "
+                    f"(retry {_state.tries}/{max_retries}): {exc}. "
+                    f"Retrying in {wait} seconds..."
+                )
 
-                wait_time = 2 ** (attempt + 1)  # Exponential backoff
-                if config["BROKER_LOGGING_ENABLED"]:
-                    logger.debug(
-                        f"Database connection error (retry {attempt + 1}/{max_retries}): {e}. "
-                        f"Retrying in {wait_time} seconds..."
-                    )
-
-                if not interruptible_sleep(wait_time, self._stop_event):
-                    raise StopException("Connection interrupted") from None
-
-        raise RuntimeError("Failed to establish database connection")
+        try:
+            return _execute_connection_retry(
+                _open,
+                stop_event=self._stop_event,
+                before_sleep=_log_connection_retry,
+            )
+        except StopException:
+            raise
+        except Exception as e:
+            if config["BROKER_LOGGING_ENABLED"]:
+                logger.exception(
+                    f"Failed to get database connection after {max_retries} retries: {e}"
+                )
+            raise RuntimeError(f"Failed to get database connection: {e}") from e
 
     def _ensure_shared_session(self) -> "_ProcessBrokerSession":
         if self._shared_session is None or self._shared_released:
@@ -461,35 +460,39 @@ class DBConnection:
             raise StopException("Connection interrupted")
 
         max_retries = 3
-        for attempt in range(max_retries):
+
+        def _open() -> BrokerConnection:
+            session = self._ensure_shared_session()
+            connection = session.get_connection(self._stop_event)
             try:
-                session = self._ensure_shared_session()
-                connection = session.get_connection(self._stop_event)
-                try:
-                    self._push_shared_operation_session(session)
-                except Exception:
-                    session.release_current_thread_connection()
-                    raise
-                return connection
-            except Exception as e:
-                if attempt >= max_retries - 1:
-                    if config["BROKER_LOGGING_ENABLED"]:
-                        logger.exception(
-                            f"Failed to get database connection after {max_retries} retries: {e}"
-                        )
-                    raise RuntimeError(f"Failed to get database connection: {e}") from e
+                self._push_shared_operation_session(session)
+            except Exception:
+                session.release_current_thread_connection()
+                raise
+            return connection
 
-                wait_time = 2 ** (attempt + 1)
-                if config["BROKER_LOGGING_ENABLED"]:
-                    logger.debug(
-                        f"Database connection error (retry {attempt + 1}/{max_retries}): {e}. "
-                        f"Retrying in {wait_time} seconds..."
-                    )
+        def _log_connection_retry(_state: Any, exc: Exception, wait: float) -> None:
+            if config["BROKER_LOGGING_ENABLED"]:
+                logger.debug(
+                    f"Database connection error "
+                    f"(retry {_state.tries}/{max_retries}): {exc}. "
+                    f"Retrying in {wait} seconds..."
+                )
 
-                if not interruptible_sleep(wait_time, self._stop_event):
-                    raise StopException("Connection interrupted") from None
-
-        raise RuntimeError("Failed to establish database connection")
+        try:
+            return _execute_connection_retry(
+                _open,
+                stop_event=self._stop_event,
+                before_sleep=_log_connection_retry,
+            )
+        except StopException:
+            raise
+        except Exception as e:
+            if config["BROKER_LOGGING_ENABLED"]:
+                logger.exception(
+                    f"Failed to get database connection after {max_retries} retries: {e}"
+                )
+            raise RuntimeError(f"Failed to get database connection: {e}") from e
 
     def _push_shared_operation_session(self, session: "_ProcessBrokerSession") -> None:
         stack = cast(

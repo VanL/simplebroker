@@ -8,6 +8,7 @@ import time
 import pytest
 import redis
 from simplebroker_redis import RedisRunner, get_backend_plugin
+from simplebroker_redis import plugin as redis_plugin_module
 from simplebroker_redis.core import RedisBrokerCore
 
 from simplebroker._exceptions import DatabaseError, OperationalError
@@ -157,6 +158,37 @@ def test_fork_check_recreates_pool(redis_url: str, redis_namespace: str) -> None
         assert runner._pool is not first_pool
     finally:
         runner.shutdown()
+
+
+def test_shared_activity_registry_is_pid_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeListener:
+        def __init__(self, target: str, namespace: str) -> None:
+            self._target = target
+            self._namespace = namespace
+            self.closed = False
+
+        def has_registrations(self) -> bool:
+            return False
+
+        def close(self) -> None:
+            self.closed = True
+
+    current_pid = 100
+    monkeypatch.setattr(
+        redis_plugin_module, "_SharedRedisActivityListener", FakeListener
+    )
+    monkeypatch.setattr(redis_plugin_module.os, "getpid", lambda: current_pid)
+    registry = redis_plugin_module._RedisActivityRegistry()
+
+    parent_first = registry.listener("redis://example.test/0", "namespace")
+    parent_second = registry.listener("redis://example.test/0", "namespace")
+    assert parent_second is parent_first
+
+    current_pid = 200
+    child = registry.listener("redis://example.test/0", "namespace")
+    assert child is not parent_first
 
 
 def test_activity_waiter_does_not_consume_command_pool_slot(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -33,6 +34,11 @@ from .validation import (
     require_namespace,
     validate_target,
 )
+
+
+def _is_stop_event_set(stop_event: Any) -> bool:
+    is_set = getattr(stop_event, "is_set", None)
+    return bool(callable(is_set) and is_set())
 
 
 def _text(value: object, default: str = "") -> str:
@@ -201,10 +207,16 @@ class _SharedRedisActivityListener:
         with self._lock:
             return bool(self._refcounts)
 
-    def wait(self, registration: _QueueWaiterRegistration, timeout: float) -> bool:
+    def wait(
+        self,
+        registration: _QueueWaiterRegistration,
+        timeout: float,
+        *,
+        stop_event: Any,
+    ) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)
         with self._lock:
-            while True:
+            while not _is_stop_event_set(stop_event) and not self._stop_event.is_set():
                 if self._error is not None:
                     raise OperationalError(str(self._error)) from self._error
                 current = self._versions.get(registration.queue_name, 0)
@@ -217,7 +229,8 @@ class _SharedRedisActivityListener:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return False
-                registration.condition.wait(remaining)
+                registration.condition.wait(min(0.05, remaining))
+            return False
 
     def close(self) -> None:
         self._stop_event.set()
@@ -231,15 +244,19 @@ class RedisActivityWaiter:
         self,
         listener: _SharedRedisActivityListener,
         registration: _QueueWaiterRegistration,
+        stop_event: Any,
     ) -> None:
         self._listener = listener
         self._registration = registration
+        self._stop_event = stop_event
         self._closed = False
 
     def wait(self, timeout: float) -> bool:
         if self._closed:
             return False
-        return self._listener.wait(self._registration, timeout)
+        return self._listener.wait(
+            self._registration, timeout, stop_event=self._stop_event
+        )
 
     def close(self) -> None:
         if self._closed:
@@ -250,12 +267,13 @@ class RedisActivityWaiter:
 
 
 class RedisMultiQueueActivityWaiter:
-    def __init__(self, waiters: Sequence[RedisActivityWaiter]) -> None:
+    def __init__(self, waiters: Sequence[RedisActivityWaiter], stop_event: Any) -> None:
         self._waiters = list(waiters)
+        self._stop_event = stop_event
 
     def wait(self, timeout: float) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)
-        while True:
+        while not _is_stop_event_set(self._stop_event):
             for waiter in self._waiters:
                 if waiter.wait(0):
                     return True
@@ -263,6 +281,7 @@ class RedisMultiQueueActivityWaiter:
             if remaining <= 0:
                 return False
             time.sleep(min(0.05, remaining))
+        return False
 
     def close(self) -> None:
         for waiter in self._waiters:
@@ -272,10 +291,10 @@ class RedisMultiQueueActivityWaiter:
 class _RedisActivityRegistry:
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._listeners: dict[tuple[str, str], _SharedRedisActivityListener] = {}
+        self._listeners: dict[tuple[int, str, str], _SharedRedisActivityListener] = {}
 
     def listener(self, target: str, namespace: str) -> _SharedRedisActivityListener:
-        key = (target, namespace)
+        key = (os.getpid(), target, namespace)
         with self._lock:
             listener = self._listeners.get(key)
             if listener is None:
@@ -287,7 +306,7 @@ class _RedisActivityRegistry:
         with self._lock:
             if listener.has_registrations():
                 return
-            key = (listener._target, listener._namespace)
+            key = (os.getpid(), listener._target, listener._namespace)
             if self._listeners.get(key) is listener:
                 self._listeners.pop(key, None)
                 listener.close()
@@ -521,7 +540,6 @@ class RedisBackendPlugin:
         queue_name: str,
         stop_event: Any,
     ) -> ActivityWaiter | None:
-        del stop_event
         if runner is not None:
             target = runner.target
             namespace = runner.namespace
@@ -530,7 +548,7 @@ class RedisBackendPlugin:
                 return None
             namespace = require_namespace(backend_options)
         listener = _activity_registry.listener(target, namespace)
-        return RedisActivityWaiter(listener, listener.register(queue_name))
+        return RedisActivityWaiter(listener, listener.register(queue_name), stop_event)
 
     def create_activity_waiter_for_queues(
         self,
@@ -556,7 +574,7 @@ class RedisBackendPlugin:
         ]
         if len(typed_waiters) != len(queue_names):
             return None
-        return RedisMultiQueueActivityWaiter(typed_waiters)
+        return RedisMultiQueueActivityWaiter(typed_waiters, stop_event)
 
 
 _plugin = RedisBackendPlugin()

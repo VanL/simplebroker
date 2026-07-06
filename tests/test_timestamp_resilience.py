@@ -341,7 +341,7 @@ def test_timestamp_retry_gives_up_after_elapsed_budget(monkeypatch):
         monotonic_time += wait
         return True
 
-    monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
     monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
 
     plugin = _LockedAdvancePlugin(fail_times=10**9)

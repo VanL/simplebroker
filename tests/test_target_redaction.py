@@ -1,6 +1,22 @@
 from simplebroker._targets import ResolvedTarget, redact_backend_target
 
 
+def test_redact_backend_target_removes_special_character_url_passwords() -> None:
+    cases = [
+        ("postgres://user:p@ss:word@host/db", "p@ss:word"),
+        ("postgresql://user:secret/withslash@host/db", "secret/withslash"),
+        ("postgresql://user:s#cret@host/db", "s#cret"),
+        ("postgresql://user:s?cret@host/db", "s?cret"),
+        ("postgresql://user:p%40ss%2Fword@host/db", "p%40ss%2Fword"),
+    ]
+
+    for target, password_fragment in cases:
+        redacted = redact_backend_target(target)
+
+        assert password_fragment not in redacted
+        assert "***" in redacted
+
+
 def test_redact_backend_target_redacts_uri_password() -> None:
     assert (
         redact_backend_target("postgresql://user:secret@db.example.com:5432/app")

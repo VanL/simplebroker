@@ -11,7 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import Queue, commands
+from simplebroker._constants import load_config
 
 from .conftest import _reset_pg_tables, run_cli
 
@@ -316,6 +317,49 @@ def test_after_with_commit_interval(workdir):
     assert len(messages) == 10  # msg10 through msg19
     assert messages[0] == "msg10"
     assert messages[-1] == "msg19"
+
+
+def test_read_all_commit_interval_keeps_uncommitted_batch_on_output_failure(
+    workdir, monkeypatch
+):
+    """CLI read --all should honor BROKER_READ_COMMIT_INTERVAL batching."""
+    db_path = workdir / "batch.db"
+    queue = Queue("batch_queue", db_path=str(db_path))
+    for i in range(20):
+        queue.write(f"msg{i:02d}")
+
+    emitted: list[str] = []
+
+    def fail_during_second_batch(
+        message: str,
+        timestamp: int,
+        json_output: bool,
+        show_timestamps: bool,
+        warned_newlines: bool,
+    ) -> bool:
+        del timestamp, json_output, show_timestamps
+        emitted.append(message)
+        if len(emitted) == 6:
+            raise RuntimeError("output stopped")
+        return warned_newlines
+
+    config = load_config()
+    config["BROKER_READ_COMMIT_INTERVAL"] = 5
+    monkeypatch.setattr(commands, "_output_message", fail_during_second_batch)
+
+    with pytest.raises(RuntimeError, match="output stopped"):
+        commands.cmd_read(
+            str(db_path),
+            "batch_queue",
+            all_messages=True,
+            config=config,
+        )
+
+    remaining = Queue("batch_queue", db_path=str(db_path)).peek_many(
+        limit=100, with_timestamps=False
+    )
+    assert emitted == [f"msg{i:02d}" for i in range(6)]
+    assert remaining == [f"msg{i:02d}" for i in range(5, 20)]
 
 
 def test_after_with_peek(workdir):
@@ -1081,6 +1125,19 @@ def test_after_scientific_notation_rejected(workdir):
         assert "scientific notation not supported" in err, (
             f"Wrong reason for {ts_str}: {err}"
         )
+
+
+def test_read_after_plain_word_with_e_reports_invalid_timestamp(workdir):
+    """Plain garbage containing e should not be mislabeled as scientific notation."""
+    queue_name = "plain_word_queue"
+    run_cli("write", queue_name, "test", cwd=workdir)
+
+    rc, out, err = run_cli("read", queue_name, "--after", "tuesday", cwd=workdir)
+
+    assert rc == 1
+    assert out == ""
+    assert "Invalid timestamp: tuesday" in err
+    assert "scientific notation" not in err
 
 
 def test_after_clock_regression(workdir):

@@ -39,6 +39,7 @@ from .watcher import QueueMoveWatcher, QueueWatcher
 
 DBTarget = str | ResolvedTarget
 _config = load_config()
+_MOVE_ALL_LIMIT = 1_000_000
 
 
 def _status(message: str, *, quiet: bool = False) -> None:
@@ -461,6 +462,8 @@ def cmd_read(
     after_str: str | None = None,
     message_id_str: str | None = None,
     before_str: str | None = None,
+    *,
+    config: dict[str, Any] = _config,
 ) -> int:
     """Read and remove message(s) from queue using Queue API.
 
@@ -488,12 +491,43 @@ def cmd_read(
     if error_code is not None:
         return error_code
 
+    resolved_config = resolve_config(config)
+
     # Create queue instance
     canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
-    with Queue(canonical_queue, db_path=db_path) as queue:
+    with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
+        selected_fetch_generator: FetchGeneratorFn = queue.read_generator
+        commit_interval = int(resolved_config["BROKER_READ_COMMIT_INTERVAL"])
+        if all_messages and commit_interval > 1:
+
+            def stream_fetch_generator(
+                *,
+                with_timestamps: bool = False,
+                after_timestamp: int | None = None,
+                before_timestamp: int | None = None,
+                exact_timestamp: int | str | None = None,
+            ) -> Iterator[str | tuple[str, int]]:
+                del exact_timestamp
+                rows = queue.stream_messages(
+                    peek=False,
+                    all_messages=True,
+                    after_timestamp=after_timestamp,
+                    before_timestamp=before_timestamp,
+                    batch_processing=True,
+                    commit_interval=commit_interval,
+                )
+
+                for message, timestamp in rows:
+                    if with_timestamps:
+                        yield message, timestamp
+                    else:
+                        yield message
+
+            selected_fetch_generator = stream_fetch_generator
+
         return _process_queue_fetch(
             fetch_one=queue.read_one,
-            fetch_generator=queue.read_generator,
+            fetch_generator=selected_fetch_generator,
             exact_timestamp=exact_timestamp,
             all_messages=all_messages,
             after_timestamp=after_timestamp,
@@ -835,7 +869,7 @@ def cmd_move(
             try:
                 results = queue.move_many(
                     canonical_dest,
-                    limit=1000000,  # Large limit to capture all messages
+                    limit=_MOVE_ALL_LIMIT,
                     with_timestamps=True,
                     delivery_guarantee="exactly_once",
                     after_timestamp=after_timestamp,
@@ -852,6 +886,14 @@ def cmd_move(
                         json_output,
                         show_timestamps,
                         warned_newlines,
+                    )
+
+                if len(results) == _MOVE_ALL_LIMIT:
+                    print(
+                        "broker move --all: capped at "
+                        f"{_MOVE_ALL_LIMIT} messages; messages may remain "
+                        "in the source queue",
+                        file=sys.stderr,
                     )
 
                 return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY

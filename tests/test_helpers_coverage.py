@@ -9,9 +9,11 @@ import pytest
 
 from simplebroker import helpers
 from simplebroker._exceptions import OperationalError, StopException
+from simplebroker._retry import DEFAULT_MIN_RETRY_SLEEP_S
 from simplebroker.helpers import (
     SetupProgressBudget,
     _create_compound_db_directories,
+    _execute_watcher_operational_retry,
     _execute_with_retry,
     _find_project_database,
     _is_compound_db_name,
@@ -135,7 +137,7 @@ def test_execute_with_retry_uses_elapsed_budget(
         monotonic_time += wait
         return True
 
-    monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
     monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
 
     with pytest.raises(OperationalError, match="database is locked"):
@@ -170,6 +172,26 @@ def test_execute_with_retry_elapsed_budget_still_honors_stop_event(
             max_elapsed=1.0,
             stop_event=stop_event,
         )
+
+
+def test_watcher_operational_retry_does_not_retry_stop_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+
+    def capture(wait: float, stop_event=None) -> bool:
+        sleeps.append(wait)
+        return True
+
+    monkeypatch.setattr(helpers, "interruptible_sleep", capture)
+
+    def fail() -> None:
+        raise StopException("stop during operation")
+
+    with pytest.raises(StopException):
+        _execute_watcher_operational_retry(fail, max_retries=5)
+
+    assert sleeps == []
 
 
 def test_execute_setup_with_retry_refreshes_progress_budget_after_success(
@@ -532,16 +554,7 @@ def test_resolve_symlinks_safely_returns_partial_path_on_inner_read_error() -> N
     assert _resolve_symlinks_safely(link) is link  # type: ignore[arg-type]
 
 
-def test_retry_jitter_is_random_per_call() -> None:
-    # Clock-derived jitter gives simultaneous retriers near-identical values
-    # and keeps them in lockstep; per-call randomness must span 0-25ms.
-    samples = [helpers._retry_jitter() for _ in range(32)]
-
-    assert all(0.0 <= s <= 0.025 for s in samples)
-    assert max(samples) - min(samples) > 0.005
-
-
-def test_execute_with_retry_jitter_decorrelates_rapid_retries(
+def test_execute_with_retry_uses_bounded_jitter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sleeps: list[float] = []
@@ -551,21 +564,23 @@ def test_execute_with_retry_jitter_decorrelates_rapid_retries(
         return True
 
     monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+    jitter_values = iter([0.006, 0.015, 0.03])
+
+    def fake_uniform(low: float, high: float) -> float:
+        value = next(jitter_values)
+        assert low == DEFAULT_MIN_RETRY_SLEEP_S
+        assert low <= value <= high
+        return value
+
+    monkeypatch.setattr("random.uniform", fake_uniform)
 
     def always_locked() -> None:
         raise OperationalError("database is locked")
 
-    for _ in range(4):
-        with pytest.raises(OperationalError):
-            _execute_with_retry(always_locked, max_retries=4, retry_delay=0.01)
+    with pytest.raises(OperationalError):
+        _execute_with_retry(always_locked, max_retries=4, retry_delay=0.01)
 
-    assert len(sleeps) == 12
-    # Strip the deterministic exponential base; what remains is jitter.
-    jitters = [wait - 0.01 * (2 ** (i % 3)) for i, wait in enumerate(sleeps)]
-    assert all(-1e-9 <= j <= 0.0251 for j in jitters)
-    # Sleeps computed microseconds apart must still span the jitter range,
-    # otherwise synchronized writers back off in lockstep and re-collide.
-    assert max(jitters) - min(jitters) > 0.005
+    assert sleeps == pytest.approx([0.006, 0.015, 0.03], rel=1e-9)
 
 
 class TestRetryableClassification:

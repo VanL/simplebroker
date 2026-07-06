@@ -183,6 +183,17 @@ class TestTimestampEdgeCases:
         with pytest.raises(TimestampError, match="scientific notation not supported"):
             TimestampGenerator.validate("1.5E+9")
 
+        with pytest.raises(TimestampError, match="scientific notation not supported"):
+            TimestampGenerator.validate("1e-5")
+
+        with pytest.raises(TimestampError, match="scientific notation not supported"):
+            TimestampGenerator.validate("1.23E+10")
+
+    def test_validate_plain_words_with_e_are_not_scientific_notation(self):
+        """Plain invalid words should keep the honest invalid timestamp message."""
+        with pytest.raises(TimestampError, match="Invalid timestamp: hello"):
+            TimestampGenerator.validate("hello")
+
     def test_validate_negative_timestamps(self):
         """Test that negative timestamps are rejected."""
         with pytest.raises(TimestampError, match="cannot be negative"):

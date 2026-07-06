@@ -123,3 +123,28 @@ def test_complex_argument_combinations(workdir: Path):
     )
     assert code == 0
     assert stdout.strip() == "test message"
+
+
+def test_init_help_does_not_expose_force(workdir: Path) -> None:
+    code, stdout, stderr = run_cli("init", "--help", cwd=workdir)
+
+    assert code == 0
+    assert "--force" not in stdout
+    assert "--force" not in stderr
+
+
+def test_init_force_is_rejected(workdir: Path) -> None:
+    code, stdout, stderr = run_cli("init", "--force", cwd=workdir)
+
+    assert code != 0
+    assert stdout == ""
+    assert "--force" in stderr
+
+
+def test_cleanup_help_uses_backend_generic_target_wording(workdir: Path) -> None:
+    code, stdout, stderr = run_cli("--help", cwd=workdir)
+
+    assert code == 0
+    help_text = f"{stdout}\n{stderr}"
+    assert "delete broker target state and exit" in help_text
+    assert "delete the database file and exit" not in help_text

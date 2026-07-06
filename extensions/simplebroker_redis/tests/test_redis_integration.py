@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 import redis
 from simplebroker_redis import RedisRunner, get_backend_plugin
+from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys, encode_id
 from simplebroker_redis.validation import key_prefix
 
@@ -36,6 +40,49 @@ def test_plugin_core_round_trip(redis_url: str, redis_namespace: str) -> None:
     finally:
         core.shutdown()
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_broadcast_is_atomic_when_generated_ids_collide(
+    redis_runner: RedisRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.write("alpha", "seed-alpha")
+        core.write("beta", "seed-beta")
+        colliding_ts = core.generate_timestamp()
+        monkeypatch.setattr(core, "generate_timestamp", lambda: colliding_ts)
+
+        with pytest.raises(RuntimeError, match="timestamp conflicts"):
+            core.broadcast("announcement")
+
+        assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
+            "seed-alpha"
+        ]
+        assert core.peek_many("beta", limit=10, with_timestamps=False) == ["seed-beta"]
+    finally:
+        core.shutdown()
+
+
+def test_broadcast_success_with_pattern(redis_runner: RedisRunner) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.write("alpha", "seed-alpha")
+        core.write("alerts", "seed-alerts")
+        core.write("beta", "seed-beta")
+
+        assert core.broadcast("announcement", pattern="a*") == 2
+
+        assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
+            "seed-alpha",
+            "announcement",
+        ]
+        assert core.peek_many("alerts", limit=10, with_timestamps=False) == [
+            "seed-alerts",
+            "announcement",
+        ]
+        assert core.peek_many("beta", limit=10, with_timestamps=False) == ["seed-beta"]
+    finally:
+        core.shutdown()
 
 
 def test_cleanup_preserves_colon_extended_namespace_keys(
@@ -413,4 +460,60 @@ def test_activity_waiter_preserves_multiple_queue_notifications(
     finally:
         waiter.close()
         core.shutdown()
+        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_activity_waiter_stop_event_breaks_wait_promptly(
+    redis_url: str, redis_namespace: str
+) -> None:
+    plugin = get_backend_plugin()
+    stop_event = threading.Event()
+    waiter = plugin.create_activity_waiter(
+        target=redis_url,
+        backend_options={"namespace": redis_namespace},
+        queue_name="jobs",
+        stop_event=stop_event,
+    )
+    assert waiter is not None
+    results: list[bool] = []
+    thread = threading.Thread(target=lambda: results.append(waiter.wait(5.0)))
+    try:
+        thread.start()
+        time.sleep(0.1)
+        stop_event.set()
+        thread.join(0.75)
+
+        assert not thread.is_alive()
+        assert results == [False]
+    finally:
+        waiter.close()
+        thread.join(5.0)
+        plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_multi_queue_activity_waiter_stop_event_breaks_wait_promptly(
+    redis_url: str, redis_namespace: str
+) -> None:
+    plugin = get_backend_plugin()
+    stop_event = threading.Event()
+    waiter = plugin.create_activity_waiter_for_queues(
+        target=redis_url,
+        backend_options={"namespace": redis_namespace},
+        queue_names=("alpha", "beta"),
+        stop_event=stop_event,
+    )
+    assert waiter is not None
+    results: list[bool] = []
+    thread = threading.Thread(target=lambda: results.append(waiter.wait(5.0)))
+    try:
+        thread.start()
+        time.sleep(0.1)
+        stop_event.set()
+        thread.join(0.75)
+
+        assert not thread.is_alive()
+        assert results == [False]
+    finally:
+        waiter.close()
+        thread.join(5.0)
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
