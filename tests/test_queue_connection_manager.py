@@ -10,9 +10,48 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import Queue, helpers
+from simplebroker._exceptions import StopException
 from simplebroker._runner import SQLiteRunner
 from simplebroker.db import BrokerCore, BrokerDB, DBConnection
+from simplebroker.helpers import _execute_connection_retry
+
+
+def test_connection_retry_sleep_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[float] = []
+
+    def capture(wait: float, stop_event=None) -> bool:
+        sleeps.append(wait)
+        return True
+
+    monkeypatch.setattr(helpers, "interruptible_sleep", capture)
+
+    def fail() -> None:
+        raise RuntimeError("connection failed")
+
+    with pytest.raises(RuntimeError):
+        _execute_connection_retry(fail, max_retries=3)
+
+    assert sleeps == [2.0, 4.0]
+
+
+def test_connection_stop_during_sleep_raises_stop_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stop_event = threading.Event()
+
+    def interrupt_sleep(_wait: float, _ev: threading.Event | None) -> bool:
+        return False
+
+    monkeypatch.setattr(helpers, "interruptible_sleep", interrupt_sleep)
+
+    def fail() -> None:
+        raise RuntimeError("connection failed")
+
+    with pytest.raises(StopException, match="Connection interrupted"):
+        _execute_connection_retry(fail, max_retries=3, stop_event=stop_event)
 
 
 class TestQueueConnectionManager:

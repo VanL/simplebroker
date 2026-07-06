@@ -227,7 +227,7 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `alias <add\|remove\|list>` | Manage queue aliases |
 | `dump [--include <glob>] [--exclude <glob>]` | Write all queues to stdout as ndjson (pending messages only, deterministic; globs match queue names, aliases match on their own name or their target, exclude wins, the flags compose) |
 | `load` | Restore a dump from stdin into a fresh broker (duplicate message IDs fail loudly); exit codes 0/1 |
-| `init [--force]` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
+| `init` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
 
 #### Queue Aliases
 
@@ -496,7 +496,10 @@ $ broker read worker1  # -> "shutdown signal"
 $ broker read worker2  # -> "shutdown signal"
 ```
 
-**Note:** Broadcast sends to all *existing* queues at execution time. There's a small race window for queues created during broadcast.
+**Note:** Broadcast sends to all *existing* queues at execution time. For the
+matched queue set, broadcast is atomic across supported backends: it commits to
+all matched queues or none. There's still a small race window for queues created
+during broadcast; newly created queues are not included.
 
 **Alias interaction:** Broadcast operations ignore aliases and work only on literal queue names. Pattern matching with `--pattern` matches queue names, not alias names.
 </details>
@@ -1509,10 +1512,10 @@ export BROKER_DEFAULT_DB_NAME=project-queue.db
 cd /home/user/myproject
 broker init
 # Creates /home/user/myproject/project-queue.db
-
-# Force reinitialize existing database
-broker init --force
 ```
+
+Running `broker init` again validates the existing broker target and reports
+that it already exists; it does not reinitialize storage.
 
 **Important:** `broker init` does not accept `-d` or `-f` flags. In legacy
 SQLite mode it initializes the current directory and respects
@@ -1952,6 +1955,14 @@ schema = "simplebroker_app"
 When `.broker.toml` is present, it owns the backend target and target-shaping
 options for that project. Env is still the right place for supplemental secret
 material such as `BROKER_BACKEND_PASSWORD`.
+
+Environment-derived SQLite path settings, such as `BROKER_DEFAULT_DB_NAME`, are
+validated for safe path components where they shape local filenames. In
+contrast, `.broker.toml` targets and in-process `config=` overrides are trusted
+developer inputs: they can select the backend, storage target, and
+backend-specific options for every broker command run in that project, including
+absolute paths, parent paths, or remote backends. Do not enable project scoping
+in directories whose `.broker.toml` you would not trust.
 </details>
 
 <details>

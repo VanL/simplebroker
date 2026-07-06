@@ -6,16 +6,53 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
-_URI_PASSWORD_RE = re.compile(r"(://[^/?#@\s:]*:)([^/?#@\s@]+)(@)")
 _CONNINFO_PASSWORD_RE = re.compile(
     r"(?i)(\bpassword\s*=\s*)(?:'[^']*'|\"[^\"]*\"|[^\s]+)"
 )
+_WHITESPACE_RE = re.compile(r"\s")
+
+
+def _redact_parsed_url_password(target: str) -> str:
+    parsed = urlsplit(target)
+    if not parsed.scheme or not parsed.netloc or not parsed.password:
+        return target
+
+    userinfo, separator, hostport = parsed.netloc.rpartition("@")
+    if not separator or ":" not in userinfo:
+        return target
+
+    username = userinfo.split(":", 1)[0]
+    safe_netloc = f"{username}:***@{hostport}"
+    return urlunsplit(
+        (parsed.scheme, safe_netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+
+
+def _redact_raw_url_userinfo(target: str) -> str:
+    scheme_end = target.find("://")
+    if scheme_end == -1:
+        return target
+
+    authority_start = scheme_end + 3
+    whitespace = _WHITESPACE_RE.search(target, authority_start)
+    authority_end = whitespace.start() if whitespace else len(target)
+    authority = target[authority_start:authority_end]
+
+    colon_index = authority.find(":")
+    at_index = authority.rfind("@")
+    if colon_index == -1 or at_index == -1 or colon_index > at_index:
+        return target
+
+    password_start = authority_start + colon_index + 1
+    at_absolute = authority_start + at_index
+    return f"{target[:password_start]}***{target[at_absolute:]}"
 
 
 def redact_backend_target(target: str) -> str:
     """Return a display-safe backend target with password material redacted."""
-    redacted = _URI_PASSWORD_RE.sub(r"\1***\3", target)
+    redacted = _redact_raw_url_userinfo(_redact_parsed_url_password(target))
     return _CONNINFO_PASSWORD_RE.sub(r"\1***", redacted)
 
 

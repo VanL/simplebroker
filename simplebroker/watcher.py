@@ -89,7 +89,7 @@ from ._constants import (
 from ._exceptions import OperationalError, StopException
 from ._targets import ResolvedTarget
 from .db import BrokerDB
-from .helpers import _retry_jitter, interruptible_sleep
+from .helpers import _execute_watcher_operational_retry, interruptible_sleep
 from .sbqueue import Queue
 
 if TYPE_CHECKING:
@@ -418,40 +418,34 @@ class BaseWatcher(ABC):
         """
         max_retries = 5
 
-        for attempt in range(max_retries):
-            try:
-                self._check_stop()
-                return process_func()
-            except StopException:
-                raise StopWatching from None
-            except OperationalError as e:
-                if attempt >= max_retries - 1:
-                    if config["BROKER_LOGGING_ENABLED"]:
-                        logger.exception(
-                            f"Failed after {max_retries} operational errors: {e}",
-                        )
-                    raise
+        def _attempt() -> Any:
+            self._check_stop()
+            return process_func()
 
-                wait_time = self._calculate_retry_wait_time(attempt)
-                if config["BROKER_LOGGING_ENABLED"]:
-                    logger.debug(
-                        f"OperationalError during {operation_name} "
-                        f"(retry {attempt + 1}/{max_retries}): {e}. "
-                        f"Retrying in {wait_time:.3f} seconds...",
-                    )
+        def _log_retry(state: Any, exc: Exception, wait: float) -> None:
+            if config["BROKER_LOGGING_ENABLED"]:
+                logger.debug(
+                    f"OperationalError during {operation_name} "
+                    f"(retry {state.tries}/{max_retries}): {exc}. "
+                    f"Retrying in {wait:.3f} seconds...",
+                )
 
-                if not interruptible_sleep(wait_time, self._stop_event):
-                    raise StopWatching from None
-            except StopWatching:
-                raise
-
-        # This should never be reached
-        raise RuntimeError("Failed to process with retry")
-
-    def _calculate_retry_wait_time(self, attempt: int) -> float:
-        """Calculate retry wait time with exponential backoff and jitter."""
-        base_wait: float = 0.05 * (2**attempt)
-        return base_wait + _retry_jitter()
+        try:
+            return _execute_watcher_operational_retry(
+                _attempt,
+                max_retries=max_retries,
+                retry_delay=0.05,
+                stop_event=self._stop_event,
+                before_sleep=_log_retry,
+            )
+        except StopException:
+            raise StopWatching from None
+        except OperationalError as e:
+            if config["BROKER_LOGGING_ENABLED"]:
+                logger.exception(
+                    f"Failed after {max_retries} operational errors: {e}",
+                )
+            raise
 
     def _handle_handler_error(
         self,

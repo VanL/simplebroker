@@ -217,6 +217,19 @@ class Queue:
 
         return self._db_path
 
+    def _move_destination_name(self, destination: Union[str, "Queue"]) -> str:
+        if not isinstance(destination, Queue):
+            return destination
+
+        source_identity = self._activity_waiter_identity().compatibility_key
+        destination_identity = destination._activity_waiter_identity().compatibility_key
+        if source_identity != destination_identity:
+            raise ValueError(
+                "Cannot move messages between different broker targets: "
+                f"source={self.db_target!r}, destination={destination.db_target!r}"
+            )
+        return destination.name
+
     @contextmanager
     def get_connection(self) -> Iterator[BrokerConnection]:
         """Get connection for operations - handles both persistent and ephemeral modes.
@@ -769,7 +782,7 @@ class Queue:
             OperationalError: If the database is locked/busy
         """
         # Get destination queue name
-        dest_name = destination.name if isinstance(destination, Queue) else destination
+        dest_name = self._move_destination_name(destination)
 
         # Check for same source and destination
         if self.name == dest_name:
@@ -859,7 +872,7 @@ class Queue:
             QueueNameError: If queue names are invalid
             OperationalError: If the database is locked/busy
         """
-        dest_name = destination.name if isinstance(destination, Queue) else destination
+        dest_name = self._move_destination_name(destination)
         if self.name == dest_name:
             raise ValueError("Source and destination queues cannot be the same")
 
@@ -908,7 +921,7 @@ class Queue:
             QueueNameError: If queue names are invalid
             OperationalError: If the database is locked/busy
         """
-        dest_name = destination.name if isinstance(destination, Queue) else destination
+        dest_name = self._move_destination_name(destination)
         if self.name == dest_name:
             raise ValueError("Source and destination queues cannot be the same")
 
@@ -954,7 +967,7 @@ class Queue:
             QueueNameError: If queue names are invalid
             OperationalError: If the database is locked/busy
         """
-        dest_name = destination.name if isinstance(destination, Queue) else destination
+        dest_name = self._move_destination_name(destination)
         if self.name == dest_name:
             raise ValueError("Source and destination queues cannot be the same")
 

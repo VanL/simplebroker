@@ -91,6 +91,25 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
 
+      - name: Verify tag matches package version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${TAG_NAME#v}"
+          PACKAGE_PYPROJECT="${PACKAGE_DIR}/pyproject.toml"
+          python - "$TAG_VERSION" "$PACKAGE_PYPROJECT" <<'PY'
+          import sys
+          import tomllib
+
+          tag = sys.argv[1]
+          pyproject_path = sys.argv[2]
+          with open(pyproject_path, "rb") as pyproject_file:
+              package_version = tomllib.load(pyproject_file)["project"]["version"]
+          if package_version != tag:
+              raise SystemExit(f"tag {tag} != pyproject version {package_version}")
+          PY
+
       - name: Build package
         working-directory: ${{ env.PACKAGE_DIR }}
         run: |

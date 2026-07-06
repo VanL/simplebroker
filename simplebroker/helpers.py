@@ -1,7 +1,6 @@
 """Helper functions and classes for SimpleBroker."""
 
 import os
-import random
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -15,6 +14,19 @@ from ._constants import (
     load_config,
 )
 from ._exceptions import OperationalError, StopException
+from ._retry import (
+    RetryInterrupted,
+    RetryState,
+    Stop,
+    bounded_jitter,
+    execute_retry,
+    expo,
+    interruptible_sleep,
+    stop_after_attempt,
+    stop_after_delay,
+    stop_any,
+    stop_never,
+)
 
 T = TypeVar("T")
 
@@ -34,67 +46,21 @@ _LOCKED_ERROR_MARKERS = (
 )
 
 
-def interruptible_sleep(
-    seconds: float,
-    stop_event: threading.Event | None = None,
-    chunk_size: float = 0.1,
-) -> bool:
-    """Sleep for the specified duration, but can be interrupted by a stop event.
-
-    This function provides a more responsive alternative to time.sleep() that can be
-    interrupted by a threading.Event. Even without a stop_event, it sleeps in chunks
-    to allow for better thread responsiveness and signal handling.
-
-    Args:
-        seconds: Number of seconds to sleep
-        stop_event: Optional threading.Event that can interrupt the sleep
-        chunk_size: Maximum duration of each sleep chunk (default: 0.1 seconds)
-
-    Returns:
-        True if the full sleep duration completed, False if interrupted by stop_event
-
-    Example:
-        # In a loop that needs to be stoppable
-        stop_event = threading.Event()
-        while not stop_event.is_set():
-            # Do work...
-            if not interruptible_sleep(5.0, stop_event):
-                break  # Sleep was interrupted, exit loop
-    """
-    if seconds <= 0:
-        return True
-
-    # Create a dummy event if none provided
-    event = stop_event or threading.Event()
-
-    # For short sleeps, do it in one go
-    if seconds <= chunk_size:
-        return not event.wait(timeout=seconds)
-
-    # For longer sleeps, chunk it up
-    start_time = time.perf_counter()
-    target_end_time = start_time + seconds
-
-    while time.perf_counter() < target_end_time:
-        remaining = target_end_time - time.perf_counter()
-        if remaining <= 0:
-            break
-
-        if event.wait(timeout=min(chunk_size, remaining)):
-            # Only return False if it was the actual stop_event that was set
-            return stop_event is None or not stop_event.is_set()
-
-    return True
-
-
-def _retry_jitter() -> float:
-    """Return 0-25ms of jitter for retry backoff.
-
-    Must be random per call rather than clock-derived: retriers that wake at
-    the same instant would otherwise compute identical jitter and stay
-    synchronized through the whole backoff ladder, re-colliding every attempt.
-    """
-    return random.uniform(0.0, 0.025)
+def _build_retry_stop(
+    *,
+    max_retries: int | None,
+    max_elapsed: float | None,
+) -> Stop:
+    stops: list[Stop] = []
+    if max_retries is not None:
+        stops.append(stop_after_attempt(max_retries))
+    if max_elapsed is not None:
+        stops.append(stop_after_delay(max_elapsed))
+    if not stops:
+        return stop_never()
+    if len(stops) == 1:
+        return stops[0]
+    return stop_any(*stops)
 
 
 def _execute_with_retry(
@@ -126,33 +92,32 @@ def _execute_with_retry(
     if max_retries is None and max_elapsed is None:
         raise ValueError("max_retries=None requires max_elapsed")
 
-    start = time.monotonic()
-    attempt = 0
-    while True:
-        try:
-            return operation()
-        except OperationalError as e:
-            if _is_locked_operational_error(e):
-                retry_count_available = max_retries is None or attempt < max_retries - 1
-                elapsed = time.monotonic() - start
-                elapsed_available = max_elapsed is None or elapsed < max_elapsed
-                if retry_count_available and elapsed_available:
-                    # exponential back-off + jitter to decorrelate retriers
-                    wait = retry_delay * (2**attempt) + _retry_jitter()
-                    if max_retry_delay is not None:
-                        wait = min(wait, max_retry_delay)
-                    if max_elapsed is not None:
-                        remaining = max_elapsed - elapsed
-                        if remaining <= 0:
-                            raise
-                        wait = min(wait, remaining)
-                    if not interruptible_sleep(wait, stop_event):
-                        # Sleep was interrupted, raise exception to exit retry loop
-                        raise StopException("Retry interrupted by stop event") from None
-                    attempt += 1
-                    continue
-            # If not a locked error or last attempt, re-raise
-            raise
+    def retry_on(exc: Exception) -> bool:
+        if not isinstance(exc, OperationalError):
+            return False
+        return _is_locked_operational_error(exc)
+
+    try:
+        return execute_retry(
+            operation,
+            retry_on=retry_on,
+            wait_gen=expo,
+            wait_gen_kwargs={
+                "base": 2,
+                "factor": retry_delay,
+                "max_value": max_retry_delay,
+            },
+            jitter=bounded_jitter,
+            stop=_build_retry_stop(
+                max_retries=max_retries,
+                max_elapsed=max_elapsed,
+            ),
+            max_delay=max_elapsed,
+            sleep=interruptible_sleep,
+            stop_event=stop_event,
+        )
+    except RetryInterrupted:
+        raise StopException("Retry interrupted by stop event") from None
 
 
 def _is_locked_operational_error(exc: OperationalError) -> bool:
@@ -167,6 +132,64 @@ def _is_locked_operational_error(exc: OperationalError) -> bool:
         return bool(retryable)
     message = str(exc).lower()
     return any(marker in message for marker in _LOCKED_ERROR_MARKERS)
+
+
+def _is_watcher_operational_retry(exc: Exception) -> bool:
+    if not isinstance(exc, OperationalError):
+        return False
+    if getattr(exc, "retryable", None) is False:
+        return False
+    return True
+
+
+def _execute_watcher_operational_retry(
+    operation: Callable[[], T],
+    *,
+    max_retries: int = 5,
+    retry_delay: float = 0.05,
+    stop_event: threading.Event | None = None,
+    before_sleep: Callable[[RetryState, Exception, float], None] | None = None,
+) -> T:
+    try:
+        return execute_retry(
+            operation,
+            retry_on=_is_watcher_operational_retry,
+            wait_gen=expo,
+            wait_gen_kwargs={"base": 2, "factor": retry_delay},
+            jitter=bounded_jitter,
+            stop=stop_after_attempt(max_retries),
+            sleep=interruptible_sleep,
+            stop_event=stop_event,
+            before_sleep=before_sleep,
+        )
+    except RetryInterrupted:
+        raise StopException("Retry interrupted by stop event") from None
+
+
+def _execute_connection_retry(
+    operation: Callable[[], T],
+    *,
+    max_retries: int = 3,
+    stop_event: threading.Event | None = None,
+    before_sleep: Callable[[RetryState, Exception, float], None] | None = None,
+) -> T:
+    def retry_on(exc: Exception) -> bool:
+        return not isinstance(exc, StopException)
+
+    try:
+        return execute_retry(
+            operation,
+            retry_on=retry_on,
+            wait_gen=expo,
+            wait_gen_kwargs={"base": 2, "factor": 2.0, "max_value": None},
+            jitter=None,
+            stop=stop_after_attempt(max_retries),
+            sleep=interruptible_sleep,
+            stop_event=stop_event,
+            before_sleep=before_sleep,
+        )
+    except RetryInterrupted:
+        raise StopException("Connection interrupted") from None
 
 
 def setup_busy_timeout_ms(config: Mapping[str, Any]) -> int:

@@ -1321,6 +1321,7 @@ class RedisBrokerCore:
         return matches
 
     def broadcast(self, message: str, *, pattern: str | None = None) -> int:
+        self._check_fork_safety()
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("broadcast")
         queues = sorted(str(queue) for queue in self._queue_names())
@@ -1328,9 +1329,34 @@ class RedisBrokerCore:
             queues = [queue for queue in queues if fnmatchcase(queue, pattern)]
         if not queues:
             return 0
-        for queue in queues:
-            self._write_message(queue, message)
-        return len(queues)
+
+        for attempt in range(3):
+            try:
+                records = [
+                    (queue, message, self.generate_timestamp()) for queue in queues
+                ]
+            except TimestampError as exc:
+                if isinstance(exc.__cause__, OperationalError):
+                    raise OperationalError(str(exc.__cause__)) from exc
+                raise
+
+            try:
+                self.insert_messages(records)
+                return len(queues)
+            except IntegrityError as exc:
+                self._ts_conflict_count += 1
+                if attempt == 0:
+                    time.sleep(0.001)
+                elif attempt == 1:
+                    self._resync_timestamp_generator()
+                else:
+                    raise RuntimeError(
+                        "Failed to broadcast message after repeated timestamp conflicts"
+                    ) from exc
+
+        raise RuntimeError(
+            "Failed to broadcast message after repeated timestamp conflicts"
+        )
 
     def queue_exists_and_has_messages(self, queue: str) -> bool:
         return self.queue_exists(queue)
