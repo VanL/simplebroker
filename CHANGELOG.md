@@ -5,6 +5,28 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- Prevented connection passwords and backend-option values from appearing in target
+  or Queue representations and cross-target move errors.
+- Made instance configuration authoritative for connection, watcher, generator, and
+  maintenance operations.
+- Kept failed peek-handler messages retryable without advancing past later message IDs.
+- Ensured each handler failure invokes its error callback at most once and made watcher
+  running state clear after normal or fatal termination.
+- Rejected invalid delivery guarantees before connection or message-state mutation.
+
+### Changed
+- Automatic vacuum now counts committed claims, moves, imports, broadcasts, and
+  generator batches on long-lived cores. It is documented as synchronous,
+  opportunistic maintenance rather than a background process.
+- Backend API v2 exposes the shared delivery-guarantee and maintenance contracts
+  from `simplebroker.ext`; first-party extensions no longer import their private
+  implementation modules.
+- `BrokerTarget` is now the single target descriptor name throughout the public
+  API and implementation; the duplicate private `ResolvedTarget` name was removed.
+
 ## [5.1.1] - 2026-07-09
 ### Added
 - Added `examples/reference_reactor.py`, a copyable sidecar-aware reactor reference

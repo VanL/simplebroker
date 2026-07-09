@@ -20,6 +20,7 @@ import logging
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +30,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from multi_queue_watcher import MultiQueueWatcher  # noqa: E402
 
 from simplebroker import Queue
-from simplebroker._constants import load_config
-
-_config = load_config()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -333,7 +331,11 @@ def pattern_5_monitoring() -> None:
                 self.current_queue: str | None = None
 
             def _dispatch(
-                self, message: str, timestamp: int, *, config: dict[str, Any] = _config
+                self,
+                message: str,
+                timestamp: int,
+                *,
+                config: Mapping[str, Any] | None = None,
             ) -> None:
                 """Override to collect metrics."""
                 start_time = time.time()

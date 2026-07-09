@@ -35,7 +35,7 @@ from typing import Any, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "5.1.1"
+__version__: Final[str] = "5.2.0"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
@@ -577,11 +577,14 @@ def load_config() -> dict[str, Any]:
         Vacuum Settings:
             BROKER_AUTO_VACUUM (int): Enable automatic vacuum of claimed messages.
                 Default: 1 (enabled)
-                Set to 0 to disable automatic cleanup.
+                Set to 0 to disable opportunistic cleanup checks.
 
-            BROKER_AUTO_VACUUM_INTERVAL (int): Write operations between vacuum checks.
+            BROKER_AUTO_VACUUM_INTERVAL (int): Successful committed message mutations
+                between checks on one long-lived broker core.
                 Default: 100
-                Lower values = more frequent cleanup, higher values = better performance.
+                Values below 1 are normalized internally to 1, preserving the
+                historical check-after-every-mutation behavior. The schedule is
+                in-memory and per core; it is not a timer or background process.
 
             BROKER_VACUUM_THRESHOLD (float): Percentage of claimed messages to trigger vacuum.
                 Default: 0.1 (10%)

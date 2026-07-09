@@ -29,9 +29,14 @@ in broker databases or backend metadata. Third-party backend extensions are
 welcome as proposed PRs or maintained packages, but authors must pin an exact
 simplebroker version and re-verify on every upgrade until there is a stable
 standalone backend SDK.
+
+Backend API v2 adds the shared delivery-guarantee and automatic-maintenance
+contracts to this public facade. Backend packages must import those names from
+``simplebroker.ext``, never their underscore-prefixed implementation modules.
 """
 
 from ._backend_plugins import (
+    BACKEND_API_VERSION,
     ActivityWaiter,
     BackendAwareRunner,
     BackendPlugin,
@@ -39,6 +44,7 @@ from ._backend_plugins import (
     MultiQueueActivityWaiterHook,
     get_backend_plugin,
 )
+from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
 from ._exceptions import (
     BrokerError,
     DatabaseError,
@@ -50,6 +56,7 @@ from ._exceptions import (
     SidecarUnavailableError,
     TimestampError,
 )
+from ._maintenance import MaintenanceSchedule, vacuum_is_eligible
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner
 from ._sidecar import RESERVED_TABLE_NAMES, SidecarSession
 from ._timestamp import TimestampGenerator
@@ -65,6 +72,7 @@ __all__ = [
     "SQLRunner",
     "SQLiteRunner",
     "SetupPhase",
+    "BACKEND_API_VERSION",
     "BackendPlugin",
     "BrokerConnection",
     "ActivityWaiter",
@@ -72,6 +80,11 @@ __all__ = [
     "MultiQueueActivityWaiterHook",
     "get_backend_plugin",
     "TimestampGenerator",
+    # Shared backend behavior contracts
+    "DeliveryGuarantee",
+    "validate_delivery_guarantee",
+    "MaintenanceSchedule",
+    "vacuum_is_eligible",
     # Sidecar tables
     "RESERVED_TABLE_NAMES",
     "SidecarSession",

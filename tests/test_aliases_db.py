@@ -1,6 +1,6 @@
 import pytest
 
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 
 from .helper_scripts.broker_factory import make_broker
 
@@ -24,7 +24,7 @@ def test_alias_store_and_resolve(broker) -> None:
     assert dict(broker.list_aliases()) == {"task2": "shared"}
 
 
-def test_alias_cache_miss_refresh(broker_target: ResolvedTarget) -> None:
+def test_alias_cache_miss_refresh(broker_target: BrokerTarget) -> None:
     creator = make_broker(broker_target)
     try:
         creator.add_alias("alpha", "shared")
@@ -83,7 +83,7 @@ def test_alias_version_bumps(broker) -> None:
     assert version3 > version2
 
 
-def test_alias_persistent_cache_refresh(broker_target: ResolvedTarget) -> None:
+def test_alias_persistent_cache_refresh(broker_target: BrokerTarget) -> None:
     db1 = make_broker(broker_target)
     try:
         db1.add_alias("alpha", "beta")
@@ -106,7 +106,7 @@ def test_alias_persistent_cache_refresh(broker_target: ResolvedTarget) -> None:
 
 
 def test_alias_add_revalidates_against_live_state(
-    broker_target: ResolvedTarget,
+    broker_target: BrokerTarget,
 ) -> None:
     db1 = make_broker(broker_target)
     db2 = make_broker(broker_target)

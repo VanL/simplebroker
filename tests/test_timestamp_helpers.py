@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 
 from .helper_scripts.broker_factory import make_broker, make_queue
 
@@ -14,7 +14,7 @@ pytestmark = [pytest.mark.shared]
 class TestTimestampHelpers:
     """Ensure convenience timestamp APIs delegate correctly."""
 
-    def test_db_generate_timestamp_monotonic(self, broker_target: ResolvedTarget):
+    def test_db_generate_timestamp_monotonic(self, broker_target: BrokerTarget):
         core = make_broker(broker_target)
         try:
             ts1 = core.generate_timestamp()
@@ -27,7 +27,7 @@ class TestTimestampHelpers:
         assert ts2 > ts1
         assert ts3 > ts2
 
-    def test_queue_generate_timestamp_monotonic(self, broker_target: ResolvedTarget):
+    def test_queue_generate_timestamp_monotonic(self, broker_target: BrokerTarget):
         queue = make_queue("tasks", broker_target)
         try:
             ts1 = queue.generate_timestamp()

@@ -57,8 +57,8 @@ def redact_backend_target(target: str) -> str:
 
 
 @dataclass(frozen=True)
-class ResolvedTarget:
-    """Resolved backend target used internally by CLI and connection plumbing."""
+class BrokerTarget:
+    """Canonical backend target descriptor for public and internal plumbing."""
 
     backend_name: str
     target: str
@@ -82,6 +82,21 @@ class ResolvedTarget:
             return self.target
         return redact_backend_target(self.target)
 
+    def __repr__(self) -> str:
+        """Return a diagnostic representation without connection credentials."""
+        safe_options = dict.fromkeys(sorted(self.backend_options), "***")
+        return (
+            "BrokerTarget("
+            f"backend_name={self.backend_name!r}, "
+            f"target={self.display_target!r}, "
+            f"backend_options={safe_options!r}, "
+            f"project_root={self.project_root!r}, "
+            f"config_path={self.config_path!r}, "
+            f"used_project_scope={self.used_project_scope!r}, "
+            f"legacy_sqlite_path_mode={self.legacy_sqlite_path_mode!r}"
+            ")"
+        )
+
     @property
     def plugin(self):  # type: ignore[no-untyped-def]
         """Resolve the backend plugin lazily to keep targets data-only."""
@@ -90,4 +105,4 @@ class ResolvedTarget:
         return get_backend_plugin(self.backend_name)
 
 
-__all__ = ["ResolvedTarget", "redact_backend_target"]
+__all__ = ["BrokerTarget", "redact_backend_target"]

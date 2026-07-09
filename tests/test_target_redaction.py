@@ -1,4 +1,12 @@
-from simplebroker._targets import ResolvedTarget, redact_backend_target
+from simplebroker import BrokerTarget
+from simplebroker._targets import redact_backend_target
+
+
+def test_broker_target_is_the_only_target_type_name() -> None:
+    import simplebroker._targets as targets
+
+    assert BrokerTarget.__name__ == "BrokerTarget"
+    assert targets.BrokerTarget is BrokerTarget
 
 
 def test_redact_backend_target_removes_special_character_url_passwords() -> None:
@@ -39,6 +47,39 @@ def test_redact_backend_target_redacts_conninfo_password() -> None:
 
 
 def test_resolved_target_display_target_leaves_sqlite_paths_unchanged() -> None:
-    target = ResolvedTarget("sqlite", "/tmp/password=literal.db")
+    target = BrokerTarget("sqlite", "/tmp/password=literal.db")
 
     assert target.display_target == "/tmp/password=literal.db"
+
+
+def test_resolved_target_repr_redacts_connection_and_backend_option_values() -> None:
+    targets = [
+        BrokerTarget(
+            "postgres",
+            "postgresql://user:uri-secret@db.example.com/app",
+            backend_options={"schema": "ordinary-secret", "password": "option-secret"},
+        ),
+        BrokerTarget(
+            "postgres",
+            "host=db.example.com user=app password='conninfo secret'",
+            backend_options={"password": "option-secret", "schema": "ordinary-secret"},
+        ),
+        BrokerTarget(
+            "redis",
+            "redis://:encoded%2Fsecret@127.0.0.1:6379/0",
+            backend_options={"schema": "ordinary-secret", "password": "option-secret"},
+        ),
+    ]
+
+    representations = [repr(target) for target in targets]
+
+    for representation in representations:
+        assert "uri-secret" not in representation
+        assert "conninfo secret" not in representation
+        assert "encoded%2Fsecret" not in representation
+        assert "option-secret" not in representation
+        assert "ordinary-secret" not in representation
+        assert "***" in representation
+
+    assert representations[0].index("password") < representations[0].index("schema")
+    assert representations[1].index("password") < representations[1].index("schema")

@@ -9,7 +9,7 @@ import warnings
 
 import pytest
 
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 
 pytest.importorskip("simplebroker.watcher")
 from simplebroker.watcher import QueueWatcher
@@ -44,7 +44,7 @@ class ConcurrentCollector:
 
 
 def wait_for_queue_drain(
-    broker_target: ResolvedTarget,
+    broker_target: BrokerTarget,
     queue_name: str,
     collectors: list[ConcurrentCollector],
     expected_total: int,

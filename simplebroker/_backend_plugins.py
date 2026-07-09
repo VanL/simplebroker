@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from importlib import metadata
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 
 from ._constants import __version__ as SIMPLEBROKER_VERSION
+from ._delivery import DeliveryGuarantee
 from ._exceptions import DatabaseError
 from ._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from .metadata import QueueRenameResult, QueueStats
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
-BACKEND_API_VERSION: Final[int] = 1
+BACKEND_API_VERSION: Final[int] = 2
 DEFAULT_BACKEND_NAME = "sqlite"
 FIRST_PARTY_BACKEND_PACKAGES: Final[dict[str, str]] = {
     "postgres": "simplebroker-pg",
@@ -284,7 +285,7 @@ class BrokerConnection(Protocol):
         limit: int,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
     ) -> list[tuple[str, int]] | list[str]: ...
@@ -294,12 +295,12 @@ class BrokerConnection(Protocol):
         queue: str,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: dict[str, Any] = ...,
+        config: Mapping[str, Any] | None = None,
     ) -> Iterator[tuple[str, int] | str]: ...
 
     def peek_one(
@@ -351,7 +352,7 @@ class BrokerConnection(Protocol):
         limit: int,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
@@ -363,12 +364,12 @@ class BrokerConnection(Protocol):
         target_queue: str,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: dict[str, Any] = ...,
+        config: Mapping[str, Any] | None = None,
     ) -> Iterator[tuple[str, int] | str]: ...
 
     def delete(self, queue: str | None = None) -> int: ...

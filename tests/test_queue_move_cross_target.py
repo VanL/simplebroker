@@ -1,18 +1,31 @@
 import pytest
 
 from simplebroker import Queue
+from simplebroker._targets import BrokerTarget
 
 
 def _queue_messages(queue: Queue) -> list[str]:
     return queue.peek_many(limit=10, with_timestamps=False)
 
 
+def _secret_target(tmp_path, filename: str, secret: str) -> BrokerTarget:
+    return BrokerTarget(
+        "sqlite",
+        str(tmp_path / filename),
+        backend_options={"password": secret, "schema": f"schema-{secret}"},
+    )
+
+
 @pytest.mark.parametrize("method_name", ["move", "move_one", "move_many"])
 def test_queue_move_rejects_cross_target_queue_destination(
     tmp_path, method_name: str
 ) -> None:
-    source = Queue("inbox", db_path=str(tmp_path / "source.db"))
-    destination = Queue("outbox", db_path=str(tmp_path / "dest.db"))
+    source = Queue(
+        "inbox", db_path=_secret_target(tmp_path, "source.db", "source-secret")
+    )
+    destination = Queue(
+        "outbox", db_path=_secret_target(tmp_path, "dest.db", "dest-secret")
+    )
     source.write("payload")
 
     with pytest.raises(ValueError, match="different broker targets") as exc_info:
@@ -26,13 +39,20 @@ def test_queue_move_rejects_cross_target_queue_destination(
     message = str(exc_info.value)
     assert "source.db" in message
     assert "dest.db" in message
+    assert "source-secret" not in message
+    assert "dest-secret" not in message
+    assert "backend_options" not in message
     assert _queue_messages(source) == ["payload"]
     assert _queue_messages(destination) == []
 
 
 def test_queue_move_generator_rejects_cross_target_queue_destination(tmp_path) -> None:
-    source = Queue("inbox", db_path=str(tmp_path / "source.db"))
-    destination = Queue("outbox", db_path=str(tmp_path / "dest.db"))
+    source = Queue(
+        "inbox", db_path=_secret_target(tmp_path, "source.db", "source-secret")
+    )
+    destination = Queue(
+        "outbox", db_path=_secret_target(tmp_path, "dest.db", "dest-secret")
+    )
     source.write("payload")
 
     with pytest.raises(ValueError, match="different broker targets") as exc_info:
@@ -41,6 +61,9 @@ def test_queue_move_generator_rejects_cross_target_queue_destination(tmp_path) -
     message = str(exc_info.value)
     assert "source.db" in message
     assert "dest.db" in message
+    assert "source-secret" not in message
+    assert "dest-secret" not in message
+    assert "backend_options" not in message
     assert _queue_messages(source) == ["payload"]
     assert _queue_messages(destination) == []
 

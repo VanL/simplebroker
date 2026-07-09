@@ -13,7 +13,7 @@ import simplebroker._backend_plugins as backend_plugins
 import simplebroker._sql as sqlite_sql
 from simplebroker import Queue, create_activity_waiter_for_queues
 from simplebroker._runner import SQLiteRunner
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 
 pytestmark = [pytest.mark.sqlite_only]
 
@@ -109,7 +109,7 @@ def test_create_activity_waiter_for_queues_calls_backend_hook_with_deduped_names
     plugin.calls.clear()
     _install_dummy_plugin(monkeypatch, lambda: plugin)
     stop_event = threading.Event()
-    target = ResolvedTarget(
+    target = BrokerTarget(
         "dummy",
         "postgresql://example/simplebroker",
         {"schema": "simplebroker_test", "pool": {"max": 4}},
@@ -141,7 +141,7 @@ def test_queue_create_activity_waiter_still_uses_single_queue_hook(
 ) -> None:
     plugin = RecordingPlugin()
     _install_dummy_plugin(monkeypatch, lambda: plugin)
-    target = ResolvedTarget("dummy", "target", {"schema": "same"})
+    target = BrokerTarget("dummy", "target", {"schema": "same"})
     queue = Queue("jobs", db_path=target)
 
     waiter = queue.create_activity_waiter(stop_event=threading.Event())
@@ -154,8 +154,8 @@ def test_create_activity_waiter_for_queues_rejects_mixed_targets(
 ) -> None:
     _install_dummy_plugin(monkeypatch, RecordingPlugin)
 
-    queue_a = Queue("a", db_path=ResolvedTarget("dummy", "target-a", {}))
-    queue_b = Queue("b", db_path=ResolvedTarget("dummy", "target-b", {}))
+    queue_a = Queue("a", db_path=BrokerTarget("dummy", "target-a", {}))
+    queue_b = Queue("b", db_path=BrokerTarget("dummy", "target-b", {}))
 
     with pytest.raises(ValueError, match="queues cannot safely share one"):
         create_activity_waiter_for_queues(
@@ -171,11 +171,11 @@ def test_create_activity_waiter_for_queues_rejects_mixed_backend_options(
 
     queue_a = Queue(
         "a",
-        db_path=ResolvedTarget("dummy", "target", {"schema": "one"}),
+        db_path=BrokerTarget("dummy", "target", {"schema": "one"}),
     )
     queue_b = Queue(
         "b",
-        db_path=ResolvedTarget("dummy", "target", {"schema": "two"}),
+        db_path=BrokerTarget("dummy", "target", {"schema": "two"}),
     )
 
     with pytest.raises(ValueError, match="queues cannot safely share one"):
@@ -258,7 +258,7 @@ def test_create_activity_waiter_for_queues_rejects_plain_and_resolved_sqlite_mix
 ) -> None:
     db_path = str(workdir / "broker.db")
     queue_plain = Queue("a", db_path=db_path)
-    queue_resolved = Queue("b", db_path=ResolvedTarget("sqlite", db_path, {}))
+    queue_resolved = Queue("b", db_path=BrokerTarget("sqlite", db_path, {}))
 
     with pytest.raises(ValueError, match="queues cannot safely share one"):
         create_activity_waiter_for_queues(
@@ -272,7 +272,7 @@ def test_create_activity_waiter_for_queues_accepts_distinct_plugin_instances(
 ) -> None:
     RecordingPlugin.calls.clear()
     _install_dummy_plugin(monkeypatch, RecordingPlugin)
-    target = ResolvedTarget("dummy", "target", {"schema": "same"})
+    target = BrokerTarget("dummy", "target", {"schema": "same"})
 
     queue_a = Queue("a", db_path=target)
     queue_b = Queue("b", db_path=target)

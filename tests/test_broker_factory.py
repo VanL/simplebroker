@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import pytest
 
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 from simplebroker.project import deserialize_broker_target, serialize_broker_target
 
 pytestmark = [pytest.mark.shared]
 
 
 def test_target_round_trips_through_serialization(
-    broker_target: ResolvedTarget,
+    broker_target: BrokerTarget,
 ) -> None:
     """A resolved target should survive serialize/deserialize."""
     payload = serialize_broker_target(broker_target)

@@ -11,7 +11,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Union, cast
+from typing import Any, Union, cast
 
 from ._backend_plugins import (
     ActivityWaiter,
@@ -22,11 +22,12 @@ from ._backend_plugins import (
     get_backend_plugin,
 )
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
+from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
 from ._message_id import MessageIdInput
 from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
 from ._sidecar import SidecarSession
-from ._targets import ResolvedTarget
+from ._targets import BrokerTarget
 from .db import DBConnection
 from .metadata import QueueStats
 from .project import target_for_directory
@@ -87,6 +88,13 @@ def _freeze_for_waiter_identity(value: Any) -> _FrozenValue:
     return repr(value)
 
 
+def _display_broker_target(target: str | BrokerTarget) -> str:
+    """Return a connection-safe target string for Queue diagnostics."""
+    if isinstance(target, BrokerTarget):
+        return target.display_target
+    return str(target)
+
+
 def _normalize_sqlite_waiter_target(target: str) -> str:
     path = Path(target).expanduser()
     try:
@@ -95,7 +103,7 @@ def _normalize_sqlite_waiter_target(target: str) -> str:
         return str(path)
 
 
-def _default_target_from_config(config: dict[str, Any]) -> ResolvedTarget:
+def _default_target_from_config(config: dict[str, Any]) -> BrokerTarget:
     """Resolve the implicit Queue target from caller-provided configuration."""
 
     root = (
@@ -159,7 +167,7 @@ class Queue:
         self,
         name: str,
         *,
-        db_path: str | ResolvedTarget | None = None,
+        db_path: str | BrokerTarget | None = None,
         persistent: bool = False,
         runner: SQLRunner | None = None,
         config: dict[str, Any] | None = None,
@@ -182,13 +190,13 @@ class Queue:
         self._config = resolve_config(config)
         self._uses_config_default_target = db_path is None or db_path == ""
         if self._uses_config_default_target:
-            resolved_db_path: str | ResolvedTarget = _default_target_from_config(
+            resolved_db_path: str | BrokerTarget = _default_target_from_config(
                 self._config
             )
         else:
             assert db_path is not None
             resolved_db_path = db_path
-        self._db_path: str | ResolvedTarget = resolved_db_path
+        self._db_path: str | BrokerTarget = resolved_db_path
         self._stop_event: threading.Event | None = None
 
         # Create DBConnection for persistent queues and injected-runner queues.
@@ -212,7 +220,7 @@ class Queue:
         self._activity_waiter: ActivityWaiter | None = None
 
     @property
-    def db_target(self) -> str | ResolvedTarget:
+    def db_target(self) -> str | BrokerTarget:
         """Return the configured broker target for this queue."""
 
         return self._db_path
@@ -226,7 +234,8 @@ class Queue:
         if source_identity != destination_identity:
             raise ValueError(
                 "Cannot move messages between different broker targets: "
-                f"source={self.db_target!r}, destination={destination.db_target!r}"
+                f"source={_display_broker_target(self.db_target)!r}, "
+                f"destination={_display_broker_target(destination.db_target)!r}"
             )
         return destination.name
 
@@ -475,7 +484,7 @@ class Queue:
         limit: int,
         *,
         with_timestamps: bool = False,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
     ) -> list[str] | list[tuple[str, int]]:
@@ -500,12 +509,13 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
+        validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         with self.get_connection() as connection:
             return connection.claim_many(
                 self.name,
                 limit,
                 with_timestamps=with_timestamps,
-                delivery_guarantee=delivery_guarantee,
+                delivery_guarantee=validated_delivery,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
             )
@@ -514,7 +524,7 @@ class Queue:
         self,
         *,
         with_timestamps: bool = False,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
@@ -539,11 +549,12 @@ class Queue:
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
+        validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         with self.get_connection() as connection:
             yield from connection.claim_generator(
                 self.name,
                 with_timestamps=with_timestamps,
-                delivery_guarantee=delivery_guarantee,
+                delivery_guarantee=validated_delivery,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
@@ -891,7 +902,7 @@ class Queue:
         limit: int,
         *,
         with_timestamps: bool = False,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
@@ -921,6 +932,7 @@ class Queue:
             QueueNameError: If queue names are invalid
             OperationalError: If the database is locked/busy
         """
+        validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         dest_name = self._move_destination_name(destination)
         if self.name == dest_name:
             raise ValueError("Source and destination queues cannot be the same")
@@ -931,7 +943,7 @@ class Queue:
                 dest_name,
                 limit,
                 with_timestamps=with_timestamps,
-                delivery_guarantee=delivery_guarantee,
+                delivery_guarantee=validated_delivery,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
                 require_unclaimed=require_unclaimed,
@@ -942,7 +954,7 @@ class Queue:
         destination: Union[str, "Queue"],
         *,
         with_timestamps: bool = False,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
@@ -967,6 +979,7 @@ class Queue:
             QueueNameError: If queue names are invalid
             OperationalError: If the database is locked/busy
         """
+        validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         dest_name = self._move_destination_name(destination)
         if self.name == dest_name:
             raise ValueError("Source and destination queues cannot be the same")
@@ -976,7 +989,7 @@ class Queue:
                 self.name,
                 dest_name,
                 with_timestamps=with_timestamps,
-                delivery_guarantee=delivery_guarantee,
+                delivery_guarantee=validated_delivery,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
@@ -1089,15 +1102,11 @@ class Queue:
             >>> Queue("logs", db_path="/var/db/app.db")
             Queue('logs', db_path='/var/db/app.db')
         """
-        parts = [f"'{self.name}'"]
+        parts = [repr(self.name)]
 
-        db_repr = (
-            self._db_path.target
-            if isinstance(self._db_path, ResolvedTarget)
-            else self._db_path
-        )
+        db_repr = _display_broker_target(self._db_path)
         if not self._uses_config_default_target and db_repr != DEFAULT_DB_NAME:
-            parts.append(f"db_path='{db_repr}'")
+            parts.append(f"db_path={db_repr!r}")
         if self._persistent:
             parts.append("persistent=True")
 
@@ -1185,7 +1194,7 @@ class Queue:
             if isinstance(self._runner, BackendAwareRunner):
                 plugin = self._runner.backend_plugin
                 backend_name = plugin.name
-            elif isinstance(self._db_path, ResolvedTarget):
+            elif isinstance(self._db_path, BrokerTarget):
                 plugin = self._db_path.plugin
                 backend_name = self._db_path.backend_name
             else:
@@ -1202,7 +1211,7 @@ class Queue:
                 runner_arg=self._runner,
             )
 
-        if isinstance(self._db_path, ResolvedTarget):
+        if isinstance(self._db_path, BrokerTarget):
             plugin = self._db_path.plugin
             target = self._db_path.target
             target_key = (
@@ -1319,7 +1328,7 @@ class Queue:
                         close_generator()
                 return
 
-            delivery_guarantee: Literal["exactly_once", "at_least_once"] = (
+            delivery_guarantee: DeliveryGuarantee = (
                 "at_least_once"
                 if batch_processing and commit_interval > 1
                 else "exactly_once"

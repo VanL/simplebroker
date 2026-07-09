@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -17,7 +18,6 @@ import redis
 from simplebroker._constants import (
     ALIAS_PREFIX,
     PEEK_BATCH_SIZE,
-    load_config,
     resolve_config,
 )
 from simplebroker._exceptions import (
@@ -46,6 +46,12 @@ from simplebroker.db import (
     _validate_queue_name_cached,
     _validate_queue_prefix,
 )
+from simplebroker.ext import (
+    DeliveryGuarantee,
+    MaintenanceSchedule,
+    vacuum_is_eligible,
+    validate_delivery_guarantee,
+)
 from simplebroker.metadata import QueueRenameResult, QueueStats
 
 from . import scripts
@@ -54,7 +60,7 @@ from .responses import response_dict, response_int, response_list, response_set
 from .runner import RedisRunner
 from .validation import is_namespace_key
 
-_config = load_config()
+logger = logging.getLogger(__name__)
 
 
 def _translate_redis_error(exc: redis.RedisError) -> OperationalError:
@@ -79,8 +85,9 @@ class RedisBrokerCore:
         self._keys = RedisKeys(runner.namespace)
         self._prefix = self._keys.prefix
         self._max_message_size = int(self._config["BROKER_MAX_MESSAGE_SIZE"])
-        self._vacuum_interval = int(self._config["BROKER_AUTO_VACUUM_INTERVAL"])
-        self._write_count = 0
+        self._maintenance_schedule = MaintenanceSchedule(
+            int(self._config["BROKER_AUTO_VACUUM_INTERVAL"])
+        )
         self._active_generator_batch: Literal["claim", "move"] | None = None
         self._active_generator_batch_owner: int | None = None
         self._ts_conflict_count = 0
@@ -196,6 +203,7 @@ class RedisBrokerCore:
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("write")
         self._write_message(queue, message)
+        self._record_maintenance_activity(1)
 
     def insert_messages(self, records: Iterable[MessageInsertRecord]) -> None:
         self._check_fork_safety()
@@ -238,6 +246,7 @@ class RedisBrokerCore:
             self.refresh_last_timestamp()
             for queue in {queue for queue, _, _ in normalized_records}:
                 self._publish(queue)
+            self._record_maintenance_activity(len(normalized_records))
             return
         if code == -1:
             raise IntegrityError("message ID already exists")
@@ -463,7 +472,9 @@ class RedisBrokerCore:
             )
         except redis.RedisError as exc:
             raise _translate_redis_error(exc) from exc
-        return self._rows_from_flat(flat)
+        rows = self._rows_from_flat(flat)
+        self._record_maintenance_activity(len(rows))
+        return rows
 
     def _move_rows(
         self,
@@ -518,6 +529,7 @@ class RedisBrokerCore:
         rows = self._rows_from_flat(flat)
         if rows:
             self._publish(target_queue)
+        self._record_maintenance_activity(len(rows))
         return rows
 
     def claim_one(
@@ -540,11 +552,11 @@ class RedisBrokerCore:
         limit: int,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
     ) -> list[tuple[str, int]] | list[str]:
-        del delivery_guarantee
+        validate_delivery_guarantee(delivery_guarantee)
         if limit < 1:
             raise ValueError("limit must be at least 1")
         self._validate_queue_name(queue)
@@ -562,15 +574,16 @@ class RedisBrokerCore:
         queue: str,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
     ) -> Generator[tuple[str, int] | str, None, None]:
+        validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         self._validate_queue_name(queue)
-        if delivery_guarantee == "exactly_once":
+        if validated_delivery == "exactly_once":
             while True:
                 rows = self._claim_rows(
                     queue,
@@ -584,7 +597,12 @@ class RedisBrokerCore:
                 row = rows[0]
                 yield row if with_timestamps else row[0]
             return
-        effective_batch_size = batch_size or config["BROKER_GENERATOR_BATCH_SIZE"]
+        effective_config = self._config if config is None else resolve_config(config)
+        effective_batch_size = (
+            batch_size
+            if batch_size is not None
+            else effective_config["BROKER_GENERATOR_BATCH_SIZE"]
+        )
         yield from self._claim_batch_generator(
             queue,
             with_timestamps=with_timestamps,
@@ -746,6 +764,7 @@ class RedisBrokerCore:
                 self._set_active_generator_batch(None)
                 if completed:
                     self._commit_claim_batch(queue, token, rows)
+                    self._record_maintenance_activity(len(rows))
                 else:
                     self._rollback_batch(queue, token, rows)
 
@@ -889,12 +908,12 @@ class RedisBrokerCore:
         limit: int,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
     ) -> list[tuple[str, int]] | list[str]:
-        del delivery_guarantee
+        validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
             raise ValueError("Source and target queues cannot be the same")
         if limit < 1:
@@ -918,18 +937,19 @@ class RedisBrokerCore:
         target_queue: str,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
     ) -> Generator[tuple[str, int] | str, None, None]:
+        validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
             raise ValueError("Source and target queues cannot be the same")
         self._validate_queue_name(source_queue)
         self._validate_queue_name(target_queue)
-        if delivery_guarantee == "exactly_once":
+        if validated_delivery == "exactly_once":
             while True:
                 rows = self._move_rows(
                     source_queue,
@@ -944,7 +964,12 @@ class RedisBrokerCore:
                 row = rows[0]
                 yield row if with_timestamps else row[0]
             return
-        effective_batch_size = batch_size or config["BROKER_GENERATOR_BATCH_SIZE"]
+        effective_config = self._config if config is None else resolve_config(config)
+        effective_batch_size = (
+            batch_size
+            if batch_size is not None
+            else effective_config["BROKER_GENERATOR_BATCH_SIZE"]
+        )
         while True:
             token, rows = self._begin_batch(
                 source_queue,
@@ -967,6 +992,7 @@ class RedisBrokerCore:
                 self._set_active_generator_batch(None)
                 if completed:
                     self._commit_move_batch(source_queue, target_queue, token, rows)
+                    self._record_maintenance_activity(len(rows))
                 else:
                     self._rollback_batch(source_queue, token, rows)
 
@@ -1043,6 +1069,28 @@ class RedisBrokerCore:
 
     def count_claimed_messages(self) -> int:
         return sum(stats.claimed for stats in self.list_queue_stats())
+
+    def _record_maintenance_activity(self, completed: int) -> None:
+        """Run one best-effort maintenance check after committed activity."""
+        if self._config["BROKER_AUTO_VACUUM"] != 1 or completed <= 0:
+            return
+
+        with self._lock:
+            if not self._maintenance_schedule.record(completed):
+                return
+            try:
+                claimed_count, total_count = self.get_overall_stats()
+                if vacuum_is_eligible(
+                    claimed_count=claimed_count,
+                    total_count=total_count,
+                    threshold=float(self._config["BROKER_VACUUM_THRESHOLD"]),
+                ):
+                    self.vacuum()
+            except Exception:
+                if self._config["BROKER_LOGGING_ENABLED"]:
+                    logger.exception("Automatic vacuum failed; will retry later")
+            else:
+                self._maintenance_schedule.mark_check_succeeded()
 
     def status(self) -> dict[str, int]:
         _, total = self.get_overall_stats()
@@ -1422,19 +1470,25 @@ class RedisBrokerCore:
     def vacuum(self, compact: bool = False) -> None:
         del compact
         self._assert_no_reentrant_mutation_during_batch("vacuum")
-        batch_size = int(self._config["BROKER_VACUUM_BATCH_SIZE"])
-        for queue in [str(item) for item in self._queue_names()]:
-            claimed_key = self._qkey(queue, "claimed")
-            ids = response_list(self._client.zrange(claimed_key, 0, batch_size - 1))
-            if not ids:
-                continue
-            with self._client.pipeline(transaction=True) as pipe:
-                pipe.zrem(claimed_key, *ids)
-                pipe.hdel(self._keys.bodies, *ids)
-                pipe.zrem(self._keys.all_ids, *ids)
-                pipe.execute()
-            if not self.queue_exists(queue):
-                self._client.srem(self._key("queues"), queue)
+        try:
+            with self._lock:
+                batch_size = int(self._config["BROKER_VACUUM_BATCH_SIZE"])
+                for queue in [str(item) for item in self._queue_names()]:
+                    claimed_key = self._qkey(queue, "claimed")
+                    ids = response_list(
+                        self._client.zrange(claimed_key, 0, batch_size - 1)
+                    )
+                    if not ids:
+                        continue
+                    with self._client.pipeline(transaction=True) as pipe:
+                        pipe.zrem(claimed_key, *ids)
+                        pipe.hdel(self._keys.bodies, *ids)
+                        pipe.zrem(self._keys.all_ids, *ids)
+                        pipe.execute()
+                    if not self.queue_exists(queue):
+                        self._client.srem(self._key("queues"), queue)
+        except redis.RedisError as exc:
+            raise _translate_redis_error(exc) from exc
 
     def recover_stale_batches(self, *, max_age_seconds: int) -> int:
         if max_age_seconds < 0:

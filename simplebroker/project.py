@@ -14,10 +14,8 @@ from ._project_config import (
     project_config_path_for_directory,
     resolve_project_target,
 )
-from ._targets import ResolvedTarget
+from ._targets import BrokerTarget
 from .helpers import _find_project_database, _is_valid_sqlite_db
-
-BrokerTarget = ResolvedTarget
 
 
 def _config_dict(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -60,7 +58,7 @@ def _configured_backend_target(
 
     plugin = _requested_backend_plugin(backend_name)
     resolved = plugin.init_backend(config)
-    return ResolvedTarget(
+    return BrokerTarget(
         backend_name=backend_name,
         target=str(resolved["target"]),
         backend_options=dict(cast(dict[str, Any], resolved["backend_options"])),
@@ -78,7 +76,7 @@ def _sqlite_target(
     config_path: Path | None = None,
 ) -> BrokerTarget:
     get_backend_plugin("sqlite")
-    return ResolvedTarget(
+    return BrokerTarget(
         backend_name="sqlite",
         target=str(target_path.resolve(strict=False)),
         backend_options={},
@@ -208,7 +206,11 @@ def broker_root(
 
 
 def serialize_broker_target(target: BrokerTarget) -> str:
-    """Serialize a broker target for transport across process boundaries."""
+    """Serialize a broker target for transport across process boundaries.
+
+    The lossless payload may contain connection credentials and backend option
+    secrets. Treat it as sensitive transport data; do not log or expose it.
+    """
 
     payload = {
         "backend_name": target.backend_name,
@@ -268,7 +270,7 @@ def deserialize_broker_target(
         else None
     )
 
-    return ResolvedTarget(
+    return BrokerTarget(
         backend_name=backend_name,
         target=target,
         backend_options=dict(cast(dict[str, Any], backend_options)),

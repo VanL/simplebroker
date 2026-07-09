@@ -1,6 +1,6 @@
 """Backend-agnostic broker factory for parametrized tests.
 
-Produces ``ResolvedTarget``, ``BrokerCore``, and ``Queue`` instances for
+Produces ``BrokerTarget``, ``BrokerCore``, and ``Queue`` instances for
 whichever backend is active, so the same behavioural test can run against
 both SQLite and Postgres without modification.
 """
@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from simplebroker import Queue
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore
 
 POSTGRES_TEST_BACKEND = "postgres"
@@ -34,8 +34,8 @@ def make_target(
     pg_schema: str | None = None,
     redis_url: str | None = None,
     redis_namespace: str | None = None,
-) -> ResolvedTarget:
-    """Create a ``ResolvedTarget`` for the requested backend.
+) -> BrokerTarget:
+    """Create a ``BrokerTarget`` for the requested backend.
 
     For SQLite the target is a database file under *tmp_path*.
     For Postgres the target is the DSN with the schema in backend_options.
@@ -45,7 +45,7 @@ def make_target(
     if backend == POSTGRES_TEST_BACKEND:
         if pg_dsn is None or pg_schema is None:
             raise ValueError("Postgres backend requires pg_dsn and pg_schema")
-        return ResolvedTarget(
+        return BrokerTarget(
             backend_name="postgres",
             target=pg_dsn,
             backend_options={"schema": pg_schema},
@@ -55,14 +55,14 @@ def make_target(
     if backend == REDIS_TEST_BACKEND:
         if redis_url is None or redis_namespace is None:
             raise ValueError("Redis backend requires redis_url and redis_namespace")
-        return ResolvedTarget(
+        return BrokerTarget(
             backend_name="redis",
             target=redis_url,
             backend_options={"namespace": redis_namespace},
             project_root=tmp_path,
         )
 
-    return ResolvedTarget(
+    return BrokerTarget(
         backend_name="sqlite",
         target=str(tmp_path / "test.db"),
         project_root=tmp_path,
@@ -70,7 +70,7 @@ def make_target(
 
 
 def make_broker(
-    target: ResolvedTarget,
+    target: BrokerTarget,
     *,
     config: dict[str, Any] | None = None,
 ) -> BrokerCore:
@@ -99,7 +99,7 @@ def make_broker(
 
 def make_queue(
     name: str,
-    target: ResolvedTarget,
+    target: BrokerTarget,
     *,
     persistent: bool = True,
     config: dict[str, Any] | None = None,

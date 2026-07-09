@@ -777,6 +777,10 @@ when you need retry-on-stop batch processing. In `delivery_guarantee="at_least_o
 generator mode, SimpleBroker commits a batch only after the full batch has been
 yielded; stopping mid-batch rolls that batch back for retry.
 
+Only `"exactly_once"` and `"at_least_once"` are valid selector values. Unknown
+values raise `ValueError` before a connection or message-state mutation; lazy
+generators raise on first iteration.
+
 Peeks can also inspect claimed (consumed but not yet vacuumed) messages:
 
 ```python
@@ -936,6 +940,14 @@ except KeyboardInterrupt:
     print("Watcher stopped by user")
 ```
 
+The error callback contract is exactly
+`(exception, message, timestamp)` and one handler failure invokes it at most
+once. In peek mode, a failed handler does not advance the watcher checkpoint.
+That message remains pending and is retried on a later turn; the watcher does
+not process later message IDs past it. Returning `True` means “keep watching,”
+not “acknowledge” or “skip.” To skip a poison message, the error callback must
+explicitly delete it or move it to another queue.
+
 ### Thread-Based Background Processing
 
 Use `run_in_thread()` to run watchers in background threads:
@@ -963,6 +975,10 @@ thread = watcher.run_in_thread()
 watcher.stop()
 thread.join()
 ```
+
+`watcher.is_running()` reports active execution. It is false before start,
+remains true while stop cleanup is still running, and becomes false after a
+normal stop or fatal exit.
 
 ### Context Manager Support
 
@@ -1100,9 +1116,13 @@ See [`examples/async_wrapper.py`](examples/async_wrapper.py) for a complete asyn
 
 ### Advanced: Custom Extensions
 
-**Note:** Most application extensions should compose the public `Queue` API. Do
-not subclass `BrokerDB` or import underscore-prefixed modules for application
-logic.
+**Note:** `BrokerCore` is the shared SQL behavior layer around a supplied
+runner. `BrokerDB` is its distinct SQLite-owning specialization: it resolves a
+database path, creates and owns `SQLiteRunner`, applies file permissions, and
+manages SQLite lifecycle. Most application code should still compose `Queue` or
+use `open_broker()`; use `BrokerDB` directly only when that low-level SQLite
+ownership boundary is specifically required. Application code should not import
+underscore-prefixed modules.
 
 ```python
 from simplebroker import Queue
@@ -1305,6 +1325,14 @@ application needs its own environment namespace, translate those values into a
 config dict and pass it through `resolve_config()`; avoid importing
 `simplebroker._constants` or guessing database paths.
 
+Configuration passed to a Queue, watcher, or broker is normalized and retained
+as that instance's snapshot. Operational methods use the snapshot unless an
+existing explicit per-call generator config is supplied. Target and Queue
+representations, plus cross-target errors, redact connection passwords and all
+backend-option values. `serialize_broker_target()` is different: it is a
+lossless process-transport payload, may contain credentials, and must not be
+logged or exposed.
+
 ### Command layer
 
 `simplebroker.commands` is supported public embedding surface: the programmatic
@@ -1397,9 +1425,24 @@ The harness measures end-to-end CLI behavior for repeated single-message
   - Larger values keep transactions open longer and can increase write lock contention; tune batch size to workload
 
 **Vacuum Settings:**
-- `BROKER_AUTO_VACUUM` - Enable automatic vacuum of claimed messages (default: true)
+- `BROKER_AUTO_VACUUM` - Enable opportunistic vacuum checks after committed message mutations (default: true)
+- `BROKER_AUTO_VACUUM_INTERVAL` - Successful message mutations between checks on one long-lived core (default: 100)
+  - Values below 1 retain the historical check-every-mutation behavior and are normalized internally to 1
 - `BROKER_VACUUM_THRESHOLD` - Claimed-message ratio that triggers auto-vacuum (default: 10%)
 - `BROKER_VACUUM_BATCH_SIZE` - Number of messages to delete per vacuum batch (default: 1000)
+
+Automatic maintenance is synchronous and best effort, not a background
+process. A due check runs after the triggering message transaction commits;
+failure does not change that operation's result and is retried on later
+activity. The schedule belongs to one core. Same-thread persistent handles may
+share it, while separate thread-local cores, ephemeral handles, and processes
+do not. Default ephemeral Queue operations and one-command CLI use often do not
+reach the interval, so schedule `broker --vacuum` when those workflows need
+bounded retention.
+
+SQLite and Postgres drain an eligible claimed backlog in configured batches
+during one pass. Redis/Valkey removes at most one configured batch per queue per
+pass. They share scheduling and eligibility, not per-pass deletion volume.
 
 **Watcher Tuning:**
 - `BROKER_INITIAL_CHECKS` - Number of checks with zero delay (default: 100)
@@ -1881,7 +1924,7 @@ contract.
 **Message Lifecycle:**
 1. **Write Phase**: Message inserted with unique timestamp
 2. **Claim Phase**: Read marks message as "claimed" (fast, logical delete)
-3. **Vacuum Phase**: Background process permanently removes claimed messages
+3. **Maintenance Phase**: Explicit `--vacuum` or a due opportunistic check permanently removes claimed messages
 
 This optimization is transparent - messages are still delivered exactly once.
 </details>
@@ -1915,6 +1958,11 @@ full backend packages also use private core modules. Backend plugins declare a
 code-level `backend_api_version`; core checks it during backend resolution and
 release tooling verifies the first-party packages move with the core backend
 seam. That handshake is not stored in broker databases or backend metadata.
+
+Backend API v2 publicly exports `DeliveryGuarantee`,
+`validate_delivery_guarantee()`, `MaintenanceSchedule`, and
+`vacuum_is_eligible()` from `simplebroker.ext`. Backend packages must use these
+exports instead of importing their underscore-prefixed implementation modules.
 
 For end users:
 

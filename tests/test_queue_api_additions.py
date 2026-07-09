@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from simplebroker import Queue
+from simplebroker._targets import BrokerTarget
 
 pytestmark = [pytest.mark.shared]
 
@@ -256,6 +257,25 @@ def test_queue_repr_representation():
         special_queue = Queue("test-queue_123", db_path="/tmp/my db.sqlite")
         expected = "Queue('test-queue_123', db_path='/tmp/my db.sqlite')"
         assert repr(special_queue) == expected
+
+
+def test_queue_repr_redacts_resolved_targets_and_uses_python_quoting() -> None:
+    target = BrokerTarget(
+        "postgres",
+        "postgresql://user:target-secret@db.example.com/app",
+        backend_options={"schema": "option-secret"},
+    )
+
+    representation = repr(Queue("task's", db_path=target))
+
+    assert "target-secret" not in representation
+    assert "option-secret" not in representation
+    assert "postgresql://user:***@db.example.com/app" in representation
+    assert repr("task's") in representation
+
+    sqlite_representation = repr(Queue("task's", db_path="/tmp/broker's data.sqlite"))
+    assert repr("task's") in sqlite_representation
+    assert repr("/tmp/broker's data.sqlite") in sqlite_representation
 
 
 def test_queue_string_representations_in_context():

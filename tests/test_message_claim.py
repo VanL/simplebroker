@@ -21,6 +21,7 @@ import pytest
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
+from .helper_scripts.broker_factory import make_broker
 
 
 @pytest.mark.sqlite_only
@@ -129,43 +130,155 @@ def test_vacuum_removes_claimed_messages(workdir: Path):
     conn.close()
 
 
+@pytest.mark.shared
+def test_automatic_vacuum_trigger(broker_target) -> None:
+    """Committed claims participate in opportunistic maintenance scheduling."""
+    broker = make_broker(
+        broker_target,
+        config={
+            "BROKER_AUTO_VACUUM": 1,
+            "BROKER_AUTO_VACUUM_INTERVAL": 4,
+            "BROKER_VACUUM_THRESHOLD": 0.5,
+            "BROKER_VACUUM_BATCH_SIZE": 10,
+        },
+    )
+    try:
+        broker.write("test_queue", "message-0")
+        broker.write("test_queue", "message-1")
+
+        assert broker.claim_one("test_queue", with_timestamps=False) == "message-0"
+        assert broker.count_claimed_messages() == 1
+
+        assert broker.claim_one("test_queue", with_timestamps=False) == "message-1"
+        assert broker.count_claimed_messages() == 0
+    finally:
+        broker.close()
+
+
+@pytest.mark.shared
+def test_disabled_automatic_vacuum_leaves_claimed_messages(broker_target) -> None:
+    broker = make_broker(
+        broker_target,
+        config={
+            "BROKER_AUTO_VACUUM": 0,
+            "BROKER_AUTO_VACUUM_INTERVAL": 4,
+            "BROKER_VACUUM_THRESHOLD": 0.5,
+            "BROKER_VACUUM_BATCH_SIZE": 10,
+        },
+    )
+    try:
+        broker.write("test_queue", "message-0")
+        broker.write("test_queue", "message-1")
+        assert broker.claim_many("test_queue", 2, with_timestamps=False) == [
+            "message-0",
+            "message-1",
+        ]
+        assert broker.count_claimed_messages() == 2
+    finally:
+        broker.close()
+
+
+@pytest.mark.shared
+def test_automatic_vacuum_waits_for_exact_activity_interval(broker_target) -> None:
+    broker = make_broker(
+        broker_target,
+        config={
+            "BROKER_AUTO_VACUUM": 1,
+            "BROKER_AUTO_VACUUM_INTERVAL": 4,
+            "BROKER_VACUUM_THRESHOLD": 0.1,
+            "BROKER_VACUUM_BATCH_SIZE": 10,
+        },
+    )
+    try:
+        broker.write("test_queue", "message-0")
+        broker.write("test_queue", "message-1")
+        assert broker.claim_one("test_queue", with_timestamps=False) == "message-0"
+        assert broker.count_claimed_messages() == 1
+
+        broker.write("test_queue", "message-2")
+        assert broker.count_claimed_messages() == 0
+        assert broker.peek_many("test_queue", limit=10, with_timestamps=False) == [
+            "message-1",
+            "message-2",
+        ]
+    finally:
+        broker.close()
+
+
+@pytest.mark.shared
+def test_bulk_maintenance_activity_preserves_interval_remainder(
+    broker_target,
+) -> None:
+    broker = make_broker(
+        broker_target,
+        config={
+            "BROKER_AUTO_VACUUM": 1,
+            "BROKER_AUTO_VACUUM_INTERVAL": 4,
+            "BROKER_VACUUM_THRESHOLD": 0.1,
+            "BROKER_VACUUM_BATCH_SIZE": 10,
+        },
+    )
+    try:
+        broker.insert_messages(
+            [("test_queue", f"message-{index}", index + 1) for index in range(10)]
+        )
+
+        assert broker.claim_one("test_queue", with_timestamps=False) == "message-0"
+        assert broker.count_claimed_messages() == 1
+
+        assert broker.claim_one("test_queue", with_timestamps=False) == "message-1"
+        assert broker.count_claimed_messages() == 0
+    finally:
+        broker.close()
+
+
 @pytest.mark.sqlite_only
-def test_automatic_vacuum_trigger(workdir: Path):
-    """Test automatic vacuum triggers based on 10% threshold."""
+def test_automatic_vacuum_failure_preserves_committed_operation(
+    broker_target, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    broker = make_broker(
+        broker_target,
+        config={
+            "BROKER_AUTO_VACUUM": 1,
+            "BROKER_AUTO_VACUUM_INTERVAL": 1,
+            "BROKER_VACUUM_THRESHOLD": 0.1,
+            "BROKER_VACUUM_BATCH_SIZE": 10,
+            "BROKER_LOGGING_ENABLED": 1,
+        },
+    )
+    original_vacuum = broker._backend_plugin.vacuum
+    vacuum_calls = 0
 
-    db_path = workdir / "test.db"
+    def fail_once(runner, *, compact, config) -> None:
+        nonlocal vacuum_calls
+        vacuum_calls += 1
+        if vacuum_calls == 1:
+            raise RuntimeError("injected automatic vacuum failure")
+        original_vacuum(runner, compact=compact, config=config)
 
-    # Write 100 messages
-    with BrokerDB(str(db_path)) as db:
-        for i in range(100):
-            db.write("test_queue", f"message{i}")
+    monkeypatch.setattr(broker._backend_plugin, "vacuum", fail_once)
+    try:
+        broker.write("test_queue", "message-0")
 
-    # Read 10 messages (10% threshold)
-    with BrokerDB(str(db_path)) as db:
-        for _ in range(10):
-            db.claim_one("test_queue", with_timestamps=False)
+        with caplog.at_level("ERROR", logger="simplebroker.db"):
+            assert broker.claim_one("test_queue", with_timestamps=False) == "message-0"
 
-    # Check claimed count before potential auto-vacuum
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    claimed_count = cursor.fetchone()[0]
-    assert claimed_count == 10
+        assert broker.count_claimed_messages() == 1
+        assert (
+            sum(
+                "Automatic vacuum failed" in record.message for record in caplog.records
+            )
+            == 1
+        )
 
-    # Force vacuum to check - directly test the vacuum logic
-    with BrokerDB(str(db_path)) as db:
-        # Verify _should_vacuum returns True
-        assert db._should_vacuum(), "Should trigger vacuum at 10% threshold"
-
-        # Run vacuum manually
-        db.vacuum()
-
-    # After vacuum, claimed messages should be removed
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    final_claimed = cursor.fetchone()[0]
-    assert final_claimed == 0, "All claimed messages should be removed after vacuum"
-
-    conn.close()
+        broker.write("test_queue", "message-1")
+        assert vacuum_calls == 2
+        assert broker.count_claimed_messages() == 0
+        assert broker.peek_many("test_queue", limit=10, with_timestamps=False) == [
+            "message-1"
+        ]
+    finally:
+        broker.close()
 
 
 def _concurrent_reader_worker(args: tuple[int, str, str]) -> list[str]:

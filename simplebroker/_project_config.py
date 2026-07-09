@@ -14,7 +14,7 @@ from ._constants import (
     load_config,
     resolve_config,
 )
-from ._targets import ResolvedTarget
+from ._targets import BrokerTarget
 
 PROJECT_CONFIG_FILENAME = DEFAULT_PROJECT_CONFIG_NAME
 SUPPORTED_PROJECT_CONFIG_VERSION = 1
@@ -123,7 +123,7 @@ def resolve_project_target(
     config_path: Path,
     *,
     config: Mapping[str, Any] | None = None,
-) -> ResolvedTarget:
+) -> BrokerTarget:
     """Resolve a project config into an internal target object.
 
     The project file owns backend selection and target-shaping fields for the
@@ -153,7 +153,7 @@ def resolve_project_target(
         target = str(resolved["target"])
         backend_options = dict(resolved["backend_options"])
 
-    return ResolvedTarget(
+    return BrokerTarget(
         backend_name=backend_name,
         target=target,
         backend_options=backend_options,

@@ -648,9 +648,16 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
     assert len(run_calls) == 3
     assert run_calls[0][1][:4] == ["uv", "venv", "--python", "3.11"]
     assert run_calls[1][1][:4] == ["uv", "pip", "install", "--python"]
-    assert "--find-links" in run_calls[1][1]
+    assert "--find-links" not in run_calls[1][1]
     assert (
         f"simplebroker[pg,redis] @ {root_wheel.resolve().as_uri()}" in run_calls[1][1]
+    )
+    assert (
+        f"simplebroker-pg @ {pg_extension_wheel.resolve().as_uri()}" in run_calls[1][1]
+    )
+    assert (
+        f"simplebroker-redis @ {redis_extension_wheel.resolve().as_uri()}"
+        in run_calls[1][1]
     )
     assert run_calls[2][1][1] == "-c"
     assert "get_backend_plugin('postgres')" in run_calls[2][1][2]

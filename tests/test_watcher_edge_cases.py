@@ -181,6 +181,91 @@ class TestWatcherEdgeCases(WatcherTestBase):
             assert "Error handler failed" in error_call_args
             assert "Handler error" in error_call_args
 
+    def test_type_error_inside_error_handler_is_not_retried(
+        self, broker, broker_target, caplog
+    ) -> None:
+        broker.write("queue", "payload")
+        calls: list[tuple[Exception, str, int, object]] = []
+        called = threading.Event()
+        watcher: QueueWatcher
+
+        def handler(_message: str, _timestamp: int) -> None:
+            raise ValueError("handler failed")
+
+        def error_handler(
+            exc: Exception,
+            message: str,
+            timestamp: int,
+            *,
+            config: object = None,
+        ) -> None:
+            calls.append((exc, message, timestamp, config))
+            called.set()
+            watcher.stop(join=False)
+            raise TypeError("error handler body failed")
+
+        watcher = QueueWatcher(
+            "queue",
+            handler,
+            db=broker_target,
+            error_handler=error_handler,
+            config={"BROKER_LOGGING_ENABLED": 1},
+        )
+
+        with caplog.at_level("ERROR", logger="simplebroker.watcher"):
+            thread = watcher.run_in_thread()
+            try:
+                assert called.wait(timeout=2.0)
+                thread.join(timeout=2.0)
+                assert not thread.is_alive()
+            finally:
+                watcher.stop()
+                thread.join(timeout=2.0)
+
+        assert len(calls) == 1
+        assert calls[0][1] == "payload"
+        assert (
+            sum("Error handler failed" in record.message for record in caplog.records)
+            == 1
+        )
+
+    @pytest.mark.parametrize("watcher_kind", ["queue", "move"])
+    @pytest.mark.parametrize("logging_enabled", [0, 1])
+    def test_default_error_handler_uses_instance_logging_config(
+        self, broker_target, caplog, watcher_kind: str, logging_enabled: int
+    ) -> None:
+        def handler(_message: str, _timestamp: int) -> None:
+            raise ValueError("instance-config-handler-error")
+
+        if watcher_kind == "queue":
+            watcher = QueueWatcher(
+                "queue",
+                handler,
+                db=broker_target,
+                config={"BROKER_LOGGING_ENABLED": logging_enabled},
+            )
+        else:
+            watcher = QueueMoveWatcher(
+                "source",
+                "destination",
+                handler,
+                db=broker_target,
+                config={"BROKER_LOGGING_ENABLED": logging_enabled},
+            )
+
+        try:
+            with caplog.at_level("ERROR", logger="simplebroker.watcher"):
+                watcher._dispatch("payload", 123)
+        finally:
+            watcher.stop()
+
+        handler_logs = [
+            record
+            for record in caplog.records
+            if "instance-config-handler-error" in record.message
+        ]
+        assert len(handler_logs) == logging_enabled
+
     @pytest.mark.sqlite_only
     def test_polling_strategy_pragma_failures(self) -> None:
         """Test handling of repeated PRAGMA data_version failures."""
@@ -389,7 +474,12 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
     def test_context_manager_error_handling(self, broker_target) -> None:
         """Test context manager handles errors during exit."""
-        watcher = QueueWatcher("queue", lambda m, t: None, db=broker_target)
+        watcher = QueueWatcher(
+            "queue",
+            lambda m, t: None,
+            db=broker_target,
+            config={"BROKER_LOGGING_ENABLED": 1},
+        )
         thread = None
         try:
             # Start the watcher manually so we can control cleanup
@@ -416,16 +506,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
             watcher.stop = failing_stop
 
-            # Patch config to enable logging and capture the warning
-            from simplebroker.watcher import _config
-
-            with (
-                patch.dict(
-                    "simplebroker.watcher._config",
-                    {**_config, "BROKER_LOGGING_ENABLED": True},
-                ),
-                patch("simplebroker.watcher.logger") as mock_logger,
-            ):
+            with patch("simplebroker.watcher.logger") as mock_logger:
                 # Simulate context manager exit
                 try:
                     watcher.__exit__(None, None, None)

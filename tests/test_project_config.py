@@ -17,7 +17,7 @@ from simplebroker._project_config import (
     project_config_path_for_directory,
     resolve_project_target,
 )
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerDB
 from simplebroker.project import (
     broker_root,
@@ -471,7 +471,7 @@ def test_public_resolve_broker_target_prefers_legacy_sqlite_over_env_backend(
     with BrokerDB(str(db_path)) as db:
         db.write("tasks", "payload")
 
-    def unexpected_backend(*args: object, **kwargs: object) -> ResolvedTarget | None:
+    def unexpected_backend(*args: object, **kwargs: object) -> BrokerTarget | None:
         raise AssertionError(
             "env backend synthesis should not run before sqlite discovery"
         )

@@ -13,6 +13,8 @@ import pytest
 
 from simplebroker.sbqueue import Queue
 
+from .helper_scripts.broker_factory import make_broker
+
 
 @pytest.mark.shared
 def test_single_message_immediate_commit(queue_factory):
@@ -57,6 +59,63 @@ def test_batch_commit_for_all_messages(broker):
     assert len(remaining) == 15
     assert remaining[0] == "message10"
     assert remaining[-1] == "message24"
+
+
+@pytest.mark.shared
+def test_automatic_vacuum_runs_only_after_generator_batch_commit(
+    broker_target,
+) -> None:
+    broker = make_broker(
+        broker_target,
+        config={
+            "BROKER_AUTO_VACUUM": 1,
+            "BROKER_AUTO_VACUUM_INTERVAL": 4,
+            "BROKER_VACUUM_THRESHOLD": 0.1,
+            "BROKER_VACUUM_BATCH_SIZE": 10,
+            "BROKER_GENERATOR_BATCH_SIZE": 2,
+        },
+    )
+    generator = None
+    try:
+        broker.insert_messages(
+            [
+                ("test_queue", "message-0", 1),
+                ("test_queue", "message-1", 2),
+            ]
+        )
+
+        generator = broker.claim_generator(
+            "test_queue",
+            with_timestamps=False,
+            delivery_guarantee="at_least_once",
+        )
+        assert next(generator) == "message-0"
+        generator.close()
+        generator = None
+
+        assert broker.peek_many("test_queue", limit=10, with_timestamps=False) == [
+            "message-0",
+            "message-1",
+        ]
+        assert broker.count_claimed_messages() == 0
+
+        generator = broker.claim_generator(
+            "test_queue",
+            with_timestamps=False,
+            delivery_guarantee="at_least_once",
+        )
+        assert next(generator) == "message-0"
+        assert next(generator) == "message-1"
+        with pytest.raises(StopIteration):
+            next(generator)
+        generator = None
+
+        assert broker.peek_many("test_queue", limit=10, with_timestamps=False) == []
+        assert broker.count_claimed_messages() == 0
+    finally:
+        if generator is not None:
+            generator.close()
+        broker.close()
 
 
 @pytest.mark.shared
@@ -113,6 +172,159 @@ def test_exactly_once_with_explicit_interval_1(queue_factory):
     assert len(remaining) == 7
     assert remaining[0] == "message8"
     assert remaining[-1] == "message14"
+
+
+@pytest.mark.shared
+def test_queue_read_many_rejects_invalid_delivery_before_mutation(
+    queue_factory,
+) -> None:
+    queue = queue_factory("source")
+    queue.write("message-0")
+    queue.write("message-1")
+
+    with pytest.raises(ValueError) as exc_info:
+        queue.read_many(2, delivery_guarantee="typo")  # type: ignore[arg-type]
+
+    error = str(exc_info.value)
+    assert "typo" in error
+    assert "exactly_once" in error
+    assert "at_least_once" in error
+    assert queue.peek_many(limit=10, with_timestamps=False) == [
+        "message-0",
+        "message-1",
+    ]
+    assert queue.stats().claimed == 0
+
+
+@pytest.mark.shared
+@pytest.mark.parametrize("operation", ["read_generator", "move_many", "move_generator"])
+def test_queue_delivery_entry_points_reject_invalid_values_before_mutation(
+    queue_factory, operation: str
+) -> None:
+    source = queue_factory("source")
+    destination = queue_factory("destination")
+    source.write("message-0")
+    source.write("message-1")
+
+    generator = None
+    try:
+        with pytest.raises(ValueError) as exc_info:
+            if operation == "read_generator":
+                generator = source.read_generator(
+                    delivery_guarantee="typo"  # type: ignore[arg-type]
+                )
+                next(generator)
+            elif operation == "move_many":
+                source.move_many(
+                    destination,
+                    2,
+                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                )
+            else:
+                generator = source.move_generator(
+                    destination,
+                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                )
+                next(generator)
+    finally:
+        if generator is not None:
+            generator.close()
+
+    error = str(exc_info.value)
+    assert "typo" in error
+    assert "exactly_once" in error
+    assert "at_least_once" in error
+    assert source.peek_many(limit=10, with_timestamps=False) == [
+        "message-0",
+        "message-1",
+    ]
+    assert source.stats().claimed == 0
+    assert destination.peek_many(limit=10, with_timestamps=False) == []
+
+
+@pytest.mark.sqlite_only
+@pytest.mark.parametrize("lazy", [False, True])
+def test_invalid_queue_delivery_does_not_create_sqlite_target(
+    tmp_path: Path, lazy: bool
+) -> None:
+    db_path = tmp_path / ("lazy.db" if lazy else "materialized.db")
+    queue = Queue("source", db_path=str(db_path))
+    generator = None
+    try:
+        with pytest.raises(ValueError, match="typo"):
+            if lazy:
+                generator = queue.read_generator(
+                    delivery_guarantee="typo"  # type: ignore[arg-type]
+                )
+                next(generator)
+            else:
+                queue.read_many(
+                    1,
+                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                )
+    finally:
+        if generator is not None:
+            generator.close()
+        queue.close()
+
+    assert not db_path.exists()
+
+
+@pytest.mark.shared
+@pytest.mark.parametrize(
+    "operation", ["claim_many", "claim_generator", "move_many", "move_generator"]
+)
+def test_direct_core_rejects_invalid_delivery_before_mutation(
+    broker_target, operation: str
+) -> None:
+    broker = make_broker(broker_target, config={"BROKER_AUTO_VACUUM": 0})
+    generator = None
+    try:
+        broker.write("source", "message-0")
+        broker.write("source", "message-1")
+
+        with pytest.raises(ValueError) as exc_info:
+            if operation == "claim_many":
+                broker.claim_many(
+                    "source",
+                    2,
+                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                )
+            elif operation == "claim_generator":
+                generator = broker.claim_generator(
+                    "source",
+                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                )
+                next(generator)
+            elif operation == "move_many":
+                broker.move_many(
+                    "source",
+                    "destination",
+                    2,
+                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                )
+            else:
+                generator = broker.move_generator(
+                    "source",
+                    "destination",
+                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                )
+                next(generator)
+
+        error = str(exc_info.value)
+        assert "typo" in error
+        assert "exactly_once" in error
+        assert "at_least_once" in error
+        assert broker.peek_many("source", limit=10, with_timestamps=False) == [
+            "message-0",
+            "message-1",
+        ]
+        assert broker.count_claimed_messages() == 0
+        assert broker.peek_many("destination", limit=10, with_timestamps=False) == []
+    finally:
+        if generator is not None:
+            generator.close()
+        broker.close()
 
 
 def _read_all_messages_worker(db_path: str, result_list):

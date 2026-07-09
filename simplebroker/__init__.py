@@ -1,11 +1,9 @@
 """SimpleBroker - A lightweight message broker with pluggable backends."""
 
 # Import main components
-# Import BrokerDB for backward compatibility (but don't export it)
 from ._backend_plugins import ActivityWaiter
 from ._constants import __version__, resolve_config
 from ._dump import LoadResult, dump_lines, load_lines
-from .db import BrokerDB as _BrokerDB  # noqa: F401
 from .db import open_broker
 from .metadata import QueueRenameResult, QueueStats
 from .project import (

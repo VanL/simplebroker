@@ -16,9 +16,8 @@ from psycopg import conninfo as pg_conninfo
 from simplebroker_pg import PostgresRunner, get_backend_plugin
 from simplebroker_pg.validation import connect
 
-from simplebroker import Queue
+from simplebroker import BrokerTarget, Queue
 from simplebroker._runner import SetupPhase
-from simplebroker._targets import ResolvedTarget
 from simplebroker.db import BrokerCore
 
 TEST_DSN = os.environ.get("SIMPLEBROKER_PG_TEST_DSN")
@@ -221,7 +220,7 @@ def test_wrapped_postgres_runner_with_resolved_target_uses_pg_waiter() -> None:
     plugin = get_backend_plugin()
     runner = PostgresRunner(dsn, schema=schema)
     wrapped_runner = WrappedRunner(runner)
-    target = ResolvedTarget(
+    target = BrokerTarget(
         "postgres",
         dsn,
         backend_options={"schema": schema},

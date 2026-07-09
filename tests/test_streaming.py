@@ -32,7 +32,12 @@ def test_streaming_read_all(workdir: Path):
     _bulk_write(workdir, "test_queue", count)
 
     code, stdout, stderr = run_cli(
-        "read", "test_queue", "--all", cwd=workdir, timeout=120.0
+        "read",
+        "test_queue",
+        "--all",
+        cwd=workdir,
+        timeout=120.0,
+        env={"BROKER_AUTO_VACUUM": "0"},
     )
     assert code == 0, stderr
 

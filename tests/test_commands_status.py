@@ -7,7 +7,7 @@ import json
 import pytest
 
 from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 from simplebroker.commands import cmd_status
 
 from .helper_scripts.broker_factory import make_queue
@@ -30,7 +30,7 @@ class TestCmdStatus:
     """Unit tests for commands.cmd_status."""
 
     def test_cmd_status_success(
-        self, broker_target: ResolvedTarget, capsys: pytest.CaptureFixture[str]
+        self, broker_target: BrokerTarget, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """cmd_status prints database metrics and returns success."""
         # Populate the database with a small amount of data via public API
@@ -55,7 +55,7 @@ class TestCmdStatus:
             assert stats["db_size"] > 0
 
     def test_cmd_status_json_output(
-        self, broker_target: ResolvedTarget, capsys: pytest.CaptureFixture[str]
+        self, broker_target: BrokerTarget, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """cmd_status emits JSON when requested."""
         queue = make_queue("tasks", broker_target)

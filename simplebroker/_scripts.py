@@ -733,13 +733,9 @@ def packaging_smoke_main() -> int:
                     "install",
                     "--python",
                     str(venv_python),
-                    "--find-links",
-                    str(root_dist),
-                    "--find-links",
-                    str(pg_extension_dist),
-                    "--find-links",
-                    str(redis_extension_dist),
                     f"simplebroker[pg,redis] @ {root_wheel.resolve().as_uri()}",
+                    f"simplebroker-pg @ {pg_extension_wheel.resolve().as_uri()}",
+                    f"simplebroker-redis @ {redis_extension_wheel.resolve().as_uri()}",
                 ]
             )
 

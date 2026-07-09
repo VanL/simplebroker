@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 
 from .helper_scripts.broker_factory import make_broker
 
@@ -138,7 +138,7 @@ def test_brokerdb_not_picklable():
             db.close()
 
 
-def test_database_lock_timeout(broker_target: ResolvedTarget):
+def test_database_lock_timeout(broker_target: BrokerTarget):
     """Test that database operations handle lock timeouts gracefully."""
     db1 = make_broker(broker_target)
     db2 = make_broker(broker_target)

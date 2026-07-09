@@ -83,7 +83,7 @@ class TestQueueWatcher(WatcherTestBase):
 
     @pytest.mark.sqlite_only
     def test_thread_safety_with_brokerdb_instance(self, tmp_path):
-        """Test that passing a BrokerDB instance works for backward compatibility."""
+        """A watcher can derive its SQLite path from a BrokerDB owner."""
         from simplebroker.db import BrokerDB
 
         temp_db = tmp_path / "test.db"
@@ -604,6 +604,133 @@ class TestQueueWatcher(WatcherTestBase):
         assert exception_count == 1
         assert handled_messages == ["message2"]
 
+    def test_peek_handler_failure_does_not_advance_checkpoint(
+        self, broker, broker_target
+    ) -> None:
+        broker.write("peek_queue", "bad")
+        attempts: list[str] = []
+        failed = threading.Event()
+        watcher: QueueWatcher
+
+        def handler(message: str, _timestamp: int) -> None:
+            attempts.append(message)
+            raise ValueError("peek handler failed")
+
+        def error_handler(_exc: Exception, _message: str, _timestamp: int) -> bool:
+            failed.set()
+            watcher.stop(join=False)
+            return True
+
+        watcher = QueueWatcher(
+            "peek_queue",
+            handler,
+            db=broker_target,
+            peek=True,
+            error_handler=error_handler,
+        )
+        thread = watcher.run_in_thread()
+        try:
+            assert failed.wait(timeout=scale_timeout_for_ci(2.0))
+            thread.join(timeout=2.0)
+            assert not thread.is_alive()
+        finally:
+            watcher.stop()
+            thread.join(timeout=2.0)
+
+        assert attempts == ["bad"]
+        assert watcher._last_seen_ts == 0
+        assert broker.peek_many("peek_queue", limit=10, with_timestamps=False) == [
+            "bad"
+        ]
+
+    def test_peek_batch_stops_at_failed_message_and_retries_in_order(
+        self, broker, broker_target
+    ) -> None:
+        broker.write("peek_queue", "bad")
+        broker.write("peek_queue", "later")
+        attempts: list[str] = []
+        failed = threading.Event()
+        watcher: QueueWatcher
+
+        def failing_handler(message: str, _timestamp: int) -> None:
+            attempts.append(message)
+            raise ValueError("peek handler failed")
+
+        def error_handler(_exc: Exception, _message: str, _timestamp: int) -> bool:
+            failed.set()
+            watcher.stop(join=False)
+            return True
+
+        watcher = QueueWatcher(
+            "peek_queue",
+            failing_handler,
+            db=broker_target,
+            peek=True,
+            batch_processing=True,
+            error_handler=error_handler,
+        )
+        thread = watcher.run_in_thread()
+        try:
+            assert failed.wait(timeout=scale_timeout_for_ci(2.0))
+            thread.join(timeout=2.0)
+            assert not thread.is_alive()
+        finally:
+            watcher.stop()
+            thread.join(timeout=2.0)
+
+        assert attempts == ["bad"]
+        assert watcher._last_seen_ts == 0
+        assert broker.peek_many("peek_queue", limit=10, with_timestamps=False) == [
+            "bad",
+            "later",
+        ]
+
+        retried: list[str] = []
+        retry_watcher = QueueWatcher(
+            "peek_queue",
+            lambda message, _timestamp: retried.append(message),
+            db=broker_target,
+            peek=True,
+            batch_processing=True,
+        )
+        try:
+            assert retry_watcher._process_peek_messages() is True
+        finally:
+            retry_watcher.stop(join=False)
+
+        assert retried == ["bad", "later"]
+
+    def test_legacy_none_dispatch_override_still_advances_peek_checkpoint(
+        self, broker, broker_target
+    ) -> None:
+        broker.write("peek_queue", "payload")
+        dispatched: list[tuple[str, int]] = []
+
+        class LegacyDispatchWatcher(QueueWatcher):
+            def _dispatch(
+                self,
+                message: str,
+                timestamp: int,
+                *,
+                config: object | None = None,
+            ) -> None:
+                del config
+                dispatched.append((message, timestamp))
+
+        watcher = LegacyDispatchWatcher(
+            "peek_queue",
+            lambda _message, _timestamp: None,
+            db=broker_target,
+            peek=True,
+        )
+        try:
+            assert watcher._process_peek_messages() is True
+        finally:
+            watcher.stop(join=False)
+
+        assert [message for message, _timestamp in dispatched] == ["payload"]
+        assert watcher._last_seen_ts == dispatched[0][1]
+
     def test_error_handler_returns_false(self, broker, broker_target):
         """Test that error_handler returning False stops the watcher."""
         broker.write("test_queue", "bad_message")
@@ -852,6 +979,139 @@ class TestQueueWatcher(WatcherTestBase):
 
         # Should be stopped
         assert strategy._stop_event.is_set()
+
+    def test_is_running_tracks_background_execution(self, broker_target) -> None:
+        watcher = QueueWatcher(
+            "lifecycle_queue",
+            lambda _message, _timestamp: None,
+            db=broker_target,
+        )
+
+        assert watcher.is_running() is False
+
+        thread = watcher.run_in_thread()
+        try:
+            assert wait_for_condition(
+                watcher.is_running,
+                timeout=scale_timeout_for_ci(2.0),
+                interval=0.01,
+            )
+        finally:
+            watcher.stop()
+            thread.join(timeout=2.0)
+
+        assert not thread.is_alive()
+        assert watcher.is_running() is False
+
+    def test_is_running_remains_true_until_cleanup_finishes(
+        self, broker_target
+    ) -> None:
+        cleanup_started = threading.Event()
+        allow_cleanup = threading.Event()
+
+        class BlockingCleanupWatcher(QueueWatcher):
+            def _cleanup_thread_local(self) -> None:
+                cleanup_started.set()
+                assert allow_cleanup.wait(timeout=2.0)
+                super()._cleanup_thread_local()
+
+        watcher = BlockingCleanupWatcher(
+            "lifecycle_queue",
+            lambda _message, _timestamp: None,
+            db=broker_target,
+        )
+        thread = watcher.run_in_thread()
+        try:
+            assert wait_for_condition(
+                watcher.is_running,
+                timeout=scale_timeout_for_ci(2.0),
+                interval=0.01,
+            )
+            watcher.stop(join=False)
+            assert cleanup_started.wait(timeout=2.0)
+            assert watcher.is_running() is True
+        finally:
+            allow_cleanup.set()
+            thread.join(timeout=2.0)
+            watcher.stop()
+
+        assert watcher.is_running() is False
+
+    def test_is_running_clears_after_background_fatal_exit(self, broker_target) -> None:
+        class FatalWatcher(QueueWatcher):
+            def _run_with_retries(self, max_retries: int = 3) -> None:
+                del max_retries
+                raise RuntimeError("fatal watcher failure")
+
+        watcher = FatalWatcher(
+            "lifecycle_queue",
+            lambda _message, _timestamp: None,
+            db=broker_target,
+        )
+        errors: list[BaseException] = []
+        error_seen = threading.Event()
+        original_excepthook = threading.excepthook
+
+        def capture_exception(args: threading.ExceptHookArgs) -> None:
+            if args.exc_value is not None:
+                errors.append(args.exc_value)
+            error_seen.set()
+
+        threading.excepthook = capture_exception
+        try:
+            thread = watcher.run_in_thread()
+            assert error_seen.wait(timeout=2.0)
+            thread.join(timeout=2.0)
+        finally:
+            threading.excepthook = original_excepthook
+            watcher.stop()
+
+        assert not thread.is_alive()
+        assert len(errors) == 1
+        assert "fatal watcher failure" in str(errors[0])
+        assert watcher.is_running() is False
+
+    def test_synchronous_fatal_and_cleanup_failures_clear_running_state(
+        self, broker_target
+    ) -> None:
+        class SynchronousFatalWatcher(QueueWatcher):
+            def _run_with_retries(self, max_retries: int = 3) -> None:
+                del max_retries
+                raise RuntimeError("synchronous fatal failure")
+
+        fatal_watcher = SynchronousFatalWatcher(
+            "fatal_queue",
+            lambda _message, _timestamp: None,
+            db=broker_target,
+        )
+        with pytest.raises(RuntimeError, match="synchronous fatal failure"):
+            fatal_watcher.run_forever()
+        assert fatal_watcher.is_running() is False
+        fatal_watcher.stop(join=False)
+
+        class CleanupFailureWatcher(QueueWatcher):
+            cleanup_calls = 0
+
+            def _run_with_retries(self, max_retries: int = 3) -> None:
+                del max_retries
+
+            def _cleanup_thread_local(self) -> None:
+                self.cleanup_calls += 1
+                if self.cleanup_calls == 1:
+                    raise RuntimeError("cleanup failure")
+                super()._cleanup_thread_local()
+
+        cleanup_watcher = CleanupFailureWatcher(
+            "cleanup_queue",
+            lambda _message, _timestamp: None,
+            db=broker_target,
+        )
+        previous_sigint = signal.getsignal(signal.SIGINT)
+        with pytest.raises(RuntimeError, match="cleanup failure"):
+            cleanup_watcher.run_forever()
+        assert signal.getsignal(signal.SIGINT) is previous_sigint
+        assert cleanup_watcher.is_running() is False
+        cleanup_watcher.stop(join=False)
 
     def test_after_parameter_in_peek_mode(self, broker, broker_target):
         """Test that peek mode respects message ordering and 'after' tracking."""

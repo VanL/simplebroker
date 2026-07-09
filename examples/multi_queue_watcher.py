@@ -30,8 +30,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from simplebroker import Queue
-from simplebroker._targets import ResolvedTarget
+from simplebroker import BrokerTarget, Queue
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import (
     BaseWatcher,
@@ -149,7 +148,7 @@ class MultiQueueWatcher(BaseWatcher):
         )
 
         # Determine database path for creating additional Queue objects
-        db_path: str | ResolvedTarget
+        db_path: str | BrokerTarget
         if isinstance(db, BrokerDB):
             db_path = str(db.db_path)
         elif isinstance(db, (str, Path)):

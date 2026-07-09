@@ -23,7 +23,7 @@ from simplebroker._broker_session import (
     close_process_broker_sessions,
 )
 from simplebroker._runner import SQLiteRunner
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore
 
 
@@ -166,8 +166,8 @@ def counting_backend(monkeypatch: pytest.MonkeyPatch) -> CountingBackendPlugin:
 
 def counting_target(
     tmp_path: Path, *, suffix: str = "broker.db", **options: Any
-) -> ResolvedTarget:
-    return ResolvedTarget(
+) -> BrokerTarget:
+    return BrokerTarget(
         backend_name="counting",
         target=str(tmp_path / suffix),
         backend_options=dict(options),

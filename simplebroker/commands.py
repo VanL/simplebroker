@@ -29,7 +29,7 @@ from ._constants import (
 from ._dump import dump_lines, load_lines
 from ._exceptions import IntegrityError, TimestampError
 from ._message_id import INVALID_MESSAGE_ID_MESSAGE, normalize_message_id
-from ._targets import ResolvedTarget
+from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
 from .db import BrokerDB, DBConnection
 from .helpers import _is_valid_sqlite_db
@@ -37,7 +37,7 @@ from .metadata import QueueRenameResult, QueueStats
 from .sbqueue import Queue
 from .watcher import QueueMoveWatcher, QueueWatcher
 
-DBTarget = str | ResolvedTarget
+DBTarget = str | BrokerTarget
 _config = load_config()
 _MOVE_ALL_LIMIT = 1_000_000
 
@@ -79,7 +79,7 @@ def _emit_error(
 
 def _target_string(db_target: DBTarget) -> str:
     """Return a human-readable target string."""
-    if isinstance(db_target, ResolvedTarget):
+    if isinstance(db_target, BrokerTarget):
         return db_target.target
     return db_target
 
@@ -1190,7 +1190,7 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
     Security Note:
         Never destroys existing data. SimpleBroker init is non-destructive by design.
     """
-    if isinstance(db_path, ResolvedTarget):
+    if isinstance(db_path, BrokerTarget):
         target_str = db_path.target
         display_target = db_path.display_target
         target_path = db_path.target_path

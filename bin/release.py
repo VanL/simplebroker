@@ -67,9 +67,10 @@ REDIS_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
 ALL_RELEASE_TARGET_KEY: Final[str] = "all"
 # Minimum simplebroker release allowed for each backend API version.
-# API v1 is first enforced in the 5.0 release line, so first-party backend
-# packages that declare it must require simplebroker>=5.0.0.
-BACKEND_API_MIN_CORE_VERSION: Final[dict[int, str]] = {1: "5.0.0"}
+BACKEND_API_MIN_CORE_VERSION: Final[dict[int, str]] = {
+    1: "5.0.0",
+    2: "5.2.0",
+}
 
 ROOT_TEST_COMMAND_PREFIX: Final[tuple[str, ...]] = (
     "uv",

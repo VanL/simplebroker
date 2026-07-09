@@ -27,7 +27,7 @@ from simplebroker._project_config import (
     find_project_config,
     project_config_path_for_directory,
 )
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 
 from .helper_scripts.broker_factory import (
     make_broker,
@@ -594,7 +594,7 @@ def broker_target(
     redis_worker_namespace: str | None,
     redis_worker_runner: Any,
     redis_worker_plugin: BackendPlugin | None,
-) -> ResolvedTarget:
+) -> BrokerTarget:
     """Backend-agnostic resolved target for the active backend."""
     if _test_backend_name() == POSTGRES_TEST_BACKEND:
         assert pg_worker_dsn is not None
@@ -624,7 +624,7 @@ def broker_target(
 
 
 @pytest.fixture
-def broker(broker_target: ResolvedTarget) -> Iterator[Any]:
+def broker(broker_target: BrokerTarget) -> Iterator[Any]:
     """Backend-agnostic BrokerCore instance."""
     core = make_broker(broker_target)
     try:
@@ -634,7 +634,7 @@ def broker(broker_target: ResolvedTarget) -> Iterator[Any]:
 
 
 @pytest.fixture
-def queue_factory(broker_target: ResolvedTarget) -> Iterator[Callable[..., Queue]]:
+def queue_factory(broker_target: BrokerTarget) -> Iterator[Callable[..., Queue]]:
     """Factory that creates Queue instances bound to the active backend.
 
     Returns a callable: ``queue_factory("queue_name")`` -> ``Queue``.

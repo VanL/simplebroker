@@ -15,7 +15,7 @@ from ._constants import (
     load_config,
 )
 from ._exceptions import DatabaseError
-from ._targets import ResolvedTarget
+from ._targets import BrokerTarget
 from .helpers import (
     _find_project_database,
     _resolve_symlinks_safely,
@@ -734,9 +734,9 @@ def _build_sqlite_target(
     legacy_sqlite_path_mode: bool,
     project_root: Path | None = None,
     config_path: Path | None = None,
-) -> ResolvedTarget:
+) -> BrokerTarget:
     """Build a resolved target for the built-in SQLite backend."""
-    return ResolvedTarget(
+    return BrokerTarget(
         backend_name="sqlite",
         target=str(db_path),
         backend_options={},
@@ -749,7 +749,7 @@ def _build_sqlite_target(
 
 def _resolve_target(
     args: argparse.Namespace, *, config: dict[str, Any] = _config
-) -> ResolvedTarget:
+) -> BrokerTarget:
     """Resolve the backend target for the current CLI invocation."""
     root = Path(args.dir).expanduser().resolve()
 

@@ -39,6 +39,7 @@ from ._constants import (
     load_config,
     resolve_config,
 )
+from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
 from ._exceptions import (
     IntegrityError,
     MessageError,
@@ -46,6 +47,7 @@ from ._exceptions import (
     QueueNameError,
     StopException,
 )
+from ._maintenance import MaintenanceSchedule, vacuum_is_eligible
 from ._message_id import MessageIdInput, normalize_message_id
 from ._message_insert import (
     MessageInsertRecord,
@@ -60,7 +62,7 @@ from ._message_search import (
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner, close_owned_runner
 from ._sidecar import SidecarSession
 from ._sql import BackendSQLNamespace, RetrieveQuerySpec
-from ._targets import ResolvedTarget
+from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator, validate_timestamp_bound
 from .helpers import (
     SetupProgressBudget,
@@ -263,7 +265,7 @@ class DBConnection:
 
     def __init__(
         self,
-        db_path: str | ResolvedTarget,
+        db_path: str | BrokerTarget,
         runner: SQLRunner | None = None,
         *,
         config: dict[str, Any] = _config,
@@ -279,7 +281,7 @@ class DBConnection:
         """
         self._config = _merge_config(config)
         self._db_path_arg = db_path
-        self._resolved_target = db_path if isinstance(db_path, ResolvedTarget) else None
+        self._resolved_target = db_path if isinstance(db_path, BrokerTarget) else None
         self.db_path = (
             self._resolved_target.target
             if self._resolved_target is not None
@@ -382,7 +384,9 @@ class DBConnection:
         core.set_stop_event(self._stop_event)
         return core
 
-    def get_connection(self, *, config: dict[str, Any] = _config) -> BrokerConnection:
+    def get_connection(
+        self, *, config: Mapping[str, Any] | None = None
+    ) -> BrokerConnection:
         """Get a robust database connection with retry logic.
 
         Returns a borrowed `BrokerCore` when using an injected runner, or a
@@ -397,8 +401,10 @@ class DBConnection:
         if self._stop_event.is_set():
             raise StopException("Connection interrupted")
 
+        effective_config = self._config if config is None else resolve_config(config)
+
         if self._share_in_process:
-            return self._get_shared_connection(config=config)
+            return self._get_shared_connection(config=effective_config)
 
         if self._external_runner:
             core = self.get_core()
@@ -421,7 +427,7 @@ class DBConnection:
             return connection
 
         def _log_connection_retry(_state: Any, exc: Exception, wait: float) -> None:
-            if config["BROKER_LOGGING_ENABLED"]:
+            if effective_config["BROKER_LOGGING_ENABLED"]:
                 logger.debug(
                     f"Database connection error "
                     f"(retry {_state.tries}/{max_retries}): {exc}. "
@@ -437,7 +443,7 @@ class DBConnection:
         except StopException:
             raise
         except Exception as e:
-            if config["BROKER_LOGGING_ENABLED"]:
+            if effective_config["BROKER_LOGGING_ENABLED"]:
                 logger.exception(
                     f"Failed to get database connection after {max_retries} retries: {e}"
                 )
@@ -454,10 +460,12 @@ class DBConnection:
         return self._shared_session
 
     def _get_shared_connection(
-        self, *, config: dict[str, Any] = _config
+        self, *, config: Mapping[str, Any] | None = None
     ) -> BrokerConnection:
         if self._stop_event.is_set():
             raise StopException("Connection interrupted")
+
+        effective_config = self._config if config is None else resolve_config(config)
 
         max_retries = 3
 
@@ -472,7 +480,7 @@ class DBConnection:
             return connection
 
         def _log_connection_retry(_state: Any, exc: Exception, wait: float) -> None:
-            if config["BROKER_LOGGING_ENABLED"]:
+            if effective_config["BROKER_LOGGING_ENABLED"]:
                 logger.debug(
                     f"Database connection error "
                     f"(retry {_state.tries}/{max_retries}): {exc}. "
@@ -488,7 +496,7 @@ class DBConnection:
         except StopException:
             raise
         except Exception as e:
-            if config["BROKER_LOGGING_ENABLED"]:
+            if effective_config["BROKER_LOGGING_ENABLED"]:
                 logger.exception(
                     f"Failed to get database connection after {max_retries} retries: {e}"
                 )
@@ -573,13 +581,15 @@ class DBConnection:
         assert self._core is not None
         return self._core
 
-    def cleanup(self, *, config: dict[str, Any] = _config) -> None:
+    def cleanup(self, *, config: Mapping[str, Any] | None = None) -> None:
         """Clean up active handles without releasing a shared session lease.
 
         For private connections this releases owned resources. For process-shared
         connections this only recycles the current thread's active handle; close()
         releases the queue/session lease.
         """
+        effective_config = self._config if config is None else resolve_config(config)
+
         if self._share_in_process:
             if self._shared_session is not None and not self._shared_released:
                 self._shared_session.cleanup_current_thread()
@@ -607,7 +617,7 @@ class DBConnection:
                 else:
                     connection.close()
             except Exception as e:
-                if config["BROKER_LOGGING_ENABLED"]:
+                if effective_config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing registered connection: {e}")
 
         # Clear the registry
@@ -631,7 +641,7 @@ class DBConnection:
             try:
                 owned_core.shutdown()
             except Exception as e:
-                if config["BROKER_LOGGING_ENABLED"]:
+                if effective_config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing owned core: {e}")
             return
 
@@ -639,7 +649,7 @@ class DBConnection:
             try:
                 close_owned_runner(owned_runner)
             except Exception as e:
-                if config["BROKER_LOGGING_ENABLED"]:
+                if effective_config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing runner: {e}")
 
     def release_connection_after_use(self) -> None:
@@ -698,7 +708,7 @@ class DBConnection:
 
 @contextmanager
 def open_broker(
-    db_target: str | ResolvedTarget,
+    db_target: str | BrokerTarget,
     runner: SQLRunner | None = None,
     *,
     config: dict[str, Any] = _config,
@@ -762,9 +772,9 @@ class BrokerCore:
         # during construction.
         self._stop_event = stop_event or threading.Event()
 
-        # Write counter for vacuum scheduling
-        self._write_count = 0
-        self._vacuum_interval = config["BROKER_AUTO_VACUUM_INTERVAL"]
+        self._maintenance_schedule = MaintenanceSchedule(
+            int(config["BROKER_AUTO_VACUUM_INTERVAL"])
+        )
 
         # Ensure backend-wide connection setup (for example SQLite WAL mode)
         # runs for all core paths, not only BrokerDB.
@@ -1206,10 +1216,9 @@ class BrokerCore:
             )
         )
         self.refresh_last_timestamp()
+        self._record_maintenance_activity(len(normalized_records))
 
-    def _log_ts_conflict(
-        self, conflict_type: str, attempt: int, *, config: dict[str, Any] = _config
-    ) -> None:
+    def _log_ts_conflict(self, conflict_type: str, attempt: int) -> None:
         """Log timestamp conflict information for diagnostics.
 
         Args:
@@ -1219,7 +1228,7 @@ class BrokerCore:
         # Use warnings for now, can be replaced with proper logging
         if conflict_type == "transient":
             # Debug level - might be normal under extreme concurrency
-            if config["BROKER_DEBUG"]:
+            if self._config["BROKER_DEBUG"]:
                 warnings.warn(
                     f"Timestamp conflict detected (attempt {attempt + 1}), retrying...",
                     RuntimeWarning,
@@ -1241,21 +1250,28 @@ class BrokerCore:
                 stacklevel=4,
             )
 
-    def _do_write_with_ts_retry(
-        self, queue: str, message: str, *, config: dict[str, Any] = _config
-    ) -> None:
+    def _do_write_with_ts_retry(self, queue: str, message: str) -> None:
         """Execute write within retry context. Separates retry logic from transaction logic."""
         # Use retry helper with stop-aware behavior for database lock handling
         self._run_with_retry(lambda: self._do_write_transaction(queue, message))
+        self._record_maintenance_activity(1)
 
-        # Increment write counter and check vacuum need
-        # Only check if auto vacuum is enabled
-        if config["BROKER_AUTO_VACUUM"] == 1:
-            self._write_count += 1
-            if self._write_count >= self._vacuum_interval:
-                self._write_count = 0  # Reset counter
+    def _record_maintenance_activity(self, completed: int) -> None:
+        """Run one best-effort maintenance check after committed activity."""
+        if self._config["BROKER_AUTO_VACUUM"] != 1 or completed <= 0:
+            return
+
+        with self._lock:
+            if not self._maintenance_schedule.record(completed):
+                return
+            try:
                 if self._should_vacuum():
                     self._vacuum_claimed_messages()
+            except Exception:
+                if self._config["BROKER_LOGGING_ENABLED"]:
+                    logger.exception("Automatic vacuum failed; will retry later")
+            else:
+                self._maintenance_schedule.mark_check_succeeded()
 
     def _do_write_transaction(self, queue: str, message: str) -> None:
         """Allocate the timestamp and insert the message in ONE transaction.
@@ -1481,6 +1497,7 @@ class BrokerCore:
 
                     self._runner.commit()
                     transaction_open = False
+                    self._record_maintenance_activity(len(results_list))
 
                 except BaseException:
                     if transaction_open:
@@ -1555,9 +1572,11 @@ class BrokerCore:
             return self._execute_peek_operation(query, params)
         else:
             # claim or move operations need transaction
-            return self._execute_transactional_operation(
+            results = self._execute_transactional_operation(
                 queue, operation, query, params, commit_before_yield
             )
+            self._record_maintenance_activity(len(results))
+            return results
 
     def claim_one(
         self,
@@ -1604,7 +1623,7 @@ class BrokerCore:
         limit: int,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
     ) -> list[tuple[str, int]] | list[str]:
@@ -1630,6 +1649,7 @@ class BrokerCore:
             ValueError: If queue name is invalid or limit < 1
             RuntimeError: If called from a forked process
         """
+        validate_delivery_guarantee(delivery_guarantee)
         if limit < 1:
             raise ValueError("limit must be at least 1")
 
@@ -1652,12 +1672,12 @@ class BrokerCore:
         queue: str,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
     ) -> Iterator[tuple[str, int] | str]:
         """Generator that claims messages from a queue.
 
@@ -1679,7 +1699,8 @@ class BrokerCore:
             ValueError: If queue name is invalid
             RuntimeError: If called from a forked process
         """
-        if delivery_guarantee == "exactly_once":
+        validated_delivery = validate_delivery_guarantee(delivery_guarantee)
+        if validated_delivery == "exactly_once":
             # Safe mode: process one message at a time
             while True:
                 result = self._retrieve(
@@ -1699,10 +1720,13 @@ class BrokerCore:
                 else:
                     yield result[0][0]
         else:
+            effective_config = (
+                self._config if config is None else resolve_config(config)
+            )
             effective_batch_size = (
                 batch_size
                 if batch_size is not None
-                else config["BROKER_GENERATOR_BATCH_SIZE"]
+                else effective_config["BROKER_GENERATOR_BATCH_SIZE"]
             )
             yield from self._yield_transactional_batches(
                 queue,
@@ -1933,7 +1957,7 @@ class BrokerCore:
         limit: int,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         require_unclaimed: bool = True,
@@ -1964,6 +1988,7 @@ class BrokerCore:
             ValueError: If queue names are invalid, same, or limit < 1
             RuntimeError: If called from a forked process
         """
+        validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
             raise ValueError("Source and target queues cannot be the same")
         if limit < 1:
@@ -1991,12 +2016,12 @@ class BrokerCore:
         target_queue: str,
         *,
         with_timestamps: bool = True,
-        delivery_guarantee: Literal["exactly_once", "at_least_once"] = "exactly_once",
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
         batch_size: int | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
     ) -> Iterator[tuple[str, int] | str]:
         """Generator that moves messages from source queue to target queue.
 
@@ -2020,10 +2045,11 @@ class BrokerCore:
             ValueError: If queue names are invalid or same
             RuntimeError: If called from a forked process
         """
+        validated_delivery = validate_delivery_guarantee(delivery_guarantee)
         if source_queue == target_queue:
             raise ValueError("Source and target queues cannot be the same")
 
-        if delivery_guarantee == "exactly_once":
+        if validated_delivery == "exactly_once":
             # Safe mode: process one message at a time
             while True:
                 result = self._retrieve(
@@ -2044,10 +2070,13 @@ class BrokerCore:
                 else:
                     yield result[0][0]
         else:
+            effective_config = (
+                self._config if config is None else resolve_config(config)
+            )
             effective_batch_size = (
                 batch_size
                 if batch_size is not None
-                else config["BROKER_GENERATOR_BATCH_SIZE"]
+                else effective_config["BROKER_GENERATOR_BATCH_SIZE"]
             )
             yield from self._yield_transactional_batches(
                 source_queue,
@@ -2648,9 +2677,10 @@ class BrokerCore:
 
         # Execute with retry logic
         self._run_with_retry(_do_broadcast)
+        self._record_maintenance_activity(queue_count)
         return queue_count
 
-    def _should_vacuum(self, *, config: dict[str, Any] = _config) -> bool:
+    def _should_vacuum(self) -> bool:
         """Check if vacuum needed (fast approximation)."""
         with self._lock:
             # Use a single table scan with conditional aggregation for better performance
@@ -2660,25 +2690,19 @@ class BrokerCore:
             claimed_count = stats[0] or 0  # Handle NULL case
             total_count = stats[1] or 0
 
-            if total_count == 0:
-                return False
-
-            # Trigger if >=10% claimed OR >10k claimed messages
-            threshold_pct = config["BROKER_VACUUM_THRESHOLD"]
-            return bool(
-                (claimed_count >= total_count * threshold_pct)
-                or (claimed_count > 10000)
+            return vacuum_is_eligible(
+                claimed_count=int(claimed_count),
+                total_count=int(total_count),
+                threshold=float(self._config["BROKER_VACUUM_THRESHOLD"]),
             )
 
-    def _vacuum_claimed_messages(
-        self, *, compact: bool = False, config: dict[str, Any] = _config
-    ) -> None:
+    def _vacuum_claimed_messages(self, *, compact: bool = False) -> None:
         """Run backend-defined vacuum/compaction work."""
         with self._lock:
             self._backend_plugin.vacuum(
                 self._runner,
                 compact=compact,
-                config=config,
+                config=self._config,
             )
 
     def queue_exists_and_has_messages(self, queue: str) -> bool:
@@ -3018,11 +3042,12 @@ class BrokerCore:
 
 
 class BrokerDB(BrokerCore):
-    """SQLite-based database implementation for SimpleBroker.
+    """SQLite-owning specialization of the shared SQL broker core.
 
-    This class maintains backward compatibility while using the extensible
-    BrokerCore implementation. It creates a SQLiteRunner and manages the
-    database connection lifecycle.
+    BrokerCore supplies backend-neutral SQL queue behavior around a caller-provided
+    runner. BrokerDB supplies the distinct SQLite ownership layer: it resolves the
+    database path, creates and owns SQLiteRunner, applies file permissions, and
+    manages the SQLite connection lifecycle.
 
     This class is thread-safe and can be shared across multiple threads
     in the same process. All database operations are protected by a lock

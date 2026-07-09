@@ -13,7 +13,7 @@ from simplebroker import Queue
 from simplebroker._backend_plugins import BACKEND_API_VERSION
 from simplebroker._constants import __version__ as SIMPLEBROKER_VERSION
 from simplebroker._runner import SetupPhase
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 from simplebroker.db import DBConnection
 from simplebroker.ext import BackendAwareRunner, get_backend_plugin
 
@@ -275,7 +275,7 @@ def test_legacy_runner_without_backend_plugin_still_looks_like_sqlite() -> None:
 def test_non_aware_runner_with_resolved_target_uses_target_plugin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ResolvedTarget context should identify wrapped runners that are not backend-aware."""
+    """BrokerTarget context should identify wrapped runners that are not backend-aware."""
 
     class LegacyRunner:
         def __init__(self) -> None:
@@ -372,7 +372,7 @@ def test_non_aware_runner_with_resolved_target_uses_target_plugin(
     monkeypatch.setattr("simplebroker._backend_plugins.get_backend_plugin", get_plugin)
 
     runner = LegacyRunner()
-    target = ResolvedTarget("dummy", "dummy-target", {"schema": "test_schema"})
+    target = BrokerTarget("dummy", "dummy-target", {"schema": "test_schema"})
 
     connection = DBConnection(target, runner)
     try:
@@ -412,5 +412,5 @@ def test_first_party_extension_plugins_declare_literal_backend_api_version(
 ) -> None:
     plugin_source = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
 
-    assert "backend_api_version = 1" in plugin_source
+    assert "backend_api_version = 2" in plugin_source
     assert "backend_api_version = BACKEND_API_VERSION" not in plugin_source

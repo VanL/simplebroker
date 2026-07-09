@@ -27,7 +27,7 @@ from hypothesis.stateful import (
     run_state_machine_as_test,
 )
 
-from simplebroker._targets import ResolvedTarget
+from simplebroker._targets import BrokerTarget
 
 from .helper_scripts.broker_factory import make_queue
 
@@ -57,7 +57,7 @@ class QueueModelMachine(RuleBasedStateMachine):
     """
 
     # Injected by the test wrapper below (the active backend's target).
-    target: ResolvedTarget
+    target: BrokerTarget
 
     def __init__(self) -> None:
         super().__init__()

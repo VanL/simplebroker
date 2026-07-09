@@ -10,8 +10,8 @@ from psycopg import conninfo as pg_conninfo
 from simplebroker_pg.plugin import PostgresBackendPlugin, verify_env
 from simplebroker_pg.validation import connect
 
-from simplebroker._backend_plugins import BACKEND_API_VERSION
 from simplebroker._exceptions import DatabaseError
+from simplebroker.ext import BACKEND_API_VERSION
 
 pytestmark = [pytest.mark.pg_only]
 

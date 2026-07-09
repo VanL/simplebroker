@@ -10,8 +10,8 @@ from simplebroker_redis.validation import (
     require_namespace,
 )
 
-from simplebroker._backend_plugins import BACKEND_API_VERSION
 from simplebroker._exceptions import DatabaseError
+from simplebroker.ext import BACKEND_API_VERSION
 
 
 @pytest.mark.redis_only

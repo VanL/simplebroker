@@ -3,15 +3,41 @@
 from __future__ import annotations
 
 import time
+from typing import NoReturn
 
 import pytest
+import redis
 from simplebroker_redis import RedisRunner
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys
 
-from simplebroker._exceptions import IntegrityError, MessageError
+from simplebroker._exceptions import IntegrityError, MessageError, OperationalError
 
 pytestmark = [pytest.mark.redis_only]
+
+
+def test_redis_manual_vacuum_translates_client_errors(
+    redis_runner: RedisRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = RedisBrokerCore(redis_runner, config={"BROKER_AUTO_VACUUM": 0})
+    try:
+        core.write("jobs", "payload")
+        assert core.claim_one("jobs", with_timestamps=False) == "payload"
+
+        def fail_zrange(*_args: object, **_kwargs: object) -> NoReturn:
+            raise redis.RedisError("injected vacuum failure")
+
+        monkeypatch.setattr(core._client, "zrange", fail_zrange)
+
+        with pytest.raises(
+            OperationalError, match="injected vacuum failure"
+        ) as exc_info:
+            core.vacuum()
+
+        assert isinstance(exc_info.value.__cause__, redis.RedisError)
+        assert core.count_claimed_messages() == 1
+    finally:
+        core.close()
 
 
 def test_redis_insert_messages_rejects_duplicate_explicit_ids(

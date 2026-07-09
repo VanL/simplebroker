@@ -18,7 +18,7 @@ from ._runner import (
     lease_runner_thread_connection,
     release_runner_thread_connection,
 )
-from ._targets import ResolvedTarget
+from ._targets import BrokerTarget
 
 if TYPE_CHECKING:
     from ._runner import SQLRunner
@@ -78,9 +78,9 @@ def _normalize_sqlite_target(target: str) -> str:
 
 
 def _target_parts(
-    db_path: str | ResolvedTarget,
+    db_path: str | BrokerTarget,
 ) -> tuple[str, str, dict[str, Any], BackendPlugin]:
-    if isinstance(db_path, ResolvedTarget):
+    if isinstance(db_path, BrokerTarget):
         target = db_path.target
         if db_path.backend_name == "sqlite":
             target = _normalize_sqlite_target(target)
@@ -98,9 +98,7 @@ def _target_parts(
     )
 
 
-def _session_key(
-    db_path: str | ResolvedTarget, config: Mapping[str, Any]
-) -> _SessionKey:
+def _session_key(db_path: str | BrokerTarget, config: Mapping[str, Any]) -> _SessionKey:
     backend_name, target, backend_options, _ = _target_parts(db_path)
     return _SessionKey(
         pid=os.getpid(),
@@ -116,7 +114,7 @@ class _ProcessBrokerSession:
 
     def __init__(
         self,
-        db_path: str | ResolvedTarget,
+        db_path: str | BrokerTarget,
         *,
         config: Mapping[str, Any] = _config,
     ) -> None:
@@ -329,7 +327,7 @@ class _ProcessBrokerSessionRegistry:
 
     def acquire(
         self,
-        db_path: str | ResolvedTarget,
+        db_path: str | BrokerTarget,
         *,
         config: Mapping[str, Any] = _config,
     ) -> tuple[_SessionKey, _ProcessBrokerSession]:
@@ -371,7 +369,7 @@ _registry = _ProcessBrokerSessionRegistry()
 
 
 def acquire_process_broker_session(
-    db_path: str | ResolvedTarget,
+    db_path: str | BrokerTarget,
     *,
     config: Mapping[str, Any] = _config,
 ) -> tuple[_SessionKey, _ProcessBrokerSession]:
