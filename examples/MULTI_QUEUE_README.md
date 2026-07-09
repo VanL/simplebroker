@@ -5,6 +5,7 @@ This directory contains examples demonstrating the **MultiQueueWatcher** class -
 ## 📁 Files
 
 - **`multi_queue_watcher.py`** - Complete MultiQueueWatcher implementation with example
+- **`reference_reactor.py`** - Sidecar-aware single-writer reactor layered on MultiQueueWatcher
 - **`multi_queue_patterns.py`** - Usage patterns and techniques
 - **`MULTI_QUEUE_README.md`** - This documentation file
 
@@ -36,6 +37,76 @@ MultiQueueWatcher extends `BaseWatcher` to provide:
 3. **Activity Detection**: Uses `PRAGMA data_version` to detect changes across all queues in the shared database.
 
 4. **Single-Threaded**: Eliminates thread synchronization, context switching, and race conditions.
+
+### Reactor Reference
+
+`reference_reactor.py` shows the stricter pattern for applications that need worker
+threads plus sidecar tables. `BaseReactor` is the reusable seam: it owns the
+single-thread process/wait/stop loop, local activity wakeups, and resource-close
+ordering. `Reactor` is the concrete demo policy layered on top: it owns input
+checkpoints, sidecar rows, output replay, control replies, and the worker pool.
+
+The reactor thread owns the reactor's persistent `Queue` handles and is the only
+normal writer to the reactor sidecar tables. Other threads may use their own
+short-lived `Queue` handles to submit input, send control messages, or inspect
+results, but they must not share the reactor's owned handles. Workers receive
+`WorkItem` dataclasses through Python `queue.Queue` and return `WorkerResult`
+dataclasses the same way. This is a single-writer reactor with broker-free
+workers. It is not a database lease: SimpleBroker owns storage-level
+multi-process contention with short SQLite write transactions and retry. The
+reactor contract is about logical workstream ownership.
+
+The operational contract is:
+
+1. `process_once()`, `run_until_stopped()`, and `start()` are single-owner drive
+   paths. Do not drive the same reactor from two threads.
+2. Shutdown is two phase. `_reactor_stop_event` stops the reactor loop without
+   interrupting durable writes; the inherited `_stop_event` is set only during
+   final resource close.
+3. A joining `stop()` waits for an active drive thread before closing reactor
+   queue handles. If an external caller uses `stop(join=False)`, the drive
+   thread's `run_until_stopped()` finalizer performs the close when it exits.
+4. Source and control queues are read with peek-plus-sidecar checkpoints. This
+   preserves queue rows; production code needs a retention or compaction policy.
+5. Output publication is at-least-once with exact-ID idempotent replay. The
+   reactor records a pending result row, publishes the exact output message ID,
+   then marks it written. Exact-ID insert handles the normal replay collision,
+   but the write and sidecar mark are separate commits. If a crash lands between
+   them and a downstream consumer has already vacuumed the claimed output row,
+   replay can deliver the same logical output again. Downstream consumers should
+   deduplicate by output message ID.
+6. Many processes may use the same broker database. Source and control lanes are
+   already at-least-once because they use peek-plus-checkpoint semantics: a
+   restart can re-run uncheckpointed work even with one reactor. More than one
+   reactor watching the same input or control lane adds another duplicate
+   execution path. Prefer one logical reactor per workstream when duplicate pure
+   work or non-idempotent side effects matter.
+7. Control replies are at-least-once. A crash after writing the reply and before
+   checkpointing the control input can produce a duplicate reply after restart.
+8. Worker count gives cross-queue parallelism, not unlimited per-queue
+   parallelism. Each input queue has one in-flight message to preserve order.
+9. The instance is one-shot. Construct, run, stop, then dispose it. `BaseReactor`
+   seals inherited dynamic queue mutators by default because role-aware dynamic
+   lanes must also update checkpoint and sidecar state.
+10. A stuck processor can stall its source queue. Production code should add
+    worker deadlines or an in-flight reaper if processors are not tightly
+    bounded.
+11. Do not hold long SQLite write transactions across worker CPU or IO time.
+    This design keeps workers off broker handles and lets the reactor thread do
+    short durable turns so SimpleBroker's contention retry model can work.
+12. A stuck output replay backpressures new input dispatch, but it must not make
+    the control lane unresponsive. `STATUS` reports `pending_output_backlog` and
+    `output_backlog_blocked`; `STOP` still works while the output sink is stuck.
+    Pending control traffic caps output replay to a small budget for that turn
+    rather than starving it entirely.
+13. Constructing `Reactor` performs durable setup and pending-output replay, then
+    starts worker threads. Do not treat construction as a side-effect-free
+    configuration step.
+
+To build a new reactor, subclass `BaseReactor` and keep broker effects on the
+reactor thread. Override `_drain_reactor_results()` for broker-free worker
+results, `_drain_reactor_backlog()` for durable retry rows, `_drain_queue()` for
+the queue policy, and `_close_reactor_resources()` for extra owned handles.
 
 ## 🚀 Quick Start
 

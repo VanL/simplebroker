@@ -30,6 +30,7 @@ def test_prepare_broadcast_excludes_concurrent_new_queue(
         runner_broadcast.begin_immediate()
         pg_plugin.prepare_broadcast(runner_broadcast)
 
+        assert pg_plugin.sql is not None
         queues = [
             row[0]
             for row in runner_broadcast.run(

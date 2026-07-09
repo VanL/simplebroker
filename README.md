@@ -72,6 +72,7 @@ dependencies and stores its state in one SQLite database.
     - [Context Manager Support](#context-manager-support)
     - [Advanced: Custom Extensions](#advanced-custom-extensions)
     - [Sidecar tables (advanced)](#sidecar-tables-advanced)
+    - [Reactor example (advanced)](#reactor-example-advanced)
   - [Embedding SimpleBroker in Your Project](#embedding-simplebroker-in-your-project)
   - [Performance \& Tuning](#performance--tuning)
     - [Cross-Backend Benchmarking](#cross-backend-benchmarking)
@@ -1170,6 +1171,49 @@ Rules of the road:
   `ALTER TABLE`) inside a `transaction=True` session is race-safe across
   processes.
 
+### Reactor example (advanced)
+
+Applications that combine worker threads with sidecar tables should keep broker
+handles and durable writes on one owning thread, then pass broker-free work
+between threads with Python `queue.Queue`.
+[`examples/reference_reactor.py`](examples/reference_reactor.py) is the copyable
+reference for that shape.
+
+The example layers a reusable `BaseReactor` on
+[`examples/multi_queue_watcher.py`](examples/multi_queue_watcher.py), then shows
+one concrete `Reactor` policy with:
+
+- fixed input, output, and control lanes;
+- peek-plus-sidecar checkpoints for input/control queues;
+- at-least-once exact-ID output replay through a durable sidecar outbox;
+- broker-free worker payloads and result envelopes; and
+- short sidecar transactions on the reactor thread.
+
+This is not a database lease. SimpleBroker already supports many processes
+using the same SQLite broker database through WAL, short write transactions, and
+retry on contention. The reactor contract is logical: source and control lanes
+are at-least-once because they use peek-plus-checkpoint semantics, so restart
+can re-run uncheckpointed work even with one reactor. Two live reactors watching
+the same lane add another duplicate execution path. Output replay is also
+at-least-once: exact-ID insert handles the normal replay collision, but a crash
+after the outbox write and before the sidecar `output_written` mark can replay
+the output if a downstream consumer already vacuumed the claimed output row.
+Make processors and control commands idempotent, deduplicate downstream by
+output message ID, and prefer one logical reactor per workstream when duplicate
+execution or non-idempotent side effects matter.
+If output replay is stuck, the example backpressures new input dispatch but
+keeps the control lane responsive; `STATUS` exposes `pending_output_backlog` and
+`output_backlog_blocked`, and `STOP` still works. A pending control message caps
+output replay to a small budget for that turn rather than starving it entirely.
+Constructing `Reactor` is not side-effect-free: it creates sidecar schema,
+replays pending outputs, and starts workers.
+
+Run the focused tests with:
+
+```bash
+uv run pytest -n0 examples/tests
+```
+
 ## Embedding SimpleBroker in Your Project
 
 For embedded use, the current best practice is to put a small project-level
@@ -2027,8 +2071,8 @@ uv run ./bin/pytest-pg -q tests/test_watcher_metrics.py -k basic
 uv run ./bin/packaging-smoke --python 3.11
 
 # Lint and format
-uv run ruff check --fix simplebroker tests bin
-uv run ruff format simplebroker tests bin
+uv run ruff check --fix simplebroker tests bin examples
+uv run ruff format simplebroker tests bin examples
 uv run mypy simplebroker bin/release.py
 ```
 
@@ -2072,6 +2116,11 @@ builds the distributions, publishes them to PyPI with trusted publishing, and
 creates the GitHub Release from the same top-level gate workflow. Keeping the
 build, attestation, and publish steps in the gate workflow makes PyPI's trusted
 publisher identity match the artifact attestation build-config URI.
+The local release helper also ruff-checks `examples/`, runs all
+pytest-discovered example tests under `examples/`, mypy-checks every Python
+example file, and mypy-checks the selected extension test tree. Core and batch
+releases check both first-party extension test trees. Those extra local checks
+are not part of the CI release workflows.
 Core releases wait for `Test`, `Test Postgres Extension`, and
 `Test Redis Extension`; extension releases wait for `Test` plus their matching
 backend workflow.

@@ -1,5 +1,7 @@
 """_translate_error must mark Postgres contention SQLSTATEs retryable."""
 
+from __future__ import annotations
+
 import psycopg
 import pytest
 from simplebroker_pg.runner import _translate_error
@@ -24,18 +26,18 @@ class _FakePgError(psycopg.Error):
 
 
 @pytest.mark.parametrize("state", ["55P03", "40001", "40P01"])
-def test_contention_sqlstates_are_marked_retryable(state):
+def test_contention_sqlstates_are_marked_retryable(state: str) -> None:
     err = _translate_error(_FakePgError("contention", state))
     assert isinstance(err, OperationalError)
     assert err.retryable is True
 
 
-def test_other_operational_sqlstates_keep_marker_fallback():
+def test_other_operational_sqlstates_keep_marker_fallback() -> None:
     err = _translate_error(_FakePgError("some failure", "57014"))
     assert isinstance(err, OperationalError)
     assert err.retryable is None
 
 
-def test_integrity_and_data_translation_unchanged():
+def test_integrity_and_data_translation_unchanged() -> None:
     assert isinstance(_translate_error(_FakePgError("dup", "23505")), IntegrityError)
     assert isinstance(_translate_error(_FakePgError("bad", "22001")), DataError)

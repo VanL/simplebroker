@@ -5,14 +5,17 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
+from typing import cast
 
 import psycopg
 import pytest
 from simplebroker_pg import PostgresRunner
+from simplebroker_pg import _sql as pg_sql
 from simplebroker_pg.validation import quote_ident
 
 from simplebroker import Queue
 from simplebroker._backend_plugins import BackendPlugin
+from simplebroker._runner import SQLRunner
 from simplebroker.db import BrokerCore
 
 pytestmark = [pytest.mark.pg_only]
@@ -100,11 +103,15 @@ def test_postgres_prepare_rename_locks_meta_before_messages(
 ) -> None:
     runner = _RecordingRunner()
 
-    pg_plugin.prepare_queue_operation(runner, operation="rename", queue="old")
+    pg_plugin.prepare_queue_operation(
+        cast(SQLRunner, runner),
+        operation="rename",
+        queue="old",
+    )
 
     assert runner.calls == [
-        (pg_plugin.sql.LOCK_LAST_TS_ROW, True),
-        (pg_plugin.sql.LOCK_RENAME_SCOPE, False),
+        (pg_sql.LOCK_LAST_TS_ROW, True),
+        (pg_sql.LOCK_RENAME_SCOPE, False),
     ]
 
 

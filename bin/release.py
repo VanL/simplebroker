@@ -99,10 +99,20 @@ REDIS_TEST_COMMAND: Final[tuple[str, ...]] = (
     "dev",
     "./bin/pytest-redis",
 )
+EXAMPLE_TEST_COMMAND: Final[tuple[str, ...]] = (
+    "uv",
+    "run",
+    "--extra",
+    "dev",
+    "pytest",
+    "-n0",
+    "examples",
+)
 PG_TOOL_PATHS: Final[tuple[str, ...]] = (
     "simplebroker",
     "tests",
     "bin",
+    "examples",
     "extensions/simplebroker_pg/simplebroker_pg",
     "extensions/simplebroker_pg/tests",
 )
@@ -110,6 +120,7 @@ REDIS_TOOL_PATHS: Final[tuple[str, ...]] = (
     "simplebroker",
     "tests",
     "bin",
+    "examples",
     "extensions/simplebroker_redis/simplebroker_redis",
     "extensions/simplebroker_redis/tests",
 )
@@ -117,6 +128,7 @@ ALL_EXTENSION_TOOL_PATHS: Final[tuple[str, ...]] = (
     "simplebroker",
     "tests",
     "bin",
+    "examples",
     "extensions/simplebroker_pg/simplebroker_pg",
     "extensions/simplebroker_pg/tests",
     "extensions/simplebroker_redis/simplebroker_redis",
@@ -131,14 +143,12 @@ REDIS_MYPY_PATHS: Final[tuple[str, ...]] = (
     "simplebroker",
     "bin/release.py",
     "extensions/simplebroker_redis/simplebroker_redis",
-    "extensions/simplebroker_redis/tests",
 )
 ALL_EXTENSION_MYPY_PATHS: Final[tuple[str, ...]] = (
     "simplebroker",
     "bin/release.py",
     "extensions/simplebroker_pg/simplebroker_pg",
     "extensions/simplebroker_redis/simplebroker_redis",
-    "extensions/simplebroker_redis/tests",
 )
 RUFF_CHECK_PREFIX: Final[tuple[str, ...]] = (
     "uv",
@@ -736,6 +746,80 @@ def _mypy_command(paths: tuple[str, ...]) -> tuple[str, ...]:
     return (*MYPY_PREFIX, *paths, *MYPY_SUFFIX)
 
 
+def _python_file_paths(root: Path) -> tuple[str, ...]:
+    return tuple(
+        _display_path(path)
+        for path in sorted(root.rglob("*.py"))
+        if "__pycache__" not in path.parts
+    )
+
+
+def _required_python_file_paths(root: Path, *, label: str) -> tuple[str, ...]:
+    paths = _python_file_paths(root)
+    if not paths:
+        raise RuntimeError(f"No Python files found under {label}")
+    return paths
+
+
+def _example_mypy_paths() -> tuple[str, ...]:
+    """Return concrete Python files under examples for mypy.
+
+    The root mypy config excludes examples from directory discovery, so the local
+    release gate must pass files explicitly.
+    """
+
+    return _required_python_file_paths(
+        PROJECT_ROOT / "examples",
+        label="examples",
+    )
+
+
+def _examples_mypy_command() -> tuple[str, ...]:
+    return _mypy_command(_example_mypy_paths())
+
+
+def _extension_test_mypy_paths(
+    *, include_pg: bool, include_redis: bool
+) -> tuple[str, ...]:
+    paths: list[str] = []
+    if include_pg:
+        paths.extend(
+            _required_python_file_paths(
+                PROJECT_ROOT / "extensions" / "simplebroker_pg" / "tests",
+                label="extensions/simplebroker_pg/tests",
+            )
+        )
+    if include_redis:
+        paths.extend(
+            _required_python_file_paths(
+                PROJECT_ROOT / "extensions" / "simplebroker_redis" / "tests",
+                label="extensions/simplebroker_redis/tests",
+            )
+        )
+    return tuple(paths)
+
+
+def _extension_test_mypy_commands(
+    *,
+    include_pg: bool,
+    include_redis: bool,
+) -> tuple[tuple[str, ...], ...]:
+    commands: list[tuple[str, ...]] = []
+    if include_pg:
+        commands.append(
+            _mypy_command(
+                _extension_test_mypy_paths(include_pg=True, include_redis=False)
+            )
+        )
+    if include_redis:
+        commands.append(
+            _mypy_command(
+                _extension_test_mypy_paths(include_pg=False, include_redis=True)
+            )
+        )
+    return tuple(commands)
+
+
 def _local_weft_uv_args() -> tuple[str, ...]:
     """Return local Weft uv args for release-helper root tests when available."""
 
@@ -823,9 +907,12 @@ def build_precheck_commands_for_targets(
     return (
         _root_test_command(),
         *backend_tests,
+        EXAMPLE_TEST_COMMAND,
         _ruff_check_command(tool_paths),
         _ruff_format_command(tool_paths),
         _mypy_command(mypy_paths),
+        *_extension_test_mypy_commands(include_pg=run_pg, include_redis=run_redis),
+        _examples_mypy_command(),
     )
 
 

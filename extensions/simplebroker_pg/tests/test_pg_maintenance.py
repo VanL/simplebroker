@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from simplebroker_pg import PostgresRunner
 from simplebroker_pg.plugin import PostgresBackendPlugin
@@ -19,6 +21,10 @@ def _counts_by_queue(pg_runner: PostgresRunner) -> dict[str, int]:
         )
     )
     return {str(queue): int(count) for queue, count in rows}
+
+
+def _timestamp_map(rows: list[tuple[str, int]] | list[str]) -> dict[str, int]:
+    return dict(cast(list[tuple[str, int]], rows))
 
 
 class SessionTrackingVacuumRunner:
@@ -166,7 +172,7 @@ def test_delete_message_ids_physically_removes_claimed_and_pending_rows(
     pg_core.write("jobs", "one")
     pg_core.write("jobs", "two")
     pg_core.write("jobs", "three")
-    timestamps = dict(pg_core.peek_many("jobs", limit=10))
+    timestamps = _timestamp_map(pg_core.peek_many("jobs", limit=10))
 
     assert (
         pg_core.claim_one(
@@ -203,7 +209,7 @@ def test_delete_from_queues_removes_selected_postgres_rows(
     pg_core.write("alpha", "alpha2")
     pg_core.write("beta", "beta1")
     pg_core.write("gamma", "gamma1")
-    timestamps = dict(pg_core.peek_many("alpha", limit=10))
+    timestamps = _timestamp_map(pg_core.peek_many("alpha", limit=10))
 
     assert (
         pg_core.claim_one(
@@ -230,7 +236,7 @@ def test_delete_from_queues_postgres_before_timestamp_is_strict(
     pg_core.write("beta", "old-beta")
     pg_core.write("gamma", "old-gamma")
     pg_core.write("alpha", "boundary-alpha")
-    boundary_ts = dict(pg_core.peek_many("alpha", limit=10))["boundary-alpha"]
+    boundary_ts = _timestamp_map(pg_core.peek_many("alpha", limit=10))["boundary-alpha"]
     pg_core.write("alpha", "new-alpha")
     pg_core.write("beta", "new-beta")
 

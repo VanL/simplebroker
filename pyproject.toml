@@ -44,6 +44,8 @@ dev = [
     "redis>=5",
     "ruff>=0.1.0",
     "pytest-timeout>=2.4.0",
+    "aiosqlite>=0.22.1",
+    "aiosqlitepool>=1.0.0",
 ]
 pg = [
     "simplebroker-pg>=3.0.0",

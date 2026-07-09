@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import pytest
+from simplebroker_pg import PostgresRunner
 from simplebroker_pg._constants import POSTGRES_SCHEMA_VERSION
+
+from simplebroker._backend_plugins import BackendPlugin
+from simplebroker.db import BrokerCore
 
 pytestmark = [pytest.mark.pg_only]
 
 
-def _queue_ts_order_unclaimed_index_exists(pg_runner) -> bool:
+def _queue_ts_order_unclaimed_index_exists(pg_runner: PostgresRunner) -> bool:
     rows = list(
         pg_runner.run(
             """
@@ -25,7 +29,9 @@ def _queue_ts_order_unclaimed_index_exists(pg_runner) -> bool:
     return bool(rows and rows[0][0])
 
 
-def test_postgres_latest_pending_timestamp_ignores_claimed_newest(pg_core) -> None:
+def test_postgres_latest_pending_timestamp_ignores_claimed_newest(
+    pg_core: BrokerCore,
+) -> None:
     pg_core.insert_messages(
         [
             ("jobs", "old", 10),
@@ -50,9 +56,9 @@ def test_postgres_latest_pending_timestamp_ignores_claimed_newest(pg_core) -> No
 
 
 def test_postgres_current_schema_recreates_missing_pending_timestamp_index(
-    pg_core,
-    pg_runner,
-    pg_plugin,
+    pg_core: BrokerCore,
+    pg_runner: PostgresRunner,
+    pg_plugin: BackendPlugin,
 ) -> None:
     del pg_core
     versions: list[int] = []

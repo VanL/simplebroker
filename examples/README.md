@@ -104,6 +104,17 @@ When working with message queues:
   - Per-queue handlers with fallback to default
   - See **[MULTI_QUEUE_README.md](MULTI_QUEUE_README.md)** for detailed documentation
 
+- **[reference_reactor.py](reference_reactor.py)** - Sidecar-aware single-writer reactor reference
+  - Layers a reusable `BaseReactor` on top of the example `MultiQueueWatcher`
+  - Shows `Reactor` as one concrete sidecar/checkpoint/output policy
+  - Uses Python `queue.Queue` to pass broker-free work/results between threads
+  - Keeps reactor-owned SimpleBroker handles and sidecar writes on the reactor thread
+  - Demonstrates input checkpoints, result replay, audit sidecars, and control lanes
+  - Treats input, output, and control effects as at-least-once across restart
+  - Relies on SimpleBroker for SQLite multi-process contention; reactor transactions stay short
+  - Treats control replies as at-least-once and requires retention/compaction for long-running use
+  - Covered by `uv run pytest -n0 examples/tests`
+
 - **[multi_queue_patterns.py](multi_queue_patterns.py)** - Advanced multi-queue usage patterns
   - Priority queue simulation
   - Load balancing across worker queues

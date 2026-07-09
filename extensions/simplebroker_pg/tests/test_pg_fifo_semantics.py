@@ -30,6 +30,7 @@ def test_same_queue_claim_waits_instead_of_skipping(
         core_a.write("jobs", "first")
         core_a.write("jobs", "second")
 
+        assert pg_plugin.sql is not None
         query, params = pg_plugin.sql.build_retrieve_query(
             "claim",
             RetrieveQuerySpec(

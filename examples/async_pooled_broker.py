@@ -31,11 +31,11 @@ import time
 import warnings
 from collections.abc import AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 try:
     import aiosqlite
-    from aiosqlitepool import SQLiteConnectionPool
+    from aiosqlitepool import SQLiteConnectionPool  # type: ignore[import-untyped]
 except ImportError:
     raise ImportError(
         "This example requires aiosqlite and aiosqlitepool. "
@@ -244,7 +244,7 @@ class PooledAsyncSQLiteRunner:
                 cursor = await transaction_conn.execute(sql, params)
                 if fetch:
                     result = await cursor.fetchall()
-                    return list(result)
+                    return cast(list[tuple[Any, ...]], list(result))
                 return []
             except aiosqlite.OperationalError as e:
                 raise OperationalError(str(e)) from e

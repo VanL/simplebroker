@@ -5,6 +5,43 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.1] - 2026-07-09
+### Added
+- Added `examples/reference_reactor.py`, a copyable sidecar-aware reactor reference
+  that layers `BaseReactor` on the `MultiQueueWatcher` example. It demonstrates
+  fixed input/output/control lanes, broker-free worker payloads over Python
+  `queue.Queue`, sidecar checkpoints, exact-ID output replay, and graceful
+  reactor shutdown.
+- Added focused reactor example tests under `examples/tests`, covering worker
+  wakeups, input activity wakeups, fixed queue topology, stop/close ordering,
+  control checkpointing, pending-output replay, crash/restart idempotency,
+  output-backlog control responsiveness, poison result handling, and per-queue
+  in-flight ordering.
+- Added regression coverage proving persistent SQLite queue handles keep
+  thread-local connection ownership stable: each worker thread applies
+  connection settings once while queue writes and sidecar transactions continue
+  to pass SQLite integrity checks.
+
+### Changed
+- `examples/multi_queue_watcher.py` now exposes `get_queue(queue_name)` so
+  subclasses can retrieve managed `Queue` handles without reaching into private
+  watcher state.
+- The example reactor now treats stuck output replay as backpressure for new
+  input dispatch only; the control lane remains responsive so `STATUS` and
+  `STOP` can still run while an output sink is wedged. Pending control traffic
+  caps output replay work for the turn rather than starving it entirely.
+
+### Documented
+- Documented the reactor threading and multi-process contract in the main README
+  and example docs: the reactor owns its persistent handles and sidecar writes
+  on one thread; SimpleBroker owns storage-level SQLite contention; input,
+  output, and control effects are application-level at-least-once workstreams
+  across restart rather than a reason to add a database lease.
+- Documented the reactor's stuck-output behavior and STATUS fields
+  (`pending_output_backlog`, `output_backlog_blocked`) for operators.
+- Documented that constructing the example `Reactor` performs durable setup,
+  pending-output replay, and worker startup.
+
 ## [5.1.0] - 2026-07-06
 ### Added
 - Added protected `BaseWatcher` lifecycle hooks for embedders that need custom

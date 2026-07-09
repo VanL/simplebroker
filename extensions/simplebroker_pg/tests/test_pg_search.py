@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from simplebroker.db import BrokerCore
@@ -9,8 +11,8 @@ from simplebroker.db import BrokerCore
 pytestmark = [pytest.mark.pg_only]
 
 
-def _timestamp_by_body(rows: list[tuple[str, int]]) -> dict[str, int]:
-    return dict(rows)
+def _timestamp_by_body(rows: list[tuple[str, int]] | list[str]) -> dict[str, int]:
+    return dict(cast(list[tuple[str, int]], rows))
 
 
 def test_find_message_ids_postgres_literal_search_preserves_rows(

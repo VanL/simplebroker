@@ -62,6 +62,10 @@ def _commands_text(commands: tuple[tuple[str, ...], ...]) -> str:
     return "\n".join(" ".join(command) for command in commands)
 
 
+def _command_lines(commands: tuple[tuple[str, ...], ...]) -> list[str]:
+    return [" ".join(command) for command in commands]
+
+
 def test_root_test_command_adds_local_weft_when_available(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -162,36 +166,124 @@ def test_command_env_appends_pythonpath_override(
     )
 
 
+def test_example_mypy_paths_discover_python_examples(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    examples = project_root / "examples"
+    (examples / "nested").mkdir(parents=True)
+    (examples / "__pycache__").mkdir()
+    (examples / "alpha.py").write_text("", encoding="utf-8")
+    (examples / "nested" / "beta.py").write_text("", encoding="utf-8")
+    (examples / "__pycache__" / "ignored.py").write_text("", encoding="utf-8")
+    (examples / "notes.md").write_text("", encoding="utf-8")
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+
+    assert release._example_mypy_paths() == (
+        "examples/alpha.py",
+        "examples/nested/beta.py",
+    )
+
+
+def test_extension_test_mypy_paths_discover_python_tests(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    pg_tests = project_root / "extensions" / "simplebroker_pg" / "tests"
+    redis_tests = project_root / "extensions" / "simplebroker_redis" / "tests"
+    (pg_tests / "__pycache__").mkdir(parents=True)
+    redis_tests.mkdir(parents=True)
+    (pg_tests / "test_pg.py").write_text("", encoding="utf-8")
+    (pg_tests / "__pycache__" / "ignored.py").write_text("", encoding="utf-8")
+    (redis_tests / "test_redis.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+
+    assert release._extension_test_mypy_paths(
+        include_pg=True,
+        include_redis=True,
+    ) == (
+        "extensions/simplebroker_pg/tests/test_pg.py",
+        "extensions/simplebroker_redis/tests/test_redis.py",
+    )
+
+
 def test_redis_prechecks_are_target_scoped() -> None:
     commands = release.build_precheck_commands(release.REDIS_RELEASE_TARGET)
-    text = _commands_text(commands)
+    command_lines = _command_lines(commands)
+    text = "\n".join(command_lines)
+    mypy_commands = [command for command in command_lines if " mypy " in f" {command} "]
 
     assert "./bin/pytest-redis" in text
+    assert "pytest -n0 examples" in text
+    assert "mypy examples/" in text
+    assert any(
+        "ruff check" in command and " examples " in command for command in command_lines
+    )
+    assert any(
+        "ruff format --check" in command and " examples " in command
+        for command in command_lines
+    )
     assert "extensions/simplebroker_redis/simplebroker_redis" in text
     assert "extensions/simplebroker_redis/tests" in text
+    assert any(
+        "extensions/simplebroker_redis/tests/" in command for command in mypy_commands
+    )
     assert "./bin/pytest-pg" not in text
     assert "extensions/simplebroker_pg" not in text
 
 
 def test_pg_prechecks_are_target_scoped() -> None:
     commands = release.build_precheck_commands(release.PG_RELEASE_TARGET)
-    text = _commands_text(commands)
+    command_lines = _command_lines(commands)
+    text = "\n".join(command_lines)
+    mypy_commands = [command for command in command_lines if " mypy " in f" {command} "]
 
     assert "./bin/pytest-pg" in text
+    assert "pytest -n0 examples" in text
+    assert "mypy examples/" in text
+    assert any(
+        "ruff check" in command and " examples " in command for command in command_lines
+    )
+    assert any(
+        "ruff format --check" in command and " examples " in command
+        for command in command_lines
+    )
     assert "extensions/simplebroker_pg/simplebroker_pg" in text
     assert "extensions/simplebroker_pg/tests" in text
+    assert any(
+        "extensions/simplebroker_pg/tests/" in command for command in mypy_commands
+    )
     assert "./bin/pytest-redis" not in text
     assert "extensions/simplebroker_redis" not in text
 
 
 def test_core_prechecks_cover_both_extensions() -> None:
     commands = release.build_precheck_commands(release.ROOT_RELEASE_TARGET)
-    text = _commands_text(commands)
+    command_lines = _command_lines(commands)
+    text = "\n".join(command_lines)
+    mypy_commands = [command for command in command_lines if " mypy " in f" {command} "]
 
     assert "./bin/pytest-pg" in text
     assert "./bin/pytest-redis" in text
+    assert "pytest -n0 examples" in text
+    assert "mypy examples/" in text
+    assert any(
+        "ruff check" in command and " examples " in command for command in command_lines
+    )
+    assert any(
+        "ruff format --check" in command and " examples " in command
+        for command in command_lines
+    )
     assert "extensions/simplebroker_pg/simplebroker_pg" in text
+    assert any(
+        "extensions/simplebroker_pg/tests/" in command for command in mypy_commands
+    )
     assert "extensions/simplebroker_redis/simplebroker_redis" in text
+    assert any(
+        "extensions/simplebroker_redis/tests/" in command for command in mypy_commands
+    )
 
 
 def test_batch_prechecks_deduplicate_shared_checks() -> None:
@@ -202,12 +294,13 @@ def test_batch_prechecks_deduplicate_shared_checks() -> None:
             release.ROOT_RELEASE_TARGET,
         )
     )
-    command_lines = [" ".join(command) for command in commands]
+    command_lines = _command_lines(commands)
     text = "\n".join(command_lines)
 
     assert sum("./bin/pytest-pg" in command for command in command_lines) == 1
     assert sum("./bin/pytest-redis" in command for command in command_lines) == 1
-    assert sum(" pytest " in f" {command} " for command in command_lines) == 1
+    assert sum(" pytest " in f" {command} " for command in command_lines) == 2
+    assert sum("pytest -n0 examples" in command for command in command_lines) == 1
     assert "extensions/simplebroker_pg/simplebroker_pg" in text
     assert "extensions/simplebroker_redis/simplebroker_redis" in text
 

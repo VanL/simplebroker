@@ -406,6 +406,11 @@ class MultiQueueWatcher(BaseWatcher):
         """
         return list(self._queues.keys())
 
+    def get_queue(self, queue_name: str) -> Queue | None:
+        """Return the managed Queue instance for *queue_name*, if configured."""
+        queue_info = self._queues.get(queue_name)
+        return queue_info["queue"] if queue_info else None
+
     def get_active_queues(self) -> list[str]:
         """Get a list of currently active queue names (queues with messages).
 

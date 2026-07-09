@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import concurrent.futures as cf
 import contextlib
+import sqlite3
 import threading
 import time
 from collections.abc import Iterator
@@ -443,6 +445,98 @@ def test_persistent_sqlite_queues_keep_thread_local_connection_isolation(
     assert len(set(main_thread_ids)) == 1
     assert len(set(worker_thread_ids)) == 1
     assert set(main_thread_ids) != set(worker_thread_ids)
+
+
+def test_persistent_sqlite_thread_owners_do_not_reapply_connection_pragmas(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread-owned persistent queues should not churn SQLite setup PRAGMAs."""
+
+    db_path = str(tmp_path / "sqlite.db")
+    with Queue("bootstrap", db_path=db_path, persistent=True) as queue:
+        queue.write("ready")
+        with queue.sidecar(transaction=True) as session:
+            session.run(
+                "CREATE TABLE IF NOT EXISTS sb_test_thread_events "
+                "(thread_index INTEGER, event_index INTEGER, payload TEXT)"
+            )
+    close_process_broker_sessions()
+
+    apply_calls: list[tuple[int, int]] = []
+    apply_lock = threading.Lock()
+    original_apply_connection_settings = SQLiteRunner._apply_connection_settings
+
+    def tracked_apply_connection_settings(
+        self: SQLiteRunner,
+        conn: sqlite3.Connection,
+    ) -> None:
+        with apply_lock:
+            apply_calls.append((threading.get_ident(), self.instance_id))
+        original_apply_connection_settings(self, conn)
+
+    monkeypatch.setattr(
+        SQLiteRunner,
+        "_apply_connection_settings",
+        tracked_apply_connection_settings,
+    )
+
+    def call_count_for_current_thread() -> int:
+        ident = threading.get_ident()
+        with apply_lock:
+            return sum(
+                1 for thread_ident, _runner_id in apply_calls if thread_ident == ident
+            )
+
+    def worker(thread_index: int) -> None:
+        queue = Queue(
+            f"thread_{thread_index}",
+            db_path=db_path,
+            persistent=True,
+        )
+        try:
+            queue.write(f"initial-{thread_index}")
+            with queue.sidecar(transaction=True) as session:
+                session.run(
+                    "INSERT INTO sb_test_thread_events "
+                    "(thread_index, event_index, payload) VALUES (?, ?, ?)",
+                    (thread_index, 0, "initial"),
+                )
+            first_connection_setup_count = call_count_for_current_thread()
+            assert first_connection_setup_count == 1
+
+            for event_index in range(1, 6):
+                queue.write(f"message-{thread_index}-{event_index}")
+                assert queue.has_pending()
+                with queue.sidecar(transaction=True) as session:
+                    session.run(
+                        "INSERT INTO sb_test_thread_events "
+                        "(thread_index, event_index, payload) VALUES (?, ?, ?)",
+                        (thread_index, event_index, f"payload-{event_index}"),
+                    )
+
+            assert call_count_for_current_thread() == first_connection_setup_count
+        finally:
+            queue.close()
+
+    with cf.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(worker, index) for index in range(3)]
+        for future in futures:
+            future.result(timeout=10.0)
+
+    with apply_lock:
+        assert len(apply_calls) == 3
+        assert len({thread_ident for thread_ident, _runner_id in apply_calls}) == 3
+
+    conn = sqlite3.connect(db_path)
+    try:
+        assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        sidecar_rows = conn.execute(
+            "SELECT COUNT(*) FROM sb_test_thread_events"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert sidecar_rows == 18
 
 
 def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
