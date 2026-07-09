@@ -100,7 +100,11 @@ jobs:
 
     - name: Type check with mypy
       run: |
-        mypy simplebroker bin/release.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests --config-file pyproject.toml
+        mapfile -t pg_test_files < <(find extensions/simplebroker_pg/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
+        mapfile -t redis_test_files < <(find extensions/simplebroker_redis/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
+        mypy simplebroker bin/release.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis --config-file pyproject.toml
+        mypy "${pg_test_files[@]}" --config-file pyproject.toml
+        mypy "${redis_test_files[@]}" --config-file pyproject.toml
 
   packaging:
     runs-on: ubuntu-latest
@@ -164,7 +168,13 @@ jobs:
         COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
-        uv run pytest --cov=simplebroker --cov-report=term-missing --cov-report=xml -m "not benchmark"
+        uv run coverage erase
+        uv run pytest --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= -m "not benchmark"
+        PYTEST_ADDOPTS= uv run ./bin/pytest-pg --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
+        PYTEST_ADDOPTS= uv run ./bin/pytest-redis --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
+        uv run coverage combine
+        uv run coverage report --show-missing
+        uv run coverage xml
 
     - name: Upload coverage reports
       uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f

@@ -74,7 +74,8 @@ The operational contract is:
    but the write and sidecar mark are separate commits. If a crash lands between
    them and a downstream consumer has already vacuumed the claimed output row,
    replay can deliver the same logical output again. Downstream consumers should
-   deduplicate by output message ID.
+   deduplicate by output message ID rather than payload; message bodies are
+   payload only and may legally duplicate byte-for-byte.
 6. Many processes may use the same broker database. Source and control lanes are
    already at-least-once because they use peek-plus-checkpoint semantics: a
    restart can re-run uncheckpointed work even with one reactor. More than one

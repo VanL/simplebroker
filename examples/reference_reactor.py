@@ -30,13 +30,13 @@ execution path. Output publication is also at-least-once: a crash after the
 exact-ID outbox write but before ``output_written`` can replay the message if a
 downstream consumer has already vacuumed the claimed output row. A production
 reactor should keep SQLite transactions short, make processors and control
-commands idempotent, deduplicate downstream by output message ID, add a
-retention or compaction policy appropriate to its durability contract, and add
-worker timeouts if processors are not tightly bounded. Output replay failures
-backpressure new input dispatch, but the control lane stays responsive so
-STATUS and STOP can still get through. Constructing ``Reactor`` performs durable
-setup and pending-output replay; do not treat construction as a side-effect-free
-configuration step.
+commands idempotent, deduplicate downstream by output message ID rather than
+payload, add a retention or compaction policy appropriate to its durability
+contract, and add worker timeouts if processors are not tightly bounded. Output
+replay failures backpressure new input dispatch, but the control lane stays
+responsive so STATUS and STOP can still get through. Constructing ``Reactor``
+performs durable setup and pending-output replay; do not treat construction as a
+side-effect-free configuration step.
 
 Run from the repository root:
 

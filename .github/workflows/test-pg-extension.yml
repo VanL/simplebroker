@@ -70,4 +70,5 @@ jobs:
 
     - name: Type check extension with mypy
       run: |
-        uv run --extra dev mypy extensions/simplebroker_pg/simplebroker_pg --config-file pyproject.toml
+        mapfile -t pg_test_files < <(find extensions/simplebroker_pg/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
+        uv run --extra dev mypy extensions/simplebroker_pg/simplebroker_pg "${pg_test_files[@]}" --config-file pyproject.toml

@@ -136,7 +136,11 @@ ignore = [
 known-first-party = ["simplebroker"]
 
 [tool.coverage.run]
-source = ["simplebroker"]
+source = [
+    "simplebroker",
+    "extensions/simplebroker_pg/simplebroker_pg",
+    "extensions/simplebroker_redis/simplebroker_redis",
+]
 parallel = true
 concurrency = ["thread", "multiprocessing"]
 omit = [

@@ -70,4 +70,5 @@ jobs:
 
     - name: Type check extension with mypy
       run: |
-        uv run --extra dev mypy extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests --config-file pyproject.toml
+        mapfile -t redis_test_files < <(find extensions/simplebroker_redis/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
+        uv run --extra dev mypy extensions/simplebroker_redis/simplebroker_redis "${redis_test_files[@]}" --config-file pyproject.toml

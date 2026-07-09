@@ -372,6 +372,12 @@ Timestamps are:
 - **Efficient** - 64-bit integers, not UUIDs
 - **Meaningful** - Can extract creation time from the ID
 
+Message bodies are payload only and may duplicate byte-for-byte. Message IDs are
+the sole durable identity for targeted broker operations and application-level
+deduplication. Because vacuum physically removes claimed rows, SimpleBroker does
+not retain a permanent tombstone for every historical ID; consumers that require
+idempotency should persist and deduplicate by message ID.
+
 The format:
 - High 52 bits: microseconds after Unix epoch
 - Low 12 bits: logical counter for sub-microsecond ordering
@@ -1199,8 +1205,8 @@ at-least-once: exact-ID insert handles the normal replay collision, but a crash
 after the outbox write and before the sidecar `output_written` mark can replay
 the output if a downstream consumer already vacuumed the claimed output row.
 Make processors and control commands idempotent, deduplicate downstream by
-output message ID, and prefer one logical reactor per workstream when duplicate
-execution or non-idempotent side effects matter.
+output message ID rather than payload, and prefer one logical reactor per
+workstream when duplicate execution or non-idempotent side effects matter.
 If output replay is stuck, the example backpressures new input dispatch but
 keeps the control lane responsive; `STATUS` exposes `pending_output_backlog` and
 `output_backlog_blocked`, and `STOP` still works. A pending control message caps
