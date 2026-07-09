@@ -75,7 +75,11 @@ The operational contract is:
    them and a downstream consumer has already vacuumed the claimed output row,
    replay can deliver the same logical output again. Downstream consumers should
    deduplicate by output message ID rather than payload; message bodies are
-   payload only and may legally duplicate byte-for-byte.
+   payload only and may legally duplicate byte-for-byte. Each pending row keeps
+   its recorded output queue. A configured-route mismatch raises and leaves the
+   row pending. In background mode the error ends the drive thread and the
+   reactor finalizer closes its owned resources. Restore the recorded topology
+   or migrate the row explicitly before restarting.
 6. Many processes may use the same broker database. Source and control lanes are
    already at-least-once because they use peek-plus-checkpoint semantics: a
    restart can re-run uncheckpointed work even with one reactor. More than one
@@ -84,11 +88,15 @@ The operational contract is:
    work or non-idempotent side effects matter.
 7. Control replies are at-least-once. A crash after writing the reply and before
    checkpointing the control input can produce a duplicate reply after restart.
+   Plain-text commands and JSON objects are accepted. Other valid JSON shapes,
+   including quoted command strings, receive an error reply and are checkpointed.
 8. Worker count gives cross-queue parallelism, not unlimited per-queue
    parallelism. Each input queue has one in-flight message to preserve order.
 9. The instance is one-shot. Construct, run, stop, then dispose it. `BaseReactor`
    seals inherited dynamic queue mutators by default because role-aware dynamic
-   lanes must also update checkpoint and sidecar state.
+   lanes must also update checkpoint and sidecar state. All input, output,
+   control-input, and control-output role names must be pairwise distinct;
+   construction rejects overlaps before opening resources.
 10. A stuck processor can stall its source queue. Production code should add
     worker deadlines or an in-flight reaper if processors are not tightly
     bounded.
@@ -99,10 +107,12 @@ The operational contract is:
     the control lane unresponsive. `STATUS` reports `pending_output_backlog` and
     `output_backlog_blocked`; `STOP` still works while the output sink is stuck.
     Pending control traffic caps output replay to a small budget for that turn
-    rather than starving it entirely.
-13. Constructing `Reactor` performs durable setup and pending-output replay, then
-    starts worker threads. Do not treat construction as a side-effect-free
-    configuration step.
+    rather than starving it entirely. The budget bounds rows returned and
+    materialized, not the underlying SQLite scan without a supporting index.
+13. Constructing `Reactor` creates durable schema, loads checkpoints, and starts
+    idle worker threads. The first `process_once()` or background drive turn
+    replays pending output before dispatching new input. Do not treat construction
+    as a side-effect-free configuration step.
 
 To build a new reactor, subclass `BaseReactor` and keep broker effects on the
 reactor thread. Override `_drain_reactor_results()` for broker-free worker

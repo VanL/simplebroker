@@ -9,6 +9,7 @@ from email.message import Message
 from pathlib import Path
 
 import pytest
+from coverage import CoverageData
 
 from simplebroker import _scripts
 from simplebroker._scripts import (
@@ -27,6 +28,103 @@ from simplebroker._scripts import (
     _venv_python,
     _with_default_suite_path,
 )
+
+COMBINE_COVERAGE_SCRIPT = (
+    Path(__file__).resolve().parents[1] / ".github" / "scripts" / "combine_coverage.py"
+)
+
+
+def _write_coverage_lines(
+    data_file: Path,
+    source_file: Path,
+    lines: set[int],
+) -> None:
+    data = CoverageData(basename=str(data_file))
+    data.add_lines({str(source_file): lines})
+    data.write()
+
+
+def _run_combine_coverage(data_file: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["COVERAGE_FILE"] = str(data_file)
+    return subprocess.run(
+        [sys.executable, str(COMBINE_COVERAGE_SCRIPT)],
+        cwd=data_file.parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_combine_coverage_keeps_base_data_when_no_shards_exist(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    source_file = tmp_path / "base_source.py"
+    _write_coverage_lines(data_file, source_file, {1})
+
+    result = _run_combine_coverage(data_file)
+
+    assert result.returncode == 0, result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert combined.lines(str(source_file)) == [1]
+
+
+def test_combine_coverage_appends_parallel_shards_to_base_data(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    base_source = tmp_path / "base_source.py"
+    worker_source = tmp_path / "worker_source.py"
+    _write_coverage_lines(data_file, base_source, {1})
+    _write_coverage_lines(shard_file, worker_source, {2})
+
+    result = _run_combine_coverage(data_file)
+
+    assert result.returncode == 0, result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert combined.lines(str(base_source)) == [1]
+    assert combined.lines(str(worker_source)) == [2]
+    assert not shard_file.exists()
+
+
+def test_combine_coverage_creates_base_from_shard_only_data(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    worker_source = tmp_path / "worker_source.py"
+    _write_coverage_lines(shard_file, worker_source, {2})
+
+    result = _run_combine_coverage(data_file)
+
+    assert result.returncode == 0, result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert combined.lines(str(worker_source)) == [2]
+    assert not shard_file.exists()
+
+
+def test_combine_coverage_propagates_corrupt_shard_failure(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.bad"
+    base_source = tmp_path / "base_source.py"
+    _write_coverage_lines(data_file, base_source, {1})
+    shard_file.write_bytes(b"not coverage data")
+
+    result = _run_combine_coverage(data_file)
+
+    assert result.returncode != 0
+    assert "Couldn't use data file" in result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert combined.lines(str(base_source)) == [1]
 
 
 def test_with_default_suite_path_applies_default_for_flag_only_args() -> None:

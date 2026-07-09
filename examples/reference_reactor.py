@@ -34,9 +34,15 @@ commands idempotent, deduplicate downstream by output message ID rather than
 payload, add a retention or compaction policy appropriate to its durability
 contract, and add worker timeouts if processors are not tightly bounded. Output
 replay failures backpressure new input dispatch, but the control lane stays
-responsive so STATUS and STOP can still get through. Constructing ``Reactor``
-performs durable setup and pending-output replay; do not treat construction as a
-side-effect-free configuration step.
+responsive so STATUS and STOP can still get through. Input, output, and control
+role names must all be distinct. Plain-text control commands are supported; JSON
+control payloads must be objects. Pending outputs retain their recorded output
+queue, and a configured-route mismatch raises instead of silently rerouting. In
+background mode that error ends the drive thread, whose finalizer closes reactor
+resources. Replay budgets limit rows returned and materialized, though SQLite may
+scan more rows without a supporting index. Constructing ``Reactor`` performs
+durable setup and starts idle workers; the first driven turn replays pending
+output. Construction is not a side-effect-free configuration step.
 
 Run from the repository root:
 
@@ -52,6 +58,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,6 +110,7 @@ class PendingOutput:
 
     source_queue: str
     input_timestamp: int
+    output_queue: str
     output_message_id: int
     payload: str
 
@@ -407,8 +415,20 @@ class Reactor(BaseReactor):
         self.input_queues = tuple(input_queues)
         if not self.input_queues:
             raise ValueError("input_queues cannot be empty")
-        if control_in_queue in self.input_queues:
-            raise ValueError("control_in_queue must be separate from input queues")
+        role_names = [
+            *self.input_queues,
+            output_queue,
+            control_in_queue,
+            control_out_queue,
+        ]
+        duplicates = sorted(
+            name for name, count in Counter(role_names).items() if count > 1
+        )
+        if duplicates:
+            names = ", ".join(repr(name) for name in duplicates)
+            raise ValueError(
+                f"reactor queue roles must use distinct names; duplicated: {names}"
+            )
 
         self.output_queue_name = output_queue
         self.control_in_queue = control_in_queue
@@ -450,7 +470,6 @@ class Reactor(BaseReactor):
         for queue_name in self.input_queues:
             self._checkpoints.setdefault(queue_name, 0)
         self._checkpoints.setdefault(control_in_queue, 0)
-        self._replay_pending_outputs()
         self._start_workers(max(1, worker_count))
 
     @staticmethod
@@ -589,7 +608,7 @@ class Reactor(BaseReactor):
             existing = list(
                 session.run(
                     """
-                    SELECT output_message_id, payload, status
+                    SELECT output_queue, output_message_id, payload, status
                     FROM reactor_results
                     WHERE source_queue = ? AND input_ts = ?
                     """,
@@ -598,12 +617,13 @@ class Reactor(BaseReactor):
                 )
             )
             if existing:
-                output_id, payload, status = existing[0]
+                output_queue, output_id, payload, status = existing[0]
                 if status == "output_written":
                     return None
                 pending = PendingOutput(
                     source_queue=result.source_queue,
                     input_timestamp=result.timestamp,
+                    output_queue=str(output_queue),
                     output_message_id=int(output_id),
                     payload=str(payload),
                 )
@@ -611,6 +631,7 @@ class Reactor(BaseReactor):
                 pending = PendingOutput(
                     source_queue=result.source_queue,
                     input_timestamp=result.timestamp,
+                    output_queue=self.output_queue_name,
                     output_message_id=self._output_queue.generate_timestamp(),
                     payload=self._result_payload(result),
                 )
@@ -944,40 +965,52 @@ class Reactor(BaseReactor):
         body, timestamp = rows[0]
 
         try:
-            payload = json.loads(body)
+            payload: Any = json.loads(body)
         except json.JSONDecodeError:
             payload = {"command": body}
-        command = str(payload.get("command", "")).strip().upper()
-        request_id = payload.get("request_id")
-        response: dict[str, Any] = {
-            "request_id": request_id,
-            "command": command,
-            "input_timestamp": timestamp,
-        }
         stop_after_response = False
 
-        if command == "PING":
-            response["ok"] = True
-            response["message"] = "PONG"
-        elif command == "STATUS":
-            response["ok"] = True
-            response["checkpoints"] = self._load_checkpoints()
-            response["live_inflight"] = [
-                {"queue": queue_name, "timestamp": ts}
-                for queue_name, ts in sorted(self._inflight)
-            ]
-            response["published_outputs_live"] = self._outputs_published
-            response["pending_output_backlog"] = self._pending_output_count()
-            response["output_backlog_blocked"] = self._output_backlog_blocked
-            response["result_status_counts"] = self._result_status_counts()
-            response["seen_status_counts"] = self._seen_status_counts()
-        elif command == "STOP":
-            response["ok"] = True
-            response["message"] = "stopping"
-            stop_after_response = True
+        if not isinstance(payload, Mapping):
+            command = "<invalid>"
+            response: dict[str, Any] = {
+                "request_id": None,
+                "command": command,
+                "input_timestamp": timestamp,
+                "ok": False,
+                "error": (
+                    "control payload must be a JSON object or plain-text command"
+                ),
+            }
         else:
-            response["ok"] = False
-            response["error"] = f"unknown command: {command or '<empty>'}"
+            command = str(payload.get("command", "")).strip().upper()
+            response = {
+                "request_id": payload.get("request_id"),
+                "command": command,
+                "input_timestamp": timestamp,
+            }
+
+            if command == "PING":
+                response["ok"] = True
+                response["message"] = "PONG"
+            elif command == "STATUS":
+                response["ok"] = True
+                response["checkpoints"] = self._load_checkpoints()
+                response["live_inflight"] = [
+                    {"queue": queue_name, "timestamp": ts}
+                    for queue_name, ts in sorted(self._inflight)
+                ]
+                response["published_outputs_live"] = self._outputs_published
+                response["pending_output_backlog"] = self._pending_output_count()
+                response["output_backlog_blocked"] = self._output_backlog_blocked
+                response["result_status_counts"] = self._result_status_counts()
+                response["seen_status_counts"] = self._seen_status_counts()
+            elif command == "STOP":
+                response["ok"] = True
+                response["message"] = "stopping"
+                stop_after_response = True
+            else:
+                response["ok"] = False
+                response["error"] = f"unknown command: {command or '<empty>'}"
 
         self._control_out_queue.write(
             json.dumps(response, sort_keys=True, separators=(",", ":"))
@@ -1045,6 +1078,12 @@ class Reactor(BaseReactor):
             return json.dumps(fallback, sort_keys=True, separators=(",", ":"))
 
     def _publish_output(self, pending: PendingOutput) -> None:
+        if pending.output_queue != self.output_queue_name:
+            raise RuntimeError(
+                "pending output route mismatch: "
+                f"stored {pending.output_queue!r}, "
+                f"configured {self.output_queue_name!r}; row was not published"
+            )
         try:
             self._output_queue.insert_messages(
                 [(pending.payload, pending.output_message_id)]
@@ -1066,17 +1105,23 @@ class Reactor(BaseReactor):
             return False
         return True
 
-    def _pending_output_rows(self) -> list[PendingOutput]:
+    def _pending_output_rows(self, *, limit: int) -> list[PendingOutput]:
         with self._metadata_queue.sidecar() as session:
             rows = list(
                 session.run(
                     """
-                    SELECT source_queue, input_ts, output_message_id, payload
+                    SELECT
+                        source_queue,
+                        input_ts,
+                        output_queue,
+                        output_message_id,
+                        payload
                     FROM reactor_results
                     WHERE status = ?
                     ORDER BY input_ts
+                    LIMIT ?
                     """,
-                    ("output_pending",),
+                    ("output_pending", limit),
                     fetch=True,
                 )
             )
@@ -1084,14 +1129,12 @@ class Reactor(BaseReactor):
             PendingOutput(
                 source_queue=str(source_queue),
                 input_timestamp=int(input_ts),
+                output_queue=str(output_queue),
                 output_message_id=int(output_message_id),
                 payload=str(payload),
             )
-            for source_queue, input_ts, output_message_id, payload in rows
+            for source_queue, input_ts, output_queue, output_message_id, payload in rows
         ]
-
-    def _replay_pending_outputs(self) -> None:
-        self._output_backlog_blocked = not self._drain_pending_outputs()
 
     def _drain_reactor_backlog(self) -> bool:
         max_outputs = 1 if self._control_queue_ready() else 100
@@ -1111,12 +1154,14 @@ class Reactor(BaseReactor):
             return False
 
     def _drain_pending_outputs(self, *, max_outputs: int = 100) -> bool:
-        for index, pending in enumerate(self._pending_output_rows()):
-            if index >= max_outputs:
-                return False
+        pending_rows = self._pending_output_rows(limit=max_outputs + 1)
+        has_more = len(pending_rows) > max_outputs
+        for index, pending in enumerate(pending_rows):
+            if index == max_outputs:
+                break
             if not self._try_publish_output(pending):
                 return False
-        return True
+        return not has_more
 
     def _result_status_counts(self) -> dict[str, int]:
         with self._metadata_queue.sidecar() as session:

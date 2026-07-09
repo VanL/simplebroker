@@ -92,11 +92,11 @@ jobs:
 
     - name: Run linting with ruff
       run: |
-        ruff check simplebroker tests bin extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
+        ruff check simplebroker tests bin .github/scripts extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 
     - name: Check formatting with ruff
       run: |
-        ruff format --check simplebroker tests bin extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
+        ruff format --check simplebroker tests bin .github/scripts extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 
     - name: Type check with mypy
       run: |
@@ -172,7 +172,7 @@ jobs:
         uv run pytest --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= -m "not benchmark"
         PYTEST_ADDOPTS= uv run ./bin/pytest-pg --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
         PYTEST_ADDOPTS= uv run ./bin/pytest-redis --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
-        uv run coverage combine
+        uv run python .github/scripts/combine_coverage.py
         uv run coverage report --show-missing
         uv run coverage xml
 

@@ -488,7 +488,10 @@ def test_persistent_sqlite_thread_owners_do_not_reapply_connection_pragmas(
                 1 for thread_ident, _runner_id in apply_calls if thread_ident == ident
             )
 
+    start_barrier = threading.Barrier(3)
+
     def worker(thread_index: int) -> None:
+        start_barrier.wait(timeout=5.0)
         queue = Queue(
             f"thread_{thread_index}",
             db_path=db_path,

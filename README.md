@@ -1189,7 +1189,7 @@ The example layers a reusable `BaseReactor` on
 [`examples/multi_queue_watcher.py`](examples/multi_queue_watcher.py), then shows
 one concrete `Reactor` policy with:
 
-- fixed input, output, and control lanes;
+- fixed, pairwise-distinct input, output, and control lanes;
 - peek-plus-sidecar checkpoints for input/control queues;
 - at-least-once exact-ID output replay through a durable sidecar outbox;
 - broker-free worker payloads and result envelopes; and
@@ -1207,12 +1207,21 @@ the output if a downstream consumer already vacuumed the claimed output row.
 Make processors and control commands idempotent, deduplicate downstream by
 output message ID rather than payload, and prefer one logical reactor per
 workstream when duplicate execution or non-idempotent side effects matter.
+Each pending row retains its recorded output queue. If a restart configures a
+different route, replay raises and leaves the row pending instead of silently
+rerouting it. In background mode this ends the drive thread and its finalizer
+closes reactor resources; restore the recorded topology or migrate the sidecar
+row explicitly before restarting. Control messages may be plain-text commands
+or JSON objects. Other valid JSON shapes receive an error reply and are
+checkpointed so they cannot poison the lane.
 If output replay is stuck, the example backpressures new input dispatch but
 keeps the control lane responsive; `STATUS` exposes `pending_output_backlog` and
 `output_backlog_blocked`, and `STOP` still works. A pending control message caps
 output replay to a small budget for that turn rather than starving it entirely.
-Constructing `Reactor` is not side-effect-free: it creates sidecar schema,
-replays pending outputs, and starts workers.
+The budget bounds rows returned and materialized, not the underlying SQLite scan
+without a supporting index. Constructing `Reactor` is not side-effect-free: it
+creates sidecar schema, loads checkpoints, and starts idle workers. Pending
+outputs replay on the first driven turn.
 
 Run the focused tests with:
 
