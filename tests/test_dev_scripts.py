@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import runpy
 import subprocess
 import sys
 import tarfile
@@ -32,6 +33,7 @@ from simplebroker._scripts import (
 COMBINE_COVERAGE_SCRIPT = (
     Path(__file__).resolve().parents[1] / ".github" / "scripts" / "combine_coverage.py"
 )
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _write_coverage_lines(
@@ -543,6 +545,103 @@ def test_pytest_pg_main_redacts_dsn_password(
     out = capsys.readouterr().out
     assert "postgresql://postgres:***@127.0.0.1:5432/db" in out
     assert "secret" not in out
+
+
+def test_pytest_pg_fast_coverage_runs_pg_only_extension_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    coverage_args = [
+        "--cov=simplebroker",
+        "--cov=extensions/simplebroker_pg/simplebroker_pg",
+        "--cov=extensions/simplebroker_redis/simplebroker_redis",
+        "--cov-append",
+        "--cov-report=",
+    ]
+
+    monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(_scripts.sys, "argv", ["pytest-pg", "--fast", *coverage_args])
+    monkeypatch.setattr(
+        _scripts,
+        "_start_postgres_container",
+        lambda: ("pg-container", "postgresql://example/test"),
+    )
+    monkeypatch.setattr(_scripts, "_verify_postgres_test_dsn", lambda dsn: None)
+    monkeypatch.setattr(_scripts, "_cleanup_container", lambda container_name: None)
+
+    def fake_run(cmd, *, cwd=_scripts.ROOT, env=None, capture_output=False):
+        calls.append(("run", cmd, env, capture_output))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(_scripts, "_run", fake_run)
+
+    assert _scripts.pytest_pg_main() == 0
+
+    run_commands = [call[1] for call in calls if call[0] == "run"]
+    assert len(run_commands) == 2
+    shared_command, extension_command = run_commands
+    assert "tests" in shared_command
+    assert shared_command[shared_command.index("-m") + 1] == "shared and not benchmark"
+    assert "extensions/simplebroker_pg/tests" in extension_command
+    assert extension_command[extension_command.index("-m") + 1] == "pg_only"
+    for arg in coverage_args:
+        assert arg in shared_command
+        assert arg in extension_command
+
+
+def test_pytest_redis_fast_coverage_runs_redis_only_extension_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis_script = runpy.run_path(str(REPO_ROOT / "bin" / "pytest-redis"))
+    redis_main = redis_script["main"]
+    redis_globals = redis_main.__globals__
+    calls = []
+    cleanup_calls = []
+    coverage_args = [
+        "--cov=simplebroker",
+        "--cov=extensions/simplebroker_pg/simplebroker_pg",
+        "--cov=extensions/simplebroker_redis/simplebroker_redis",
+        "--cov-append",
+        "--cov-report=",
+    ]
+
+    monkeypatch.setattr(
+        redis_globals["shutil"], "which", lambda name: f"/usr/bin/{name}"
+    )
+    monkeypatch.setattr(
+        redis_globals["sys"],
+        "argv",
+        ["pytest-redis", "--fast", *coverage_args],
+    )
+    monkeypatch.setitem(
+        redis_globals,
+        "_start_valkey_container",
+        lambda: ("redis-container", "redis://127.0.0.1:6379/15"),
+    )
+    monkeypatch.setitem(
+        redis_globals,
+        "_cleanup_container",
+        lambda container_name: cleanup_calls.append(container_name),
+    )
+
+    def fake_run(cmd, *, env=None):
+        calls.append(("run", cmd, env))
+
+    monkeypatch.setitem(redis_globals, "_run", fake_run)
+
+    assert redis_main() == 0
+
+    run_commands = [call[1] for call in calls if call[0] == "run"]
+    assert len(run_commands) == 2
+    shared_command, extension_command = run_commands
+    assert "tests" in shared_command
+    assert shared_command[shared_command.index("-m") + 1] == "shared and not benchmark"
+    assert "extensions/simplebroker_redis/tests" in extension_command
+    assert extension_command[extension_command.index("-m") + 1] == "redis_only"
+    for arg in coverage_args:
+        assert arg in shared_command
+        assert arg in extension_command
+    assert cleanup_calls == ["redis-container"]
 
 
 def test_packaging_smoke_main_builds_and_smoke_installs(

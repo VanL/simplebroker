@@ -75,3 +75,22 @@ def test_extension_release_gate_names_strip_prefix_and_v() -> None:
         workflow_text = _workflow_text(workflow_path)
 
         assert extractor in workflow_text
+
+
+def test_coverage_workflow_runs_backend_helpers_before_upload() -> None:
+    workflow_text = _workflow_text("test.yml")
+    coverage_section = workflow_text.split("- name: Run tests with coverage", 1)[1]
+    coverage_section = coverage_section.split("- name: Upload coverage reports", 1)[0]
+
+    assert "uv run pytest" in coverage_section
+    assert "uv run ./bin/pytest-pg --fast" in coverage_section
+    assert "uv run ./bin/pytest-redis --fast" in coverage_section
+    assert coverage_section.count("--cov-append") == 3
+    assert "uv run python .github/scripts/combine_coverage.py" in coverage_section
+    assert "uv run coverage xml" in coverage_section
+    assert coverage_section.index("./bin/pytest-pg --fast") < coverage_section.index(
+        "combine_coverage.py"
+    )
+    assert coverage_section.index("./bin/pytest-redis --fast") < coverage_section.index(
+        "combine_coverage.py"
+    )
