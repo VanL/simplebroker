@@ -650,16 +650,23 @@ def test_move_performance_with_large_batches(workdir: Path):
 def test_performance_improvement_with_claims(workdir: Path):
     """Test performance improvement when using claimed vs delete operations."""
     db_path = workdir / "test.db"
+    config = {"BROKER_AUTO_VACUUM": 0}
 
-    # Write a large batch of messages using Queue API
+    # This benchmark inspects the physical claimed-row representation. Automatic
+    # maintenance is a separate concern and may legitimately remove those rows.
     message_count = 1000
-    with Queue("perf_queue", db_path=str(db_path), persistent=True) as q:
+    with Queue(
+        "perf_queue",
+        db_path=str(db_path),
+        persistent=True,
+        config=config,
+    ) as q:
         for i in range(message_count):
             q.write(f"msg{i:04d}")
 
     # Time reading all messages using Queue API
     start_time = time.monotonic()
-    q = Queue("perf_queue", db_path=str(db_path))
+    q = Queue("perf_queue", db_path=str(db_path), config=config)
     try:
         messages = list(q.read(all_messages=True))
     finally:
@@ -717,17 +724,23 @@ def test_batch_delete_many_performance(workdir: Path):
 def test_vacuum_batch_size_limits(workdir: Path):
     """Test that vacuum respects batch size limits for performance."""
     db_path = workdir / "test.db"
+    config = {"BROKER_AUTO_VACUUM": 0}
 
     # Write and claim a large number of messages
     message_count = 10000
 
-    # Write messages using Queue API with persistent connection for efficiency
-    with Queue("large_queue", db_path=str(db_path), persistent=True) as q:
+    # Retain claimed rows until the explicit vacuum this benchmark measures.
+    with Queue(
+        "large_queue",
+        db_path=str(db_path),
+        persistent=True,
+        config=config,
+    ) as q:
         for i in range(message_count):
             q.write(f"msg{i:05d}")
 
     # Read all messages to claim them using Queue API
-    q = Queue("large_queue", db_path=str(db_path))
+    q = Queue("large_queue", db_path=str(db_path), config=config)
     try:
         count = 0
         for _msg in q.read(all_messages=True):
@@ -744,7 +757,7 @@ def test_vacuum_batch_size_limits(workdir: Path):
 
     # Run vacuum - should handle large batch efficiently
     start_time = time.monotonic()
-    with BrokerDB(str(db_path)) as db:
+    with BrokerDB(str(db_path), config=config) as db:
         db.vacuum()
     vacuum_time = time.monotonic() - start_time
 
