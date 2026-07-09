@@ -98,11 +98,13 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "5.0.2"
+version = "5.1.1"
 source = { editable = "../../" }
 
 [package.metadata]
 requires-dist = [
+    { name = "aiosqlite", marker = "extra == 'dev'", specifier = ">=0.22.1" },
+    { name = "aiosqlitepool", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },

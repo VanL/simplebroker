@@ -103,8 +103,8 @@ jobs:
         mapfile -t pg_test_files < <(find extensions/simplebroker_pg/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
         mapfile -t redis_test_files < <(find extensions/simplebroker_redis/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
         mypy simplebroker bin/release.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis --config-file pyproject.toml
-        mypy "${pg_test_files[@]}" --config-file pyproject.toml
-        mypy "${redis_test_files[@]}" --config-file pyproject.toml
+        mypy extensions/simplebroker_pg/simplebroker_pg "${pg_test_files[@]}" --config-file pyproject.toml
+        mypy extensions/simplebroker_redis/simplebroker_redis "${redis_test_files[@]}" --config-file pyproject.toml
 
   packaging:
     runs-on: ubuntu-latest
