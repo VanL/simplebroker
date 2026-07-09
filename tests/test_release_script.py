@@ -186,6 +186,59 @@ def test_example_mypy_paths_discover_python_examples(
     )
 
 
+def test_example_shell_paths_discover_shell_examples(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    examples = project_root / "examples"
+    (examples / "nested").mkdir(parents=True)
+    (examples / "__pycache__").mkdir()
+    (examples / "alpha.sh").write_text("", encoding="utf-8")
+    (examples / "nested" / "beta.sh").write_text("", encoding="utf-8")
+    (examples / "__pycache__" / "ignored.sh").write_text("", encoding="utf-8")
+    (examples / "notes.md").write_text("", encoding="utf-8")
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+
+    assert release._example_shell_paths() == (
+        "examples/alpha.sh",
+        "examples/nested/beta.sh",
+    )
+
+
+def test_shellcheck_examples_skips_when_shellcheck_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    examples = project_root / "examples"
+    examples.mkdir(parents=True)
+    (examples / "alpha.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(release.shutil, "which", lambda name: None)
+
+    assert release.run_shellcheck_examples() == 0
+    assert "shellcheck not found" in capsys.readouterr().out
+
+
+def test_shellcheck_examples_runs_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    examples = project_root / "examples"
+    examples.mkdir(parents=True)
+    (examples / "alpha.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    commands: list[tuple[str, ...]] = []
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(release.shutil, "which", lambda name: "/usr/bin/shellcheck")
+    monkeypatch.setattr(release, "run_command", commands.append)
+
+    assert release.run_shellcheck_examples() == 0
+    assert commands == [("shellcheck", "examples/alpha.sh")]
+
+
 def test_extension_test_mypy_paths_discover_python_tests(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -217,6 +270,7 @@ def test_redis_prechecks_are_target_scoped() -> None:
 
     assert "./bin/pytest-redis" in text
     assert "pytest -n0 examples" in text
+    assert "./bin/release.py --check-shell-examples" in text
     assert "mypy examples/" in text
     assert any(
         "ruff check" in command and " examples " in command for command in command_lines
@@ -242,6 +296,7 @@ def test_pg_prechecks_are_target_scoped() -> None:
 
     assert "./bin/pytest-pg" in text
     assert "pytest -n0 examples" in text
+    assert "./bin/release.py --check-shell-examples" in text
     assert "mypy examples/" in text
     assert any(
         "ruff check" in command and " examples " in command for command in command_lines
@@ -268,6 +323,7 @@ def test_core_prechecks_cover_both_extensions() -> None:
     assert "./bin/pytest-pg" in text
     assert "./bin/pytest-redis" in text
     assert "pytest -n0 examples" in text
+    assert "./bin/release.py --check-shell-examples" in text
     assert "mypy examples/" in text
     assert any(
         "ruff check" in command and " examples " in command for command in command_lines
@@ -301,6 +357,13 @@ def test_batch_prechecks_deduplicate_shared_checks() -> None:
     assert sum("./bin/pytest-redis" in command for command in command_lines) == 1
     assert sum(" pytest " in f" {command} " for command in command_lines) == 2
     assert sum("pytest -n0 examples" in command for command in command_lines) == 1
+    assert (
+        sum(
+            "./bin/release.py --check-shell-examples" in command
+            for command in command_lines
+        )
+        == 1
+    )
     assert "extensions/simplebroker_pg/simplebroker_pg" in text
     assert "extensions/simplebroker_redis/simplebroker_redis" in text
 

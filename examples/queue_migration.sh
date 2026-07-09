@@ -24,7 +24,8 @@ rename_queue() {
         echo "Successfully migrated all messages"
         
         # Verify old queue is empty
-        local remaining=$(broker list | grep "^$old_name:" | awk '{print $2}' || echo 0)
+        local remaining
+        remaining=$(broker list | grep "^$old_name:" | awk '{print $2}' || echo 0)
         if [ "$remaining" -eq 0 ]; then
             echo "Migration complete. Old queue is empty."
         else
@@ -49,14 +50,17 @@ filtered_migration() {
     # Use peek-and-ack pattern with JSON for safety
     while true; do
         # Peek at next message in JSON format
-        local msg_data=$(broker peek "$source" --json 2>/dev/null)
+        local msg_data
+        msg_data=$(broker peek "$source" --json 2>/dev/null)
         if [ -z "$msg_data" ]; then
             break
         fi
         
         # Extract message and timestamp safely
-        local msg=$(echo "$msg_data" | jq -r '.message')
-        local timestamp=$(echo "$msg_data" | jq -r '.timestamp')
+        local msg
+        local timestamp
+        msg=$(echo "$msg_data" | jq -r '.message')
+        timestamp=$(echo "$msg_data" | jq -r '.timestamp')
         
         # Check if message matches filter
         if echo "$msg" | grep -q "$filter"; then
@@ -142,7 +146,8 @@ gradual_migration() {
         echo "moved $moved messages (total: $total_moved)"
         
         # Verify destination is receiving messages
-        local dest_count=$(broker list | grep "^$dest:" | awk '{print $2}' || echo 0)
+        local dest_count
+        dest_count=$(broker list | grep "^$dest:" | awk '{print $2}' || echo 0)
         echo "Destination queue size: $dest_count"
         
         # Optional: pause between batches
@@ -166,14 +171,17 @@ split_queue() {
     # Distribute messages round-robin using peek-and-ack
     while true; do
         # Peek at next message in JSON format
-        local msg_data=$(broker peek "$source" --json 2>/dev/null)
+        local msg_data
+        msg_data=$(broker peek "$source" --json 2>/dev/null)
         if [ -z "$msg_data" ]; then
             break
         fi
         
         # Extract message and timestamp safely
-        local msg=$(echo "$msg_data" | jq -r '.message')
-        local timestamp=$(echo "$msg_data" | jq -r '.timestamp')
+        local msg
+        local timestamp
+        msg=$(echo "$msg_data" | jq -r '.message')
+        timestamp=$(echo "$msg_data" | jq -r '.timestamp')
         
         # Get destination queue
         local dest="${destinations[$dest_index]}"
@@ -206,7 +214,8 @@ merge_queues() {
         echo -n "Merging $source... "
         
         # Count messages before move
-        local count=$(broker list | grep "^$source:" | awk '{print $2}' || echo 0)
+        local count
+        count=$(broker list | grep "^$source:" | awk '{print $2}' || echo 0)
         
         # Move all messages
         broker move "$source" "$dest" --all
@@ -237,14 +246,17 @@ transform_migration() {
     # Use peek-and-ack pattern for safety
     while true; do
         # Peek at message with JSON format for safety
-        local msg_data=$(broker peek "$source" --json 2>/dev/null)
+        local msg_data
+        msg_data=$(broker peek "$source" --json 2>/dev/null)
         if [ -z "$msg_data" ]; then
             break
         fi
         
         # Extract message and timestamp
-        local msg=$(echo "$msg_data" | jq -r '.message')
-        local timestamp=$(echo "$msg_data" | jq -r '.timestamp')
+        local msg
+        local timestamp
+        msg=$(echo "$msg_data" | jq -r '.message')
+        timestamp=$(echo "$msg_data" | jq -r '.timestamp')
         
         # Apply transformation safely without eval
         local transformed
@@ -284,7 +296,8 @@ backup_queue() {
     # Export all messages with timestamps
     broker peek "$queue" --all --json > "$backup_file"
     
-    local count=$(wc -l < "$backup_file")
+    local count
+    count=$(wc -l < "$backup_file")
     echo "Backed up $count messages"
     
     # Create restore script
@@ -326,10 +339,12 @@ verify_migration() {
     echo "Verifying migration from $source to $dest"
     
     # Check source is empty
-    local source_count=$(broker list | grep "^$source:" | awk '{print $2}' || echo 0)
+    local source_count
+    source_count=$(broker list | grep "^$source:" | awk '{print $2}' || echo 0)
     
     # Check destination has messages
-    local dest_count=$(broker list | grep "^$dest:" | awk '{print $2}' || echo 0)
+    local dest_count
+    dest_count=$(broker list | grep "^$dest:" | awk '{print $2}' || echo 0)
     
     echo "Source queue: $source_count messages"
     echo "Destination queue: $dest_count messages"
@@ -349,7 +364,7 @@ setup_demo() {
     
     # Create old queue structure
     for i in {1..10}; do
-        broker write "old-orders" "Order #$i from $(date -d "$i days ago" +%Y-%m-%d 2>/dev/null || date -v -${i}d +%Y-%m-%d)"
+        broker write "old-orders" "Order #$i from $(date -d "$i days ago" +%Y-%m-%d 2>/dev/null || date -v -"${i}"d +%Y-%m-%d)"
     done
     
     for i in {1..5}; do
@@ -375,68 +390,68 @@ main() {
     echo "9. Setup demo"
     echo
     
-    read -p "Select an example (1-9): " choice
+    read -r -p "Select an example (1-9): " choice
     
     case $choice in
         1) 
-            read -p "Source queue: " src
-            read -p "Destination queue: " dst
+            read -r -p "Source queue: " src
+            read -r -p "Destination queue: " dst
             rename_queue "$src" "$dst"
             ;;
         2)
-            read -p "Source queue: " src
-            read -p "Destination queue: " dst
-            read -p "Filter pattern: " filter
+            read -r -p "Source queue: " src
+            read -r -p "Destination queue: " dst
+            read -r -p "Filter pattern: " filter
             filtered_migration "$src" "$dst" "$filter"
             ;;
         3)
-            read -p "Source queue: " src
-            read -p "Destination queue: " dst
-            read -p "Cutoff time (YYYY-MM-DD or timestamp): " cutoff
+            read -r -p "Source queue: " src
+            read -r -p "Destination queue: " dst
+            read -r -p "Cutoff time (YYYY-MM-DD or timestamp): " cutoff
             migrate_by_time "$src" "$dst" "$cutoff"
             ;;
         4)
-            read -p "Source queue: " src
-            read -p "Destination queue: " dst
-            read -p "Batch size (default 100): " batch
+            read -r -p "Source queue: " src
+            read -r -p "Destination queue: " dst
+            read -r -p "Batch size (default 100): " batch
             gradual_migration "$src" "$dst" "${batch:-100}"
             ;;
         5)
-            read -p "Source queue: " src
-            read -p "Number of destination queues: " num
+            read -r -p "Source queue: " src
+            read -r -p "Number of destination queues: " num
             dests=()
             for i in $(seq 1 "$num"); do
-                read -p "Destination $i: " d
+                read -r -p "Destination $i: " d
                 dests+=("$d")
             done
             split_queue "$src" "${dests[@]}"
             ;;
         6)
-            read -p "Destination queue: " dst
-            read -p "Number of source queues: " num
+            read -r -p "Destination queue: " dst
+            read -r -p "Number of source queues: " num
             srcs=()
             for i in $(seq 1 "$num"); do
-                read -p "Source $i: " s
+                read -r -p "Source $i: " s
                 srcs+=("$s")
             done
             merge_queues "$dst" "${srcs[@]}"
             ;;
         7)
-            read -p "Source queue: " src
-            read -p "Destination queue: " dst
+            read -r -p "Source queue: " src
+            read -r -p "Destination queue: " dst
             echo "Enter transformation command (e.g., 'sed s/old/new/', 'tr a-z A-Z', 'jq .')"
             echo "Note: Enter command and arguments separately when prompted"
-            read -p "Command: " cmd
-            read -p "Arguments (if any): " args
+            read -r -p "Command: " cmd
+            read -r -a args -p "Arguments (if any): "
             # Pass command and args as separate arguments
-            if [ -n "$args" ]; then
-                transform_migration "$src" "$dst" "$cmd" $args
+            if [ ${#args[@]} -gt 0 ]; then
+                transform_migration "$src" "$dst" "$cmd" "${args[@]}"
             else
                 transform_migration "$src" "$dst" "$cmd"
             fi
             ;;
         8)
-            read -p "Queue to backup: " queue
+            read -r -p "Queue to backup: " queue
             backup_queue "$queue"
             ;;
         9)

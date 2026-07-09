@@ -24,15 +24,18 @@ simple_dlq_pattern() {
     # Process messages using peek-and-ack pattern
     while true; do
         # Peek at next message
-        local msg_data=$(broker peek tasks --json 2>/dev/null)
+        local msg_data
+        msg_data=$(broker peek tasks --json 2>/dev/null)
         if [ -z "$msg_data" ]; then
             echo "No more messages to process"
             break
         fi
         
         # Extract message and timestamp safely
-        local msg=$(echo "$msg_data" | jq -r '.message')
-        local timestamp=$(echo "$msg_data" | jq -r '.timestamp')
+        local msg
+        local timestamp
+        msg=$(echo "$msg_data" | jq -r '.message')
+        timestamp=$(echo "$msg_data" | jq -r '.timestamp')
         
         printf "Processing: %s\n" "$msg"
         
@@ -66,7 +69,8 @@ dlq_with_retry_count() {
     
     while true; do
         # Peek at next message
-        local msg_data=$(broker peek tasks --json 2>/dev/null)
+        local msg_data
+        msg_data=$(broker peek tasks --json 2>/dev/null)
         if [ -z "$msg_data" ]; then
             # No messages, wait a bit
             sleep 1
@@ -74,8 +78,10 @@ dlq_with_retry_count() {
         fi
         
         # Extract message and timestamp
-        local raw_msg=$(echo "$msg_data" | jq -r '.message')
-        local timestamp=$(echo "$msg_data" | jq -r '.timestamp')
+        local raw_msg
+        local timestamp
+        raw_msg=$(echo "$msg_data" | jq -r '.message')
+        timestamp=$(echo "$msg_data" | jq -r '.timestamp')
         
         # Parse retry count from JSON message (default to 0)
         local retry_count=0
@@ -144,7 +150,7 @@ dlq_with_retry_delays() {
     local retry_pid=$!
     
     # Handle interrupts gracefully
-    trap "kill $main_pid $retry_pid 2>/dev/null; exit 0" INT TERM
+    trap 'kill "$main_pid" "$retry_pid" 2>/dev/null; exit 0' INT TERM
     
     # Wait for both processes
     wait $main_pid $retry_pid
@@ -155,19 +161,24 @@ process_with_delays() {
     
     while true; do
         # Peek at next message
-        local msg_data=$(broker peek "$queue" --json 2>/dev/null)
+        local msg_data
+        msg_data=$(broker peek "$queue" --json 2>/dev/null)
         if [ -z "$msg_data" ]; then
             sleep 1
             continue
         fi
         
-        local msg=$(echo "$msg_data" | jq -r '.message')
-        local timestamp=$(echo "$msg_data" | jq -r '.timestamp')
+        local msg
+        local timestamp
+        msg=$(echo "$msg_data" | jq -r '.message')
+        timestamp=$(echo "$msg_data" | jq -r '.timestamp')
         
         if ! process_message "$msg"; then
             # Add retry information with next attempt time
-            local next_retry=$(($(date +%s) + 60))  # Retry after 1 minute
-            local retry_msg=$(jq -n \
+            local next_retry
+            next_retry=$(($(date +%s) + 60))  # Retry after 1 minute
+            local retry_msg
+            retry_msg=$(jq -n \
                 --arg msg "$msg" \
                 --arg next "$next_retry" \
                 '{original: $msg, next_retry: $next, attempts: 1}')
@@ -186,19 +197,25 @@ process_with_delays() {
 process_retry_queue() {
     while true; do
         # Check retry queue for messages ready to retry
-        local current_time=$(date +%s)
+        local current_time
+        current_time=$(date +%s)
         
         # Peek at all messages in retry queue
         while IFS= read -r line; do
             # Parse JSON data
-            local msg_data=$(echo "$line" | jq -c '.')
-            local next_retry=$(echo "$msg_data" | jq -r '.next_retry')
-            local timestamp=$(echo "$line" | jq -r '.timestamp')
+            local msg_data
+            local next_retry
+            local timestamp
+            msg_data=$(echo "$line" | jq -c '.')
+            next_retry=$(echo "$msg_data" | jq -r '.next_retry')
+            timestamp=$(echo "$line" | jq -r '.timestamp')
             
             if [ "$next_retry" -le "$current_time" ]; then
                 # Time to retry this message
-                local msg=$(echo "$msg_data" | jq -r '.message.original')
-                local attempts=$(echo "$msg_data" | jq -r '.message.attempts')
+                local msg
+                local attempts
+                msg=$(echo "$msg_data" | jq -r '.message.original')
+                attempts=$(echo "$msg_data" | jq -r '.message.attempts')
                 
                 # Try processing again
                 if process_message "$msg"; then
@@ -212,7 +229,8 @@ process_retry_queue() {
                         local new_next_retry=$(($(date +%s) + delay))
                         
                         # Update the retry message
-                        local updated_msg=$(echo "$msg_data" | jq -r '.message' | jq \
+                        local updated_msg
+                        updated_msg=$(echo "$msg_data" | jq -r '.message' | jq \
                             --arg next "$new_next_retry" \
                             ".next_retry = \$next | .attempts = $((attempts + 1))")
                         
@@ -244,7 +262,8 @@ batch_retry_dlq() {
     
     # Or selectively retry recent failures only
     echo "Retrying only recent failures (last hour)..."
-    local one_hour_ago=$(date -d '1 hour ago' +%s 2>/dev/null || date -v -1H +%s)
+    local one_hour_ago
+    one_hour_ago=$(date -d '1 hour ago' +%s 2>/dev/null || date -v -1H +%s)
     broker move "$DLQ_NAME" tasks --after "${one_hour_ago}s"
 }
 
@@ -254,7 +273,8 @@ monitor_dlq() {
     
     while true; do
         # Get DLQ size
-        local dlq_size=$(broker list --stats | grep "^$DLQ_NAME:" | awk '{print $2}' || echo 0)
+        local dlq_size
+        dlq_size=$(broker list --stats | grep "^$DLQ_NAME:" | awk '{print $2}' || echo 0)
         
         if [ "$dlq_size" -gt 100 ]; then
             echo "WARNING: DLQ size is $dlq_size (threshold: 100)"
@@ -297,7 +317,7 @@ main() {
     echo "6. Setup demo data"
     echo
     
-    read -p "Select an example (1-6): " choice
+    read -r -p "Select an example (1-6): " choice
     
     case $choice in
         1) simple_dlq_pattern ;;

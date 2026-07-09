@@ -108,6 +108,10 @@ EXAMPLE_TEST_COMMAND: Final[tuple[str, ...]] = (
     "-n0",
     "examples",
 )
+SHELLCHECK_EXAMPLES_COMMAND: Final[tuple[str, ...]] = (
+    "./bin/release.py",
+    "--check-shell-examples",
+)
 PG_TOOL_PATHS: Final[tuple[str, ...]] = (
     "simplebroker",
     "tests",
@@ -778,6 +782,28 @@ def _examples_mypy_command() -> tuple[str, ...]:
     return _mypy_command(_example_mypy_paths())
 
 
+def _example_shell_paths() -> tuple[str, ...]:
+    return tuple(
+        _display_path(path)
+        for path in sorted((PROJECT_ROOT / "examples").rglob("*.sh"))
+        if "__pycache__" not in path.parts
+    )
+
+
+def run_shellcheck_examples() -> int:
+    """Run shellcheck over shell examples when shellcheck is available."""
+
+    paths = _example_shell_paths()
+    if not paths:
+        print("No shell examples found under examples; skipping shellcheck")
+        return 0
+    if shutil.which("shellcheck") is None:
+        print("shellcheck not found on PATH; skipping shell example lint")
+        return 0
+    run_command(("shellcheck", *paths))
+    return 0
+
+
 def _extension_test_mypy_paths(
     *, include_pg: bool, include_redis: bool
 ) -> tuple[str, ...]:
@@ -908,6 +934,7 @@ def build_precheck_commands_for_targets(
         _root_test_command(),
         *backend_tests,
         EXAMPLE_TEST_COMMAND,
+        SHELLCHECK_EXAMPLES_COMMAND,
         _ruff_check_command(tool_paths),
         _ruff_format_command(tool_paths),
         _mypy_command(mypy_paths),
@@ -1560,6 +1587,11 @@ def _build_parser() -> argparse.ArgumentParser:
             "points at the wrong commit."
         ),
     )
+    parser.add_argument(
+        "--check-shell-examples",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     return parser
 
 
@@ -1762,6 +1794,8 @@ def _run_batch_release(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.check_shell_examples:
+        return run_shellcheck_examples()
     if args.target == ALL_RELEASE_TARGET_KEY:
         return _run_batch_release(args)
 

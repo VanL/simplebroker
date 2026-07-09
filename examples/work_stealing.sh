@@ -51,7 +51,8 @@ load_based_distribution() {
         
         for worker in "${WORKERS[@]}"; do
             # Get queue size for this worker
-            local load=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
+            local load
+            load=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
             
             if [ "$load" -lt "$min_load" ]; then
                 min_load=$load
@@ -80,7 +81,8 @@ work_stealing() {
         declare -A worker_loads
         
         for worker in "${WORKERS[@]}"; do
-            local load=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
+            local load
+            load=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
             worker_loads[$worker]=$load
             total_work=$((total_work + load))
         done
@@ -128,7 +130,8 @@ batch_distribution() {
     
     while true; do
         # Count messages in overflow
-        local overflow_count=$(broker list | grep "^$OVERFLOW_QUEUE:" | awk '{print $2}' || echo 0)
+        local overflow_count
+        overflow_count=$(broker list | grep "^$OVERFLOW_QUEUE:" | awk '{print $2}' || echo 0)
         
         if [ "$overflow_count" -ge "$batch_size" ]; then
             # Distribute batches to workers
@@ -158,7 +161,8 @@ priority_distribution() {
         
         for worker in "${priority_workers[@]}"; do
             # Check if worker has capacity (e.g., less than 5 tasks)
-            local load=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
+            local load
+            load=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
             
             if [ "$load" -lt 5 ]; then
                 # This worker can take more work
@@ -185,10 +189,13 @@ simulate_worker() {
     
     while true; do
         # Peek at task from worker's queue for safe processing
-        local msg_data=$(broker peek "${worker_name}-tasks" --json 2>/dev/null)
+        local msg_data
+        msg_data=$(broker peek "${worker_name}-tasks" --json 2>/dev/null)
         if [ -n "$msg_data" ]; then
-            local msg=$(echo "$msg_data" | jq -r '.message')
-            local timestamp=$(echo "$msg_data" | jq -r '.timestamp')
+            local msg
+            local timestamp
+            msg=$(echo "$msg_data" | jq -r '.message')
+            timestamp=$(echo "$msg_data" | jq -r '.timestamp')
             
             printf "[%s] Processing: %s\n" "$worker_name" "$msg"
             sleep "$process_time"
@@ -217,14 +224,16 @@ monitor_queues() {
         echo "===================="
         
         # Show overflow queue
-        local overflow=$(broker list | grep "^$OVERFLOW_QUEUE:" | awk '{print $2}' || echo 0)
+        local overflow
+        overflow=$(broker list | grep "^$OVERFLOW_QUEUE:" | awk '{print $2}' || echo 0)
         echo "Overflow Queue: $overflow tasks"
         echo
         
         # Show worker queues
         echo "Worker Queues:"
         for worker in "${WORKERS[@]}"; do
-            local count=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
+            local count
+            count=$(broker list | grep "^${worker}-tasks:" | awk '{print $2}' || echo 0)
             printf "  %-15s %3d tasks" "$worker:" "$count"
             
             # Show load bar
@@ -315,7 +324,7 @@ main() {
     echo "8. Setup demo workload"
     echo
     
-    read -p "Select an example (1-8): " choice
+    read -r -p "Select an example (1-8): " choice
     
     case $choice in
         1) round_robin_distribution ;;

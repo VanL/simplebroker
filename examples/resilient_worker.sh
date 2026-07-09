@@ -12,7 +12,6 @@ command -v broker >/dev/null || { echo "Error: broker command is required but no
 
 QUEUE="events"
 CHECKPOINT_FILE="/var/lib/myapp/checkpoint"
-BATCH_SIZE=100
 
 # Signal handler to save checkpoint on interrupt
 trap 'echo "Interrupted, saving checkpoint: $last_checkpoint"; echo "$last_checkpoint" > "$CHECKPOINT_FILE"; exit 0' INT TERM
