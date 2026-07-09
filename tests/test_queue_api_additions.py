@@ -241,7 +241,7 @@ def test_queue_repr_representation():
 
         # Test with custom db_path
         queue2 = Queue("logs", db_path=db_path)
-        expected = f"Queue('logs', db_path='{db_path}')"
+        expected = f"Queue('logs', db_path={db_path!r})"
         assert repr(queue2) == expected
 
         # Test with persistent=True
@@ -250,13 +250,19 @@ def test_queue_repr_representation():
 
         # Test with both custom db_path and persistent=True
         queue4 = Queue("data", db_path=db_path, persistent=True)
-        expected = f"Queue('data', db_path='{db_path}', persistent=True)"
+        expected = f"Queue('data', db_path={db_path!r}, persistent=True)"
         assert repr(queue4) == expected
 
         # Test with special characters in name and path
         special_queue = Queue("test-queue_123", db_path="/tmp/my db.sqlite")
         expected = "Queue('test-queue_123', db_path='/tmp/my db.sqlite')"
         assert repr(special_queue) == expected
+
+        # Test Windows-style paths are escaped the way Python repr escapes them
+        windows_path = r"C:\Users\RUNNER~1\AppData\Local\Temp\tmp123\test.db"
+        windows_queue = Queue("windows", db_path=windows_path)
+        expected = f"Queue('windows', db_path={windows_path!r})"
+        assert repr(windows_queue) == expected
 
 
 def test_queue_repr_redacts_resolved_targets_and_uses_python_quoting() -> None:
@@ -291,7 +297,7 @@ def test_queue_string_representations_in_context():
             # Test __repr__ shows full configuration
             debug_repr = repr(queue)
             assert "orders" in debug_repr
-            assert db_path in debug_repr
+            assert f"db_path={db_path!r}" in debug_repr
             assert "persistent=True" in debug_repr
 
             # Test they produce different outputs for configured queues
