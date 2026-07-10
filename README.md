@@ -2058,6 +2058,38 @@ loop. If a caller-owned waiter is attached to a strategy and later closed by the
 caller, use `PollingStrategy.detach_activity_waiter(expected=waiter)` first so
 the strategy releases it without closing it.
 
+After selecting a new authoritative queue set, the serialized strategy owner
+can build a new fixed-set waiter and install it before the next wait without
+restarting the strategy's polling state. The new candidate remains
+caller-owned until replacement returns successfully:
+
+```python
+candidate = create_activity_waiter_for_queues(new_queues, stop_event=stop_event)
+try:
+    displaced = strategy.replace_activity_waiter(candidate)
+except Exception:
+    # Installation did not complete; the candidate is still caller-owned.
+    if candidate is not None:
+        candidate.close()  # Apply the embedder's cleanup-error policy here.
+    raise
+
+# Installation succeeded. The strategy owns candidate, and the caller owns
+# the displaced waiter returned from the previous generation.
+if displaced is not None:
+    displaced.close()
+```
+
+`None` is a valid candidate and selects polling fallback, as it does for
+SQLite. PostgreSQL and Redis/Valkey return fixed-set waiters, so rebuild them
+when the authoritative queue set changes. Replacement never closes the
+displaced waiter. During a handoff, the installed waiter may briefly coexist
+with an uninstalled candidate or a displaced caller-owned waiter. The strategy
+owner must serialize replacement with `wait_for_activity()`, `start()`,
+`close()`, and other replacements; the method is not a cross-thread handoff
+primitive. Coalesce superseded topology generations before building and
+installing waiters because each distinct replacement resets the native wait
+cadence for responsiveness.
+
 An explicitly injected `runner=` remains caller-owned. Reuse the same runner
 object yourself when you want several queues to share an injected backend.
 For `PostgresRunner`, call `runner.close()` or `runner.shutdown()` when you are

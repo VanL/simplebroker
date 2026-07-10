@@ -5,6 +5,19 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.3.0] - 2026-07-10
+
+### Added
+- Added `PollingStrategy.replace_activity_waiter()` for owner-serialized live
+  replacement of backend-native queue-set waiters without losing polling,
+  data-version, or local-activity state. The API returns the displaced waiter
+  without closing it and accepts `None` to select polling fallback.
+
+### Changed
+- Bumped the coordinated first-party `simplebroker-pg` and
+  `simplebroker-redis` packages to 3.2.0 and raised the root optional-backend
+  dependency floors to those versions.
+
 ## [5.2.1] - 2026-07-10
 
 ### Fixed

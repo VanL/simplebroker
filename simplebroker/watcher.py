@@ -1247,6 +1247,31 @@ class PollingStrategy:
         self._activity_burst_remaining = 0
         return waiter
 
+    def replace_activity_waiter(
+        self,
+        activity_waiter: ActivityWaiter | None,
+    ) -> ActivityWaiter | None:
+        """Install a waiter and return the displaced waiter without closing it.
+
+        Calls must be serialized with waits, starts, closes, and other
+        replacements by the strategy owner. Until this method returns
+        successfully, a distinct candidate remains caller-owned. After a
+        successful return, the caller owns the displaced waiter and is
+        responsible for closing it. Passing ``None`` switches the strategy to
+        polling fallback.
+        """
+        if activity_waiter is self._activity_waiter:
+            return None
+
+        next_idle_poll_at = self._next_native_idle_poll_deadline(initial=True)
+        displaced = self._activity_waiter
+        self._activity_waiter = activity_waiter
+        self._native_activity_pending = False
+        self._activity_burst_remaining = 0
+        self._check_count = 0
+        self._next_native_idle_poll_at = next_idle_poll_at
+        return displaced
+
     def start(
         self,
         data_version_provider: Callable[[], int | None] | None = None,
@@ -1309,8 +1334,8 @@ class PollingStrategy:
                 return
             self._get_delay()
 
-    def _schedule_next_native_idle_poll(self, *, initial: bool = False) -> None:
-        """Stagger slow fallback polls for notification-backed waiters."""
+    def _next_native_idle_poll_deadline(self, *, initial: bool = False) -> float:
+        """Calculate a staggered fallback-poll deadline without mutating state."""
         interval = self._native_idle_poll_interval
         if initial:
             interval = max(1.0, interval)
@@ -1318,7 +1343,13 @@ class PollingStrategy:
             interval,
             interval * 2,
         )
-        self._next_native_idle_poll_at = time.monotonic() + jittered_interval
+        return time.monotonic() + jittered_interval
+
+    def _schedule_next_native_idle_poll(self, *, initial: bool = False) -> None:
+        """Stagger slow fallback polls for notification-backed waiters."""
+        self._next_native_idle_poll_at = self._next_native_idle_poll_deadline(
+            initial=initial
+        )
 
     def _check_data_version(self) -> bool:
         """Check PRAGMA data_version for changes."""

@@ -67,15 +67,82 @@ class MessageCollector:
 
 
 class FakeActivityWaiter:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        wait_result: bool = False,
+        wait_error: Exception | None = None,
+        close_error: Exception | None = None,
+    ) -> None:
+        self.wait_result = wait_result
+        self.wait_error = wait_error
+        self.close_error = close_error
+        self.wait_calls: list[float] = []
         self.close_calls = 0
 
     def wait(self, timeout: float) -> bool:
-        del timeout
-        return False
+        self.wait_calls.append(timeout)
+        if self.wait_error is not None:
+            raise self.wait_error
+        return self.wait_result
 
     def close(self) -> None:
         self.close_calls += 1
+        if self.close_error is not None:
+            raise self.close_error
+
+
+def _polling_strategy_state(strategy):
+    """Return every mutable PollingStrategy field for atomicity assertions."""
+    return (
+        strategy._initial_checks,
+        strategy._max_interval,
+        strategy._burst_sleep,
+        strategy._check_count,
+        strategy._stop_event,
+        strategy._data_version,
+        strategy._data_version_provider,
+        strategy._data_change_callback,
+        strategy._activity_waiter,
+        strategy._pragma_failures,
+        strategy._jitter_factor,
+        strategy._native_activity_pending,
+        strategy._local_activity_pending,
+        strategy._local_activity_pending_for_drain,
+        strategy._local_activity_empty_check,
+        strategy._activity_burst_remaining,
+        strategy._native_idle_poll_interval,
+        strategy._next_native_idle_poll_at,
+    )
+
+
+def _seed_polling_strategy_state(strategy, waiter):
+    """Populate mutable strategy state with distinctive preservation sentinels."""
+
+    def provider():
+        return 37
+
+    def callback():
+        return None
+
+    strategy._initial_checks = 7
+    strategy._max_interval = 0.4
+    strategy._burst_sleep = 0.003
+    strategy._check_count = 19
+    strategy._data_version = 23
+    strategy._data_version_provider = provider
+    strategy._data_change_callback = callback
+    strategy._activity_waiter = waiter
+    strategy._pragma_failures = 5
+    strategy._jitter_factor = 0.25
+    strategy._native_activity_pending = True
+    strategy._local_activity_pending = True
+    strategy._local_activity_pending_for_drain = True
+    strategy._local_activity_empty_check = True
+    strategy._activity_burst_remaining = 11
+    strategy._native_idle_poll_interval = 7.5
+    strategy._next_native_idle_poll_at = 123.5
+    return provider, callback
 
 
 class TestQueueWatcher(WatcherTestBase):
@@ -1372,6 +1439,229 @@ class TestPollingStrategy:
 
         assert waiter_a.close_calls == 1
         assert waiter_b.close_calls == 0
+
+    def test_replace_activity_waiter_returns_displaced_without_closing(self):
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        waiter_a = FakeActivityWaiter()
+        waiter_b = FakeActivityWaiter(wait_result=True)
+        strategy.start(activity_waiter=waiter_a)
+
+        displaced = strategy.replace_activity_waiter(waiter_b)
+
+        assert displaced is waiter_a
+        assert waiter_a.close_calls == 0
+        assert waiter_b.close_calls == 0
+        strategy.wait_for_activity()
+        assert waiter_a.wait_calls == []
+        assert len(waiter_b.wait_calls) == 1
+
+        strategy.close()
+        waiter_a.close()
+
+    @pytest.mark.parametrize("with_waiter", [False, True])
+    def test_replace_activity_waiter_same_object_is_exact_noop(
+        self,
+        monkeypatch,
+        with_waiter,
+    ):
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        waiter = FakeActivityWaiter() if with_waiter else None
+        _seed_polling_strategy_state(strategy, waiter)
+        state_before = _polling_strategy_state(strategy)
+
+        def fail_if_scheduled(*args, **kwargs):
+            del args, kwargs
+            raise AssertionError("same-object replacement must not schedule")
+
+        monkeypatch.setattr(watcher_module.random, "uniform", fail_if_scheduled)
+
+        assert strategy.replace_activity_waiter(waiter) is None
+        assert _polling_strategy_state(strategy) == state_before
+
+    @pytest.mark.parametrize("transition", ["to_none", "from_none"])
+    def test_replace_activity_waiter_none_transitions(self, transition):
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        if transition == "to_none":
+            versions = [1]
+            callback_versions = []
+            waiter = FakeActivityWaiter()
+
+            def version_provider():
+                return versions[0]
+
+            def on_data_version_change():
+                callback_versions.append(versions[0])
+
+            strategy.start(
+                version_provider,
+                on_data_version_change=on_data_version_change,
+                activity_waiter=waiter,
+            )
+            strategy._data_version = 1
+
+            assert strategy.replace_activity_waiter(None) is waiter
+            assert strategy.uses_native_activity() is False
+            assert waiter.close_calls == 0
+
+            versions[0] = 2
+            strategy.wait_for_activity()
+            assert callback_versions == [2]
+            waiter.close()
+            return
+
+        waiter = FakeActivityWaiter(wait_result=True)
+        strategy.start()
+
+        assert strategy.replace_activity_waiter(waiter) is None
+        assert strategy.uses_native_activity() is True
+        strategy.wait_for_activity()
+        assert len(waiter.wait_calls) == 1
+        strategy.close()
+
+    def test_replace_activity_waiter_preserves_data_and_local_state(self):
+        from simplebroker.watcher import PollingStrategy
+
+        stop_event = threading.Event()
+        strategy = PollingStrategy(stop_event)
+        waiter_a = FakeActivityWaiter()
+        waiter_b = FakeActivityWaiter()
+        provider, callback = _seed_polling_strategy_state(strategy, waiter_a)
+
+        strategy.replace_activity_waiter(waiter_b)
+
+        assert strategy._stop_event is stop_event
+        assert strategy._initial_checks == 7
+        assert strategy._max_interval == 0.4
+        assert strategy._burst_sleep == 0.003
+        assert strategy._jitter_factor == 0.25
+        assert strategy._native_idle_poll_interval == 7.5
+        assert strategy._data_version_provider is provider
+        assert strategy._data_change_callback is callback
+        assert strategy._data_version == 23
+        assert strategy._pragma_failures == 5
+        assert strategy._local_activity_pending is True
+        assert strategy._local_activity_pending_for_drain is True
+        assert strategy._local_activity_empty_check is True
+
+    def test_replace_activity_waiter_clears_native_generation_state(
+        self,
+        monkeypatch,
+    ):
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        waiter_a = FakeActivityWaiter()
+        waiter_b = FakeActivityWaiter()
+        strategy.start(activity_waiter=waiter_a)
+        strategy._native_activity_pending = True
+        strategy._activity_burst_remaining = 17
+        strategy._check_count = 13
+        strategy._next_native_idle_poll_at = -1.0
+
+        monkeypatch.setattr(watcher_module.time, "monotonic", lambda: 10.0)
+        monkeypatch.setattr(
+            watcher_module.random,
+            "uniform",
+            lambda lower, upper: lower + (upper - lower) / 4,
+        )
+
+        assert strategy.replace_activity_waiter(waiter_b) is waiter_a
+        assert strategy._native_activity_pending is False
+        assert strategy._activity_burst_remaining == 0
+        assert strategy._check_count == 0
+        assert strategy._next_native_idle_poll_at == 11.25
+
+    def test_replace_activity_waiter_deadline_failure_is_exception_atomic(
+        self,
+        monkeypatch,
+    ):
+        import simplebroker.watcher as watcher_module
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        waiter_a = FakeActivityWaiter()
+        waiter_b = FakeActivityWaiter()
+        _seed_polling_strategy_state(strategy, waiter_a)
+        state_before = _polling_strategy_state(strategy)
+
+        def raise_deadline_error(*args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("deadline failed")
+
+        monkeypatch.setattr(watcher_module.random, "uniform", raise_deadline_error)
+
+        with pytest.raises(RuntimeError, match="deadline failed"):
+            strategy.replace_activity_waiter(waiter_b)
+
+        assert _polling_strategy_state(strategy) == state_before
+        assert waiter_a.close_calls == 0
+        assert waiter_b.close_calls == 0
+
+    def test_replace_activity_waiter_invokes_no_external_seam(self):
+        from simplebroker.watcher import PollingStrategy
+
+        class PoisonDetachStrategy(PollingStrategy):
+            detach_is_poisoned = False
+
+            def detach_activity_waiter(self, *, expected=None):
+                if self.detach_is_poisoned:
+                    raise AssertionError("replacement called detach")
+                return super().detach_activity_waiter(expected=expected)
+
+        strategy = PoisonDetachStrategy(threading.Event())
+        waiter_a = FakeActivityWaiter(
+            wait_error=AssertionError("old waiter was called"),
+            close_error=AssertionError("old waiter was closed"),
+        )
+        waiter_b = FakeActivityWaiter(
+            wait_error=AssertionError("candidate waiter was called"),
+            close_error=AssertionError("candidate waiter was closed"),
+        )
+
+        def provider():
+            raise AssertionError("provider was called")
+
+        def callback():
+            raise AssertionError("callback was called")
+
+        strategy.start(
+            provider,
+            on_data_version_change=callback,
+            activity_waiter=waiter_a,
+        )
+        strategy.detach_is_poisoned = True
+
+        assert strategy.replace_activity_waiter(waiter_b) is waiter_a
+        assert waiter_a.wait_calls == []
+        assert waiter_a.close_calls == 0
+        assert waiter_b.wait_calls == []
+        assert waiter_b.close_calls == 0
+
+    def test_replace_activity_waiter_close_closes_only_installed_waiter(self):
+        from simplebroker.watcher import PollingStrategy
+
+        strategy = PollingStrategy(threading.Event())
+        waiter_a = FakeActivityWaiter()
+        waiter_b = FakeActivityWaiter()
+        strategy.start(activity_waiter=waiter_a)
+
+        assert strategy.replace_activity_waiter(waiter_b) is waiter_a
+        strategy.close()
+
+        assert waiter_a.close_calls == 0
+        assert waiter_b.close_calls == 1
+        waiter_a.close()
+        strategy.close()
+        assert waiter_a.close_calls == 1
+        assert waiter_b.close_calls == 1
 
     def test_polling_strategy_primes_last_ts_callback(self):
         """First observed data_version should still sync dependent caches."""

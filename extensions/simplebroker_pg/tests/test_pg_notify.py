@@ -12,6 +12,7 @@ from simplebroker_pg.runner import PostgresMultiQueueActivityWaiter
 
 from simplebroker import Queue, create_activity_waiter_for_queues
 from simplebroker._backend_plugins import BackendPlugin
+from simplebroker.ext import PollingStrategy
 
 pytestmark = [pytest.mark.pg_only]
 
@@ -249,6 +250,85 @@ def test_multi_queue_activity_waiter_filters_by_watched_queues(
         queue_a_writer.close()
         queue_b_writer.close()
         noise_writer.close()
+
+
+def test_polling_strategy_replaces_postgres_waiter_for_dynamic_queue_set(
+    pg_runner: PostgresRunner,
+) -> None:
+    """The strategy should switch fixed-set registrations before old cleanup."""
+    queue_a = Queue("alpha", runner=pg_runner, persistent=True)
+    queue_b = Queue("beta", runner=pg_runner, persistent=True)
+    queue_c = Queue("charlie", runner=pg_runner, persistent=True)
+    queue_b_writer = Queue("beta", runner=pg_runner, persistent=True)
+    queue_c_writer = Queue("charlie", runner=pg_runner, persistent=True)
+    stop_event = threading.Event()
+    strategy = PollingStrategy(stop_event)
+    old_waiter: PostgresMultiQueueActivityWaiter | None = None
+    candidate: PostgresMultiQueueActivityWaiter | None = None
+    displaced: PostgresMultiQueueActivityWaiter | None = None
+
+    try:
+        created_old = create_activity_waiter_for_queues(
+            [queue_a, queue_b],
+            stop_event=stop_event,
+        )
+        assert created_old is not None
+        old_waiter = cast(PostgresMultiQueueActivityWaiter, created_old)
+        strategy.start(activity_waiter=old_waiter)
+        assert _listener_fan_in_state(old_waiter) == (1, [{"alpha", "beta"}])
+
+        created_candidate = create_activity_waiter_for_queues(
+            [queue_a, queue_c],
+            stop_event=stop_event,
+        )
+        assert created_candidate is not None
+        candidate = cast(PostgresMultiQueueActivityWaiter, created_candidate)
+        replaced = strategy.replace_activity_waiter(candidate)
+        displaced = cast(PostgresMultiQueueActivityWaiter, replaced)
+
+        assert displaced is old_waiter
+        assert old_waiter._closed is False
+        assert candidate._closed is False
+        fan_in_count, fan_in_sets = _listener_fan_in_state(candidate)
+        assert fan_in_count == 2
+        assert {frozenset(queue_names) for queue_names in fan_in_sets} == {
+            frozenset({"alpha", "beta"}),
+            frozenset({"alpha", "charlie"}),
+        }
+
+        queue_b_writer.write("removed")
+        strategy._next_native_idle_poll_at = time.monotonic() + 1.5
+        strategy.wait_for_activity()
+        assert strategy.consume_native_activity_hint() is False
+
+        displaced.close()
+        assert displaced._closed is True
+        assert candidate._closed is False
+        assert _listener_fan_in_state(candidate) == (
+            1,
+            [{"alpha", "charlie"}],
+        )
+
+        queue_c_writer.write("added")
+        strategy.wait_for_activity()
+        assert strategy.consume_native_activity_hint() is True
+
+        strategy.close()
+        assert candidate._closed is True
+        assert _listener_fan_in_state(candidate)[0] == 0
+    finally:
+        strategy.close()
+        if displaced is not None:
+            displaced.close()
+        if old_waiter is not None:
+            old_waiter.close()
+        if candidate is not None:
+            candidate.close()
+        queue_a.close()
+        queue_b.close()
+        queue_c.close()
+        queue_b_writer.close()
+        queue_c_writer.close()
 
 
 def test_multi_queue_activity_waiter_coexists_with_single_queue_waiter(

@@ -128,6 +128,7 @@ def test_watcher_contract_exports():
     assert _StopLoop is StopWatching  # backwards-compatible private alias
     assert BaseWatcher is not None
     assert PollingStrategy is not None
+    assert hasattr(PollingStrategy, "replace_activity_waiter")
     assert callable(default_error_handler)
 
 

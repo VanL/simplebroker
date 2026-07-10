@@ -10,9 +10,11 @@ import redis
 from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys, encode_id
+from simplebroker_redis.plugin import RedisMultiQueueActivityWaiter
 from simplebroker_redis.validation import key_prefix
 
-from simplebroker import Queue
+from simplebroker import Queue, create_activity_waiter_for_queues
+from simplebroker.ext import PollingStrategy
 
 pytestmark = [pytest.mark.redis_only]
 
@@ -461,6 +463,72 @@ def test_activity_waiter_preserves_multiple_queue_notifications(
         waiter.close()
         core.shutdown()
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_polling_strategy_replaces_redis_waiter_for_dynamic_queue_set(
+    redis_runner: RedisRunner,
+) -> None:
+    """The strategy should replace fixed Redis registrations before cleanup."""
+    queue_a = Queue("alpha", runner=redis_runner, persistent=True)
+    queue_b = Queue("beta", runner=redis_runner, persistent=True)
+    queue_c = Queue("charlie", runner=redis_runner, persistent=True)
+    stop_event = threading.Event()
+    strategy = PollingStrategy(stop_event)
+    old_waiter: RedisMultiQueueActivityWaiter | None = None
+    candidate: RedisMultiQueueActivityWaiter | None = None
+    displaced: RedisMultiQueueActivityWaiter | None = None
+
+    try:
+        created_old = create_activity_waiter_for_queues(
+            [queue_a, queue_b],
+            stop_event=stop_event,
+        )
+        assert created_old is not None
+        assert isinstance(created_old, RedisMultiQueueActivityWaiter)
+        old_waiter = created_old
+        strategy.start(activity_waiter=old_waiter)
+
+        created_candidate = create_activity_waiter_for_queues(
+            [queue_a, queue_c],
+            stop_event=stop_event,
+        )
+        assert created_candidate is not None
+        assert isinstance(created_candidate, RedisMultiQueueActivityWaiter)
+        candidate = created_candidate
+        replaced = strategy.replace_activity_waiter(candidate)
+        assert isinstance(replaced, RedisMultiQueueActivityWaiter)
+        displaced = replaced
+
+        assert displaced is old_waiter
+        assert all(child._closed is False for child in old_waiter._waiters)
+        assert all(child._closed is False for child in candidate._waiters)
+
+        queue_b.write("removed")
+        strategy._next_native_idle_poll_at = time.monotonic() + 2.0
+        strategy.wait_for_activity()
+        assert strategy.consume_native_activity_hint() is False
+
+        displaced.close()
+        assert all(child._closed is True for child in displaced._waiters)
+        assert all(child._closed is False for child in candidate._waiters)
+
+        queue_c.write("added")
+        strategy.wait_for_activity()
+        assert strategy.consume_native_activity_hint() is True
+
+        strategy.close()
+        assert all(child._closed is True for child in candidate._waiters)
+    finally:
+        strategy.close()
+        if displaced is not None:
+            displaced.close()
+        if old_waiter is not None:
+            old_waiter.close()
+        if candidate is not None:
+            candidate.close()
+        queue_a.close()
+        queue_b.close()
+        queue_c.close()
 
 
 def test_activity_waiter_stop_event_breaks_wait_promptly(
