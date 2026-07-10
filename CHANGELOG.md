@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added `PollingStrategy.replace_activity_waiter()` for owner-serialized live
-  replacement of backend-native queue-set waiters without losing polling,
-  data-version, or local-activity state. The API returns the displaced waiter
-  without closing it and accepts `None` to select polling fallback.
+  replacement of backend-native queue-set waiters. The API preserves
+  data-version and local-activity state, resets backoff and native-generation
+  state for each distinct replacement, returns the displaced waiter without
+  closing it, accepts `None` to select polling fallback, and treats
+  same-object replacement as an exact no-op.
 
 ### Changed
 - Bumped the coordinated first-party `simplebroker-pg` and

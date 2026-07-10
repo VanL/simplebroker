@@ -2060,8 +2060,9 @@ the strategy releases it without closing it.
 
 After selecting a new authoritative queue set, the serialized strategy owner
 can build a new fixed-set waiter and install it before the next wait without
-restarting the strategy's polling state. The new candidate remains
-caller-owned until replacement returns successfully:
+replacing the strategy object or discarding its data-version and local-activity
+state. The new candidate remains caller-owned until replacement returns
+successfully:
 
 ```python
 candidate = create_activity_waiter_for_queues(new_queues, stop_event=stop_event)
@@ -2086,9 +2087,15 @@ displaced waiter. During a handoff, the installed waiter may briefly coexist
 with an uninstalled candidate or a displaced caller-owned waiter. The strategy
 owner must serialize replacement with `wait_for_activity()`, `start()`,
 `close()`, and other replacements; the method is not a cross-thread handoff
-primitive. Coalesce superseded topology generations before building and
-installing waiters because each distinct replacement resets the native wait
-cadence for responsiveness.
+primitive.
+
+Passing the object that is already installed is an exact no-op. This includes
+passing `None` while polling fallback is already active: the method returns
+`None`, makes no state change, and does not reset the wait cadence. A distinct
+replacement preserves the data-version cache and local-activity hints, but
+resets polling backoff and the backend-native generation for responsiveness.
+Coalesce superseded topology generations before building and installing new
+waiters so rapid changes do not repeatedly restart that cadence.
 
 An explicitly injected `runner=` remains caller-owned. Reuse the same runner
 object yourself when you want several queues to share an injected backend.

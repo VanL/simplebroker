@@ -1259,6 +1259,11 @@ class PollingStrategy:
         successful return, the caller owns the displaced waiter and is
         responsible for closing it. Passing ``None`` switches the strategy to
         polling fallback.
+
+        Passing the installed object, including ``None`` while already using
+        polling fallback, is an exact no-op that returns ``None``. A distinct
+        replacement preserves data-version and local-activity state while
+        resetting the backoff and backend-native activity generation.
         """
         if activity_waiter is self._activity_waiter:
             return None
