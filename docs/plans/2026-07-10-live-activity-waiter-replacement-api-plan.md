@@ -1714,6 +1714,7 @@ Fill during implementation. Do not use `pending` in a completed plan.
 | 7 | Neighboring watcher/public contract gates | GREEN | 24 focused watcher lifecycle cases and 26 race/API/export cases passed. |
 | 8 | README, changelog, versions, and locks | GREEN | Documented owner serialization and cleanup; set `5.3.0`/`3.2.0`/`3.2.0`; regenerated all three locks; `git diff --check` passed. |
 | 9 | Authoritative release precheck and packaging smoke | GREEN after one format-only correction | Final run: core 1564 passed/13 skipped; PG shared 833/2 and extension 101 passed; Redis shared 826/9 and extension 79 passed/7 deselected; examples 80 passed; shell checks, Ruff, four mypy groups, and Python 3.11 packaging smoke passed. The first run stopped only because Ruff requested formatting in `tests/test_watcher.py`; that file was formatted before the complete rerun. |
+| 10 | Independent completed-slice review | READY after documentation revision | Initial checkpoint `671da3ca8e633295574edfcd8dbc3b4bc5a31587` had a clean worktree. Grok found two P2 documentation ambiguities: “polling state” overstated preservation, and same-object exact-no-op behavior was not public enough. Commit `f48752734df5fd0b494846b5b40a3ac03fde8b29` fixed the docstring, README, and changelog; 10 focused tests, Ruff lint/format, docs search, and diff checks passed; Grok re-reviewed the amended shipped-content diff and returned `READY` with no P1/P2 findings. PostgreSQL proof ran with both `{A,B}` and `{A,C}` fan-ins registered, B produced a false native hint, displaced close left only `{A,C}`, C produced a true native hint, and strategy close released the final fan-in. Redis proved the equivalent child-registration open/closed states and false/true behavior. Claude was unavailable for this completed-slice run because its wrapper's required auth check failed; the user-approved Grok fallback supplied the different-family review. |
 
 ## 19. Deviation Log
 
@@ -1767,6 +1768,8 @@ before clearance:
 | Review traceability | Per-file hashes plus a second independent review of an evidence-only plan append duplicated Git's content addressing without increasing shipped-behavior confidence. | Commit the tested slice before review, review the exact commit, verify later evidence-only diffs mechanically, and re-review only normative or shipped-behavior changes. |
 | Test/config cleanup | `None -> None` was specified in two focused tests, and `_native_idle_poll_interval` was absent from the preservation snapshot despite being derived strategy configuration. | Keep `None -> None` only in the exact-no-op test and include `_native_idle_poll_interval` in preservation assertions. |
 | Churn cost and timing language | Resetting `_check_count` on every distinct replacement can keep a rapidly changing embedder near the minimum native wait cadence, while the plan called ad hoc timeout literals an existing matching-wake allowance. | Preserve the responsiveness reset, advise callers to coalesce superseded generations, and describe 1.5/2.0 seconds as generous bounds consistent with existing timeout literals. |
+| Completed-slice docs | The implementation docs said replacement did not restart or lose “polling state,” although the frozen contract deliberately resets `_check_count` and the native idle deadline. | Replaced the broad claim with explicit data-version/local-state preservation and backoff/native-generation reset language in the docstring, README, and changelog. |
+| Completed-slice identity semantics | The implementation and tests made same-object replacement an exact no-op, but the public docs did not tell embedders that it returns `None` without refreshing cadence. | Documented the identity no-op, including `None -> None`, and distinguished it from distinct replacement behavior. |
 
 An earlier independent review examined normative plan blob
 `dddd7aa99ad736166555f4e7b92d6635c7c82ace` and returned `READY` after its
@@ -1776,6 +1779,20 @@ process issues recorded above. This revision supersedes the affected prior
 clearance text, incorporates those findings, and retains the real-backend,
 release, and isolated-artifact correctness gates.
 
+The completed implementation checkpoint was `671da3ca8e633295574edfcd8dbc3b4bc5a31587`.
+The required Claude wrapper could not start a new completed-slice review because
+its authentication precheck found no configured credentials, so the explicitly
+user-approved Grok fallback reviewed the shipped-content diff. The first
+completed Grok review returned two P2 documentation findings and no production
+finding. Those were corrected in `f48752734df5fd0b494846b5b40a3ac03fde8b29`.
+With a clean worktree, Grok re-reviewed that exact amended shipped-content diff
+against the frozen contract and returned `Review verdict: READY`, with no P1 or
+P2 issues. The 1,795-line plan file was omitted from the Grok payload only after
+the CLI rejected the oversized combined prompt; its normative content retained
+the earlier Claude and engineering clearances, while the completed review
+received the frozen contract verbatim plus every shipped production, test,
+README, changelog, version, and lock-file change.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
@@ -1783,6 +1800,7 @@ release, and isolated-artifact correctness gates.
 | CEO Review | `/plan-ceo-review` | Scope and strategy | 0 | not applicable | Narrow library API and conformance slice; user fixed the three-backend scope. |
 | Codex Review | `/codex review` | Independent second opinion | 0 | not run | No Codex outside voice used for this revision. |
 | Claude Outside Voice | `/claude` | Different-family independent challenge | 1 | FINDINGS INCORPORATED | Found the PG/Redis negative-test ordering gap and two advisory wording/performance issues; corrections are in the normative plan. |
+| Grok Completed Slice | `/grok review` | Different-family exact implementation review after Claude auth was unavailable | 2 | READY AFTER REVISION | First completed review found two P2 public-doc ambiguities; amended commit `f48752734df5fd0b494846b5b40a3ac03fde8b29` resolved both, and re-review returned no P1/P2 findings. One earlier oversized-prompt attempt produced no review and is not counted. |
 | Eng Review | `/plan-eng-review` | Architecture and tests | 4 | CLEAR AFTER REVISION | Two P2 correctness/documentation issues and three P3 simplifications incorporated; zero unresolved. |
 | Design Review | `/plan-design-review` | UI/UX | 0 | not applicable | No UI surface. |
 | DX Review | `/plan-devex-review` | Developer experience | 0 | not run | Public README contract and zero-context task instructions were covered by engineering review. |
