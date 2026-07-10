@@ -56,8 +56,7 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:
         except sqlite3.DatabaseError as exc:
             if "not a database" in str(exc).lower():
                 raise DatabaseError(
-                    f"File is not a valid SQLite database (invalid header): "
-                    f"{file_path}"
+                    f"File is not a valid SQLite database (invalid header): {file_path}"
                 ) from exc
             raise
         cursor.fetchone()
