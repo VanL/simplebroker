@@ -5,6 +5,15 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.2.1] - 2026-07-10
+
+### Fixed
+- Preserved live SQLite WAL locks during database validation by replacing the
+  raw header read with stat and a SQLite-managed read-only connection.
+- Extended the cross-backend benchmark to Redis/Valkey with optional
+  Docker-managed Postgres and Valkey services, including cleanup when a
+  container fails its readiness check.
+
 ## [5.2.0] - 2026-07-09
 
 ### Fixed

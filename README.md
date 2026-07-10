@@ -1376,25 +1376,34 @@ surface. Nothing else is promoted.
 
 ### Cross-Backend Benchmarking
 
-If you want an apples-to-apples CLI benchmark for SQLite vs Postgres, the repo
-includes a black-box harness that reuses the same `run_cli()` hook as the test
-suite:
+If you want an apples-to-apples CLI benchmark for SQLite, Postgres, and Redis,
+the repo includes a black-box harness that reuses the same `run_cli()` hook as
+the test suite:
 
 ```bash
 # Quick SQLite-only smoke run
 uv run python -m tests.backend_benchmark --backends sqlite --iterations 1 --warmups 0
 
-# SQLite vs Postgres comparison
-export SIMPLEBROKER_PG_TEST_DSN="postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test"
-uv run python -m tests.backend_benchmark --backends sqlite postgres
+# SQLite vs Postgres vs Redis comparison with automatic Docker setup/teardown
+uv run --with-editable './extensions/simplebroker_pg[dev]' \
+  --with-editable './extensions/simplebroker_redis[dev]' \
+  python -m tests.backend_benchmark --backends sqlite postgres redis \
+  --pg-docker --redis-docker
 
 # Machine-readable output
-uv run python -m tests.backend_benchmark --backends sqlite postgres --format json
+uv run --with-editable './extensions/simplebroker_pg[dev]' \
+  --with-editable './extensions/simplebroker_redis[dev]' \
+  python -m tests.backend_benchmark --backends sqlite postgres redis \
+  --pg-docker --redis-docker --format json
 ```
 
 The harness measures end-to-end CLI behavior for repeated single-message
 `write` and `read`, bulk `read --all`, bulk `move --all`, and repeated
 `--status --json` calls.
+
+If you already have backend services running, pass `--pg-dsn` /
+`--redis-url` or set `SIMPLEBROKER_PG_TEST_DSN` /
+`SIMPLEBROKER_VALKEY_TEST_URL` instead of using the Docker flags.
 
 ### Environment Variables
 

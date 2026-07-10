@@ -27,6 +27,7 @@ POSTGRES_IMAGE = os.environ.get("SIMPLEBROKER_PG_TEST_IMAGE", "postgres:18")
 POSTGRES_DB = os.environ.get("SIMPLEBROKER_PG_TEST_DB", "simplebroker_test")
 POSTGRES_USER = os.environ.get("SIMPLEBROKER_PG_TEST_USER", "postgres")
 POSTGRES_PASSWORD = os.environ.get("SIMPLEBROKER_PG_TEST_PASSWORD", "postgres")
+VALKEY_IMAGE = os.environ.get("SIMPLEBROKER_VALKEY_TEST_IMAGE", "valkey/valkey:7.2")
 
 
 def _run(
@@ -179,12 +180,80 @@ def _start_postgres_container() -> tuple[str, str]:
         ],
         capture_output=True,
     )
-    port = _wait_for_postgres(container_name)
+    try:
+        port = _wait_for_postgres(container_name)
+    except BaseException:
+        _cleanup_container(container_name)
+        raise
     dsn = (
         f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
         f"@127.0.0.1:{port}/{POSTGRES_DB}"
     )
     return container_name, dsn
+
+
+def _valkey_docker_port(container_name: str) -> str | None:
+    """Return the published host port for Valkey or None if not ready yet."""
+
+    result = subprocess.run(
+        ["docker", "port", container_name, "6379/tcp"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if result.returncode != 0:
+        return None
+    output = result.stdout.strip()
+    if not output:
+        return None
+    return output.rsplit(":", 1)[1]
+
+
+def _wait_for_valkey(container_name: str, *, timeout_seconds: float = 30.0) -> str:
+    """Wait for the Valkey container to accept connections and return its host port."""
+
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "container did not start"
+    while time.monotonic() < deadline:
+        port = _valkey_docker_port(container_name)
+        if port is None:
+            last_error = "waiting for published port"
+            time.sleep(0.5)
+            continue
+        try:
+            with socket.create_connection(("127.0.0.1", int(port)), timeout=1.0):
+                return port
+        except OSError as exc:
+            last_error = str(exc)
+            time.sleep(0.5)
+    raise RuntimeError(f"Valkey did not become ready: {last_error}")
+
+
+def _start_valkey_container() -> tuple[str, str]:
+    """Start the temporary Valkey container and return its name and URL."""
+
+    container_name = f"simplebroker-valkey-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    _run(
+        [
+            "docker",
+            "run",
+            "--detach",
+            "--rm",
+            "--name",
+            container_name,
+            "--publish-all",
+            VALKEY_IMAGE,
+        ]
+    )
+    try:
+        port = _wait_for_valkey(container_name)
+    except BaseException:
+        _cleanup_container(container_name)
+        raise
+    return container_name, f"redis://127.0.0.1:{port}/15"
 
 
 def _build_test_env(*, dsn: str, include_backend_marker: bool) -> dict[str, str]:

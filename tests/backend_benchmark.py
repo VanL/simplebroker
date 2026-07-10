@@ -1,14 +1,16 @@
 """Black-box CLI benchmark harness for comparing SimpleBroker backends.
 
-This module intentionally reuses the test-suite's ``run_cli()`` helper so both
-SQLite and Postgres are exercised through the same subprocess entry point that
-the integration tests use.
+This module intentionally reuses the test-suite's ``run_cli()`` helper so
+SQLite, Postgres, and Redis are exercised through the same subprocess entry
+point that the integration tests use.
 
 Typical usage:
 
     uv run python -m tests.backend_benchmark --backends sqlite
-    uv run python -m tests.backend_benchmark --backends sqlite postgres \
-        --pg-dsn postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test
+    uv run --with-editable './extensions/simplebroker_pg[dev]' \
+        --with-editable './extensions/simplebroker_redis[dev]' \
+        python -m tests.backend_benchmark --backends sqlite postgres redis \
+        --pg-docker --redis-docker
 """
 
 from __future__ import annotations
@@ -25,17 +27,32 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from simplebroker._scripts import (
+    _cleanup_container,
+    _start_postgres_container,
+    _start_valkey_container,
+    _verify_postgres_test_dsn,
+)
+
 if __package__ in {None, ""}:
     REPO_ROOT = Path(__file__).resolve().parents[1]
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
     from tests.conftest import (  # type: ignore[no-redef]
         POSTGRES_TEST_BACKEND,
+        REDIS_TEST_BACKEND,
         _cleanup_postgres_projects,
+        _cleanup_redis_projects,
         run_cli,
     )
 else:
-    from .conftest import POSTGRES_TEST_BACKEND, _cleanup_postgres_projects, run_cli
+    from .conftest import (
+        POSTGRES_TEST_BACKEND,
+        REDIS_TEST_BACKEND,
+        _cleanup_postgres_projects,
+        _cleanup_redis_projects,
+        run_cli,
+    )
 
 SQLITE_BACKEND = "sqlite"
 MESSAGE_BODY = "x"
@@ -54,6 +71,9 @@ class BenchmarkSettings:
     status_iterations: int = 25
     command_timeout: float = 30.0
     pg_dsn: str | None = None
+    pg_docker: bool = False
+    redis_url: str | None = None
+    redis_docker: bool = False
 
     def validate(self) -> None:
         """Validate CLI-supplied settings up front."""
@@ -69,9 +89,31 @@ class BenchmarkSettings:
             raise ValueError("status_iterations must be at least 1")
         if self.command_timeout <= 0:
             raise ValueError("command_timeout must be positive")
-        if POSTGRES_TEST_BACKEND in self.backends and not self.pg_dsn:
+        if self.pg_docker and self.pg_dsn:
+            raise ValueError("Use either --pg-docker or --pg-dsn, not both")
+        if self.pg_docker and POSTGRES_TEST_BACKEND not in self.backends:
+            raise ValueError("--pg-docker requires the postgres backend")
+        if self.redis_docker and self.redis_url:
+            raise ValueError("Use either --redis-docker or --redis-url, not both")
+        if self.redis_docker and REDIS_TEST_BACKEND not in self.backends:
+            raise ValueError("--redis-docker requires the redis backend")
+        if (
+            POSTGRES_TEST_BACKEND in self.backends
+            and not self.pg_dsn
+            and not self.pg_docker
+        ):
             raise ValueError(
-                "Postgres benchmarks require --pg-dsn or SIMPLEBROKER_PG_TEST_DSN"
+                "Postgres benchmarks require --pg-dsn, SIMPLEBROKER_PG_TEST_DSN, "
+                "or --pg-docker"
+            )
+        if (
+            REDIS_TEST_BACKEND in self.backends
+            and not self.redis_url
+            and not self.redis_docker
+        ):
+            raise ValueError(
+                "Redis benchmarks require --redis-url, SIMPLEBROKER_VALKEY_TEST_URL, "
+                "SIMPLEBROKER_REDIS_TEST_URL, or --redis-docker"
             )
 
 
@@ -104,12 +146,14 @@ class BenchmarkSummary:
 
 @dataclass(frozen=True)
 class BenchmarkComparison:
-    """Relative performance between SQLite and Postgres for one workload."""
+    """Relative performance between SQLite and another backend for one workload."""
 
     workload: str
     description: str
-    sqlite_ops_per_second: float
-    postgres_ops_per_second: float
+    baseline_backend: str
+    compared_backend: str
+    baseline_ops_per_second: float
+    compared_ops_per_second: float
     faster_backend: str
     speedup_ratio: float
 
@@ -326,21 +370,41 @@ WORKLOADS: dict[str, WorkloadSpec] = {
 
 
 @contextmanager
-def _backend_env(backend: str, pg_dsn: str | None) -> dict[str, str]:
+def _backend_env(
+    backend: str,
+    pg_dsn: str | None,
+    redis_url: str | None,
+) -> dict[str, str]:
     """Provide both process env and run_cli env for one backend."""
-    keys = ("BROKER_TEST_BACKEND", "SIMPLEBROKER_PG_TEST_DSN")
+    keys = (
+        "BROKER_TEST_BACKEND",
+        "SIMPLEBROKER_PG_TEST_DSN",
+        "SIMPLEBROKER_VALKEY_TEST_URL",
+        "SIMPLEBROKER_REDIS_TEST_URL",
+    )
     previous = {key: os.environ.get(key) for key in keys}
     env = {"BROKER_TEST_BACKEND": backend}
     if backend == POSTGRES_TEST_BACKEND:
         assert pg_dsn is not None
         env["SIMPLEBROKER_PG_TEST_DSN"] = pg_dsn
+    if backend == REDIS_TEST_BACKEND:
+        assert redis_url is not None
+        env["SIMPLEBROKER_VALKEY_TEST_URL"] = redis_url
 
     try:
         os.environ["BROKER_TEST_BACKEND"] = backend
         if backend == POSTGRES_TEST_BACKEND:
             os.environ["SIMPLEBROKER_PG_TEST_DSN"] = pg_dsn or ""
+            os.environ.pop("SIMPLEBROKER_VALKEY_TEST_URL", None)
+            os.environ.pop("SIMPLEBROKER_REDIS_TEST_URL", None)
+        elif backend == REDIS_TEST_BACKEND:
+            os.environ["SIMPLEBROKER_VALKEY_TEST_URL"] = redis_url or ""
+            os.environ.pop("SIMPLEBROKER_REDIS_TEST_URL", None)
+            os.environ.pop("SIMPLEBROKER_PG_TEST_DSN", None)
         else:
             os.environ.pop("SIMPLEBROKER_PG_TEST_DSN", None)
+            os.environ.pop("SIMPLEBROKER_VALKEY_TEST_URL", None)
+            os.environ.pop("SIMPLEBROKER_REDIS_TEST_URL", None)
         yield env
     finally:
         for key, value in previous.items():
@@ -362,46 +426,103 @@ def _ensure_postgres_support() -> None:
         ) from exc
 
 
+def _ensure_redis_support() -> None:
+    """Fail early with a clear message when Redis support is unavailable."""
+    try:
+        import simplebroker_redis  # noqa: F401
+    except Exception as exc:  # pragma: no cover - exercised only in missing-Redis envs
+        raise RuntimeError(
+            "Redis benchmark requested, but simplebroker_redis is unavailable. "
+            "Install the extension first with "
+            '`uv pip install -e "./extensions/simplebroker_redis[dev]"`.'
+        ) from exc
+
+
+@contextmanager
+def _postgres_dsn_for_benchmark(settings: BenchmarkSettings):
+    """Yield the configured Postgres DSN, provisioning Docker when requested."""
+
+    if POSTGRES_TEST_BACKEND not in settings.backends or settings.pg_dsn:
+        yield settings.pg_dsn
+        return
+
+    container_name: str | None = None
+    try:
+        container_name, dsn = _start_postgres_container()
+        print(f"Postgres benchmark DSN: {dsn}", flush=True)
+        _verify_postgres_test_dsn(dsn)
+        yield dsn
+    finally:
+        if container_name is not None:
+            _cleanup_container(container_name)
+
+
+@contextmanager
+def _redis_url_for_benchmark(settings: BenchmarkSettings):
+    """Yield the configured Redis URL, provisioning Docker when requested."""
+
+    if REDIS_TEST_BACKEND not in settings.backends or settings.redis_url:
+        yield settings.redis_url
+        return
+
+    container_name: str | None = None
+    try:
+        container_name, url = _start_valkey_container()
+        print(f"Valkey benchmark URL: {url}", flush=True)
+        yield url
+    finally:
+        if container_name is not None:
+            _cleanup_container(container_name)
+
+
 def run_benchmarks(settings: BenchmarkSettings) -> list[BenchmarkResult]:
     """Run the configured benchmarks and return raw iteration results."""
     settings.validate()
 
     if POSTGRES_TEST_BACKEND in settings.backends:
         _ensure_postgres_support()
+    if REDIS_TEST_BACKEND in settings.backends:
+        _ensure_redis_support()
 
     results: list[BenchmarkResult] = []
 
-    for backend in settings.backends:
-        with _backend_env(backend, settings.pg_dsn) as env:
-            for workload_name in settings.workloads:
-                workload = WORKLOADS[workload_name]
-                total_runs = settings.warmups + settings.iterations
-                for run_index in range(total_runs):
-                    with tempfile.TemporaryDirectory(
-                        prefix=f"simplebroker-bench-{backend}-{workload.name}-"
-                    ) as tempdir:
-                        cwd = Path(tempdir)
-                        operations, elapsed = workload.runner(cwd, env, settings)
-                        if backend == POSTGRES_TEST_BACKEND:
-                            _cleanup_postgres_projects(cwd)
+    with _postgres_dsn_for_benchmark(settings) as pg_dsn:
+        with _redis_url_for_benchmark(settings) as redis_url:
+            for backend in settings.backends:
+                with _backend_env(backend, pg_dsn, redis_url) as env:
+                    for workload_name in settings.workloads:
+                        workload = WORKLOADS[workload_name]
+                        total_runs = settings.warmups + settings.iterations
+                        for run_index in range(total_runs):
+                            with tempfile.TemporaryDirectory(
+                                prefix=f"simplebroker-bench-{backend}-{workload.name}-"
+                            ) as tempdir:
+                                cwd = Path(tempdir)
+                                operations, elapsed = workload.runner(
+                                    cwd, env, settings
+                                )
+                                if backend == POSTGRES_TEST_BACKEND:
+                                    _cleanup_postgres_projects(cwd)
+                                if backend == REDIS_TEST_BACKEND:
+                                    _cleanup_redis_projects(cwd)
 
-                    if run_index < settings.warmups:
-                        continue
+                            if run_index < settings.warmups:
+                                continue
 
-                    iteration = run_index - settings.warmups + 1
-                    ops_per_second = (
-                        operations / elapsed if elapsed > 0 else float("inf")
-                    )
-                    results.append(
-                        BenchmarkResult(
-                            backend=backend,
-                            workload=workload.name,
-                            iteration=iteration,
-                            operations=operations,
-                            elapsed_seconds=elapsed,
-                            ops_per_second=ops_per_second,
-                        )
-                    )
+                            iteration = run_index - settings.warmups + 1
+                            ops_per_second = (
+                                operations / elapsed if elapsed > 0 else float("inf")
+                            )
+                            results.append(
+                                BenchmarkResult(
+                                    backend=backend,
+                                    workload=workload.name,
+                                    iteration=iteration,
+                                    operations=operations,
+                                    elapsed_seconds=elapsed,
+                                    ops_per_second=ops_per_second,
+                                )
+                            )
 
     return results
 
@@ -437,7 +558,7 @@ def summarize_results(results: list[BenchmarkResult]) -> list[BenchmarkSummary]:
 def compare_backends(
     summaries: list[BenchmarkSummary],
 ) -> list[BenchmarkComparison]:
-    """Create workload-level comparisons when both backends are present."""
+    """Create workload-level comparisons against SQLite when possible."""
     by_workload: dict[str, dict[str, BenchmarkSummary]] = {}
     for summary in summaries:
         by_workload.setdefault(summary.workload, {})[summary.backend] = summary
@@ -445,33 +566,38 @@ def compare_backends(
     comparisons: list[BenchmarkComparison] = []
     for workload, summary_map in sorted(by_workload.items()):
         sqlite_summary = summary_map.get(SQLITE_BACKEND)
-        postgres_summary = summary_map.get(POSTGRES_TEST_BACKEND)
-        if sqlite_summary is None or postgres_summary is None:
+        if sqlite_summary is None:
             continue
 
         sqlite_rate = sqlite_summary.median_ops_per_second
-        postgres_rate = postgres_summary.median_ops_per_second
-        if sqlite_rate >= postgres_rate:
-            faster_backend = SQLITE_BACKEND
-            speedup_ratio = (
-                sqlite_rate / postgres_rate if postgres_rate > 0 else float("inf")
-            )
-        else:
-            faster_backend = POSTGRES_TEST_BACKEND
-            speedup_ratio = (
-                postgres_rate / sqlite_rate if sqlite_rate > 0 else float("inf")
-            )
+        for backend, summary in sorted(summary_map.items()):
+            if backend == SQLITE_BACKEND:
+                continue
 
-        comparisons.append(
-            BenchmarkComparison(
-                workload=workload,
-                description=WORKLOADS[workload].description,
-                sqlite_ops_per_second=sqlite_rate,
-                postgres_ops_per_second=postgres_rate,
-                faster_backend=faster_backend,
-                speedup_ratio=speedup_ratio,
+            compared_rate = summary.median_ops_per_second
+            if sqlite_rate >= compared_rate:
+                faster_backend = SQLITE_BACKEND
+                speedup_ratio = (
+                    sqlite_rate / compared_rate if compared_rate > 0 else float("inf")
+                )
+            else:
+                faster_backend = backend
+                speedup_ratio = (
+                    compared_rate / sqlite_rate if sqlite_rate > 0 else float("inf")
+                )
+
+            comparisons.append(
+                BenchmarkComparison(
+                    workload=workload,
+                    description=WORKLOADS[workload].description,
+                    baseline_backend=SQLITE_BACKEND,
+                    compared_backend=backend,
+                    baseline_ops_per_second=sqlite_rate,
+                    compared_ops_per_second=compared_rate,
+                    faster_backend=faster_backend,
+                    speedup_ratio=speedup_ratio,
+                )
             )
-        )
 
     return comparisons
 
@@ -550,16 +676,18 @@ def render_text_report(
                 _render_table(
                     [
                         "Workload",
+                        "Backend",
                         "SQLite ops/s",
-                        "Postgres ops/s",
+                        "Backend ops/s",
                         "Faster",
                         "Speedup",
                     ],
                     [
                         [
                             comparison.workload,
-                            _format_ops_per_second(comparison.sqlite_ops_per_second),
-                            _format_ops_per_second(comparison.postgres_ops_per_second),
+                            comparison.compared_backend,
+                            _format_ops_per_second(comparison.baseline_ops_per_second),
+                            _format_ops_per_second(comparison.compared_ops_per_second),
                             comparison.faster_backend,
                             _format_ratio(comparison.speedup_ratio),
                         ]
@@ -583,7 +711,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--backends",
         nargs="+",
-        choices=(SQLITE_BACKEND, POSTGRES_TEST_BACKEND),
+        choices=(SQLITE_BACKEND, POSTGRES_TEST_BACKEND, REDIS_TEST_BACKEND),
         default=(SQLITE_BACKEND, POSTGRES_TEST_BACKEND),
         help="Backends to benchmark",
     )
@@ -632,8 +760,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--pg-dsn",
-        default=os.environ.get("SIMPLEBROKER_PG_TEST_DSN"),
-        help="Postgres DSN (defaults to SIMPLEBROKER_PG_TEST_DSN)",
+        default=None,
+        help=(
+            "Postgres DSN (defaults to SIMPLEBROKER_PG_TEST_DSN unless "
+            "--pg-docker is used)"
+        ),
+    )
+    parser.add_argument(
+        "--pg-docker",
+        action="store_true",
+        help=(
+            "Start a temporary Postgres test Docker container for the benchmark "
+            "and remove it afterward"
+        ),
+    )
+    parser.add_argument(
+        "--redis-url",
+        default=None,
+        help=(
+            "Redis/Valkey URL (defaults to SIMPLEBROKER_VALKEY_TEST_URL or "
+            "SIMPLEBROKER_REDIS_TEST_URL unless --redis-docker is used)"
+        ),
+    )
+    parser.add_argument(
+        "--redis-docker",
+        action="store_true",
+        help=(
+            "Start a temporary Valkey test Docker container for the benchmark "
+            "and remove it afterward"
+        ),
     )
     parser.add_argument(
         "--format",
@@ -648,6 +803,18 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
     parser = build_parser()
     args = parser.parse_args(argv)
+    pg_dsn = args.pg_dsn
+    if pg_dsn is None and not args.pg_docker and POSTGRES_TEST_BACKEND in args.backends:
+        pg_dsn = os.environ.get("SIMPLEBROKER_PG_TEST_DSN")
+    redis_url = args.redis_url
+    if (
+        redis_url is None
+        and not args.redis_docker
+        and REDIS_TEST_BACKEND in args.backends
+    ):
+        redis_url = os.environ.get("SIMPLEBROKER_VALKEY_TEST_URL") or os.environ.get(
+            "SIMPLEBROKER_REDIS_TEST_URL"
+        )
 
     settings = BenchmarkSettings(
         backends=tuple(args.backends),
@@ -658,7 +825,10 @@ def main(argv: list[str] | None = None) -> int:
         batch_message_count=args.batch_message_count,
         status_iterations=args.status_iterations,
         command_timeout=args.command_timeout,
-        pg_dsn=args.pg_dsn,
+        pg_dsn=pg_dsn,
+        pg_docker=args.pg_docker,
+        redis_url=redis_url,
+        redis_docker=args.redis_docker,
     )
 
     try:

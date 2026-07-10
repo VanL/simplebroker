@@ -348,6 +348,54 @@ def test_wait_for_postgres_waits_for_published_port(
     assert len(pg_isready_calls) == 1
 
 
+def test_start_postgres_cleans_up_when_readiness_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_calls: list[str] = []
+
+    monkeypatch.setattr(_scripts, "_run", lambda *args, **kwargs: None)
+
+    def fail_readiness(container_name: str) -> str:
+        raise RuntimeError("Postgres did not become ready")
+
+    monkeypatch.setattr(_scripts, "_wait_for_postgres", fail_readiness)
+    monkeypatch.setattr(
+        _scripts,
+        "_cleanup_container",
+        lambda container_name: cleanup_calls.append(container_name),
+    )
+
+    with pytest.raises(RuntimeError, match="Postgres did not become ready"):
+        _scripts._start_postgres_container()
+
+    assert len(cleanup_calls) == 1
+    assert cleanup_calls[0].startswith("simplebroker-pg-test-")
+
+
+def test_start_valkey_cleans_up_when_readiness_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_calls: list[str] = []
+
+    monkeypatch.setattr(_scripts, "_run", lambda *args, **kwargs: None)
+
+    def fail_readiness(container_name: str) -> str:
+        raise RuntimeError("Valkey did not become ready")
+
+    monkeypatch.setattr(_scripts, "_wait_for_valkey", fail_readiness)
+    monkeypatch.setattr(
+        _scripts,
+        "_cleanup_container",
+        lambda container_name: cleanup_calls.append(container_name),
+    )
+
+    with pytest.raises(RuntimeError, match="Valkey did not become ready"):
+        _scripts._start_valkey_container()
+
+    assert len(cleanup_calls) == 1
+    assert cleanup_calls[0].startswith("simplebroker-valkey-test-")
+
+
 def test_pg_test_uv_command_uses_pg_test_dependencies() -> None:
     assert _pg_test_uv_command("pytest", "tests") == [
         "uv",

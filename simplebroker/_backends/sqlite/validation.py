@@ -27,15 +27,22 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:
     if not os.access(file_path, os.R_OK | os.W_OK):
         raise DatabaseError(f"Database file is not readable/writable: {file_path}")
 
+    # Header validation must NOT open() the database file directly. Closing
+    # any raw file descriptor to the database drops ALL of this process's
+    # POSIX advisory locks on it (SQLite guards only descriptors it opens
+    # itself), silently stripping live WAL connections' shared locks. A
+    # later external "last closer" can then checkpoint-delete the wal/shm
+    # sidecars beneath those connections, freezing their view permanently
+    # and losing committed rows on their eventual close. See
+    # https://www.sqlite.org/howtocorrupt.html (POSIX advisory locking) and
+    # tests/test_validation_lock_safety.py. Use stat plus the read-only
+    # SQLite connection below (whose descriptor SQLite manages safely) to
+    # produce the same diagnostics instead.
     try:
-        with open(file_path, "rb") as file_handle:
-            header = file_handle.read(16)
-            if header != b"SQLite format 3\x00":
-                raise DatabaseError(
-                    f"File is not a valid SQLite database (invalid header): {file_path}"
-                )
-    except DatabaseError:
-        raise
+        if file_path.stat().st_size == 0:
+            raise DatabaseError(
+                f"File is not a valid SQLite database (invalid header): {file_path}"
+            )
     except OSError as exc:
         raise DatabaseError(f"Cannot read database file: {file_path} ({exc})") from exc
 
@@ -44,7 +51,15 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:
     try:
         conn = sqlite3.connect(f"file:{file_path}?mode=ro", uri=True)
         cursor = conn.cursor()
-        cursor.execute("PRAGMA schema_version")
+        try:
+            cursor.execute("PRAGMA schema_version")
+        except sqlite3.DatabaseError as exc:
+            if "not a database" in str(exc).lower():
+                raise DatabaseError(
+                    f"File is not a valid SQLite database (invalid header): "
+                    f"{file_path}"
+                ) from exc
+            raise
         cursor.fetchone()
 
         if verify_magic:
