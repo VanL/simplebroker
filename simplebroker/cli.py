@@ -210,6 +210,17 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         nargs="?",
         help="message content (omit or use '-' for stdin)",
     )
+    write_parser.add_argument(
+        "-t",
+        "--timestamps",
+        action="store_true",
+        help="print the new message's timestamp ID",
+    )
+    write_parser.add_argument(
+        "--json",
+        action="store_true",
+        help='print {"timestamp": <id>} for the new message',
+    )
 
     # Read command
     read_parser = subparsers.add_parser("read", help="read and remove message")
@@ -436,6 +447,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
 
 
 _HELP_TOKENS = frozenset({"-h", "--help"})
+_WRITE_OUTPUT_OPTIONS = frozenset({"-t", "--timestamps", "--json"})
 
 
 def rearrange_args(argv: list[str]) -> list[str]:
@@ -608,14 +620,28 @@ class ArgumentProcessor:
         if "--" in command_args[1:] or len(command_args) < 2:
             return command_args
 
+        protected = [command_args[0]]
+        i = 1
+        # Output flags may precede the queue name; pass them through so a
+        # dash-leading operand after them still gets literal protection.
+        while i < len(command_args) and command_args[i] in _WRITE_OUTPUT_OPTIONS:
+            protected.append(command_args[i])
+            i += 1
+
+        rest = command_args[i:]
+        if not rest:
+            return command_args
+
         # Queue names that start with '-' are invalid, but protecting the token
         # prevents it from being interpreted as a global option before
         # validation reports the queue-name error.
-        if command_args[1].startswith("-"):
-            return [command_args[0], "--", *command_args[1:]]
+        if rest[0].startswith("-"):
+            return [*protected, "--", *rest]
 
-        if len(command_args) >= 3 and command_args[2].startswith("-"):
-            return [command_args[0], command_args[1], "--", *command_args[2:]]
+        # A bare '-' is the unambiguous stdin marker; it needs no protection,
+        # which also lets output flags follow it.
+        if len(rest) >= 2 and rest[1].startswith("-") and rest[1] != "-":
+            return [*protected, rest[0], "--", *rest[1:]]
 
         return command_args
 
@@ -1075,7 +1101,13 @@ def main(*, config: dict[str, Any] = _config) -> int:
 
         # Dispatch to appropriate command handler
         if args.command == "write":
-            return commands.cmd_write(resolved_target, args.queue, args.message)
+            return commands.cmd_write(
+                resolved_target,
+                args.queue,
+                args.message,
+                json_output=args.json,
+                show_timestamps=args.timestamps,
+            )
         elif args.command == "read":
             after_str = getattr(args, "after", None)
             before_str = getattr(args, "before", None)

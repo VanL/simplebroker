@@ -433,6 +433,8 @@ def cmd_write(
     queue_name: str,
     message: str | None,
     *,
+    json_output: bool = False,
+    show_timestamps: bool = False,
     config: dict[str, Any] = _config,
 ) -> int:
     """Write message to queue using Queue API.
@@ -441,6 +443,8 @@ def cmd_write(
         db_path: Path to database file
         queue_name: Name of the queue
         message: Message content, None to read piped stdin, or "-" for stdin
+        json_output: If True, print {"timestamp": <id>} for the new message
+        show_timestamps: If True, print the new message's timestamp ID
 
     Returns:
         Exit code
@@ -449,7 +453,11 @@ def cmd_write(
     content = _get_message_content(message, config=resolved_config)
     canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
     with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
-        queue.write(content)
+        timestamp = queue.write(content)
+    if json_output:
+        print(json.dumps({"timestamp": timestamp}))
+    elif show_timestamps:
+        print(timestamp)
     return EXIT_SUCCESS
 
 
