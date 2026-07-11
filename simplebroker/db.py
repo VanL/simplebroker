@@ -1111,12 +1111,15 @@ class BrokerCore:
                 f"({self._max_message_size} bytes). Adjust BROKER_MAX_MESSAGE_SIZE if needed."
             )
 
-    def write(self, queue: str, message: str) -> None:
+    def write(self, queue: str, message: str) -> int:
         """Write a message to a queue with resilience against timestamp conflicts.
 
         Args:
             queue: Name of the queue
             message: Message body to write
+
+        Returns:
+            The committed message's unique 64-bit timestamp/message ID.
 
         Raises:
             ValueError: If queue name is invalid
@@ -1144,8 +1147,7 @@ class BrokerCore:
             for attempt in range(MAX_TS_RETRIES):
                 try:
                     # Use existing _do_write logic wrapped in retry handler
-                    self._do_write_with_ts_retry(queue, message)
-                    return  # Success!
+                    return self._do_write_with_ts_retry(queue, message)
 
                 except IntegrityError as e:
                     # The only INSERT in _do_write_with_ts_retry targets the
@@ -1250,11 +1252,14 @@ class BrokerCore:
                 stacklevel=4,
             )
 
-    def _do_write_with_ts_retry(self, queue: str, message: str) -> None:
+    def _do_write_with_ts_retry(self, queue: str, message: str) -> int:
         """Execute write within retry context. Separates retry logic from transaction logic."""
         # Use retry helper with stop-aware behavior for database lock handling
-        self._run_with_retry(lambda: self._do_write_transaction(queue, message))
+        timestamp = self._run_with_retry(
+            lambda: self._do_write_transaction(queue, message)
+        )
         self._record_maintenance_activity(1)
+        return timestamp
 
     def _record_maintenance_activity(self, completed: int) -> None:
         """Run one best-effort maintenance check after committed activity."""
@@ -1273,7 +1278,7 @@ class BrokerCore:
             else:
                 self._maintenance_schedule.mark_check_succeeded()
 
-    def _do_write_transaction(self, queue: str, message: str) -> None:
+    def _do_write_transaction(self, queue: str, message: str) -> int:
         """Allocate the timestamp and insert the message in ONE transaction.
 
         The meta.last_ts advance and the message row must become visible in
@@ -1284,6 +1289,9 @@ class BrokerCore:
         The CAS UPDATE has no BEGIN of its own, so it joins this transaction;
         _do_insert_messages_transaction and broadcast already use the same
         allocate-inside-transaction pattern.
+
+        Returns the committed timestamp so write() can hand the exact
+        message ID back to the caller.
         """
         with self._lock:
             self._runner.begin_immediate()
@@ -1297,6 +1305,7 @@ class BrokerCore:
             except Exception:
                 self._runner.rollback()
                 raise
+            return timestamp
 
     def _do_insert_messages_transaction(
         self,

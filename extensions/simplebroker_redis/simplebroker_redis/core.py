@@ -197,13 +197,14 @@ class RedisBrokerCore:
     def refresh_last_timestamp(self) -> int:
         return self._timestamp_gen.refresh_last_ts()
 
-    def write(self, queue: str, message: str) -> None:
+    def write(self, queue: str, message: str) -> int:
         self._check_fork_safety()
         self._validate_queue_name(queue)
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("write")
-        self._write_message(queue, message)
+        timestamp = self._write_message(queue, message)
         self._record_maintenance_activity(1)
+        return timestamp
 
     def insert_messages(self, records: Iterable[MessageInsertRecord]) -> None:
         self._check_fork_safety()

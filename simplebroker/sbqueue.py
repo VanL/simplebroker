@@ -328,11 +328,20 @@ class Queue:
         if self._last_ts is None or timestamp > self._last_ts:
             self._last_ts = timestamp
 
-    def write(self, message: str) -> None:
+    def write(self, message: str) -> int:
         """Write a message to this queue.
 
         Args:
             message: The message content to write
+
+        Returns:
+            The committed message's unique 64-bit timestamp/message ID —
+            the same value read/peek report for this message and the ID
+            accepted by exact-ID APIs such as ``peek_one(exact_timestamp=...)``
+            and ``delete(message_id=...)``. Unlike ``queue.last_ts`` (a
+            broker-global high-water mark that may already reflect another
+            writer's later message), the returned value always identifies
+            this write's own row.
 
         Raises:
             QueueNameError: If the queue name is invalid
@@ -340,8 +349,9 @@ class Queue:
             OperationalError: If the database is locked/busy
         """
         with self.get_connection() as connection:
-            connection.write(self.name, message)
+            timestamp: int = connection.write(self.name, message)
             self._update_last_ts_hint(connection)
+            return timestamp
 
     def _insert_records_for_queue(
         self,
