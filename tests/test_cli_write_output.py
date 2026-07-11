@@ -35,9 +35,7 @@ def test_write_timestamps_flag_before_queue_prints_id(workdir):
 
 
 def test_write_timestamps_long_flag(workdir):
-    code, stdout, stderr = run_cli(
-        "write", "--timestamps", "q", "hello", cwd=workdir
-    )
+    code, stdout, stderr = run_cli("write", "--timestamps", "q", "hello", cwd=workdir)
 
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
@@ -57,9 +55,7 @@ def test_write_json_prints_timestamp_only(workdir):
 
 
 def test_write_json_wins_over_timestamps(workdir):
-    code, stdout, stderr = run_cli(
-        "write", "--json", "-t", "q", "hello", cwd=workdir
-    )
+    code, stdout, stderr = run_cli("write", "--json", "-t", "q", "hello", cwd=workdir)
 
     assert code == 0, stderr
     assert len(stdout.splitlines()) == 1
@@ -87,9 +83,7 @@ def test_write_flag_with_stdin_marker(workdir):
 
 
 def test_write_flag_with_omitted_message_stdin(workdir):
-    code, stdout, stderr = run_cli(
-        "write", "-t", "q", cwd=workdir, stdin="piped body"
-    )
+    code, stdout, stderr = run_cli("write", "-t", "q", cwd=workdir, stdin="piped body")
 
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
@@ -132,9 +126,7 @@ def test_dash_leading_operand_after_queue_stays_literal(workdir):
 
 
 def test_flag_plus_literal_dash_message_via_escape(workdir):
-    code, stdout, stderr = run_cli(
-        "write", "-t", "q", "--", "-t", cwd=workdir
-    )
+    code, stdout, stderr = run_cli("write", "-t", "q", "--", "-t", cwd=workdir)
 
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout

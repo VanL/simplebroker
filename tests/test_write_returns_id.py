@@ -132,9 +132,7 @@ def test_concurrent_writers_get_their_own_ids(queue_factory):
         except BaseException as exc:  # pragma: no cover - failure reporting
             errors.append(exc)
 
-    threads = [
-        threading.Thread(target=writer, args=(i,)) for i in range(n_threads)
-    ]
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(n_threads)]
     for t in threads:
         t.start()
     for t in threads:
