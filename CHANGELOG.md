@@ -5,6 +5,30 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.3.1] - 2026-07-11
+
+### Added
+- `Queue.write()`, `BrokerCore.write()`, and every first-party backend
+  connection now return the committed message's 64-bit timestamp/message ID
+  instead of `None`. Producers can record, correlate, or later target the
+  exact message they wrote without a racy peek. Callers that ignore the
+  return value are unaffected.
+- `broker write` accepts `-t/--timestamps` (print the new message's
+  19-digit ID) and `--json` (print `{"timestamp": <id>}`). Default write
+  output is unchanged (silent). `broker write q - -t` (stdin marker followed
+  by an output flag) now parses; it was previously an argument error.
+
+### Changed
+- `simplebroker.ext.BrokerConnection.write` is now typed `-> int` (was
+  `-> Any`) and required to return the committed timestamp. Because this
+  changes the backend seam contract, `BACKEND_API_VERSION` is bumped to 3.
+- Bumped the coordinated `simplebroker-pg` and `simplebroker-redis` packages
+  to 3.2.1 and raised the root optional-backend dependency floors to those
+  versions. The Redis release returns the committed ID from `write()`; the
+  Postgres release is a handshake-only version bump (Postgres writes are
+  driven by the shared core). Both extension core floors move to
+  `simplebroker>=5.3.1`.
+
 ## [5.3.0] - 2026-07-10
 
 ### Added

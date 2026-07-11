@@ -213,7 +213,7 @@ Global options must appear before the command, for example `broker -f queue.db r
 
 | Command | Description |
 |---------|-------------|
-| `write <queue> [message\|-]` | Add message to queue (omit or use `-` for stdin) |
+| `write <queue> [message\|-]` | Add message to queue (omit or use `-` for stdin); `-t`/`--json` print the new message's ID |
 | `read <queue> [options]` | Remove and return message(s) |
 | `peek <queue> [options]` | Return message(s) without removing |
 | `move <source> <dest> [options]` | Atomically transfer messages between queues |
@@ -280,6 +280,17 @@ $ broker alias remove task1.outbox
 > its queue behind its checkpoint. If a queue receives `move` traffic,
 > consume it without a timestamp filter, or periodically rescan from
 > `--after 0`.
+
+**Write options:**
+- `-t, --timestamps` - Print the new message's 19-digit timestamp ID on stdout
+- `--json` - Print `{"timestamp": <id>}` for the new message (the message body
+  is not echoed back, unlike read/peek JSON)
+
+Place write output flags before the queue name (`broker write -t tasks "job"`).
+They are also recognized after a literal message or after the stdin marker
+`-`. A dash-leading operand after the queue name is still treated as literal
+message content, so use `broker write -t tasks -- "-literal"` to combine a
+flag with a message that starts with `-`.
 
 **Watch options:**
 - `--peek` - Monitor without consuming
@@ -377,6 +388,12 @@ the sole durable identity for targeted broker operations and application-level
 deduplication. Because vacuum physically removes claimed rows, SimpleBroker does
 not retain a permanent tombstone for every historical ID; consumers that require
 idempotency should persist and deduplicate by message ID.
+
+Producers get the ID at write time: `Queue.write()` returns the committed
+message's ID, and `broker write -t` (or `--json`) prints it. This is the
+value to record for later exact-ID operations (`-m`, `delete(message_id=...)`)
+— do not reconstruct it from `queue.last_ts`, which is a broker-global
+high-water mark and may already reflect another writer's later message.
 
 The format:
 - High 52 bits: microseconds after Unix epoch
@@ -706,7 +723,7 @@ import logging
 
 # Basic usage
 with Queue("tasks") as q:
-    q.write("process order 123")
+    message_id = q.write("process order 123")  # returns the committed message ID
     print(q.exists())
     print(q.stats())
     message = q.read()  # Returns: "process order 123"
@@ -852,7 +869,8 @@ print(ts)  # Monotonic within a database
 ```
 
 Notes:
-- Timestamps are monotonic per database and match what `Queue.write()` uses internally.
+- Timestamps are monotonic per database and come from the same generator as
+  `Queue.write()`, which returns the ID it committed.
 - Generating a timestamp advances the broker high-water mark. Normal `write()`
   calls will not reuse that ID, but no message row exists until you write one.
 
@@ -1016,13 +1034,13 @@ class AsyncQueue:
         self.db_path = db_path
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         
-    async def write(self, message: str) -> None:
+    async def write(self, message: str) -> int:
         """Write message asynchronously."""
         loop = asyncio.get_event_loop()
         def _write():
             with Queue(self.queue_name, db_path=self.db_path) as q:
-                q.write(message)
-        await loop.run_in_executor(self._executor, _write)
+                return q.write(message)
+        return await loop.run_in_executor(self._executor, _write)
     
     async def read(self) -> str | None:
         """Read message asynchronously."""
