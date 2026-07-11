@@ -27,6 +27,9 @@ BACKEND_PLUGINS_PATH: Final[Path] = (
 PG_EXTENSION_DIR: Final[Path] = PROJECT_ROOT / "extensions" / "simplebroker_pg"
 PG_EXTENSION_PYPROJECT_PATH: Final[Path] = PG_EXTENSION_DIR / "pyproject.toml"
 PG_PLUGIN_PATH: Final[Path] = PG_EXTENSION_DIR / "simplebroker_pg" / "plugin.py"
+SQLITE_PLUGIN_PATH: Final[Path] = (
+    PROJECT_ROOT / "simplebroker" / "_backends" / "sqlite" / "plugin.py"
+)
 REDIS_EXTENSION_DIR: Final[Path] = PROJECT_ROOT / "extensions" / "simplebroker_redis"
 REDIS_EXTENSION_PYPROJECT_PATH: Final[Path] = REDIS_EXTENSION_DIR / "pyproject.toml"
 REDIS_PLUGIN_PATH: Final[Path] = (
@@ -70,6 +73,7 @@ ALL_RELEASE_TARGET_KEY: Final[str] = "all"
 BACKEND_API_MIN_CORE_VERSION: Final[dict[int, str]] = {
     1: "5.0.0",
     2: "5.2.0",
+    3: "5.3.1",
 }
 
 ROOT_TEST_COMMAND_PREFIX: Final[tuple[str, ...]] = (
@@ -420,6 +424,7 @@ def version_tuple(version: str) -> tuple[int, int, int]:
 def require_backend_api_versions_match(
     *,
     core_path: Path = BACKEND_PLUGINS_PATH,
+    sqlite_plugin_path: Path = SQLITE_PLUGIN_PATH,
     pg_plugin_path: Path = PG_PLUGIN_PATH,
     redis_plugin_path: Path = REDIS_PLUGIN_PATH,
 ) -> None:
@@ -427,6 +432,10 @@ def require_backend_api_versions_match(
 
     core_version = read_core_backend_api_version(core_path)
     plugin_versions = {
+        "simplebroker built-in sqlite": read_plugin_backend_api_version(
+            sqlite_plugin_path,
+            "built-in sqlite plugin",
+        ),
         "simplebroker-pg": read_plugin_backend_api_version(
             pg_plugin_path,
             "simplebroker-pg plugin",

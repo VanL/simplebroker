@@ -579,14 +579,17 @@ def test_backend_api_version_guard_accepts_matching_versions(
     tmp_path: Path,
 ) -> None:
     core = tmp_path / "_backend_plugins.py"
+    sqlite_plugin = tmp_path / "sqlite_plugin.py"
     pg_plugin = tmp_path / "pg_plugin.py"
     redis_plugin = tmp_path / "redis_plugin.py"
     core.write_text("BACKEND_API_VERSION: Final[int] = 1\n", encoding="utf-8")
+    sqlite_plugin.write_text("backend_api_version = 1\n", encoding="utf-8")
     pg_plugin.write_text("backend_api_version = 1\n", encoding="utf-8")
     redis_plugin.write_text("backend_api_version = 1\n", encoding="utf-8")
 
     release.require_backend_api_versions_match(
         core_path=core,
+        sqlite_plugin_path=sqlite_plugin,
         pg_plugin_path=pg_plugin,
         redis_plugin_path=redis_plugin,
     )
@@ -594,15 +597,18 @@ def test_backend_api_version_guard_accepts_matching_versions(
 
 def test_backend_api_version_guard_rejects_pg_mismatch(tmp_path: Path) -> None:
     core = tmp_path / "_backend_plugins.py"
+    sqlite_plugin = tmp_path / "sqlite_plugin.py"
     pg_plugin = tmp_path / "pg_plugin.py"
     redis_plugin = tmp_path / "redis_plugin.py"
     core.write_text("BACKEND_API_VERSION: Final[int] = 2\n", encoding="utf-8")
+    sqlite_plugin.write_text("backend_api_version = 2\n", encoding="utf-8")
     pg_plugin.write_text("backend_api_version = 1\n", encoding="utf-8")
     redis_plugin.write_text("backend_api_version = 2\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="simplebroker-pg"):
         release.require_backend_api_versions_match(
             core_path=core,
+            sqlite_plugin_path=sqlite_plugin,
             pg_plugin_path=pg_plugin,
             redis_plugin_path=redis_plugin,
         )
@@ -610,15 +616,18 @@ def test_backend_api_version_guard_rejects_pg_mismatch(tmp_path: Path) -> None:
 
 def test_backend_api_version_guard_rejects_redis_mismatch(tmp_path: Path) -> None:
     core = tmp_path / "_backend_plugins.py"
+    sqlite_plugin = tmp_path / "sqlite_plugin.py"
     pg_plugin = tmp_path / "pg_plugin.py"
     redis_plugin = tmp_path / "redis_plugin.py"
     core.write_text("BACKEND_API_VERSION: Final[int] = 2\n", encoding="utf-8")
+    sqlite_plugin.write_text("backend_api_version = 2\n", encoding="utf-8")
     pg_plugin.write_text("backend_api_version = 2\n", encoding="utf-8")
     redis_plugin.write_text("backend_api_version = 1\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="simplebroker-redis"):
         release.require_backend_api_versions_match(
             core_path=core,
+            sqlite_plugin_path=sqlite_plugin,
             pg_plugin_path=pg_plugin,
             redis_plugin_path=redis_plugin,
         )
@@ -639,12 +648,12 @@ def test_extension_core_floor_guard_accepts_required_floor(tmp_path: Path) -> No
     )
 
 
-def test_repository_backend_api_v2_handshake_and_floors_match() -> None:
+def test_repository_backend_api_v3_handshake_and_floors_match() -> None:
     release.require_backend_api_versions_match()
     release.require_extension_core_floors_for_backend_api()
 
-    assert release.read_core_backend_api_version() == 2
-    assert release.BACKEND_API_MIN_CORE_VERSION[2] == "5.2.0"
+    assert release.read_core_backend_api_version() == 3
+    assert release.BACKEND_API_MIN_CORE_VERSION[3] == "5.3.1"
 
 
 def test_extension_core_floor_guard_rejects_too_low_floor(tmp_path: Path) -> None:

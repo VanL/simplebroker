@@ -412,5 +412,5 @@ def test_first_party_extension_plugins_declare_literal_backend_api_version(
 ) -> None:
     plugin_source = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
 
-    assert "backend_api_version = 2" in plugin_source
+    assert "backend_api_version = 3" in plugin_source
     assert "backend_api_version = BACKEND_API_VERSION" not in plugin_source
