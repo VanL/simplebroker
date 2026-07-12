@@ -164,7 +164,7 @@ def test_postgres_benchmark_redacts_provisioned_dsn(
         assert provisioned == dsn
 
     output = capsys.readouterr().out
-    assert "postgresql://postgres:***@127.0.0.1:5432/test" in output
+    assert output == "Postgres benchmark DSN: [redacted]\n"
     assert secret not in output
 
 

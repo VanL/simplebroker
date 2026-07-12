@@ -89,8 +89,10 @@ solo-maintainer workflow.
 
 Do not teach generic `_run()` logging to guess which arbitrary arguments are
 secret. For the Docker password, pass `--env POSTGRES_PASSWORD` and place the
-value only in the subprocess environment. For DSNs intentionally displayed to a
-developer, call the existing `redact_backend_target()` chokepoint.
+value only in the subprocess environment. Keep using `redact_backend_target()`
+where connection details are intentionally useful. The benchmark does not need
+connection details, so print a constant `[redacted]` marker there instead of
+passing sensitive data through another analyzer-visible sink.
 
 ### Use the repository lock, not hand-maintained requirements hashes
 
@@ -206,7 +208,7 @@ upload results successfully. A configuration-error SARIF upload is not a pass.
      unchanged.
 2. In `tests/test_backend_benchmark_smoke.py`, provision a fake Docker DSN with a
    distinctive password, enter `_postgres_dsn_for_benchmark()`, and assert the
-   captured output contains `***` and never the secret.
+   captured output is the constant `[redacted]` message and never the secret.
 3. Keep `test_pytest_pg_main_redacts_dsn_password` green. It is the regression
    evidence for the sink reported by false-positive alert `#29`.
 
@@ -216,8 +218,9 @@ upload results successfully. A configuration-error SARIF upload is not a pass.
    `POSTGRES_PASSWORD`, `POSTGRES_USER`, and `POSTGRES_DB` in that copy.
 2. Change the Docker argument list from `--env NAME=value` to `--env NAME` and
    pass the copied environment to `_run()`.
-3. In the benchmark harness, import and use `redact_backend_target()` before
-   displaying the DSN, matching `pytest_pg_main()`.
+3. In the benchmark harness, print a constant `[redacted]` marker rather than
+   passing the DSN through the output sink. CodeQL does not model the custom
+   sanitizer, and the benchmark does not need host or database details.
 4. Do not change the DSN returned to tests or the environment passed to backend
    subprocesses. Only the display and Docker command boundary change.
 
