@@ -13,8 +13,8 @@ with plain pytest.
 
 Run (Linux only — Atheris does not build on macOS arm64):
 
-    pip install atheris hypothesis pytest && pip install -e .
-    python fuzz/fuzz_dump_load.py fuzz/corpus/dump_load
+    uv sync --frozen --extra dev --group fuzz
+    uv run --frozen --no-sync python fuzz/fuzz_dump_load.py fuzz/corpus/dump_load
 
 Any libFuzzer flags (-max_total_time, -runs, ...) pass through. See
 .github/workflows/fuzz.yml for the scheduled run.

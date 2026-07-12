@@ -159,6 +159,14 @@ def _start_postgres_container() -> tuple[str, str]:
     """Start the temporary Postgres container and return its name and DSN."""
 
     container_name = f"simplebroker-pg-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    container_env = os.environ.copy()
+    container_env.update(
+        {
+            "POSTGRES_PASSWORD": POSTGRES_PASSWORD,
+            "POSTGRES_USER": POSTGRES_USER,
+            "POSTGRES_DB": POSTGRES_DB,
+        }
+    )
     _run(
         [
             "docker",
@@ -168,16 +176,17 @@ def _start_postgres_container() -> tuple[str, str]:
             "--name",
             container_name,
             "--env",
-            f"POSTGRES_PASSWORD={POSTGRES_PASSWORD}",
+            "POSTGRES_PASSWORD",
             "--env",
-            f"POSTGRES_USER={POSTGRES_USER}",
+            "POSTGRES_USER",
             "--env",
-            f"POSTGRES_DB={POSTGRES_DB}",
+            "POSTGRES_DB",
             "--publish-all",
             POSTGRES_IMAGE,
             "-c",
             "max_connections=300",
         ],
+        env=container_env,
         capture_output=True,
     )
     try:

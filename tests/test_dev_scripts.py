@@ -372,6 +372,49 @@ def test_start_postgres_cleans_up_when_readiness_fails(
     assert cleanup_calls[0].startswith("simplebroker-pg-test-")
 
 
+def test_start_postgres_keeps_password_out_of_docker_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    password = "command-output-secret"
+
+    monkeypatch.setattr(_scripts, "POSTGRES_PASSWORD", password)
+    monkeypatch.setattr(_scripts, "POSTGRES_USER", "test-user")
+    monkeypatch.setattr(_scripts, "POSTGRES_DB", "test-db")
+    monkeypatch.setattr(_scripts, "_wait_for_postgres", lambda name: "32786")
+
+    def fake_run(
+        cmd: list[str],
+        *,
+        cwd: Path = _scripts.ROOT,
+        env: dict[str, str] | None = None,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        captured.update(cmd=cmd, env=env, capture_output=capture_output)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(_scripts, "_run", fake_run)
+
+    _, dsn = _scripts._start_postgres_container()
+
+    command = captured["cmd"]
+    assert isinstance(command, list)
+    assert all(password not in arg for arg in command)
+    assert [
+        command[index + 1] for index, arg in enumerate(command) if arg == "--env"
+    ] == [
+        "POSTGRES_PASSWORD",
+        "POSTGRES_USER",
+        "POSTGRES_DB",
+    ]
+    environment = captured["env"]
+    assert isinstance(environment, dict)
+    assert environment["POSTGRES_PASSWORD"] == password
+    assert environment["POSTGRES_USER"] == "test-user"
+    assert environment["POSTGRES_DB"] == "test-db"
+    assert password in dsn
+
+
 def test_start_valkey_cleans_up_when_readiness_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

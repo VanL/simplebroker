@@ -11,8 +11,9 @@ replay with plain pytest.
 
 Run (Linux only — Atheris does not build on macOS arm64):
 
-    pip install atheris hypothesis pytest && pip install -e .
-    python fuzz/fuzz_timestamp_validate.py fuzz/corpus/timestamp_validate
+    uv sync --frozen --extra dev --group fuzz
+    uv run --frozen --no-sync python fuzz/fuzz_timestamp_validate.py \
+        fuzz/corpus/timestamp_validate
 
 Any libFuzzer flags (-max_total_time, -runs, ...) pass through. See
 .github/workflows/fuzz.yml for the scheduled run.
