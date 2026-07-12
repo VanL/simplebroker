@@ -54,6 +54,11 @@ redis = [
     "simplebroker-redis>=3.2.1",
 ]
 
+[dependency-groups]
+fuzz = [
+    "atheris>=2.3.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
 [project.scripts]
 broker = "simplebroker.cli:main"
 simplebroker = "simplebroker.cli:main"
@@ -63,6 +68,9 @@ Homepage = "https://github.com/VanL/simplebroker"
 Documentation = "https://github.com/VanL/simplebroker#readme"
 Repository = "https://github.com/VanL/simplebroker.git"
 Issues = "https://github.com/VanL/simplebroker/issues"
+
+[tool.uv]
+default-groups = []
 
 [tool.uv.sources]
 simplebroker-pg = { path = "./extensions/simplebroker_pg", editable = true }

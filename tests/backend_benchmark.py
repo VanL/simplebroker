@@ -33,6 +33,7 @@ from simplebroker._scripts import (
     _start_valkey_container,
     _verify_postgres_test_dsn,
 )
+from simplebroker._targets import redact_backend_target
 
 if __package__ in {None, ""}:
     REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -449,7 +450,10 @@ def _postgres_dsn_for_benchmark(settings: BenchmarkSettings):
     container_name: str | None = None
     try:
         container_name, dsn = _start_postgres_container()
-        print(f"Postgres benchmark DSN: {dsn}", flush=True)
+        print(
+            f"Postgres benchmark DSN: {redact_backend_target(dsn)}",
+            flush=True,
+        )
         _verify_postgres_test_dsn(dsn)
         yield dsn
     finally:

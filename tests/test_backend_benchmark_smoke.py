@@ -132,6 +132,42 @@ def test_postgres_benchmark_docker_mode_manages_container(
     assert calls[-1] == ("cleanup-container", "pg-container")
 
 
+def test_postgres_benchmark_redacts_provisioned_dsn(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    secret = "benchmark-output-secret"
+    dsn = f"postgresql://postgres:{secret}@127.0.0.1:5432/test"
+
+    monkeypatch.setattr(
+        backend_benchmark,
+        "_start_postgres_container",
+        lambda: ("pg-container", dsn),
+    )
+    monkeypatch.setattr(
+        backend_benchmark,
+        "_verify_postgres_test_dsn",
+        lambda value: None,
+    )
+    monkeypatch.setattr(
+        backend_benchmark,
+        "_cleanup_container",
+        lambda value: None,
+    )
+    settings = BenchmarkSettings(
+        backends=(backend_benchmark.POSTGRES_TEST_BACKEND,),
+        workloads=("write_single",),
+        pg_docker=True,
+    )
+
+    with backend_benchmark._postgres_dsn_for_benchmark(settings) as provisioned:
+        assert provisioned == dsn
+
+    output = capsys.readouterr().out
+    assert "postgresql://postgres:***@127.0.0.1:5432/test" in output
+    assert secret not in output
+
+
 def test_postgres_benchmark_docker_mode_cleans_up_after_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

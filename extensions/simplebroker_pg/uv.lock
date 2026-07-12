@@ -181,6 +181,9 @@ requires-dist = [
 ]
 provides-extras = ["dev", "pg", "redis"]
 
+[package.metadata.requires-dev]
+fuzz = [{ name = "atheris", specifier = ">=2.3.0" }]
+
 [[package]]
 name = "simplebroker-pg"
 version = "3.2.1"
