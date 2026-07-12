@@ -486,14 +486,14 @@ tests alone when it requires GitHub state.
 
 | Slice | Status | Evidence |
 |---|---|---|
-| Current baseline captured | Pending | Record starting SHA, alert list, and failed CodeQL run. |
-| CodeQL versions aligned | Pending | PR run URL and successful default-branch run URL. |
-| Credential sinks fixed | Pending | Focused tests plus fixed alert URLs `#28` and `#35`. |
-| Locked CI installs | Pending | Lock diff, fuzz/packaging runs, fixed alert URLs `#19/#25/#32/#33`. |
-| Dependabot gate | Pending | Unit tests and one demonstrated fail-closed case. |
-| False-positive dismissal | Pending | Alert `#29` readback with reason and comment. |
-| Policy dismissals | Pending | Alerts `#1/#20/#22` readback with reasons and comments. |
-| Final analyzer state | Pending | Successful CodeQL/Scorecard runs on current `main`; zero open alerts from this set. |
+| Current baseline captured | Complete | Starting SHA [`d0056c5c`](https://github.com/VanL/simplebroker/commit/d0056c5c), alerts `#1/#19/#20/#22/#25/#28/#29/#32/#33/#35`, and the incompatible CodeQL action failure on [PR `#47`](https://github.com/VanL/simplebroker/actions/runs/29181076673/job/86618661652). |
+| CodeQL versions aligned | Complete | [PR `#50` CodeQL](https://github.com/VanL/simplebroker/actions/runs/29213748080/job/86705784446) and [`main` CodeQL](https://github.com/VanL/simplebroker/actions/runs/29214304312) passed. |
+| Credential sinks fixed | Complete | Focused regressions passed; alerts [`#28`](https://github.com/VanL/simplebroker/security/code-scanning/28) and [`#35`](https://github.com/VanL/simplebroker/security/code-scanning/35) are fixed. |
+| Locked CI installs | Complete | Packaging passed in [PR `#50`](https://github.com/VanL/simplebroker/actions/runs/29213748082); both 15-minute harnesses passed in the [fuzz run](https://github.com/VanL/simplebroker/actions/runs/29213671555); alerts [`#19`](https://github.com/VanL/simplebroker/security/code-scanning/19), [`#25`](https://github.com/VanL/simplebroker/security/code-scanning/25), [`#32`](https://github.com/VanL/simplebroker/security/code-scanning/32), and [`#33`](https://github.com/VanL/simplebroker/security/code-scanning/33) are fixed. |
+| Dependabot gate | Complete | Gate unit tests, including failed/missing sibling workflow cases, passed; [PR `#50`](https://github.com/VanL/simplebroker/pull/50) records the fail-closed required workflow set. |
+| False-positive dismissal | Complete | Alert [`#29`](https://github.com/VanL/simplebroker/security/code-scanning/29) is dismissed as `false positive` with sanitizer and regression-test evidence. |
+| Policy dismissals | Complete | Alerts [`#1`](https://github.com/VanL/simplebroker/security/code-scanning/1), [`#20`](https://github.com/VanL/simplebroker/security/code-scanning/20), and [`#22`](https://github.com/VanL/simplebroker/security/code-scanning/22) are dismissed as `won't fix` with solo-maintainer scope comments. |
+| Final analyzer state | Complete | Merge SHA [`bbb6293c`](https://github.com/VanL/simplebroker/commit/bbb6293ce62e3c8afebe31ee8f3e6d3f6fed7c91); [`main` CodeQL](https://github.com/VanL/simplebroker/actions/runs/29214304312) and [`main` Scorecard](https://github.com/VanL/simplebroker/actions/runs/29214304313) passed; the open-alert query returned no results. |
 
 ## Fresh-Eyes Review Checklist
 
