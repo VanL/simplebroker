@@ -169,9 +169,7 @@ def test_precheck_env_extends_pythonpath_with_local_weft_venv(
     env = release._precheck_env_overrides(root_command)
 
     assert env["PYTEST_ADDOPTS"] == "-x --maxfail=1"
-    assert env["PYTEST_XDIST_AUTO_NUM_WORKERS"] == str(
-        release.LOCAL_PYTEST_WORKERS
-    )
+    assert env["PYTEST_XDIST_AUTO_NUM_WORKERS"] == str(release.LOCAL_PYTEST_WORKERS)
     assert env["PYTHONPATH"] == str(site_packages)
     assert release._precheck_env_overrides(backend_command) == {
         "PYTEST_ADDOPTS": "-x --maxfail=1",
