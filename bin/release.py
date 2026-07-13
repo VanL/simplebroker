@@ -134,8 +134,6 @@ PG_TEST_COMMAND: Final[tuple[str, ...]] = (
     "--extra",
     "dev",
     "./bin/pytest-pg",
-    "-n",
-    str(LOCAL_PYTEST_WORKERS),
 )
 REDIS_TEST_COMMAND: Final[tuple[str, ...]] = (
     "uv",
@@ -143,8 +141,6 @@ REDIS_TEST_COMMAND: Final[tuple[str, ...]] = (
     "--extra",
     "dev",
     "./bin/pytest-redis",
-    "-n",
-    str(LOCAL_PYTEST_WORKERS),
 )
 EXAMPLE_TEST_COMMAND: Final[tuple[str, ...]] = (
     "uv",
@@ -257,7 +253,10 @@ REDIS_BUILD_COMMAND: Final[tuple[str, ...]] = (
     "build",
     "extensions/simplebroker_redis",
 )
-PRECHECK_ENV_OVERRIDES: Final[dict[str, str]] = {"PYTEST_ADDOPTS": "-x --maxfail=1"}
+PRECHECK_ENV_OVERRIDES: Final[dict[str, str]] = {
+    "PYTEST_ADDOPTS": "-x --maxfail=1",
+    "PYTEST_XDIST_AUTO_NUM_WORKERS": str(LOCAL_PYTEST_WORKERS),
+}
 TagAction = Literal[
     "create",
     "push_local",
