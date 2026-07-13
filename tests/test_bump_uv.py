@@ -120,21 +120,21 @@ def test_update_and_check_cover_every_lock(
         assert "\njobs: {}\n" in workflow.read_text()
     assert calls == [
         ["uv", "lock"],
-        ["uv", "lock", "--directory", "extensions/simplebroker_pg"],
-        ["uv", "lock", "--directory", "extensions/simplebroker_redis"],
+        ["uv", "lock", "--directory", str(Path("extensions/simplebroker_pg"))],
+        ["uv", "lock", "--directory", str(Path("extensions/simplebroker_redis"))],
         ["uv", "lock", "--check"],
         [
             "uv",
             "lock",
             "--directory",
-            "extensions/simplebroker_pg",
+            str(Path("extensions/simplebroker_pg")),
             "--check",
         ],
         [
             "uv",
             "lock",
             "--directory",
-            "extensions/simplebroker_redis",
+            str(Path("extensions/simplebroker_redis")),
             "--check",
         ],
     ]
@@ -165,14 +165,14 @@ def test_update_and_check_cover_every_lock(
             "uv",
             "lock",
             "--directory",
-            "extensions/simplebroker_pg",
+            str(Path("extensions/simplebroker_pg")),
             "--check",
         ],
         [
             "uv",
             "lock",
             "--directory",
-            "extensions/simplebroker_redis",
+            str(Path("extensions/simplebroker_redis")),
             "--check",
         ],
     ]
