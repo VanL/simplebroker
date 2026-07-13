@@ -82,6 +82,27 @@ def test_initialize_database_bootstraps_core_schema_and_metadata(
         runner.close()
 
 
+def test_initialize_database_uses_one_explicit_transaction(tmp_path: Path) -> None:
+    runner = _runner(tmp_path / "broker.db")
+    conn = runner.get_connection()
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+
+    try:
+        initialize_database(runner, run_with_retry=_run_direct)
+    finally:
+        conn.set_trace_callback(None)
+        runner.close()
+
+    transaction_statements = [
+        statement
+        for statement in statements
+        if statement.lstrip().split(None, maxsplit=1)[0].upper()
+        in {"BEGIN", "COMMIT", "ROLLBACK"}
+    ]
+    assert transaction_statements == ["BEGIN IMMEDIATE", "COMMIT"]
+
+
 def test_migrate_schema_applies_v2_v3_v4_and_v5_in_order(tmp_path: Path) -> None:
     db_path = tmp_path / "old.db"
     _create_v1_messages_table(db_path)

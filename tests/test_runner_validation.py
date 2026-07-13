@@ -1,5 +1,6 @@
 """Test SQLiteRunner database file validation during connection phase."""
 
+import sqlite3
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -13,6 +14,21 @@ from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import OperationalError
 from simplebroker._phaselock import PhaseLockService
 from simplebroker._runner import SetupPhase, SQLiteRunner
+from simplebroker.db import BrokerCore
+
+
+class _FailFirstCommitRunner(SQLiteRunner):
+    """Inject a failure at the schema bootstrap commit boundary."""
+
+    def __init__(self, db_path: str) -> None:
+        super().__init__(db_path)
+        self._fail_first_commit = True
+
+    def commit(self) -> None:
+        if self._fail_first_commit:
+            self._fail_first_commit = False
+            raise RuntimeError("injected bootstrap commit failure")
+        super().commit()
 
 
 def _force_status_sidecars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -204,6 +220,42 @@ class TestSQLiteRunnerValidation:
         assert service.status_base_path == tmp_path / "broker.db.status"
         assert service.status_base_path.exists()
         assert _read_status_file(db_path) == list(_setup_phase_names())
+
+    @pytest.mark.sqlite_only
+    def test_failed_bootstrap_rolls_back_before_phaselock_marks_schema_complete(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _force_status_sidecars(monkeypatch)
+        db_path = tmp_path / "broker.db"
+        failing_runner = _FailFirstCommitRunner(str(db_path))
+
+        try:
+            with pytest.raises(RuntimeError, match="injected bootstrap commit failure"):
+                BrokerCore(failing_runner)
+
+            assert _read_status_file(db_path) == ["connection"]
+            with sqlite3.connect(db_path) as conn:
+                tables = conn.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            assert tables == []
+        finally:
+            failing_runner.close()
+
+        retry_runner = SQLiteRunner(str(db_path))
+        try:
+            BrokerCore(retry_runner)
+            assert _read_status_file(db_path) == list(_setup_phase_names())
+            assert retry_runner.run(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'messages'",
+                fetch=True,
+            ) == [("messages",)]
+        finally:
+            retry_runner.close()
 
     @pytest.mark.sqlite_only
     def test_connection_marker_check_does_not_open_sqlite_connection(

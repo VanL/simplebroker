@@ -35,43 +35,48 @@ def initialize_database(
     *,
     run_with_retry: Callable[[Callable[[], Any]], Any],
 ) -> None:
-    """Run the built-in SQLite schema/bootstrap setup."""
-    run_with_retry(lambda: runner.run(CREATE_MESSAGES_TABLE))
+    """Run the built-in SQLite schema/bootstrap setup atomically."""
+    run_with_retry(runner.begin_immediate)
+    try:
+        run_with_retry(lambda: runner.run(CREATE_MESSAGES_TABLE))
 
-    for drop_sql in DROP_OLD_INDEXES:
+        for drop_sql in DROP_OLD_INDEXES:
 
-        def drop_index(sql: str = drop_sql) -> Any:
-            return runner.run(sql)
+            def drop_index(sql: str = drop_sql) -> Any:
+                return runner.run(sql)
 
-        run_with_retry(drop_index)
+            run_with_retry(drop_index)
 
-    run_with_retry(lambda: runner.run(CREATE_QUEUE_TS_ID_INDEX))
+        run_with_retry(lambda: runner.run(CREATE_QUEUE_TS_ID_INDEX))
 
-    has_claimed_column = bool(
-        run_with_retry(lambda: messages_has_claimed_column(runner))
-    )
-    if has_claimed_column:
-        run_with_retry(lambda: runner.run(CREATE_UNCLAIMED_INDEX))
-        run_with_retry(lambda: runner.run(CREATE_PENDING_QUEUE_TS_INDEX))
-
-    run_with_retry(lambda: runner.run(CREATE_META_TABLE))
-    run_with_retry(lambda: runner.run(INIT_LAST_TS))
-    run_with_retry(lambda: runner.run(CREATE_ALIASES_TABLE))
-    run_with_retry(lambda: runner.run(CREATE_ALIAS_TARGET_INDEX))
-    run_with_retry(lambda: runner.run(INSERT_ALIAS_VERSION_META))
-    run_with_retry(
-        lambda: runner.run(
-            "INSERT OR IGNORE INTO meta (key, value) VALUES ('magic', ?)",
-            (SIMPLEBROKER_MAGIC,),
+        has_claimed_column = bool(
+            run_with_retry(lambda: messages_has_claimed_column(runner))
         )
-    )
-    run_with_retry(
-        lambda: runner.run(
-            "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
-            (SCHEMA_VERSION,),
+        if has_claimed_column:
+            run_with_retry(lambda: runner.run(CREATE_UNCLAIMED_INDEX))
+            run_with_retry(lambda: runner.run(CREATE_PENDING_QUEUE_TS_INDEX))
+
+        run_with_retry(lambda: runner.run(CREATE_META_TABLE))
+        run_with_retry(lambda: runner.run(INIT_LAST_TS))
+        run_with_retry(lambda: runner.run(CREATE_ALIASES_TABLE))
+        run_with_retry(lambda: runner.run(CREATE_ALIAS_TARGET_INDEX))
+        run_with_retry(lambda: runner.run(INSERT_ALIAS_VERSION_META))
+        run_with_retry(
+            lambda: runner.run(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES ('magic', ?)",
+                (SIMPLEBROKER_MAGIC,),
+            )
         )
-    )
-    run_with_retry(runner.commit)
+        run_with_retry(
+            lambda: runner.run(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
+                (SCHEMA_VERSION,),
+            )
+        )
+        run_with_retry(runner.commit)
+    except BaseException:
+        runner.rollback()
+        raise
 
 
 def meta_table_exists(runner: SQLRunner) -> bool:
