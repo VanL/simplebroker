@@ -9,6 +9,8 @@ import warnings
 
 import pytest
 
+from simplebroker import _runner as runner_module
+from simplebroker._exceptions import OperationalError
 from simplebroker._targets import BrokerTarget
 
 pytest.importorskip("simplebroker.watcher")
@@ -758,6 +760,50 @@ class TestEdgeCases(WatcherTestBase):
         watcher.run_forever()
 
         assert not drain_called.is_set()
+
+    @pytest.mark.sqlite_only
+    def test_stop_during_locked_connection_setup_ends_startup(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """A stop during WAL setup must prevent another contention retry."""
+        setup_entered = threading.Event()
+        release_setup = threading.Event()
+        setup_attempts = 0
+
+        def locked_connection_setup(*args, **kwargs):
+            del args, kwargs
+            nonlocal setup_attempts
+            setup_attempts += 1
+            setup_entered.set()
+            assert release_setup.wait(timeout=scale_timeout_for_ci(2.0))
+            raise OperationalError("database is locked")
+
+        monkeypatch.setattr(
+            runner_module.db_backend,
+            "setup_connection_phase",
+            locked_connection_setup,
+        )
+        watcher = QueueWatcher(
+            "stop_during_locked_setup",
+            lambda message, timestamp: None,
+            db=str(tmp_path / "broker.db"),
+        )
+        thread = watcher.run_in_thread()
+        try:
+            assert setup_entered.wait(timeout=scale_timeout_for_ci(2.0))
+            watcher.stop(join=False)
+            release_setup.set()
+            thread.join(timeout=scale_timeout_for_ci(2.0))
+
+            assert not thread.is_alive()
+            assert setup_attempts == 1
+            assert not watcher.is_running()
+        finally:
+            release_setup.set()
+            watcher.stop()
+            thread.join(timeout=scale_timeout_for_ci(2.0))
 
     def test_queue_name_validation(self, broker_target):
         """Test that watcher respects queue name validation."""

@@ -84,6 +84,10 @@ class PhaseLockUnavailable(RuntimeError):
     """Raised when this platform has no supported advisory file lock primitive."""
 
 
+class PhaseLockCancelled(RuntimeError):
+    """Raised when a caller cancels an advisory-lock wait."""
+
+
 @dataclass(frozen=True)
 class _XattrProvider:
     get_value: Callable[[Path, str], bytes]
@@ -581,7 +585,12 @@ class PhaseLockService:
         finally:
             lock.release()
 
-    def run_phases(self, phases: Iterable[Phase]) -> PhaseRunResult:
+    def run_phases(
+        self,
+        phases: Iterable[Phase],
+        *,
+        should_cancel: Callable[[], bool] | None = None,
+    ) -> PhaseRunResult:
         """Run missing phases in order under the setup lock.
 
         On Windows, the lock is always acquired before completion markers are
@@ -618,6 +627,25 @@ class PhaseLockService:
 
         completed: list[str] = []
         skipped: list[str] = []
+
+        def cancellation_requested() -> bool:
+            if should_cancel is None:
+                return False
+            try:
+                return bool(should_cancel())
+            except Exception:
+                # Cancellation is a best-effort hint. A broken callback must not
+                # strand a setup lock or prevent the phase from making progress.
+                return False
+
+        def should_stop_lock_wait() -> bool:
+            if cancellation_requested():
+                return True
+            return not self.strict_marker_locking and self._all_marked(
+                phase_list,
+                using_xattrs=self._should_use_xattrs(),
+            )
+
         lock = _AdvisoryLock(
             self.lock_path,
             timeout=self.timeout,
@@ -625,15 +653,17 @@ class PhaseLockService:
         )
         acquired = lock.acquire(
             should_stop_waiting=(
-                None
-                if self.strict_marker_locking
-                else lambda: self._all_marked(
-                    phase_list, using_xattrs=self._should_use_xattrs()
-                )
+                should_stop_lock_wait
+                if should_cancel is not None or not self.strict_marker_locking
+                else None
             ),
             diagnostics=lambda: self._phase_diagnostics(phase_list),
         )
         if not acquired:
+            if cancellation_requested():
+                raise PhaseLockCancelled(
+                    f"Cancelled while waiting for phase lock: {self.lock_path}"
+                )
             using_xattrs = self._should_use_xattrs()
             return PhaseRunResult(
                 completed=(),
@@ -644,6 +674,10 @@ class PhaseLockService:
             )
 
         try:
+            if cancellation_requested():
+                raise PhaseLockCancelled(
+                    f"Cancelled while waiting for phase lock: {self.lock_path}"
+                )
             using_xattrs = self._should_use_xattrs()
             if using_xattrs:
                 self._run_xattr_phases(phase_list, completed, skipped)
@@ -936,6 +970,7 @@ __all__ = [
     "AdvisoryFileLock",
     "PHASELOCK_ENABLE_XATTRS",
     "Phase",
+    "PhaseLockCancelled",
     "PhaseLockService",
     "PhaseLockTimeout",
     "PhaseLockUnavailable",

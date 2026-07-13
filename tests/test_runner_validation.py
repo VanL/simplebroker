@@ -2,6 +2,7 @@
 
 import sqlite3
 import tempfile
+import threading
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,7 @@ from simplebroker import _phaselock as phaselock_module
 from simplebroker import _runner as runner_module
 from simplebroker import helpers as helpers_module
 from simplebroker._constants import SCHEMA_VERSION
-from simplebroker._exceptions import OperationalError
+from simplebroker._exceptions import OperationalError, StopException
 from simplebroker._phaselock import PhaseLockService
 from simplebroker._runner import SetupPhase, SQLiteRunner
 from simplebroker.db import BrokerCore
@@ -106,6 +107,92 @@ def _read_status_file(db_path: Path) -> list[str]:
 
 class TestSQLiteRunnerValidation:
     """Test SQLiteRunner validation of database files during CONNECTION phase."""
+
+    def test_connection_setup_honors_runner_stop_event(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        stop_event = threading.Event()
+        stop_event.set()
+        runner = SQLiteRunner(str(tmp_path / "broker.db"))
+        setup_called = False
+
+        def setup_connection_phase(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            nonlocal setup_called
+            setup_called = True
+
+        monkeypatch.setattr(
+            runner_module.db_backend,
+            "setup_connection_phase",
+            setup_connection_phase,
+        )
+
+        with pytest.raises(StopException, match="Retry interrupted"):
+            runner.setup_with_stop_event(SetupPhase.CONNECTION, stop_event)
+
+        assert not setup_called
+
+    def test_broker_core_propagates_stop_before_connection_setup(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        stop_event = threading.Event()
+        stop_event.set()
+        runner = SQLiteRunner(str(tmp_path / "broker.db"))
+        setup_called = False
+
+        def setup_connection_phase(*args: object, **kwargs: object) -> None:
+            del args, kwargs
+            nonlocal setup_called
+            setup_called = True
+
+        monkeypatch.setattr(
+            runner_module.db_backend,
+            "setup_connection_phase",
+            setup_connection_phase,
+        )
+
+        with pytest.raises(StopException, match="Retry interrupted"):
+            BrokerCore(runner, stop_event=stop_event)
+
+        assert not setup_called
+
+    def test_broker_core_propagates_stop_to_exclusive_schema_setup(self) -> None:
+        stop_event = threading.Event()
+        operation_called = False
+
+        class StopAwareRunner:
+            def run_exclusive_setup_with_stop_event(
+                self,
+                phase: SetupPhase,
+                operation: object,
+                received_stop_event: threading.Event,
+            ) -> bool:
+                del operation
+                assert phase is SetupPhase.SCHEMA
+                assert received_stop_event is stop_event
+                raise StopException("Retry interrupted by stop event")
+
+        class MinimalBrokerCore(BrokerCore):
+            def __init__(self) -> None:
+                pass
+
+            def _setup_database(self, *, progress_budget=None) -> None:
+                del progress_budget
+                nonlocal operation_called
+                operation_called = True
+
+        core = MinimalBrokerCore()
+        core._runner = StopAwareRunner()  # type: ignore[assignment]
+        core._stop_event = stop_event
+
+        with pytest.raises(StopException, match="Retry interrupted"):
+            core._setup_schema()
+
+        assert not operation_called
 
     def test_validation_with_invalid_file(self):
         """Test that SQLiteRunner validates database files during CONNECTION phase."""

@@ -35,10 +35,12 @@ failures remain visible without making a reporting-service outage block
 otherwise-green CI. The earlier bounded (not exact) Hatchling decision,
 delete-and-recreate draft idempotency, PyPI lag budget, closed-list
 `--frozen --no-sync` invariant, example-mypy helper flag, and 85% local
-coverage floor remain. Two SQLite correctness prerequisites found by the
+coverage floor remain. Three SQLite correctness prerequisites found by the
 Windows rollout gates landed separately from the three release slices: atomic
 first-time bootstrap, and a PhaseLock-style idle budget that refreshes normal
-lock retries only while other connections are observably committing.
+lock retries only while other connections are observably committing, plus
+stop-aware PhaseLock and connection-setup waits so watcher shutdown does not
+inherit the full bootstrap timeout.
 
 ## Verified Current State
 
@@ -245,7 +247,8 @@ bump into a mandatory release of all three packages.
 ## Non-Goals
 
 - no runtime behavior changes beyond the separately identified SQLite
-  bootstrap atomicity and progress-aware lock-retry correctness fixes
+  bootstrap atomicity, progress-aware lock retries, and stop-aware watcher
+  bootstrap cancellation fixes
 - no test serialization or wider timing budgets
 - no PR approval requirement
 - no release reviewer requirement
@@ -1306,8 +1309,8 @@ There is no rollback that reuses the version or tag.
     packaging, CodeQL, Scorecard, and fuzz gates pass on the combined `main` SHA.
 24. The release-hardening slices change no public queue, watcher, or backend
     API. The separate SQLite runtime prerequisites are limited to atomic
-    first-time bootstrap and progress-aware lock retries, with the Windows
-    concurrency detectors left intact.
+    first-time bootstrap, progress-aware lock retries, and stop-aware watcher
+    bootstrap cancellation, with the Windows concurrency detectors left intact.
 
 ## Completion Evidence
 
@@ -1317,7 +1320,7 @@ from YAML or local tests alone.
 | Slice | Status | Evidence |
 |---|---|---|
 | Baseline captured | Complete | `7311c278`; stale extension locks, live CI resolution, movable tags, open Actions policy, and mutable releases recorded above |
-| SQLite rollout prerequisites | Complete | Atomic bootstrap in PR #54; elapsed retry baseline in PR #55; forward-progress refresh in `bac886c3`; unchanged Windows detectors pass in run `29284078540` |
+| SQLite rollout prerequisites | In progress | Atomic bootstrap in PR #54; elapsed retry baseline in PR #55; forward-progress refresh in `bac886c3`; stop-aware watcher bootstrap cancellation is locally green and awaits exact-SHA Windows CI |
 | PR A: reproducible builds | Complete | PR #53, merged as `91ad0eae`; combined Test run `29284078540` and Fuzz run `29284100824` |
 | uv bump automation | Complete | `bin/bump_uv.py --check`, updater unit tests, and portable dry-run coverage pass |
 | Locks current | Complete | Root, Postgres, and Redis `uv lock --check` gates pass in run `29284078540` |
@@ -1362,4 +1365,6 @@ from YAML or local tests alone.
 - Can Codecov availability override the local 85% coverage result?
 - Did any change weaken PyPI Trusted Publishing, add a PyPI token, or replace
   Codecov's existing repository-secret authentication?
-- Did any change alter contention, timing, queue, watcher, or backend behavior?
+- Did any change alter contention, timing, queue, watcher, or backend behavior
+  outside the three recorded SQLite prerequisites, or weaken the Windows
+  detectors?

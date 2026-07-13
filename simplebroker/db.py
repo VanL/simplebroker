@@ -780,11 +780,11 @@ class BrokerCore:
 
         # Ensure backend-wide connection setup (for example SQLite WAL mode)
         # runs for all core paths, not only BrokerDB.
-        self._runner.setup(SetupPhase.CONNECTION)
+        self._setup_runner_phase(SetupPhase.CONNECTION)
 
         # Setup database (must be done before creating TimestampGenerator)
         self._setup_schema()
-        self._runner.setup(SetupPhase.OPTIMIZATION)
+        self._setup_runner_phase(SetupPhase.OPTIMIZATION)
 
         # Timestamp generator (created after database setup so meta table exists)
         self._timestamp_gen = TimestampGenerator(
@@ -804,6 +804,15 @@ class BrokerCore:
         """Propagate stop event to retryable operations."""
 
         self._stop_event = stop_event or threading.Event()
+
+    def _setup_runner_phase(self, phase: SetupPhase) -> None:
+        """Run a backend setup phase with cancellation when it is supported."""
+
+        setup_with_stop_event = getattr(self._runner, "setup_with_stop_event", None)
+        if callable(setup_with_stop_event):
+            setup_with_stop_event(phase, self._stop_event)
+            return
+        self._runner.setup(phase)
 
     def _run_with_retry(self, operation: Callable[[], T], **kwargs: Any) -> T:
         """Run an operation until success or one idle contention window."""
@@ -891,6 +900,23 @@ class BrokerCore:
                 phase=SetupPhase.SCHEMA,
                 progress_budget=progress_budget,
             )
+
+        run_exclusive_setup_with_stop_event = getattr(
+            self._runner,
+            "run_exclusive_setup_with_stop_event",
+            None,
+        )
+        if callable(run_exclusive_setup_with_stop_event):
+            schema_was_initialized = bool(
+                run_exclusive_setup_with_stop_event(
+                    SetupPhase.SCHEMA,
+                    operation,
+                    self._stop_event,
+                )
+            )
+            if not schema_was_initialized:
+                self._verify_database_magic()
+            return
 
         run_exclusive_setup = getattr(self._runner, "run_exclusive_setup", None)
         if callable(run_exclusive_setup):

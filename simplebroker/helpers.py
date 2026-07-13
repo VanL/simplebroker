@@ -136,9 +136,14 @@ def _execute_with_retry(
             return False
         return _is_locked_operational_error(exc)
 
+    def stop_checked_operation() -> T:
+        if stop_event is not None and stop_event.is_set():
+            raise RetryInterrupted
+        return operation()
+
     try:
         return execute_retry(
-            operation,
+            stop_checked_operation,
             retry_on=retry_on,
             wait_gen=expo,
             wait_gen_kwargs={
@@ -309,6 +314,8 @@ def execute_setup_with_retry(
             max_elapsed=max_elapsed,
             max_retry_delay=SETUP_RETRY_MAX_DELAY,
         )
+    except StopException:
+        raise
     except OperationalError as exc:
         if progress_budget is not None:
             remaining = progress_budget.remaining()

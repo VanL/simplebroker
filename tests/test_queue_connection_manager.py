@@ -458,16 +458,20 @@ class TestQueueConnectionManager:
 
             # Track SQLiteRunner setup calls
             setup_calls = []
-            original_setup = SQLiteRunner.setup
+            original_setup = SQLiteRunner.setup_with_stop_event
 
-            def tracked_setup(self, phase):
+            def tracked_setup(self, phase, stop_event):
                 setup_calls.append((self.instance_id, phase))
-                return original_setup(self, phase)
+                return original_setup(self, phase, stop_event)
 
             # Test persistent mode first
             queue1 = None
             try:
-                with patch.object(SQLiteRunner, "setup", tracked_setup):
+                with patch.object(
+                    SQLiteRunner,
+                    "setup_with_stop_event",
+                    tracked_setup,
+                ):
                     # Create a persistent queue
                     queue1 = Queue("test", db_path=db_path, persistent=True)
 
@@ -506,7 +510,11 @@ class TestQueueConnectionManager:
             setup_calls.clear()
             queue2 = None
             try:
-                with patch.object(SQLiteRunner, "setup", tracked_setup):
+                with patch.object(
+                    SQLiteRunner,
+                    "setup_with_stop_event",
+                    tracked_setup,
+                ):
                     # Create an ephemeral queue
                     queue2 = Queue("test", db_path=db_path, persistent=False)
 

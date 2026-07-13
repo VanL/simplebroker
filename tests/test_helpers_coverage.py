@@ -107,6 +107,22 @@ def test_execute_with_retry_stops_when_sleep_is_interrupted(
         )
 
 
+def test_execute_with_retry_does_not_start_after_stop_is_requested() -> None:
+    stop_event = threading.Event()
+    stop_event.set()
+    operation_called = False
+
+    def operation() -> str:
+        nonlocal operation_called
+        operation_called = True
+        return "unexpected"
+
+    with pytest.raises(StopException, match="Retry interrupted"):
+        _execute_with_retry(operation, stop_event=stop_event)
+
+    assert not operation_called
+
+
 def test_execute_with_retry_does_not_retry_unrelated_operational_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a fixed total deadline. Commits from other connections refresh the budget,
   so sustained Windows contention cannot starve a writer while a genuinely
   stalled database still fails in bounded time.
+- Made watcher startup honor stop requests while waiting for PhaseLock and
+  retrying SQLite connection setup. Lock contention during WAL setup can no
+  longer keep a stopped watcher alive for the full bootstrap timeout.
 
 ### Changed
 - Hardened CI and releases around checked locks, frozen and cache-free builds,

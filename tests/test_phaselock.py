@@ -18,6 +18,7 @@ import simplebroker._phaselock as phaselock_module
 from simplebroker._phaselock import (
     AdvisoryFileLock,
     Phase,
+    PhaseLockCancelled,
     PhaseLockService,
     PhaseLockTimeout,
     PhaseLockUnavailable,
@@ -1314,6 +1315,64 @@ def test_no_xattr_existing_status_marker_does_not_bypass_held_lock(
     assert result.completed == ()
     assert result.skipped == ("connection-v1",)
     assert calls == []
+    assert not waiter.is_alive()
+
+
+def test_strict_lock_wait_can_be_cancelled(tmp_path: Path) -> None:
+    """Callers can stop waiting without weakening the marker barrier."""
+    target = tmp_path / "broker.db"
+    target.touch()
+    service = PhaseLockService(
+        target,
+        timeout=5.0,
+        retry_delay=0.01,
+        use_xattrs=False,
+        strict_marker_locking=True,
+    )
+    lock_held = threading.Event()
+    release_lock = threading.Event()
+    stop_waiting = threading.Event()
+    done = threading.Event()
+    errors: list[BaseException] = []
+    calls: list[str] = []
+
+    def hold_lock() -> None:
+        with service.locked():
+            lock_held.set()
+            release_lock.wait(timeout=2.0)
+
+    def wait_for_phase() -> None:
+        try:
+            service.run_phases(
+                (Phase("connection-v1", lambda: calls.append("ran")),),
+                should_cancel=stop_waiting.is_set,
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    holder = threading.Thread(target=hold_lock)
+    waiter = threading.Thread(target=wait_for_phase)
+    try:
+        holder.start()
+        assert lock_held.wait(timeout=1.0)
+        waiter.start()
+        assert not done.wait(timeout=0.1)
+
+        stop_waiting.set()
+
+        assert done.wait(timeout=1.0)
+    finally:
+        release_lock.set()
+        holder.join(timeout=1.0)
+        waiter.join(timeout=1.0)
+
+    assert len(errors) == 1
+    assert isinstance(errors[0], PhaseLockCancelled)
+    assert "cancel" in str(errors[0]).lower()
+    assert calls == []
+    assert not holder.is_alive()
     assert not waiter.is_alive()
 
 

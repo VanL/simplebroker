@@ -20,8 +20,20 @@ from typing import Any, Literal, Protocol, Self, cast
 
 from ._backends import get_configured_backend
 from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config, resolve_config
-from ._exceptions import DatabaseError, DataError, IntegrityError, OperationalError
-from ._phaselock import Phase, PhaseLockService, PhaseLockTimeout, PhaseLockUnavailable
+from ._exceptions import (
+    DatabaseError,
+    DataError,
+    IntegrityError,
+    OperationalError,
+    StopException,
+)
+from ._phaselock import (
+    Phase,
+    PhaseLockCancelled,
+    PhaseLockService,
+    PhaseLockTimeout,
+    PhaseLockUnavailable,
+)
 from .helpers import (
     SETUP_PHASE_LOCK_TIMEOUT,
     execute_setup_with_retry,
@@ -62,6 +74,10 @@ class SQLRunner(Protocol):
     - Must handle connection lifecycle (open/close)
 
     Optional hooks (probed via getattr, no-op if absent):
+    - setup_with_stop_event(phase, stop_event) -- interruptible setup for callers
+      such as watchers (probed in db.py BrokerCore construction)
+    - run_exclusive_setup_with_stop_event(phase, operation, stop_event) --
+      interruptible exclusive schema setup (probed in db.py BrokerCore setup)
     - run_exclusive_setup(phase, operation) -- serialize cross-process
       schema setup (probed in db.py BrokerCore setup, called as
       run_exclusive_setup(SetupPhase.SCHEMA, operation))
@@ -347,7 +363,10 @@ class SQLiteRunner:
         for phase in SetupPhase:
             self.is_setup_complete(phase)
 
-    def _setup_connection_phase(self) -> None:
+    def _setup_connection_phase(
+        self,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         """Setup critical connection settings including WAL mode."""
         execute_setup_with_retry(
             lambda: db_backend.setup_connection_phase(
@@ -357,6 +376,7 @@ class SQLiteRunner:
             ),
             phase=str(SetupPhase.CONNECTION.value),
             target=self._db_path,
+            stop_event=stop_event,
         )
 
     def _setup_optimization_phase(self) -> None:
@@ -542,14 +562,46 @@ class SQLiteRunner:
         completion markers and advisory lock behavior on one code path.
 
         """
-        self.run_exclusive_setup(
-            phase, lambda: self._execute_builtin_setup_phase(phase)
+        self.setup_with_stop_event(phase, None)
+
+    def setup_with_stop_event(
+        self,
+        phase: SetupPhase,
+        stop_event: threading.Event | None,
+    ) -> None:
+        """Run setup while allowing a caller's stop event to cancel waits."""
+
+        self.run_exclusive_setup_with_stop_event(
+            phase,
+            lambda: self._execute_builtin_setup_phase(phase, stop_event),
+            stop_event,
         )
 
     def run_exclusive_setup(
         self,
         phase: SetupPhase,
         operation: Callable[[], None],
+    ) -> bool:
+        """Run setup once under the phase lock without caller cancellation."""
+
+        return self._run_exclusive_setup(phase, operation, stop_event=None)
+
+    def run_exclusive_setup_with_stop_event(
+        self,
+        phase: SetupPhase,
+        operation: Callable[[], None],
+        stop_event: threading.Event | None,
+    ) -> bool:
+        """Run setup once while allowing lock waits to be cancelled."""
+
+        return self._run_exclusive_setup(phase, operation, stop_event=stop_event)
+
+    def _run_exclusive_setup(
+        self,
+        phase: SetupPhase,
+        operation: Callable[[], None],
+        *,
+        stop_event: threading.Event | None,
     ) -> bool:
         """Run a setup operation once under the phase's cross-process lock.
 
@@ -580,7 +632,12 @@ class SQLiteRunner:
                 ran = True
 
         try:
-            result = service.run_phases((Phase(phase_name, guarded_operation),))
+            result = service.run_phases(
+                (Phase(phase_name, guarded_operation),),
+                should_cancel=stop_event.is_set if stop_event is not None else None,
+            )
+        except PhaseLockCancelled as exc:
+            raise StopException("Retry interrupted by stop event") from exc
         except (PhaseLockTimeout, PhaseLockUnavailable) as exc:
             raise OperationalError(str(exc)) from exc
 
@@ -612,10 +669,14 @@ class SQLiteRunner:
             return f"schema-v{SCHEMA_VERSION}"
         return str(phase.value)
 
-    def _execute_builtin_setup_phase(self, phase: SetupPhase) -> None:
+    def _execute_builtin_setup_phase(
+        self,
+        phase: SetupPhase,
+        stop_event: threading.Event | None = None,
+    ) -> None:
         """Execute a built-in SQLite setup phase."""
         if phase == SetupPhase.CONNECTION:
-            self._setup_connection_phase()
+            self._setup_connection_phase(stop_event)
         elif phase == SetupPhase.OPTIMIZATION:
             self._setup_optimization_phase()
 
