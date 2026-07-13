@@ -50,17 +50,52 @@ def _build_retry_stop(
     *,
     max_retries: int | None,
     max_elapsed: float | None,
+    progress_token: Callable[[], object | None] | None = None,
 ) -> Stop:
     stops: list[Stop] = []
     if max_retries is not None:
         stops.append(stop_after_attempt(max_retries))
     if max_elapsed is not None:
-        stops.append(stop_after_delay(max_elapsed))
+        if progress_token is None:
+            stops.append(stop_after_delay(max_elapsed))
+        else:
+            stops.append(_StopAfterProgressStall(max_elapsed, progress_token))
     if not stops:
         return stop_never()
     if len(stops) == 1:
         return stops[0]
     return stop_any(*stops)
+
+
+class _StopAfterProgressStall(Stop):
+    """Stop after one idle window without a changed external progress token."""
+
+    def __init__(
+        self,
+        idle_timeout: float,
+        progress_token: Callable[[], object | None],
+    ) -> None:
+        self.idle_timeout = idle_timeout
+        self._progress_token = progress_token
+        self._last_progress_elapsed = 0.0
+        self._observed_token: object | None = None
+        self._has_observed_token = False
+
+    def _observe_progress(self, *, elapsed: float) -> None:
+        try:
+            token = self._progress_token()
+        except Exception:
+            return
+        if token is None:
+            return
+        if self._has_observed_token and token != self._observed_token:
+            self._last_progress_elapsed = elapsed
+        self._observed_token = token
+        self._has_observed_token = True
+
+    def __call__(self, state: RetryState) -> bool:
+        self._observe_progress(elapsed=state.elapsed)
+        return state.elapsed - self._last_progress_elapsed >= self.idle_timeout
 
 
 def _execute_with_retry(
@@ -71,6 +106,7 @@ def _execute_with_retry(
     stop_event: threading.Event | None = None,
     max_elapsed: float | None = None,
     max_retry_delay: float | None = None,
+    progress_token: Callable[[], object | None] | None = None,
 ) -> T:
     """Execute a database operation with retry logic for locked database errors.
 
@@ -82,6 +118,9 @@ def _execute_with_retry(
         stop_event: Optional threading.Event that can interrupt the retry loop
         max_elapsed: Optional elapsed-time retry budget in seconds
         max_retry_delay: Optional cap for each retry sleep
+        progress_token: Optional external progress marker. When it changes,
+            max_elapsed is treated as an idle timeout instead of a fixed
+            wall-clock deadline.
 
     Returns:
         The result of the operation
@@ -111,8 +150,12 @@ def _execute_with_retry(
             stop=_build_retry_stop(
                 max_retries=max_retries,
                 max_elapsed=max_elapsed,
+                progress_token=progress_token,
             ),
-            max_delay=max_elapsed,
+            # execute_retry's max_delay is a fixed total-runtime clamp. A
+            # progress-aware stop owns the deadline instead so forward motion
+            # can refresh the idle window.
+            max_delay=max_elapsed if progress_token is None else None,
             sleep=interruptible_sleep,
             stop_event=stop_event,
         )

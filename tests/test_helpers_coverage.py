@@ -154,6 +154,102 @@ def test_execute_with_retry_uses_elapsed_budget(
     assert monotonic_time <= 0.15
 
 
+def test_execute_with_retry_refreshes_idle_budget_on_external_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slow forward progress must outlive one fixed elapsed window."""
+
+    monotonic_time = 0.0
+    attempts = 0
+
+    def fake_monotonic() -> float:
+        return monotonic_time
+
+    def fake_sleep(wait: float, stop_event=None) -> bool:
+        nonlocal monotonic_time
+        monotonic_time += wait
+        return True
+
+    def operation() -> str:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 5:
+            raise OperationalError("database is locked")
+        return "ok"
+
+    monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+    monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+    monkeypatch.setattr(helpers, "bounded_jitter", lambda wait: wait)
+
+    assert (
+        _execute_with_retry(
+            operation,
+            max_retries=None,
+            retry_delay=0.1,
+            max_retry_delay=0.1,
+            max_elapsed=0.15,
+            progress_token=lambda: attempts // 2,
+        )
+        == "ok"
+    )
+    assert attempts == 5
+    assert monotonic_time > 0.15
+
+
+def test_execute_with_retry_does_not_probe_progress_without_contention() -> None:
+    """The forward-progress detector must not tax the uncontended fast path."""
+
+    progress_probes = 0
+
+    def progress_token() -> int:
+        nonlocal progress_probes
+        progress_probes += 1
+        return 1
+
+    assert (
+        _execute_with_retry(
+            lambda: "ok",
+            max_retries=None,
+            max_elapsed=0.15,
+            progress_token=progress_token,
+        )
+        == "ok"
+    )
+    assert progress_probes == 0
+
+
+def test_execute_with_retry_progress_budget_still_stops_when_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stable progress token must not turn retries into an infinite wait."""
+
+    monotonic_time = 0.0
+
+    def fake_monotonic() -> float:
+        return monotonic_time
+
+    def fake_sleep(wait: float, stop_event=None) -> bool:
+        nonlocal monotonic_time
+        monotonic_time += wait
+        return True
+
+    monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+    monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+    monkeypatch.setattr(helpers, "bounded_jitter", lambda wait: wait)
+
+    with pytest.raises(OperationalError, match="database is locked"):
+        _execute_with_retry(
+            lambda: (_ for _ in ()).throw(OperationalError("database is locked")),
+            max_retries=None,
+            retry_delay=0.1,
+            max_retry_delay=0.1,
+            max_elapsed=0.15,
+            progress_token=lambda: 7,
+        )
+
+    assert 0.15 <= monotonic_time <= 0.25
+
+
 def test_execute_with_retry_elapsed_budget_still_honors_stop_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

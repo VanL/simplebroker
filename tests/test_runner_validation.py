@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -48,6 +49,36 @@ class _TransientWriteLockRunner(SQLiteRunner):
         if self.write_begin_attempts > 0:
             self.write_begin_attempts += 1
         super().begin_immediate()
+
+
+class _ForwardProgressWriteLockRunner(_TransientWriteLockRunner):
+    """Report another connection's commits during injected lock contention."""
+
+    def __init__(self, db_path: str) -> None:
+        super().__init__(db_path)
+        self.external_data_version = 0
+
+    def begin_immediate(self) -> None:
+        if self.write_lock_failures_remaining > 0:
+            self.write_lock_failures_remaining -= 1
+            self.write_begin_attempts += 1
+            if self.write_begin_attempts % 2 == 0:
+                self.external_data_version += 1
+            raise OperationalError("database is locked")
+        if self.write_begin_attempts > 0:
+            self.write_begin_attempts += 1
+        SQLiteRunner.begin_immediate(self)
+
+    def run(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+        *,
+        fetch: bool = False,
+    ) -> Iterable[tuple[Any, ...]]:
+        if " ".join(sql.split()).upper() == "PRAGMA DATA_VERSION":
+            return [(self.external_data_version,)]
+        return super().run(sql, params, fetch=fetch)
 
 
 def _force_status_sidecars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -307,7 +338,7 @@ class TestSQLiteRunnerValidation:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Persistent contention must still fail at the wall-clock deadline."""
+        """Persistent contention must still fail after one idle window."""
 
         monotonic_time = 0.0
 
@@ -331,7 +362,41 @@ class TestSQLiteRunnerValidation:
                 core.write("q", "message")
 
             assert runner.write_begin_attempts > 10
-            assert monotonic_time == pytest.approx(30.0)
+            assert 30.0 <= monotonic_time <= 30.25
+        finally:
+            runner.close()
+
+    @pytest.mark.sqlite_only
+    def test_normal_write_refreshes_idle_budget_while_other_writers_progress(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Observed commits keep a contended writer alive past one idle window."""
+
+        monotonic_time = 0.0
+
+        def fake_monotonic() -> float:
+            return monotonic_time
+
+        def fake_sleep(wait: float, stop_event=None) -> bool:
+            nonlocal monotonic_time
+            monotonic_time += wait
+            return True
+
+        monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+        monkeypatch.setattr(helpers_module, "interruptible_sleep", fake_sleep)
+        monkeypatch.setattr(helpers_module, "bounded_jitter", lambda wait: wait)
+        monkeypatch.setattr("simplebroker.db.OPERATION_RETRY_MAX_ELAPSED", 0.15)
+        monkeypatch.setattr("simplebroker.db.OPERATION_RETRY_MAX_DELAY", 0.1)
+        runner = _ForwardProgressWriteLockRunner(str(tmp_path / "broker.db"))
+        core = BrokerCore(runner)
+        runner.write_lock_failures_remaining = 4
+
+        try:
+            assert core.write("q", "message") > 0
+            assert runner.write_begin_attempts == 5
+            assert monotonic_time > 0.15
         finally:
             runner.close()
 

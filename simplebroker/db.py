@@ -806,12 +806,13 @@ class BrokerCore:
         self._stop_event = stop_event or threading.Event()
 
     def _run_with_retry(self, operation: Callable[[], T], **kwargs: Any) -> T:
-        """Run a normal operation with bounded, stop-aware lock retries."""
+        """Run an operation until success or one idle contention window."""
 
         kwargs.setdefault("stop_event", self._stop_event)
         kwargs.setdefault("max_retries", None)
         kwargs.setdefault("max_elapsed", OPERATION_RETRY_MAX_ELAPSED)
         kwargs.setdefault("max_retry_delay", OPERATION_RETRY_MAX_DELAY)
+        kwargs.setdefault("progress_token", self._operation_progress_token)
 
         def stop_checked_operation() -> T:
             if self._stop_event.is_set():
@@ -819,6 +820,11 @@ class BrokerCore:
             return operation()
 
         return _execute_with_retry(stop_checked_operation, **kwargs)
+
+    def _operation_progress_token(self) -> object | None:
+        """Return SQLite's external-commit counter when the backend has one."""
+
+        return self._backend_plugin.get_data_version(self._runner)
 
     def _run_setup_with_retry(
         self,
