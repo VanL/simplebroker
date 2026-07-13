@@ -25,6 +25,7 @@ jobs:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
     - name: Set up Python ${{ matrix.python-version }}
+      id: matrix-python
       uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
       with:
         python-version: ${{ matrix.python-version }}
@@ -41,7 +42,11 @@ jobs:
           extensions/simplebroker_pg/uv.lock
 
     - name: Install dependencies
-      run: uv sync --frozen --extra dev --extra pg
+      run: uv sync --frozen --extra dev --extra pg --python "${{ steps.matrix-python.outputs.python-path }}"
+
+    - name: Verify matrix Python
+      run: |
+        uv run --frozen --no-sync python -c "import sys; expected = tuple(map(int, '${{ matrix.python-version }}'.split('.'))); assert sys.version_info[:2] == expected, (sys.version, expected)"
 
     - name: Run PG-backed test suites
       run: |
@@ -53,6 +58,7 @@ jobs:
     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
     - name: Set up Python
+      id: sync-python
       uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
       with:
         python-version: "3.12"
@@ -69,7 +75,7 @@ jobs:
           extensions/simplebroker_pg/uv.lock
 
     - name: Install dependencies
-      run: uv sync --frozen --extra dev --extra pg
+      run: uv sync --frozen --extra dev --extra pg --python "${{ steps.sync-python.outputs.python-path }}"
 
     - name: Run extension linting with ruff
       run: |

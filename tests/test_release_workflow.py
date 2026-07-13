@@ -148,6 +148,46 @@ def test_test_workflows_sync_once_and_only_run_the_frozen_environment() -> None:
                 assert command.startswith("uv run --frozen --no-sync ")
 
 
+def test_test_matrices_run_on_the_declared_python_version() -> None:
+    matrix_sections = {
+        "test.yml": _workflow_text("test.yml")
+        .split("  test:", 1)[1]
+        .split("  lint:", 1)[0],
+        "test-pg-extension.yml": _workflow_text("test-pg-extension.yml")
+        .split("  test-pg:", 1)[1]
+        .split("  lint:", 1)[0],
+        "test-redis-extension.yml": _workflow_text("test-redis-extension.yml")
+        .split("  test-redis:", 1)[1]
+        .split("  lint:", 1)[0],
+    }
+
+    for workflow_path, matrix_section in matrix_sections.items():
+        assert "id: matrix-python" in matrix_section, workflow_path
+        assert (
+            '--python "${{ steps.matrix-python.outputs.python-path }}"'
+            in matrix_section
+        ), workflow_path
+        assert "name: Verify matrix Python" in matrix_section, workflow_path
+        assert "sys.version_info[:2] == expected" in matrix_section, workflow_path
+
+
+def test_every_workflow_sync_uses_the_setup_python_executable() -> None:
+    python_option = re.compile(
+        r'--python "\$\{\{ steps\.(?:matrix-python|sync-python)'
+        r"\.outputs\.python-path \}\}"
+    )
+
+    for workflow_path in UV_WORKFLOWS:
+        sync_commands = [
+            line.strip()
+            for line in _workflow_text(workflow_path).splitlines()
+            if "uv sync " in line
+        ]
+        assert sync_commands, workflow_path
+        for sync_command in sync_commands:
+            assert python_option.search(sync_command), (workflow_path, sync_command)
+
+
 def test_release_builds_use_the_exact_locked_frontend_without_a_cache() -> None:
     for workflow_path in RELEASE_WORKFLOWS:
         workflow_text = _workflow_text(workflow_path)

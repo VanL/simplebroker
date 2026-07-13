@@ -28,6 +28,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up Python
+        id: sync-python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           # Pinned below latest: Atheris wheels lag the newest CPython.
@@ -43,7 +44,7 @@ jobs:
             uv.lock
 
       - name: Install
-        run: uv sync --frozen --extra dev --group fuzz
+        run: uv sync --frozen --extra dev --group fuzz --python "${{ steps.sync-python.outputs.python-path }}"
 
       - name: Restore corpus
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
