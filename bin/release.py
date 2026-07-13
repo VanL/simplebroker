@@ -82,6 +82,16 @@ REDIS_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
 ALL_RELEASE_TARGET_KEY: Final[str] = "all"
 RELEASE_TAG_RULESET_NAME: Final[str] = "Protect release tags"
+ACTIONS_ALLOWED_PATTERNS: Final[frozenset[str]] = frozenset(
+    {
+        "astral-sh/setup-uv@*",
+        "codecov/codecov-action@*",
+        "dependabot/fetch-metadata@*",
+        "ossf/scorecard-action@*",
+        "pypa/gh-action-pypi-publish@*",
+        "softprops/action-gh-release@*",
+    }
+)
 RELEASE_TAG_PATTERNS: Final[frozenset[str]] = frozenset(
     {
         "refs/tags/v*",
@@ -825,8 +835,11 @@ def _example_mypy_paths() -> tuple[str, ...]:
     )
 
 
-def _examples_mypy_command() -> tuple[str, ...]:
-    return _mypy_command(_example_mypy_paths())
+def _examples_mypy_command(*, frozen: bool = False) -> tuple[str, ...]:
+    command = _mypy_command(_example_mypy_paths())
+    if not frozen:
+        return command
+    return (*command[:2], "--frozen", "--no-sync", *command[2:])
 
 
 def _example_shell_paths() -> tuple[str, ...]:
@@ -1386,11 +1399,56 @@ def repository_settings_issues(repo_slug: str, token: str) -> tuple[str, ...]:
         issues=issues,
     )
     actions_mapping = _json_mapping(actions)
-    if actions is not None and (
-        actions_mapping is None
-        or actions_mapping.get("sha_pinning_required") is not True
+    if actions is not None:
+        if (
+            actions_mapping is None
+            or actions_mapping.get("allowed_actions") != "selected"
+        ):
+            issues.append("Actions must allow selected actions only")
+        if (
+            actions_mapping is None
+            or actions_mapping.get("sha_pinning_required") is not True
+        ):
+            issues.append("Actions SHA pinning must require full commit SHAs")
+
+    selected_actions = None
+    if (
+        actions_mapping is not None
+        and actions_mapping.get("allowed_actions") == "selected"
     ):
-        issues.append("Actions SHA pinning must require full commit SHAs")
+        selected_actions = _setting_payload(
+            label="selected Actions policy",
+            path=f"{base}/actions/permissions/selected-actions",
+            token=token,
+            issues=issues,
+        )
+    selected_actions_mapping = _json_mapping(selected_actions)
+    if selected_actions is not None and (
+        selected_actions_mapping is None
+        or selected_actions_mapping.get("verified_allowed") is not False
+    ):
+        issues.append("Actions must not allow all verified publishers")
+    if selected_actions is not None and (
+        selected_actions_mapping is None
+        or selected_actions_mapping.get("github_owned_allowed") is not True
+    ):
+        issues.append("Actions must allow GitHub-owned actions")
+    raw_action_patterns = (
+        selected_actions_mapping.get("patterns_allowed")
+        if selected_actions_mapping is not None
+        else None
+    )
+    observed_action_patterns = (
+        {pattern for pattern in raw_action_patterns if isinstance(pattern, str)}
+        if isinstance(raw_action_patterns, list)
+        else set()
+    )
+    if selected_actions is not None and (
+        not isinstance(raw_action_patterns, list)
+        or len(raw_action_patterns) != len(ACTIONS_ALLOWED_PATTERNS)
+        or observed_action_patterns != set(ACTIONS_ALLOWED_PATTERNS)
+    ):
+        issues.append("Actions must use the exact six third-party action patterns")
 
     environment = _setting_payload(
         label="pypi environment policy",
@@ -1536,7 +1594,7 @@ def require_repository_settings() -> None:
     print("repository setting ok: immutable releases enabled")
     print("repository setting ok: release tags are write-once")
     print("repository setting ok: pypi accepts only release tags")
-    print("repository setting ok: Actions require full SHA pinning")
+    print("repository setting ok: Actions use the exact allowlist and full SHAs")
 
 
 def _url_exists(url: str) -> bool:
@@ -2037,6 +2095,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Read and verify release-related GitHub repository settings",
     )
     parser.add_argument(
+        "--check-example-types",
+        action="store_true",
+        help="Type-check the maintained Python examples and exit",
+    )
+    parser.add_argument(
         "--check-shell-examples",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -2220,6 +2283,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.check_shell_examples:
         return run_shellcheck_examples()
+    if args.check_example_types:
+        run_command(_examples_mypy_command(frozen=True))
+        return 0
     if args.check_repository_settings:
         require_repository_settings()
         return 0

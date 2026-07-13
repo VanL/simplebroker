@@ -43,6 +43,32 @@ def test_codeql_actions_use_one_full_sha() -> None:
     assert len(set(references)) == 1
 
 
+def test_third_party_action_inventory_matches_the_selected_policy() -> None:
+    repositories: set[str] = set()
+    for workflow_path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        workflow_text = workflow_path.read_text(encoding="utf-8")
+        for reference in re.findall(r"(?m)^\s*uses:\s*([^\s#]+)", workflow_text):
+            if reference.startswith("./"):
+                continue
+            match = re.fullmatch(r"([^@\s]+)@[0-9a-f]{40}", reference)
+            assert match is not None, f"mutable action reference: {reference}"
+            repositories.add(match.group(1))
+
+    third_party_patterns = {
+        f"{repository}@*"
+        for repository in repositories
+        if repository.split("/", maxsplit=1)[0] not in {"actions", "github"}
+    }
+    assert third_party_patterns == {
+        "astral-sh/setup-uv@*",
+        "codecov/codecov-action@*",
+        "dependabot/fetch-metadata@*",
+        "ossf/scorecard-action@*",
+        "pypa/gh-action-pypi-publish@*",
+        "softprops/action-gh-release@*",
+    }
+
+
 def test_scorecard_can_be_dispatched_for_fresh_default_branch_evidence() -> None:
     workflow_text = _workflow_text("scorecard.yml")
 
@@ -163,6 +189,20 @@ def test_packaging_workflow_has_no_redundant_pip_install() -> None:
 
     assert "pip install" not in packaging_section
     assert "./bin/packaging-smoke --python 3.11" in packaging_section
+
+
+def test_python_examples_run_in_the_frozen_lint_environment() -> None:
+    workflow_text = _workflow_text("test.yml")
+    lint_section = workflow_text.split("  lint:", 1)[1].split("  packaging:", 1)[0]
+
+    pytest_command = "uv run --frozen --no-sync pytest -n auto examples"
+    mypy_command = (
+        "uv run --frozen --no-sync python bin/release.py --check-example-types"
+    )
+    assert pytest_command in lint_section
+    assert mypy_command in lint_section
+    assert lint_section.index("uv sync --frozen") < lint_section.index(pytest_command)
+    assert lint_section.index(pytest_command) < lint_section.index(mypy_command)
 
 
 def test_dependabot_merges_only_after_required_workflows_are_green() -> None:
@@ -381,3 +421,33 @@ def test_coverage_workflow_runs_backend_helpers_before_upload() -> None:
     assert coverage_section.index("./bin/pytest-redis --fast") < coverage_section.index(
         "combine_coverage.py"
     )
+
+
+def test_codecov_keeps_secret_auth_and_reports_nonblocking_failures() -> None:
+    workflow_text = _workflow_text("test.yml")
+    coverage_job = workflow_text.split("  coverage:", 1)[1]
+    upload_step = coverage_job.split("    - name: Upload coverage reports", 1)[1]
+
+    assert "id-token: write" not in coverage_job
+    assert "use_oidc:" not in coverage_job
+    assert "        token: ${{ secrets.CODECOV_TOKEN }}" in upload_step
+    assert "      id: codecov" in upload_step
+    assert "      continue-on-error: true" in upload_step
+    assert "        fail_ci_if_error: true" in upload_step
+    assert "if: steps.codecov.outcome == 'failure'" in upload_step
+    assert "::warning::Codecov upload failed" in upload_step
+
+
+def test_coverage_report_enforces_the_local_floor() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert pyproject["tool"]["coverage"]["report"]["fail_under"] == 85
+
+
+def test_coverage_floor_runs_only_after_all_partial_data_is_combined() -> None:
+    workflow_text = _workflow_text("test.yml")
+    coverage_section = workflow_text.split("- name: Run tests with coverage", 1)[1]
+    coverage_section = coverage_section.split("- name: Upload coverage reports", 1)[0]
+
+    assert coverage_section.count("--cov-fail-under=0") == 3
+    assert "coverage report --show-missing" in coverage_section

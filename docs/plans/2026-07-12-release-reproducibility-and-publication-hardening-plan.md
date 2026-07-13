@@ -12,7 +12,8 @@ This document is the implementation plan for two linked improvements:
 It also includes three small, high-value follow-ups discovered during the same
 review:
 
-- authenticate Codecov uploads with OIDC and fail visibly when upload fails
+- retain Codecov repository-secret authentication, make upload failures visible,
+  and enforce a local coverage floor
 - enforce the repository's existing full-SHA Actions convention in GitHub
   settings
 - run the already-maintained Python examples in normal CI
@@ -29,8 +30,9 @@ Revised 2026-07-13 after solo-maintainer burden review: final release tags are
 created only after exact-SHA CI is green, uv version changes use a checked-in
 maintenance command, publication-state logic is shared outside the three
 trusted-publisher workflow files, rollout is split into three reviewable PRs,
-and Codecov failures remain visible without making a reporting-service outage
-block otherwise-green CI. The earlier bounded (not exact) Hatchling decision,
+and Codecov keeps its existing `CODECOV_TOKEN` authentication while upload
+failures remain visible without making a reporting-service outage block
+otherwise-green CI. The earlier bounded (not exact) Hatchling decision,
 delete-and-recreate draft idempotency, PyPI lag budget, closed-list
 `--frozen --no-sync` invariant, example-mypy helper flag, and 85% local
 coverage floor remain.
@@ -208,11 +210,11 @@ bump into a mandatory release of all three packages.
 - Do not add `actions/cache` to a release workflow.
 - Normal test and fuzz workflows may continue using caches.
 
-### Codecov uses OIDC
+### Codecov keeps repository-secret authentication
 
-- Give only the coverage job `id-token: write` plus `contents: read`.
-- Set `use_oidc: true`.
-- Remove the unused `CODECOV_TOKEN` input.
+- Keep the existing `token: ${{ secrets.CODECOV_TOKEN }}` input. Do not add
+  `id-token: write` or `use_oidc`; changing Codecov authentication is out of
+  scope.
 - Set `fail_ci_if_error: true` on the Codecov action so the upload step records
   an accurate failure, but set `continue-on-error: true` on that step and emit
   an explicit workflow warning when `steps.codecov.outcome == 'failure'`.
@@ -263,7 +265,7 @@ bump into a mandatory release of all three packages.
 | `extensions/simplebroker_pg/uv.lock` | PG-local lock | Regenerate and prove current |
 | `extensions/simplebroker_redis/pyproject.toml` | Redis build metadata | Bound Hatchling build requirement to `>=1.31,<2` |
 | `extensions/simplebroker_redis/uv.lock` | Redis-local lock | Regenerate and prove current |
-| `.github/workflows/test.yml` | Main matrix, lint, packaging, coverage | Frozen sync/run, lock job, examples, Codecov OIDC |
+| `.github/workflows/test.yml` | Main matrix, lint, packaging, coverage | Frozen sync/run, lock job, examples, local coverage floor, and visible secret-auth Codecov failures |
 | `.github/workflows/test-pg-extension.yml` | PG service and extension gates | Frozen root environment and explicit uv version |
 | `.github/workflows/test-redis-extension.yml` | Redis service and extension gates | Frozen root environment and explicit uv version |
 | `.github/workflows/release-gate.yml` | Core publication | Cache-free locked build and draft-first immutable release flow |
@@ -274,9 +276,9 @@ bump into a mandatory release of all three packages.
 | `simplebroker/_scripts.py` | PG test and packaging developer helpers | Replace live editable/build overlays with locked root-project invocations; no broker runtime semantics change |
 | `bin/pytest-redis` | Redis service-test helper | Replace live editable overlay with locked root-project invocation |
 | `bin/release.py` | Maintainer preflight, release commit, CI wait, tag creation, release checks | Remove remote retagging, require exact-SHA CI on `main` before the tag push, add fail-closed repository-settings verification, and expose `--check-example-types` |
-| `.github/scripts/require_green_workflows.py` | Existing exact-SHA workflow poller | Reuse from the local release helper before tag creation; preserve the post-tag workflow check as defense in depth |
+| `.github/scripts/require_green_workflows.py` | Existing exact-SHA workflow poller | Reuse from the local release helper before tag creation, preserve the post-tag workflow check as defense in depth, and keep JSON integer narrowing type-clean under the locked mypy version |
 | `.github/scripts/release_publication.py` | Shared GitHub Release state machine | Discover/delete matching drafts, verify expected tag/SHA/assets, publish drafts, and handle exact already-published reruns plus PyPI lag |
-| `tests/test_release_workflow.py` | Workflow structure regressions | Add lock, build, draft, OIDC, and pin-policy assertions |
+| `tests/test_release_workflow.py` | Workflow structure regressions | Add lock, build, draft, coverage, Codecov secret-auth, and pin-policy assertions |
 | `tests/test_release_script.py` | Release helper regressions | Add immutable-tag and repository-setting tests |
 | `tests/test_release_publication_script.py` | Shared publication-state regressions | Cover draft replacement, mismatched state, publication, and exact rerun behavior without duplicating API logic in YAML |
 | `tests/test_bump_uv.py` | uv maintenance regressions | Cover atomic updates, check/dry-run behavior, unknown workflow shapes, and command failures |
@@ -302,8 +304,8 @@ bump into a mandatory release of all three packages.
   <https://docs.github.com/en/rest/actions/permissions>
 - uv lock checking and frozen sync:
   <https://docs.astral.sh/uv/concepts/projects/sync/>
-- Codecov OIDC:
-  <https://github.com/codecov/codecov-action#using-oidc>
+- Codecov action configuration:
+  <https://github.com/codecov/codecov-action>
 
 ## Engineering Rules
 
@@ -842,7 +844,7 @@ graphs; do not create a real release tag merely to test this slice.
 
 ## Task 4: Apply the Quick Wins
 
-### 4.1 Codecov OIDC and local coverage floor
+### 4.1 Codecov visibility and local coverage floor
 
 Files:
 
@@ -852,14 +854,16 @@ Files:
 
 Tests first:
 
-- coverage job has job-scoped `contents: read` and `id-token: write`
-- Codecov uses `use_oidc: true`
-- `CODECOV_TOKEN` is absent
+- Codecov keeps `token: ${{ secrets.CODECOV_TOKEN }}`
+- `use_oidc` and job-scoped `id-token: write` are absent
 - the Codecov step has an `id`, uses `fail_ci_if_error: true`, and is marked
   `continue-on-error: true`
 - a following step runs only when the Codecov step's `outcome` is `failure`
   and emits an explicit GitHub workflow warning
 - coverage configuration contains `fail_under = 85`
+- each of the three partial pytest-cov collection commands uses
+  `--cov-fail-under=0`; only the final combined `coverage report` applies the
+  85% floor
 
 Gate:
 
@@ -872,9 +876,11 @@ uv run pytest -q -n "$PYTEST_WORKERS" tests/test_release_workflow.py \
 This focused gate proves the workflow and configuration shape without assuming
 that a `.coverage` data file already exists. Task 5 must run the real coverage
 job, including `coverage report --show-missing`, to prove the current combined
-coverage remains at least 85% (measured 92.4% on 2026-07-12). The initial OIDC
-rollout is not complete until one PR or `main` upload succeeds, but an external
-Codecov outage does not make otherwise-green code unmergeable.
+coverage remains at least 85% (measured 92.4% on 2026-07-12). The interim zero
+overrides prevent incomplete core/extension datasets from being judged before
+they are combined; they do not weaken the final report. Codecov keeps
+the existing repository-secret authentication. An external Codecov outage does
+not make otherwise-green code unmergeable.
 
 ### 4.2 Python examples in normal CI
 
@@ -917,14 +923,24 @@ Desired repository policy:
 The allowlist identifies approved action repositories; the separate SHA policy
 ensures every actual reference remains immutable.
 
+### 4.4 Keep the exact-SHA poller type-clean
+
+The documented final mypy command includes
+`.github/scripts/require_green_workflows.py`. Narrow GitHub JSON integer values
+to the scalar types accepted by `int()` before conversion instead of carrying a
+stale `type: ignore`. Preserve the existing default behavior for missing or
+invalid fields and cover string IDs plus invalid run attempts through
+`WorkflowRun.from_api`. This is a type-gate cleanup only; it does not change
+valid GitHub API handling or workflow selection.
+
 ### PR C gate
 
 Open PR C with Task 4 only. Require Test and CodeQL on the PR head. Confirm the
-local 85% coverage command is a hard gate, the Codecov OIDC attempt is visible,
-and the example pytest/mypy commands run from the frozen environment. If the
-Codecov service itself is unavailable, the PR may merge after the explicit
-warning path is observed and local coverage passes; keep the Codecov evidence
-row pending until a later authenticated upload succeeds.
+local 85% coverage command is a hard gate, the repository-secret Codecov upload
+attempt is visible, and the example pytest/mypy commands run from the frozen
+environment. If the Codecov service itself is unavailable, the PR may merge
+after the explicit warning path is observed and local coverage passes; keep the
+Codecov evidence row pending until a later authenticated upload succeeds.
 
 ## Task 5: Verify the Three Merged Slices Together
 
@@ -944,9 +960,10 @@ row pending until a later authenticated upload succeeds.
    merged `main` SHA because lock and uv behavior changed.
 4. Confirm both 15-minute fuzz harnesses pass.
 5. Confirm packaging smoke prints exact locked build-tool versions.
-6. Confirm at least one PR or `main` Codecov upload succeeds through OIDC. If
-   Codecov is externally unavailable, do not block merging otherwise-green
-   slices; leave rollout evidence pending and capture the warning-bearing run.
+6. Confirm at least one PR or `main` Codecov upload succeeds with the existing
+   repository secret. If Codecov is externally unavailable, do not block
+   merging otherwise-green slices; leave evidence pending and capture the
+   warning-bearing run.
 7. Confirm all three `uv lock --check` commands pass in CI.
 8. Review the final diff for runtime behavior changes. Changes to
    `simplebroker/_scripts.py` must be limited to developer/test/packaging command
@@ -1111,9 +1128,9 @@ git status --short
 - CodeQL passes with zero new alerts
 - Scorecard uploads successfully
 - both fuzz harnesses pass
-- at least one Codecov upload is authenticated with OIDC and succeeds; any
-  later upload failure is an explicit warning while the local 85% gate remains
-  hard
+- at least one Codecov upload succeeds with repository-secret authentication;
+  any later upload failure is an explicit warning while the local 85% gate
+  remains hard
 - Actions settings show selected actions plus required SHA pinning
 - `pypi` environment shows only the three tag policies
 - tag ruleset shows update/deletion restrictions and no bypass
@@ -1199,9 +1216,9 @@ There is no rollback that reuses the version or tag.
 | Final release publication fails after PyPI succeeds | PyPI version exists; draft remains | Rerun final job; do not rebuild or retag |
 | Remote tag exists at the wrong SHA | Release helper and workflow fail closed | Choose a new version; never retag |
 | Post-tag failure requires a code change | Existing tag and version remain bound to their original SHA | Commit the fix and publish a new patch version |
-| Wrong tag pattern targets `pypi` | Deployment is rejected before OIDC publish | Correct environment tag pattern; rerun |
+| Wrong tag pattern targets `pypi` | Deployment is rejected before PyPI Trusted Publishing | Correct environment tag pattern; rerun |
 | Action allowlist blocks a workflow | Workflow fails before the action starts | Add the exact action repository pattern, retain SHA enforcement |
-| Codecov OIDC or service upload fails | Upload step records failure and emits a warning; local 85% coverage gate still controls the job | Fix persistent OIDC/configuration errors; rerun opportunistically for an outage; do not add a token or block unrelated green work |
+| Codecov authentication or service upload fails | Upload step records failure and emits a warning; local 85% coverage gate still controls the job | Check the existing repository secret and Codecov configuration; rerun opportunistically for an outage; do not change authentication or block unrelated green work |
 | GitHub immutable release is published with wrong assets | Assets cannot be replaced | Publish a corrected patch release; do not weaken immutability |
 
 ## Common Wrong Turns
@@ -1232,6 +1249,8 @@ There is no rollback that reuses the version or tag.
 - Do not touch Windows timing factors or contention tests in this work.
 - Do not turn Codecov reporting availability into the hard coverage gate; the
   local 85% report is the gate and Codecov failures must be visible warnings.
+- Do not replace Codecov's repository-secret authentication with OIDC; it does
+  not improve coverage correctness or a release security boundary in this plan.
 - Do not move publication into a reusable workflow without first changing the
   PyPI trusted-publisher identities; that is explicitly out of scope.
 
@@ -1271,9 +1290,9 @@ There is no rollback that reuses the version or tag.
 18. GitHub enforces full-SHA Actions references and admits only GitHub-owned
     actions plus the six explicit third-party action repositories.
 19. Future GitHub Releases are immutable.
-20. Codecov uses OIDC and has at least one successful authenticated rollout
-    upload; later upload errors produce an explicit warning without overriding
-    the local coverage result.
+20. Codecov keeps repository-secret authentication and has at least one
+    successful upload; later upload errors produce an explicit warning without
+    overriding the local coverage result.
 21. Local combined coverage below 85% fails the coverage job independently of
     Codecov.
 22. Python examples run under normal CI.
@@ -1300,7 +1319,7 @@ from YAML or local tests alone.
 | Write-once release helper | Pending | Unit tests; no `--retag` or remote delete command; final tag created only after CI |
 | Shared draft-first release flow | Pending | Shared-script tests and all three merged job dependency graphs |
 | PR C: CI quick wins | Pending | Focused PR diff, coverage/example workflow output, and warning-path test |
-| Codecov OIDC | Pending | At least one successful authenticated PR or `main` upload URL; warning-bearing outage run if encountered |
+| Codecov secret-auth upload | Pending | At least one successful authenticated PR or `main` upload URL; warning-bearing outage run if encountered |
 | Example CI | Pending | `pytest -n auto examples` and example mypy job output |
 | Actions policy | Pending | Authenticated permissions and selected-actions readback |
 | PyPI environment policy | Pending | Environment and tag-policy readback |
@@ -1331,5 +1350,6 @@ from YAML or local tests alone.
 - Can a non-SHA action reference start in Actions?
 - Can Codecov upload fail without an explicit warning?
 - Can Codecov availability override the local 85% coverage result?
-- Did any change weaken Trusted Publishing or add a long-lived secret?
+- Did any change weaken PyPI Trusted Publishing, add a PyPI token, or replace
+  Codecov's existing repository-secret authentication?
 - Did any change alter contention, timing, queue, watcher, or backend behavior?

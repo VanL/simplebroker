@@ -61,8 +61,10 @@ def _optional_str(value: object) -> str | None:
 
 
 def _int_value(value: object, *, default: int = 0) -> int:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return default
     try:
-        return int(value)  # type: ignore[arg-type]
+        return int(value)
     except (TypeError, ValueError):
         return default
 

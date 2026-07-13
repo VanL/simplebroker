@@ -282,6 +282,35 @@ def test_shellcheck_examples_runs_when_available(
     assert commands == [("shellcheck", "examples/alpha.sh")]
 
 
+def test_check_example_types_uses_the_existing_file_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    examples = project_root / "examples"
+    examples.mkdir(parents=True)
+    (examples / "alpha.py").write_text("value: int = 1\n", encoding="utf-8")
+    commands: list[tuple[str, ...]] = []
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(release, "run_command", commands.append)
+
+    assert release.main(["--check-example-types"]) == 0
+    assert commands == [
+        (
+            "uv",
+            "run",
+            "--frozen",
+            "--no-sync",
+            "--extra",
+            "dev",
+            "mypy",
+            "examples/alpha.py",
+            "--config-file",
+            "pyproject.toml",
+        )
+    ]
+
+
 def test_extension_test_mypy_paths_discover_python_tests(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1247,7 +1276,22 @@ def test_failed_pre_tag_ci_creates_no_tag(
 def _repository_settings_payloads() -> dict[str, object]:
     return {
         "/repos/VanL/simplebroker/immutable-releases": {"enabled": True},
-        "/repos/VanL/simplebroker/actions/permissions": {"sha_pinning_required": True},
+        "/repos/VanL/simplebroker/actions/permissions": {
+            "allowed_actions": "selected",
+            "sha_pinning_required": True,
+        },
+        "/repos/VanL/simplebroker/actions/permissions/selected-actions": {
+            "github_owned_allowed": True,
+            "verified_allowed": False,
+            "patterns_allowed": [
+                "astral-sh/setup-uv@*",
+                "codecov/codecov-action@*",
+                "dependabot/fetch-metadata@*",
+                "ossf/scorecard-action@*",
+                "pypa/gh-action-pypi-publish@*",
+                "softprops/action-gh-release@*",
+            ],
+        },
         "/repos/VanL/simplebroker/environments/pypi": {
             "deployment_branch_policy": {
                 "protected_branches": False,
@@ -1301,6 +1345,85 @@ def test_repository_settings_accept_only_the_hardened_state(
     )
 
     assert release.repository_settings_issues("VanL/simplebroker", "token") == ()
+
+
+def test_repository_settings_require_selected_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads = _repository_settings_payloads()
+    payloads["/repos/VanL/simplebroker/actions/permissions"] = {
+        "allowed_actions": "all",
+        "sha_pinning_required": True,
+    }
+    monkeypatch.setattr(
+        release,
+        "_github_api_json",
+        lambda path, token: payloads[path],
+    )
+
+    issues = release.repository_settings_issues("VanL/simplebroker", "token")
+
+    assert any("selected actions" in issue for issue in issues)
+
+
+def test_repository_settings_reject_blanket_verified_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads = _repository_settings_payloads()
+    selected_path = "/repos/VanL/simplebroker/actions/permissions/selected-actions"
+    selected = dict(payloads[selected_path])
+    selected["verified_allowed"] = True
+    payloads[selected_path] = selected
+    monkeypatch.setattr(
+        release,
+        "_github_api_json",
+        lambda path, token: payloads[path],
+    )
+
+    issues = release.repository_settings_issues("VanL/simplebroker", "token")
+
+    assert any("verified publishers" in issue for issue in issues)
+
+
+def test_repository_settings_require_github_owned_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads = _repository_settings_payloads()
+    selected_path = "/repos/VanL/simplebroker/actions/permissions/selected-actions"
+    selected = dict(payloads[selected_path])
+    selected["github_owned_allowed"] = False
+    payloads[selected_path] = selected
+    monkeypatch.setattr(
+        release,
+        "_github_api_json",
+        lambda path, token: payloads[path],
+    )
+
+    issues = release.repository_settings_issues("VanL/simplebroker", "token")
+
+    assert any("GitHub-owned actions" in issue for issue in issues)
+
+
+def test_repository_settings_require_exact_third_party_action_patterns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads = _repository_settings_payloads()
+    selected_path = "/repos/VanL/simplebroker/actions/permissions/selected-actions"
+    selected = dict(payloads[selected_path])
+    selected["patterns_allowed"] = [
+        "astral-sh/setup-uv@*",
+        "codecov/codecov-action@*",
+    ]
+    payloads[selected_path] = selected
+    monkeypatch.setattr(
+        release,
+        "_github_api_json",
+        lambda path, token: payloads[path],
+    )
+
+    issues = release.repository_settings_issues("VanL/simplebroker", "token")
+
+    assert any("third-party action patterns" in issue for issue in issues)
 
 
 @pytest.mark.parametrize(

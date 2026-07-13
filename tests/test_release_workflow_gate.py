@@ -58,6 +58,23 @@ def test_gate_passes_when_required_workflows_are_green() -> None:
     assert [run.name for run in check.passed] == ["Test", "Test Postgres Extension"]
 
 
+def test_gate_normalizes_github_api_integer_fields() -> None:
+    run = gate.WorkflowRun.from_api(
+        {
+            "id": "42",
+            "name": "Test",
+            "status": "completed",
+            "conclusion": "success",
+            "html_url": "https://example.test/runs/42",
+            "created_at": "2026-07-13T00:00:00Z",
+            "run_attempt": "invalid",
+        }
+    )
+
+    assert run.id == 42
+    assert run.run_attempt == 1
+
+
 def test_gate_reports_missing_required_workflows() -> None:
     check = gate.evaluate_required_workflows(
         [_run("Test", run_id=1)],
