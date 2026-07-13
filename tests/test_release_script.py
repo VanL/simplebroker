@@ -103,6 +103,14 @@ def test_local_release_gate_uses_logical_cpus_plus_one_worker() -> None:
         str(release.LOCAL_PYTEST_WORKERS),
         "examples",
     )
+    assert release.PG_TEST_COMMAND[-2:] == (
+        "-n",
+        str(release.LOCAL_PYTEST_WORKERS),
+    )
+    assert release.REDIS_TEST_COMMAND[-2:] == (
+        "-n",
+        str(release.LOCAL_PYTEST_WORKERS),
+    )
 
 
 def _command_lines(commands: tuple[tuple[str, ...], ...]) -> list[str]:

@@ -134,6 +134,8 @@ PG_TEST_COMMAND: Final[tuple[str, ...]] = (
     "--extra",
     "dev",
     "./bin/pytest-pg",
+    "-n",
+    str(LOCAL_PYTEST_WORKERS),
 )
 REDIS_TEST_COMMAND: Final[tuple[str, ...]] = (
     "uv",
@@ -141,6 +143,8 @@ REDIS_TEST_COMMAND: Final[tuple[str, ...]] = (
     "--extra",
     "dev",
     "./bin/pytest-redis",
+    "-n",
+    str(LOCAL_PYTEST_WORKERS),
 )
 EXAMPLE_TEST_COMMAND: Final[tuple[str, ...]] = (
     "uv",
