@@ -10,6 +10,7 @@ import pytest
 from simplebroker import Queue
 from simplebroker import _phaselock as phaselock_module
 from simplebroker import _runner as runner_module
+from simplebroker import helpers as helpers_module
 from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import OperationalError
 from simplebroker._phaselock import PhaseLockService
@@ -29,6 +30,24 @@ class _FailFirstCommitRunner(SQLiteRunner):
             self._fail_first_commit = False
             raise RuntimeError("injected bootstrap commit failure")
         super().commit()
+
+
+class _TransientWriteLockRunner(SQLiteRunner):
+    """Inject a bounded lock-contention burst after setup has completed."""
+
+    def __init__(self, db_path: str) -> None:
+        super().__init__(db_path)
+        self.write_lock_failures_remaining = 0
+        self.write_begin_attempts = 0
+
+    def begin_immediate(self) -> None:
+        if self.write_lock_failures_remaining > 0:
+            self.write_lock_failures_remaining -= 1
+            self.write_begin_attempts += 1
+            raise OperationalError("database is locked")
+        if self.write_begin_attempts > 0:
+            self.write_begin_attempts += 1
+        super().begin_immediate()
 
 
 def _force_status_sidecars(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -256,6 +275,65 @@ class TestSQLiteRunnerValidation:
             ) == [("messages",)]
         finally:
             retry_runner.close()
+
+    @pytest.mark.sqlite_only
+    def test_normal_write_survives_more_than_ten_transient_lock_errors(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Forward-moving contention must not fail at a fixed attempt count."""
+
+        monkeypatch.setattr(
+            helpers_module,
+            "interruptible_sleep",
+            lambda wait, stop_event=None: True,
+        )
+        runner = _TransientWriteLockRunner(str(tmp_path / "broker.db"))
+        core = BrokerCore(runner)
+        runner.write_lock_failures_remaining = 10
+
+        try:
+            message_id = core.write("q", "message")
+
+            assert message_id > 0
+            assert runner.write_begin_attempts == 11
+        finally:
+            runner.close()
+
+    @pytest.mark.sqlite_only
+    def test_normal_write_lock_retry_has_bounded_elapsed_budget(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Persistent contention must still fail at the wall-clock deadline."""
+
+        monotonic_time = 0.0
+
+        def fake_monotonic() -> float:
+            return monotonic_time
+
+        def fake_sleep(wait: float, stop_event=None) -> bool:
+            nonlocal monotonic_time
+            monotonic_time += wait
+            return True
+
+        monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
+        monkeypatch.setattr(helpers_module, "interruptible_sleep", fake_sleep)
+        monkeypatch.setattr(helpers_module, "bounded_jitter", lambda wait: wait)
+        runner = _TransientWriteLockRunner(str(tmp_path / "broker.db"))
+        core = BrokerCore(runner)
+        runner.write_lock_failures_remaining = 10_000
+
+        try:
+            with pytest.raises(OperationalError, match="database is locked"):
+                core.write("q", "message")
+
+            assert runner.write_begin_attempts > 10
+            assert monotonic_time == pytest.approx(30.0)
+        finally:
+            runner.close()
 
     @pytest.mark.sqlite_only
     def test_connection_marker_check_does_not_open_sqlite_connection(
