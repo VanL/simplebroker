@@ -461,6 +461,18 @@ def test_extension_postupdate_steps_build_only_target_extension() -> None:
     assert "packaging-smoke" not in pg_text
 
 
+@pytest.mark.parametrize("target", tuple(release.RELEASE_TARGETS.values()))
+def test_every_release_postupdate_refreshes_every_lockfile(target: object) -> None:
+    steps = release.build_postupdate_steps(target)
+    lock_steps = [step for step in steps if step.command == ("uv", "lock")]
+
+    assert [(step.cwd, step.command) for step in lock_steps] == [
+        (release.PROJECT_ROOT, ("uv", "lock")),
+        (release.PG_EXTENSION_DIR, ("uv", "lock")),
+        (release.REDIS_EXTENSION_DIR, ("uv", "lock")),
+    ]
+
+
 def test_batch_postupdate_steps_build_every_selected_package_once() -> None:
     steps = release.build_postupdate_steps_for_targets(
         (
@@ -897,6 +909,15 @@ def test_redis_release_target_tracks_extension_lockfile() -> None:
     assert release.REDIS_EXTENSION_PYPROJECT_PATH in paths
     assert release.REDIS_EXTENSION_UV_LOCK_PATH in paths
     assert release.UV_LOCK_PATH in paths
+
+
+@pytest.mark.parametrize("target", tuple(release.RELEASE_TARGETS.values()))
+def test_every_release_target_tracks_every_lockfile(target: object) -> None:
+    paths = release._release_file_paths(target)
+
+    assert release.UV_LOCK_PATH in paths
+    assert release.PG_EXTENSION_UV_LOCK_PATH in paths
+    assert release.REDIS_EXTENSION_UV_LOCK_PATH in paths
 
 
 def test_batch_release_files_deduplicate_shared_lockfile() -> None:

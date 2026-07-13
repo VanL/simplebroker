@@ -750,13 +750,14 @@ def _display_path(path: Path) -> str:
 def _release_file_paths(target: ReleaseTarget) -> tuple[Path, ...]:
     """Return tracked files the helper may update for a release."""
 
-    paths = [target.pyproject_path, UV_LOCK_PATH]
+    paths = [
+        target.pyproject_path,
+        UV_LOCK_PATH,
+        PG_EXTENSION_UV_LOCK_PATH,
+        REDIS_EXTENSION_UV_LOCK_PATH,
+    ]
     if target.constants_path is not None:
         paths.append(target.constants_path)
-    if target.key == PG_RELEASE_TARGET.key:
-        paths.append(PG_EXTENSION_UV_LOCK_PATH)
-    if target.key == REDIS_RELEASE_TARGET.key:
-        paths.append(REDIS_EXTENSION_UV_LOCK_PATH)
     return tuple(paths)
 
 
@@ -1028,12 +1029,12 @@ def build_postupdate_steps_for_targets(
 ) -> tuple[CommandStep, ...]:
     """Return post-version-update verification/build steps for one or more targets."""
 
-    steps = [CommandStep(("uv", "lock"))]
+    steps = [
+        CommandStep(("uv", "lock")),
+        CommandStep(("uv", "lock"), cwd=PG_EXTENSION_DIR),
+        CommandStep(("uv", "lock"), cwd=REDIS_EXTENSION_DIR),
+    ]
     target_keys = {target.key for target in targets}
-    if PG_RELEASE_TARGET.key in target_keys:
-        steps.append(CommandStep(("uv", "lock"), cwd=PG_EXTENSION_DIR))
-    if REDIS_RELEASE_TARGET.key in target_keys:
-        steps.append(CommandStep(("uv", "lock"), cwd=REDIS_EXTENSION_DIR))
     if ROOT_RELEASE_TARGET.key in target_keys:
         steps.append(
             CommandStep(("uv", "run", "pytest", "tests/test_constants.py", "-q"))
