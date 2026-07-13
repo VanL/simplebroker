@@ -121,6 +121,12 @@ jobs:
       run: |
         uv sync --frozen --extra dev --extra pg --extra redis
 
+    - name: Test Python examples
+      run: uv run --frozen --no-sync pytest -n auto examples
+
+    - name: Type check Python examples
+      run: uv run --frozen --no-sync python bin/release.py --check-example-types
+
     - name: Run linting with ruff
       run: |
         uv run --frozen --no-sync ruff check simplebroker tests bin .github/scripts extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
@@ -199,19 +205,25 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        uv run --frozen --no-sync pytest --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= -m "not benchmark"
-        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
-        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
+        uv run --frozen --no-sync pytest --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0 -m "not benchmark"
+        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0
+        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0
         uv run --frozen --no-sync python .github/scripts/combine_coverage.py
         uv run --frozen --no-sync coverage report --show-missing
         uv run --frozen --no-sync coverage xml
 
     - name: Upload coverage reports
+      id: codecov
+      continue-on-error: true
       uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
       with:
         files: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         token: ${{ secrets.CODECOV_TOKEN }}
         slug: VanL/simplebroker
+
+    - name: Warn if Codecov upload failed
+      if: steps.codecov.outcome == 'failure'
+      run: echo "::warning::Codecov upload failed; local coverage gate passed"
