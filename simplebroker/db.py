@@ -85,6 +85,8 @@ logger = logging.getLogger(__name__)
 
 # Module constants
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
+OPERATION_RETRY_MAX_ELAPSED = 30.0
+OPERATION_RETRY_MAX_DELAY = 0.25
 
 
 def _resolve_backend_plugin(
@@ -804,9 +806,12 @@ class BrokerCore:
         self._stop_event = stop_event or threading.Event()
 
     def _run_with_retry(self, operation: Callable[[], T], **kwargs: Any) -> T:
-        """Wrapper around _execute_with_retry that honors the stop event."""
+        """Run a normal operation with bounded, stop-aware lock retries."""
 
         kwargs.setdefault("stop_event", self._stop_event)
+        kwargs.setdefault("max_retries", None)
+        kwargs.setdefault("max_elapsed", OPERATION_RETRY_MAX_ELAPSED)
+        kwargs.setdefault("max_retry_delay", OPERATION_RETRY_MAX_DELAY)
 
         def stop_checked_operation() -> T:
             if self._stop_event.is_set():
