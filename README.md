@@ -2249,16 +2249,30 @@ python bin/release.py all
 
 # Preview the checks, version files, commit, and tag action
 python bin/release.py --dry-run
+
+# Read back the release-related GitHub settings without changing anything
+uv run python bin/release.py --check-repository-settings
 ```
 
-The helper checks the target version against GitHub Releases and PyPI, runs the
-release checks, updates version files when needed, commits release-file changes,
-pushes the branch, and then pushes the release tag. The tag workflow waits for
-the relevant normal test workflows on the same commit to finish green, then
-builds the distributions, publishes them to PyPI with trusted publishing, and
-creates the GitHub Release from the same top-level gate workflow. Keeping the
-build, attestation, and publish steps in the gate workflow makes PyPI's trusted
-publisher identity match the artifact attestation build-config URI.
+Real releases must run from `main`. The helper checks the target version against
+GitHub Releases and PyPI, verifies the repository's immutable-release, tag,
+environment, and Actions SHA-pinning settings, runs the local release checks,
+updates and commits release files, and pushes the release commit to `main`. It
+then waits for the target's normal workflows to pass on that exact commit and
+checks that the commit is still reachable from a freshly fetched `origin/main`.
+Only then does it create the final tag at the tested SHA and push it.
+
+Remote release tags are permanent. They are never moved or deleted. A wrong
+remote tag requires a new version. A local-only tag may be replaced before it
+is pushed.
+
+The tag workflow rechecks the normal workflows and tag SHA, builds and attests
+the distributions, and stages every distribution and Sigstore bundle on a
+draft GitHub Release. It publishes to PyPI with trusted publishing only after
+that complete draft exists, then verifies the exact draft asset set and
+publishes the immutable GitHub Release. Keeping the build, attestation, and
+publish steps in the top-level gate workflow makes PyPI's trusted-publisher
+identity match the artifact attestation build-config URI.
 The local release helper also ruff-checks `examples/`, runs all
 pytest-discovered example tests under `examples/`, mypy-checks every Python
 example file, and mypy-checks the selected extension test tree. Core and batch
@@ -2267,6 +2281,14 @@ are not part of the CI release workflows.
 Core releases wait for `Test`, `Test Postgres Extension`, and
 `Test Redis Extension`; extension releases wait for `Test` plus their matching
 backend workflow.
+
+If pre-tag CI fails, is cancelled, is missing, or times out, no final tag has
+been created. Fix `main` and rerun the helper with the same unpublished
+version. An interrupted helper can also be rerun at the same release commit;
+it resumes the exact-SHA check without creating another release commit. If a
+transient publication step fails after the tag exists, retry the workflow only
+when the tag still points at the same SHA. If recovery needs a code change, use
+the next patch version. Never delete, move, or reuse a published tag or version.
 
 PyPI trusted publisher entries should use repository `VanL/simplebroker`, the
 `pypi` environment, and these GitHub Actions workflows:
