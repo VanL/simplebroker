@@ -1320,7 +1320,7 @@ from YAML or local tests alone.
 | Slice | Status | Evidence |
 |---|---|---|
 | Baseline captured | Complete | `7311c278`; stale extension locks, live CI resolution, movable tags, open Actions policy, and mutable releases recorded above |
-| SQLite rollout prerequisites | In progress | Atomic bootstrap in PR #54; elapsed retry baseline in PR #55; forward-progress refresh in `bac886c3`; stop-aware watcher bootstrap cancellation is locally green and awaits exact-SHA Windows CI |
+| SQLite rollout prerequisites | Complete | Atomic bootstrap in PR #54; elapsed retry baseline in PR #55; forward-progress refresh in `bac886c3`; stop-aware watcher bootstrap cancellation in `dc18d4a8`; the unchanged Windows 3.14 detectors pass twice in Test run `29290011721` |
 | PR A: reproducible builds | Complete | PR #53, merged as `91ad0eae`; combined Test run `29284078540` and Fuzz run `29284100824` |
 | uv bump automation | Complete | `bin/bump_uv.py --check`, updater unit tests, and portable dry-run coverage pass |
 | Locks current | Complete | Root, Postgres, and Redis `uv lock --check` gates pass in run `29284078540` |
@@ -1339,7 +1339,35 @@ from YAML or local tests alone.
 | Release tag ruleset | Complete | Active ruleset `18894182`: update/deletion only, three tag families, no bypass |
 | Immutable releases | Complete | Repository API returns `enabled: true` |
 | Repository-settings preflight | Complete | `bin/release.py --check-repository-settings` reports all four controls OK |
-| First immutable release | Pending: 5.3.2 | Record workflow, PyPI, immutable GitHub Release, and attestation URLs after publication |
+| First immutable release | Complete: 5.3.2 | [release workflow](https://github.com/VanL/simplebroker/actions/runs/29291847175); [immutable GitHub Release](https://github.com/VanL/simplebroker/releases/tag/v5.3.2); [PyPI](https://pypi.org/project/simplebroker/5.3.2/); [GitHub attestation](https://github.com/VanL/simplebroker/attestations/35166065) |
+
+### 5.3.2 live publication proof
+
+- Release identity: the helper completed its full 17-worker local gate, reused
+  version 5.3.2 without changing release files, read back green exact-SHA CI,
+  and pushed `v5.3.2`. The tag, release target, and then-current `origin/main`
+  all resolved to `dc18d4a89e0604d9a3353159d4eb387b18db42df`.
+- Pre-tag gates: [Test run 29290011721](https://github.com/VanL/simplebroker/actions/runs/29290011721)
+  passed twice on Windows 3.14, including targeted attempt 2; the
+  [Postgres run](https://github.com/VanL/simplebroker/actions/runs/29290011720),
+  [Redis run](https://github.com/VanL/simplebroker/actions/runs/29290011718),
+  and both [fuzz harnesses](https://github.com/VanL/simplebroker/actions/runs/29290872379)
+  also passed on the same SHA before the tag-triggered release began.
+- Locked build: the [release build job](https://github.com/VanL/simplebroker/actions/runs/29291847175/job/86956999692)
+  installed uv 0.11.28 with caching disabled, synced the frozen lock with
+  `build==1.5.1` and `hatchling==1.31.0`, and built with
+  `python -m build --no-isolation` from the tested SHA.
+- Publication order: exact-SHA and tag-current checks passed first. Draft asset
+  staging completed at 23:04:12 UTC; tokenless Trusted Publishing ran from
+  23:04:17 through 23:04:38; final publication ran from 23:04:41 through
+  23:04:51. GitHub API readback reports `immutable: true`.
+- Artifact identity: the GitHub and PyPI wheel is 227,732 bytes with SHA-256
+  `388747d6cbf91b4cfbf1322b394715659590a516cddee4eb0be84e5df5fc6548`.
+  The sdist is 206,585 bytes with SHA-256
+  `41164ddb432aac0198fc13e118df3f2fd4dae597dcf91cbb9c21b6ac6f67bbaa`.
+  `gh attestation verify` passed for both files. The release includes the
+  [repository-generated Sigstore bundle](https://github.com/VanL/simplebroker/releases/download/v5.3.2/simplebroker-v5.3.2.sigstore.json)
+  and the [GitHub artifact attestation](https://github.com/VanL/simplebroker/attestations/35166065).
 
 ## Fresh-Eyes Review Checklist
 
