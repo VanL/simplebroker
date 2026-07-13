@@ -1090,19 +1090,42 @@ def test_workflow_wait_passes_token_only_through_redacted_environment(
     assert "Test" in command
     assert "Test Postgres Extension" in command
     assert "top-secret-token" not in " ".join(command)
-    assert kwargs["env_overrides"] == {"GITHUB_TOKEN": "top-secret-token"}
-    assert kwargs["sensitive_env_keys"] == frozenset({"GITHUB_TOKEN"})
+    assert kwargs["private_env_overrides"] == {"GITHUB_TOKEN": "top-secret-token"}
+    assert "env_overrides" not in kwargs
 
 
 def test_sensitive_command_environment_is_redacted() -> None:
     rendered = release._format_command_prefix(
-        {"GITHUB_TOKEN": "top-secret-token", "SAFE": "visible"},
-        sensitive_env_keys=frozenset({"GITHUB_TOKEN"}),
+        {"SAFE": "visible"},
+        private_env_keys=frozenset({"GITHUB_TOKEN"}),
     )
 
-    assert "top-secret-token" not in rendered
     assert "GITHUB_TOKEN=<redacted>" in rendered
     assert "SAFE=visible" in rendered
+
+
+def test_private_command_environment_reaches_subprocess_but_not_log(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed_env: dict[str, str] = {}
+
+    def run(command: tuple[str, ...], **kwargs: object) -> None:
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        observed_env.update(env)
+
+    monkeypatch.setattr(release.subprocess, "run", run)
+
+    release.run_command(
+        ("example-command",),
+        private_env_overrides={"GITHUB_TOKEN": "top-secret-token"},
+    )
+
+    output = capsys.readouterr().out
+    assert observed_env["GITHUB_TOKEN"] == "top-secret-token"
+    assert "top-secret-token" not in output
+    assert "GITHUB_TOKEN=<redacted>" in output
 
 
 def test_release_sha_must_remain_reachable_from_fetched_main(

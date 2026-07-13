@@ -1065,19 +1065,33 @@ def _merge_command_env(
     return merged
 
 
+def _merge_public_and_private_command_env(
+    env_overrides: dict[str, str] | None,
+    private_env_overrides: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Merge logged and private command environment without logging private values."""
+
+    merged = _merge_command_env(env_overrides)
+    if not private_env_overrides:
+        return merged
+    return _merge_command_env(private_env_overrides, base_env=merged)
+
+
 def _format_command_prefix(
     env_overrides: dict[str, str] | None,
     *,
-    sensitive_env_keys: frozenset[str] = frozenset(),
+    private_env_keys: frozenset[str] = frozenset(),
 ) -> str:
     """Format environment overrides shown before a command in logs."""
 
-    if not env_overrides:
+    if not env_overrides and not private_env_keys:
         return ""
-    return " ".join(
-        f"{key}=" + ("<redacted>" if key in sensitive_env_keys else shlex.quote(value))
-        for key, value in sorted(env_overrides.items())
-    )
+    public_parts = [
+        f"{key}={shlex.quote(value)}"
+        for key, value in sorted((env_overrides or {}).items())
+    ]
+    private_parts = [f"{key}=<redacted>" for key in sorted(private_env_keys)]
+    return " ".join((*public_parts, *private_parts))
 
 
 def _format_cwd_suffix(cwd: Path) -> str:
@@ -1092,13 +1106,19 @@ def run_command(
     cwd: Path = PROJECT_ROOT,
     dry_run: bool = False,
     env_overrides: dict[str, str] | None = None,
-    sensitive_env_keys: frozenset[str] = frozenset(),
+    private_env_overrides: dict[str, str] | None = None,
 ) -> None:
     """Run a command, printing it first."""
 
+    overlapping_keys = set(env_overrides or ()) & set(private_env_overrides or ())
+    if overlapping_keys:
+        raise RuntimeError(
+            "Command environment keys cannot be both public and private: "
+            + ", ".join(sorted(overlapping_keys))
+        )
     prefix = _format_command_prefix(
         env_overrides,
-        sensitive_env_keys=sensitive_env_keys,
+        private_env_keys=frozenset(private_env_overrides or ()),
     )
     formatted = _format_command(command)
     command_text = f"$ {prefix} {formatted}" if prefix else f"$ {formatted}"
@@ -1109,7 +1129,10 @@ def run_command(
         command,
         cwd=cwd,
         check=True,
-        env=_merge_command_env(env_overrides),
+        env=_merge_public_and_private_command_env(
+            env_overrides,
+            private_env_overrides,
+        ),
     )
 
 
@@ -1891,8 +1914,7 @@ def wait_for_release_workflows(
     run_command(
         tuple(command),
         dry_run=dry_run,
-        env_overrides={"GITHUB_TOKEN": token},
-        sensitive_env_keys=frozenset({"GITHUB_TOKEN"}),
+        private_env_overrides={"GITHUB_TOKEN": token},
     )
 
 
