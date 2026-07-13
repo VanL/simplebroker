@@ -5,6 +5,25 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.3.2] - 2026-07-13
+
+### Fixed
+- Made first-time SQLite schema setup atomic. A failed bootstrap now rolls
+  back completely and leaves its PhaseLock phase incomplete so a later opener
+  can retry from a clean database.
+- Made normal SQLite lock retries use a 30-second no-progress budget instead
+  of a fixed total deadline. Commits from other connections refresh the budget,
+  so sustained Windows contention cannot starve a writer while a genuinely
+  stalled database still fails in bounded time.
+
+### Changed
+- Hardened CI and releases around checked locks, frozen and cache-free builds,
+  exact-SHA pre-tag gates, write-once tags, draft-first publication, immutable
+  GitHub Releases, and an 85% local coverage floor.
+- Added Python example tests and type checks to normal CI. Codecov continues to
+  use the repository secret; upload failures are visible but do not override
+  the local coverage result.
+
 ## [5.3.1] - 2026-07-11
 
 ### Added

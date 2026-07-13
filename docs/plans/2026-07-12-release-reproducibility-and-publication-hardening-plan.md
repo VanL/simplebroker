@@ -35,7 +35,10 @@ failures remain visible without making a reporting-service outage block
 otherwise-green CI. The earlier bounded (not exact) Hatchling decision,
 delete-and-recreate draft idempotency, PyPI lag budget, closed-list
 `--frozen --no-sync` invariant, example-mypy helper flag, and 85% local
-coverage floor remain.
+coverage floor remain. Two SQLite correctness prerequisites found by the
+Windows rollout gates landed separately from the three release slices: atomic
+first-time bootstrap, and a PhaseLock-style idle budget that refreshes normal
+lock retries only while other connections are observably committing.
 
 ## Verified Current State
 
@@ -241,7 +244,8 @@ bump into a mandatory release of all three packages.
 
 ## Non-Goals
 
-- no runtime queue, watcher, backend, retry, or timing behavior changes
+- no runtime behavior changes beyond the separately identified SQLite
+  bootstrap atomicity and progress-aware lock-retry correctness fixes
 - no test serialization or wider timing budgets
 - no PR approval requirement
 - no release reviewer requirement
@@ -965,9 +969,11 @@ Codecov evidence row pending until a later authenticated upload succeeds.
    merging otherwise-green slices; leave evidence pending and capture the
    warning-bearing run.
 7. Confirm all three `uv lock --check` commands pass in CI.
-8. Review the final diff for runtime behavior changes. Changes to
-   `simplebroker/_scripts.py` must be limited to developer/test/packaging command
-   construction.
+8. Review the final release-hardening diff for runtime behavior changes.
+   Changes to `simplebroker/_scripts.py` must be limited to
+   developer/test/packaging command construction. Review the separately landed
+   SQLite bootstrap and lock-progress fixes as explicit correctness
+   prerequisites, not incidental release-script changes.
 9. If a required gate is red, stop the settings rollout and fix the problem in
    a focused follow-up assigned to the responsible PR slice. A warning caused
    solely by external Codecov availability may leave the Codecov rollout row
@@ -1298,7 +1304,10 @@ There is no rollback that reuses the version or tag.
 22. Python examples run under normal CI.
 23. PRs A, B, and C each have focused green evidence, and full core, PG, Redis,
     packaging, CodeQL, Scorecard, and fuzz gates pass on the combined `main` SHA.
-24. No queue, watcher, backend, retry, timing, or public runtime behavior changes.
+24. The release-hardening slices change no public queue, watcher, or backend
+    API. The separate SQLite runtime prerequisites are limited to atomic
+    first-time bootstrap and progress-aware lock retries, with the Windows
+    concurrency detectors left intact.
 
 ## Completion Evidence
 
@@ -1307,26 +1316,27 @@ from YAML or local tests alone.
 
 | Slice | Status | Evidence |
 |---|---|---|
-| Baseline captured | Pending | Starting SHA, lock outcomes, settings JSON, green run URLs |
-| PR A: reproducible builds | Pending | Focused PR diff, normal workflow URLs, and both fuzz results |
-| uv bump automation | Pending | `bin/bump_uv.py --check`, dry-run output, and updater unit tests |
-| Locks current | Pending | Three successful `uv lock --check` outputs and reviewed lock diff |
-| Frozen CI | Pending | PR workflow URLs and tests proving no live resolver path |
-| Locked build frontend | Pending | Packaging log with exact uv/build/Hatchling versions |
-| Cache-free release builds | Pending | Workflow diff plus PR structural tests |
-| PR B: publication flow | Pending | Focused PR diff, release-helper tests, shared-script tests, and merged dry-run order |
-| Pre-tag exact-SHA gate | Pending | Command-order tests plus first-release workflow timestamps before tag creation |
-| Write-once release helper | Pending | Unit tests; no `--retag` or remote delete command; final tag created only after CI |
-| Shared draft-first release flow | Pending | Shared-script tests and all three merged job dependency graphs |
-| PR C: CI quick wins | Pending | Focused PR diff, coverage/example workflow output, and warning-path test |
-| Codecov secret-auth upload | Pending | At least one successful authenticated PR or `main` upload URL; warning-bearing outage run if encountered |
-| Example CI | Pending | `pytest -n auto examples` and example mypy job output |
-| Actions policy | Pending | Authenticated permissions and selected-actions readback |
-| PyPI environment policy | Pending | Environment and tag-policy readback |
-| Release tag ruleset | Pending | Active tag ruleset readback with no bypass |
-| Immutable releases | Pending | Repository API returns `enabled: true` |
-| Repository-settings preflight | Pending | `bin/release.py --check-repository-settings` output |
-| First immutable release | Pending until next normal release | Workflow, PyPI, immutable GitHub Release, and attestation URLs |
+| Baseline captured | Complete | `7311c278`; stale extension locks, live CI resolution, movable tags, open Actions policy, and mutable releases recorded above |
+| SQLite rollout prerequisites | Complete | Atomic bootstrap in PR #54; elapsed retry baseline in PR #55; forward-progress refresh in `bac886c3`; unchanged Windows detectors pass in run `29284078540` |
+| PR A: reproducible builds | Complete | PR #53, merged as `91ad0eae`; combined Test run `29284078540` and Fuzz run `29284100824` |
+| uv bump automation | Complete | `bin/bump_uv.py --check`, updater unit tests, and portable dry-run coverage pass |
+| Locks current | Complete | Root, Postgres, and Redis `uv lock --check` gates pass in run `29284078540` |
+| Frozen CI | Complete | PR #53 structural tests and merged workflow runs use frozen installs with no sync |
+| Locked build frontend | Complete | Packaging smoke passes with the locked uv/build/Hatchling set in run `29284078540` |
+| Cache-free release builds | Complete | PR #53 workflow diff and release-workflow structural tests |
+| PR B: publication flow | Complete | PR #56, merged as `4c131f8f`; release-helper/shared-script tests and merged 5.3.2 dry-run order pass |
+| Pre-tag exact-SHA gate | Complete | Command-order tests and 5.3.2 dry run show `push main -> exact-SHA CI -> create tag` |
+| Write-once release helper | Complete | No `--retag` or remote tag deletion path; immutable-tag and ancestry tests pass |
+| Shared draft-first release flow | Complete | Shared publication-state tests and all three release job graphs pass structural checks |
+| PR C: CI quick wins | Complete | PR #57; Test run `29281924077` passed with 92% combined coverage and all example gates |
+| Codecov secret-auth upload | Complete | Secret-authenticated upload for `ed7c031b`; Codecov accepted and queued the 92% report |
+| Example CI | Complete | Frozen example pytest and explicit example-mypy steps pass in run `29281924077` |
+| Actions policy | Complete | API readback: selected actions, full-SHA required, GitHub-owned plus exactly six third-party patterns |
+| PyPI environment policy | Complete | API readback: exactly three tag policies and no branch policy |
+| Release tag ruleset | Complete | Active ruleset `18894182`: update/deletion only, three tag families, no bypass |
+| Immutable releases | Complete | Repository API returns `enabled: true` |
+| Repository-settings preflight | Complete | `bin/release.py --check-repository-settings` reports all four controls OK |
+| First immutable release | Pending: 5.3.2 | Record workflow, PyPI, immutable GitHub Release, and attestation URLs after publication |
 
 ## Fresh-Eyes Review Checklist
 
