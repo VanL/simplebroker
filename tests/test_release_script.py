@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -58,8 +59,50 @@ def test_release_targets_format_expected_tags() -> None:
     assert "redis" in release.RELEASE_TARGETS
 
 
+def test_bare_dry_run_previews_next_patch_when_current_version_is_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def inspect(version: str, *, target: release.ReleaseTarget) -> release.ReleaseState:
+        return release.ReleaseState(
+            target=target,
+            version=version,
+            tag_name=target.tag_name(version),
+            github_release_exists=version == "5.3.1",
+            pypi_release_exists=version == "5.3.1",
+            local_tag_commit=None,
+            remote_tag_commit=None,
+        )
+
+    monkeypatch.setattr(release, "inspect_release_state", inspect)
+
+    version, state = release.resolve_target_version(
+        None,
+        current_version="5.3.1",
+        target=release.ROOT_RELEASE_TARGET,
+        dry_run=True,
+    )
+
+    assert version == "5.3.2"
+    assert state.published is False
+
+
 def _commands_text(commands: tuple[tuple[str, ...], ...]) -> str:
     return "\n".join(" ".join(command) for command in commands)
+
+
+def test_local_release_gate_uses_logical_cpus_plus_one_worker() -> None:
+    assert release._local_pytest_worker_count(8) == 9
+    assert release._local_pytest_worker_count(1) == 2
+    assert release._local_pytest_worker_count(0) == 2
+    assert (
+        f"-n {release.LOCAL_PYTEST_WORKERS} --dist loadgroup"
+        in release.ROOT_TEST_PYTEST_ARGS[-1]
+    )
+    assert release.EXAMPLE_TEST_COMMAND[-3:] == (
+        "-n",
+        str(release.LOCAL_PYTEST_WORKERS),
+        "examples",
+    )
 
 
 def _command_lines(commands: tuple[tuple[str, ...], ...]) -> list[str]:
@@ -269,7 +312,7 @@ def test_redis_prechecks_are_target_scoped() -> None:
     mypy_commands = [command for command in command_lines if " mypy " in f" {command} "]
 
     assert "./bin/pytest-redis" in text
-    assert "pytest -n0 examples" in text
+    assert f"pytest -n {release.LOCAL_PYTEST_WORKERS} examples" in text
     assert "./bin/release.py --check-shell-examples" in text
     assert "mypy examples/" in text
     assert any(
@@ -295,7 +338,7 @@ def test_pg_prechecks_are_target_scoped() -> None:
     mypy_commands = [command for command in command_lines if " mypy " in f" {command} "]
 
     assert "./bin/pytest-pg" in text
-    assert "pytest -n0 examples" in text
+    assert f"pytest -n {release.LOCAL_PYTEST_WORKERS} examples" in text
     assert "./bin/release.py --check-shell-examples" in text
     assert "mypy examples/" in text
     assert any(
@@ -322,7 +365,7 @@ def test_core_prechecks_cover_both_extensions() -> None:
 
     assert "./bin/pytest-pg" in text
     assert "./bin/pytest-redis" in text
-    assert "pytest -n0 examples" in text
+    assert f"pytest -n {release.LOCAL_PYTEST_WORKERS} examples" in text
     assert "./bin/release.py --check-shell-examples" in text
     assert "mypy examples/" in text
     assert any(
@@ -356,7 +399,13 @@ def test_batch_prechecks_deduplicate_shared_checks() -> None:
     assert sum("./bin/pytest-pg" in command for command in command_lines) == 1
     assert sum("./bin/pytest-redis" in command for command in command_lines) == 1
     assert sum(" pytest " in f" {command} " for command in command_lines) == 2
-    assert sum("pytest -n0 examples" in command for command in command_lines) == 1
+    assert (
+        sum(
+            f"pytest -n {release.LOCAL_PYTEST_WORKERS} examples" in command
+            for command in command_lines
+        )
+        == 1
+    )
     assert (
         sum(
             "./bin/release.py --check-shell-examples" in command
@@ -924,7 +973,6 @@ def test_plan_tag_action_for_new_or_matching_tags() -> None:
             _state(),
             head_commit=head,
             version_changed=False,
-            allow_retag=False,
         )
         == "create"
     )
@@ -933,7 +981,6 @@ def test_plan_tag_action_for_new_or_matching_tags() -> None:
             _state(local=head),
             head_commit=head,
             version_changed=False,
-            allow_retag=False,
         )
         == "push_local"
     )
@@ -942,7 +989,6 @@ def test_plan_tag_action_for_new_or_matching_tags() -> None:
             _state(remote=head),
             head_commit=head,
             version_changed=False,
-            allow_retag=False,
         )
         == "reuse_remote"
     )
@@ -952,23 +998,13 @@ def test_plan_tag_action_rejects_remote_tag_at_different_commit() -> None:
     head = "a" * 40
     remote = "b" * 40
 
-    with pytest.raises(RuntimeError, match="already exists on origin"):
+    with pytest.raises(RuntimeError, match="already exists on origin") as exc:
         release.plan_tag_action(
             _state(remote=remote),
             head_commit=head,
             version_changed=False,
-            allow_retag=False,
         )
-
-    assert (
-        release.plan_tag_action(
-            _state(remote=remote),
-            head_commit=head,
-            version_changed=False,
-            allow_retag=True,
-        )
-        == "replace_remote"
-    )
+    assert "Choose a new version" in str(exc.value)
 
 
 def test_plan_tag_action_replaces_local_tag_when_new_release_commit_is_expected() -> (
@@ -981,7 +1017,505 @@ def test_plan_tag_action_replaces_local_tag_when_new_release_commit_is_expected(
             _state(local=old_commit),
             head_commit=release.PENDING_RELEASE_COMMIT,
             version_changed=True,
-            allow_retag=False,
         )
         == "replace_local"
     )
+
+
+def test_retag_option_is_removed() -> None:
+    parser = release._build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--retag"])
+
+
+def test_repository_settings_command_is_standalone() -> None:
+    args = release._build_parser().parse_args(["--check-repository-settings"])
+
+    assert args.check_repository_settings is True
+
+
+def test_required_workflows_are_target_specific() -> None:
+    assert release.required_workflows_for_targets((release.ROOT_RELEASE_TARGET,)) == (
+        "Test",
+        "Test Postgres Extension",
+        "Test Redis Extension",
+    )
+    assert release.required_workflows_for_targets((release.PG_RELEASE_TARGET,)) == (
+        "Test",
+        "Test Postgres Extension",
+    )
+    assert release.required_workflows_for_targets((release.REDIS_RELEASE_TARGET,)) == (
+        "Test",
+        "Test Redis Extension",
+    )
+    assert release.required_workflows_for_targets(
+        (
+            release.PG_RELEASE_TARGET,
+            release.REDIS_RELEASE_TARGET,
+            release.ROOT_RELEASE_TARGET,
+        )
+    ) == (
+        "Test",
+        "Test Postgres Extension",
+        "Test Redis Extension",
+    )
+
+
+def test_workflow_wait_passes_token_only_through_redacted_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def record(command: tuple[str, ...], **kwargs: object) -> None:
+        calls.append((command, kwargs))
+
+    monkeypatch.setattr(release, "_github_api_token", lambda: "top-secret-token")
+    monkeypatch.setattr(
+        release,
+        "origin_remote_url",
+        lambda: "git@github.com:VanL/simplebroker.git",
+    )
+    monkeypatch.setattr(release, "run_command", record)
+
+    release.wait_for_release_workflows(
+        (release.PG_RELEASE_TARGET,),
+        "a" * 40,
+    )
+
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert ".github/scripts/require_green_workflows.py" in command
+    assert command.count("--workflow") == 2
+    assert "Test" in command
+    assert "Test Postgres Extension" in command
+    assert "top-secret-token" not in " ".join(command)
+    assert kwargs["private_env_overrides"] == {"GITHUB_TOKEN": "top-secret-token"}
+    assert "env_overrides" not in kwargs
+
+
+def test_sensitive_command_environment_is_redacted() -> None:
+    rendered = release._format_command_prefix(
+        {"SAFE": "visible"},
+        private_env_keys=frozenset({"GITHUB_TOKEN"}),
+    )
+
+    assert "GITHUB_TOKEN=<redacted>" in rendered
+    assert "SAFE=visible" in rendered
+
+
+def test_private_command_environment_reaches_subprocess_but_not_log(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed_env: dict[str, str] = {}
+
+    def run(command: tuple[str, ...], **kwargs: object) -> None:
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        observed_env.update(env)
+
+    monkeypatch.setattr(release.subprocess, "run", run)
+
+    release.run_command(
+        ("example-command",),
+        private_env_overrides={"GITHUB_TOKEN": "top-secret-token"},
+    )
+
+    output = capsys.readouterr().out
+    assert observed_env["GITHUB_TOKEN"] == "top-secret-token"
+    assert "top-secret-token" not in output
+    assert "GITHUB_TOKEN=<redacted>" in output
+
+
+def test_release_sha_must_remain_reachable_from_fetched_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+    sha = "a" * 40
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: commands.append(command),
+    )
+    monkeypatch.setattr(
+        release,
+        "_capture_command",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", ""),
+    )
+
+    release.require_release_sha_on_origin_main(sha)
+
+    assert commands == [("git", "fetch", "origin", "main")]
+
+
+def test_release_sha_removed_from_main_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sha = "a" * 40
+    monkeypatch.setattr(release, "run_command", lambda command, **kwargs: None)
+    monkeypatch.setattr(
+        release,
+        "_capture_command",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 1, "", ""),
+    )
+
+    with pytest.raises(RuntimeError, match="no longer reachable from origin/main"):
+        release.require_release_sha_on_origin_main(sha)
+
+
+def test_tag_creation_happens_after_push_and_exact_sha_ci(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sha = "a" * 40
+    candidate = release.ReleaseCandidate(
+        target=release.ROOT_RELEASE_TARGET,
+        current_version="5.3.2",
+        release_version="5.3.2",
+        state=_state(),
+    )
+    events: list[str] = []
+
+    def record(command: tuple[str, ...], **kwargs: object) -> None:
+        events.append("command:" + " ".join(command))
+
+    monkeypatch.setattr(release, "run_command", record)
+    monkeypatch.setattr(
+        release,
+        "wait_for_release_workflows",
+        lambda targets, release_sha, **kwargs: events.append("wait:" + release_sha),
+    )
+    monkeypatch.setattr(
+        release,
+        "require_release_sha_on_origin_main",
+        lambda release_sha, **kwargs: events.append("ancestry:" + release_sha),
+    )
+    monkeypatch.setattr(
+        release,
+        "inspect_release_state",
+        lambda version, target: _state(),
+    )
+
+    release.publish_release_tags_after_ci((candidate,), sha)
+
+    assert events == [
+        "command:git push origin main",
+        f"wait:{sha}",
+        f"ancestry:{sha}",
+        f"command:git tag v3.1.10 {sha}",
+        "command:git push origin v3.1.10",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "required workflow run failed",
+        "required workflow run was cancelled",
+        "required workflow run was not found",
+        "timed out waiting for required workflow runs",
+    ),
+)
+def test_failed_pre_tag_ci_creates_no_tag(
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+) -> None:
+    candidate = release.ReleaseCandidate(
+        target=release.ROOT_RELEASE_TARGET,
+        current_version="5.3.2",
+        release_version="5.3.2",
+        state=_state(),
+    )
+    commands: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: commands.append(command),
+    )
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(release, "wait_for_release_workflows", fail)
+
+    with pytest.raises(RuntimeError, match=message):
+        release.publish_release_tags_after_ci((candidate,), "a" * 40)
+
+    assert commands == [("git", "push", "origin", "main")]
+
+
+def _repository_settings_payloads() -> dict[str, object]:
+    return {
+        "/repos/VanL/simplebroker/immutable-releases": {"enabled": True},
+        "/repos/VanL/simplebroker/actions/permissions": {"sha_pinning_required": True},
+        "/repos/VanL/simplebroker/environments/pypi": {
+            "deployment_branch_policy": {
+                "protected_branches": False,
+                "custom_branch_policies": True,
+            }
+        },
+        "/repos/VanL/simplebroker/environments/pypi/deployment-branch-policies": {
+            "branch_policies": [
+                {"type": "tag", "name": "v*"},
+                {"type": "tag", "name": "simplebroker_pg/v*"},
+                {"type": "tag", "name": "simplebroker_redis/v*"},
+            ]
+        },
+        "/repos/VanL/simplebroker/rulesets": [
+            {
+                "id": 42,
+                "name": "Protect release tags",
+                "target": "tag",
+                "enforcement": "active",
+            }
+        ],
+        "/repos/VanL/simplebroker/rulesets/42": {
+            "id": 42,
+            "name": "Protect release tags",
+            "target": "tag",
+            "enforcement": "active",
+            "bypass_actors": [],
+            "conditions": {
+                "ref_name": {
+                    "include": [
+                        "refs/tags/v*",
+                        "refs/tags/simplebroker_pg/v*",
+                        "refs/tags/simplebroker_redis/v*",
+                    ],
+                    "exclude": [],
+                }
+            },
+            "rules": [{"type": "update"}, {"type": "deletion"}],
+        },
+    }
+
+
+def test_repository_settings_accept_only_the_hardened_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payloads = _repository_settings_payloads()
+    monkeypatch.setattr(
+        release,
+        "_github_api_json",
+        lambda path, token: payloads[path],
+    )
+
+    assert release.repository_settings_issues("VanL/simplebroker", "token") == ()
+
+
+@pytest.mark.parametrize(
+    ("key", "replacement", "message"),
+    (
+        (
+            "/repos/VanL/simplebroker/immutable-releases",
+            {"enabled": False},
+            "immutable releases",
+        ),
+        (
+            "/repos/VanL/simplebroker/actions/permissions",
+            {"sha_pinning_required": False},
+            "SHA pinning",
+        ),
+        (
+            "/repos/VanL/simplebroker/environments/pypi",
+            {"deployment_branch_policy": None},
+            "pypi environment",
+        ),
+        ("/repos/VanL/simplebroker/rulesets", [], "release-tag ruleset"),
+    ),
+)
+def test_repository_settings_report_each_missing_control(
+    monkeypatch: pytest.MonkeyPatch,
+    key: str,
+    replacement: object,
+    message: str,
+) -> None:
+    payloads = _repository_settings_payloads()
+    payloads[key] = replacement
+    monkeypatch.setattr(
+        release,
+        "_github_api_json",
+        lambda path, token: payloads[path],
+    )
+
+    issues = release.repository_settings_issues("VanL/simplebroker", "token")
+
+    assert any(message in issue for issue in issues)
+
+
+def test_release_helper_has_no_remote_tag_deletion_path() -> None:
+    source = (Path(__file__).resolve().parents[1] / "bin" / "release.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"push", "--delete"' not in source
+    assert "replace_remote" not in source
+
+
+def test_local_only_wrong_tag_is_replaced_at_explicit_release_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+    sha = "a" * 40
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: commands.append(command),
+    )
+
+    release._prepare_tag_action(
+        _state(local="b" * 40),
+        tag_action="replace_local",
+        dry_run=False,
+        target_commit=sha,
+    )
+
+    assert commands == [
+        ("git", "tag", "-d", "v3.1.10"),
+        ("git", "tag", "v3.1.10", sha),
+    ]
+
+
+def test_real_release_branch_check_cannot_be_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        release,
+        "require_backend_api_release_invariants",
+        lambda targets: None,
+    )
+    monkeypatch.setattr(release, "read_target_version", lambda target: "5.3.1")
+    monkeypatch.setattr(release, "is_dirty_worktree", lambda: False)
+    monkeypatch.setattr(
+        release,
+        "resolve_target_version",
+        lambda requested, current_version, target, dry_run=False: (
+            "5.3.2",
+            _state(),
+        ),
+    )
+    monkeypatch.setattr(release, "current_head_commit", lambda: "a" * 40)
+
+    def reject() -> None:
+        raise RuntimeError("must run from main")
+
+    monkeypatch.setattr(release, "require_main_branch", reject)
+
+    with pytest.raises(RuntimeError, match="must run from main"):
+        release.main(["core", "--version", "5.3.2", "--skip-checks"])
+
+
+def test_repository_settings_check_cannot_be_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        release,
+        "require_backend_api_release_invariants",
+        lambda targets: None,
+    )
+    monkeypatch.setattr(release, "read_target_version", lambda target: "5.3.1")
+    monkeypatch.setattr(release, "is_dirty_worktree", lambda: False)
+    monkeypatch.setattr(
+        release,
+        "resolve_target_version",
+        lambda requested, current_version, target, dry_run=False: (
+            "5.3.2",
+            _state(),
+        ),
+    )
+    monkeypatch.setattr(release, "current_head_commit", lambda: "a" * 40)
+    monkeypatch.setattr(release, "require_main_branch", lambda: None)
+
+    def reject() -> None:
+        raise RuntimeError("repository settings blocked release")
+
+    monkeypatch.setattr(release, "require_repository_settings", reject)
+
+    with pytest.raises(RuntimeError, match="repository settings blocked release"):
+        release.main(["core", "--version", "5.3.2", "--skip-checks"])
+
+
+def test_interrupted_release_rerun_reuses_existing_release_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sha = "a" * 40
+    commands: list[tuple[str, ...]] = []
+    publications: list[tuple[tuple[release.ReleaseCandidate, ...], str]] = []
+    monkeypatch.setattr(
+        release,
+        "require_backend_api_release_invariants",
+        lambda targets: None,
+    )
+    monkeypatch.setattr(release, "read_target_version", lambda target: "5.3.2")
+    monkeypatch.setattr(release, "is_dirty_worktree", lambda: False)
+    monkeypatch.setattr(
+        release,
+        "resolve_target_version",
+        lambda requested, current_version, target, dry_run=False: (
+            "5.3.2",
+            _state(),
+        ),
+    )
+    monkeypatch.setattr(release, "current_head_commit", lambda: sha)
+    monkeypatch.setattr(release, "require_main_branch", lambda: None)
+    monkeypatch.setattr(release, "require_repository_settings", lambda: None)
+    monkeypatch.setattr(release, "_require_command", lambda name: None)
+    monkeypatch.setattr(release, "require_published_pg_baseline", lambda version: None)
+    monkeypatch.setattr(
+        release,
+        "require_published_redis_baseline",
+        lambda version: None,
+    )
+    monkeypatch.setattr(release, "read_pg_extension_version", lambda: "3.2.1")
+    monkeypatch.setattr(release, "read_redis_extension_version", lambda: "3.2.1")
+    monkeypatch.setattr(release, "sync_root_pg_extra_dependency", lambda: None)
+    monkeypatch.setattr(release, "sync_root_redis_extra_dependency", lambda: None)
+    monkeypatch.setattr(release, "build_postupdate_steps", lambda target: ())
+    monkeypatch.setattr(release, "release_files_changed", lambda target: False)
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: commands.append(command),
+    )
+    monkeypatch.setattr(
+        release,
+        "publish_release_tags_after_ci",
+        lambda candidates, release_sha: publications.append((candidates, release_sha)),
+    )
+
+    assert release.main(["core", "--skip-checks"]) == 0
+
+    assert not any(command[:2] == ("git", "commit") for command in commands)
+    assert len(publications) == 1
+    assert publications[0][1] == sha
+
+
+def test_remote_tag_is_read_again_after_ci_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sha = "a" * 40
+    candidate = release.ReleaseCandidate(
+        target=release.ROOT_RELEASE_TARGET,
+        current_version="5.3.2",
+        release_version="5.3.2",
+        state=_state(),
+    )
+    monkeypatch.setattr(release, "run_command", lambda command, **kwargs: None)
+    monkeypatch.setattr(
+        release,
+        "wait_for_release_workflows",
+        lambda targets, release_sha, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        release,
+        "require_release_sha_on_origin_main",
+        lambda release_sha, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        release,
+        "inspect_release_state",
+        lambda version, target: _state(remote="b" * 40),
+    )
+
+    with pytest.raises(RuntimeError, match="Choose a new version"):
+        release.publish_release_tags_after_ci((candidate,), sha)

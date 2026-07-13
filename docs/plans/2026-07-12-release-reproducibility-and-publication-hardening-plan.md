@@ -354,6 +354,12 @@ Use `uv run --locked` for these local bootstrap helpers. In already-synced CI
 steps, use `uv run --frozen --no-sync` where no nested helper needs to change the
 environment.
 
+Run local pytest release gates with one worker more than the available logical
+CPU count. `bin/release.py` calculates `(os.cpu_count() or 1) + 1`; ad hoc plan
+gates use the same calculation. This preserves the prior small worker
+oversubscription. Do not serialize local gates to avoid exposing contention;
+hosted CI remains the stricter timing environment.
+
 ## Dependency and Execution Order
 
 ```text
@@ -543,7 +549,8 @@ Add tests that require:
 
 ```bash
 python bin/bump_uv.py --check
-uv run pytest -q -n0 \
+PYTEST_WORKERS="$(python -c 'import os; print((os.cpu_count() or 1) + 1)')"
+uv run pytest -q -n "$PYTEST_WORKERS" \
   tests/test_bump_uv.py \
   tests/test_release_workflow.py \
   tests/test_dev_scripts.py \
@@ -608,7 +615,8 @@ Add tests that fail until:
 ```bash
 uv lock --check
 uv run ./bin/packaging-smoke --python 3.11
-uv run pytest -q -n0 \
+PYTEST_WORKERS="$(python -c 'import os; print((os.cpu_count() or 1) + 1)')"
+uv run pytest -q -n "$PYTEST_WORKERS" \
   tests/test_release_workflow.py \
   tests/test_release_script.py \
   tests/test_dev_scripts.py
@@ -811,7 +819,8 @@ Tests must also prove:
 ### Gates
 
 ```bash
-uv run pytest -q -n0 \
+PYTEST_WORKERS="$(python -c 'import os; print((os.cpu_count() or 1) + 1)')"
+uv run pytest -q -n "$PYTEST_WORKERS" \
   tests/test_release_script.py \
   tests/test_release_publication_script.py \
   tests/test_release_workflow.py
@@ -855,7 +864,8 @@ Tests first:
 Gate:
 
 ```bash
-uv run pytest -q -n0 tests/test_release_workflow.py \
+PYTEST_WORKERS="$(python -c 'import os; print((os.cpu_count() or 1) + 1)')"
+uv run pytest -q -n "$PYTEST_WORKERS" tests/test_release_workflow.py \
   -k 'codecov or coverage'
 ```
 
@@ -877,7 +887,7 @@ workflow. Cover the flag in `tests/test_release_script.py`.
 Then add these to the existing lint/quality job after its frozen sync:
 
 ```bash
-uv run --frozen --no-sync pytest -n0 examples
+uv run --frozen --no-sync pytest -n auto examples
 uv run --frozen --no-sync python bin/release.py --check-example-types
 ```
 
@@ -1062,13 +1072,14 @@ policies, and Actions SHA enforcement.
 
 ```bash
 python bin/bump_uv.py --check
-uv run pytest -q -n0 \
+PYTEST_WORKERS="$(python -c 'import os; print((os.cpu_count() or 1) + 1)')"
+uv run pytest -q -n "$PYTEST_WORKERS" \
   tests/test_bump_uv.py \
   tests/test_release_publication_script.py \
   tests/test_release_workflow.py \
   tests/test_release_script.py \
   tests/test_dev_scripts.py
-uv run pytest
+uv run pytest -n "$PYTEST_WORKERS"
 uv run ruff check simplebroker tests bin .github/scripts \
   extensions/simplebroker_pg/simplebroker_pg \
   extensions/simplebroker_pg/tests \
@@ -1290,7 +1301,7 @@ from YAML or local tests alone.
 | Shared draft-first release flow | Pending | Shared-script tests and all three merged job dependency graphs |
 | PR C: CI quick wins | Pending | Focused PR diff, coverage/example workflow output, and warning-path test |
 | Codecov OIDC | Pending | At least one successful authenticated PR or `main` upload URL; warning-bearing outage run if encountered |
-| Example CI | Pending | `pytest -n0 examples` and example mypy job output |
+| Example CI | Pending | `pytest -n auto examples` and example mypy job output |
 | Actions policy | Pending | Authenticated permissions and selected-actions readback |
 | PyPI environment policy | Pending | Environment and tag-policy readback |
 | Release tag ruleset | Pending | Active tag ruleset readback with no bypass |

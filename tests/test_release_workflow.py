@@ -210,13 +210,117 @@ def test_release_gate_uploads_python_distributions_and_attestations() -> None:
         "release-gate-redis.yml",
     ):
         workflow_text = _workflow_text(workflow_path)
-        github_release_section = workflow_text.split("  github-release:", 1)[1]
+        github_release_section = workflow_text.split("  stage-github-release:", 1)[
+            1
+        ].split("  publish-to-pypi:", 1)[0]
 
         assert "dist/*.tar.gz" in github_release_section
         assert "dist/*.whl" in github_release_section
         assert "attestations/*.sigstore.json" in github_release_section
         assert "dist/*\n" not in github_release_section
         assert "id-token" not in github_release_section
+
+
+def test_release_gate_stages_draft_before_pypi_and_publishes_last() -> None:
+    for workflow_path in RELEASE_WORKFLOWS:
+        workflow_text = _workflow_text(workflow_path)
+
+        require_index = workflow_text.index("  require-tests:")
+        verify_index = workflow_text.index("  verify-tag-current:")
+        build_index = workflow_text.index("  build:")
+        stage_index = workflow_text.index("  stage-github-release:")
+        pypi_index = workflow_text.index("  publish-to-pypi:")
+        publish_index = workflow_text.index("  publish-github-release:")
+
+        assert require_index < verify_index < build_index < stage_index
+        assert stage_index < pypi_index < publish_index
+        stage_section = workflow_text[stage_index:pypi_index]
+        pypi_section = workflow_text[pypi_index:publish_index]
+        publish_section = workflow_text[publish_index:]
+        verify_section = workflow_text[verify_index:build_index]
+        build_section = workflow_text[build_index:stage_index]
+
+        assert "- require-tests" in verify_section
+        assert "- verify-tag-current" in build_section
+        assert "- build" in stage_section
+        assert "replace-draft" in stage_section
+        assert "draft: true" in stage_section
+        assert "uses: softprops/action-gh-release@" in stage_section
+        assert "publish-draft" in publish_section
+        assert "uses: softprops/action-gh-release@" not in publish_section
+        assert "files:" not in publish_section
+        assert "- stage-github-release" in pypi_section
+        assert "- publish-to-pypi" in publish_section
+
+
+def test_release_gate_uses_one_shared_publication_state_machine() -> None:
+    for workflow_path in RELEASE_WORKFLOWS:
+        workflow_text = _workflow_text(workflow_path)
+
+        assert workflow_text.count(".github/scripts/release_publication.py") == 2
+        assert "gh api" not in workflow_text
+        assert "gh release edit" not in workflow_text
+        assert "api.pypi.org" not in workflow_text
+        assert "pypi.org/pypi" not in workflow_text
+
+
+def test_release_gate_passes_github_context_to_shell_as_environment_data() -> None:
+    unsafe_shell_interpolations = (
+        '--repo "${{ github.repository }}"',
+        '--tag "${{ github.ref_name }}"',
+        '--expected-sha "${{ github.sha }}"',
+    )
+
+    for workflow_path in RELEASE_WORKFLOWS:
+        workflow_text = _workflow_text(workflow_path)
+
+        assert all(
+            interpolation not in workflow_text
+            for interpolation in unsafe_shell_interpolations
+        )
+        assert '--repo "${GITHUB_REPOSITORY}"' in workflow_text
+        assert '--tag "${GITHUB_REF_NAME}"' in workflow_text
+        assert '--expected-sha "${GITHUB_SHA}"' in workflow_text
+
+    for workflow_path in ("release-gate-pg.yml", "release-gate-redis.yml"):
+        workflow_text = _workflow_text(workflow_path)
+
+        assert 'run: echo "name=simplebroker-' not in workflow_text
+        assert "printf 'name=%s %s\\n'" in workflow_text
+
+
+def test_release_gate_attaches_all_assets_before_publishing() -> None:
+    for workflow_path in RELEASE_WORKFLOWS:
+        workflow_text = _workflow_text(workflow_path)
+        stage_section = workflow_text.split("  stage-github-release:", 1)[1].split(
+            "  publish-to-pypi:", 1
+        )[0]
+        publish_section = workflow_text.split("  publish-github-release:", 1)[1]
+
+        assert "dist/*.tar.gz" in stage_section
+        assert "dist/*.whl" in stage_section
+        assert "attestations/*.sigstore.json" in stage_section
+        assert "fail_on_unmatched_files: true" in stage_section
+        assert "--expected-asset" in publish_section
+        assert "find dist attestations" in publish_section
+        assert "dist/*.tar.gz" not in publish_section
+        assert "dist/*.whl" not in publish_section
+        assert "attestations/*.sigstore.json" not in publish_section
+
+
+def test_release_gate_pypi_job_keeps_tokenless_minimum_permissions() -> None:
+    forbidden_secrets = ("PYPI_TOKEN", "TWINE_PASSWORD", "password:", "api-token")
+
+    for workflow_path in RELEASE_WORKFLOWS:
+        workflow_text = _workflow_text(workflow_path)
+        pypi_section = workflow_text.split("  publish-to-pypi:", 1)[1].split(
+            "  publish-github-release:", 1
+        )[0]
+
+        assert "permissions:\n      id-token: write" in pypi_section
+        assert "contents: write" not in pypi_section
+        assert "actions: write" not in pypi_section
+        assert all(secret not in workflow_text for secret in forbidden_secrets)
 
 
 def test_release_gate_verifies_tag_matches_package_version() -> None:

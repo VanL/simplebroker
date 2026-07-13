@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -17,6 +19,14 @@ from typing import Final, Literal
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
+
+
+def _local_pytest_worker_count(logical_cpu_count: int | None = None) -> int:
+    """Return the local release-gate worker count: logical CPUs plus one."""
+
+    detected = os.cpu_count() if logical_cpu_count is None else logical_cpu_count
+    return max(detected or 1, 1) + 1
+
 
 PROJECT_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 PYPROJECT_PATH: Final[Path] = PROJECT_ROOT / "pyproject.toml"
@@ -42,8 +52,10 @@ ROOT_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-gate.yml"
 PG_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-gate-pg.yml"
 REDIS_RELEASE_WORKFLOW: Final[str] = ".github/workflows/release-gate-redis.yml"
 GITHUB_API_BASE: Final[str] = "https://api.github.com"
+GITHUB_API_VERSION: Final[str] = "2026-03-10"
 PYPI_API_BASE: Final[str] = "https://pypi.org/pypi"
 HTTP_TIMEOUT_SECONDS: Final[float] = 10.0
+LOCAL_PYTEST_WORKERS: Final[int] = _local_pytest_worker_count()
 VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^\d+\.\d+\.\d+$")
 PYPROJECT_VERSION_PATTERN: Final[re.Pattern[str]] = re.compile(
     r'(?m)^version = "([^"]+)"$'
@@ -69,6 +81,21 @@ REDIS_EXTRA_DEPENDENCY_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 PENDING_RELEASE_COMMIT: Final[str] = "<release-commit>"
 ALL_RELEASE_TARGET_KEY: Final[str] = "all"
+RELEASE_TAG_RULESET_NAME: Final[str] = "Protect release tags"
+RELEASE_TAG_PATTERNS: Final[frozenset[str]] = frozenset(
+    {
+        "refs/tags/v*",
+        "refs/tags/simplebroker_pg/v*",
+        "refs/tags/simplebroker_redis/v*",
+    }
+)
+PYPI_ENVIRONMENT_TAG_PATTERNS: Final[frozenset[tuple[str, str]]] = frozenset(
+    {
+        ("tag", "v*"),
+        ("tag", "simplebroker_pg/v*"),
+        ("tag", "simplebroker_redis/v*"),
+    }
+)
 # Minimum simplebroker release allowed for each backend API version.
 BACKEND_API_MIN_CORE_VERSION: Final[dict[int, str]] = {
     1: "5.0.0",
@@ -88,7 +115,8 @@ ROOT_TEST_PYTEST_ARGS: Final[tuple[str, ...]] = (
     "--tb=short",
     "-m",
     "",
-    "--override-ini=addopts=-ra -q --strict-markers -n auto --dist loadgroup",
+    "--override-ini=addopts=-ra -q --strict-markers "
+    f"-n {LOCAL_PYTEST_WORKERS} --dist loadgroup",
 )
 PG_TEST_COMMAND: Final[tuple[str, ...]] = (
     "uv",
@@ -110,7 +138,8 @@ EXAMPLE_TEST_COMMAND: Final[tuple[str, ...]] = (
     "--extra",
     "dev",
     "pytest",
-    "-n0",
+    "-n",
+    str(LOCAL_PYTEST_WORKERS),
     "examples",
 )
 SHELLCHECK_EXAMPLES_COMMAND: Final[tuple[str, ...]] = (
@@ -219,7 +248,6 @@ TagAction = Literal[
     "create",
     "push_local",
     "replace_local",
-    "replace_remote",
     "reuse_remote",
 ]
 
@@ -320,6 +348,15 @@ BATCH_RELEASE_TARGETS: Final[tuple[ReleaseTarget, ...]] = (
     REDIS_RELEASE_TARGET,
     ROOT_RELEASE_TARGET,
 )
+REQUIRED_WORKFLOWS_BY_TARGET: Final[dict[str, tuple[str, ...]]] = {
+    ROOT_RELEASE_TARGET.key: (
+        "Test",
+        "Test Postgres Extension",
+        "Test Redis Extension",
+    ),
+    PG_RELEASE_TARGET.key: ("Test", "Test Postgres Extension"),
+    REDIS_RELEASE_TARGET.key: ("Test", "Test Redis Extension"),
+}
 
 
 def validate_version(version: str) -> str:
@@ -1028,14 +1065,33 @@ def _merge_command_env(
     return merged
 
 
-def _format_command_prefix(env_overrides: dict[str, str] | None) -> str:
+def _merge_public_and_private_command_env(
+    env_overrides: dict[str, str] | None,
+    private_env_overrides: dict[str, str] | None,
+) -> dict[str, str] | None:
+    """Merge logged and private command environment without logging private values."""
+
+    merged = _merge_command_env(env_overrides)
+    if not private_env_overrides:
+        return merged
+    return _merge_command_env(private_env_overrides, base_env=merged)
+
+
+def _format_command_prefix(
+    env_overrides: dict[str, str] | None,
+    *,
+    private_env_keys: frozenset[str] = frozenset(),
+) -> str:
     """Format environment overrides shown before a command in logs."""
 
-    if not env_overrides:
+    if not env_overrides and not private_env_keys:
         return ""
-    return " ".join(
-        f"{key}={shlex.quote(value)}" for key, value in sorted(env_overrides.items())
-    )
+    public_parts = [
+        f"{key}={shlex.quote(value)}"
+        for key, value in sorted((env_overrides or {}).items())
+    ]
+    private_parts = [f"{key}=<redacted>" for key in sorted(private_env_keys)]
+    return " ".join((*public_parts, *private_parts))
 
 
 def _format_cwd_suffix(cwd: Path) -> str:
@@ -1050,10 +1106,20 @@ def run_command(
     cwd: Path = PROJECT_ROOT,
     dry_run: bool = False,
     env_overrides: dict[str, str] | None = None,
+    private_env_overrides: dict[str, str] | None = None,
 ) -> None:
     """Run a command, printing it first."""
 
-    prefix = _format_command_prefix(env_overrides)
+    overlapping_keys = set(env_overrides or ()) & set(private_env_overrides or ())
+    if overlapping_keys:
+        raise RuntimeError(
+            "Command environment keys cannot be both public and private: "
+            + ", ".join(sorted(overlapping_keys))
+        )
+    prefix = _format_command_prefix(
+        env_overrides,
+        private_env_keys=frozenset(private_env_overrides or ()),
+    )
     formatted = _format_command(command)
     command_text = f"$ {prefix} {formatted}" if prefix else f"$ {formatted}"
     print(f"{command_text}{_format_cwd_suffix(cwd)}")
@@ -1063,7 +1129,10 @@ def run_command(
         command,
         cwd=cwd,
         check=True,
-        env=_merge_command_env(env_overrides),
+        env=_merge_public_and_private_command_env(
+            env_overrides,
+            private_env_overrides,
+        ),
     )
 
 
@@ -1117,6 +1186,28 @@ def current_head_commit() -> str:
     """Return the current HEAD commit SHA."""
 
     return _git_output(("git", "rev-parse", "HEAD"), label="current HEAD commit")
+
+
+def current_branch() -> str:
+    """Return the current branch name, rejecting detached HEAD."""
+
+    branch = _git_output(
+        ("git", "branch", "--show-current"),
+        label="current branch",
+    )
+    if not branch:
+        raise RuntimeError("A real release cannot run from detached HEAD")
+    return branch
+
+
+def require_main_branch() -> None:
+    """Require real releases to run from the main branch."""
+
+    branch = current_branch()
+    if branch != "main":
+        raise RuntimeError(
+            f"A real release must run from main; current branch is {branch}"
+        )
 
 
 def local_tag_commit(tag_name: str) -> str | None:
@@ -1223,6 +1314,231 @@ def _github_api_auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _github_api_json(path: str, token: str) -> object:
+    """Return one authenticated GitHub API JSON response."""
+
+    if not path.startswith("/"):
+        raise RuntimeError("GitHub API path must start with /")
+    request = urllib_request.Request(
+        f"{GITHUB_API_BASE}{path}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "simplebroker-release-helper",
+            "X-GitHub-Api-Version": GITHUB_API_VERSION,
+        },
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+            return json.load(response)
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"GitHub API request failed for {path}: HTTP {exc.code}: {detail}"
+        ) from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(
+            f"GitHub API request failed for {path}: {exc.reason}"
+        ) from exc
+
+
+def _json_mapping(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, Mapping) else None
+
+
+def _setting_payload(
+    *,
+    label: str,
+    path: str,
+    token: str,
+    issues: list[str],
+) -> object | None:
+    try:
+        return _github_api_json(path, token)
+    except RuntimeError as exc:
+        issues.append(f"{label} could not be verified: {exc}")
+        return None
+
+
+def repository_settings_issues(repo_slug: str, token: str) -> tuple[str, ...]:
+    """Return targeted issues for every required release repository setting."""
+
+    issues: list[str] = []
+    encoded_repo = urllib_parse.quote(repo_slug, safe="/")
+    base = f"/repos/{encoded_repo}"
+
+    immutable = _setting_payload(
+        label="immutable releases",
+        path=f"{base}/immutable-releases",
+        token=token,
+        issues=issues,
+    )
+    immutable_mapping = _json_mapping(immutable)
+    if immutable is not None and (
+        immutable_mapping is None or immutable_mapping.get("enabled") is not True
+    ):
+        issues.append("immutable releases must be enabled")
+
+    actions = _setting_payload(
+        label="Actions SHA pinning",
+        path=f"{base}/actions/permissions",
+        token=token,
+        issues=issues,
+    )
+    actions_mapping = _json_mapping(actions)
+    if actions is not None and (
+        actions_mapping is None
+        or actions_mapping.get("sha_pinning_required") is not True
+    ):
+        issues.append("Actions SHA pinning must require full commit SHAs")
+
+    environment = _setting_payload(
+        label="pypi environment policy",
+        path=f"{base}/environments/pypi",
+        token=token,
+        issues=issues,
+    )
+    environment_mapping = _json_mapping(environment)
+    deployment_policy = (
+        _json_mapping(environment_mapping.get("deployment_branch_policy"))
+        if environment_mapping is not None
+        else None
+    )
+    if environment is not None and (
+        deployment_policy is None
+        or deployment_policy.get("protected_branches") is not False
+        or deployment_policy.get("custom_branch_policies") is not True
+    ):
+        issues.append("pypi environment must use custom tag deployment policies only")
+
+    policies = _setting_payload(
+        label="pypi environment tag policies",
+        path=f"{base}/environments/pypi/deployment-branch-policies",
+        token=token,
+        issues=issues,
+    )
+    policies_mapping = _json_mapping(policies)
+    observed_policies: set[tuple[str, str]] = set()
+    raw_policies = (
+        policies_mapping.get("branch_policies")
+        if policies_mapping is not None
+        else None
+    )
+    if isinstance(raw_policies, list):
+        for raw_policy in raw_policies:
+            policy = _json_mapping(raw_policy)
+            if policy is None:
+                continue
+            policy_type = policy.get("type")
+            name = policy.get("name")
+            if isinstance(policy_type, str) and isinstance(name, str):
+                observed_policies.add((policy_type, name))
+    if policies is not None and observed_policies != set(PYPI_ENVIRONMENT_TAG_PATTERNS):
+        issues.append(
+            "pypi environment tag policies must be exactly v*, "
+            "simplebroker_pg/v*, and simplebroker_redis/v*"
+        )
+
+    rulesets = _setting_payload(
+        label="release-tag ruleset",
+        path=f"{base}/rulesets",
+        token=token,
+        issues=issues,
+    )
+    matching_rulesets: list[Mapping[str, object]] = []
+    if isinstance(rulesets, list):
+        matching_rulesets = [
+            ruleset
+            for raw_ruleset in rulesets
+            if (ruleset := _json_mapping(raw_ruleset)) is not None
+            and ruleset.get("name") == RELEASE_TAG_RULESET_NAME
+            and ruleset.get("target") == "tag"
+            and ruleset.get("enforcement") == "active"
+        ]
+    if rulesets is not None and len(matching_rulesets) != 1:
+        issues.append(
+            "release-tag ruleset 'Protect release tags' must exist and be active"
+        )
+    elif len(matching_rulesets) == 1:
+        ruleset_id = matching_rulesets[0].get("id")
+        if not isinstance(ruleset_id, int) or isinstance(ruleset_id, bool):
+            issues.append("release-tag ruleset did not contain a numeric id")
+        else:
+            detail = _setting_payload(
+                label="release-tag ruleset",
+                path=f"{base}/rulesets/{ruleset_id}",
+                token=token,
+                issues=issues,
+            )
+            detail_mapping = _json_mapping(detail)
+            conditions = (
+                _json_mapping(detail_mapping.get("conditions"))
+                if detail_mapping is not None
+                else None
+            )
+            ref_name = (
+                _json_mapping(conditions.get("ref_name"))
+                if conditions is not None
+                else None
+            )
+            includes = ref_name.get("include") if ref_name is not None else None
+            excludes = ref_name.get("exclude") if ref_name is not None else None
+            bypass_actors = (
+                detail_mapping.get("bypass_actors")
+                if detail_mapping is not None
+                else None
+            )
+            raw_rules = (
+                detail_mapping.get("rules") if detail_mapping is not None else None
+            )
+            rule_types: set[str] = set()
+            if isinstance(raw_rules, list):
+                for raw_rule in raw_rules:
+                    rule = _json_mapping(raw_rule)
+                    rule_type = rule.get("type") if rule is not None else None
+                    if isinstance(rule_type, str):
+                        rule_types.add(rule_type)
+            if (
+                not isinstance(includes, list)
+                or {item for item in includes if isinstance(item, str)}
+                != set(RELEASE_TAG_PATTERNS)
+                or excludes != []
+                or bypass_actors != []
+                or rule_types != {"update", "deletion"}
+            ):
+                issues.append(
+                    "release-tag ruleset must block updates and deletions for all "
+                    "release tags, allow creation, and have no bypass actors"
+                )
+
+    return tuple(issues)
+
+
+def require_repository_settings() -> None:
+    """Fail closed unless authenticated GitHub settings match release policy."""
+
+    token = _github_api_token()
+    if not token:
+        raise RuntimeError(
+            "Authenticated GitHub access is required to verify repository settings"
+        )
+    remote_url = origin_remote_url()
+    repo_slug = github_repo_slug_from_remote(remote_url)
+    if repo_slug is None:
+        raise RuntimeError(
+            f"Unable to determine GitHub repository from origin remote: {remote_url}"
+        )
+    issues = repository_settings_issues(repo_slug, token)
+    if issues:
+        raise RuntimeError(
+            "Repository settings are not ready for release:\n- " + "\n- ".join(issues)
+        )
+    print("repository setting ok: immutable releases enabled")
+    print("repository setting ok: release tags are write-once")
+    print("repository setting ok: pypi accepts only release tags")
+    print("repository setting ok: Actions require full SHA pinning")
+
+
 def _url_exists(url: str) -> bool:
     """Return whether a JSON endpoint exists, treating 404 as missing."""
 
@@ -1302,6 +1618,7 @@ def resolve_target_version(
     *,
     current_version: str,
     target: ReleaseTarget,
+    dry_run: bool = False,
 ) -> tuple[str, ReleaseState]:
     """Resolve the target version and ensure it has not been externally published."""
 
@@ -1311,6 +1628,10 @@ def resolve_target_version(
         else validate_version(requested_version)
     )
     state = inspect_release_state(target_version, target=target)
+    if state.published and requested_version is None and dry_run:
+        major, minor, patch = version_tuple(current_version)
+        target_version = f"{major}.{minor}.{patch + 1}"
+        state = inspect_release_state(target_version, target=target)
     if state.published:
         if requested_version is None:
             raise RuntimeError(
@@ -1333,31 +1654,27 @@ def plan_tag_action(
     *,
     head_commit: str,
     version_changed: bool,
-    allow_retag: bool,
 ) -> TagAction:
     """Plan how the helper should handle the target tag safely."""
 
     if version_changed:
         if state.remote_tag_commit is not None:
-            if allow_retag:
-                return "replace_remote"
             raise RuntimeError(
                 f"Tag {state.tag_name} already exists on origin at "
-                f"{_short_commit(state.remote_tag_commit)}. Choose a different version "
-                "or pass --retag."
+                f"{_short_commit(state.remote_tag_commit)}. Choose a new version; "
+                "remote release tags are permanent."
             )
         if state.local_tag_commit is not None:
             return "replace_local"
         return "create"
 
     if state.remote_tag_commit is not None and state.remote_tag_commit != head_commit:
-        if allow_retag:
-            return "replace_remote"
         raise RuntimeError(
             f"Tag {state.tag_name} already exists on origin at "
             f"{_short_commit(state.remote_tag_commit)}, but HEAD is "
             f"{_short_commit(head_commit)}. Reusing this unpublished version "
-            "would move the remote tag; choose a new version or pass --retag."
+            "would move the remote tag. Choose a new version; remote release "
+            "tags are permanent."
         )
 
     if state.local_tag_commit is not None and state.local_tag_commit != head_commit:
@@ -1456,14 +1773,12 @@ def _plan_candidate_tag_actions(
     *,
     head_commit: str,
     version_changed: bool,
-    allow_retag: bool,
 ) -> dict[str, TagAction]:
     return {
         candidate.target.key: plan_tag_action(
             candidate.state,
             head_commit=head_commit,
             version_changed=version_changed,
-            allow_retag=allow_retag,
         )
         for candidate in candidates
     }
@@ -1548,6 +1863,133 @@ def _remote_tag_reuse_note(state: ReleaseState) -> str:
     )
 
 
+def required_workflows_for_targets(
+    targets: tuple[ReleaseTarget, ...],
+) -> tuple[str, ...]:
+    """Return the ordered union of normal workflows required for targets."""
+
+    required: list[str] = []
+    for target in targets:
+        for workflow in REQUIRED_WORKFLOWS_BY_TARGET[target.key]:
+            if workflow not in required:
+                required.append(workflow)
+    return tuple(required)
+
+
+def _github_repo_slug() -> str:
+    remote_url = origin_remote_url()
+    repo_slug = github_repo_slug_from_remote(remote_url)
+    if repo_slug is None:
+        raise RuntimeError(
+            f"Unable to determine GitHub repository from origin remote: {remote_url}"
+        )
+    return repo_slug
+
+
+def wait_for_release_workflows(
+    targets: tuple[ReleaseTarget, ...],
+    release_sha: str,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Invoke the shared exact-SHA workflow poller without exposing its token."""
+
+    token = "dry-run-authenticated-token"
+    if not dry_run:
+        token = _github_api_token() or ""
+        if not token:
+            raise RuntimeError(
+                "Authenticated GitHub access is required to wait for release CI"
+            )
+    command: list[str] = [
+        sys.executable,
+        ".github/scripts/require_green_workflows.py",
+        "--repo",
+        _github_repo_slug(),
+        "--sha",
+        release_sha,
+    ]
+    for workflow in required_workflows_for_targets(targets):
+        command.extend(("--workflow", workflow))
+    run_command(
+        tuple(command),
+        dry_run=dry_run,
+        private_env_overrides={"GITHUB_TOKEN": token},
+    )
+
+
+def require_release_sha_on_origin_main(
+    release_sha: str,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Fetch main and require it still contains the tested release commit."""
+
+    run_command(("git", "fetch", "origin", "main"), dry_run=dry_run)
+    if dry_run:
+        print(
+            "dry-run: would require the tested release SHA to remain reachable "
+            "from origin/main"
+        )
+        return
+    result = _capture_command(
+        ("git", "merge-base", "--is-ancestor", release_sha, "origin/main")
+    )
+    if result.returncode == 0:
+        return
+    if result.returncode == 1:
+        raise RuntimeError(
+            f"Tested release SHA {release_sha} is no longer reachable from origin/main"
+        )
+    detail = result.stderr.strip() or result.stdout.strip() or "unknown git error"
+    raise RuntimeError(f"Unable to verify origin/main ancestry: {detail}")
+
+
+def publish_release_tags_after_ci(
+    candidates: tuple[ReleaseCandidate, ...],
+    release_sha: str,
+    *,
+    dry_run: bool = False,
+) -> None:
+    """Push main, wait for exact-SHA CI, then create and push final tags."""
+
+    targets = _candidate_targets(candidates)
+    run_command(("git", "push", "origin", "main"), dry_run=dry_run)
+    wait_for_release_workflows(targets, release_sha, dry_run=dry_run)
+    require_release_sha_on_origin_main(release_sha, dry_run=dry_run)
+
+    for candidate in candidates:
+        state = (
+            candidate.state
+            if dry_run
+            else inspect_release_state(
+                candidate.release_version,
+                target=candidate.target,
+            )
+        )
+        if state.published:
+            raise RuntimeError(
+                f"{candidate.target.display_name} {candidate.release_version} was "
+                f"published during the pre-tag wait via {published_destinations(state)}"
+            )
+        tag_action = plan_tag_action(
+            state,
+            head_commit=release_sha,
+            version_changed=False,
+        )
+        _prepare_tag_action(
+            state,
+            tag_action=tag_action,
+            dry_run=dry_run,
+            target_commit=release_sha,
+        )
+        _push_tag_action(
+            state,
+            tag_action=tag_action,
+            dry_run=dry_run,
+        )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Create a local SimpleBroker release")
     parser.add_argument(
@@ -1590,12 +2032,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print planned actions without modifying files or running commands",
     )
     parser.add_argument(
-        "--retag",
+        "--check-repository-settings",
         action="store_true",
-        help=(
-            "Delete and recreate unpublished remote tags when the existing tag "
-            "points at the wrong commit."
-        ),
+        help="Read and verify release-related GitHub repository settings",
     )
     parser.add_argument(
         "--check-shell-examples",
@@ -1610,20 +2049,19 @@ def _prepare_tag_action(
     *,
     tag_action: TagAction,
     dry_run: bool,
+    target_commit: str,
 ) -> None:
-    """Apply local tag mutations and remote tag deletions."""
+    """Apply local-only tag mutations after exact-SHA CI succeeds."""
 
     tag_name = state.tag_name
     if tag_action == "replace_local":
         run_command(("git", "tag", "-d", tag_name), dry_run=dry_run)
 
-    if tag_action == "replace_remote":
-        if state.local_tag_commit is not None:
-            run_command(("git", "tag", "-d", tag_name), dry_run=dry_run)
-        run_command(("git", "push", "--delete", "origin", tag_name), dry_run=dry_run)
-
-    if tag_action in {"create", "replace_local", "replace_remote"}:
-        run_command(("git", "tag", tag_name), dry_run=dry_run)
+    if tag_action in {"create", "replace_local"}:
+        run_command(
+            ("git", "tag", tag_name, target_commit),
+            dry_run=dry_run,
+        )
 
 
 def _push_tag_action(
@@ -1635,7 +2073,7 @@ def _push_tag_action(
     """Push a prepared tag to origin when required."""
 
     tag_name = state.tag_name
-    if tag_action in {"create", "push_local", "replace_local", "replace_remote"}:
+    if tag_action in {"create", "push_local", "replace_local"}:
         run_command(("git", "push", "origin", tag_name), dry_run=dry_run)
         return
 
@@ -1681,11 +2119,12 @@ def _run_batch_release(args: argparse.Namespace) -> int:
         candidates,
         head_commit=initial_head_commit,
         version_changed=False,
-        allow_retag=args.retag,
     )
     _print_batch_release_plan(candidates, tag_actions)
 
     if args.dry_run:
+        print("dry-run: would require the current branch to be main")
+        print("dry-run: would verify authenticated repository release settings")
         if dirty:
             print("dry-run: working tree is dirty; a real release would fail")
         if args.publish:
@@ -1713,25 +2152,19 @@ def _run_batch_release(args: argparse.Namespace) -> int:
             ("git", "commit", "-m", _batch_release_commit_message(candidates)),
             dry_run=True,
         )
-        for candidate in candidates:
-            _prepare_tag_action(
-                candidate.state,
-                tag_action=tag_actions[candidate.target.key],
-                dry_run=True,
-            )
-        run_command(("git", "push"), dry_run=True)
-        for candidate in candidates:
-            _push_tag_action(
-                candidate.state,
-                tag_action=tag_actions[candidate.target.key],
-                dry_run=True,
-            )
+        publish_release_tags_after_ci(
+            candidates,
+            PENDING_RELEASE_COMMIT,
+            dry_run=True,
+        )
         print(
-            "dry-run: next step is to wait for release workflows on "
+            "dry-run: tag pushes would start draft-first release workflows on "
             + ", ".join(candidate.state.tag_name for candidate in candidates)
         )
         return 0
 
+    require_main_branch()
+    require_repository_settings()
     _require_command("uv")
     if args.publish:
         _print_publish_note()
@@ -1771,27 +2204,8 @@ def _run_batch_release(args: argparse.Namespace) -> int:
     else:
         print("No release commit needed; release files already match target versions")
 
-    head_commit = current_head_commit()
-    tag_actions = _plan_candidate_tag_actions(
-        candidates,
-        head_commit=head_commit,
-        version_changed=release_commit_created,
-        allow_retag=args.retag,
-    )
-
-    for candidate in candidates:
-        _prepare_tag_action(
-            candidate.state,
-            tag_action=tag_actions[candidate.target.key],
-            dry_run=False,
-        )
-    run_command(("git", "push"))
-    for candidate in candidates:
-        _push_tag_action(
-            candidate.state,
-            tag_action=tag_actions[candidate.target.key],
-            dry_run=False,
-        )
+    release_sha = current_head_commit()
+    publish_release_tags_after_ci(candidates, release_sha)
 
     print(
         "Next step: wait for release-gate workflows on "
@@ -1806,6 +2220,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.check_shell_examples:
         return run_shellcheck_examples()
+    if args.check_repository_settings:
+        require_repository_settings()
+        return 0
     if args.target == ALL_RELEASE_TARGET_KEY:
         return _run_batch_release(args)
 
@@ -1822,6 +2239,7 @@ def main(argv: list[str] | None = None) -> int:
         args.version,
         current_version=current_version,
         target=target,
+        dry_run=args.dry_run,
     )
     version_changed = target_version != current_version
     initial_head_commit = current_head_commit()
@@ -1832,7 +2250,6 @@ def main(argv: list[str] | None = None) -> int:
         release_state,
         head_commit=planning_head_commit,
         version_changed=version_changed,
-        allow_retag=args.retag,
     )
 
     print(f"target:  {target.display_name}")
@@ -1842,6 +2259,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"tag:     {release_state.tag_name} ({tag_action})")
 
     if args.dry_run:
+        print("dry-run: would require the current branch to be main")
+        print("dry-run: would verify authenticated repository release settings")
         if dirty:
             print("dry-run: working tree is dirty; a real release would fail")
         if args.publish:
@@ -1904,15 +2323,25 @@ def main(argv: list[str] | None = None) -> int:
                 "dry-run: no release commit needed unless generated release files "
                 "change during post-update checks"
             )
-        _prepare_tag_action(release_state, tag_action=tag_action, dry_run=True)
-        run_command(("git", "push"), dry_run=True)
-        _push_tag_action(release_state, tag_action=tag_action, dry_run=True)
+        candidate = ReleaseCandidate(
+            target=target,
+            current_version=current_version,
+            release_version=target_version,
+            state=release_state,
+        )
+        publish_release_tags_after_ci(
+            (candidate,),
+            PENDING_RELEASE_COMMIT,
+            dry_run=True,
+        )
         print(
-            "dry-run: next step is to wait for "
+            "dry-run: the tag push would start the draft-first workflow "
             f"{target.release_workflow} on {release_state.tag_name}"
         )
         return 0
 
+    require_main_branch()
+    require_repository_settings()
     _require_command("uv")
     if args.publish:
         _print_publish_note()
@@ -1971,17 +2400,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("No release commit needed; release files already match target version")
 
-    head_commit = current_head_commit()
-    tag_action = plan_tag_action(
-        release_state,
-        head_commit=head_commit,
-        version_changed=release_commit_created,
-        allow_retag=args.retag,
+    release_sha = current_head_commit()
+    candidate = ReleaseCandidate(
+        target=target,
+        current_version=current_version,
+        release_version=target_version,
+        state=release_state,
     )
-
-    _prepare_tag_action(release_state, tag_action=tag_action, dry_run=False)
-    run_command(("git", "push"))
-    _push_tag_action(release_state, tag_action=tag_action, dry_run=False)
+    publish_release_tags_after_ci((candidate,), release_sha)
 
     print(
         "Next step: wait for "
