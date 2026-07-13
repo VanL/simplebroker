@@ -281,12 +281,13 @@ def _pg_test_uv_command(*args: str) -> list[str]:
     return [
         "uv",
         "run",
+        "--project",
+        str(ROOT),
+        "--locked",
         "--extra",
         "dev",
-        "--with-editable",
-        ".",
-        "--with-editable",
-        "./extensions/simplebroker_pg[dev]",
+        "--extra",
+        "pg",
         *args,
     ]
 
@@ -688,8 +689,21 @@ def _remove_build_outputs() -> None:
 
 def _build_distribution(project_dir: Path) -> None:
     _run(
-        ["uv", "run", "--with", "build", "python", "-m", "build"],
-        cwd=project_dir,
+        [
+            "uv",
+            "run",
+            "--project",
+            str(ROOT),
+            "--locked",
+            "--group",
+            "release",
+            "python",
+            "-m",
+            "build",
+            "--no-isolation",
+            str(project_dir),
+        ],
+        cwd=ROOT,
     )
 
 

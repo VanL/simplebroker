@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_VERSION: "0.11.28"
+
 jobs:
   test-pg:
     strategy:
@@ -29,6 +32,7 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
       with:
+        version: ${{ env.UV_VERSION }}
         enable-cache: true
         cache-dependency-glob: |
           pyproject.toml
@@ -36,9 +40,12 @@ jobs:
           extensions/simplebroker_pg/pyproject.toml
           extensions/simplebroker_pg/uv.lock
 
+    - name: Install dependencies
+      run: uv sync --frozen --extra dev --extra pg
+
     - name: Run PG-backed test suites
       run: |
-        uv run ./bin/pytest-pg
+        uv run --frozen --no-sync ./bin/pytest-pg
 
   lint:
     runs-on: ubuntu-latest
@@ -53,6 +60,7 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
       with:
+        version: ${{ env.UV_VERSION }}
         enable-cache: true
         cache-dependency-glob: |
           pyproject.toml
@@ -60,15 +68,18 @@ jobs:
           extensions/simplebroker_pg/pyproject.toml
           extensions/simplebroker_pg/uv.lock
 
+    - name: Install dependencies
+      run: uv sync --frozen --extra dev --extra pg
+
     - name: Run extension linting with ruff
       run: |
-        uv run --extra dev ruff check extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests
+        uv run --frozen --no-sync ruff check extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests
 
     - name: Check extension formatting with ruff
       run: |
-        uv run --extra dev ruff format --check extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests
+        uv run --frozen --no-sync ruff format --check extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests
 
     - name: Type check extension with mypy
       run: |
         mapfile -t pg_test_files < <(find extensions/simplebroker_pg/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
-        uv run --extra dev mypy extensions/simplebroker_pg/simplebroker_pg "${pg_test_files[@]}" --config-file pyproject.toml
+        uv run --frozen --no-sync mypy extensions/simplebroker_pg/simplebroker_pg "${pg_test_files[@]}" --config-file pyproject.toml

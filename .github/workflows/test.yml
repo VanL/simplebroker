@@ -10,7 +10,36 @@ on:
 permissions:
   contents: read
 
+env:
+  UV_VERSION: "0.11.28"
+
 jobs:
+  locks:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+    - name: Set up Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+      with:
+        version: ${{ env.UV_VERSION }}
+        enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_pg/pyproject.toml
+          extensions/simplebroker_pg/uv.lock
+          extensions/simplebroker_redis/pyproject.toml
+          extensions/simplebroker_redis/uv.lock
+
+    - name: Check uv policy and lockfiles
+      run: python bin/bump_uv.py --check
+
   test:
     runs-on: ${{ matrix.os }}
     strategy:
@@ -36,6 +65,7 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
       with:
+        version: ${{ env.UV_VERSION }}
         enable-cache: true
         cache-dependency-glob: |
           pyproject.toml
@@ -47,22 +77,22 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install --system -e ".[dev]"
+        uv sync --frozen --extra dev
 
     - name: Run tests with pytest
       run: |
-        pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup"
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup"
 
     - name: Run phaselock fallback-path gate
       env:
         PHASELOCK_ENABLE_XATTRS: "0"
       run: |
-        pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup" tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup" tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
 
     - name: Test CLI installation
       run: |
-        broker --version
-        simplebroker --version
+        uv run --frozen --no-sync broker --version
+        uv run --frozen --no-sync simplebroker --version
 
   lint:
     runs-on: ubuntu-latest
@@ -77,6 +107,7 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
       with:
+        version: ${{ env.UV_VERSION }}
         enable-cache: true
         cache-dependency-glob: |
           pyproject.toml
@@ -88,23 +119,23 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install --system -e ".[dev]"
+        uv sync --frozen --extra dev --extra pg --extra redis
 
     - name: Run linting with ruff
       run: |
-        ruff check simplebroker tests bin .github/scripts extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
+        uv run --frozen --no-sync ruff check simplebroker tests bin .github/scripts extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 
     - name: Check formatting with ruff
       run: |
-        ruff format --check simplebroker tests bin .github/scripts extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
+        uv run --frozen --no-sync ruff format --check simplebroker tests bin .github/scripts extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 
     - name: Type check with mypy
       run: |
         mapfile -t pg_test_files < <(find extensions/simplebroker_pg/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
         mapfile -t redis_test_files < <(find extensions/simplebroker_redis/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
-        mypy simplebroker bin/release.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis --config-file pyproject.toml
-        mypy extensions/simplebroker_pg/simplebroker_pg "${pg_test_files[@]}" --config-file pyproject.toml
-        mypy extensions/simplebroker_redis/simplebroker_redis "${redis_test_files[@]}" --config-file pyproject.toml
+        uv run --frozen --no-sync mypy simplebroker bin/release.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis --config-file pyproject.toml
+        uv run --frozen --no-sync mypy extensions/simplebroker_pg/simplebroker_pg "${pg_test_files[@]}" --config-file pyproject.toml
+        uv run --frozen --no-sync mypy extensions/simplebroker_redis/simplebroker_redis "${redis_test_files[@]}" --config-file pyproject.toml
 
   packaging:
     runs-on: ubuntu-latest
@@ -119,6 +150,7 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
       with:
+        version: ${{ env.UV_VERSION }}
         enable-cache: true
         cache-dependency-glob: |
           pyproject.toml
@@ -130,7 +162,8 @@ jobs:
 
     - name: Run packaging smoke
       run: |
-        uv run ./bin/packaging-smoke --python 3.11
+        uv sync --frozen --extra dev
+        uv run --frozen --no-sync ./bin/packaging-smoke --python 3.11
 
   coverage:
     runs-on: ubuntu-latest
@@ -145,6 +178,7 @@ jobs:
     - name: Install uv
       uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
       with:
+        version: ${{ env.UV_VERSION }}
         enable-cache: true
         cache-dependency-glob: |
           pyproject.toml
@@ -156,7 +190,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv pip install --system -e ".[dev]"
+        uv sync --frozen --extra dev --extra pg --extra redis
 
     - name: Run tests with coverage
       env:
@@ -164,13 +198,13 @@ jobs:
         COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
-        uv run coverage erase
-        uv run pytest --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= -m "not benchmark"
-        PYTEST_ADDOPTS= uv run ./bin/pytest-pg --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
-        PYTEST_ADDOPTS= uv run ./bin/pytest-redis --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
-        uv run python .github/scripts/combine_coverage.py
-        uv run coverage report --show-missing
-        uv run coverage xml
+        uv run --frozen --no-sync coverage erase
+        uv run --frozen --no-sync pytest --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= -m "not benchmark"
+        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
+        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report=
+        uv run --frozen --no-sync python .github/scripts/combine_coverage.py
+        uv run --frozen --no-sync coverage report --show-missing
+        uv run --frozen --no-sync coverage xml
 
     - name: Upload coverage reports
       uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f

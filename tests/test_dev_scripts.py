@@ -443,12 +443,31 @@ def test_pg_test_uv_command_uses_pg_test_dependencies() -> None:
     assert _pg_test_uv_command("pytest", "tests") == [
         "uv",
         "run",
+        "--project",
+        str(REPO_ROOT),
+        "--locked",
         "--extra",
         "dev",
-        "--with-editable",
-        ".",
-        "--with-editable",
-        "./extensions/simplebroker_pg[dev]",
+        "--extra",
+        "pg",
+        "pytest",
+        "tests",
+    ]
+
+
+def test_redis_test_uv_command_uses_the_locked_root_project() -> None:
+    redis_script = runpy.run_path(str(REPO_ROOT / "bin" / "pytest-redis"))
+
+    assert redis_script["_uv_command"]("pytest", "tests") == [
+        "uv",
+        "run",
+        "--project",
+        str(REPO_ROOT),
+        "--locked",
+        "--extra",
+        "dev",
+        "--extra",
+        "redis",
         "pytest",
         "tests",
     ]
@@ -469,18 +488,19 @@ def test_verify_postgres_test_dsn_runs_select_one(
 
     assert len(calls) == 1
     cmd, env, capture_output = calls[0]
-    assert cmd[:8] == [
+    assert cmd[:9] == [
         "uv",
         "run",
+        "--project",
+        str(REPO_ROOT),
+        "--locked",
         "--extra",
         "dev",
-        "--with-editable",
-        ".",
-        "--with-editable",
-        "./extensions/simplebroker_pg[dev]",
+        "--extra",
+        "pg",
     ]
-    assert cmd[8:10] == ["python", "-c"]
-    assert cmd[10] == _scripts._POSTGRES_DSN_VERIFY_COMMAND
+    assert cmd[9:11] == ["python", "-c"]
+    assert cmd[11] == _scripts._POSTGRES_DSN_VERIFY_COMMAND
     assert env is not None
     assert env["SIMPLEBROKER_PG_TEST_DSN"] == "postgresql://example/test"
     assert env["SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT"] == "60.000000"
@@ -602,7 +622,7 @@ def test_pytest_pg_main_preflights_dsn_before_pytest(
     assert calls[0] == ("verify", "postgresql://example/test")
     run_call = calls[1]
     assert run_call[0] == "run"
-    assert run_call[1][8:10] == ["pytest", "tests/test_smoke.py"]
+    assert run_call[1][9:11] == ["pytest", "tests/test_smoke.py"]
     assert run_call[2]["SIMPLEBROKER_PG_TEST_DSN"] == "postgresql://example/test"
     assert run_call[2]["BROKER_TEST_BACKEND"] == "postgres"
     assert calls[2] == ("cleanup", "pg-container")
@@ -852,6 +872,41 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
     assert run_calls[2][1][1] == "-c"
     assert "get_backend_plugin('postgres')" in run_calls[2][1][2]
     assert "get_backend_plugin('redis')" in run_calls[2][1][2]
+
+
+def test_build_distribution_uses_locked_nonisolated_frontend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    project_dir = REPO_ROOT / "extensions" / "simplebroker_pg"
+
+    def fake_run(cmd, *, cwd=_scripts.ROOT, env=None, capture_output=False):
+        calls.append((cmd, cwd))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(_scripts, "_run", fake_run)
+
+    _scripts._build_distribution(project_dir)
+
+    assert calls == [
+        (
+            [
+                "uv",
+                "run",
+                "--project",
+                str(REPO_ROOT),
+                "--locked",
+                "--group",
+                "release",
+                "python",
+                "-m",
+                "build",
+                "--no-isolation",
+                str(project_dir),
+            ],
+            REPO_ROOT,
+        )
+    ]
 
 
 def test_packaging_smoke_main_returns_subprocess_failure(
