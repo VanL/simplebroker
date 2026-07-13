@@ -182,7 +182,11 @@ requires-dist = [
 provides-extras = ["dev", "pg", "redis"]
 
 [package.metadata.requires-dev]
-fuzz = [{ name = "atheris", specifier = ">=2.3.0" }]
+fuzz = [{ name = "atheris", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = ">=2.3.0" }]
+release = [
+    { name = "build", specifier = "==1.5.1" },
+    { name = "hatchling", specifier = "==1.31.0" },
+]
 
 [[package]]
 name = "simplebroker-pg"

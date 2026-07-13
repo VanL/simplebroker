@@ -91,12 +91,13 @@ def _uv_command(*args: str) -> list[str]:
     return [
         "uv",
         "run",
+        "--project",
+        str(ROOT),
+        "--locked",
         "--extra",
         "dev",
-        "--with-editable",
-        ".",
-        "--with-editable",
-        "./extensions/simplebroker_redis[dev]",
+        "--extra",
+        "redis",
         *args,
     ]
 

@@ -3,6 +3,25 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+UV_WORKFLOWS = (
+    "fuzz.yml",
+    "release-gate.yml",
+    "release-gate-pg.yml",
+    "release-gate-redis.yml",
+    "test.yml",
+    "test-pg-extension.yml",
+    "test-redis-extension.yml",
+)
+TEST_WORKFLOWS = (
+    "test.yml",
+    "test-pg-extension.yml",
+    "test-redis-extension.yml",
+)
+RELEASE_WORKFLOWS = (
+    "release-gate.yml",
+    "release-gate-pg.yml",
+    "release-gate-redis.yml",
+)
 
 
 def _workflow_text(path: str) -> str:
@@ -68,6 +87,72 @@ def test_fuzz_dependency_group_is_opt_in() -> None:
         "atheris>=2.3.0; sys_platform == 'linux' and platform_machine == 'x86_64'"
     ]
     assert pyproject["tool"]["uv"]["default-groups"] == []
+
+
+def test_every_uv_workflow_uses_the_repository_pin() -> None:
+    for workflow_path in UV_WORKFLOWS:
+        workflow_text = _workflow_text(workflow_path)
+
+        assert workflow_text.count('UV_VERSION: "0.11.28"') == 1
+        assert re.search(r"(?m)^jobs:\n  [a-z]", workflow_text)
+        setup_count = workflow_text.count("uses: astral-sh/setup-uv@")
+        assert setup_count > 0
+        assert workflow_text.count("version: ${{ env.UV_VERSION }}") == setup_count
+
+
+def test_test_workflows_sync_once_and_only_run_the_frozen_environment() -> None:
+    expected_extras = {
+        "test.yml": (
+            "uv sync --frozen --extra dev",
+            "uv sync --frozen --extra dev --extra pg --extra redis",
+        ),
+        "test-pg-extension.yml": ("uv sync --frozen --extra dev --extra pg",),
+        "test-redis-extension.yml": ("uv sync --frozen --extra dev --extra redis",),
+    }
+
+    for workflow_path in TEST_WORKFLOWS:
+        workflow_text = _workflow_text(workflow_path)
+
+        assert "uv pip install" not in workflow_text
+        for sync_command in expected_extras[workflow_path]:
+            assert sync_command in workflow_text
+        for line in workflow_text.splitlines():
+            command = line.strip()
+            if command.startswith(("uv run ", "uv run ./")):
+                assert command.startswith("uv run --frozen --no-sync ")
+
+
+def test_release_builds_use_the_exact_locked_frontend_without_a_cache() -> None:
+    for workflow_path in RELEASE_WORKFLOWS:
+        workflow_text = _workflow_text(workflow_path)
+
+        build_section = workflow_text.split("      - name: Install uv", 1)[1].split(
+            "      - name: Generate artifact attestation", 1
+        )[0]
+        assert "enable-cache: false" in build_section
+        assert "uv sync --frozen --group release" in build_section
+        assert (
+            'uv run --frozen --no-sync python -m build --no-isolation "${PACKAGE_DIR}"'
+        ) in build_section
+        assert "uv build" not in build_section
+        assert "working-directory:" not in build_section
+
+
+def test_build_frontend_is_bounded_and_locked() -> None:
+    projects = (
+        ROOT / "pyproject.toml",
+        ROOT / "extensions" / "simplebroker_pg" / "pyproject.toml",
+        ROOT / "extensions" / "simplebroker_redis" / "pyproject.toml",
+    )
+    for path in projects:
+        pyproject = tomllib.loads(path.read_text(encoding="utf-8"))
+        assert pyproject["build-system"]["requires"] == ["hatchling>=1.31,<2"]
+
+    root_pyproject = tomllib.loads(projects[0].read_text(encoding="utf-8"))
+    assert root_pyproject["dependency-groups"]["release"] == [
+        "build==1.5.1",
+        "hatchling==1.31.0",
+    ]
 
 
 def test_packaging_workflow_has_no_redundant_pip_install() -> None:
@@ -177,12 +262,15 @@ def test_coverage_workflow_runs_backend_helpers_before_upload() -> None:
     coverage_section = workflow_text.split("- name: Run tests with coverage", 1)[1]
     coverage_section = coverage_section.split("- name: Upload coverage reports", 1)[0]
 
-    assert "uv run pytest" in coverage_section
-    assert "uv run ./bin/pytest-pg --fast" in coverage_section
-    assert "uv run ./bin/pytest-redis --fast" in coverage_section
+    assert "uv run --frozen --no-sync pytest" in coverage_section
+    assert "uv run --frozen --no-sync ./bin/pytest-pg --fast" in coverage_section
+    assert "uv run --frozen --no-sync ./bin/pytest-redis --fast" in coverage_section
     assert coverage_section.count("--cov-append") == 3
-    assert "uv run python .github/scripts/combine_coverage.py" in coverage_section
-    assert "uv run coverage xml" in coverage_section
+    assert (
+        "uv run --frozen --no-sync python .github/scripts/combine_coverage.py"
+        in coverage_section
+    )
+    assert "uv run --frozen --no-sync coverage xml" in coverage_section
     assert coverage_section.index("./bin/pytest-pg --fast") < coverage_section.index(
         "combine_coverage.py"
     )

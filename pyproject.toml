@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.31,<2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -58,6 +58,10 @@ redis = [
 fuzz = [
     "atheris>=2.3.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
+release = [
+    "build==1.5.1",
+    "hatchling==1.31.0",
+]
 
 [project.scripts]
 broker = "simplebroker.cli:main"
@@ -70,6 +74,7 @@ Repository = "https://github.com/VanL/simplebroker.git"
 Issues = "https://github.com/VanL/simplebroker/issues"
 
 [tool.uv]
+required-version = ">=0.11.11,<0.12"
 default-groups = []
 
 [tool.uv.sources]

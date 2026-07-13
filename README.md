@@ -2205,6 +2205,20 @@ uv run ruff format simplebroker tests bin examples
 uv run mypy simplebroker bin/release.py
 ```
 
+CI uses one pinned uv release while local development accepts the compatible
+uv 0.11 line. Update both policies and all three lockfiles with one command:
+
+```bash
+python bin/bump_uv.py \
+  --ci-version 0.11.28 \
+  --required-version '>=0.11.11,<0.12'
+python bin/bump_uv.py --check
+```
+
+Run the update with system Python. This still works when a newly installed uv
+falls outside the old repository range. Review the workflow and lockfile diffs
+before running the normal tests.
+
 Property-based tests (`tests/test_property_*.py`, powered by Hypothesis)
 check parser totality/round-trips and run a stateful model of queue
 semantics against every backend; failures print a `@reproduce_failure`

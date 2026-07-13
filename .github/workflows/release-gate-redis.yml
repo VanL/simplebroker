@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  UV_VERSION: "0.11.11"
+  UV_VERSION: "0.11.28"
   PACKAGE_NAME: simplebroker-redis
   PACKAGE_DIR: extensions/simplebroker_redis
 
@@ -100,7 +100,7 @@ jobs:
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
           version: ${{ env.UV_VERSION }}
-          enable-cache: true
+          enable-cache: false
 
       - name: Verify checked out commit matches tested release commit
         run: |
@@ -125,10 +125,12 @@ jobs:
               raise SystemExit(f"tag {tag} != pyproject version {package_version}")
           PY
 
+      - name: Install locked build frontend
+        run: uv sync --frozen --group release
+
       - name: Build package
-        working-directory: ${{ env.PACKAGE_DIR }}
         run: |
-          uv build
+          uv run --frozen --no-sync python -m build --no-isolation "${PACKAGE_DIR}"
 
       - name: Generate artifact attestation
         id: attest
