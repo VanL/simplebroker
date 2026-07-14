@@ -20,8 +20,13 @@ pytestmark = [pytest.mark.pg_only]
 
 
 class FakeCursor:
-    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+    def __init__(
+        self,
+        rows: list[tuple[Any, ...]],
+        execute_error: Exception | None = None,
+    ) -> None:
         self._rows = rows
+        self._execute_error = execute_error
 
     def __enter__(self) -> FakeCursor:
         return self
@@ -37,6 +42,8 @@ class FakeCursor:
         prepare: bool = False,
     ) -> None:
         del sql, params, prepare
+        if self._execute_error is not None:
+            raise self._execute_error
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self._rows
@@ -51,9 +58,11 @@ class FakeConnection:
         self.commit_calls = 0
         self.rollback_calls = 0
         self.commit_error: PsycopgOperationalError | None = None
+        self.rollback_error: PsycopgOperationalError | None = None
+        self.execute_error: Exception | None = None
 
     def cursor(self) -> FakeCursor:
-        return FakeCursor(self._rows)
+        return FakeCursor(self._rows, self.execute_error)
 
     def commit(self) -> None:
         self.commit_calls += 1
@@ -62,6 +71,8 @@ class FakeConnection:
 
     def rollback(self) -> None:
         self.rollback_calls += 1
+        if self.rollback_error is not None:
+            raise self.rollback_error
 
 
 class FakePool:
@@ -89,10 +100,13 @@ def _runner_with_thread_connection() -> tuple[PostgresRunner, FakePool]:
     runner._pool = pool
     runner._thread_local = threading.local()
     runner._thread_local.conn = pool.conn
+    runner._pid = os.getpid()
     runner._lease_lock = threading.RLock()
     runner._leased_operation_lock = threading.RLock()
     runner._leased_conn = None
     runner._lease_depth = 0
+    runner._meta_cache_lock = threading.Lock()
+    runner._meta_cache = None
     return cast(PostgresRunner, runner), pool
 
 
@@ -106,6 +120,8 @@ def _runner_with_fake_pool() -> tuple[PostgresRunner, FakePool]:
     runner._leased_operation_lock = threading.RLock()
     runner._leased_conn = None
     runner._lease_depth = 0
+    runner._meta_cache_lock = threading.Lock()
+    runner._meta_cache = None
     return cast(PostgresRunner, runner), pool
 
 
@@ -209,6 +225,283 @@ def test_close_returns_thread_connection_and_closes_pool() -> None:
     assert pool.putconn_calls == 1
     assert pool.close_calls == 1
     assert not hasattr(runner._thread_local, "conn")
+
+
+def test_fork_check_rebuilds_all_process_owned_runner_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, old_pool = _runner_with_fake_pool()
+    runner._thread_local.conn = old_pool.conn
+    runner._setup_lock = threading.RLock()
+    runner._completed_phases = {SetupPhase.CONNECTION, SetupPhase.SCHEMA}
+    runner._meta_cache_lock = threading.Lock()
+    runner._meta_cache = pg_runner_module.RunnerMetaState("magic", 5, 10, 3)
+    runner._schema_bootstrapped = True
+    runner._pid = 1001
+    new_pool = FakePool()
+
+    monkeypatch.setattr(pg_runner_module.os, "getpid", lambda: 1002)
+    monkeypatch.setattr(runner, "_create_pool", lambda: new_pool)
+
+    runner._check_fork()
+
+    assert runner._pid == 1002
+    assert runner._pool is new_pool
+    assert not hasattr(runner._thread_local, "conn")
+    assert runner._lease_depth == 0
+    assert runner._leased_conn is None
+    assert runner._completed_phases == set()
+    assert runner._meta_cache is None
+    assert runner._schema_bootstrapped is False
+
+
+def test_lease_adopts_thread_checkout_and_clears_transaction_markers() -> None:
+    runner, pool = _runner_with_thread_connection()
+    runner._thread_local.in_transaction = True
+    runner._thread_local.transaction_uses_leased_conn = False
+
+    runner.lease_thread_connection()
+
+    assert runner._leased_conn is pool.conn
+    assert runner._lease_depth == 1
+    assert not hasattr(runner._thread_local, "conn")
+    assert not hasattr(runner._thread_local, "in_transaction")
+    assert not hasattr(runner._thread_local, "transaction_uses_leased_conn")
+    assert pool.getconn_calls == 0
+
+
+@pytest.mark.parametrize("leased", [False, True])
+@pytest.mark.parametrize(
+    ("execute_error", "expected_error"),
+    [
+        (PsycopgOperationalError("database unavailable"), OperationalError),
+        (RuntimeError("cursor failed"), RuntimeError),
+    ],
+)
+def test_begin_failure_returns_checkout_and_releases_operation_lock(
+    leased: bool,
+    execute_error: Exception,
+    expected_error: type[Exception],
+) -> None:
+    runner, pool = _runner_with_fake_pool()
+    pool.conn.execute_error = execute_error
+    if leased:
+        runner.lease_thread_connection()
+
+    with pytest.raises(expected_error):
+        runner.begin_immediate()
+
+    assert pool.putconn_calls == 1
+    assert not hasattr(runner._thread_local, "in_transaction")
+    assert runner._leased_operation_lock.acquire(blocking=False)
+    runner._leased_operation_lock.release()
+
+
+def test_nonleased_commit_failure_returns_checkout() -> None:
+    runner, pool = _runner_with_fake_pool()
+    pool.conn.commit_error = PsycopgOperationalError("commit failed")
+
+    with pytest.raises(OperationalError, match="commit failed"):
+        runner.commit()
+
+    assert pool.putconn_calls == 1
+    assert not hasattr(runner._thread_local, "conn")
+
+
+@pytest.mark.parametrize("leased", [False, True])
+def test_rollback_failure_returns_checkout_and_releases_operation_lock(
+    leased: bool,
+) -> None:
+    runner, pool = _runner_with_fake_pool()
+    pool.conn.rollback_error = PsycopgOperationalError("rollback failed")
+    if leased:
+        runner.lease_thread_connection()
+        runner._leased_operation_lock.acquire()
+    runner._thread_local.in_transaction = True
+    runner._thread_local.transaction_uses_leased_conn = leased
+
+    with pytest.raises(OperationalError, match="rollback failed"):
+        runner.rollback()
+
+    assert pool.putconn_calls == 1
+    assert not hasattr(runner._thread_local, "in_transaction") or not leased
+    assert runner._leased_operation_lock.acquire(blocking=False)
+    runner._leased_operation_lock.release()
+
+
+def test_shutdown_swallows_pool_failures_after_releasing_local_state() -> None:
+    class BrokenPool(FakePool):
+        def putconn(self, conn: object) -> None:
+            raise RuntimeError("pool already closed")
+
+        def close(self) -> None:
+            raise RuntimeError("pool already closed")
+
+    runner, _ = _runner_with_fake_pool()
+    pool = BrokenPool()
+    runner._pool = pool
+    runner._leased_conn = pool.conn
+    runner._lease_depth = 1
+
+    runner.shutdown()
+
+    assert runner._leased_conn is None
+    assert runner._lease_depth == 0
+
+
+def test_update_meta_cache_is_noop_before_metadata_is_loaded() -> None:
+    runner = object.__new__(PostgresRunner)
+    runner._meta_cache_lock = threading.Lock()
+    runner._meta_cache = None
+
+    runner.update_meta_cache(last_ts=10)
+
+    assert runner._meta_cache is None
+
+
+def test_listener_handles_unknown_registrations_and_surfaces_errors() -> None:
+    listener = object.__new__(pg_runner_module._SharedActivityListener)
+    listener._lock = threading.RLock()
+    listener._conditions = {}
+    listener._versions = {}
+    listener._queue_refcounts = {}
+    listener._fan_in_entries = {}
+    listener._wildcard_version = 7
+    listener._stop_event = threading.Event()
+    listener._error = None
+
+    listener.unregister_queue("missing")
+    listener.unregister_queue_set(999)
+    assert listener.wait(
+        queue_name="missing",
+        stop_event=threading.Event(),
+        timeout=0,
+        last_queue_version=3,
+        last_wildcard_version=4,
+    ) == (False, 3, 7)
+    assert listener.wait_any(
+        fan_in_id=999,
+        stop_event=threading.Event(),
+        timeout=0,
+        last_queue_versions={"jobs": 2},
+        last_wildcard_version=4,
+    ) == (False, {"jobs": 2}, 7)
+
+    listener.register_queue("jobs")
+    listener._error = RuntimeError("listener failed")
+    with pytest.raises(RuntimeError, match="listener failed"):
+        listener.wait(
+            queue_name="jobs",
+            stop_event=threading.Event(),
+            timeout=1,
+            last_queue_version=0,
+            last_wildcard_version=7,
+        )
+
+
+def test_activity_registry_ignores_unknown_release() -> None:
+    registry = pg_runner_module._SharedActivityRegistry()
+
+    registry.release("unknown-dsn", schema="unknown_schema")
+
+    assert registry._listeners == {}
+
+
+def test_activity_waiters_clamp_versions_and_translate_driver_errors() -> None:
+    class SingleListener:
+        def __init__(self) -> None:
+            self.error: Exception | None = None
+
+        def wait(self, **kwargs: object) -> tuple[bool, int, int]:
+            if self.error is not None:
+                raise self.error
+            return True, 4, 8
+
+    single = object.__new__(pg_runner_module.PostgresActivityWaiter)
+    single._listener = SingleListener()
+    single._queue_name = "jobs"
+    single._stop_event = threading.Event()
+    single._last_queue_version = 4
+    single._last_wildcard_version = 5
+
+    assert single.wait(1.0) is True
+    assert single._last_queue_version == 4
+    assert single._last_wildcard_version == 6
+
+    single._listener.error = PsycopgOperationalError("listener connection failed")
+    with pytest.raises(OperationalError, match="listener connection failed"):
+        single.wait(1.0)
+
+    class MultiListener:
+        def wait_any(self, **kwargs: object) -> tuple[bool, dict[str, int], int]:
+            return True, {"jobs": 3, "other": 1}, 9
+
+    multi = object.__new__(pg_runner_module.PostgresMultiQueueActivityWaiter)
+    multi._listener = MultiListener()
+    multi._fan_in_id = 1
+    multi._queue_names = ("jobs", "other")
+    multi._stop_event = threading.Event()
+    multi._last_queue_versions = {"jobs": 1, "other": 1}
+    multi._last_wildcard_version = 5
+
+    assert multi.wait(1.0) is True
+    assert multi._last_queue_versions == {"jobs": 2, "other": 1}
+    assert multi._last_wildcard_version == 6
+
+    with pytest.raises(ValueError, match="queue_names cannot be empty"):
+        pg_runner_module.PostgresMultiQueueActivityWaiter(
+            "postgresql://example/test",
+            schema="broker_data",
+            queue_names=(),
+            stop_event=threading.Event(),
+        )
+
+
+def test_connection_return_helpers_handle_active_and_mismatched_leases() -> None:
+    runner, pool = _runner_with_thread_connection()
+    runner._leased_conn = pool.conn
+    runner._lease_depth = 1
+
+    runner._return_thread_conn()
+    runner._return_leased_conn(object())  # type: ignore[arg-type]
+    runner._return_thread_conn_after_operation()
+
+    assert runner._thread_local.conn is pool.conn
+    assert runner._leased_conn is pool.conn
+    assert pool.putconn_calls == 0
+
+
+def test_begin_handles_lease_ending_between_precheck_and_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner, pool = _runner_with_fake_pool()
+    monkeypatch.setattr(runner, "_has_leased_connection", lambda: True)
+    monkeypatch.setattr(runner, "_uses_leased_connection", lambda conn: False)
+
+    runner.begin_immediate()
+
+    assert runner._thread_local.in_transaction is True
+    assert runner._thread_local.transaction_uses_leased_conn is False
+    assert runner._leased_operation_lock.acquire(blocking=False)
+    runner._leased_operation_lock.release()
+    runner.rollback()
+    assert pool.putconn_calls == 1
+
+
+def test_release_empty_lease_and_mark_bootstrap_are_idempotent() -> None:
+    runner, pool = _runner_with_fake_pool()
+    runner._lease_depth = 1
+    runner._leased_conn = None
+
+    runner.release_thread_connection()
+
+    assert runner._lease_depth == 0
+    assert pool.putconn_calls == 0
+
+    runner._meta_cache_lock = threading.Lock()
+    runner._schema_bootstrapped = False
+    runner.mark_schema_bootstrapped()
+    assert runner._schema_bootstrapped is True
 
 
 def test_run_exclusive_setup_runs_operation_once_per_phase() -> None:

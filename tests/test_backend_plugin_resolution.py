@@ -11,6 +11,7 @@ import pytest
 import simplebroker._sql as sqlite_sql
 from simplebroker import Queue
 from simplebroker._backend_plugins import BACKEND_API_VERSION
+from simplebroker._backends import get_backend
 from simplebroker._constants import __version__ as SIMPLEBROKER_VERSION
 from simplebroker._runner import SetupPhase
 from simplebroker._targets import BrokerTarget
@@ -78,6 +79,27 @@ def test_builtin_sqlite_backend_plugin_resolves() -> None:
     assert isinstance(plugin.create_runner(":memory:"), SQLiteRunner)
 
 
+def test_unknown_builtin_backend_fails_with_the_requested_name() -> None:
+    """Internal backend selection should not silently fall back to SQLite."""
+
+    with pytest.raises(RuntimeError, match="Unsupported built-in backend: missing"):
+        get_backend("missing")
+
+
+@pytest.mark.sqlite_only
+def test_sqlite_plugin_reports_missing_magic_metadata() -> None:
+    """An empty metadata table must not be mistaken for a managed database."""
+
+    plugin = get_backend_plugin("sqlite")
+    runner = plugin.create_runner(":memory:")
+    try:
+        runner.run("CREATE TABLE meta (key TEXT PRIMARY KEY, value)")
+
+        assert plugin.read_magic(runner) is None
+    finally:
+        runner.close()
+
+
 def test_unknown_backend_plugin_raises_clear_error() -> None:
     """Unknown backends should fail with a readable exception."""
     with pytest.raises(RuntimeError, match="Unknown backend plugin: missing"):
@@ -91,6 +113,23 @@ def test_external_backend_plugin_resolves_via_entry_point(monkeypatch) -> None:
 
     plugin = get_backend_plugin("dummy")
     assert plugin.name == "dummy"
+
+
+def test_entry_point_plugin_name_must_match_the_requested_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A misregistered entry point must not impersonate another backend."""
+
+    class MismatchedPlugin(ValidDummyPlugin):
+        name = "other"
+
+    _install_entry_point(monkeypatch, "dummy", MismatchedPlugin)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Backend plugin 'dummy' resolved to object with mismatched name 'other'",
+    ):
+        get_backend_plugin("dummy")
 
 
 def test_external_backend_plugin_with_invalid_sql_namespace_is_rejected(
@@ -110,6 +149,36 @@ def test_external_backend_plugin_with_invalid_sql_namespace_is_rejected(
     _install_entry_point(monkeypatch, "dummy", DummyPlugin)
 
     with pytest.raises(RuntimeError, match="Backend SQL namespace is missing"):
+        get_backend_plugin("dummy")
+
+
+def test_plugin_without_sql_must_be_declared_as_a_direct_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing SQL hooks must not be accepted as an implicit direct backend."""
+
+    class NeitherSqlNorDirectPlugin(ValidDummyPlugin):
+        sql = None
+        is_direct_backend = False
+
+    _install_entry_point(monkeypatch, "dummy", NeitherSqlNorDirectPlugin)
+
+    with pytest.raises(RuntimeError, match="has no SQL namespace"):
+        get_backend_plugin("dummy")
+
+
+def test_direct_backend_must_expose_a_callable_core_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Declaring direct mode is insufficient without the direct core interface."""
+
+    class DirectPluginWithoutCoreFactory(ValidDummyPlugin):
+        sql = None
+        is_direct_backend = True
+
+    _install_entry_point(monkeypatch, "dummy", DirectPluginWithoutCoreFactory)
+
+    with pytest.raises(RuntimeError, match=r"must expose create_core\(\)"):
         get_backend_plugin("dummy")
 
 

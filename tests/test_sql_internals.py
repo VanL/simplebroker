@@ -166,6 +166,23 @@ class TestSQLBuilders:
                 ),
             )
 
+    def test_build_retrieve_query_move_requires_a_target_queue(self) -> None:
+        """A move must not produce SQL that can bind a missing destination."""
+
+        with pytest.raises(ValueError, match="requires target_queue"):
+            build_retrieve_query(
+                "move",
+                RetrieveQuerySpec(
+                    queue="jobs",
+                    limit=1,
+                    offset=0,
+                    exact_timestamp=None,
+                    after_timestamp=None,
+                    require_unclaimed=True,
+                    target_queue=None,
+                ),
+            )
+
 
 class TestRetrieveMethod:
     """Test the internal _retrieve method."""

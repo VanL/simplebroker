@@ -32,7 +32,11 @@ class OperationalError(BrokerError, sqlite3.OperationalError):
 
 
 class StopException(OperationalError):
-    """Exception raised when an operation is interrupted by a stop signal."""
+    """Control flow raised when an operation is interrupted by a stop signal.
+
+    User callbacks that catch :class:`Exception` must re-raise this exception
+    so they do not swallow shutdown.
+    """
 
     # A user-initiated stop must never be retried.
     retryable = False

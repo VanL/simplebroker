@@ -70,6 +70,7 @@ def test_pool_options_from_backend_options(
         {"max_connections": "nope"},
         {"pool_timeout": 0},
         {"pool_timeout": -1},
+        {"pool_timeout": True},
         {"pool_timeout": "nope"},
         {"unexpected": "value"},
     ],

@@ -115,7 +115,7 @@ def test_automatic_vacuum_runs_only_after_generator_batch_commit(
     finally:
         if generator is not None:
             generator.close()
-        broker.close()
+        broker.shutdown()
 
 
 @pytest.mark.shared
@@ -324,7 +324,7 @@ def test_direct_core_rejects_invalid_delivery_before_mutation(
     finally:
         if generator is not None:
             generator.close()
-        broker.close()
+        broker.shutdown()
 
 
 def _read_all_messages_worker(db_path: str, result_list):

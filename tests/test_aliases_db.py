@@ -29,7 +29,7 @@ def test_alias_cache_miss_refresh(broker_target: BrokerTarget) -> None:
     try:
         creator.add_alias("alpha", "shared")
     finally:
-        creator.close()
+        creator.shutdown()
 
     consumer = make_broker(broker_target)
     try:
@@ -39,11 +39,11 @@ def test_alias_cache_miss_refresh(broker_target: BrokerTarget) -> None:
         try:
             remover.remove_alias("alpha")
         finally:
-            remover.close()
+            remover.shutdown()
 
         assert consumer.resolve_alias("alpha") is None
     finally:
-        consumer.close()
+        consumer.shutdown()
 
 
 def test_aliases_for_target(broker) -> None:
@@ -92,7 +92,7 @@ def test_alias_persistent_cache_refresh(broker_target: BrokerTarget) -> None:
         try:
             assert db2.resolve_alias("alpha") == "beta"
         finally:
-            db2.close()
+            db2.shutdown()
 
         db1.remove_alias("alpha")
 
@@ -100,9 +100,9 @@ def test_alias_persistent_cache_refresh(broker_target: BrokerTarget) -> None:
         try:
             assert db3.resolve_alias("alpha") is None
         finally:
-            db3.close()
+            db3.shutdown()
     finally:
-        db1.close()
+        db1.shutdown()
 
 
 def test_alias_add_revalidates_against_live_state(
@@ -120,8 +120,8 @@ def test_alias_add_revalidates_against_live_state(
 
         assert dict(db1.list_aliases()) == {"b": "a"}
     finally:
-        db1.close()
-        db2.close()
+        db1.shutdown()
+        db2.shutdown()
 
 
 def test_alias_add_warns_on_existing_queue(broker) -> None:

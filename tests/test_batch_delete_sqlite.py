@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from pathlib import Path
 
@@ -13,7 +14,7 @@ pytestmark = [pytest.mark.sqlite_only]
 
 
 def _counts(db_path: Path) -> tuple[int, int]:
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
         total = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
         claimed = conn.execute(
             "SELECT COUNT(*) FROM messages WHERE claimed = 1"
@@ -22,7 +23,7 @@ def _counts(db_path: Path) -> tuple[int, int]:
 
 
 def _counts_by_queue(db_path: Path) -> dict[str, int]:
-    with sqlite3.connect(str(db_path)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
         rows = conn.execute(
             "SELECT queue, COUNT(*) FROM messages GROUP BY queue ORDER BY queue"
         ).fetchall()

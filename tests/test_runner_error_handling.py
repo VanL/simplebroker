@@ -1,6 +1,8 @@
 """Test error handling in _runner.py to increase coverage."""
 
 import concurrent.futures as cf
+import contextlib
+import logging
 import os
 import sqlite3
 import tempfile
@@ -10,6 +12,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from simplebroker import _runner as runner_module
 from simplebroker import db as db_module
 from simplebroker import helpers as helpers_module
 from simplebroker._backends.sqlite import runtime as sqlite_runtime
@@ -331,10 +334,13 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 runner.close()
 
-    def test_close_error_handling(self):
+    def test_close_error_handling(self, caplog):
         """Test that close ignores errors during cleanup."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            runner = SQLiteRunner(str(Path(tmpdir) / "test.db"))
+            runner = SQLiteRunner(
+                str(Path(tmpdir) / "test.db"),
+                config={"BROKER_LOGGING_ENABLED": True},
+            )
 
             # Create a connection
             _ = runner.get_connection()
@@ -351,14 +357,17 @@ class TestSQLiteRunnerErrorHandling:
                 runner._all_connections.discard(real_conn)
                 runner._all_connections.add(mock_conn)
 
-            # Should not raise
-            runner.close()
+            # Should not raise, but the failed cleanup must remain visible.
+            with caplog.at_level(logging.WARNING, logger="simplebroker._runner"):
+                runner.close()
 
             # Verify connection was attempted to be closed
             mock_conn.close.assert_called_once()
 
             with runner._connections_lock:
                 assert mock_conn in runner._all_connections
+
+            assert "Error closing SQLite connection: close failed" in caplog.text
 
             # Verify thread local was cleaned up
             assert not hasattr(runner._thread_local, "conn")
@@ -449,6 +458,39 @@ class TestSQLiteRunnerErrorHandling:
             runner.close()
 
         assert connect_timeouts == [0.25]
+
+    @pytest.mark.sqlite_only
+    def test_setup_operation_context_nests_without_opening_connection(self, tmp_path):
+        """Entering setup context alone must not allocate a database connection."""
+
+        runner = SQLiteRunner(str(tmp_path / "test.db"))
+
+        with runner._setup_operation_context():
+            assert runner._thread_local.setup_busy_timeout is True
+            assert not hasattr(runner._thread_local, "conn")
+            with runner._setup_operation_context():
+                assert runner._thread_local.setup_busy_timeout is True
+                assert not hasattr(runner._thread_local, "conn")
+
+        assert not hasattr(runner._thread_local, "setup_busy_timeout")
+        assert not hasattr(runner._thread_local, "conn")
+
+    @pytest.mark.sqlite_only
+    def test_completed_setup_phase_is_cached(self, tmp_path):
+        """A completed phase should be visible from the runner's local cache."""
+
+        runner = SQLiteRunner(str(tmp_path / "test.db"))
+        calls: list[str] = []
+        try:
+            assert runner.run_exclusive_setup(
+                SetupPhase.OPTIMIZATION,
+                lambda: calls.append("setup"),
+            )
+            assert runner.is_setup_complete(SetupPhase.OPTIMIZATION)
+        finally:
+            runner.close()
+
+        assert calls == ["setup"]
 
     @pytest.mark.sqlite_only
     def test_schema_setup_refreshes_idle_budget_after_forward_progress(
@@ -693,6 +735,36 @@ class TestSQLiteRunnerErrorHandling:
         assert runner._created_files == set()
 
     @pytest.mark.sqlite_only
+    def test_cleanup_marker_files_never_deletes_database(self, tmp_path):
+        """Cleanup removes setup markers, never the database they coordinate."""
+        db_path = tmp_path / "MockBroker.db"
+        runner = SQLiteRunner(str(db_path))
+        try:
+            list(
+                runner.run(
+                    "CREATE TABLE retained (value TEXT NOT NULL)",
+                    fetch=False,
+                )
+            )
+            list(
+                runner.run(
+                    "INSERT INTO retained (value) VALUES (?)",
+                    ("still here",),
+                    fetch=False,
+                )
+            )
+        finally:
+            runner.close()
+
+        runner.cleanup_marker_files()
+
+        assert db_path.exists()
+        with contextlib.closing(sqlite3.connect(db_path)) as connection:
+            assert connection.execute("SELECT value FROM retained").fetchone() == (
+                "still here",
+            )
+
+    @pytest.mark.sqlite_only
     def test_run_exclusive_setup_marker_does_not_bypass_held_lock(self, tmp_path):
         """SQLite setup markers are trusted only after acquiring the setup lock."""
         db_path = tmp_path / "test.db"
@@ -798,26 +870,6 @@ class TestSQLiteRunnerErrorHandling:
         assert enter_count == 1
         assert max_active == 1
 
-    @pytest.mark.sqlite_only
-    def test_cleanup_marker_files_still_cleans_mock_sidecars(self, tmp_path):
-        """Mock-path tests still need sidecar cleanup for synthetic DB names."""
-        db_path = tmp_path / "MockBroker.db"
-        runner = SQLiteRunner(str(db_path))
-        service = PhaseLockService(db_path)
-
-        sidecars = [
-            service.lock_path,
-            service.status_base_path,
-        ]
-        for path in sidecars:
-            path.touch()
-        runner._created_files.update(sidecars)
-
-        runner.cleanup_marker_files()
-
-        assert all(not path.exists() for path in sidecars)
-        assert runner._created_files == set()
-
     def test_corrupted_database_detection(self):
         """Test handling of corrupted database."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -876,18 +928,21 @@ class TestSQLiteRunnerForkSafety:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             runner = SQLiteRunner(str(Path(tmpdir) / "test.db"))
+            initial_connection = runner.get_connection()
+            try:
+                initial_pid = runner._pid
 
-            # Get initial connection
-            runner.get_connection()
-            initial_pid = runner._pid
+                # Simulate fork by changing PID
+                runner._pid = initial_pid - 1  # Different PID
 
-            # Simulate fork by changing PID
-            runner._pid = initial_pid - 1  # Different PID
+                # Get connection again - should reinitialize
+                runner.get_connection()
 
-            # Get connection again - should reinitialize
-            runner.get_connection()
-
-            # Verify reinitialization
-            assert runner._pid == os.getpid()
-            # Thread local should have been reset
-            assert hasattr(runner._thread_local, "conn")
+                # Verify reinitialization
+                assert runner._pid == os.getpid()
+                # Thread local should have been reset
+                assert hasattr(runner._thread_local, "conn")
+            finally:
+                runner.close()
+                initial_connection.close()
+                runner_module._ABANDONED_FORK_CONNECTIONS.remove(initial_connection)

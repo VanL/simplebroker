@@ -206,8 +206,6 @@ class SQLiteRunner:
         self._setup_lock = threading.Lock()
         # Track created marker files for cleanup
         self._created_files: set[Path] = set()
-        # Track if we created the database file (for cleanup of test mocks)
-        self._created_db = False
         # Track all connections across all threads for robust cleanup
         # Note: sqlite3.Connection doesn't support weak references, so we use a regular set
         self._all_connections: set[sqlite3.Connection] = set()
@@ -299,8 +297,6 @@ class SQLiteRunner:
 
         # Check if this thread has a connection
         if not hasattr(self._thread_local, "conn"):
-            # Check if database exists before creating connection
-            db_existed = os.path.exists(self._db_path)
             if getattr(self._thread_local, "setup_busy_timeout", False):
                 connect_timeout_ms = setup_busy_timeout_ms(self._config)
             else:
@@ -322,13 +318,6 @@ class SQLiteRunner:
             with self._connections_lock:
                 self._all_connections.add(self._thread_local.conn)
                 self._thread_local.conn_generation = self._connection_generation
-
-            # Track if we created the database (for test cleanup)
-            if not db_existed and os.path.exists(self._db_path):
-                self._created_db = True
-                # Track the database file for cleanup if it looks like a mock path
-                if "Mock" in self._db_path:
-                    self._created_files.add(Path(self._db_path))
 
             # Apply per-connection settings
             self._apply_connection_settings(self._thread_local.conn)
@@ -611,17 +600,9 @@ class SQLiteRunner:
         self._recover_after_fork_if_needed()
         service = self._phase_lock_service()
         phase_name = self._phase_marker_name(phase)
-        if phase in self._completed_phases and not service.strict_marker_locking:
-            return False
 
         if phase == SetupPhase.CONNECTION and self._target_needs_fresh_setup_markers():
             self._discard_stale_completion_markers()
-        elif not service.strict_marker_locking and self._has_valid_completion_marker(
-            service, phase, phase_name
-        ):
-            with self._setup_lock:
-                self._completed_phases.add(phase)
-            return False
 
         ran = False
 
@@ -644,9 +625,8 @@ class SQLiteRunner:
         self._created_files.add(result.lock_path)
         self._created_files.update(result.status_paths)
 
-        if phase_name in result.completed or phase_name in result.skipped:
-            with self._setup_lock:
-                self._completed_phases.add(phase)
+        with self._setup_lock:
+            self._completed_phases.add(phase)
 
         return ran
 
@@ -745,42 +725,16 @@ class SQLiteRunner:
         return False
 
     def cleanup_marker_files(self) -> None:
-        """Clean up any marker files created during setup.
+        """Forget marker files observed during setup without unlinking them.
 
         Shared setup coordination files must outlive any one BrokerDB/Queue
         handle. Weft and other callers create many short-lived handles against
         the same database; if one handle unlinks a shared setup lock or status
         file while another process is still using it, the next opener can
-        bypass the intended cross-process serialization. Keep those files for
-        real databases, but preserve the mock-path cleanup behavior that older
-        tests rely on.
+        bypass the intended cross-process serialization. Keep those shared
+        files for every database path.
         """
-        for file_path in self._created_files:
-            try:
-                if not self._should_cleanup_tracked_file(file_path):
-                    continue
-                if file_path.exists():
-                    file_path.unlink()
-            except (OSError, ValueError, TypeError):
-                # Ignore errors during cleanup
-                pass
         self._created_files.clear()
-
-    def _should_cleanup_tracked_file(self, file_path: Path) -> bool:
-        """Return whether this runner should unlink a tracked file on cleanup."""
-        # Mock-path tests intentionally exercise path cleanup using synthetic
-        # database names. Preserve that behavior for those scenarios.
-        if "Mock" in self._db_path:
-            return True
-
-        with contextlib.suppress(ValueError, OSError, TypeError):
-            service = self._phase_lock_service()
-            if file_path == service.lock_path:
-                return False
-            if file_path == service.status_base_path:
-                return False
-
-        return True
 
     def __enter__(self) -> Self:
         """Enter context manager."""

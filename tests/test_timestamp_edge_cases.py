@@ -104,6 +104,55 @@ class TestTimestampEdgeCases:
         assert len(set(timestamps)) == len(timestamps)
         assert max(timestamps) == plugin.last_ts
 
+    def test_generate_fails_if_backend_timestamp_disappears_after_a_conflict(
+        self,
+    ) -> None:
+        """A lost metadata row must not let timestamp generation restart at zero."""
+
+        class DisappearingTimestampPlugin(AtomicLastTimestampPlugin):
+            def __init__(self) -> None:
+                super().__init__()
+                self.read_count = 0
+
+            def read_last_ts(self, runner: Any) -> int:
+                del runner
+                self.read_count += 1
+                if self.read_count == 1:
+                    return 0
+                return None  # type: ignore[return-value]
+
+            def advance_last_ts(self, runner: Any, *, new_ts: int) -> bool:
+                del runner, new_ts
+                return False
+
+        gen = TimestampGenerator(object(), backend_plugin=DisappearingTimestampPlugin())
+
+        with pytest.raises(TimestampError, match="meta.last_ts missing"):
+            gen.generate()
+
+    def test_refresh_clears_a_stale_timestamp_when_backend_metadata_is_absent(
+        self,
+    ) -> None:
+        """An explicit refresh must not preserve a timestamp the backend lost."""
+
+        class MissingTimestampPlugin(AtomicLastTimestampPlugin):
+            def __init__(self) -> None:
+                super().__init__()
+                self.read_count = 0
+
+            def read_last_ts(self, runner: Any) -> int:
+                del runner
+                self.read_count += 1
+                if self.read_count == 1:
+                    return 123
+                return None  # type: ignore[return-value]
+
+        gen = TimestampGenerator(object(), backend_plugin=MissingTimestampPlugin())
+
+        assert gen.get_cached_last_ts() == 123
+        assert gen.refresh_last_ts() == 0
+        assert gen.get_cached_last_ts() == 0
+
     def test_clock_regression_keeps_generator_monotonic(self) -> None:
         """A wall-clock rollback should advance only the logical counter."""
 
@@ -252,6 +301,9 @@ class TestTimestampEdgeCases:
         result = TimestampGenerator.validate("2024-01-01T00:00:00Z")
         assert result > 0
 
+        with pytest.raises(TimestampError, match="Invalid timestamp"):
+            TimestampGenerator.validate("cats")
+
     def test_validate_overflow_handling(self):
         """Test overflow handling in numeric parsing."""
         # Test with a very large number that might cause overflow
@@ -324,6 +376,11 @@ class TestTimestampEdgeCases:
         # Test float with many decimal places
         result = TimestampGenerator.validate("1234567890.123456789")
         assert result > 0
+
+    def test_fractional_unix_milliseconds_preserve_the_fraction(self) -> None:
+        """Fractional milliseconds must be converted before hybrid-bit masking."""
+
+        assert TimestampGenerator.validate("123456789012.5") == 123456789012496384
 
     def test_iso8601_timezone_handling(self):
         """Test ISO 8601 parsing with different timezone formats."""

@@ -207,7 +207,7 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
     finally:
         if watcher is not None:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
@@ -293,7 +293,7 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
             active_watcher.stop()
         if idle_watcher is not None:
             idle_watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_burst_mode_gradual_backoff(no_jitter, broker_target) -> None:
@@ -325,7 +325,7 @@ def test_burst_mode_gradual_backoff(no_jitter, broker_target) -> None:
         strategy._check_count = 300
         assert strategy._calculate_base_delay() == strategy._max_interval  # Max backoff
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 def test_burst_mode_with_batch_processing(no_jitter, broker_target) -> None:
@@ -384,7 +384,7 @@ def test_burst_mode_with_batch_processing(no_jitter, broker_target) -> None:
     finally:
         if watcher is not None:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_burst_mode_with_errors_single_message(no_jitter, broker_target) -> None:
@@ -433,7 +433,7 @@ def test_burst_mode_with_errors_single_message(no_jitter, broker_target) -> None
     finally:
         if watcher is not None:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_burst_mode_with_errors_batch_processing(no_jitter, broker_target) -> None:
@@ -482,7 +482,7 @@ def test_burst_mode_with_errors_batch_processing(no_jitter, broker_target) -> No
     finally:
         if watcher is not None:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_polling_jitter(broker_target) -> None:
@@ -621,7 +621,7 @@ def test_polling_jitter(broker_target) -> None:
             time.sleep(1)
 
         # Now safe to close the broker
-        broker.close()
+        broker.shutdown()
 
 
 def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
@@ -697,7 +697,7 @@ def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
     finally:
         if watcher is not None:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:
@@ -837,7 +837,7 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:
     finally:
         if watcher is not None:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 if __name__ == "__main__":

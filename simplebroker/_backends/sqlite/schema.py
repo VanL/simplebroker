@@ -145,11 +145,7 @@ def ensure_schema_v2(
     has_claimed_column = messages_has_claimed_column(runner)
 
     if current_version >= 2 and has_claimed_column:
-        try:
-            runner.run(CREATE_UNCLAIMED_INDEX)
-        except Exception as exc:
-            if "already exists" not in str(exc):
-                raise
+        runner.run(CREATE_UNCLAIMED_INDEX)
         return
 
     runner.begin_immediate()
@@ -161,6 +157,8 @@ def ensure_schema_v2(
                 if "duplicate column name" not in str(exc):
                     raise
 
+        # Defensive adapter check: real SQLite either adds the column or raises,
+        # but a custom SQLite runner could report success without applying it.
         if not messages_has_claimed_column(runner):
             raise RuntimeError(
                 "Failed to ensure messages.claimed column during schema migration"
@@ -237,11 +235,7 @@ def ensure_schema_v4(
                 CREATE_ALIAS_TARGET_INDEX,
                 INSERT_ALIAS_VERSION_META,
             ):
-                try:
-                    runner.run(statement)
-                except Exception as exc:
-                    if "already exists" not in str(exc):
-                        raise
+                runner.run(statement)
             runner.commit()
         except Exception:
             runner.rollback()

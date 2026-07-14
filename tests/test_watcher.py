@@ -226,7 +226,7 @@ class TestQueueWatcher(WatcherTestBase):
         try:
             remaining = list(db.peek_generator("test_queue", with_timestamps=False))
         finally:
-            db.close()
+            db.shutdown()
         assert len(remaining) == 0
 
     def test_peek_mode(self, broker, broker_target):
@@ -263,7 +263,7 @@ class TestQueueWatcher(WatcherTestBase):
         try:
             remaining = list(db.peek_generator("test_queue", with_timestamps=False))
         finally:
-            db.close()
+            db.shutdown()
         assert len(remaining) == 2
         assert remaining[0] == "peek1"
         assert remaining[1] == "peek2"
@@ -820,9 +820,8 @@ class TestQueueWatcher(WatcherTestBase):
             error_handler=error_handler,
         ) as watcher:
             thread = watcher.run_in_thread()
-            time.sleep(0.2)
-
-            thread.join(timeout=2.0)
+            thread.join(timeout=scale_timeout_for_ci(2.0))
+            assert not thread.is_alive(), "watcher did not stop after error handler"
 
             # Should have stopped after first error
             assert processed == []
@@ -832,7 +831,7 @@ class TestQueueWatcher(WatcherTestBase):
                 remaining = list(db.peek_generator("test_queue", with_timestamps=False))
                 assert remaining == ["good_message"]
             finally:
-                db.close()
+                db.shutdown()
 
     def test_multiple_workers_exactly_once(self, broker_target):
         """Test multiple workers ensure exactly-once delivery."""
@@ -843,7 +842,7 @@ class TestQueueWatcher(WatcherTestBase):
             for i in range(num_messages):
                 db.write("work_queue", f"task_{i}")
         finally:
-            db.close()
+            db.shutdown()
 
         # Create multiple workers
         collectors = [MessageCollector() for _ in range(3)]
@@ -877,7 +876,7 @@ class TestQueueWatcher(WatcherTestBase):
                         db.peek_generator("work_queue", with_timestamps=False)
                     )
                 finally:
-                    db.close()
+                    db.shutdown()
                 alive_workers = sum(
                     1 for _watcher, thread in workers if thread.is_alive()
                 )
@@ -915,7 +914,7 @@ class TestQueueWatcher(WatcherTestBase):
             remaining = list(db.peek_generator("work_queue", with_timestamps=False))
             assert len(remaining) == 0
         finally:
-            db.close()
+            db.shutdown()
 
     def test_mixed_peek_and_read_watchers(self, broker_target):
         """Test mixed peek and read watchers on same queue."""
@@ -950,7 +949,7 @@ class TestQueueWatcher(WatcherTestBase):
                 writer_db.write("mixed_queue", "msg2")
                 writer_db.write("mixed_queue", "msg3")
             finally:
-                writer_db.close()
+                writer_db.shutdown()
 
             # Let watchers process
             time.sleep(0.4)
@@ -1022,7 +1021,7 @@ class TestQueueWatcher(WatcherTestBase):
     def test_polling_lifecycle(self, broker_target):
         """Test that polling strategy lifecycle works correctly."""
         broker = make_broker(broker_target)
-        broker.close()
+        broker.shutdown()
 
         watcher = QueueWatcher(
             "test_queue",
@@ -1753,14 +1752,14 @@ class TestPollingStrategy:
             # Start watcher
             thread = watcher.run_in_thread()
             try:
-                # Give watcher time to start
-                time.sleep(0.1)
-
                 # Write message - should be detected via data_version change
                 db.write("version_test", "test_message")
 
-                # Wait for processing
-                time.sleep(0.2)
+                assert wait_for_condition(
+                    lambda: messages_received == ["test_message"],
+                    timeout=scale_timeout_for_ci(2.0),
+                    interval=0.01,
+                ), f"watcher messages did not settle: {messages_received!r}"
             finally:
                 # Stop watcher
                 watcher.stop()
@@ -1813,7 +1812,7 @@ class TestPollingStrategy:
                 # Signal the strategy to stop before closing the database
                 stop_event.set()
         finally:
-            db.close()
+            db.shutdown()
 
 
 class TestErrorScenarios(WatcherTestBase):
@@ -1841,7 +1840,13 @@ class TestErrorScenarios(WatcherTestBase):
 
         thread = watcher.run_in_thread()
         try:
-            time.sleep(0.2)
+            assert wait_for_condition(
+                lambda: (
+                    "Handler failed" in caplog.text or "Handler error" in caplog.text
+                ),
+                timeout=scale_timeout_for_ci(2.0),
+                interval=0.01,
+            ), f"handler error was not logged; captured logs: {caplog.text!r}"
         finally:
             watcher.stop()
             thread.join(timeout=2.0)
@@ -1965,7 +1970,7 @@ class TestErrorScenarios(WatcherTestBase):
                 assert len(remaining) == 1
                 assert remaining[0] == "message3"
             finally:
-                db.close()
+                db.shutdown()
 
     def test_signal_handler_restoration(self, broker_target):
         """Test that original signal handlers are restored after the watcher stops."""
@@ -1993,7 +1998,7 @@ class TestErrorScenarios(WatcherTestBase):
         try:
             db.write("signal_test_queue", "test_message")
         finally:
-            db.close()
+            db.shutdown()
 
         # Create and run watcher
         watcher = QueueWatcher(
@@ -2040,7 +2045,7 @@ def test_context_manager_usage(broker_target):
         db.write("context_queue", "message2")
         db.write("context_queue", "message3")
     finally:
-        db.close()
+        db.shutdown()
 
     # Use watcher as a context manager
     with QueueWatcher(
@@ -2080,7 +2085,7 @@ def test_context_manager_usage(broker_target):
         remaining = list(db.peek_generator("context_queue", with_timestamps=False))
         assert len(remaining) == 0
     finally:
-        db.close()
+        db.shutdown()
 
 
 def test_context_manager_with_exception(broker_target):

@@ -156,5 +156,5 @@ def test_database_lock_timeout(broker_target: BrokerTarget):
         assert set(msgs2) == {"msg1", "msg2"}
 
     finally:
-        db1.close()
-        db2.close()
+        db1.shutdown()
+        db2.shutdown()

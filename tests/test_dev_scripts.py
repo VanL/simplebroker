@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+from contextlib import nullcontext
 from email.message import Message
 from pathlib import Path
 
@@ -243,6 +244,14 @@ def test_extract_pytest_runner_overrides_accepts_compact_forms() -> None:
     assert numprocesses == "2"
     assert dist == "loadscope"
 
+    remaining, marker_expr, numprocesses, dist = _extract_pytest_runner_overrides(
+        ["--dist", "loadfile", "-q"]
+    )
+    assert remaining == ["-q"]
+    assert marker_expr is None
+    assert numprocesses is None
+    assert dist == "loadfile"
+
 
 @pytest.mark.parametrize("args", [["-m"], ["-n"], ["--dist"]])
 def test_extract_pytest_runner_overrides_rejects_missing_values(
@@ -263,6 +272,7 @@ def test_classify_pytest_target_handles_node_ids_and_external_paths(
         == "extension"
     )
     assert _classify_pytest_target("-q") is None
+    assert _classify_pytest_target("::test_without_a_path") is None
     assert _classify_pytest_target(str(tmp_path / "outside_test.py")) is None
 
 
@@ -286,11 +296,112 @@ def test_docker_port_returns_none_before_container_is_ready(
     assert _docker_port("pg") is None
 
 
+def test_docker_port_returns_none_before_port_is_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _scripts.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, stdout="\n"),
+    )
+
+    assert _docker_port("pg") is None
+
+
+def test_run_logs_command_and_enforces_subprocess_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, stdout="done")
+
+    monkeypatch.setattr(_scripts.subprocess, "run", fake_run)
+
+    result = _scripts._run(
+        ["tool", "arg with space"],
+        cwd=tmp_path,
+        env={"MODE": "test"},
+        capture_output=True,
+    )
+
+    assert result.stdout == "done"
+    assert capsys.readouterr().out == "+ tool 'arg with space'\n"
+    assert calls == [
+        (
+            ["tool", "arg with space"],
+            {
+                "cwd": tmp_path,
+                "env": {"MODE": "test"},
+                "check": True,
+                "capture_output": True,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+            },
+        )
+    ]
+
+
+def test_cleanup_container_forces_removal_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 1)
+
+    monkeypatch.setattr(_scripts.subprocess, "run", fake_run)
+
+    _scripts._cleanup_container("temporary-container")
+
+    assert calls == [
+        (
+            ["docker", "rm", "-f", "temporary-container"],
+            {
+                "cwd": REPO_ROOT,
+                "check": False,
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+            },
+        )
+    ]
+
+
 def test_host_port_accepts_connections_rejects_invalid_port() -> None:
     ready, error = _scripts._host_port_accepts_connections("not-a-port")
 
     assert ready is False
     assert "invalid published port" in error
+
+
+def test_host_port_accepts_connections_reports_success_and_socket_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[tuple[str, int], float]] = []
+
+    def connect(address: tuple[str, int], *, timeout: float):
+        calls.append((address, timeout))
+        return nullcontext()
+
+    monkeypatch.setattr(_scripts.socket, "create_connection", connect)
+    assert _scripts._host_port_accepts_connections("5432", timeout_seconds=2.5) == (
+        True,
+        "",
+    )
+    assert calls == [(("127.0.0.1", 5432), 2.5)]
+
+    def refuse(address: tuple[str, int], *, timeout: float):
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr(_scripts.socket, "create_connection", refuse)
+    ready, error = _scripts._host_port_accepts_connections("5432")
+    assert ready is False
+    assert error == "connection refused"
 
 
 def test_wait_for_postgres_waits_for_host_port(
@@ -346,6 +457,28 @@ def test_wait_for_postgres_waits_for_published_port(
 
     assert _scripts._wait_for_postgres("pg", timeout_seconds=60) == "32786"
     assert len(pg_isready_calls) == 1
+
+
+def test_wait_for_postgres_reports_last_readiness_error_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    times = iter([0.0, 0.0, 1.0])
+    monkeypatch.setattr(_scripts.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(_scripts.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(_scripts, "_docker_port", lambda container_name: "32786")
+    monkeypatch.setattr(
+        _scripts.subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(
+            cmd, 1, stdout="", stderr="database is starting\n"
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Postgres did not become ready: database is starting",
+    ):
+        _scripts._wait_for_postgres("pg", timeout_seconds=1.0)
 
 
 def test_start_postgres_cleans_up_when_readiness_fails(
@@ -437,6 +570,88 @@ def test_start_valkey_cleans_up_when_readiness_fails(
 
     assert len(cleanup_calls) == 1
     assert cleanup_calls[0].startswith("simplebroker-valkey-test-")
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "expected"),
+    [
+        (1, "", None),
+        (0, "\n", None),
+        (0, "0.0.0.0:49152\n", "49152"),
+    ],
+)
+def test_valkey_docker_port_requires_a_published_port(
+    monkeypatch: pytest.MonkeyPatch,
+    returncode: int,
+    stdout: str,
+    expected: str | None,
+) -> None:
+    monkeypatch.setattr(
+        _scripts.subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(
+            cmd, returncode, stdout=stdout
+        ),
+    )
+
+    assert _scripts._valkey_docker_port("valkey") == expected
+
+
+def test_wait_for_valkey_retries_port_and_socket_then_connects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ports = iter([None, "49152", "49152"])
+    sleeps: list[float] = []
+    connection_attempts = 0
+
+    def connect(address: tuple[str, int], *, timeout: float):
+        nonlocal connection_attempts
+        connection_attempts += 1
+        assert address == ("127.0.0.1", 49152)
+        assert timeout == 1.0
+        if connection_attempts == 1:
+            raise ConnectionRefusedError("starting")
+        return nullcontext()
+
+    monkeypatch.setattr(_scripts.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(_scripts.time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        _scripts, "_valkey_docker_port", lambda container_name: next(ports)
+    )
+    monkeypatch.setattr(_scripts.socket, "create_connection", connect)
+
+    assert _scripts._wait_for_valkey("valkey", timeout_seconds=1.0) == "49152"
+    assert sleeps == [0.5, 0.5]
+    assert connection_attempts == 2
+
+
+def test_wait_for_valkey_reports_timeout_while_port_is_unpublished(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    times = iter([0.0, 0.0, 1.0])
+    monkeypatch.setattr(_scripts.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(_scripts.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(_scripts, "_valkey_docker_port", lambda container_name: None)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Valkey did not become ready: waiting for published port",
+    ):
+        _scripts._wait_for_valkey("valkey", timeout_seconds=1.0)
+
+
+def test_start_valkey_returns_container_url_after_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(_scripts, "_run", lambda cmd, **kwargs: commands.append(cmd))
+    monkeypatch.setattr(_scripts, "_wait_for_valkey", lambda container_name: "49152")
+
+    container_name, url = _scripts._start_valkey_container()
+
+    assert container_name.startswith("simplebroker-valkey-test-")
+    assert url == "redis://127.0.0.1:49152/15"
+    assert commands[0][-1] == _scripts.VALKEY_IMAGE
 
 
 def test_pg_test_uv_command_uses_pg_test_dependencies() -> None:
@@ -627,6 +842,30 @@ def test_pytest_pg_main_preflights_dsn_before_pytest(
     assert run_call[2]["BROKER_TEST_BACKEND"] == "postgres"
     assert calls[2] == ("cleanup", "pg-container")
     assert "postgresql://example/test" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("available", "message"),
+    [
+        ({"uv"}, "docker is required"),
+        ({"docker"}, "uv is required"),
+    ],
+)
+def test_pytest_pg_main_reports_missing_runner_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    available: set[str],
+    message: str,
+) -> None:
+    monkeypatch.setattr(
+        _scripts.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in available else None,
+    )
+    monkeypatch.setattr(_scripts.sys, "argv", ["pytest-pg"])
+
+    assert _scripts.pytest_pg_main() == 1
+    assert message in capsys.readouterr().err
 
 
 def test_pytest_pg_main_redacts_dsn_password(
@@ -909,6 +1148,25 @@ def test_build_distribution_uses_locked_nonisolated_frontend(
     ]
 
 
+def test_remove_build_outputs_cleans_all_released_package_dist_dirs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    removed: list[tuple[Path, bool]] = []
+    monkeypatch.setattr(
+        _scripts.shutil,
+        "rmtree",
+        lambda path, *, ignore_errors: removed.append((path, ignore_errors)),
+    )
+
+    _scripts._remove_build_outputs()
+
+    assert removed == [
+        (REPO_ROOT / "dist", True),
+        (REPO_ROOT / "extensions" / "simplebroker_pg" / "dist", True),
+        (REPO_ROOT / "extensions" / "simplebroker_redis" / "dist", True),
+    ]
+
+
 def test_packaging_smoke_main_returns_subprocess_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -984,6 +1242,15 @@ def test_assert_distribution_clean_rejects_agent_artifacts(tmp_path: Path) -> No
 
     with pytest.raises(RuntimeError, match=r"\.agents"):
         _assert_distribution_clean(sdist)
+
+
+def test_assert_distribution_clean_rejects_unknown_archive_format(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "package.zip"
+
+    with pytest.raises(RuntimeError, match="Unsupported distribution archive"):
+        _assert_distribution_clean(archive)
 
 
 def test_assert_wheel_contains_license_accepts_dist_info_license(

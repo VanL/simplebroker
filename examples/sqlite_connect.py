@@ -611,7 +611,13 @@ class SQLiteConnectionManager:
 
     def _create_thread_connection(self) -> None:
         """Create new thread-local connection."""
-        conn = sqlite3.connect(self._db_path, isolation_level=None)
+        conn = sqlite3.connect(
+            self._db_path,
+            isolation_level=None,
+            # Connections are thread-local while active, but the manager owns
+            # them and closes them centrally after worker threads have joined.
+            check_same_thread=False,
+        )
 
         with self._connections_lock:
             self._all_connections.add(conn)

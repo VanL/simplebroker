@@ -20,14 +20,17 @@ any connection in the process may hold locks on it.
 from __future__ import annotations
 
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from simplebroker import Queue
 from simplebroker._backends.sqlite.validation import validate_database
+from simplebroker._exceptions import DatabaseError
 
 pytestmark = [
     pytest.mark.sqlite_only,
@@ -94,3 +97,32 @@ def test_validate_database_preserves_live_wal_locks(workdir: Path) -> None:
         assert holder.read_one() == "two"
     finally:
         holder.close()
+
+
+def test_validate_database_accepts_a_filesystem_string(workdir: Path) -> None:
+    db_path = str(workdir / "string-target.db")
+    queue = Queue("q", db_path=db_path)
+    queue.write("seed")
+    queue.close()
+
+    validate_database(db_path)  # type: ignore[arg-type]
+
+
+def test_validate_database_reports_corruption_during_schema_probe(
+    workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = workdir / "corrupt.db"
+    db_path.write_bytes(b"nonempty")
+    corruption = sqlite3.DatabaseError("database disk image is malformed")
+    cursor = MagicMock()
+    cursor.execute.side_effect = corruption
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+    monkeypatch.setattr(sqlite3, "connect", lambda *args, **kwargs: connection)
+
+    with pytest.raises(
+        DatabaseError, match="Database corruption or invalid format"
+    ) as exc_info:
+        validate_database(db_path, verify_magic=False)
+
+    assert exc_info.value.__cause__ is corruption

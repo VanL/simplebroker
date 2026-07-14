@@ -693,8 +693,8 @@ def _subprocess_holding_phase_lock(target: Path) -> Iterator[subprocess.Popen[st
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5.0)
+        stdout, stderr = proc.communicate()
         if proc.returncode != 0:
-            stdout, stderr = proc.communicate()
             raise AssertionError(
                 f"lock holder failed with {proc.returncode}\nstdout={stdout}\nstderr={stderr}"
             )

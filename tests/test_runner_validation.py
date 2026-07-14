@@ -1,5 +1,6 @@
 """Test SQLiteRunner database file validation during connection phase."""
 
+import contextlib
 import sqlite3
 import tempfile
 import threading
@@ -373,7 +374,7 @@ class TestSQLiteRunnerValidation:
                 BrokerCore(failing_runner)
 
             assert _read_status_file(db_path) == ["connection"]
-            with sqlite3.connect(db_path) as conn:
+            with contextlib.closing(sqlite3.connect(db_path)) as conn:
                 tables = conn.execute(
                     "SELECT name FROM sqlite_master "
                     "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"

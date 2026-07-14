@@ -630,7 +630,7 @@ def broker(broker_target: BrokerTarget) -> Iterator[Any]:
     try:
         yield core
     finally:
-        core.close()
+        core.shutdown()
 
 
 @pytest.fixture

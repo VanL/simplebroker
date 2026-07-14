@@ -794,6 +794,23 @@ when you need retry-on-stop batch processing. In `delivery_guarantee="at_least_o
 generator mode, SimpleBroker commits a batch only after the full batch has been
 yielded; stopping mid-batch rolls that batch back for retry.
 
+Transactional generators are thread-affine: create, iterate, exhaust, and close
+them on the same thread. Closing or finalizing one from another thread is not
+supported and can leave a SQL-backed instance or transaction unusable. When a
+loop may exit early, close the generator explicitly:
+
+```python
+from contextlib import closing
+
+with closing(
+    q.read_generator(delivery_guarantee="at_least_once")
+) as messages:
+    for message in messages:
+        process(message)
+        if should_stop():
+            break
+```
+
 Only `"exactly_once"` and `"at_least_once"` are valid selector values. Unknown
 values raise `ValueError` before a connection or message-state mutation; lazy
 generators raise on first iteration.
@@ -965,6 +982,10 @@ That message remains pending and is retried on a later turn; the watcher does
 not process later message IDs past it. Returning `True` means “keep watching,”
 not “acknowledge” or “skip.” To skip a poison message, the error callback must
 explicitly delete it or move it to another queue.
+
+`StopException` is watcher control flow, not an ordinary handler failure. If a
+callback catches `Exception`, it must re-raise `StopException` so shutdown is
+not swallowed.
 
 ### Thread-Based Background Processing
 
@@ -2239,10 +2260,10 @@ Use the repo-local release helper instead of pushing release tags by hand:
 
 ```bash
 # Release simplebroker
-python bin/release.py --version 3.1.10
+python bin/release.py --version X.Y.Z
 
 # Release simplebroker-pg
-python bin/release.py pg --version 1.0.6
+python bin/release.py pg --version X.Y.Z
 
 # Release every current unpublished package version with one local check run
 python bin/release.py all
@@ -2253,6 +2274,9 @@ python bin/release.py --dry-run
 # Read back the release-related GitHub settings without changing anything
 uv run python bin/release.py --check-repository-settings
 ```
+
+Replace `X.Y.Z` with the next unpublished version for the package being
+released.
 
 Real releases must run from `main`. The helper checks the target version against
 GitHub Releases and PyPI, verifies the repository's immutable-release, tag,

@@ -222,7 +222,7 @@ def _run_synchronized_pre_checks(
     finally:
         for watcher in watchers:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_pre_check_race_no_message_loss(broker_target) -> None:
@@ -290,7 +290,7 @@ def test_pre_check_race_no_message_loss(broker_target) -> None:
         # Stop all watchers before closing broker
         for w in watchers:
             w.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_native_activity_hint_still_checks_empty_queue(broker_target) -> None:
@@ -410,7 +410,7 @@ def test_concurrent_writers_readers(broker_target) -> None:
         # Ensure watcher is stopped before closing broker
         if watcher is not None:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_pre_check_drain_race(broker_target) -> None:
@@ -442,7 +442,7 @@ def test_pre_check_drain_race(broker_target) -> None:
                     consumed.append(msg)
                 return consumed
             finally:
-                other_broker.close()
+                other_broker.shutdown()
 
         # Add messages
         for i in range(50):
@@ -469,7 +469,7 @@ def test_pre_check_drain_race(broker_target) -> None:
         # Ensure watcher is stopped before closing broker
         if watcher is not None:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_multiple_queues_concurrent_activity(broker_target) -> None:
@@ -569,7 +569,7 @@ def test_multiple_queues_concurrent_activity(broker_target) -> None:
         # Stop all watchers before closing broker
         for w in watchers:
             w.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_watcher_stop_during_pre_check(broker_target) -> None:
@@ -618,7 +618,7 @@ def test_watcher_stop_during_pre_check(broker_target) -> None:
             and not watcher._stop_event.is_set()
         ):
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_pre_check_with_peek_mode(broker_target) -> None:
@@ -662,14 +662,14 @@ def test_pre_check_with_peek_mode(broker_target) -> None:
                 check_db.peek_generator("test_queue", with_timestamps=False)
             )
         finally:
-            check_db.close()
+            check_db.shutdown()
         assert len(messages) == 1
         assert messages[0] == "test_message"
     finally:
         # Ensure watcher is stopped before closing broker
         if watcher is not None:
             watcher.stop()
-        broker.close()
+        broker.shutdown()
 
 
 def test_concurrent_pre_checks(broker_target) -> None:
@@ -841,7 +841,7 @@ def test_pre_check_database_contention(broker_target) -> None:
         # Stop all watchers before closing broker
         for w in watchers:
             w.stop()
-        broker.close()
+        broker.shutdown()
 
 
 if __name__ == "__main__":

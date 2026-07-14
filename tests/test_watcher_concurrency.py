@@ -69,7 +69,7 @@ def wait_for_queue_drain(
                 if stats.get(queue_name, 0) == 0:
                     return
             finally:
-                db.close()
+                db.shutdown()
 
         time.sleep(poll_interval)
 
@@ -80,7 +80,7 @@ def wait_for_queue_drain(
     try:
         stats_snapshot = db.get_queue_stats()
     finally:
-        db.close()
+        db.shutdown()
 
     pytest.fail(
         "Timeout waiting for queue to drain: "
@@ -129,7 +129,7 @@ class TestWorkerPool(WatcherTestBase):
                     if i % 10 == 0:
                         time.sleep(0.01)
             finally:
-                db.close()
+                db.shutdown()
 
             wait_for_queue_drain(
                 broker_target,
@@ -199,7 +199,7 @@ class TestWorkerPool(WatcherTestBase):
                     f"Expected 0 remaining messages, found {unclaimed_count}"
                 )
         finally:
-            db.close()
+            db.shutdown()
 
     def test_worker_pool_with_slow_handlers(self, broker_target):
         """Test worker pool with varying processing speeds.
@@ -218,7 +218,7 @@ class TestWorkerPool(WatcherTestBase):
                     json.dumps({"id": i, "work_time": 0.05 if i % 3 == 0 else 0.01}),
                 )
         finally:
-            db.close()
+            db.shutdown()
 
         processed = []
         processed_lock = threading.Lock()
@@ -298,7 +298,7 @@ class TestWorkerPool(WatcherTestBase):
                 for i in range(50):
                     db.write("dynamic_queue", f"early_msg_{i}")
             finally:
-                db.close()
+                db.shutdown()
 
             time.sleep(0.5)
 
@@ -323,7 +323,7 @@ class TestWorkerPool(WatcherTestBase):
                 for i in range(50):
                     db.write("dynamic_queue", f"late_msg_{i}")
             finally:
-                db.close()
+                db.shutdown()
 
             wait_for_queue_drain(
                 broker_target,
@@ -427,7 +427,7 @@ class TestMixedMode(WatcherTestBase):
                 for i in range(10):
                     db.write("mixed", f"msg_{i}")
             finally:
-                db.close()
+                db.shutdown()
 
             # Wait for the consuming watcher to actually drain the queue.
             assert wait_for_condition(
@@ -471,7 +471,7 @@ class TestMixedMode(WatcherTestBase):
             }
             assert stats.get("mixed", 0) == 0
         finally:
-            db.close()
+            db.shutdown()
 
         # Peek might have seen some/all messages
         # Can't guarantee exact behavior due to race conditions
@@ -519,7 +519,7 @@ class TestMixedMode(WatcherTestBase):
                     db.write("broadcast", f"broadcast_{i}")
                     time.sleep(0.05)  # Small delay to ensure order
             finally:
-                db.close()
+                db.shutdown()
 
             time.sleep(0.5)
 
@@ -565,7 +565,7 @@ class TestMixedMode(WatcherTestBase):
                     "Expected broadcast queue to exist with 5 messages"
                 )
         finally:
-            db.close()
+            db.shutdown()
 
     def test_concurrent_writes_during_watch(self, broker_target):
         """Test handling concurrent writes while watching."""
@@ -610,7 +610,7 @@ class TestMixedMode(WatcherTestBase):
                             db.write("concurrent", f"w{writer_id}_m{i}")
                             time.sleep(0.01)
                     finally:
-                        db.close()
+                        db.shutdown()
                 except Exception:
                     with writer_errors_lock:
                         writer_errors.append((writer_id, traceback.format_exc()))
@@ -702,7 +702,7 @@ class TestEdgeCases(WatcherTestBase):
         try:
             db.write("empty", "finally!")
         finally:
-            db.close()
+            db.shutdown()
 
         # Wait longer on slower systems
         for _ in range(10):  # Up to 1 second total

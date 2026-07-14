@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import pytest
+from simplebroker_redis import validation as redis_validation
 from simplebroker_redis.plugin import RedisBackendPlugin
 from simplebroker_redis.validation import (
+    NamespaceInspection,
+    NamespaceState,
     is_namespace_key,
     key_prefix,
     require_namespace,
+    validate_target,
 )
 
 from simplebroker._exceptions import DatabaseError
 from simplebroker.ext import BACKEND_API_VERSION
 
+pytestmark = [pytest.mark.redis_only]
 
-@pytest.mark.redis_only
+
 def test_backend_plugin_declares_backend_api_version() -> None:
     plugin = RedisBackendPlugin()
 
@@ -33,6 +38,11 @@ def test_require_namespace_allows_non_delimiter_punctuation() -> None:
     )
 
 
+def test_require_namespace_rejects_values_over_key_schema_limit() -> None:
+    with pytest.raises(DatabaseError, match="1-128 chars"):
+        require_namespace({"namespace": "n" * 129})
+
+
 def test_is_namespace_key_rejects_colon_extended_namespace_keys() -> None:
     prefix = key_prefix("parent")
     token = "0123456789abcdef0123456789abcdef"
@@ -44,6 +54,56 @@ def test_is_namespace_key_rejects_colon_extended_namespace_keys() -> None:
     assert not is_namespace_key(prefix, f"{prefix}:child:meta")
     assert not is_namespace_key(prefix, f"{prefix}:q:q:jobs:reserved")
     assert not is_namespace_key(prefix, f"{prefix}:batches:batches:{token}:meta")
+
+
+def test_is_namespace_key_validates_activity_queue_keys_and_prefix() -> None:
+    prefix = key_prefix("tenant")
+
+    assert not is_namespace_key(prefix, "simplebroker:other:meta")
+    assert is_namespace_key(prefix, f"{prefix}:activity:q:jobs")
+    assert not is_namespace_key(prefix, f"{prefix}:activity:q:bad queue")
+    assert not is_namespace_key(prefix, f"{prefix}:unknown:key:shape")
+
+
+@pytest.mark.parametrize("state", [NamespaceState.ABSENT, NamespaceState.OWNED])
+def test_validate_target_allows_initializable_namespace_states(
+    monkeypatch: pytest.MonkeyPatch,
+    state: NamespaceState,
+) -> None:
+    monkeypatch.setattr(
+        redis_validation,
+        "inspect_namespace",
+        lambda *args, **kwargs: NamespaceInspection("tenant", state, 0),
+    )
+
+    validate_target("redis://example/0", verify_initialized=False)
+
+
+@pytest.mark.parametrize(
+    ("state", "verify_initialized", "match"),
+    [
+        (NamespaceState.FOREIGN, False, "not available for SimpleBroker init"),
+        (NamespaceState.ABSENT, True, "does not exist"),
+        (NamespaceState.FOREIGN, True, "not SimpleBroker-managed"),
+    ],
+)
+def test_validate_target_reports_namespace_ownership_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    state: NamespaceState,
+    verify_initialized: bool,
+    match: str,
+) -> None:
+    monkeypatch.setattr(
+        redis_validation,
+        "inspect_namespace",
+        lambda *args, **kwargs: NamespaceInspection("tenant", state, 1),
+    )
+
+    with pytest.raises(DatabaseError, match=match):
+        validate_target(
+            "redis://example/0",
+            verify_initialized=verify_initialized,
+        )
 
 
 class _StaleApiPlugin(RedisBackendPlugin):

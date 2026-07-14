@@ -253,8 +253,7 @@ def migrate_schema(
         if current_version < 4:
             runner.run(CREATE_ALIASES_TABLE)
             runner.run(CREATE_ALIAS_TARGET_INDEX)
-        if current_version < 5:
-            runner.run(CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX)
+        runner.run(CREATE_QUEUE_TS_ORDER_UNCLAIMED_INDEX)
 
         write_schema_version(POSTGRES_SCHEMA_VERSION)
         runner.commit()

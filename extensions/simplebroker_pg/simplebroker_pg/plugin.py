@@ -6,7 +6,7 @@ import threading
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import quote
 
 from psycopg import ProgrammingError, conninfo
@@ -39,43 +39,43 @@ from .validation import (
     validate_target,
 )
 
+if TYPE_CHECKING:
+    from typing import Protocol
 
-class _SchemaAwareRunner(SQLRunner, Protocol):
-    """Runner protocol exposing the managed Postgres schema name."""
+    class _SchemaAwareRunner(SQLRunner, Protocol):
+        """Runner protocol exposing the managed Postgres schema name."""
 
-    @property
-    def schema(self) -> str: ...
+        @property
+        def schema(self) -> str: ...
 
+    class _DsnAwareRunner(SQLRunner, Protocol):
+        """Runner protocol exposing DSN details for activity waiters."""
 
-class _DsnAwareRunner(SQLRunner, Protocol):
-    """Runner protocol exposing DSN details for activity waiters."""
+        @property
+        def dsn(self) -> str: ...
 
-    @property
-    def dsn(self) -> str: ...
+        @property
+        def schema(self) -> str: ...
 
-    @property
-    def schema(self) -> str: ...
+    class _MetaCachingRunner(SQLRunner, Protocol):
+        """Runner protocol exposing optional cached Postgres metadata."""
 
+        def get_meta_cache(self) -> RunnerMetaState | None: ...
 
-class _MetaCachingRunner(SQLRunner, Protocol):
-    """Runner protocol exposing optional cached Postgres metadata."""
+        def prime_meta_cache(self, state: RunnerMetaState) -> None: ...
 
-    def get_meta_cache(self) -> RunnerMetaState | None: ...
+        def update_meta_cache(
+            self,
+            *,
+            magic: str | None = None,
+            schema_version: int | None = None,
+            last_ts: int | None = None,
+            alias_version: int | None = None,
+        ) -> None: ...
 
-    def prime_meta_cache(self, state: RunnerMetaState) -> None: ...
+        def invalidate_meta_cache(self) -> None: ...
 
-    def update_meta_cache(
-        self,
-        *,
-        magic: str | None = None,
-        schema_version: int | None = None,
-        last_ts: int | None = None,
-        alias_version: int | None = None,
-    ) -> None: ...
-
-    def invalidate_meta_cache(self) -> None: ...
-
-    def is_schema_bootstrapped(self) -> bool: ...
+        def is_schema_bootstrapped(self) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,14 +95,14 @@ class VerifiedPostgresEnv:
 def _cached_meta(runner: SQLRunner) -> RunnerMetaState | None:
     getter = getattr(runner, "get_meta_cache", None)
     if callable(getter):
-        return cast(_MetaCachingRunner, runner).get_meta_cache()
+        return cast("_MetaCachingRunner", runner).get_meta_cache()
     return None
 
 
 def _prime_meta(runner: SQLRunner, state: RunnerMetaState) -> None:
     setter = getattr(runner, "prime_meta_cache", None)
     if callable(setter):
-        cast(_MetaCachingRunner, runner).prime_meta_cache(state)
+        cast("_MetaCachingRunner", runner).prime_meta_cache(state)
 
 
 def _update_meta(
@@ -115,7 +115,7 @@ def _update_meta(
 ) -> None:
     updater = getattr(runner, "update_meta_cache", None)
     if callable(updater):
-        cast(_MetaCachingRunner, runner).update_meta_cache(
+        cast("_MetaCachingRunner", runner).update_meta_cache(
             magic=magic,
             schema_version=schema_version,
             last_ts=last_ts,
@@ -494,7 +494,7 @@ class PostgresBackendPlugin:
         *,
         run_with_retry: Callable[[Callable[[], Any]], Any],
     ) -> None:
-        schema_name = cast(_SchemaAwareRunner, runner).schema
+        schema_name = cast("_SchemaAwareRunner", runner).schema
         initialize_database(
             runner,
             schema=schema_name,
@@ -691,7 +691,7 @@ class PostgresBackendPlugin:
         ]
 
     def database_size_bytes(self, runner: SQLRunner) -> int:
-        schema_name = cast(_SchemaAwareRunner, runner).schema
+        schema_name = cast("_SchemaAwareRunner", runner).schema
         rows = list(runner.run(pg_sql.DATABASE_SIZE_BYTES, (schema_name,), fetch=True))
         return int(rows[0][0]) if rows else 0
 
@@ -735,7 +735,7 @@ class PostgresBackendPlugin:
         runner.run(pg_sql.LOCK_BROADCAST_SCOPE)
 
     def prepare_alias_mutation(self, runner: SQLRunner) -> None:
-        schema_name = cast(_SchemaAwareRunner, runner).schema
+        schema_name = cast("_SchemaAwareRunner", runner).schema
         runner.run(
             "SELECT pg_advisory_xact_lock(?)",
             (stable_lock_key("aliases", schema_name),),
@@ -748,7 +748,7 @@ class PostgresBackendPlugin:
         compact: bool,
         config: Mapping[str, Any],
     ) -> None:
-        schema_name = cast(_SchemaAwareRunner, runner).schema
+        schema_name = cast("_SchemaAwareRunner", runner).schema
         lock_key = stable_lock_key("vacuum", schema_name)
         leased = lease_runner_thread_connection(runner)
         try:
@@ -828,8 +828,8 @@ class PostgresBackendPlugin:
 
         if runner is not None:
             if not isinstance(runner, PostgresRunner):
-                dsn = cast(_DsnAwareRunner, runner).dsn
-                schema = cast(_DsnAwareRunner, runner).schema
+                dsn = cast("_DsnAwareRunner", runner).dsn
+                schema = cast("_DsnAwareRunner", runner).schema
             else:
                 dsn = runner.dsn
                 schema = runner.schema
@@ -864,8 +864,8 @@ class PostgresBackendPlugin:
 
         if runner is not None:
             if not isinstance(runner, PostgresRunner):
-                dsn = cast(_DsnAwareRunner, runner).dsn
-                schema = cast(_DsnAwareRunner, runner).schema
+                dsn = cast("_DsnAwareRunner", runner).dsn
+                schema = cast("_DsnAwareRunner", runner).schema
             else:
                 dsn = runner.dsn
                 schema = runner.schema

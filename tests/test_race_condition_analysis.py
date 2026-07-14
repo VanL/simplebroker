@@ -173,8 +173,14 @@ class TestRaceConditionAnalysis:
                     exit_code = process.returncode
 
         finally:
-            reader_thread.join(timeout=1.0)
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5.0)
+            reader_thread.join(timeout=5.0)
+            assert not reader_thread.is_alive()
             drain_subprocess_output()
+            assert process.stdout is not None
+            process.stdout.close()
             # Ensure db monitoring thread completes
             db_thread.join(timeout=1.0)
 

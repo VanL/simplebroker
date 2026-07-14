@@ -608,12 +608,7 @@ def _resolve_symlinks_safely(path: Path, max_depth: int = 40) -> Path:
         while resolved_path.is_symlink() and depth < max_depth:
             try:
                 # Read the symlink target and resolve it
-                if hasattr(resolved_path, "readlink"):
-                    # Python 3.9+
-                    target = resolved_path.readlink()
-                else:
-                    # Python 3.8 and older
-                    target = Path(os.readlink(str(resolved_path)))
+                target = resolved_path.readlink()
 
                 if target.is_absolute():
                     resolved_path = target.resolve()
@@ -645,16 +640,7 @@ def _validate_path_containment(
     """
     # Check if the database path is within the working directory
     # Exception: Allow parent paths when using legitimate project scoping
-    containment_check = True
-    if hasattr(db_path, "is_relative_to"):
-        containment_check = not db_path.is_relative_to(working_dir)
-    else:
-        # Fallback for older Python versions - try relative_to and catch exception
-        try:
-            db_path.relative_to(working_dir)
-            containment_check = False
-        except ValueError:
-            containment_check = True
+    containment_check = not db_path.is_relative_to(working_dir)
 
     if containment_check and not used_project_scope:
         raise ValueError("Database file must be within the working directory")

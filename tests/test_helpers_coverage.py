@@ -170,6 +170,21 @@ def test_execute_with_retry_uses_elapsed_budget(
     assert monotonic_time <= 0.15
 
 
+def test_execute_with_retry_rejects_an_unbounded_retry_policy() -> None:
+    """A missing attempt limit must be paired with an elapsed-time limit."""
+
+    operation_called = False
+
+    def operation() -> None:
+        nonlocal operation_called
+        operation_called = True
+
+    with pytest.raises(ValueError, match="max_retries=None requires max_elapsed"):
+        _execute_with_retry(operation, max_retries=None, max_elapsed=None)
+
+    assert not operation_called
+
+
 def test_execute_with_retry_refreshes_idle_budget_on_external_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

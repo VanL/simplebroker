@@ -97,6 +97,27 @@ def test_move_same_queue(queue_factory):
         queue.move_one("queue")
 
 
+@pytest.mark.parametrize("operation", ["move_many", "move_generator"])
+def test_bulk_move_interfaces_reject_the_same_source_and_destination(
+    queue_factory,
+    operation: str,
+) -> None:
+    """Every bulk move interface must reject a self-move before mutation."""
+
+    queue = queue_factory("queue")
+    queue.write("msg1")
+
+    with pytest.raises(
+        ValueError, match="Source and destination queues cannot be the same"
+    ):
+        if operation == "move_many":
+            queue.move_many("queue", 1)
+        else:
+            list(queue.move_generator("queue"))
+
+    assert queue.peek() == "msg1"
+
+
 def test_move_atomic(queue_factory):
     """Test that move is atomic (all-or-nothing)."""
     source = queue_factory("source")

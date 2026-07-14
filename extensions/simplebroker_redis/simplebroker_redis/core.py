@@ -11,9 +11,12 @@ import warnings
 from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from fnmatch import fnmatchcase
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal
 
 import redis
+
+if TYPE_CHECKING:
+    from typing import overload
 
 from simplebroker._constants import (
     ALIAS_PREFIX,
@@ -788,41 +791,43 @@ class RedisBrokerCore:
             return None
         return rows[0] if with_timestamps else rows[0][0]
 
-    @overload
-    def peek_many(
-        self,
-        queue: str,
-        limit: int = PEEK_BATCH_SIZE,
-        *,
-        with_timestamps: Literal[True] = True,
-        after_timestamp: int | None = None,
-        before_timestamp: int | None = None,
-        include_claimed: bool = False,
-    ) -> list[tuple[str, int]]: ...
+    if TYPE_CHECKING:
 
-    @overload
-    def peek_many(
-        self,
-        queue: str,
-        limit: int = PEEK_BATCH_SIZE,
-        *,
-        with_timestamps: Literal[False],
-        after_timestamp: int | None = None,
-        before_timestamp: int | None = None,
-        include_claimed: bool = False,
-    ) -> list[str]: ...
+        @overload
+        def peek_many(
+            self,
+            queue: str,
+            limit: int = PEEK_BATCH_SIZE,
+            *,
+            with_timestamps: Literal[True] = True,
+            after_timestamp: int | None = None,
+            before_timestamp: int | None = None,
+            include_claimed: bool = False,
+        ) -> list[tuple[str, int]]: ...
 
-    @overload
-    def peek_many(
-        self,
-        queue: str,
-        limit: int = PEEK_BATCH_SIZE,
-        *,
-        with_timestamps: bool,
-        after_timestamp: int | None = None,
-        before_timestamp: int | None = None,
-        include_claimed: bool = False,
-    ) -> list[tuple[str, int]] | list[str]: ...
+        @overload
+        def peek_many(
+            self,
+            queue: str,
+            limit: int = PEEK_BATCH_SIZE,
+            *,
+            with_timestamps: Literal[False],
+            after_timestamp: int | None = None,
+            before_timestamp: int | None = None,
+            include_claimed: bool = False,
+        ) -> list[str]: ...
+
+        @overload
+        def peek_many(
+            self,
+            queue: str,
+            limit: int = PEEK_BATCH_SIZE,
+            *,
+            with_timestamps: bool,
+            after_timestamp: int | None = None,
+            before_timestamp: int | None = None,
+            include_claimed: bool = False,
+        ) -> list[tuple[str, int]] | list[str]: ...
 
     def peek_many(
         self,

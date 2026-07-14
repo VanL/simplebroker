@@ -29,6 +29,17 @@ def _requires_sql_runner(broker) -> None:
         pytest.skip("SQL-runner timestamp fault injection is not supported here")
 
 
+@pytest.mark.sqlite_only
+def test_conflict_metrics_exist_before_first_write(broker):
+    """A fresh SQL core has stable metric state before concurrent writes begin."""
+    assert broker._ts_conflict_count == 0
+    assert broker._ts_resync_count == 0
+    assert broker.get_conflict_metrics() == {
+        "ts_conflict_count": 0,
+        "ts_resync_count": 0,
+    }
+
+
 @pytest.mark.shared
 def test_normal_operation_no_conflicts(broker):
     """Verify normal operation has zero overhead."""

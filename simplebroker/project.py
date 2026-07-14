@@ -15,7 +15,7 @@ from ._project_config import (
     resolve_project_target,
 )
 from ._targets import BrokerTarget
-from .helpers import _find_project_database, _is_valid_sqlite_db
+from .helpers import _find_project_database
 
 
 def _config_dict(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -23,9 +23,6 @@ def _config_dict(config: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _root_from_relative_target(target_path: Path, relative_target: Path) -> Path:
-    if relative_target.is_absolute():
-        return target_path.parent.resolve(strict=False)
-
     root = target_path
     for _ in relative_target.parts:
         root = root.parent
@@ -93,16 +90,6 @@ def _discover_legacy_sqlite_target(
     """Discover an existing legacy SQLite project target rooted above start_dir."""
 
     default_target = Path(str(config["BROKER_DEFAULT_DB_NAME"]))
-    if default_target.is_absolute():
-        absolute_target = default_target.resolve(strict=False)
-        if _is_valid_sqlite_db(absolute_target):
-            return _sqlite_target(
-                absolute_target,
-                root=absolute_target.parent,
-                used_project_scope=True,
-            )
-        return None
-
     discovered = _find_project_database(str(default_target), start_dir)
     if discovered is None:
         return None

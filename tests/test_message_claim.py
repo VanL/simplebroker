@@ -152,7 +152,7 @@ def test_automatic_vacuum_trigger(broker_target) -> None:
         assert broker.claim_one("test_queue", with_timestamps=False) == "message-1"
         assert broker.count_claimed_messages() == 0
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 @pytest.mark.shared
@@ -175,7 +175,7 @@ def test_disabled_automatic_vacuum_leaves_claimed_messages(broker_target) -> Non
         ]
         assert broker.count_claimed_messages() == 2
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 @pytest.mark.shared
@@ -202,7 +202,7 @@ def test_automatic_vacuum_waits_for_exact_activity_interval(broker_target) -> No
             "message-2",
         ]
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 @pytest.mark.shared
@@ -229,7 +229,7 @@ def test_bulk_maintenance_activity_preserves_interval_remainder(
         assert broker.claim_one("test_queue", with_timestamps=False) == "message-1"
         assert broker.count_claimed_messages() == 0
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 @pytest.mark.sqlite_only
@@ -278,7 +278,7 @@ def test_automatic_vacuum_failure_preserves_committed_operation(
             "message-1"
         ]
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 def _concurrent_reader_worker(args: tuple[int, str, str]) -> list[str]:

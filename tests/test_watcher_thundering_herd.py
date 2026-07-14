@@ -238,7 +238,7 @@ def test_thundering_herd_mitigation(broker_target) -> None:
                 w.stop()
             except Exception:
                 pass  # Continue cleanup even if individual stop fails
-        broker.close()
+        broker.shutdown()
 
 
 def test_thundering_herd_with_multiple_active_queues(broker_target) -> None:
@@ -309,7 +309,7 @@ def test_thundering_herd_with_multiple_active_queues(broker_target) -> None:
                 w.stop()
             except Exception:
                 pass  # Continue cleanup even if individual stop fails
-        broker.close()
+        broker.shutdown()
 
 
 def test_pre_check_correctness(broker_target) -> None:
@@ -341,7 +341,7 @@ def test_pre_check_correctness(broker_target) -> None:
                 watcher.stop()
             except Exception:
                 pass
-        broker.close()
+        broker.shutdown()
 
 
 def test_pre_check_with_timestamp_filtering(broker_target) -> None:
@@ -390,7 +390,7 @@ def test_pre_check_with_timestamp_filtering(broker_target) -> None:
                 watcher.stop()
             except Exception:
                 pass
-        broker.close()
+        broker.shutdown()
 
 
 def test_disable_pre_check_via_env(broker_target) -> None:
@@ -452,7 +452,7 @@ def test_disable_pre_check_via_env(broker_target) -> None:
             except Exception:
                 pass
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 def test_concurrent_pre_check_safety(broker_target) -> None:
@@ -504,7 +504,7 @@ def test_concurrent_pre_check_safety(broker_target) -> None:
                 w.stop()
             except Exception:
                 pass  # Continue cleanup even if individual stop fails
-        broker.close()
+        broker.shutdown()
 
 
 def test_metrics_collection(broker_target) -> None:
@@ -552,7 +552,7 @@ def test_metrics_collection(broker_target) -> None:
                 watcher.stop()
             except Exception:
                 pass
-        broker.close()
+        broker.shutdown()
 
 
 if __name__ == "__main__":

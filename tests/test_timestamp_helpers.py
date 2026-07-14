@@ -21,7 +21,7 @@ class TestTimestampHelpers:
             ts2 = core.generate_timestamp()
             ts3 = core.get_ts()
         finally:
-            core.close()
+            core.shutdown()
 
         assert isinstance(ts1, int)
         assert ts2 > ts1

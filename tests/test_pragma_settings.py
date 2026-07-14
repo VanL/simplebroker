@@ -192,6 +192,20 @@ def test_invalid_sync_mode_defaults_to_full(tmp_path) -> None:
         assert sync_mode == 2  # FULL = 2
 
 
+def test_optimization_settings_defensively_default_invalid_sync_mode() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        with pytest.warns(RuntimeWarning, match="defaulting to FULL"):
+            sqlite_runtime.apply_optimization_settings(
+                conn,
+                config={"BROKER_CACHE_MB": 8, "BROKER_SYNC_MODE": "INVALID"},
+            )
+
+        assert conn.execute("PRAGMA synchronous").fetchone() == (2,)
+    finally:
+        conn.close()
+
+
 def test_sync_mode_case_insensitive(tmp_path) -> None:
     """Test that BROKER_SYNC_MODE is case-insensitive."""
     db_path = tmp_path / "test.db"

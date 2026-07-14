@@ -114,13 +114,7 @@ def _is_direct_backend(plugin: BackendPlugin) -> bool:
 def _get_sql_namespace(plugin: BackendPlugin) -> BackendSQLNamespace:
     """Return the SQL namespace for runner-backed broker cores."""
 
-    sql = plugin.sql
-    if sql is None:
-        raise RuntimeError(
-            f"Backend plugin '{plugin.name}' cannot be used with BrokerCore "
-            "because it does not expose a SQL namespace"
-        )
-    return sql
+    return cast("BackendSQLNamespace", plugin.sql)
 
 
 def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -218,8 +212,6 @@ def _validate_queue_prefix(prefix: str) -> None:
 
 def _prefix_upper_bound(prefix: str) -> str:
     """Return the exclusive upper bound for all strings starting with prefix."""
-    if prefix == "":
-        raise ValueError("Cannot compute an upper bound for an empty prefix")
     return f"{prefix[:-1]}{chr(ord(prefix[-1]) + 1)}"
 
 
@@ -800,6 +792,11 @@ class BrokerCore:
         self._active_generator_batch: Literal["claim", "move"] | None = None
         self._active_generator_batch_owner: int | None = None
 
+        # Timestamp conflict metrics exist for the full core lifetime. Creating
+        # them here avoids concurrent first writes resetting each other's data.
+        self._ts_conflict_count = 0
+        self._ts_resync_count = 0
+
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Propagate stop event to retryable operations."""
 
@@ -1172,12 +1169,6 @@ class BrokerCore:
         # Constants
         MAX_TS_RETRIES = 3
         RETRY_BACKOFF_BASE = 0.001  # 1ms
-
-        # Metrics initialization (if not exists)
-        if not hasattr(self, "_ts_conflict_count"):
-            self._ts_conflict_count = 0
-        if not hasattr(self, "_ts_resync_count"):
-            self._ts_resync_count = 0
 
         # Retry loop for timestamp conflicts
         with self._lock:
@@ -2197,8 +2188,8 @@ class BrokerCore:
             dictionary with conflict_count and resync_count
         """
         return {
-            "ts_conflict_count": getattr(self, "_ts_conflict_count", 0),
-            "ts_resync_count": getattr(self, "_ts_resync_count", 0),
+            "ts_conflict_count": self._ts_conflict_count,
+            "ts_resync_count": self._ts_resync_count,
         }
 
     def reset_conflict_metrics(self) -> None:
@@ -2480,20 +2471,16 @@ class BrokerCore:
         )
 
         def _do_delete_message_ids() -> int:
-            transaction_open = False
             with self._lock:
                 self._runner.begin_immediate()
-                transaction_open = True
                 try:
                     deleted_count = self._backend_plugin.delete_message_ids(
                         self._runner, queue=queue, message_ids=deduped
                     )
                     self._runner.commit()
-                    transaction_open = False
                     return deleted_count
                 except Exception:
-                    if transaction_open:
-                        self._runner.rollback()
+                    self._runner.rollback()
                     raise
 
         return self._run_with_retry(_do_delete_message_ids)
@@ -2560,10 +2547,8 @@ class BrokerCore:
             return 0
 
         def _do_delete_from_queues() -> int:
-            transaction_open = False
             with self._lock:
                 self._runner.begin_immediate()
-                transaction_open = True
                 try:
                     deleted_count = self._backend_plugin.delete_from_queues(
                         self._runner,
@@ -2571,11 +2556,9 @@ class BrokerCore:
                         before_timestamp=before_timestamp,
                     )
                     self._runner.commit()
-                    transaction_open = False
                     return deleted_count
                 except Exception:
-                    if transaction_open:
-                        self._runner.rollback()
+                    self._runner.rollback()
                     raise
 
         return self._run_with_retry(_do_delete_from_queues)
@@ -2603,10 +2586,8 @@ class BrokerCore:
         self._assert_no_reentrant_mutation_during_batch("rename_queue")
 
         def _do_rename_queue() -> QueueRenameResult:
-            transaction_open = False
             with self._lock:
                 self._runner.begin_immediate()
-                transaction_open = True
                 try:
                     self._backend_plugin.prepare_queue_operation(
                         self._runner,
@@ -2617,7 +2598,6 @@ class BrokerCore:
                         raise ValueError("Target queue already exists")
                     if not self._queue_exists_locked(old_queue):
                         self._runner.rollback()
-                        transaction_open = False
                         return QueueRenameResult(
                             old_queue=old_queue,
                             new_queue=new_queue,
@@ -2647,7 +2627,6 @@ class BrokerCore:
                             self._load_aliases_locked()
 
                     self._runner.commit()
-                    transaction_open = False
                     return QueueRenameResult(
                         old_queue=old_queue,
                         new_queue=new_queue,
@@ -2655,8 +2634,7 @@ class BrokerCore:
                         aliases_retargeted=aliases_retargeted,
                     )
                 except Exception:
-                    if transaction_open:
-                        self._runner.rollback()
+                    self._runner.rollback()
                     raise
 
         return self._run_with_retry(_do_rename_queue)
@@ -2942,10 +2920,6 @@ class BrokerCore:
     def _validate_alias_target(self, alias: str, target: str) -> None:
         if alias == target:
             raise ValueError("Alias and target must differ")
-        if not alias:
-            raise ValueError("Alias name cannot be empty")
-        if alias.startswith(ALIAS_PREFIX):
-            raise ValueError("Alias names should not include the '@' prefix")
         if target.startswith(ALIAS_PREFIX):
             raise ValueError("Target names should not include the '@' prefix")
         if not target:
@@ -2958,19 +2932,6 @@ class BrokerCore:
 
         if target in self._alias_cache:
             raise ValueError("Cannot target another alias")
-
-        visited = set()
-        to_visit = [target]
-        while to_visit:
-            current = to_visit.pop()
-            if current == alias:
-                raise ValueError("Alias cycle detected")
-            if current in visited:
-                continue
-            visited.add(current)
-            next_target = self._alias_cache.get(current)
-            if next_target is not None:
-                to_visit.append(next_target)
 
     def add_alias(self, alias: str, target: str) -> None:
         self._assert_no_reentrant_mutation_during_batch("add_alias")

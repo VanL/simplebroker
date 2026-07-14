@@ -41,6 +41,22 @@ def test_resolve_config_normalizes_partial_override_values() -> None:
     assert config["BROKER_MAX_MESSAGE_SIZE"] == load_config()["BROKER_MAX_MESSAGE_SIZE"]
 
 
+def test_resolve_config_preserves_typed_debug_and_percentage_overrides() -> None:
+    """Programmatic overrides should not need environment-style strings."""
+
+    config = resolve_config(
+        {
+            "BROKER_DEBUG": False,
+            "BROKER_VACUUM_THRESHOLD": 20,
+        }
+    )
+
+    assert config["BROKER_DEBUG"] is False
+    assert config["BROKER_VACUUM_THRESHOLD"] == 0.2
+
+    assert resolve_config({"BROKER_DEBUG": "verbose"})["BROKER_DEBUG"] is True
+
+
 def test_broker_core_merges_partial_config_with_defaults(tmp_path: Path) -> None:
     """Direct BrokerCore construction should accept override-only configs."""
     runner = SQLiteRunner(str(tmp_path / "test.db"))
@@ -168,7 +184,7 @@ def test_claim_generator_uses_instance_batch_size(broker_target) -> None:
     finally:
         if generator is not None:
             generator.close()
-        broker.close()
+        broker.shutdown()
 
 
 @pytest.mark.shared
@@ -206,7 +222,7 @@ def test_move_generator_uses_instance_batch_size(broker_target) -> None:
     finally:
         if generator is not None:
             generator.close()
-        broker.close()
+        broker.shutdown()
 
 
 @pytest.mark.shared
@@ -262,4 +278,4 @@ def test_generator_explicit_config_overrides_instance_batch_size(
     finally:
         if generator is not None:
             generator.close()
-        broker.close()
+        broker.shutdown()

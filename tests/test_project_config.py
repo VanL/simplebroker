@@ -264,6 +264,35 @@ def test_load_project_config_rejects_nested_backend_option_tables(
         load_project_config(config_path)
 
 
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        (
+            'version = 2\nbackend = "sqlite"\ntarget = "queue.db"\n',
+            "Unsupported .broker.toml version",
+        ),
+        ('version = 1\ntarget = "queue.db"\n', "requires a non-empty string 'backend'"),
+        ('version = 1\nbackend = "sqlite"\n', "requires a non-empty string 'target'"),
+        (
+            'version = 1\nbackend = "sqlite"\ntarget = "queue.db"\nbackend_options = "bad"\n',
+            "'backend_options' must be a table",
+        ),
+    ],
+)
+def test_load_project_config_rejects_invalid_required_fields(
+    tmp_path: Path,
+    contents: str,
+    message: str,
+) -> None:
+    """Malformed project identity fields must fail before backend resolution."""
+
+    config_path = tmp_path / ".broker.toml"
+    config_path.write_text(contents, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        load_project_config(config_path)
+
+
 def test_load_project_config_ignores_unknown_top_level_fields(
     tmp_path: Path,
 ) -> None:
@@ -524,6 +553,32 @@ def test_public_broker_target_roundtrip_serialization(tmp_path: Path) -> None:
     assert decoded == original
 
 
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ("[]", "must decode to an object"),
+        ({"target": "queue.db"}, "missing backend_name"),
+        ({"backend_name": "sqlite"}, "missing target"),
+        (
+            {
+                "backend_name": "sqlite",
+                "target": "queue.db",
+                "backend_options": [],
+            },
+            "backend_options must be an object",
+        ),
+    ],
+)
+def test_deserialize_broker_target_rejects_malformed_transport_payloads(
+    payload: str | dict[str, object],
+    message: str,
+) -> None:
+    """Worker transport must reject incomplete or structurally invalid targets."""
+
+    with pytest.raises(ValueError, match=message):
+        deserialize_broker_target(payload)
+
+
 def test_resolve_target_defaults_to_sqlite_without_toml(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -533,6 +588,7 @@ def test_resolve_target_defaults_to_sqlite_without_toml(
     target = resolve_broker_target(tmp_path, config=load_config())
 
     assert target is None
+    assert broker_root(tmp_path, config=load_config()) is None
 
 
 def test_resolve_target_unknown_backend_raises(
@@ -671,6 +727,29 @@ def test_project_config_discovery_uses_configured_path_and_name(
     assert target is not None
     assert target.config_path == namespaced_config.resolve()
     assert target.target_path == (project_root / ".weft" / "weft.db").resolve()
+
+
+@pytest.mark.sqlite_only
+def test_project_config_discovery_honors_an_absolute_config_location(
+    tmp_path: Path,
+) -> None:
+    """An absolute config directory should not be rebased under the caller."""
+
+    config_dir = tmp_path / "central-config"
+    config_dir.mkdir()
+    config_path = config_dir / "broker.toml"
+    _write_project_config(config_path, backend="sqlite", target="queue.db")
+    unrelated_start = tmp_path / "workspace" / "nested"
+    unrelated_start.mkdir(parents=True)
+    config = {
+        "BROKER_PROJECT_CONFIG_PATH": str(config_dir),
+        "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
+    }
+
+    assert project_config_path_for_directory(unrelated_start, config=config) == (
+        config_path.resolve()
+    )
+    assert find_project_config(unrelated_start, config=config) == config_path.resolve()
 
 
 @pytest.mark.sqlite_only

@@ -18,7 +18,9 @@ from simplebroker import Queue
 from simplebroker._backend_plugins import BACKEND_ENTRY_POINT_GROUP
 from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
 from simplebroker._broker_session import (
+    _freeze_for_key,
     _ProcessBrokerSession,
+    _ProcessBrokerSessionRegistry,
     _session_key,
     close_process_broker_sessions,
 )
@@ -644,3 +646,149 @@ def test_process_session_key_includes_pid(
     child_key = _session_key(target, {})
 
     assert parent_key != child_key
+
+
+def test_session_key_freezes_nested_backend_options_deterministically() -> None:
+    class OpaqueOption:
+        def __repr__(self) -> str:
+            return "opaque-option"
+
+    frozen = _freeze_for_key(
+        {
+            "items": [2, 1],
+            "modes": {"write", "read"},
+            "opaque": OpaqueOption(),
+        }
+    )
+
+    assert frozen == (
+        ("items", (2, 1)),
+        ("modes", ("read", "write")),
+        ("opaque", "opaque-option"),
+    )
+
+
+def test_closed_session_rejects_connections_and_extra_releases(tmp_path: Path) -> None:
+    session = _ProcessBrokerSession(str(tmp_path / "sqlite.db"))
+    session.close_all()
+    session.close_all()
+
+    with pytest.raises(RuntimeError, match="Broker session is closed"):
+        session.get_connection(None)
+    with pytest.raises(RuntimeError, match="Broker session is closed"):
+        session.get_connection(None, lease_operation=False)
+
+    session.release_current_thread_connection()
+
+
+@pytest.mark.parametrize("supports_lease", [True, False])
+def test_failed_direct_core_creation_releases_any_runner_lease(
+    monkeypatch: pytest.MonkeyPatch,
+    supports_lease: bool,
+) -> None:
+    class Runner:
+        def __init__(self) -> None:
+            self.lease_calls = 0
+            self.release_calls = 0
+            self.close_calls = 0
+            if supports_lease:
+                self.lease_thread_connection = self._lease
+                self.release_thread_connection = self._release
+
+        def _lease(self) -> None:
+            self.lease_calls += 1
+
+        def _release(self) -> None:
+            self.release_calls += 1
+
+        def close(self) -> None:
+            self.close_calls += 1
+
+    class FailingDirectPlugin:
+        name = "failing-direct"
+        sql = None
+        is_direct_backend = True
+
+        def __init__(self, runner: Runner) -> None:
+            self.runner = runner
+
+        def create_runner(self, *args: Any, **kwargs: Any) -> Runner:
+            return self.runner
+
+        def create_core_from_runner(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("core creation failed")
+
+    runner = Runner()
+    plugin = FailingDirectPlugin(runner)
+    monkeypatch.setattr(
+        "simplebroker._broker_session._target_parts",
+        lambda db_path: ("failing-direct", str(db_path), {}, plugin),
+    )
+    session = _ProcessBrokerSession("target")
+    try:
+        with pytest.raises(RuntimeError, match="core creation failed"):
+            session.get_connection(None)
+
+        assert runner.lease_calls == int(supports_lease)
+        assert runner.release_calls == int(supports_lease)
+        assert session._active_operations == 0
+    finally:
+        session.close_all()
+
+
+def test_registry_shutdown_closes_live_sessions_and_tolerates_late_release(
+    tmp_path: Path,
+) -> None:
+    registry = _ProcessBrokerSessionRegistry()
+    key, session = registry.acquire(str(tmp_path / "registry.db"))
+
+    registry.close_all()
+    registry.release(key)
+
+    assert session._closed
+
+
+def test_session_close_wins_race_with_core_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _ProcessBrokerSession(str(tmp_path / "sqlite.db"))
+    core_created = threading.Event()
+    allow_return = threading.Event()
+    errors: list[BaseException] = []
+
+    class Core:
+        def __init__(self) -> None:
+            self.shutdown_calls = 0
+
+        def shutdown(self) -> None:
+            self.shutdown_calls += 1
+
+    created_core = Core()
+
+    def create_core(stop_event: threading.Event | None) -> Core:
+        del stop_event
+        core_created.set()
+        assert allow_return.wait(timeout=5.0)
+        return created_core
+
+    def get_connection() -> None:
+        try:
+            session.get_connection(None, lease_operation=False)
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(session, "_create_core", create_core)
+    worker = threading.Thread(target=get_connection)
+    worker.start()
+    assert core_created.wait(timeout=5.0)
+
+    session.close_all()
+    allow_return.set()
+    worker.join(timeout=5.0)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], RuntimeError)
+    assert str(errors[0]) == "Broker session is closed"
+    assert created_core.shutdown_calls == 1

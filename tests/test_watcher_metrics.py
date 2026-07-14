@@ -293,7 +293,7 @@ def test_metrics_collection_basic(broker_target) -> None:
         assert "handler_time_ms_avg" in stats
         assert stats["handler_time_ms_avg"] > 5  # Should reflect sleep
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 def test_metrics_efficiency_tracking(broker_target) -> None:
@@ -356,7 +356,7 @@ def test_metrics_efficiency_tracking(broker_target) -> None:
         assert stats2["messages_processed"] == 20
         # Note: Not asserting on efficiency as it depends on implementation
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 def test_metrics_logging(broker_target) -> None:
@@ -411,7 +411,7 @@ def test_metrics_logging(broker_target) -> None:
 
     finally:
         os.environ.pop("BROKER_WATCHER_LOG_INTERVAL", None)
-        broker.close()
+        broker.shutdown()
 
 
 def test_metrics_aggregation(broker_target) -> None:
@@ -480,7 +480,7 @@ def test_metrics_aggregation(broker_target) -> None:
             for t in threads:
                 t.join(timeout=scale_timeout_for_ci(1.0))
     finally:
-        broker.close()
+        broker.shutdown()
 
 
 def test_metrics_export_format() -> None:

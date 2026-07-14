@@ -240,6 +240,49 @@ def test_redis_core_rejects_invalid_inputs(
         core.close()
 
 
+def test_redis_core_internal_state_edges_are_safe(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        assert core._qkey("jobs", "custom") == (
+            f"simplebroker:{redis_runner.namespace}:q:jobs:custom"
+        )
+
+        core._publish(None)
+        core._pid = -1
+        core._check_fork_safety()
+        assert core._pid > 0
+
+        core._active_generator_batch = "claim"
+        core._active_generator_batch_owner = -1
+        core._assert_no_reentrant_mutation_during_batch("write")
+        core._set_active_generator_batch(None)
+
+        core._commit_claim_batch("jobs", "unused", [])
+        core._commit_move_batch("jobs", "other", "unused", [])
+
+        with pytest.raises(OperationalError, match="invalid Redis claim batch"):
+            core._commit_claim_batch("jobs", "missing-token", [("payload", 1)])
+        with pytest.raises(OperationalError, match="invalid Redis move batch"):
+            core._commit_move_batch(
+                "jobs",
+                "other",
+                "missing-token",
+                [("payload", 1)],
+            )
+
+        assert core.recover_stale_batches(max_age_seconds=-1) == 0
+        redis_runner.stale_batch_seconds = -1
+        core._maybe_recover_stale_batches()
+
+        core._resync_timestamp_generator()
+        assert core.get_conflict_metrics()["ts_resync_count"] == 1
+    finally:
+        core.close()
+
+
 def test_redis_alias_api_validates_and_updates_alias_metadata(
     redis_runner: RedisRunner,
 ) -> None:

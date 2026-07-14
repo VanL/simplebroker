@@ -30,6 +30,10 @@ pytestmark = [pytest.mark.shared]
 class TestWatcherEdgeCases(WatcherTestBase):
     """Test edge cases in QueueWatcher."""
 
+    def test_invalid_database_owner_type_is_rejected(self) -> None:
+        with pytest.raises(TypeError, match="Watcher db= must be a path"):
+            QueueWatcher("queue", lambda message, timestamp: None, db=object())
+
     def test_invalid_handler_type(self, broker_target) -> None:
         """Test that non-callable handler raises TypeError."""
         with pytest.raises(TypeError, match="handler must be callable"):
@@ -118,7 +122,92 @@ class TestWatcherEdgeCases(WatcherTestBase):
             assert "byte limit" in str(errors[0][0])
             assert errors[0][1].endswith("...")  # Truncated message
         finally:
-            broker.close()
+            broker.shutdown()
+
+    def test_oversized_message_without_error_handler_is_logged_and_rejected(
+        self, broker_target, caplog
+    ) -> None:
+        handled: list[tuple[str, int]] = []
+        watcher = QueueWatcher(
+            "queue",
+            lambda message, timestamp: handled.append((message, timestamp)),
+            db=broker_target,
+            config={
+                "BROKER_LOGGING_ENABLED": True,
+                "BROKER_MAX_MESSAGE_SIZE": 1,
+            },
+        )
+        watcher._error_handler = None
+        try:
+            with caplog.at_level("ERROR", logger="simplebroker.watcher"):
+                assert watcher._dispatch("too large", 123) is False
+        finally:
+            watcher.stop()
+
+        assert handled == []
+        assert "exceeds 1 byte limit" in caplog.text
+
+    def test_legacy_dispatch_supports_handler_and_no_handler_states(
+        self, broker_target
+    ) -> None:
+        handled: list[tuple[str, int]] = []
+        watcher = QueueWatcher(
+            "queue",
+            lambda message, timestamp: handled.append((message, timestamp)),
+            db=broker_target,
+        )
+        watcher._error_handler = None
+        try:
+            assert watcher._dispatch("payload", 123) is True
+            watcher._handler = None
+            assert watcher._dispatch("ignored", 456) is False
+            assert (
+                watcher._safe_call_handler("ignored", 456, lambda *args: True) is False
+            )
+        finally:
+            watcher.stop()
+
+        assert handled == [("payload", 123)]
+
+    def test_operational_retry_logs_attempts_and_exhaustion(
+        self, broker_target, caplog
+    ) -> None:
+        watcher = QueueWatcher(
+            "queue",
+            lambda message, timestamp: None,
+            db=broker_target,
+            config={"BROKER_LOGGING_ENABLED": True},
+        )
+        attempts = 0
+
+        def locked_operation() -> None:
+            nonlocal attempts
+            attempts += 1
+            raise OperationalError("database is locked")
+
+        try:
+            with caplog.at_level("DEBUG", logger="simplebroker.watcher"):
+                with pytest.raises(OperationalError, match="database is locked"):
+                    watcher._process_with_retry(locked_operation, "locked-test")
+        finally:
+            watcher.stop()
+
+        assert attempts == 5
+        assert "OperationalError during locked-test" in caplog.text
+        assert "Failed after 5 operational errors" in caplog.text
+
+    def test_polling_strategy_handles_missing_versions_and_local_empty_hint(
+        self,
+    ) -> None:
+        strategy = PollingStrategy(threading.Event())
+
+        assert strategy._check_data_version() is False
+        strategy.start(lambda: None)
+        assert strategy._check_data_version() is False
+
+        strategy.mark_local_activity_as_empty_check()
+        assert strategy.consume_local_empty_check_hint() is True
+        assert strategy.consume_local_empty_check_hint() is False
 
     def test_error_handler_returns_false(self, broker_target) -> None:
         """Test that error handler returning False stops the watcher."""
@@ -806,7 +895,7 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
             if hasattr(watcher, "stop"):
                 watcher.stop()
         finally:
-            broker.close()
+            broker.shutdown()
 
     @pytest.mark.sqlite_only
     def test_move_unexpected_error(self) -> None:
