@@ -339,9 +339,10 @@ def test_shutdown_swallows_pool_failures_after_releasing_local_state() -> None:
 
     runner, _ = _runner_with_fake_pool()
     pool = BrokenPool()
-    runner._pool = pool
-    runner._leased_conn = pool.conn
-    runner._lease_depth = 1
+    runner_state = cast(Any, runner)
+    runner_state._pool = pool
+    runner_state._leased_conn = pool.conn
+    runner_state._lease_depth = 1
 
     runner.shutdown()
 
@@ -408,7 +409,7 @@ def test_activity_registry_ignores_unknown_release() -> None:
 
 
 def test_activity_waiters_clamp_versions_and_translate_driver_errors() -> None:
-    class SingleListener:
+    class SingleListener(pg_runner_module._SharedActivityListener):
         def __init__(self) -> None:
             self.error: Exception | None = None
 
@@ -418,7 +419,8 @@ def test_activity_waiters_clamp_versions_and_translate_driver_errors() -> None:
             return True, 4, 8
 
     single = object.__new__(pg_runner_module.PostgresActivityWaiter)
-    single._listener = SingleListener()
+    single_listener = SingleListener()
+    single._listener = single_listener
     single._queue_name = "jobs"
     single._stop_event = threading.Event()
     single._last_queue_version = 4
@@ -428,11 +430,14 @@ def test_activity_waiters_clamp_versions_and_translate_driver_errors() -> None:
     assert single._last_queue_version == 4
     assert single._last_wildcard_version == 6
 
-    single._listener.error = PsycopgOperationalError("listener connection failed")
+    single_listener.error = PsycopgOperationalError("listener connection failed")
     with pytest.raises(OperationalError, match="listener connection failed"):
         single.wait(1.0)
 
-    class MultiListener:
+    class MultiListener(pg_runner_module._SharedActivityListener):
+        def __init__(self) -> None:
+            return None
+
         def wait_any(self, **kwargs: object) -> tuple[bool, dict[str, int], int]:
             return True, {"jobs": 3, "other": 1}, 9
 
@@ -459,8 +464,9 @@ def test_activity_waiters_clamp_versions_and_translate_driver_errors() -> None:
 
 def test_connection_return_helpers_handle_active_and_mismatched_leases() -> None:
     runner, pool = _runner_with_thread_connection()
-    runner._leased_conn = pool.conn
-    runner._lease_depth = 1
+    runner_state = cast(Any, runner)
+    runner_state._leased_conn = pool.conn
+    runner_state._lease_depth = 1
 
     runner._return_thread_conn()
     runner._return_leased_conn(object())  # type: ignore[arg-type]

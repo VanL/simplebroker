@@ -14,6 +14,7 @@ from simplebroker_pg.validation import SchemaInspection, SchemaState
 
 import simplebroker.db as db_module
 from simplebroker._exceptions import DatabaseError
+from simplebroker._runner import SetupPhase
 
 pytestmark = [pytest.mark.pg_only]
 
@@ -34,6 +35,25 @@ class RecordingRunner:
     ) -> list[tuple[Any, ...]]:
         self.calls.append((sql, params, fetch))
         return next(self._responses, [])
+
+    def begin_immediate(self) -> None:
+        return None
+
+    def commit(self) -> None:
+        return None
+
+    def rollback(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def setup(self, phase: SetupPhase) -> None:
+        del phase
+
+    def is_setup_complete(self, phase: SetupPhase) -> bool:
+        del phase
+        return True
 
 
 class CachingRunner(RecordingRunner):
