@@ -723,7 +723,11 @@ def test_concurrent_pre_check_timing(broker_target) -> None:
     # the process-local runner pool. Keep the contract bounded, but do not apply
     # the SQLite micro-query budget to the PG backend.
     avg_default = 0.5 if is_pg else 0.01
-    p99_default = 2.0 if is_pg else (0.04 if os.environ.get("CI") else 0.025)
+    # Wall-clock tail latency includes scheduler stalls when xdist loads all
+    # logical CPUs. Use the existing CI contention budget for local xdist too;
+    # keep the tighter budget for genuinely isolated benchmark runs.
+    contended_run = bool(os.environ.get("CI") or os.environ.get("PYTEST_XDIST_WORKER"))
+    p99_default = 2.0 if is_pg else (0.04 if contended_run else 0.025)
     avg_threshold = get_performance_threshold(
         "WATCHER_PRECHECK_AVG_SECONDS",
         avg_default,
