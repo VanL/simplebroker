@@ -1,5 +1,5 @@
 name: Normalize Scorecard SARIF
-description: Remove invalid placeholder locations from repository-level findings
+description: Anchor repository-level findings to a valid SARIF location
 
 runs:
   using: composite

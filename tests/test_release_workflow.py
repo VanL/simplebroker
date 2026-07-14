@@ -105,8 +105,9 @@ def test_scorecard_normalizes_invalid_repository_level_sarif_locations() -> None
     assert "name: scorecard-sarif" in upload_job
     assert "using: composite" in action_text
     assert "normalize_scorecard_sarif.jq" in action_text
-    assert '!= "no file associated with this alert"' in filter_text
-    assert "del(.locations)" in filter_text
+    assert '== "no file associated with this alert"' in filter_text
+    assert ".github/workflows/scorecard.yml" in filter_text
+    assert "Repository-level finding anchored" in filter_text
 
 
 def test_dependabot_groups_codeql_action_updates() -> None:
