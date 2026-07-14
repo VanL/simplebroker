@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write
       id-token: write
 
     steps:
@@ -30,6 +29,34 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           publish_results: true
+
+      - name: Upload raw SARIF artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-sarif-raw
+          path: results.sarif
+          retention-days: 1
+
+  upload:
+    name: Upload Scorecard results
+    needs: analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Download raw SARIF artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --name scorecard-sarif-raw --dir .
 
       - name: Normalize repository-level SARIF locations
         uses: ./.github/actions/normalize-scorecard-sarif

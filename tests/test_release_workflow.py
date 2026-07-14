@@ -77,6 +77,8 @@ def test_scorecard_can_be_dispatched_for_fresh_default_branch_evidence() -> None
 
 def test_scorecard_normalizes_invalid_repository_level_sarif_locations() -> None:
     workflow_text = _workflow_text("scorecard.yml")
+    analysis_job = workflow_text.split("  analysis:", 1)[1].split("  upload:", 1)[0]
+    upload_job = workflow_text.split("  upload:", 1)[1]
     action_text = (
         ROOT / ".github" / "actions" / "normalize-scorecard-sarif" / "action.yml"
     ).read_text(encoding="utf-8")
@@ -88,8 +90,19 @@ def test_scorecard_normalizes_invalid_repository_level_sarif_locations() -> None
     upload_step = "- name: Upload to code scanning"
     assert normalize_step in workflow_text
     assert workflow_text.index(normalize_step) < workflow_text.index(upload_step)
-    assert "uses: ./.github/actions/normalize-scorecard-sarif" in workflow_text
-    assert "\n        run:" not in workflow_text
+    assert set(re.findall(r"uses: ([^@\s]+)@", analysis_job)) == {
+        "actions/checkout",
+        "actions/upload-artifact",
+        "ossf/scorecard-action",
+    }
+    assert workflow_text.count("id-token: write") == 1
+    assert "uses: ./.github/actions/normalize-scorecard-sarif" not in analysis_job
+    assert "\n        run:" not in analysis_job
+    assert "name: scorecard-sarif-raw" in analysis_job
+    assert "needs: analysis" in upload_job
+    assert "gh run download" in upload_job
+    assert "uses: ./.github/actions/normalize-scorecard-sarif" in upload_job
+    assert "name: scorecard-sarif" in upload_job
     assert "using: composite" in action_text
     assert "normalize_scorecard_sarif.jq" in action_text
     assert '!= "no file associated with this alert"' in filter_text
@@ -305,7 +318,7 @@ def test_release_gate_workflows_publish_from_top_level_gate() -> None:
 
 
 def test_artifact_downloads_do_not_use_the_warning_emitting_node_action() -> None:
-    for workflow_path in ("test.yml", *RELEASE_WORKFLOWS):
+    for workflow_path in ("scorecard.yml", "test.yml", *RELEASE_WORKFLOWS):
         workflow_text = _workflow_text(workflow_path)
 
         assert "actions/download-artifact@" not in workflow_text
