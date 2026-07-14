@@ -32,9 +32,7 @@ jobs:
           publish_results: true
 
       - name: Normalize repository-level SARIF locations
-        run: |
-          jq --from-file .github/scripts/normalize_scorecard_sarif.jq results.sarif > results.normalized.sarif
-          mv results.normalized.sarif results.sarif
+        uses: ./.github/actions/normalize-scorecard-sarif
 
       - name: Upload SARIF artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

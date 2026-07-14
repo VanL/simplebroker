@@ -77,6 +77,9 @@ def test_scorecard_can_be_dispatched_for_fresh_default_branch_evidence() -> None
 
 def test_scorecard_normalizes_invalid_repository_level_sarif_locations() -> None:
     workflow_text = _workflow_text("scorecard.yml")
+    action_text = (
+        ROOT / ".github" / "actions" / "normalize-scorecard-sarif" / "action.yml"
+    ).read_text(encoding="utf-8")
     filter_text = (
         ROOT / ".github" / "scripts" / "normalize_scorecard_sarif.jq"
     ).read_text(encoding="utf-8")
@@ -85,9 +88,10 @@ def test_scorecard_normalizes_invalid_repository_level_sarif_locations() -> None
     upload_step = "- name: Upload to code scanning"
     assert normalize_step in workflow_text
     assert workflow_text.index(normalize_step) < workflow_text.index(upload_step)
-    assert (
-        "jq --from-file .github/scripts/normalize_scorecard_sarif.jq" in workflow_text
-    )
+    assert "uses: ./.github/actions/normalize-scorecard-sarif" in workflow_text
+    assert "\n        run:" not in workflow_text
+    assert "using: composite" in action_text
+    assert "normalize_scorecard_sarif.jq" in action_text
     assert '!= "no file associated with this alert"' in filter_text
     assert "del(.locations)" in filter_text
 

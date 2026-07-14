@@ -1,0 +1,16 @@
+name: Normalize Scorecard SARIF
+description: Remove invalid placeholder locations from repository-level findings
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        temporary_file="$(mktemp "${RUNNER_TEMP}/scorecard-results.XXXXXX")"
+        trap 'rm -f "${temporary_file}"' EXIT
+        jq \
+          --from-file "${GITHUB_WORKSPACE}/.github/scripts/normalize_scorecard_sarif.jq" \
+          results.sarif > "${temporary_file}"
+        mv "${temporary_file}" results.sarif
+        trap - EXIT
