@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import runpy
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -50,6 +51,33 @@ def _write_coverage_lines(
     data = CoverageData(basename=str(data_file))
     data.add_lines({str(source_file): lines})
     data.write()
+
+
+def _write_interrupted_empty_coverage_database(
+    data_file: Path,
+    *,
+    include_measurement_row: bool = False,
+) -> None:
+    connection = sqlite3.connect(data_file)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE coverage_schema (version integer);
+            CREATE TABLE file (
+                id integer primary key,
+                path text,
+                unique (path)
+            );
+            """
+        )
+        if include_measurement_row:
+            connection.execute(
+                "INSERT INTO file (path) VALUES (?)",
+                ("partially-recorded.py",),
+            )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _replace_with_retry(source: Path, target: Path, *, timeout: float = 2.0) -> None:
@@ -280,6 +308,58 @@ def test_combine_coverage_propagates_corrupt_shard_failure(
     combined = CoverageData(basename=str(data_file))
     combined.read()
     assert combined.lines(str(base_source)) == [1]
+
+
+def test_combine_coverage_excludes_interrupted_empty_shard(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    base_source = tmp_path / "base_source.py"
+    _write_coverage_lines(data_file, base_source, {1})
+    _write_interrupted_empty_coverage_database(shard_file)
+
+    result = _run_combine_coverage(data_file)
+
+    assert result.returncode == 0, result.stderr
+    assert "Excluded 1 interrupted empty coverage data file(s)" in result.stdout
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert combined.lines(base_source.as_posix()) == [1]
+    assert not shard_file.exists()
+
+
+def test_combine_coverage_rejects_partial_shard_with_a_measurement_row(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    base_source = tmp_path / "base_source.py"
+    _write_coverage_lines(data_file, base_source, {1})
+    _write_interrupted_empty_coverage_database(
+        shard_file,
+        include_measurement_row=True,
+    )
+
+    result = _run_combine_coverage(data_file)
+
+    assert result.returncode != 0
+    assert "Could not combine coverage data" in result.stderr
+    assert shard_file.exists()
+
+
+def test_combine_coverage_rejects_empty_shard_as_the_only_data(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    _write_interrupted_empty_coverage_database(shard_file)
+
+    result = _run_combine_coverage(data_file)
+
+    assert result.returncode != 0
+    assert "no recoverable coverage data files" in result.stderr
+    assert shard_file.exists()
 
 
 def test_combine_coverage_waits_for_transiently_incomplete_shard(

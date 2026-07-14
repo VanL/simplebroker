@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import tempfile
 import time
@@ -15,6 +16,7 @@ from coverage.exceptions import CoverageException
 _SUBPROCESS_COVERAGE_SUFFIX = "-subprocess"
 _DEFAULT_RETRY_TIMEOUT_SECONDS = 10.0
 _DEFAULT_SETTLE_SECONDS = 0.5
+_COVERAGE_DATA_TABLES = ("meta", "file", "context", "line_bits", "arc", "tracer")
 
 
 def _source_files(data_file: Path) -> list[Path]:
@@ -39,12 +41,46 @@ def _readable_coverage_file(path: Path) -> None:
         data.close(force=True)
 
 
+def _has_no_recoverable_coverage_data(path: Path) -> bool:
+    """Recognize a data file interrupted before its first measurement write."""
+
+    if path.stat().st_size == 0:
+        return True
+
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = sqlite3.connect(path)
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "coverage_schema" not in tables:
+            return False
+        if (
+            connection.execute("SELECT version FROM coverage_schema").fetchone()
+            is not None
+        ):
+            return False
+        return all(
+            table not in tables
+            or connection.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is None
+            for table in _COVERAGE_DATA_TABLES
+        )
+    except sqlite3.Error:
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def _file_signature(path: Path) -> tuple[str, int, int]:
     stat = path.stat()
     return str(path), stat.st_size, stat.st_mtime_ns
 
 
-def _wait_for_stable_sources(data_file: Path) -> list[Path]:
+def _wait_for_stable_sources(data_file: Path) -> tuple[list[Path], list[Path]]:
     """Wait for late coverage writers without accepting permanent corruption."""
 
     retry_timeout = float(
@@ -63,15 +99,20 @@ def _wait_for_stable_sources(data_file: Path) -> list[Path]:
     last_snapshot: tuple[tuple[str, int, int], ...] | None = None
     stable_since: float | None = None
     last_error: CoverageException | OSError | None = None
+    empty_sources: list[Path] = []
 
     while True:
         now = time.monotonic()
         sources = _source_files(data_file)
         monitored = ([data_file] if data_file.is_file() else []) + sources
 
+        empty_sources = []
         try:
             snapshot = tuple(_file_signature(path) for path in monitored)
             for path in monitored:
+                if _has_no_recoverable_coverage_data(path):
+                    empty_sources.append(path)
+                    continue
                 _readable_coverage_file(path)
         except (CoverageException, OSError) as exc:
             last_error = exc
@@ -81,15 +122,29 @@ def _wait_for_stable_sources(data_file: Path) -> list[Path]:
             if snapshot != last_snapshot or stable_since is None:
                 last_snapshot = snapshot
                 stable_since = now
-            elif stable_since is not None and now - stable_since >= settle_seconds:
-                return sources
+            elif (
+                not empty_sources
+                and stable_since is not None
+                and now - stable_since >= settle_seconds
+            ):
+                return sources, []
 
-            if settle_seconds == 0:
-                return sources
+            if settle_seconds == 0 and not empty_sources:
+                return sources, []
 
         if now >= deadline:
             if last_error is not None:
                 raise last_error
+            if (
+                empty_sources
+                and stable_since is not None
+                and now - stable_since >= settle_seconds
+            ):
+                empty_source_set = set(empty_sources)
+                return (
+                    [source for source in sources if source not in empty_source_set],
+                    empty_sources,
+                )
             raise CoverageException(
                 "coverage data files did not become stable before the merge deadline"
             )
@@ -130,19 +185,29 @@ def main() -> int:
         return 0
 
     try:
-        sources = _wait_for_stable_sources(data_file)
+        sources, empty_sources = _wait_for_stable_sources(data_file)
     except (CoverageException, OSError) as exc:
         print(f"Could not combine coverage data: {exc}", file=sys.stderr)
         return 1
 
+    if not sources and (not data_file.is_file() or data_file in empty_sources):
+        print(
+            "Could not combine coverage data: no recoverable coverage data files",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
+        for empty_source in empty_sources:
+            empty_source.unlink(missing_ok=True)
         coverage = Coverage(data_file=str(data_file))
         try:
             coverage.load()
-            coverage.combine(
-                data_paths=[str(source) for source in sources],
-                strict=True,
-            )
+            if sources:
+                coverage.combine(
+                    data_paths=[str(source) for source in sources],
+                    strict=True,
+                )
             coverage.save()
         finally:
             coverage.get_data().close(force=True)
@@ -152,6 +217,11 @@ def main() -> int:
         return 1
 
     print(f"Combined {len(sources)} coverage data files into {data_file}")
+    if empty_sources:
+        print(
+            f"Excluded {len(empty_sources)} interrupted empty coverage data "
+            "file(s) with no measurements"
+        )
     return 0
 
 
