@@ -408,15 +408,28 @@ jobs:
         uv run --frozen --no-sync coverage report --show-missing
         uv run --frozen --no-sync coverage xml
 
+    - name: Trust pinned Codecov uploader key
+      shell: bash
+      run: |
+        set -euo pipefail
+        fingerprint=27034E7FDB850E0BBC2C62FF806BB28AED779869
+        install -d -m 700 "${HOME}/.gnupg"
+        curl --fail --silent --show-error https://keybase.io/codecovsecops/pgp_keys.asc | gpg --batch --import
+        imported_fingerprint=$(gpg --batch --with-colons --fingerprint "${fingerprint}" | awk -F: '$1 == "fpr" { print $10; exit }')
+        test "${imported_fingerprint}" = "${fingerprint}"
+        printf '%s:6:\n' "${fingerprint}" | gpg --batch --import-ownertrust
+
     - name: Upload coverage reports
       id: codecov
       continue-on-error: true
       uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
       with:
+        disable_search: true
         files: ./coverage.xml
         flags: unittests
         name: codecov-umbrella
         fail_ci_if_error: true
+        plugins: noop
         token: ${{ secrets.CODECOV_TOKEN }}
         slug: VanL/simplebroker
 

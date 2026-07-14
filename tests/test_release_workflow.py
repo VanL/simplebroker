@@ -492,11 +492,20 @@ def test_coverage_workflow_runs_four_independent_producers() -> None:
 def test_codecov_keeps_secret_auth_and_reports_nonblocking_failures() -> None:
     workflow_text = _workflow_text("test.yml")
     coverage_job = workflow_text.split("  coverage-report:", 1)[1]
+    trust_step = coverage_job.split(
+        "    - name: Trust pinned Codecov uploader key",
+        1,
+    )[1].split("    - name: Upload coverage reports", 1)[0]
     upload_step = coverage_job.split("    - name: Upload coverage reports", 1)[1]
 
     assert "id-token: write" not in coverage_job
     assert "use_oidc:" not in coverage_job
+    assert "27034E7FDB850E0BBC2C62FF806BB28AED779869" in trust_step
+    assert 'test "${imported_fingerprint}" = "${fingerprint}"' in trust_step
+    assert "gpg --batch --import-ownertrust" in trust_step
+    assert "        disable_search: true" in upload_step
     assert "        token: ${{ secrets.CODECOV_TOKEN }}" in upload_step
+    assert "        plugins: noop" in upload_step
     assert "      id: codecov" in upload_step
     assert "      continue-on-error: true" in upload_step
     assert "        fail_ci_if_error: true" in upload_step
