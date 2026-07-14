@@ -35,14 +35,12 @@ class OutputReader(threading.Thread):
                 if self.text_mode:
                     line = self.stream.readline()
                     if line:
-                        self.lines.append(line)
                         self.queue.put(line)
                     else:
                         break
                 else:
                     chunk = self.stream.read(4096)
                     if chunk:
-                        self.lines.append(chunk)
                         self.queue.put(chunk)
                     else:
                         break

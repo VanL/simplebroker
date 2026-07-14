@@ -8,8 +8,8 @@ from .helper_scripts.timestamp_validation import validate_timestamp
 from .helper_scripts.timing import scale_timeout_for_ci
 
 
-def _watch_output_timeout(timeout: float = 2.0) -> float:
-    """Allow Windows CI extra time for watch subprocess startup and first output."""
+def _watch_output_timeout(timeout: float = 10.0) -> float:
+    """Bound functional waits without treating watcher startup as a benchmark."""
 
     if sys.platform == "win32":
         return scale_timeout_for_ci(timeout)
@@ -32,6 +32,7 @@ def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages
 
     start = time.monotonic()
     json_objects = []
+    processed_line_count = 0
 
     while time.monotonic() - start < timeout:
         # Get current stdout
@@ -39,7 +40,8 @@ def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages
         lines = output.strip().split("\n") if output else []
 
         # Parse all lines as JSON
-        for line in lines[len(json_objects) :]:  # Only process new lines
+        for line in lines[processed_line_count:]:
+            processed_line_count += 1
             if line.strip():
                 try:
                     data = json.loads(line)
@@ -76,6 +78,18 @@ def wait_for_json_output(proc, expected_count=None, timeout=5, expected_messages
         )
 
     return json_objects
+
+
+def test_managed_subprocess_captures_each_output_line_once(tmp_path) -> None:
+    cmd = [sys.executable, "-c", "print('one line', flush=True)"]
+
+    with managed_subprocess(cmd, cwd=tmp_path) as proc:
+        assert proc.wait_for_output(
+            "one line",
+            timeout=scale_timeout_for_ci(5.0),
+        )
+        proc.proc.wait(timeout=scale_timeout_for_ci(5.0))
+        assert proc.stdout.splitlines() == ["one line"]
 
 
 class TestWatchCommand:
