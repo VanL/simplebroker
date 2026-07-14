@@ -77,6 +77,48 @@ def _run_combine_coverage(
     )
 
 
+def test_coverage_exit_patch_saves_readable_data_from_os_exit(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    env = os.environ.copy()
+    for name in (
+        "COV_CORE_CONFIG",
+        "COV_CORE_DATAFILE",
+        "COV_CORE_SOURCE",
+        "COVERAGE_PROCESS_CONFIG",
+        "COVERAGE_RCFILE",
+    ):
+        env.pop(name, None)
+    env["COVERAGE_PROCESS_START"] = str(REPO_ROOT / "pyproject.toml")
+    env["COVERAGE_FILE"] = str(data_file)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import coverage; coverage.process_startup(); "
+            "import simplebroker._backend_plugins; "
+            "import os; os._exit(0)",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    shards = list(tmp_path.glob(".coverage.*"))
+    assert len(shards) == 1
+    data = CoverageData(basename=str(shards[0]))
+    data.read()
+    assert any(
+        measured.replace("\\", "/").endswith("simplebroker/_backend_plugins.py")
+        for measured in data.measured_files()
+    )
+
+
 def test_combine_coverage_maps_ci_checkout_roots_to_repo_relative_paths(
     tmp_path: Path,
 ) -> None:

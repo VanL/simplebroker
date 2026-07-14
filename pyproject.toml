@@ -159,6 +159,7 @@ branch = true
 parallel = true
 relative_files = true
 concurrency = ["thread", "multiprocessing"]
+patch = ["_exit"]
 omit = [
     "*/tests/*",
     "*/examples/*",

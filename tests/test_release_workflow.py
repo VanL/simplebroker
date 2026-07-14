@@ -509,6 +509,7 @@ def test_coverage_report_enforces_the_local_floor() -> None:
 
     assert pyproject["tool"]["coverage"]["report"]["fail_under"] == 85
     assert pyproject["tool"]["coverage"]["run"]["relative_files"] is True
+    assert pyproject["tool"]["coverage"]["run"]["patch"] == ["_exit"]
 
 
 def test_coverage_floor_runs_only_after_all_partial_data_is_combined() -> None:
