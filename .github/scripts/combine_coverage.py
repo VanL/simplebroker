@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -35,7 +36,7 @@ def _readable_coverage_file(path: Path) -> None:
     try:
         data.read()
     finally:
-        data.close()
+        data.close(force=True)
 
 
 def _file_signature(path: Path) -> tuple[str, int, int]:
@@ -95,6 +96,32 @@ def _wait_for_stable_sources(data_file: Path) -> list[Path]:
         time.sleep(min(0.1, max(0.0, deadline - now)))
 
 
+def _normalize_stored_paths(data_file: Path) -> None:
+    """Store repository-relative paths with POSIX separators on every OS."""
+
+    source = CoverageData(basename=str(data_file))
+    try:
+        source.read()
+        if all("\\" not in path for path in source.measured_files()):
+            return
+
+        with tempfile.TemporaryDirectory(
+            prefix="coverage-normalize-",
+            dir=data_file.parent,
+        ) as temp_dir:
+            normalized_file = Path(temp_dir) / data_file.name
+            normalized = CoverageData(basename=str(normalized_file))
+            try:
+                normalized.update(source, map_path=lambda path: path.replace("\\", "/"))
+                normalized.write()
+            finally:
+                normalized.close(force=True)
+            source.close(force=True)
+            os.replace(normalized_file, data_file)
+    finally:
+        source.close(force=True)
+
+
 def main() -> int:
     data_file = Path(os.environ.get("COVERAGE_FILE", ".coverage")).resolve()
     sources = _source_files(data_file)
@@ -108,19 +135,21 @@ def main() -> int:
         print(f"Could not combine coverage data: {exc}", file=sys.stderr)
         return 1
 
-    coverage = Coverage(data_file=str(data_file))
     try:
-        coverage.load()
-        coverage.combine(
-            data_paths=[str(source) for source in sources],
-            strict=True,
-        )
-        coverage.save()
+        coverage = Coverage(data_file=str(data_file))
+        try:
+            coverage.load()
+            coverage.combine(
+                data_paths=[str(source) for source in sources],
+                strict=True,
+            )
+            coverage.save()
+        finally:
+            coverage.get_data().close(force=True)
+        _normalize_stored_paths(data_file)
     except (CoverageException, OSError) as exc:
         print(f"Could not combine coverage data: {exc}", file=sys.stderr)
         return 1
-    finally:
-        coverage.get_data().close()
 
     print(f"Combined {len(sources)} coverage data files into {data_file}")
     return 0

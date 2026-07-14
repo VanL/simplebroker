@@ -52,6 +52,19 @@ def _write_coverage_lines(
     data.write()
 
 
+def _replace_with_retry(source: Path, target: Path, *, timeout: float = 2.0) -> None:
+    """Replace a file despite transient Windows reader locks."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            source.replace(target)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
 def _run_combine_coverage(
     data_file: Path,
     *,
@@ -155,10 +168,28 @@ def test_combine_coverage_maps_ci_checkout_roots_to_repo_relative_paths(
     combined = CoverageData(basename=str(data_file))
     combined.read()
     assert set(combined.measured_files()) == {
-        str(relative) for relative, _ in measured.values()
+        relative.as_posix() for relative, _ in measured.values()
     }
     for relative, line in measured.values():
-        assert combined.lines(str(relative)) == [line]
+        assert combined.lines(relative.as_posix()) == [line]
+
+
+def test_combine_coverage_normalizes_stored_separators_to_posix(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.mixed"
+    shard = CoverageData(basename=str(shard_file))
+    shard.add_arcs({r"simplebroker\mixed_sample.py": {(3, 4), (4, 5)}})
+    shard.write()
+
+    result = _run_combine_coverage(data_file)
+
+    assert result.returncode == 0, result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert set(combined.measured_files()) == {"simplebroker/mixed_sample.py"}
+    assert combined.arcs("simplebroker/mixed_sample.py") == [(3, 4), (4, 5)]
 
 
 def test_combine_coverage_keeps_base_data_when_no_shards_exist(
@@ -191,8 +222,8 @@ def test_combine_coverage_appends_parallel_shards_to_base_data(
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(str(base_source)) == [1]
-    assert combined.lines(str(worker_source)) == [2]
+    assert combined.lines(base_source.as_posix()) == [1]
+    assert combined.lines(worker_source.as_posix()) == [2]
     assert not shard_file.exists()
 
 
@@ -209,7 +240,7 @@ def test_combine_coverage_creates_base_from_shard_only_data(
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(str(worker_source)) == [2]
+    assert combined.lines(worker_source.as_posix()) == [2]
     assert not shard_file.exists()
 
 
@@ -228,8 +259,8 @@ def test_combine_coverage_appends_deferred_subprocess_data(
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(str(base_source)) == [1]
-    assert combined.lines(str(child_source)) == [2]
+    assert combined.lines(base_source.as_posix()) == [1]
+    assert combined.lines(child_source.as_posix()) == [2]
     assert not subprocess_file.exists()
 
 
@@ -265,7 +296,7 @@ def test_combine_coverage_waits_for_transiently_incomplete_shard(
     def finish_shard() -> None:
         time.sleep(0.2)
         _write_coverage_lines(replacement_file, worker_source, {2})
-        replacement_file.replace(shard_file)
+        _replace_with_retry(replacement_file, shard_file)
 
     writer = threading.Thread(target=finish_shard)
     writer.start()
@@ -281,8 +312,8 @@ def test_combine_coverage_waits_for_transiently_incomplete_shard(
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(str(base_source)) == [1]
-    assert combined.lines(str(worker_source)) == [2]
+    assert combined.lines(base_source.as_posix()) == [1]
+    assert combined.lines(worker_source.as_posix()) == [2]
     assert not shard_file.exists()
 
 
@@ -296,7 +327,7 @@ def test_combine_coverage_waits_for_readable_shard_to_settle(tmp_path: Path) -> 
     def finish_shard() -> None:
         time.sleep(0.2)
         _write_coverage_lines(replacement_file, worker_source, {3})
-        replacement_file.replace(shard_file)
+        _replace_with_retry(replacement_file, shard_file)
 
     writer = threading.Thread(target=finish_shard)
     writer.start()
@@ -312,7 +343,7 @@ def test_combine_coverage_waits_for_readable_shard_to_settle(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(str(worker_source)) == [3]
+    assert combined.lines(worker_source.as_posix()) == [3]
     assert not shard_file.exists()
 
 
