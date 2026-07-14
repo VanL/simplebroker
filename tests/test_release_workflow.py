@@ -75,6 +75,23 @@ def test_scorecard_can_be_dispatched_for_fresh_default_branch_evidence() -> None
     assert "workflow_dispatch:" in workflow_text
 
 
+def test_scorecard_normalizes_invalid_repository_level_sarif_locations() -> None:
+    workflow_text = _workflow_text("scorecard.yml")
+    filter_text = (
+        ROOT / ".github" / "scripts" / "normalize_scorecard_sarif.jq"
+    ).read_text(encoding="utf-8")
+
+    normalize_step = "- name: Normalize repository-level SARIF locations"
+    upload_step = "- name: Upload to code scanning"
+    assert normalize_step in workflow_text
+    assert workflow_text.index(normalize_step) < workflow_text.index(upload_step)
+    assert (
+        "jq --from-file .github/scripts/normalize_scorecard_sarif.jq" in workflow_text
+    )
+    assert '!= "no file associated with this alert"' in filter_text
+    assert "del(.locations)" in filter_text
+
+
 def test_dependabot_groups_codeql_action_updates() -> None:
     dependabot_text = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
     github_actions = dependabot_text.split('- package-ecosystem: "github-actions"', 1)[
