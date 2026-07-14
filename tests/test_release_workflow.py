@@ -441,28 +441,41 @@ def test_extension_release_gate_names_strip_prefix_and_v() -> None:
         assert extractor in workflow_text
 
 
-def test_coverage_workflow_runs_backend_helpers_before_staging_data() -> None:
+def test_coverage_workflow_runs_four_independent_producers() -> None:
     workflow_text = _workflow_text("test.yml")
-    coverage_section = workflow_text.split("- name: Run tests with coverage", 1)[1]
-    coverage_section = coverage_section.split("- name: Upload Linux coverage data", 1)[
-        0
-    ]
+    linux_job = workflow_text.split("  coverage-linux:", 1)[1].split(
+        "  coverage-postgres:", 1
+    )[0]
+    postgres_job = workflow_text.split("  coverage-postgres:", 1)[1].split(
+        "  coverage-redis:", 1
+    )[0]
+    redis_job = workflow_text.split("  coverage-redis:", 1)[1].split(
+        "  coverage-report:", 1
+    )[0]
+    windows_job = workflow_text.split("  test:", 1)[1].split("  lint:", 1)[0]
 
-    assert "uv run --frozen --no-sync pytest" in coverage_section
-    assert "uv run --frozen --no-sync ./bin/pytest-pg --fast" in coverage_section
-    assert "uv run --frozen --no-sync ./bin/pytest-redis --fast" in coverage_section
-    assert coverage_section.count("--cov-append") == 3
-    assert (
-        "uv run --frozen --no-sync python .github/scripts/combine_coverage.py"
-        in coverage_section
-    )
-    assert "Path('.coverage').replace('.coverage.linux')" in coverage_section
-    assert coverage_section.index("./bin/pytest-pg --fast") < coverage_section.index(
-        "combine_coverage.py"
-    )
-    assert coverage_section.index("./bin/pytest-redis --fast") < coverage_section.index(
-        "combine_coverage.py"
-    )
+    expected_commands = {
+        "linux": (linux_job, "pytest --cov=simplebroker"),
+        "postgres": (postgres_job, "./bin/pytest-pg --fast"),
+        "redis": (redis_job, "./bin/pytest-redis --fast"),
+        "windows": (windows_job, "Run Windows tests with coverage"),
+    }
+    for suffix, (job, command) in expected_commands.items():
+        assert command in job
+        assert f".coverage.{suffix}" in job
+        assert f"name: coverage-{suffix}" in job
+
+    assert "./bin/pytest-pg" not in linux_job
+    assert "./bin/pytest-redis" not in linux_job
+    assert "./bin/pytest-redis" not in postgres_job
+    assert "./bin/pytest-pg" not in redis_job
+
+    for job in (linux_job, postgres_job, redis_job):
+        assert "--cov-append" in job
+        assert "--cov-fail-under=0" in job
+        assert "python .github/scripts/combine_coverage.py" in job
+        assert "include-hidden-files: true" in job
+        assert "if-no-files-found: error" in job
 
 
 def test_codecov_keeps_secret_auth_and_reports_nonblocking_failures() -> None:
@@ -489,15 +502,21 @@ def test_coverage_report_enforces_the_local_floor() -> None:
 
 def test_coverage_floor_runs_only_after_all_partial_data_is_combined() -> None:
     workflow_text = _workflow_text("test.yml")
-    linux_section = workflow_text.split("- name: Run tests with coverage", 1)[1]
-    linux_section = linux_section.split("- name: Upload Linux coverage data", 1)[0]
+    producer_section = workflow_text.split("  coverage-linux:", 1)[1].split(
+        "  coverage-report:", 1
+    )[0]
     report_section = workflow_text.split("  coverage-report:", 1)[1]
     report_section = report_section.split("- name: Upload coverage reports", 1)[0]
 
-    assert linux_section.count("--cov-fail-under=0") == 3
-    assert "needs: [test, coverage]" in report_section
+    assert producer_section.count("--cov-fail-under=0") == 3
+    assert (
+        "needs: [test, coverage-linux, coverage-postgres, coverage-redis]"
+        in report_section
+    )
     assert "pattern: coverage-*" in report_section
     assert "merge-multiple: true" in report_section
+    for suffix in ("linux", "postgres", "redis", "windows"):
+        assert f"Path('.coverage.{suffix}')" in report_section
     assert "coverage report --show-missing" in report_section
     assert report_section.index("combine_coverage.py") < report_section.index(
         "coverage report --show-missing"

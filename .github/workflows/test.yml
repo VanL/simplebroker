@@ -221,7 +221,7 @@ jobs:
         uv sync --frozen --extra dev --python "${{ steps.sync-python.outputs.python-path }}"
         uv run --frozen --no-sync ./bin/packaging-smoke --python 3.11
 
-  coverage:
+  coverage-linux:
     runs-on: ubuntu-latest
     env:
       UV_PYTHON: "3.12"
@@ -249,7 +249,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync --frozen --extra dev --extra pg --extra redis --python "${{ steps.sync-python.outputs.python-path }}"
+        uv sync --frozen --extra dev --python "${{ steps.sync-python.outputs.python-path }}"
 
     - name: Run tests with coverage
       env:
@@ -258,9 +258,7 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        uv run --frozen --no-sync pytest --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0 -m "not benchmark"
-        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0
-        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0
+        uv run --frozen --no-sync pytest --cov=simplebroker --cov-append --cov-report= --cov-fail-under=0 -m "not benchmark"
         uv run --frozen --no-sync python .github/scripts/combine_coverage.py
         uv run --frozen --no-sync python -c "from pathlib import Path; Path('.coverage').replace('.coverage.linux')"
 
@@ -272,8 +270,100 @@ jobs:
         include-hidden-files: true
         if-no-files-found: error
 
+  coverage-postgres:
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+    - name: Set up Python
+      id: sync-python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+      with:
+        version: ${{ env.UV_VERSION }}
+        enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_pg/pyproject.toml
+          extensions/simplebroker_pg/uv.lock
+
+    - name: Install dependencies
+      run: |
+        uv sync --frozen --extra dev --extra pg --python "${{ steps.sync-python.outputs.python-path }}"
+
+    - name: Run PostgreSQL tests with coverage
+      env:
+        COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
+        COVERAGE_FILE: ${{ github.workspace }}/.coverage
+      run: |
+        uv run --frozen --no-sync coverage erase
+        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov-append --cov-report= --cov-fail-under=0
+        uv run --frozen --no-sync python .github/scripts/combine_coverage.py
+        uv run --frozen --no-sync python -c "from pathlib import Path; Path('.coverage').replace('.coverage.postgres')"
+
+    - name: Upload PostgreSQL coverage data
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: coverage-postgres
+        path: .coverage.postgres
+        include-hidden-files: true
+        if-no-files-found: error
+
+  coverage-redis:
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+    - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+    - name: Set up Python
+      id: sync-python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+      with:
+        version: ${{ env.UV_VERSION }}
+        enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_redis/pyproject.toml
+          extensions/simplebroker_redis/uv.lock
+
+    - name: Install dependencies
+      run: |
+        uv sync --frozen --extra dev --extra redis --python "${{ steps.sync-python.outputs.python-path }}"
+
+    - name: Run Redis/Valkey tests with coverage
+      env:
+        COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
+        COVERAGE_FILE: ${{ github.workspace }}/.coverage
+      run: |
+        uv run --frozen --no-sync coverage erase
+        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast --cov=simplebroker --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0
+        uv run --frozen --no-sync python .github/scripts/combine_coverage.py
+        uv run --frozen --no-sync python -c "from pathlib import Path; Path('.coverage').replace('.coverage.redis')"
+
+    - name: Upload Redis/Valkey coverage data
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: coverage-redis
+        path: .coverage.redis
+        include-hidden-files: true
+        if-no-files-found: error
+
   coverage-report:
-    needs: [test, coverage]
+    needs: [test, coverage-linux, coverage-postgres, coverage-redis]
     runs-on: ubuntu-latest
     env:
       UV_PYTHON: "3.12"
@@ -310,7 +400,7 @@ jobs:
       env:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
-        uv run --frozen --no-sync python -c "from pathlib import Path; expected = (Path('.coverage.linux'), Path('.coverage.windows')); missing = [str(path) for path in expected if not path.is_file()]; assert not missing, f'missing coverage data: {missing}'"
+        uv run --frozen --no-sync python -c "from pathlib import Path; expected = (Path('.coverage.linux'), Path('.coverage.postgres'), Path('.coverage.redis'), Path('.coverage.windows')); missing = [str(path) for path in expected if not path.is_file()]; assert not missing, f'missing coverage data: {missing}'"
         uv run --frozen --no-sync python .github/scripts/combine_coverage.py
         uv run --frozen --no-sync coverage report --show-missing
         uv run --frozen --no-sync coverage xml

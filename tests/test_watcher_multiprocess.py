@@ -19,6 +19,15 @@ from simplebroker.watcher import QueueWatcher
 from .helper_scripts.timing import scale_timeout_for_ci
 
 
+def _process_diagnostics(
+    processes: list[multiprocessing.Process],
+) -> list[tuple[int, int | None, int | None, bool]]:
+    return [
+        (i, process.pid, process.exitcode, process.is_alive())
+        for i, process in enumerate(processes)
+    ]
+
+
 def watcher_process(
     db_path: str,
     queue_name: str,
@@ -516,12 +525,33 @@ def test_multiprocess_thundering_herd() -> None:
                     p.start()
                     processes.append(p)
 
-                # Wait for ready
-                ready_count = 0
-                while ready_count < num_processes:
-                    msg_type, proc_id, data = result_queue.get(timeout=5.0)
+                # Windows spawn plus coverage instrumentation can take longer than
+                # one fixed queue timeout. Use one bounded startup deadline and
+                # retain child errors and process state for a useful failure.
+                ready_processes = set()
+                errors: list[tuple[int, str]] = []
+                ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+                while (
+                    len(ready_processes) < num_processes
+                    and time.monotonic() < ready_deadline
+                ):
+                    try:
+                        msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+
                     if msg_type == "ready":
-                        ready_count += 1
+                        ready_processes.add(proc_id)
+                    elif msg_type == "error":
+                        errors.append((proc_id, data))
+                        break
+
+                if errors or ready_processes != set(range(num_processes)):
+                    raise AssertionError(
+                        "Timed out waiting for thundering-herd watchers to start: "
+                        f"ready={sorted(ready_processes)}, errors={errors}, "
+                        f"processes={_process_diagnostics(processes)}"
+                    )
 
                 # Wait a bit for processing
                 time.sleep(1.0)
@@ -533,12 +563,12 @@ def test_multiprocess_thundering_herd() -> None:
                 # Collect stats with robust error handling
                 stats = {}
                 errors = []
-                timeout_start = time.monotonic()
+                stats_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
 
                 # Wait for all processes to send their stats
                 while (
                     len(stats) + len(errors) < num_processes
-                    and time.monotonic() - timeout_start < 10
+                    and time.monotonic() < stats_deadline
                 ):
                     try:
                         msg_type, proc_id, data = result_queue.get(timeout=0.5)
@@ -553,9 +583,12 @@ def test_multiprocess_thundering_herd() -> None:
                     except queue.Empty:
                         continue
 
-                # Check for errors
-                if errors:
-                    raise AssertionError(f"Process errors occurred: {errors}")
+                if errors or set(stats) != set(range(num_processes)):
+                    raise AssertionError(
+                        "Timed out waiting for thundering-herd watcher stats: "
+                        f"received={sorted(stats)}, errors={errors}, "
+                        f"processes={_process_diagnostics(processes)}"
+                    )
 
                 # Only process 0 should have processed the message
                 for i in range(num_processes):
