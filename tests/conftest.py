@@ -75,6 +75,37 @@ if os.environ.get("COVERAGE_PROCESS_START"):
 else:
     run_with_coverage = None
 
+
+_SUBPROCESS_COVERAGE_SUFFIX = "-subprocess"
+
+
+def _defer_subprocess_coverage(config: pytest.Config) -> None:
+    """Keep child-process shards out of pytest-cov's in-process combine.
+
+    pytest-cov has already created its collectors when ``pytest_sessionstart``
+    hooks run.  Changing the environment here affects only collectors created
+    later in subprocesses and multiprocessing children.  Some multiprocessing
+    coordinator processes exit while pytest-cov is combining its own shards;
+    giving their data a distinct basename prevents that read/write race.
+    """
+    if not os.environ.get("COVERAGE_PROCESS_START"):
+        return
+    if not config.pluginmanager.hasplugin("_cov"):
+        return
+
+    data_file = Path(os.environ.get("COVERAGE_FILE", ".coverage"))
+    if not data_file.name.endswith(_SUBPROCESS_COVERAGE_SUFFIX):
+        os.environ["COVERAGE_FILE"] = str(
+            data_file.with_name(f"{data_file.name}{_SUBPROCESS_COVERAGE_SUFFIX}")
+        )
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Defer automatic child coverage until pytest-cov has initialized."""
+    _defer_subprocess_coverage(session.config)
+
+
 if TYPE_CHECKING:
     from simplebroker._backend_plugins import BackendPlugin
 

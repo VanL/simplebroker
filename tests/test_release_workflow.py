@@ -441,10 +441,12 @@ def test_extension_release_gate_names_strip_prefix_and_v() -> None:
         assert extractor in workflow_text
 
 
-def test_coverage_workflow_runs_backend_helpers_before_upload() -> None:
+def test_coverage_workflow_runs_backend_helpers_before_staging_data() -> None:
     workflow_text = _workflow_text("test.yml")
     coverage_section = workflow_text.split("- name: Run tests with coverage", 1)[1]
-    coverage_section = coverage_section.split("- name: Upload coverage reports", 1)[0]
+    coverage_section = coverage_section.split("- name: Upload Linux coverage data", 1)[
+        0
+    ]
 
     assert "uv run --frozen --no-sync pytest" in coverage_section
     assert "uv run --frozen --no-sync ./bin/pytest-pg --fast" in coverage_section
@@ -454,7 +456,7 @@ def test_coverage_workflow_runs_backend_helpers_before_upload() -> None:
         "uv run --frozen --no-sync python .github/scripts/combine_coverage.py"
         in coverage_section
     )
-    assert "uv run --frozen --no-sync coverage xml" in coverage_section
+    assert "Path('.coverage').replace('.coverage.linux')" in coverage_section
     assert coverage_section.index("./bin/pytest-pg --fast") < coverage_section.index(
         "combine_coverage.py"
     )
@@ -465,7 +467,7 @@ def test_coverage_workflow_runs_backend_helpers_before_upload() -> None:
 
 def test_codecov_keeps_secret_auth_and_reports_nonblocking_failures() -> None:
     workflow_text = _workflow_text("test.yml")
-    coverage_job = workflow_text.split("  coverage:", 1)[1]
+    coverage_job = workflow_text.split("  coverage-report:", 1)[1]
     upload_step = coverage_job.split("    - name: Upload coverage reports", 1)[1]
 
     assert "id-token: write" not in coverage_job
@@ -482,12 +484,53 @@ def test_coverage_report_enforces_the_local_floor() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["tool"]["coverage"]["report"]["fail_under"] == 85
+    assert pyproject["tool"]["coverage"]["run"]["relative_files"] is True
 
 
 def test_coverage_floor_runs_only_after_all_partial_data_is_combined() -> None:
     workflow_text = _workflow_text("test.yml")
-    coverage_section = workflow_text.split("- name: Run tests with coverage", 1)[1]
-    coverage_section = coverage_section.split("- name: Upload coverage reports", 1)[0]
+    linux_section = workflow_text.split("- name: Run tests with coverage", 1)[1]
+    linux_section = linux_section.split("- name: Upload Linux coverage data", 1)[0]
+    report_section = workflow_text.split("  coverage-report:", 1)[1]
+    report_section = report_section.split("- name: Upload coverage reports", 1)[0]
 
-    assert coverage_section.count("--cov-fail-under=0") == 3
-    assert "coverage report --show-missing" in coverage_section
+    assert linux_section.count("--cov-fail-under=0") == 3
+    assert "needs: [test, coverage]" in report_section
+    assert "pattern: coverage-*" in report_section
+    assert "merge-multiple: true" in report_section
+    assert "coverage report --show-missing" in report_section
+    assert report_section.index("combine_coverage.py") < report_section.index(
+        "coverage report --show-missing"
+    )
+
+
+def test_windows_314_runner_produces_merged_coverage_data() -> None:
+    workflow_text = _workflow_text("test.yml")
+    test_job = workflow_text.split("  test:", 1)[1].split("  lint:", 1)[0]
+
+    windows_condition = (
+        "matrix.os == 'windows-latest' && matrix.python-version == '3.14'"
+    )
+    assert test_job.count(windows_condition) == 4
+    assert "- name: Run Windows tests with coverage" in test_job
+    assert "- name: Run Windows phaselock fallback-path gate with coverage" in test_job
+    assert "Path('.coverage').replace('.coverage.windows')" in test_job
+    assert "name: coverage-windows" in test_job
+    assert "include-hidden-files: true" in test_job
+    assert "if-no-files-found: error" in test_job
+
+
+def test_uv_uses_each_jobs_synced_python_without_environment_warnings() -> None:
+    root_workflow = _workflow_text("test.yml")
+    assert "UV_PYTHON: ${{ matrix.python-version }}" in root_workflow
+    assert 'UV_PYTHON: "3.11"' in root_workflow
+    assert 'UV_PYTHON: "3.12"' in root_workflow
+
+    for workflow_name in ("test-pg-extension.yml", "test-redis-extension.yml"):
+        workflow_text = _workflow_text(workflow_name)
+        assert "UV_PYTHON: ${{ matrix.python-version }}" in workflow_text
+        assert 'UV_PYTHON: "3.12"' in workflow_text
+
+    assert 'UV_PYTHON: "3.12"' in _workflow_text("fuzz.yml")
+    for workflow_name in RELEASE_WORKFLOWS:
+        assert 'UV_PYTHON: "3.13"' in _workflow_text(workflow_name)

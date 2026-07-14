@@ -9,6 +9,8 @@ import zipfile
 from contextlib import nullcontext
 from email.message import Message
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from coverage import CoverageData
@@ -30,6 +32,7 @@ from simplebroker._scripts import (
     _venv_python,
     _with_default_suite_path,
 )
+from tests import conftest as suite_conftest
 
 COMBINE_COVERAGE_SCRIPT = (
     Path(__file__).resolve().parents[1] / ".github" / "scripts" / "combine_coverage.py"
@@ -112,6 +115,26 @@ def test_combine_coverage_creates_base_from_shard_only_data(
     assert not shard_file.exists()
 
 
+def test_combine_coverage_appends_deferred_subprocess_data(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    subprocess_file = tmp_path / ".coverage-subprocess.worker"
+    base_source = tmp_path / "base_source.py"
+    child_source = tmp_path / "child_source.py"
+    _write_coverage_lines(data_file, base_source, {1})
+    _write_coverage_lines(subprocess_file, child_source, {2})
+
+    result = _run_combine_coverage(data_file)
+
+    assert result.returncode == 0, result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert combined.lines(str(base_source)) == [1]
+    assert combined.lines(str(child_source)) == [2]
+    assert not subprocess_file.exists()
+
+
 def test_combine_coverage_propagates_corrupt_shard_failure(
     tmp_path: Path,
 ) -> None:
@@ -124,10 +147,25 @@ def test_combine_coverage_propagates_corrupt_shard_failure(
     result = _run_combine_coverage(data_file)
 
     assert result.returncode != 0
-    assert "Couldn't use data file" in result.stderr
+    assert "Could not combine coverage data" in result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
     assert combined.lines(str(base_source)) == [1]
+
+
+def test_pytest_cov_defers_child_data_to_a_separate_basename(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    monkeypatch.setenv("COVERAGE_PROCESS_START", str(REPO_ROOT / "pyproject.toml"))
+    monkeypatch.setenv("COVERAGE_FILE", str(data_file))
+    plugin_manager = SimpleNamespace(hasplugin=lambda name: name == "_cov")
+    config = SimpleNamespace(pluginmanager=plugin_manager)
+
+    suite_conftest._defer_subprocess_coverage(cast(Any, config))
+
+    assert os.environ["COVERAGE_FILE"] == f"{data_file}-subprocess"
 
 
 def test_with_default_suite_path_applies_default_for_flag_only_args() -> None:

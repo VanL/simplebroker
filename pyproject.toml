@@ -157,6 +157,7 @@ source = [
 ]
 branch = true
 parallel = true
+relative_files = true
 concurrency = ["thread", "multiprocessing"]
 omit = [
     "*/tests/*",

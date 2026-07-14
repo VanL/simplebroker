@@ -66,6 +66,8 @@ jobs:
       - verify-tag-current
     runs-on: ubuntu-latest
     timeout-minutes: 50
+    env:
+      UV_PYTHON: "3.13"
     permissions:
       attestations: write
       artifact-metadata: write
