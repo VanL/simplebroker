@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -676,10 +677,10 @@ def test_performance_improvement_with_claims(workdir: Path):
     assert len(messages) == message_count
 
     # Verify all messages are claimed
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    claimed_count = cursor.fetchone()[0]
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        claimed_count = conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE claimed = 1"
+        ).fetchone()[0]
     assert claimed_count == message_count
 
     # Performance assertion - reading should be fast
@@ -689,8 +690,6 @@ def test_performance_improvement_with_claims(workdir: Path):
     assert read_time < timeout, (
         f"Reading {message_count} messages took {read_time:.2f}s"
     )
-
-    conn.close()
 
 
 @pytest.mark.benchmark
@@ -712,7 +711,7 @@ def test_batch_delete_many_performance(workdir: Path):
         delete_time = time.monotonic() - start_time
 
     assert deleted == delete_count
-    with sqlite3.connect(str(db_path)) as conn:
+    with closing(sqlite3.connect(str(db_path))) as conn:
         row_count = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     assert row_count == message_count - delete_count
     assert delete_time < get_timeout("batch_delete_5k_messages"), (
@@ -750,27 +749,25 @@ def test_vacuum_batch_size_limits(workdir: Path):
         q.close()
 
     # Verify all are claimed
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    assert cursor.fetchone()[0] == message_count
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
+        assert cursor.fetchone()[0] == message_count
 
-    # Run vacuum - should handle large batch efficiently
-    start_time = time.monotonic()
-    with BrokerDB(str(db_path), config=config) as db:
-        db.vacuum()
-    vacuum_time = time.monotonic() - start_time
+        # Run vacuum - should handle large batch efficiently
+        start_time = time.monotonic()
+        with BrokerDB(str(db_path), config=config) as db:
+            db.vacuum()
+        vacuum_time = time.monotonic() - start_time
 
-    # Verify all claimed messages removed
-    cursor.execute("SELECT COUNT(*) FROM messages")
-    assert cursor.fetchone()[0] == 0
+        # Verify all claimed messages removed
+        cursor.execute("SELECT COUNT(*) FROM messages")
+        assert cursor.fetchone()[0] == 0
 
     # Vacuum should complete reasonably quickly even with many messages
     assert vacuum_time < 5.0, (
         f"Vacuum of {message_count} messages took {vacuum_time:.2f}s"
     )
-
-    conn.close()
 
 
 @pytest.mark.benchmark
@@ -796,17 +793,17 @@ def test_write_performance_not_regressed(workdir: Path):
     )
 
     # Verify messages were written correctly
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE queue = 'write_perf_queue'")
-    assert cursor.fetchone()[0] == message_count
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM messages WHERE queue = 'write_perf_queue'")
+        assert cursor.fetchone()[0] == message_count
 
-    # All should be unclaimed
-    cursor.execute(
-        "SELECT COUNT(*) FROM messages WHERE queue = 'write_perf_queue' AND claimed = 0"
-    )
-    assert cursor.fetchone()[0] == message_count
-    conn.close()
+        # All should be unclaimed
+        cursor.execute(
+            "SELECT COUNT(*) FROM messages "
+            "WHERE queue = 'write_perf_queue' AND claimed = 0"
+        )
+        assert cursor.fetchone()[0] == message_count
 
 
 # ============================================================================
