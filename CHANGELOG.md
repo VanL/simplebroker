@@ -5,6 +5,42 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.3.3] - 2026-07-14
+
+### Fixed
+- Removed a mistaken SQLite cleanup heuristic that treated `Mock` in a database
+  path as proof that the file was disposable. Runner teardown no longer deletes
+  a database or its shared setup sidecars based on its name.
+- Initialized timestamp-conflict metrics when a SQL-backed core is created.
+  Concurrent first writes can no longer reset conflict or resync counters while
+  another write is updating them.
+
+### Changed
+- Documented that transactional generators on SQL-backed cores must be created,
+  consumed, exhausted, and closed on the same thread. Foreign-thread
+  finalization remains unsupported; Redis/Valkey does not share this SQL
+  transaction failure mode.
+- Enabled branch coverage and made unexpected pytest warnings fail the suite.
+  Added behavior-focused tests until all 58 measured runtime files exceeded 90%
+  statement and branch coverage. The existing aggregate coverage gate remains
+  85%.
+- Bumped the coordinated first-party `simplebroker-pg` and
+  `simplebroker-redis` packages to 3.2.2 and raised the root optional-backend
+  dependency floors to those versions.
+
+### simplebroker-pg 3.2.2
+- Coordinated compatibility and verification release for SimpleBroker 5.3.3;
+  the extension now requires `simplebroker>=5.3.3`. Runtime schema behavior is
+  unchanged. Expanded coverage of schema migration and validation, plugin
+  contracts, runner lifecycle failures, and resource cleanup.
+
+### simplebroker-redis 3.2.2
+- Coordinated compatibility and verification release for SimpleBroker 5.3.3;
+  the extension now requires `simplebroker>=5.3.3`. Runtime queue behavior is
+  unchanged. Expanded Valkey-backed coverage of core operations, namespace
+  validation, activity-listener lifecycle, plugin contracts, and resource
+  cleanup.
+
 ## [5.3.2] - 2026-07-13
 
 ### Fixed
