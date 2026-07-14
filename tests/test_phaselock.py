@@ -25,6 +25,7 @@ from simplebroker._phaselock import (
     PhaseRunResult,
     __version__,
 )
+from tests.helper_scripts.timing import scale_timeout_for_ci
 
 
 def _real_xattrs_supported(target: Path) -> bool:
@@ -1463,52 +1464,83 @@ def test_no_xattr_non_strict_waiter_skips_when_phase_marked_while_lock_is_held(
     assert not marker.is_alive()
 
 
-def test_process_local_lock_serializes_threads(tmp_path: Path) -> None:
+def test_process_local_lock_serializes_threads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     target = tmp_path / "broker.db"
     target.touch()
+    timeout = scale_timeout_for_ci(2.0)
     first_service = PhaseLockService(
         target,
-        timeout=1.0,
+        timeout=timeout,
         retry_delay=0.01,
         use_xattrs=False,
     )
     second_service = PhaseLockService(
         target,
-        timeout=1.0,
+        timeout=timeout,
         retry_delay=0.01,
         use_xattrs=False,
     )
     first_entered = threading.Event()
     release_first = threading.Event()
+    second_waiting = threading.Event()
+    second_done = threading.Event()
     calls: list[str] = []
     results: dict[str, PhaseRunResult] = {}
+    errors: list[BaseException] = []
+
+    real_acquire_process_lock = phaselock_module._AdvisoryLock._acquire_process_lock
+
+    def observe_process_lock(self: Any, *args: Any, **kwargs: Any) -> bool:
+        if threading.current_thread().name == "second-phase-runner":
+            second_waiting.set()
+        return real_acquire_process_lock(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        phaselock_module._AdvisoryLock,
+        "_acquire_process_lock",
+        observe_process_lock,
+    )
 
     def first_action() -> None:
         calls.append("first")
         first_entered.set()
-        assert release_first.wait(timeout=1.0)
+        assert release_first.wait(timeout=timeout)
 
     def run_first() -> None:
-        first_service.run_phases((Phase("connection-v1", first_action),))
+        try:
+            first_service.run_phases((Phase("connection-v1", first_action),))
+        except BaseException as exc:
+            errors.append(exc)
 
     def run_second() -> None:
-        results["second"] = second_service.run_phases(
-            (Phase("connection-v1", lambda: calls.append("second")),)
-        )
+        try:
+            results["second"] = second_service.run_phases(
+                (Phase("connection-v1", lambda: calls.append("second")),)
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            second_done.set()
 
     first = threading.Thread(target=run_first)
-    first.start()
-    assert first_entered.wait(timeout=1.0)
+    second = threading.Thread(target=run_second, name="second-phase-runner")
+    try:
+        first.start()
+        assert first_entered.wait(timeout=timeout)
 
-    second = threading.Thread(target=run_second)
-    second.start()
-    time.sleep(0.05)
-    assert second.is_alive()
+        second.start()
+        assert second_waiting.wait(timeout=timeout)
+        assert not second_done.is_set()
+    finally:
+        release_first.set()
+        first.join(timeout=timeout)
+        if second.ident is not None:
+            second.join(timeout=timeout)
 
-    release_first.set()
-    first.join(timeout=1.0)
-    second.join(timeout=1.0)
-
+    assert not errors
     assert not first.is_alive()
     assert not second.is_alive()
     assert calls == ["first"]
