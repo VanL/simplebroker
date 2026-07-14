@@ -60,6 +60,8 @@ def _run_combine_coverage(
     coverage_config: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    env.pop("COVERAGE_PROCESS_START", None)
+    env.pop("COVERAGE_RCFILE", None)
     env["COVERAGE_FILE"] = str(data_file)
     env["COVERAGE_COMBINE_RETRY_TIMEOUT"] = str(retry_timeout)
     env["COVERAGE_COMBINE_SETTLE_SECONDS"] = str(settle_seconds)
