@@ -5,6 +5,8 @@ import runpy
 import subprocess
 import sys
 import tarfile
+import threading
+import time
 import zipfile
 from contextlib import nullcontext
 from email.message import Message
@@ -50,9 +52,16 @@ def _write_coverage_lines(
     data.write()
 
 
-def _run_combine_coverage(data_file: Path) -> subprocess.CompletedProcess[str]:
+def _run_combine_coverage(
+    data_file: Path,
+    *,
+    retry_timeout: float = 0.0,
+    settle_seconds: float = 0.0,
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["COVERAGE_FILE"] = str(data_file)
+    env["COVERAGE_COMBINE_RETRY_TIMEOUT"] = str(retry_timeout)
+    env["COVERAGE_COMBINE_SETTLE_SECONDS"] = str(settle_seconds)
     return subprocess.run(
         [sys.executable, str(COMBINE_COVERAGE_SCRIPT)],
         cwd=data_file.parent,
@@ -151,6 +160,71 @@ def test_combine_coverage_propagates_corrupt_shard_failure(
     combined = CoverageData(basename=str(data_file))
     combined.read()
     assert combined.lines(str(base_source)) == [1]
+
+
+def test_combine_coverage_waits_for_transiently_incomplete_shard(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    replacement_file = tmp_path / "replacement.coverage"
+    base_source = tmp_path / "base_source.py"
+    worker_source = tmp_path / "worker_source.py"
+    _write_coverage_lines(data_file, base_source, {1})
+    shard_file.write_bytes(b"")
+
+    def finish_shard() -> None:
+        time.sleep(0.2)
+        _write_coverage_lines(replacement_file, worker_source, {2})
+        replacement_file.replace(shard_file)
+
+    writer = threading.Thread(target=finish_shard)
+    writer.start()
+    try:
+        result = _run_combine_coverage(
+            data_file,
+            retry_timeout=2.0,
+            settle_seconds=0.1,
+        )
+    finally:
+        writer.join()
+
+    assert result.returncode == 0, result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert combined.lines(str(base_source)) == [1]
+    assert combined.lines(str(worker_source)) == [2]
+    assert not shard_file.exists()
+
+
+def test_combine_coverage_waits_for_readable_shard_to_settle(tmp_path: Path) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    replacement_file = tmp_path / "replacement.coverage"
+    worker_source = tmp_path / "worker_source.py"
+    _write_coverage_lines(shard_file, worker_source, {2})
+
+    def finish_shard() -> None:
+        time.sleep(0.2)
+        _write_coverage_lines(replacement_file, worker_source, {3})
+        replacement_file.replace(shard_file)
+
+    writer = threading.Thread(target=finish_shard)
+    writer.start()
+    try:
+        result = _run_combine_coverage(
+            data_file,
+            retry_timeout=2.0,
+            settle_seconds=0.3,
+        )
+    finally:
+        writer.join()
+
+    assert result.returncode == 0, result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert combined.lines(str(worker_source)) == [3]
+    assert not shard_file.exists()
 
 
 def test_pytest_cov_defers_child_data_to_a_separate_basename(
