@@ -57,11 +57,14 @@ def _run_combine_coverage(
     *,
     retry_timeout: float = 0.0,
     settle_seconds: float = 0.0,
+    coverage_config: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["COVERAGE_FILE"] = str(data_file)
     env["COVERAGE_COMBINE_RETRY_TIMEOUT"] = str(retry_timeout)
     env["COVERAGE_COMBINE_SETTLE_SECONDS"] = str(settle_seconds)
+    if coverage_config is not None:
+        env["COVERAGE_RCFILE"] = str(coverage_config)
     return subprocess.run(
         [sys.executable, str(COMBINE_COVERAGE_SCRIPT)],
         cwd=data_file.parent,
@@ -70,6 +73,48 @@ def _run_combine_coverage(
         text=True,
         check=False,
     )
+
+
+def test_combine_coverage_maps_ci_checkout_roots_to_repo_relative_paths(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.windows"
+    measured = {
+        r"D:\a\simplebroker\simplebroker\simplebroker\core_sample.py": (
+            Path("simplebroker/core_sample.py"),
+            1,
+        ),
+        r"D:\a\simplebroker\simplebroker\extensions\simplebroker_pg\simplebroker_pg\pg_sample.py": (
+            Path("extensions/simplebroker_pg/simplebroker_pg/pg_sample.py"),
+            2,
+        ),
+        r"D:\a\simplebroker\simplebroker\extensions\simplebroker_redis\simplebroker_redis\redis_sample.py": (
+            Path("extensions/simplebroker_redis/simplebroker_redis/redis_sample.py"),
+            3,
+        ),
+    }
+    shard = CoverageData(basename=str(shard_file))
+    shard.add_lines({source: {line} for source, (_, line) in measured.items()})
+    shard.write()
+    for relative, _ in measured.values():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch()
+
+    result = _run_combine_coverage(
+        data_file,
+        coverage_config=REPO_ROOT / "pyproject.toml",
+    )
+
+    assert result.returncode == 0, result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert set(combined.measured_files()) == {
+        str(relative) for relative, _ in measured.values()
+    }
+    for relative, line in measured.values():
+        assert combined.lines(str(relative)) == [line]
 
 
 def test_combine_coverage_keeps_base_data_when_no_shards_exist(

@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from coverage import CoverageData
+from coverage import Coverage, CoverageData
 from coverage.exceptions import CoverageException
 
 _SUBPROCESS_COVERAGE_SUFFIX = "-subprocess"
@@ -108,37 +108,19 @@ def main() -> int:
         print(f"Could not combine coverage data: {exc}", file=sys.stderr)
         return 1
 
-    combined = CoverageData(basename=str(data_file))
-    source_data: list[CoverageData] = []
+    coverage = Coverage(data_file=str(data_file))
     try:
-        if data_file.is_file():
-            combined.read()
-
-        for source in sources:
-            partial = CoverageData(basename=str(source))
-            source_data.append(partial)
-            partial.read()
-
-        for partial in source_data:
-            combined.update(partial)
-        combined.write()
+        coverage.load()
+        coverage.combine(
+            data_paths=[str(source) for source in sources],
+            strict=True,
+        )
+        coverage.save()
     except (CoverageException, OSError) as exc:
         print(f"Could not combine coverage data: {exc}", file=sys.stderr)
         return 1
     finally:
-        for partial in source_data:
-            partial.close()
-        combined.close()
-
-    for source in sources:
-        try:
-            source.unlink()
-        except OSError as exc:
-            print(
-                f"Could not remove combined coverage data {source}: {exc}",
-                file=sys.stderr,
-            )
-            return 1
+        coverage.get_data().close()
 
     print(f"Combined {len(sources)} coverage data files into {data_file}")
     return 0

@@ -166,6 +166,20 @@ omit = [
     "*/site-packages/*",
 ]
 
+[tool.coverage.paths]
+simplebroker = [
+    "simplebroker",
+    "*/simplebroker/simplebroker/simplebroker",
+]
+postgres = [
+    "extensions/simplebroker_pg/simplebroker_pg",
+    "*/extensions/simplebroker_pg/simplebroker_pg",
+]
+redis = [
+    "extensions/simplebroker_redis/simplebroker_redis",
+    "*/extensions/simplebroker_redis/simplebroker_redis",
+]
+
 [tool.coverage.report]
 fail_under = 85
 exclude_lines = [

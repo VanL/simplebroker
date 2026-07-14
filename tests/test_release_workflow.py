@@ -283,6 +283,15 @@ def test_release_gate_workflows_publish_from_top_level_gate() -> None:
         assert "uses: actions/attest@" in workflow_text
 
 
+def test_artifact_downloads_do_not_use_the_warning_emitting_node_action() -> None:
+    for workflow_path in ("test.yml", *RELEASE_WORKFLOWS):
+        workflow_text = _workflow_text(workflow_path)
+
+        assert "actions/download-artifact@" not in workflow_text
+        assert "gh run download" in workflow_text
+        assert "GH_TOKEN: ${{ github.token }}" in workflow_text
+
+
 def test_release_gate_uploads_python_distributions_and_attestations() -> None:
     for workflow_path in (
         "release-gate.yml",
@@ -397,7 +406,9 @@ def test_release_gate_pypi_job_keeps_tokenless_minimum_permissions() -> None:
             "  publish-github-release:", 1
         )[0]
 
-        assert "permissions:\n      id-token: write" in pypi_section
+        assert (
+            "permissions:\n      actions: read\n      id-token: write" in pypi_section
+        )
         assert "contents: write" not in pypi_section
         assert "actions: write" not in pypi_section
         assert all(secret not in workflow_text for secret in forbidden_secrets)
@@ -513,9 +524,8 @@ def test_coverage_floor_runs_only_after_all_partial_data_is_combined() -> None:
         "needs: [test, coverage-linux, coverage-postgres, coverage-redis]"
         in report_section
     )
-    assert "pattern: coverage-*" in report_section
-    assert "merge-multiple: true" in report_section
     for suffix in ("linux", "postgres", "redis", "windows"):
+        assert f"--name coverage-{suffix}" in report_section
         assert f"Path('.coverage.{suffix}')" in report_section
     assert "coverage report --show-missing" in report_section
     assert report_section.index("combine_coverage.py") < report_section.index(
