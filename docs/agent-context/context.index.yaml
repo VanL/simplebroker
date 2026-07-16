@@ -1,0 +1,47 @@
+schema_version: 1
+updated_at: 2026-07-14
+hub: docs/agent-context
+read_order:
+  - docs/agent-context/decision-hierarchy.md
+  - docs/agent-context/principles.md
+  - docs/agent-context/engineering-principles.md
+  - docs/agent-context/runbooks/
+  - docs/agent-context/lessons.md
+  - docs/lessons.md  # startup: Golden Rules + entries after the docs/coalescing.md watermark
+documents:
+  - path: docs/agent-context/README.md
+    role: hub_overview
+  - path: docs/agent-context/decision-hierarchy.md
+    role: conflict_resolution_policy
+  - path: docs/agent-context/principles.md
+    role: shared_execution_principles
+  - path: docs/agent-context/engineering-principles.md
+    role: engineering_rules
+  - path: docs/agent-context/runbooks/writing-plans.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/hardening-plans.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/review-loops-and-agent-bootstrap.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/writing-specs.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/writing-implementation-docs.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/testing-patterns.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/adversarial-acceptance-probes.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/maintaining-traceability.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/skills-lifecycle.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/external-skill-suites.md
+    role: operational_runbook
+  - path: docs/agent-context/runbooks/designing-agent-facing-interfaces.md
+    role: operational_runbook
+  - path: docs/agent-context/lessons.md
+    role: lessons_pointer
+  - path: docs/lessons.md
+    role: canonical_lessons_ledger
+  - path: docs/coalescing.md
+    role: coalescing_state
