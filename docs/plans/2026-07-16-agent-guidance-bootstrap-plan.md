@@ -2,7 +2,7 @@
 
 Date: 2026-07-16
 
-Status: in progress
+Status: completed — wave landed at `2f93ee5`; pin commit follows
 
 Owner: SimpleBroker
 

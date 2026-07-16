@@ -23,7 +23,7 @@ Legacy `Status:` headers are not retro-converted.
 
 | Plan | Status |
 |------|--------|
-| 2026-07-16-agent-guidance-bootstrap-plan.md | active — landing in progress |
+| 2026-07-16-agent-guidance-bootstrap-plan.md | completed — wave landed at 2f93ee5 (source agent-guidance @ fc23eae); grok round 1 FAIL fixed, round 2 PASS |
 
 ## Rules
 

@@ -60,6 +60,9 @@ not re-nag; a changed count or a fired reconsideration condition does.
 
 | Tier | Checked through (date, SHA) | Counts at check | Reason deferred | Reconsider when |
 |------|------------------------------|-----------------|-----------------|-----------------|
+| Lessons | 2026-07-16, `2f93ee5` | 0 dated entries (ledger new at bootstrap) — under threshold 10 | Not tripped; nothing foldable | Count changes |
+| Plans | 2026-07-16, `2f93ee5` | Index: 1 active (the bootstrap plan), 0 completed-unretired — not tripped. 51 legacy plans (44 dated, 7 undated) are declared backfill debt, not a derived count; ~23 carry `Status:` headers as the partial derivable source | Backfill is dedicated-session work, never bootstrap work; guessing 51 statuses at install time destroys evidence | A backfill session is authorized; the tier derives normally from the index thereafter |
+| Promotion | 2026-07-16, `2f93ee5` | not derived — no local citations yet (skills arrived with the scaffold) | Derive at the first real sweep | First sweep with local work history |
 
 ## Run Log
 
@@ -70,4 +73,5 @@ may be appended as metadata once it exists.
 
 | Date | Tier(s) | Source SHA | Claim |
 |------|---------|------------|-------|
+| 2026-07-16 | all | `2f93ee5` (wave commit; source agent-guidance @ `fc23eae`) | First sweep, run in the same unit as the bootstrap per the standing rule: checked-deferred across all tiers. Lessons 0 (new ledger); plans 1 active local, 51 legacy declared as backfill debt (~23 with `Status:` headers); promotion not derived. Nothing folded; no watermark advanced. Thresholds kept at scaffold defaults (10/5/3) — calibrate with a run-log note when volume warrants. Scoped adaptation review: grok round 1 FAIL (phantom hub plans index; census 23→51 — orchestrator errors, fixed), round 2 PASS. Two hub back-ports filed from this landing: bootstrap now generates a neutral plans README instead of copying the hub's, and the generated repository-map gained the interface-review row. |
 | (bootstrap) | — | — | Initialized by the agent-guidance scaffold. Derive counts and calibrate thresholds before first use. |
