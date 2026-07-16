@@ -435,6 +435,32 @@ Use `false positive` only for `#29`; use `won't fix` for the three policy
 exceptions. Do not label the Scorecard results false positives: their
 observations are accurate, but the prescribed controls do not fit this project.
 
+The API caps `dismissed_comment` at 280 characters. The comments above are the
+substance to convey, not literal text; condense to fit and keep the reason and
+the revisit condition.
+
+### Policy dismissals re-mint when the SARIF location changes
+
+GitHub fingerprints a Scorecard alert partly by its SARIF location, so changing
+where a repository-level finding is anchored retires the old alert number and
+creates a new one carrying no dismissal. The three policy checks
+(`BranchProtectionID`, `CodeReviewID`, `CIIBestPracticesID`) have no real file
+location, so they are the ones exposed to this.
+
+This has happened once. Commit `f7bc7c7` moved repository-level findings from
+`no file associated with this alert` to `.github/workflows/scorecard.yml` for
+SARIF compatibility, and alerts `#1`, `#20`, and `#22` reappeared on
+2026-07-14 as `#38`, `#39`, and `#40`. They were re-dismissed on 2026-07-16 with
+the same reasons and a `Supersedes #N` marker. Nothing about the repository's
+posture had changed.
+
+If these three surface again as new numbers, check whether the anchoring in
+`.github/scripts/normalize_scorecard_sarif.jq` changed before re-triaging. A
+re-mint is a fingerprint artifact, not a new finding: re-dismiss with the same
+substance and cite the alert it supersedes. This is the accepted cost of
+anchoring — it buys SARIF compatibility at the price of dismissal stability.
+Do not resolve it by weakening the anchoring or by adopting the controls.
+
 ## Final Verification
 
 ### Local gates
@@ -492,7 +518,7 @@ tests alone when it requires GitHub state.
 | Locked CI installs | Complete | Packaging passed in [PR `#50`](https://github.com/VanL/simplebroker/actions/runs/29213748082); both 15-minute harnesses passed in the [fuzz run](https://github.com/VanL/simplebroker/actions/runs/29213671555); alerts [`#19`](https://github.com/VanL/simplebroker/security/code-scanning/19), [`#25`](https://github.com/VanL/simplebroker/security/code-scanning/25), [`#32`](https://github.com/VanL/simplebroker/security/code-scanning/32), and [`#33`](https://github.com/VanL/simplebroker/security/code-scanning/33) are fixed. |
 | Dependabot gate | Complete | Gate unit tests, including failed/missing sibling workflow cases, passed; [PR `#50`](https://github.com/VanL/simplebroker/pull/50) records the fail-closed required workflow set. |
 | False-positive dismissal | Complete | Alert [`#29`](https://github.com/VanL/simplebroker/security/code-scanning/29) is dismissed as `false positive` with sanitizer and regression-test evidence. |
-| Policy dismissals | Complete | Alerts [`#1`](https://github.com/VanL/simplebroker/security/code-scanning/1), [`#20`](https://github.com/VanL/simplebroker/security/code-scanning/20), and [`#22`](https://github.com/VanL/simplebroker/security/code-scanning/22) are dismissed as `won't fix` with solo-maintainer scope comments. |
+| Policy dismissals | Complete | Alerts [`#1`](https://github.com/VanL/simplebroker/security/code-scanning/1), [`#20`](https://github.com/VanL/simplebroker/security/code-scanning/20), and [`#22`](https://github.com/VanL/simplebroker/security/code-scanning/22) are dismissed as `won't fix` with solo-maintainer scope comments. Re-minted as [`#38`](https://github.com/VanL/simplebroker/security/code-scanning/38), [`#39`](https://github.com/VanL/simplebroker/security/code-scanning/39), and [`#40`](https://github.com/VanL/simplebroker/security/code-scanning/40) by the `f7bc7c7` SARIF anchoring change and re-dismissed on 2026-07-16; see the re-mint note above. |
 | Final analyzer state | Complete | Merge SHA [`bbb6293c`](https://github.com/VanL/simplebroker/commit/bbb6293ce62e3c8afebe31ee8f3e6d3f6fed7c91); [`main` CodeQL](https://github.com/VanL/simplebroker/actions/runs/29214304312) and [`main` Scorecard](https://github.com/VanL/simplebroker/actions/runs/29214304313) passed; the open-alert query returned no results. |
 
 ## Fresh-Eyes Review Checklist
