@@ -158,7 +158,7 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "5.3.3"
+version = "5.4.0"
 source = { editable = "../../" }
 
 [package.metadata]

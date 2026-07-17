@@ -939,7 +939,8 @@ protocol rather than review guidance.
 - Mypy: **58 source files** across core/Postgres/Redis plus the maintained
   `examples/python_api.py` passed.
 - `python3 bin/check-dom15-fixtures`, the complete exit-code inventory tests,
-  both uv lock checks, and `uv run python examples/python_api.py`: passed.
+  all three uv lock checks (root, Postgres, Redis), and
+  `uv run python examples/python_api.py`: passed.
 - `uv run bin/packaging-smoke`: built core 5.4.0, Postgres 3.2.2, and Redis
   3.2.3 sdists/wheels; installed the wheel set into a fresh Python 3.11 venv;
   both backend entry points loaded successfully.
