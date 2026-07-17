@@ -52,3 +52,7 @@ Startup context is the Golden Rules plus entries after the watermark in
   save path. Do not make the combiner ignore malformed shards with measurements;
   configure the producer to finish its coverage database and keep corruption as
   a hard gate.
+- With pytest-cov and xdist, do not redirect `COVERAGE_FILE` in the controller
+  before workers are spawned. That moves pytest-cov's own worker databases out
+  of its managed combine lifecycle. Redirect child collectors from a
+  session-scoped fixture inside each worker, after the worker collector starts.

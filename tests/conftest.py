@@ -83,9 +83,9 @@ _SUBPROCESS_COVERAGE_SUFFIX = "-subprocess"
 def _defer_subprocess_coverage(config: pytest.Config) -> None:
     """Keep child-process shards out of pytest-cov's in-process combine.
 
-    pytest-cov has already created its collectors when ``pytest_sessionstart``
-    hooks run.  Changing the environment here affects only collectors created
-    later in subprocesses and multiprocessing children.  Some multiprocessing
+    The session fixture calls this after pytest-cov has created this process's
+    collector. Changing the environment then affects only collectors created
+    later in subprocesses and multiprocessing children. Some multiprocessing
     coordinator processes exit while pytest-cov is combining its own shards;
     giving their data a distinct basename prevents that read/write race.
     """
@@ -101,10 +101,18 @@ def _defer_subprocess_coverage(config: pytest.Config) -> None:
         )
 
 
-@pytest.hookimpl(trylast=True)
-def pytest_sessionstart(session: pytest.Session) -> None:
-    """Defer automatic child coverage until pytest-cov has initialized."""
-    _defer_subprocess_coverage(session.config)
+@pytest.fixture(scope="session", autouse=True)
+def _defer_coverage_for_test_children(pytestconfig: pytest.Config) -> None:
+    """Defer child coverage after this process's pytest-cov collector starts.
+
+    A session-start hook in the xdist controller changes ``COVERAGE_FILE``
+    before workers are spawned.  That redirects each worker's own pytest-cov
+    database as well as its children, leaving worker databases outside
+    pytest-cov's managed combine lifecycle.  Session fixtures run inside each
+    worker after its collector starts, so only later subprocess and
+    multiprocessing collectors use the deferred basename.
+    """
+    _defer_subprocess_coverage(pytestconfig)
 
 
 if TYPE_CHECKING:

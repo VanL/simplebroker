@@ -7,7 +7,10 @@ local gates and independent review, but its first native rerun exposed the
 Windows CRT's generic `EINVAL` closed-pipe form; the follow-up fix passes local
 gates and independent review. Its next native run passed Windows 3.11/3.12 but
 was blocked by an unrelated Windows 3.13 timeout cluster and a corrupt Redis
-coverage shard; the coverage-producer fix and another native rerun are pending
+coverage shard. The Windows rerun passed 3.11, 3.12, and 3.13. The repeated
+Redis corruption was traced to xdist worker databases being redirected out of
+pytest-cov's managed lifecycle; the lifecycle fix and exact-shard regression
+pass locally, and another native rerun is pending
 **Class:** 4 — risky triggers fire per [DOM-5]: public CLI contract and exit-code
 semantics change (Units A, E), the same stop/pipe logic runs in more than one
 execution context (CLI command layer and library watcher), and Unit D changes
@@ -1009,6 +1012,22 @@ protocol rather than review guidance.
   SIGTERM; enabling coverage's SIGTERM save path makes the child produce a
   readable measured shard. The existing `os._exit` regression and all **69
   dev-script tests** also pass.
+- The exact-SHA rerun at `ee4cace` proved SIGTERM persistence was necessary but
+  insufficient: Redis again passed all **914 shared** and **122 extension**
+  tests, then produced a corrupt shard. The damaged filename had pytest-cov's
+  xdist-worker suffix. A lifecycle regression demonstrated the root cause: the
+  controller's session-start hook changed `COVERAGE_FILE` before workers were
+  spawned, so a two-worker/two-child run left four deferred files instead of
+  only the two real child files. Moving the redirect to a session-scoped
+  fixture inside each worker keeps pytest-cov worker databases in pytest-cov's
+  own combine lifecycle while still deferring later child collectors. The
+  regression fails **4 != 2** before the fix and passes after it.
+- The repaired Redis shared coverage phase was reproduced in a non-root Debian
+  Python 3.12 container against Valkey: **914 passed, 10 skipped**, then **1953
+  coverage files combined** without corruption. The same native rerun passed
+  Windows 3.11, 3.12, and 3.13; the earlier 3.13 timeout cluster did not recur
+  and was not caused by stopping the separate local release helper. Windows
+  3.14 also completed successfully; all four native Windows versions passed.
 
 ## Review Log
 

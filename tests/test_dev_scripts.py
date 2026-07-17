@@ -496,6 +496,86 @@ def test_pytest_cov_defers_child_data_to_a_separate_basename(
     assert os.environ["COVERAGE_FILE"] == f"{data_file}-subprocess"
 
 
+def test_xdist_worker_coverage_stays_in_pytest_cov_lifecycle(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    nested_test = tmp_path / "test_nested_coverage.py"
+    nested_test.write_text(
+        """
+import os
+import subprocess
+import sys
+
+import pytest
+
+
+@pytest.mark.parametrize("index", range(2))
+def test_child_coverage(index):
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import coverage; coverage.process_startup(); import simplebroker.commands",
+        ],
+        check=True,
+        env=os.environ.copy(),
+    )
+""",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
+            "COVERAGE_FILE": str(data_file),
+            "PYTEST_ADDOPTS": "",
+            "PYTHONPATH": os.pathsep.join(
+                filter(None, [str(REPO_ROOT), env.get("PYTHONPATH", "")])
+            ),
+        }
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "tests.conftest",
+            "-n",
+            "2",
+            "--dist",
+            "load",
+            "--cov=simplebroker",
+            "--cov-report=",
+            "--cov-fail-under=0",
+            str(nested_test),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert any(
+        path.endswith("simplebroker/commands.py") for path in combined.measured_files()
+    )
+    deferred_files = sorted(tmp_path.glob(".coverage-subprocess.*"))
+    assert len(deferred_files) == 2
+    for deferred_file in deferred_files:
+        deferred = CoverageData(basename=str(deferred_file))
+        deferred.read()
+        assert any(
+            path.endswith("simplebroker/commands.py")
+            for path in deferred.measured_files()
+        )
+
+
 def test_with_default_suite_path_applies_default_for_flag_only_args() -> None:
     """Regression for finding F9: ``pytest-pg -q`` routed the flag into both
     phases, which suppressed the extension phase's default path, so that
