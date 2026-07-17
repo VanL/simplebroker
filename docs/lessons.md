@@ -61,6 +61,12 @@ Startup context is the Golden Rules plus entries after the watermark in
   save coverage before interpreter shutdown, validate it in the waiting parent,
   then atomically rename it into the deferred namespace. Partial writers stay
   invisible, and missing or corrupt data fails at the producing test boundary.
+- A coverage SQLite shard can be otherwise complete yet lack only the
+  `coverage_schema` version row if initialization is interrupted between schema
+  creation and marker insertion. The resulting coverage.py error has an empty
+  detail string. After writers have settled, recover that narrow case only when
+  every expected table and column matches the installed schema; keep arbitrary
+  corruption and partial measurement schemas as hard failures.
 - A timing gate cannot share an xdist run with unrelated tests merely because
   its own cases have one xdist group. The group serializes those cases with
   each other, not with work on other workers. Run threshold-bearing benchmarks

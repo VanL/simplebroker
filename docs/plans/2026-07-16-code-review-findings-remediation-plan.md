@@ -1068,6 +1068,17 @@ protocol rather than review guidance.
   graceful shutdown without asynchronously unwinding the backend operation;
   a firing unit test locks that invariant, and the black-box PostgreSQL test
   remains the integration gate.
+- The same exact-SHA run showed that CLI staging was necessary but not
+  sufficient: Linux, Redis, and PostgreSQL coverage each ended with one
+  automatic-child SQLite shard whose `coverage_schema` table lacked its version
+  row. The empty detail in coverage.py's "isn't a coverage data file" error
+  identifies that specific assertion. The combiner now waits through its normal
+  settlement window, verifies every expected table and column, restores only
+  the installed coverage schema version, revalidates the database, and then
+  combines it.
+  Arbitrary bytes and partial schemas with measurement rows remain hard
+  failures. A red-green regression deletes only the marker from a measured
+  shard and proves its lines survive the repair and strict merge.
 
 ## Review Log
 

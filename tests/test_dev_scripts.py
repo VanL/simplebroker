@@ -364,6 +364,37 @@ def test_combine_coverage_propagates_corrupt_shard_failure(
     assert combined.lines(str(base_source)) == [1]
 
 
+def test_combine_coverage_repairs_missing_schema_version(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard_file = tmp_path / ".coverage.worker"
+    base_source = tmp_path / "base_source.py"
+    worker_source = tmp_path / "worker_source.py"
+    _write_coverage_lines(data_file, base_source, {1})
+    _write_coverage_lines(shard_file, worker_source, {2})
+    connection = sqlite3.connect(shard_file)
+    try:
+        connection.execute("DELETE FROM coverage_schema")
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = _run_combine_coverage(
+        data_file,
+        retry_timeout=0.2,
+        settle_seconds=0,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Repaired 1 coverage data file(s)" in result.stdout
+    combined = CoverageData(basename=str(data_file))
+    combined.read()
+    assert combined.lines(base_source.as_posix()) == [1]
+    assert combined.lines(worker_source.as_posix()) == [2]
+    assert not shard_file.exists()
+
+
 def test_combine_coverage_excludes_interrupted_empty_shard(
     tmp_path: Path,
 ) -> None:
