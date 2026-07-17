@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no timeout behavior changed in this release.
 
 ### Fixed
+- POSIX watcher signal handlers now request shutdown without asynchronously
+  unwinding an active backend call. PostgreSQL `watch` shutdown no longer
+  returns an active libpq connection to the pool or emits pool diagnostics on
+  stderr.
 - Preserved attached broadcast patterns such as `-pqueue*`, rejected missing
   broadcast messages cleanly, and retained `--` as the escape for literal
   option-looking messages. Write-output flags before an explicit escape are

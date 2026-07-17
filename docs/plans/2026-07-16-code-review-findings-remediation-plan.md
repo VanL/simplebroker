@@ -1060,6 +1060,14 @@ protocol rather than review guidance.
   combined**; Redis **914 shared + 122 extension**, **1959 files combined**.
   The combiner remained strict and excluded only automatic-child databases
   interrupted before their first measurement row.
+- The exact-SHA PostgreSQL extension workflow then reproduced the SIGTERM
+  shutdown stderr race for a second CI run. A local stress loop reproduced it
+  on iteration four: the installed signal handler raised `KeyboardInterrupt`
+  through an active libpq call, so psycopg_pool closed the returned `ACTIVE`
+  connection and emitted diagnostics. Signal handling now requests and wakes
+  graceful shutdown without asynchronously unwinding the backend operation;
+  a firing unit test locks that invariant, and the black-box PostgreSQL test
+  remains the integration gate.
 
 ## Review Log
 

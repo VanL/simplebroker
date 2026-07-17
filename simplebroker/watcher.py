@@ -837,14 +837,12 @@ class BaseWatcher(ABC):
                     break
 
     def _sigint_handler(self, signum: int, frame: Any) -> None:
-        """Convert an installed termination signal to graceful shutdown.
+        """Request graceful shutdown from an installed termination signal.
 
         Can be overridden by subclasses for custom handling.
         """
-        # Default implementation - just stop
         logger.info("Received signal %s, stopping watcher...", signum)
         self.stop(join=False)
-        raise KeyboardInterrupt
 
     def _safe_call_handler(
         self,

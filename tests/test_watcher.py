@@ -627,6 +627,23 @@ class TestQueueWatcher(WatcherTestBase):
         assert returncode == 0, f"Test failed: {stdout} {stderr}"
         assert "PASS" in stdout
 
+    def test_signal_handler_requests_stop_without_async_unwind(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Signals must not interrupt an active backend operation mid-call."""
+        watcher = object.__new__(QueueWatcher)
+        join_values: list[bool] = []
+
+        monkeypatch.setattr(
+            watcher,
+            "stop",
+            lambda *, join: join_values.append(join),
+        )
+
+        watcher._sigint_handler(signal.SIGTERM, None)
+
+        assert join_values == [False]
+
     def test_handler_exception_handling(self, broker, broker_target):
         """Test that handler exceptions don't crash the watcher."""
         # Write messages
