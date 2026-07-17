@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `peek --all`, and `dump` exit `0` without a traceback or interpreter flush
   error, stop claiming further messages, and close transactional iterators.
   With a configured at-least-once read batch, uncommitted messages are rolled
-  back instead of being lost. `watch` also exits cleanly on SIGTERM.
+  back instead of being lost. Windows pipe closure is recognized when the C
+  runtime reports either a pipe error or a generic `EINVAL`. `watch` also exits
+  cleanly on SIGTERM.
 - `DatabaseError` is now the common base for SimpleBroker's
   `OperationalError`, `IntegrityError`, and `DataError`, while all remain under
   `BrokerError`. Code that catches `DatabaseError` now catches those subclasses.

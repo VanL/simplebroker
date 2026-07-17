@@ -43,4 +43,8 @@ Startup context is the Golden Rules plus entries after the watermark in
   prefix longer than every internal window.
 - Classify closed-pipe errors only at the exact stdout write or flush boundary.
   Catching `EPIPE` around iterator advancement or a helper that also writes to
-  stderr can turn backend or diagnostic failures into false success.
+  stderr can turn backend or diagnostic failures into false success. On
+  Windows, the C runtime can report a closing anonymous pipe as generic
+  `EINVAL` with no Win32 error code; accept that form only at those stdout
+  boundaries, and do not swallow `EINVAL` values that retain another Win32
+  cause.

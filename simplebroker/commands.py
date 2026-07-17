@@ -51,10 +51,14 @@ class _StdoutClosed(Exception):
 
 def _is_closed_pipe_error(error: OSError) -> bool:
     """Return whether an output error means the downstream pipe closed."""
+    winerror = getattr(error, "winerror", None)
     return (
         isinstance(error, BrokenPipeError)
         or error.errno == errno.EPIPE
-        or getattr(error, "winerror", None) in _WINDOWS_CLOSED_PIPE_ERRORS
+        or winerror in _WINDOWS_CLOSED_PIPE_ERRORS
+        # The Windows CRT can collapse ERROR_NO_DATA from a closing anonymous
+        # pipe to a generic EINVAL without preserving a Win32 error code.
+        or (os.name == "nt" and error.errno == errno.EINVAL and winerror is None)
     )
 
 

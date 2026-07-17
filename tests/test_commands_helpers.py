@@ -189,6 +189,84 @@ class TestProcessQueueFetch:
 
         assert rc == EXIT_SUCCESS
 
+    def test_all_messages_treats_windows_einval_as_clean_exit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fetch_one(**_kwargs):  # pragma: no cover - unused
+            return None
+
+        def fetch_generator(**_kwargs):
+            return iter([("a", 1)])
+
+        error = OSError(errno.EINVAL, "invalid argument")
+        monkeypatch.setattr(commands.os, "name", "nt")
+        monkeypatch.setattr(commands.sys, "stdout", self._ClosedPipeStdout(error))
+        monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
+
+        rc = _process_queue_fetch(
+            fetch_one=fetch_one,
+            fetch_generator=fetch_generator,
+            exact_timestamp=None,
+            all_messages=True,
+            after_timestamp=None,
+            before_timestamp=None,
+            json_output=False,
+            show_timestamps=False,
+        )
+
+        assert rc == EXIT_SUCCESS
+
+    def test_all_messages_does_not_swallow_windows_invalid_parameter(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fetch_one(**_kwargs):  # pragma: no cover - unused
+            return None
+
+        def fetch_generator(**_kwargs):
+            return iter([("a", 1)])
+
+        error = OSError(errno.EINVAL, "invalid parameter")
+        error.winerror = 87  # type: ignore[attr-defined]
+        monkeypatch.setattr(commands.os, "name", "nt")
+        monkeypatch.setattr(commands.sys, "stdout", self._ClosedPipeStdout(error))
+
+        with pytest.raises(OSError, match="invalid parameter"):
+            _process_queue_fetch(
+                fetch_one=fetch_one,
+                fetch_generator=fetch_generator,
+                exact_timestamp=None,
+                all_messages=True,
+                after_timestamp=None,
+                before_timestamp=None,
+                json_output=False,
+                show_timestamps=False,
+            )
+
+    def test_all_messages_does_not_swallow_posix_einval(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fetch_one(**_kwargs):  # pragma: no cover - unused
+            return None
+
+        def fetch_generator(**_kwargs):
+            return iter([("a", 1)])
+
+        error = OSError(errno.EINVAL, "invalid argument")
+        monkeypatch.setattr(commands.os, "name", "posix")
+        monkeypatch.setattr(commands.sys, "stdout", self._ClosedPipeStdout(error))
+
+        with pytest.raises(OSError, match="invalid argument"):
+            _process_queue_fetch(
+                fetch_one=fetch_one,
+                fetch_generator=fetch_generator,
+                exact_timestamp=None,
+                all_messages=True,
+                after_timestamp=None,
+                before_timestamp=None,
+                json_output=False,
+                show_timestamps=False,
+            )
+
     def test_all_messages_does_not_swallow_unrelated_output_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

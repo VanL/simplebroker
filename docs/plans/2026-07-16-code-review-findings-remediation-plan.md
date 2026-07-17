@@ -3,8 +3,9 @@
 **Date:** 2026-07-16
 **Status:** active — implementation landed at `b7c0077`; Python 3.11 CLI
 compatibility is committed at `f190291`; the Windows pipe correction has passed
-local gates and independent review, with its native Windows CI rerun still
-pending
+local gates and independent review, but its first native rerun exposed the
+Windows CRT's generic `EINVAL` closed-pipe form; the follow-up fix passes local
+gates and independent review, with native CI confirmation pending
 **Class:** 4 — risky triggers fire per [DOM-5]: public CLI contract and exit-code
 semantics change (Units A, E), the same stop/pipe logic runs in more than one
 execution context (CLI command layer and library watcher), and Unit D changes
@@ -969,14 +970,19 @@ protocol rather than review guidance.
   pre-marker help and literal escaped `-h`/`--help`.
 - Windows CI showed that closed stdout could escape the narrow
   `BrokenPipeError`/descriptor-redirection path. Closed-pipe classification is
-  now limited to `EPIPE` and Windows errors 109/232; unrelated `OSError`s keep
-  their normal error path. If `dup2` is unavailable, stdout is replaced with
-  the null device so interpreter shutdown cannot re-flush the broken stream.
-  Closed-pipe classification is scoped only around stdout writes and flushes;
-  backend-origin `EPIPE` remains an error. The focused command/pipe suite passed
-  all **26 tests** on Python 3.11, 3.12, and 3.14. Existing native Windows
-  black-box tests remain the final OS proof.
-- Current full gates after review disposition: core **1851 passed, 14
+  `BrokenPipeError`/descriptor-redirection path. The first fix recognized
+  `EPIPE` and Windows errors 109/232, but the native rerun proved that CPython's
+  Windows CRT path can instead surface a closing anonymous pipe as generic
+  `EINVAL` with no `winerror`. That exact failure reproduced in a focused unit
+  test before the follow-up fix. Classification now accepts that form only on
+  Windows and only at the existing stdout write/flush boundaries; `EINVAL` with
+  another Win32 cause, unrelated output errors, backend errors, and stderr
+  errors retain their normal paths. If `dup2` is unavailable, stdout is
+  replaced with the null device so interpreter shutdown cannot re-flush the
+  broken stream. The focused command/pipe suite passes all **29 tests** on
+  Python 3.11, 3.12, and 3.14. Native Windows black-box tests remain the final
+  OS proof.
+- Current full gates after the Windows follow-up: core **1854 passed, 14
   skipped**; Postgres shared **919 passed, 2 skipped** and extension **144
   passed, 1 skipped**; Redis shared **912 passed, 9 skipped** and extension
   **122 passed, 1 skipped**.
@@ -1153,6 +1159,17 @@ backend, and stderr failures remain on the normal error path. Windows errors
 109/232, fallback redirection, iterator cleanup, and the new negative tests
 were approved. Native Windows CI remains the residual gate before this plan can
 close.
+
+### 2026-07-17 — Independent Windows `EINVAL` follow-up review
+
+Verdict after disposition: **pass; no actionable finding remains**.
+
+The reviewer required one additional negative regression before approval:
+generic `EINVAL` without a `winerror` must still propagate when the platform is
+not Windows. The completed classifier matrix now proves Windows generic
+`EINVAL` is accepted, Windows `EINVAL` with another Win32 cause propagates, and
+non-Windows `EINVAL` propagates. The reviewer approved the production scope and
+retained native Windows CI as the final acceptance gate.
 
 ## Fresh-Eyes Review (author pass)
 
