@@ -1039,6 +1039,27 @@ protocol rather than review guidance.
   boundaries. Worker selection is expressed as the final explicit CLI args so
   ambient `PYTEST_ADDOPTS` cannot override either phase; opposing ambient modes
   are covered before the release is retried.
+- The xdist-lifecycle correction removed worker-owned databases from the
+  deferred namespace but did not eliminate child corruption: the next exact-SHA
+  runs still produced partial `.coverage-subprocess` SQLite files in Redis and
+  PostgreSQL after all backend tests passed. The backend suites create roughly
+  two thousand instrumented CLI children, and `coverage.process_startup()`
+  published each database directly into the combiner glob during interpreter
+  shutdown. The harness now gives every `run_cli` invocation a UUID-scoped
+  staging database outside that glob, explicitly stops and saves coverage in
+  the child, validates readable measured data in the waiting parent, and only
+  then atomically renames it into the deferred namespace. Relative coverage
+  paths are anchored in the parent before the child changes directory. Timeout,
+  runner-error, and failed-promotion staging files are discarded; missing,
+  unreadable, or empty data fails the producing test instead of poisoning the
+  later aggregate merge.
+- Red-green coverage: the end-to-end CLI regression found no promoted file
+  before the change and now reads the promoted database; a corrupt-staging
+  regression proves no final file is published. Exact local backend coverage
+  then passed: PostgreSQL **921 shared + 144 extension**, **1959 files
+  combined**; Redis **914 shared + 122 extension**, **1959 files combined**.
+  The combiner remained strict and excluded only automatic-child databases
+  interrupted before their first measurement row.
 
 ## Review Log
 

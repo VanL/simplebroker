@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 from collections.abc import Callable, Iterator
 from functools import cache
 from pathlib import Path
@@ -78,6 +79,7 @@ else:
 
 
 _SUBPROCESS_COVERAGE_SUFFIX = "-subprocess"
+_CLI_COVERAGE_STAGING_ENV = "SIMPLEBROKER_TEST_COVERAGE_STAGING"
 
 
 def _defer_subprocess_coverage(config: pytest.Config) -> None:
@@ -105,8 +107,8 @@ def _defer_subprocess_coverage(config: pytest.Config) -> None:
 def _defer_coverage_for_test_children(pytestconfig: pytest.Config) -> None:
     """Defer child coverage after this process's pytest-cov collector starts.
 
-    A session-start hook in the xdist controller changes ``COVERAGE_FILE``
-    before workers are spawned.  That redirects each worker's own pytest-cov
+    A session-start hook in the xdist controller would change ``COVERAGE_FILE``
+    before workers are spawned. That redirects each worker's own pytest-cov
     database as well as its children, leaving worker databases outside
     pytest-cov's managed combine lifecycle.  Session fixtures run inside each
     worker after its collector starts, so only later subprocess and
@@ -120,11 +122,13 @@ if TYPE_CHECKING:
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_CLI_COVERAGE_ROOT = PROJECT_ROOT
 _CLI_STARTUP_CODE = """
 import os
 import sys
 
 _faulthandler = None
+_coverage = None
 _dump_timeout = float(
     os.environ.get("SIMPLEBROKER_TEST_FAULTHANDLER_TIMEOUT", "0") or "0"
 )
@@ -137,16 +141,30 @@ if _dump_timeout > 0:
         file=sys.stderr,
     )
 
-if os.environ.get("COVERAGE_PROCESS_START"):
-    import coverage
+_coverage_staging = os.environ.get("SIMPLEBROKER_TEST_COVERAGE_STAGING")
+if _coverage_staging:
+    import coverage as _coverage_module
 
-    coverage.process_startup()
+    _coverage = _coverage_module.Coverage(
+        config_file=os.environ["COVERAGE_PROCESS_START"],
+        data_file=_coverage_staging,
+        data_suffix=False,
+    )
+    _coverage._warn_unimported_source = False
+    _coverage.start()
+elif os.environ.get("COVERAGE_PROCESS_START"):
+    import coverage as _coverage_module
+
+    _coverage_module.process_startup()
 
 try:
     import runpy
 
     runpy.run_module("simplebroker.cli", run_name="__main__", alter_sys=True)
 finally:
+    if _coverage is not None:
+        _coverage.stop()
+        _coverage.save()
     if _faulthandler is not None:
         _faulthandler.cancel_dump_traceback_later()
 """
@@ -787,6 +805,83 @@ def _decode_timeout_stream(value: object) -> str:
     return str(value)
 
 
+def _cli_coverage_paths(env: dict[str, str]) -> tuple[Path, Path] | None:
+    """Reserve private staging and promoted paths for one CLI invocation."""
+
+    if not env.get("COVERAGE_PROCESS_START"):
+        return None
+
+    data_file = Path(env.get("COVERAGE_FILE", ".coverage"))
+    if not data_file.is_absolute():
+        data_file = (_CLI_COVERAGE_ROOT / data_file).resolve()
+    if data_file.name.endswith(_SUBPROCESS_COVERAGE_SUFFIX):
+        deferred_file = data_file
+        base_name = data_file.name.removesuffix(_SUBPROCESS_COVERAGE_SUFFIX)
+    else:
+        deferred_file = data_file.with_name(
+            f"{data_file.name}{_SUBPROCESS_COVERAGE_SUFFIX}"
+        )
+        base_name = data_file.name
+
+    token = uuid.uuid4().hex
+    staging = data_file.with_name(f"{base_name}-staging.cli-{token}")
+    promoted = deferred_file.with_name(f"{deferred_file.name}.cli-{token}")
+    return staging, promoted
+
+
+def _promote_cli_coverage(staging: Path, promoted: Path) -> None:
+    """Validate one completed CLI database before atomically publishing it."""
+
+    from coverage import CoverageData
+    from coverage.exceptions import CoverageException
+
+    data = CoverageData(basename=str(staging))
+    error_message: str | None = None
+    coverage_error: CoverageException | None = None
+    try:
+        if not staging.is_file() or staging.stat().st_size == 0:
+            error_message = f"missing CLI coverage staging data: {staging}"
+        else:
+            data.read()
+            if not data.measured_files():
+                error_message = f"empty CLI coverage staging data: {staging}"
+    except CoverageException as exc:
+        coverage_error = exc
+        error_message = f"unreadable CLI coverage staging data: {staging}: {exc}"
+    finally:
+        data.close(force=True)
+
+    if error_message is not None:
+        _discard_cli_coverage_staging(staging)
+        if coverage_error is not None:
+            raise AssertionError(error_message) from coverage_error
+        raise AssertionError(error_message)
+
+    os.replace(staging, promoted)
+
+
+def _discard_cli_coverage_staging(staging: Path) -> None:
+    """Remove private coverage files after an incomplete CLI invocation."""
+
+    for path in (
+        staging,
+        staging.with_name(f"{staging.name}-journal"),
+        staging.with_name(f"{staging.name}-shm"),
+        staging.with_name(f"{staging.name}-wal"),
+    ):
+        path.unlink(missing_ok=True)
+
+
+def _publish_cli_coverage(staging: Path, promoted: Path) -> None:
+    """Publish completed CLI coverage without leaving private staging data."""
+
+    try:
+        _promote_cli_coverage(staging, promoted)
+    except BaseException:
+        _discard_cli_coverage_staging(staging)
+        raise
+
+
 def run_cli(
     *args: object,
     cwd: Path,
@@ -820,6 +915,11 @@ def run_cli(
     cmd = [sys.executable, "-c", _CLI_STARTUP_CODE, *cli_args]
 
     full_env = build_cli_env(env)
+    coverage_paths = _cli_coverage_paths(full_env)
+    if coverage_paths is not None:
+        staging_coverage, promoted_coverage = coverage_paths
+        full_env[_CLI_COVERAGE_STAGING_ENV] = str(staging_coverage)
+        full_env["COVERAGE_FILE"] = str(staging_coverage)
 
     if _test_backend_name(full_env) == POSTGRES_TEST_BACKEND:
         dsn = full_env.get("SIMPLEBROKER_PG_TEST_DSN")
@@ -880,6 +980,8 @@ def run_cli(
     try:
         completed = run_func(cmd, **run_kwargs)
     except subprocess.TimeoutExpired as exc:
+        if coverage_paths is not None:
+            _discard_cli_coverage_staging(staging_coverage)
         stdout = _decode_timeout_stream(exc.stdout)
         stderr = _decode_timeout_stream(exc.stderr)
         raise AssertionError(
@@ -888,6 +990,13 @@ def run_cli(
             f"stdout:\n{stdout or '<empty>'}\n\n"
             f"stderr:\n{stderr or '<empty>'}"
         ) from exc
+    except BaseException:
+        if coverage_paths is not None:
+            _discard_cli_coverage_staging(staging_coverage)
+        raise
+
+    if coverage_paths is not None:
+        _publish_cli_coverage(staging_coverage, promoted_coverage)
 
     if stdin is None:
         stdout = completed.stdout

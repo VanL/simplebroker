@@ -56,6 +56,11 @@ Startup context is the Golden Rules plus entries after the watermark in
   before workers are spawned. That moves pytest-cov's own worker databases out
   of its managed combine lifecycle. Redirect child collectors from a
   session-scoped fixture inside each worker, after the worker collector starts.
+- High-volume black-box CLI coverage should not publish directly into the
+  combiner's glob. Give each child an exact private staging database, stop and
+  save coverage before interpreter shutdown, validate it in the waiting parent,
+  then atomically rename it into the deferred namespace. Partial writers stay
+  invisible, and missing or corrupt data fails at the producing test boundary.
 - A timing gate cannot share an xdist run with unrelated tests merely because
   its own cases have one xdist group. The group serializes those cases with
   each other, not with work on other workers. Run threshold-bearing benchmarks

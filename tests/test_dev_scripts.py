@@ -576,6 +576,200 @@ def test_child_coverage(index):
         )
 
 
+@pytest.mark.sqlite_only
+def test_run_cli_atomically_promotes_readable_coverage(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    invoke_cli = vars(suite_conftest)["run_cli"]
+
+    code, stdout, stderr = invoke_cli(
+        "write",
+        "jobs",
+        "message",
+        cwd=workdir,
+        env={
+            "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
+            "COVERAGE_FILE": str(data_file),
+        },
+    )
+
+    assert (code, stdout, stderr) == (0, "", "")
+    code, stdout, stderr = invoke_cli(
+        "read",
+        "missing",
+        cwd=workdir,
+        env={
+            "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
+            "COVERAGE_FILE": str(data_file),
+        },
+    )
+    assert (code, stdout, stderr) == (2, "", "")
+
+    promoted = list(tmp_path.glob(".coverage-subprocess.cli-*"))
+    assert len(promoted) == 2
+    assert not list(tmp_path.glob(".coverage-staging.cli-*"))
+    for promoted_file in promoted:
+        data = CoverageData(basename=str(promoted_file))
+        try:
+            data.read()
+            assert any(
+                path.replace("\\", "/").endswith("simplebroker/commands.py")
+                for path in data.measured_files()
+            )
+        finally:
+            data.close(force=True)
+
+
+def test_cli_coverage_rejects_corrupt_staging_data(tmp_path: Path) -> None:
+    staging = tmp_path / ".coverage-staging.cli-test"
+    promoted = tmp_path / ".coverage-subprocess.cli-test"
+    staging.write_text("partial sqlite header", encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="unreadable CLI coverage staging data"):
+        suite_conftest._promote_cli_coverage(staging, promoted)
+
+    assert not staging.exists()
+    assert not promoted.exists()
+
+
+@pytest.mark.parametrize(
+    ("staging_kind", "expected_message"),
+    [
+        ("missing", "missing CLI coverage staging data"),
+        ("zero-byte", "missing CLI coverage staging data"),
+        ("readable-empty", "empty CLI coverage staging data"),
+    ],
+)
+def test_cli_coverage_rejects_missing_or_empty_staging_data(
+    tmp_path: Path,
+    staging_kind: str,
+    expected_message: str,
+) -> None:
+    staging = tmp_path / ".coverage-staging.cli-test"
+    promoted = tmp_path / ".coverage-subprocess.cli-test"
+    if staging_kind == "zero-byte":
+        staging.touch()
+    elif staging_kind == "readable-empty":
+        _write_coverage_lines(staging, tmp_path / "source.py", {1})
+        connection = sqlite3.connect(staging)
+        try:
+            connection.execute("DELETE FROM line_bits")
+            connection.execute("DELETE FROM file")
+            connection.commit()
+        finally:
+            connection.close()
+
+    with pytest.raises(AssertionError, match=expected_message):
+        suite_conftest._promote_cli_coverage(staging, promoted)
+
+    assert not staging.exists()
+    assert not promoted.exists()
+
+
+@pytest.mark.sqlite_only
+def test_run_cli_anchors_relative_coverage_outside_child_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    coverage_root = tmp_path / "coverage-root"
+    coverage_root.mkdir()
+    child_cwd = tmp_path / "child-cwd"
+    child_cwd.mkdir()
+    monkeypatch.setattr(suite_conftest, "_CLI_COVERAGE_ROOT", coverage_root)
+    invoke_cli = vars(suite_conftest)["run_cli"]
+
+    code, stdout, stderr = invoke_cli(
+        "write",
+        "jobs",
+        "message",
+        cwd=child_cwd,
+        env={
+            "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
+            "COVERAGE_FILE": ".coverage",
+        },
+    )
+
+    assert (code, stdout, stderr) == (0, "", "")
+    assert len(list(coverage_root.glob(".coverage-subprocess.cli-*"))) == 1
+    assert not list(child_cwd.glob(".coverage*"))
+
+
+def test_cli_coverage_cleans_staging_when_atomic_promotion_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging = tmp_path / ".coverage-staging.cli-test"
+    promoted = tmp_path / ".coverage-subprocess.cli-test"
+    source = tmp_path / "source.py"
+    _write_coverage_lines(staging, source, {1})
+
+    def fail_replace(source_path: Path, destination_path: Path) -> None:
+        raise PermissionError(f"cannot replace {source_path} with {destination_path}")
+
+    monkeypatch.setattr(suite_conftest.os, "replace", fail_replace)
+
+    with pytest.raises(PermissionError, match="cannot replace"):
+        suite_conftest._publish_cli_coverage(staging, promoted)
+
+    assert not staging.exists()
+    assert not promoted.exists()
+
+
+@pytest.mark.parametrize("failure_kind", ["timeout", "runner-error"])
+def test_cli_coverage_cleans_staging_when_runner_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+) -> None:
+    coverage_root = tmp_path / "coverage-root"
+    coverage_root.mkdir()
+    child_cwd = tmp_path / "child-cwd"
+    child_cwd.mkdir()
+    monkeypatch.setattr(suite_conftest, "_CLI_COVERAGE_ROOT", coverage_root)
+
+    def fail_runner(command: list[str], **kwargs: Any) -> None:
+        staging = Path(kwargs["env"][suite_conftest._CLI_COVERAGE_STAGING_ENV])
+        for suffix in ("", "-journal", "-shm", "-wal"):
+            staging.with_name(f"{staging.name}{suffix}").write_bytes(b"partial")
+        if failure_kind == "timeout":
+            raise subprocess.TimeoutExpired(
+                command,
+                kwargs["timeout"],
+                output=b"partial stdout",
+                stderr=b"partial stderr",
+            )
+        raise PermissionError("runner failed")
+
+    monkeypatch.setattr(suite_conftest, "run_with_coverage", fail_runner)
+    invoke_cli = vars(suite_conftest)["run_cli"]
+
+    def invoke_failing_cli() -> tuple[int, str, str]:
+        return invoke_cli(
+            "write",
+            "jobs",
+            "message",
+            cwd=child_cwd,
+            env={
+                "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
+                "COVERAGE_FILE": ".coverage",
+            },
+        )
+
+    if failure_kind == "timeout":
+        with pytest.raises(AssertionError, match="CLI command timed out") as exc_info:
+            invoke_failing_cli()
+        assert "partial stdout" in str(exc_info.value)
+        assert "partial stderr" in str(exc_info.value)
+    else:
+        with pytest.raises(PermissionError, match="runner failed"):
+            invoke_failing_cli()
+
+    assert not list(coverage_root.glob(".coverage-staging.cli-*"))
+
+
 def test_with_default_suite_path_applies_default_for_flag_only_args() -> None:
     """Regression for finding F9: ``pytest-pg -q`` routed the flag into both
     phases, which suppressed the extension phase's default path, so that
