@@ -491,7 +491,7 @@ def test_concurrent_pre_check_safety(broker_target) -> None:
         assert wait_for_count(
             lambda: len(processed_messages),
             expected_count=50,
-            timeout=5.0,
+            timeout=_watcher_processing_timeout(broker_target),
         )
 
         # All messages should be processed exactly once

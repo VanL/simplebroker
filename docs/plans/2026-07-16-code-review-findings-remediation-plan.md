@@ -1084,6 +1084,12 @@ protocol rather than review guidance.
   the assertion matched only a POSIX suffix. Source-path matching now
   normalizes separators, with both path forms firing locally before the native
   Windows matrix rerun.
+- Windows 3.11 also timed out once while five watcher threads drained 50
+  messages under the full four-worker matrix. That assertion alone bypassed the
+  suite's backend-aware, CI-scaled watcher processing budget and hard-coded
+  five seconds. It now uses the existing helper, preserving the five-second
+  local SQLite budget while allowing ten seconds under CI; the other Windows
+  versions completed the same invariant, so no production timing was changed.
 
 ## Review Log
 
