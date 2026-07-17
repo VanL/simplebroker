@@ -26,6 +26,7 @@ Legacy `Status:` headers are not retro-converted.
 | 2026-07-16-agent-guidance-bootstrap-plan.md | completed — wave landed at 2f93ee5 (source agent-guidance @ fc23eae); grok round 1 FAIL fixed, round 2 PASS |
 | 2026-07-16-code-review-findings-remediation-plan.md | active — Windows pipe fix passes on 3.11/3.12; SIGTERM coverage-shard fix and clean native rerun pending |
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | draft — class 4; F21 threshold-triggered follow-up, design decision and independent review required |
+| 2026-07-17-propagate-guidance-delta-wave-plan.md | completed — delta wave from agent-guidance @ b248e1c (prior pin fc23eae); runbook units landed at bc7de9e, remainder with the plan; scoped review no-blocker |
 
 ## Rules
 
