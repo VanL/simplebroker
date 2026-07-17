@@ -48,3 +48,7 @@ Startup context is the Golden Rules plus entries after the watermark in
   `EINVAL` with no Win32 error code; accept that form only at those stdout
   boundaries, and do not swallow `EINVAL` values that retain another Win32
   cause.
+- Coverage for intentionally terminated subprocesses needs an explicit SIGTERM
+  save path. Do not make the combiner ignore malformed shards with measurements;
+  configure the producer to finish its coverage database and keep corruption as
+  a hard gate.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import runpy
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -150,6 +151,59 @@ def test_coverage_exit_patch_saves_readable_data_from_os_exit(
     )
 
     assert result.returncode == 0, result.stderr
+    shards = list(tmp_path.glob(".coverage.*"))
+    assert len(shards) == 1
+    data = CoverageData(basename=str(shards[0]))
+    data.read()
+    assert any(
+        measured.replace("\\", "/").endswith("simplebroker/_backend_plugins.py")
+        for measured in data.measured_files()
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="coverage sigterm is POSIX-only")
+def test_coverage_sigterm_saves_readable_data_from_terminated_process(
+    tmp_path: Path,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    env = os.environ.copy()
+    for name in (
+        "COV_CORE_CONFIG",
+        "COV_CORE_DATAFILE",
+        "COV_CORE_SOURCE",
+        "COVERAGE_PROCESS_CONFIG",
+        "COVERAGE_RCFILE",
+    ):
+        env.pop(name, None)
+    env["COVERAGE_PROCESS_START"] = str(REPO_ROOT / "pyproject.toml")
+    env["COVERAGE_FILE"] = str(data_file)
+
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import coverage; coverage.process_startup(); "
+            "import simplebroker._backend_plugins; "
+            "print('ready', flush=True); "
+            "import signal; signal.pause()",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert process.stdout is not None
+        assert process.stdout.readline().strip() == "ready"
+        process.terminate()
+        _stdout, stderr = process.communicate(timeout=5)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
+
+    assert process.returncode == -signal.SIGTERM, stderr
     shards = list(tmp_path.glob(".coverage.*"))
     assert len(shards) == 1
     data = CoverageData(basename=str(shards[0]))

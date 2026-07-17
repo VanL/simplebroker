@@ -5,7 +5,9 @@
 compatibility is committed at `f190291`; the Windows pipe correction has passed
 local gates and independent review, but its first native rerun exposed the
 Windows CRT's generic `EINVAL` closed-pipe form; the follow-up fix passes local
-gates and independent review, with native CI confirmation pending
+gates and independent review. Its next native run passed Windows 3.11/3.12 but
+was blocked by an unrelated Windows 3.13 timeout cluster and a corrupt Redis
+coverage shard; the coverage-producer fix and another native rerun are pending
 **Class:** 4 — risky triggers fire per [DOM-5]: public CLI contract and exit-code
 semantics change (Units A, E), the same stop/pipe logic runs in more than one
 execution context (CLI command layer and library watcher), and Unit D changes
@@ -994,6 +996,19 @@ protocol rather than review guidance.
   installed and loaded the wheel set in a fresh Python 3.11 environment.
 - Residual: rerun native Windows CI after both focused commits land. The plan
   remains active until that black-box proof is green.
+- The first exact-SHA release retry at `67717e1` passed every local release gate
+  and the Postgres/Redis workflows, then stopped before tagging because the main
+  workflow failed in two independent jobs. Windows 3.11 and 3.12 passed; the
+  3.13 runner timed out five unrelated CLI operations at different SQLite and
+  phase-lock boundaries. That cluster is treated as an unresolved runner-load
+  signal pending a clean rerun; no timeout was raised without recurrence.
+- The Redis coverage job passed **914 shared** and **122 extension** tests, then
+  rejected a malformed deferred subprocess coverage database. The combiner's
+  fail-closed behavior remains intact. A focused regression proved that the
+  current configuration loses coverage when an instrumented child receives
+  SIGTERM; enabling coverage's SIGTERM save path makes the child produce a
+  readable measured shard. The existing `os._exit` regression and all **69
+  dev-script tests** also pass.
 
 ## Review Log
 
@@ -1170,6 +1185,16 @@ not Windows. The completed classifier matrix now proves Windows generic
 `EINVAL` is accepted, Windows `EINVAL` with another Win32 cause propagates, and
 non-Windows `EINVAL` propagates. The reviewer approved the production scope and
 retained native Windows CI as the final acceptance gate.
+
+### 2026-07-17 — Independent coverage-shard follow-up review
+
+Verdict: **pass; no blocking scope or test gap**.
+
+The reviewer approved fixing the terminated coverage producer while preserving
+the combiner's strict rejection of corrupt measured shards. The new SIGTERM
+regression and existing `os._exit` regression cover the configured termination
+paths. The accepted boundary does not claim recovery from SIGKILL, process
+crashes, or Windows `TerminateProcess`.
 
 ## Fresh-Eyes Review (author pass)
 
