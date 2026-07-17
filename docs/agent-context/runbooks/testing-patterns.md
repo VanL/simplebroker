@@ -121,6 +121,25 @@ Fix:
 - for config keys specifically, prove each behavior-affecting key changes
   observable output versus the no-config baseline (no-op prevention)
 
+### Pattern 7: Multiprocess Coordination Needs Aggregate Deadlines
+
+Symptoms:
+
+- a parent fails on a short `Queue.get(timeout=...)` while children are still
+  starting normally under Windows, xdist, or other runner contention
+- a loop resets the timeout for each child, so the real total budget is either
+  too short for the first result or accidentally multiplied by the child count
+- timeout failures omit child PIDs, exit codes, or liveness state
+
+Fix:
+
+- use one monotonic aggregate deadline for the coordination phase
+- scale that deadline with the repository's CI timing helper when startup cost
+  depends on process spawning or interpreter imports
+- poll the queue in short intervals so child error messages surface promptly
+- on failure, report received child IDs plus each process's PID, exit code, and
+  liveness; do not turn a missing result into a silent pass
+
 ## Verification Pattern
 
 For meaningful changes:

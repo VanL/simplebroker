@@ -1097,6 +1097,17 @@ protocol rather than review guidance.
   local runs retain the original budgets. The scaling conditions have firing
   tests, and the black-box test still requires a real `-SIGTERM` exit plus a
   readable measured shard.
+- The following exact-SHA matrix passed every required job except Windows
+  Python 3.14, where `test_multiprocess_database_locking` gave the first of five
+  spawned children only five seconds to publish readiness. The same test had
+  no aggregate startup budget, no child diagnostics, and could silently pass
+  without receiving any lock statistics. Readiness and statistics now use
+  single CI-scaled monotonic deadlines, surface child errors and process state,
+  and require results from all five children. A parent-controlled start barrier
+  also prevents an early child from ending its fixed observation window before
+  the slowest child starts. The barrier has a direct firing test. The reusable
+  rule is recorded in the testing-patterns runbook; no production timeout or
+  locking behavior changed.
 
 ## Review Log
 

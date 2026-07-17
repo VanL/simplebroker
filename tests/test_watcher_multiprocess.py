@@ -187,6 +187,21 @@ def lock_test_process(
 
         result_queue.put(("ready", process_id, None))
 
+        # Do not start the fixed observation window until every sibling has
+        # spawned. Otherwise a fast child can finish before a slow Windows
+        # child is ready, weakening the intended contention phase.
+        while True:
+            try:
+                command = control_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if command == "start":
+                break
+            if command == "stop":
+                watcher.stop()
+                thread.join(timeout=2.0)
+                return
+
         # Run for a fixed time
         start_time = time.monotonic()
         while time.monotonic() - start_time < 2.0:
@@ -214,6 +229,37 @@ def lock_test_process(
 
     except Exception as e:
         result_queue.put(("error", process_id, str(e)))
+
+
+def test_lock_test_process_waits_for_parent_start(tmp_path: Path) -> None:
+    """Lock-test workers must not finish before the parent starts the phase."""
+    db_path = str(tmp_path / "start_barrier.db")
+    broker = BrokerDB(db_path)
+    result_queue: queue.Queue = queue.Queue()
+    control_queue: queue.Queue = queue.Queue()
+    worker = threading.Thread(
+        target=lock_test_process,
+        args=(db_path, "shared_queue", result_queue, control_queue, 0),
+    )
+
+    try:
+        worker.start()
+        assert result_queue.get(timeout=5.0) == ("ready", 0, None)
+
+        with pytest.raises(queue.Empty):
+            result_queue.get(timeout=0.25)
+
+        control_queue.put("start")
+        msg_type, process_id, data = result_queue.get(timeout=5.0)
+        assert msg_type == "lock_stats"
+        assert process_id == 0
+        assert data["attempts"] > 0
+    finally:
+        control_queue.put("stop")
+        worker.join(timeout=5.0)
+        broker.close()
+
+    assert not worker.is_alive()
 
 
 def test_multiprocess_single_queue() -> None:
@@ -748,12 +794,38 @@ def test_multiprocess_database_locking() -> None:
                 p.start()
                 processes.append(p)
 
-            # Wait for ready
-            ready_count = 0
-            while ready_count < num_processes:
-                msg_type, proc_id, data = result_queue.get(timeout=5.0)
+            # Wait for every child using one contention-aware deadline. A
+            # per-read timeout can fail before the slowest Windows child has
+            # imported the test process under the full xdist matrix.
+            ready_processes: set[int] = set()
+            errors: list[tuple[int, str]] = []
+            ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+            while (
+                len(ready_processes) < num_processes
+                and time.monotonic() < ready_deadline
+            ):
+                try:
+                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+
                 if msg_type == "ready":
-                    ready_count += 1
+                    ready_processes.add(proc_id)
+                elif msg_type == "error":
+                    errors.append((proc_id, data))
+                    break
+
+            if errors or len(ready_processes) != num_processes:
+                raise AssertionError(
+                    "Timed out waiting for lock-test processes to start: "
+                    f"ready={sorted(ready_processes)}, errors={errors}, "
+                    f"processes={_process_diagnostics(processes)}"
+                )
+
+            # Start one shared observation window only after all children have
+            # published readiness.
+            for control_queue in control_queues:
+                control_queue.put("start")
 
             # Create high write load
             for i in range(100):
@@ -764,23 +836,33 @@ def test_multiprocess_database_locking() -> None:
             time.sleep(2.0)
 
             # Collect lock stats
-            lock_stats = []
-            for _ in range(num_processes):
+            lock_stats: dict[int, dict[str, int | float]] = {}
+            stats_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+            while len(lock_stats) < num_processes and time.monotonic() < stats_deadline:
                 try:
-                    msg_type, proc_id, data = result_queue.get(timeout=2.0)
+                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
                     if msg_type == "lock_stats":
-                        lock_stats.append(data)
+                        lock_stats[proc_id] = data
+                    elif msg_type == "error":
+                        errors.append((proc_id, data))
+                        break
                 except queue.Empty:
-                    pass
+                    continue
+
+            if errors or len(lock_stats) != num_processes:
+                raise AssertionError(
+                    "Timed out waiting for lock-test process statistics: "
+                    f"received={sorted(lock_stats)}, errors={errors}, "
+                    f"processes={_process_diagnostics(processes)}"
+                )
 
             # With pre-check optimization, lock contention should be minimal
-            if lock_stats:
-                total_attempts = sum(s["attempts"] for s in lock_stats)
-                total_failures = sum(s["failures"] for s in lock_stats)
-                overall_failure_rate = total_failures / max(1, total_attempts)
+            total_attempts = sum(s["attempts"] for s in lock_stats.values())
+            total_failures = sum(s["failures"] for s in lock_stats.values())
+            overall_failure_rate = total_failures / max(1, total_attempts)
 
-                # Failure rate should be low with proper implementation
-                assert overall_failure_rate < 0.3  # Less than 30% lock failures
+            # Failure rate should be low with proper implementation
+            assert overall_failure_rate < 0.3  # Less than 30% lock failures
         finally:
             # Stop all processes
             for control_queue in control_queues:
