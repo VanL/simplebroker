@@ -10,6 +10,8 @@ protection in cli.py).
 import json
 import re
 
+import pytest
+
 from .conftest import run_cli
 
 _ID_RE = re.compile(r"^\d{19}$")
@@ -144,3 +146,16 @@ def test_status_operand_after_double_dash_does_not_disable_write_json(workdir):
     assert code == 0, stderr
     assert set(json.loads(stdout)) == {"timestamp"}
     assert run_cli("read", "q", cwd=workdir)[1] == "--status"
+
+
+@pytest.mark.parametrize("help_token", ["-h", "--help"])
+def test_help_operand_after_double_dash_stays_literal_with_write_json(
+    workdir, help_token
+):
+    code, stdout, stderr = run_cli(
+        "write", "q", "--json", "--", help_token, cwd=workdir
+    )
+
+    assert code == 0, stderr
+    assert set(json.loads(stdout)) == {"timestamp"}
+    assert run_cli("read", "q", cwd=workdir)[1] == help_token

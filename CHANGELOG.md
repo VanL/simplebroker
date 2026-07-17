@@ -42,8 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Preserved attached broadcast patterns such as `-pqueue*`, rejected missing
   broadcast messages cleanly, and retained `--` as the escape for literal
-  option-looking messages. Global status JSON preprocessing no longer consumes
-  a post-command literal `--json`.
+  option-looking messages. Write-output flags before an explicit escape are
+  canonicalized for consistent parsing on every supported Python version.
+  Global status JSON preprocessing no longer consumes a post-command literal
+  `--json`.
 - Sidecar writes and schema-v3 repair now roll back if commit fails, preserving
   the original commit exception even if rollback also fails.
 - `has_pending_messages()` now consistently rejects boolean and string

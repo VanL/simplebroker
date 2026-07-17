@@ -176,6 +176,25 @@ class TestRearrangeArgs:
             "--help",
         ]
 
+    def test_write_output_flag_is_canonicalized_before_explicit_escape(self):
+        """Keep explicit escaped operands compatible with Python 3.11 argparse."""
+        assert rearrange_args(["write", "q", "--json", "--", "--status"]) == [
+            "write",
+            "--json",
+            "q",
+            "--",
+            "--status",
+        ]
+
+    def test_escaped_help_is_data_during_write_canonicalization(self):
+        assert rearrange_args(["write", "q", "--json", "--", "--help"]) == [
+            "write",
+            "--json",
+            "q",
+            "--",
+            "--help",
+        ]
+
     def test_alias_is_a_recognized_subcommand(self):
         """Tokens after 'alias' must never be hoisted to global position.
 
@@ -298,6 +317,15 @@ class TestHelpHasNoSideEffects:
         rc, stdout, _ = run_cli("write", "-h", cwd=workdir)
         assert rc == 0
         assert "usage:" in stdout.lower()
+
+    @pytest.mark.parametrize("help_token", ["-h", "--help"])
+    def test_write_output_flag_before_help_still_shows_usage(
+        self, workdir: Path, help_token: str
+    ) -> None:
+        rc, stdout, _ = run_cli("write", "tasks", "--json", help_token, cwd=workdir)
+        assert rc == 0
+        assert "usage:" in stdout.lower()
+        assert not (workdir / ".broker.db").exists()
 
     def test_broadcast_help_does_not_broadcast(self, workdir: Path):
         rc, _, _ = run_cli("write", "tasks", "hello", cwd=workdir)

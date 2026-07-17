@@ -612,7 +612,10 @@ class ArgumentProcessor:
         if command not in ("write", "broadcast"):
             return command_args
 
-        if any(arg in _HELP_TOKENS for arg in command_args[1:]):
+        help_region = command_args[1:]
+        if "--" in help_region:
+            help_region = help_region[: help_region.index("--")]
+        if any(arg in _HELP_TOKENS for arg in help_region):
             return command_args
 
         if command == "write":
@@ -621,8 +624,31 @@ class ArgumentProcessor:
 
     def _protect_write_operands(self, command_args: list[str]) -> list[str]:
         """Protect the write queue/message positionals."""
-        if "--" in command_args[1:] or len(command_args) < 2:
+        if len(command_args) < 2:
             return command_args
+
+        if "--" in command_args[1:]:
+            marker = command_args.index("--", 1)
+            before_marker = command_args[1:marker]
+            output_options = [
+                arg for arg in before_marker if arg in _WRITE_OUTPUT_OPTIONS
+            ]
+            if not output_options:
+                return command_args
+            operands = [
+                arg for arg in before_marker if arg not in _WRITE_OUTPUT_OPTIONS
+            ]
+            # Python 3.11 argparse rejects an option interleaved between the
+            # write positionals and their explicit end-of-options marker.
+            # Canonicalizing recognized output flags before the operands keeps
+            # the public flexible ordering while preserving escaped data.
+            return [
+                command_args[0],
+                *output_options,
+                *operands,
+                "--",
+                *command_args[marker + 1 :],
+            ]
 
         protected = [command_args[0]]
         i = 1
