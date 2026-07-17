@@ -1,9 +1,10 @@
 # Code Review Findings Remediation Plan (5.3.3 review)
 
 **Date:** 2026-07-16
-**Status:** active — implementation is present, full gates and the independent
-completed-work review passed after disposition, and the worktree remains
-uncommitted
+**Status:** active — implementation landed at `b7c0077`; Python 3.11 CLI
+compatibility is committed at `f190291`; the Windows pipe correction has passed
+local gates and independent review, with its native Windows CI rerun still
+pending
 **Class:** 4 — risky triggers fire per [DOM-5]: public CLI contract and exit-code
 semantics change (Units A, E), the same stop/pipe logic runs in more than one
 execution context (CLI command layer and library watcher), and Unit D changes
@@ -827,6 +828,8 @@ contract and this section is its review target.
 |----------|------------------|-----------------|-----------|---------------|
 | README Pipe behavior | The message whose output detects a closed pipe is never returned in consume modes | Default exactly-once consumption retains that behavior; configured at-least-once `read --all` closes its generator and rolls back the still-uncommitted batch | Preserves invariant 3 and the existing delivery-guarantee contract; forcing loss would weaken at-least-once semantics | README Pipe behavior paragraph updated in this worktree |
 | F17 Redis pending-bound validation | Add rejection that was assumed absent | Redis already rejected these values indirectly in `_zrange_pending`; an explicit public-boundary guard and firing tests were still added | Keeps the backend contract structural and reviewable without claiming a behavior change that did not reproduce | None |
+| F15/T4 compatibility verification | Local completion gates were treated as sufficient for supported Python and Windows behavior | CI found that Python 3.11 rejects the non-canonical `write q --json -- --status` ordering and that Windows pipe shutdown escapes the narrow `BrokenPipeError`/cleanup path | Canonicalize write-output flags at the argv boundary; narrowly classify Windows closed-pipe errors; make stdout redirection best-effort; retain native matrix tests as the final proof | None — intended README behavior is unchanged |
+| T4 CLI-wide fallback | Keep a generic `cli.main` BrokenPipe fallback as defense in depth | Removed: a command/backend-origin `BrokenPipeError` or `EPIPE` is indistinguishable there and could be falsely reported as successful stdout shutdown | Output sites own classification through a dedicated stdout-write signal; iterator, backend, and stderr errors remain on the normal error path | None — narrows implementation to the intended stdout-only contract |
 
 ## Implementation Record
 
@@ -956,6 +959,35 @@ protocol rather than review guidance.
   CI still owns the real `msvcrt` classification gate; F21's crossed threshold
   is recorded in its memo and the separate draft migration-aware-waiting
   proposal. No F21 timeout behavior changed.
+
+### 2026-07-17 — CI compatibility remediation verification
+
+- Python 3.11 rejected the F15 escaped-operand order that Python 3.12+ accepts.
+  `ArgumentProcessor` now canonicalizes recognized write-output flags before
+  the queue when an explicit `--` is present. The focused argument/write suite
+  passed all **55 tests** on Python 3.11, 3.12, and 3.14, including genuine
+  pre-marker help and literal escaped `-h`/`--help`.
+- Windows CI showed that closed stdout could escape the narrow
+  `BrokenPipeError`/descriptor-redirection path. Closed-pipe classification is
+  now limited to `EPIPE` and Windows errors 109/232; unrelated `OSError`s keep
+  their normal error path. If `dup2` is unavailable, stdout is replaced with
+  the null device so interpreter shutdown cannot re-flush the broken stream.
+  Closed-pipe classification is scoped only around stdout writes and flushes;
+  backend-origin `EPIPE` remains an error. The focused command/pipe suite passed
+  all **26 tests** on Python 3.11, 3.12, and 3.14. Existing native Windows
+  black-box tests remain the final OS proof.
+- Current full gates after review disposition: core **1851 passed, 14
+  skipped**; Postgres shared **919 passed, 2 skipped** and extension **144
+  passed, 1 skipped**; Redis shared **912 passed, 9 skipped** and extension
+  **122 passed, 1 skipped**.
+- Ruff lint and formatting passed (**265 files**); mypy passed **59 runtime**,
+  **28 Postgres-test**, **26 Redis-test**, and **12 example** source files;
+  examples passed **80 tests**; DOM-15 fixtures, uv lock policy, and
+  `git diff --check` passed.
+- Packaging smoke rebuilt core 5.4.0, Postgres 3.2.2, and Redis 3.2.3, then
+  installed and loaded the wheel set in a fresh Python 3.11 environment.
+- Residual: rerun native Windows CI after both focused commits land. The plan
+  remains active until that black-box proof is green.
 
 ## Review Log
 
@@ -1108,6 +1140,19 @@ and the TOML trust-anchor edges. Those missing cases were added before the
 pass. No Redis atomicity defect or unnecessary production abstraction was
 found. The reviewer explicitly retained F21 as investigation-only and noted
 that this plan stays active while the worktree is uncommitted.
+
+### 2026-07-17 — Independent CI compatibility re-review
+
+Verdict: **pass; no actionable source finding remains**.
+
+The reviewer rechecked the Windows pipe correction after two earlier findings
+were dispositioned: backend iterator `EPIPE` and warning-path `EPIPE` must not
+be reported as clean stdout closure. The final design uses a private
+stdout-only control-flow signal at exact write and flush boundaries; iterator,
+backend, and stderr failures remain on the normal error path. Windows errors
+109/232, fallback redirection, iterator cleanup, and the new negative tests
+were approved. Native Windows CI remains the residual gate before this plan can
+close.
 
 ## Fresh-Eyes Review (author pass)
 

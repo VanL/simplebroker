@@ -81,7 +81,7 @@ def test_watch_stops_claiming_after_stdout_consumer_exits(workdir: Path) -> None
     stderr = process.stderr.read()
     process.stderr.close()
 
-    assert returncode == 0
+    assert returncode == 0, stderr
     assert stderr == ""
     code, remaining, error = run_cli("peek", "jobs", "--all", cwd=workdir)
     assert code == 0, error
@@ -96,7 +96,7 @@ def test_peek_all_pipe_closure_is_clean_and_preserves_queue(workdir: Path) -> No
 
     returncode, stderr = _close_consumer_and_wait(process)
 
-    assert returncode == 0
+    assert returncode == 0, stderr
     assert stderr == ""
     with Queue("bulk", db_path=target_for_directory(workdir)) as queue:
         assert queue.stats().pending == 128
@@ -112,7 +112,7 @@ def test_read_all_pipe_closure_is_clean_and_leaves_unread_messages(
 
     returncode, stderr = _close_consumer_and_wait(process)
 
-    assert returncode == 0
+    assert returncode == 0, stderr
     assert stderr == ""
     with Queue("bulk", db_path=target_for_directory(workdir)) as queue:
         assert 0 < queue.stats().pending < 128
@@ -129,7 +129,7 @@ def test_read_all_pipe_closure_rolls_back_active_at_least_once_batch(
 
     returncode, stderr = _close_consumer_and_wait(process)
 
-    assert returncode == 0
+    assert returncode == 0, stderr
     assert stderr == ""
     with Queue("bulk", db_path=target_for_directory(workdir)) as queue:
         assert queue.stats().pending == 128
@@ -143,7 +143,7 @@ def test_dump_pipe_closure_is_clean(workdir: Path) -> None:
 
     returncode, stderr = _close_consumer_and_wait(process)
 
-    assert returncode == 0
+    assert returncode == 0, stderr
     assert stderr == ""
 
 

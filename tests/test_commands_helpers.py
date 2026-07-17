@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import types
 from collections.abc import Iterator
@@ -98,6 +99,19 @@ class TestGetMessageContent:
 
 
 class TestProcessQueueFetch:
+    class _ClosedPipeStdout:
+        def __init__(self, error: OSError, *, fd: int | None = None) -> None:
+            self._error = error
+            self._fd = fd
+
+        def write(self, _value: str) -> int:
+            raise self._error
+
+        def fileno(self) -> int:
+            if self._fd is None:
+                raise OSError("stdout pipe is closed")
+            return self._fd
+
     def test_exact_timestamp_path_json_output(self, capsys):
         def fetch_one(*, exact_timestamp, with_timestamps):
             assert exact_timestamp == 42
@@ -146,6 +160,172 @@ class TestProcessQueueFetch:
         captured = capsys.readouterr()
         assert rc == EXIT_SUCCESS
         assert captured.out.strip().splitlines() == ["a", "b"]
+
+    @pytest.mark.parametrize("winerror", [109, 232])
+    def test_all_messages_treats_windows_closed_pipe_as_clean_exit(
+        self, monkeypatch: pytest.MonkeyPatch, winerror: int
+    ) -> None:
+        def fetch_one(**_kwargs):  # pragma: no cover - unused
+            return None
+
+        def fetch_generator(**_kwargs):
+            return iter([("a", 1)])
+
+        error = OSError("the pipe is being closed")
+        error.winerror = winerror  # type: ignore[attr-defined]
+        monkeypatch.setattr(commands.sys, "stdout", self._ClosedPipeStdout(error))
+        monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
+
+        rc = _process_queue_fetch(
+            fetch_one=fetch_one,
+            fetch_generator=fetch_generator,
+            exact_timestamp=None,
+            all_messages=True,
+            after_timestamp=None,
+            before_timestamp=None,
+            json_output=False,
+            show_timestamps=False,
+        )
+
+        assert rc == EXIT_SUCCESS
+
+    def test_all_messages_does_not_swallow_unrelated_output_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fetch_one(**_kwargs):  # pragma: no cover - unused
+            return None
+
+        def fetch_generator(**_kwargs):
+            return iter([("a", 1)])
+
+        error = OSError("unrelated output failure")
+        monkeypatch.setattr(commands.sys, "stdout", self._ClosedPipeStdout(error))
+
+        with pytest.raises(OSError, match="unrelated output failure"):
+            _process_queue_fetch(
+                fetch_one=fetch_one,
+                fetch_generator=fetch_generator,
+                exact_timestamp=None,
+                all_messages=True,
+                after_timestamp=None,
+                before_timestamp=None,
+                json_output=False,
+                show_timestamps=False,
+            )
+
+    @pytest.mark.parametrize(
+        ("all_messages", "after_timestamp"),
+        [(True, None), (False, 1)],
+    )
+    def test_fetch_does_not_treat_backend_epipe_as_stdout_closure(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        all_messages: bool,
+        after_timestamp: int | None,
+    ) -> None:
+        def fetch_one(**_kwargs):  # pragma: no cover - unused
+            return None
+
+        def fetch_generator(**_kwargs):
+            def rows():
+                raise OSError(errno.EPIPE, "backend transport failed")
+                yield ("unreachable", 0)
+
+            return rows()
+
+        monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
+        with pytest.raises(OSError, match="backend transport failed"):
+            _process_queue_fetch(
+                fetch_one=fetch_one,
+                fetch_generator=fetch_generator,
+                exact_timestamp=None,
+                all_messages=all_messages,
+                after_timestamp=after_timestamp,
+                before_timestamp=None,
+                json_output=False,
+                show_timestamps=False,
+            )
+
+    def test_dump_does_not_treat_backend_epipe_as_stdout_closure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class Connection:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def get_connection(self):
+                return object()
+
+        def failing_dump_lines(*_args, **_kwargs):
+            raise OSError(errno.EPIPE, "backend dump failed")
+            yield "unreachable"
+
+        monkeypatch.setattr(commands, "DBConnection", lambda _target: Connection())
+        monkeypatch.setattr(commands, "dump_lines", failing_dump_lines)
+        monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
+
+        with pytest.raises(OSError, match="backend dump failed"):
+            commands.cmd_dump("ignored")
+
+    def test_all_messages_does_not_treat_warning_epipe_as_stdout_closure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fetch_one(**_kwargs):  # pragma: no cover - unused
+            return None
+
+        def fetch_generator(**_kwargs):
+            return iter([("line one\nline two", 1)])
+
+        def failing_warning(*_args, **_kwargs):
+            raise OSError(errno.EPIPE, "stderr warning failed")
+
+        monkeypatch.setattr(commands.warnings, "warn", failing_warning)
+        monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
+
+        with pytest.raises(OSError, match="stderr warning failed"):
+            _process_queue_fetch(
+                fetch_one=fetch_one,
+                fetch_generator=fetch_generator,
+                exact_timestamp=None,
+                all_messages=True,
+                after_timestamp=None,
+                before_timestamp=None,
+                json_output=False,
+                show_timestamps=False,
+            )
+
+    def test_all_messages_stays_clean_when_stdout_redirect_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fetch_one(**_kwargs):  # pragma: no cover - unused
+            return None
+
+        def fetch_generator(**_kwargs):
+            return iter([("a", 1)])
+
+        closed_stdout = self._ClosedPipeStdout(BrokenPipeError(), fd=-1)
+        monkeypatch.setattr(commands.sys, "stdout", closed_stdout)
+
+        try:
+            rc = _process_queue_fetch(
+                fetch_one=fetch_one,
+                fetch_generator=fetch_generator,
+                exact_timestamp=None,
+                all_messages=True,
+                after_timestamp=None,
+                before_timestamp=None,
+                json_output=False,
+                show_timestamps=False,
+            )
+        finally:
+            replacement = commands.sys.stdout
+            if replacement is not closed_stdout:
+                replacement.close()
+
+        assert rc == EXIT_SUCCESS
 
     def test_after_timestamp_path(self, capsys):
         def fetch_one(**_kwargs):  # pragma: no cover - unused

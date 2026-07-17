@@ -41,3 +41,6 @@ Startup context is the Golden Rules plus entries after the watermark in
   the eligible subset. When reserved or filtered entries can fill a window,
   carry an exclusive continuation cursor across bounded windows and test a
   prefix longer than every internal window.
+- Classify closed-pipe errors only at the exact stdout write or flush boundary.
+  Catching `EPIPE` around iterator advancement or a helper that also writes to
+  stderr can turn backend or diagnostic failures into false success.

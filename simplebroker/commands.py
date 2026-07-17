@@ -9,6 +9,7 @@ the package's public exports. See the README "Command layer" subsection for
 usage and the ``DatabaseError`` note.
 """
 
+import errno
 import json
 import os
 import sys
@@ -41,6 +42,30 @@ from .watcher import QueueMoveWatcher, QueueWatcher, StopWatching
 DBTarget = str | BrokerTarget
 _config = load_config()
 _MOVE_ALL_LIMIT = 1_000_000
+_WINDOWS_CLOSED_PIPE_ERRORS = frozenset({109, 232})
+
+
+class _StdoutClosed(Exception):
+    """Internal control flow raised only by a failed stdout write."""
+
+
+def _is_closed_pipe_error(error: OSError) -> bool:
+    """Return whether an output error means the downstream pipe closed."""
+    return (
+        isinstance(error, BrokenPipeError)
+        or error.errno == errno.EPIPE
+        or getattr(error, "winerror", None) in _WINDOWS_CLOSED_PIPE_ERRORS
+    )
+
+
+def _replace_stdout_with_devnull() -> None:
+    """Replace a broken stdout wrapper when descriptor redirection is unavailable."""
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except OSError:
+        # Pipe shutdown is already in progress. There is no safer output sink
+        # if even the platform null device cannot be opened.
+        return
 
 
 def _redirect_stdout_to_devnull() -> None:
@@ -49,11 +74,29 @@ def _redirect_stdout_to_devnull() -> None:
         stdout_fd = sys.stdout.fileno()
         devnull_fd = os.open(os.devnull, os.O_WRONLY)
     except (AttributeError, OSError, ValueError):
+        _replace_stdout_with_devnull()
         return
     try:
-        os.dup2(devnull_fd, stdout_fd)
+        try:
+            os.dup2(devnull_fd, stdout_fd)
+        except OSError:
+            _replace_stdout_with_devnull()
     finally:
-        os.close(devnull_fd)
+        try:
+            os.close(devnull_fd)
+        except OSError:
+            pass
+
+
+def _print_stdout(value: str) -> None:
+    """Print one value, translating only a closed stdout into control flow."""
+    try:
+        print(value)
+    except OSError as error:
+        if not _is_closed_pipe_error(error):
+            raise
+        _redirect_stdout_to_devnull()
+        raise _StdoutClosed from None
 
 
 def _close_iterator(iterator: object) -> None:
@@ -302,10 +345,10 @@ def _output_message(
     if json_output:
         # JSON output includes timestamp by default
         output = {"message": message, "timestamp": timestamp}
-        print(json.dumps(output, ensure_ascii=False))
+        _print_stdout(json.dumps(output, ensure_ascii=False))
     elif show_timestamps:
         # Include timestamp in plain output
-        print(f"{timestamp}\t{message}")
+        _print_stdout(f"{timestamp}\t{message}")
     else:
         # Plain output
         if not warned_newlines and "\n" in message:
@@ -316,7 +359,7 @@ def _output_message(
                 stacklevel=2,
             )
             warned_newlines = True
-        print(message)
+        _print_stdout(message)
 
     return warned_newlines
 
@@ -414,13 +457,17 @@ def _process_queue_fetch(
 
         try:
             for message, timestamp in generator:
-                warned_newlines = _output_message(
-                    message, timestamp, json_output, show_timestamps, warned_newlines
-                )
+                try:
+                    warned_newlines = _output_message(
+                        message,
+                        timestamp,
+                        json_output,
+                        show_timestamps,
+                        warned_newlines,
+                    )
+                except _StdoutClosed:
+                    return EXIT_SUCCESS
                 message_count += 1
-        except BrokenPipeError:
-            _redirect_stdout_to_devnull()
-            return EXIT_SUCCESS
         finally:
             _close_iterator(generator)
 
@@ -441,10 +488,10 @@ def _process_queue_fetch(
             except StopIteration:
                 return EXIT_QUEUE_EMPTY
 
-            _output_message(message, timestamp, json_output, show_timestamps, False)
-            return EXIT_SUCCESS
-        except BrokenPipeError:
-            _redirect_stdout_to_devnull()
+            try:
+                _output_message(message, timestamp, json_output, show_timestamps, False)
+            except _StdoutClosed:
+                return EXIT_SUCCESS
             return EXIT_SUCCESS
         finally:
             _close_iterator(gen)
@@ -453,11 +500,14 @@ def _process_queue_fetch(
     if result is None:
         return EXIT_QUEUE_EMPTY
 
-    if with_timestamps:
-        message, timestamp = cast(tuple[str, int], result)
-        _output_message(message, timestamp, json_output, show_timestamps, False)
-    else:
-        print(cast(str, result))
+    try:
+        if with_timestamps:
+            message, timestamp = cast(tuple[str, int], result)
+            _output_message(message, timestamp, json_output, show_timestamps, False)
+        else:
+            _print_stdout(cast(str, result))
+    except _StdoutClosed:
+        pass
     return EXIT_SUCCESS
 
 
@@ -1025,10 +1075,10 @@ def cmd_dump(
         lines = dump_lines(broker, include=include, exclude=exclude)
         try:
             for line in lines:
-                print(line)
-        except BrokenPipeError:
-            _redirect_stdout_to_devnull()
-            return EXIT_SUCCESS
+                try:
+                    _print_stdout(line)
+                except _StdoutClosed:
+                    return EXIT_SUCCESS
         finally:
             _close_iterator(lines)
     return EXIT_SUCCESS
@@ -1173,8 +1223,13 @@ def cmd_watch(
             warned_newlines = _output_message(
                 message, timestamp, json_output, show_timestamps, warned_newlines
             )
+        except _StdoutClosed:
+            raise StopWatching from None
+        try:
             sys.stdout.flush()  # Ensure immediate output for real-time watching
-        except BrokenPipeError:
+        except OSError as error:
+            if not _is_closed_pipe_error(error):
+                raise
             _redirect_stdout_to_devnull()
             raise StopWatching from None
 
@@ -1213,7 +1268,9 @@ def cmd_watch(
         # Ensure any final output is flushed
         try:
             sys.stdout.flush()
-        except BrokenPipeError:
+        except OSError as error:
+            if not _is_closed_pipe_error(error):
+                raise
             _redirect_stdout_to_devnull()
         sys.stderr.flush()
         if watcher is not None:

@@ -1336,9 +1336,6 @@ def main(*, config: dict[str, Any] = _config) -> int:
         # Handle Ctrl-C gracefully
         print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
         return EXIT_SUCCESS
-    except BrokenPipeError:
-        commands._redirect_stdout_to_devnull()
-        return EXIT_SUCCESS
     except Exception as e:
         if not args.quiet:
             code = "INVALID_ARGUMENT" if isinstance(e, ArgumentParserError) else "ERROR"
