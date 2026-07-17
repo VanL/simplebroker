@@ -56,6 +56,16 @@ Plans are executable documents, not rough notes.
 - Prefer red-green TDD when the behavior can be expressed cleanly as a failing
   test first. If not, say why and name the smallest concrete proof that should
   replace it.
+- **Plans record completed work and evidence, never transient repository
+  state.** "X is uncommitted," "currently in the worktree," "awaiting
+  staging" are claims that fall false the moment the work lands — and a
+  plan becomes immutable at closure, so a transient claim frozen into it
+  is *guaranteed* to end up wrong. State what was done and the evidence
+  that proves it (files, gates, SHAs once they exist); express landing
+  mechanics as instructions ("land by explicit file-list staging against
+  the delta table"), never as descriptions of the current tree. Transient
+  state belongs in the conversation, the commit message, the handoff
+  report, or a status-index qualifier that is expected to clear.
 
 If a first draft is structurally complete but still feels easy to implement
 wrong, or if the change is risky, use the companion runbook:
@@ -571,6 +581,17 @@ ceremony inside the plan file.
   edited ones, and git preserves prior versions; decision, deviation, and
   review logs are append-only. At closure the whole plan becomes
   immutable.
+- **Approval attaches to the text that was reviewed, not to the file
+  name.** Mutability within approved scope is free, but a revision that
+  changes invariants, ownership, authority, or blast radius re-enters
+  classification and review — the reviewer's unit is the delta from the
+  reviewed text plus the stated reason for it, never the revised text
+  standalone. (Evidence: mm's July 2026 lifecycle incident propagated
+  entirely through in-place revisions of an approved plan; the fold-up
+  candidates — mm's revision re-gate, reviewed-baseline pin, and Revision
+  Log — are recorded in mm's own plan
+  `2026-07-17-process-hardening-after-lifecycle-rollback.md`, foreign to
+  this repository.)
 - **Completed and superseded plans are harvest candidates.** They stay in
   the tree until the coalescing sweep retires them.
 - **The harvest gate — all four before deletion, no exceptions:**
