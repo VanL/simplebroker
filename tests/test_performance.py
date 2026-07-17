@@ -1,8 +1,10 @@
 """Performance tests for SimpleBroker.
 
-All performance-sensitive tests are collected here and assigned to one xdist
-group. That keeps the benchmarks from running on top of each other while still
-letting the suite exercise them under normal xdist worker contention.
+The performance-sensitive tests in this module share one xdist group. That
+keeps them from running on top of each other during ad-hoc parallel runs. The
+release helper runs every test with the global benchmark marker in a separate
+serial phase so latency thresholds are not measured under unrelated suite
+load.
 
 These tests are all marked as "benchmark" and never gate CI: timing on CI/CD
 machines is flaky, and CI emphasizes correctness. Run them on your own machine

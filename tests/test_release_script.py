@@ -94,9 +94,11 @@ def test_local_release_gate_uses_logical_cpus_plus_one_worker() -> None:
     assert release._local_pytest_worker_count(8) == 9
     assert release._local_pytest_worker_count(1) == 2
     assert release._local_pytest_worker_count(0) == 2
-    assert (
-        f"-n {release.LOCAL_PYTEST_WORKERS} --dist loadgroup"
-        in release.ROOT_TEST_PYTEST_ARGS[-1]
+    assert release.ROOT_TEST_PYTEST_ARGS[-4:] == (
+        "-n",
+        str(release.LOCAL_PYTEST_WORKERS),
+        "--dist",
+        "loadgroup",
     )
     assert release.EXAMPLE_TEST_COMMAND[-3:] == (
         "-n",
@@ -106,6 +108,52 @@ def test_local_release_gate_uses_logical_cpus_plus_one_worker() -> None:
     assert release.PRECHECK_ENV_OVERRIDES["PYTEST_XDIST_AUTO_NUM_WORKERS"] == str(
         release.LOCAL_PYTEST_WORKERS
     )
+
+
+def test_release_gate_isolates_benchmarks_from_parallel_suite_load() -> None:
+    commands = release.build_precheck_commands(release.ROOT_RELEASE_TARGET)
+    root_pytest_commands = [
+        command for command in commands if release._is_root_test_command(command)
+    ]
+
+    assert len(root_pytest_commands) == 2
+    functional, benchmarks = root_pytest_commands
+    assert functional[functional.index("-m") + 1] == "not benchmark"
+    assert functional[-4:] == (
+        "-n",
+        str(release.LOCAL_PYTEST_WORKERS),
+        "--dist",
+        "loadgroup",
+    )
+    assert benchmarks[benchmarks.index("-m") + 1] == "benchmark"
+    assert benchmarks[-2:] == ("-n", "0")
+
+
+def test_release_gate_worker_modes_override_ambient_pytest_addopts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    functional, benchmarks = release._root_test_commands()
+
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-n 0")
+    functional_env = release._merge_command_env(
+        release._precheck_env_overrides(functional)
+    )
+    assert functional_env is not None
+    assert functional_env["PYTEST_ADDOPTS"].startswith("-n 0 ")
+    assert functional[-4:] == (
+        "-n",
+        str(release.LOCAL_PYTEST_WORKERS),
+        "--dist",
+        "loadgroup",
+    )
+
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-n auto")
+    benchmark_env = release._merge_command_env(
+        release._precheck_env_overrides(benchmarks)
+    )
+    assert benchmark_env is not None
+    assert benchmark_env["PYTEST_ADDOPTS"].startswith("-n auto ")
+    assert benchmarks[-2:] == ("-n", "0")
 
 
 def _command_lines(commands: tuple[tuple[str, ...], ...]) -> list[str]:
@@ -435,7 +483,7 @@ def test_batch_prechecks_deduplicate_shared_checks() -> None:
 
     assert sum("./bin/pytest-pg" in command for command in command_lines) == 1
     assert sum("./bin/pytest-redis" in command for command in command_lines) == 1
-    assert sum(" pytest " in f" {command} " for command in command_lines) == 2
+    assert sum(" pytest " in f" {command} " for command in command_lines) == 3
     assert (
         sum(
             f"pytest -n {release.LOCAL_PYTEST_WORKERS} examples" in command

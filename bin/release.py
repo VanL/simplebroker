@@ -124,9 +124,22 @@ ROOT_TEST_PYTEST_ARGS: Final[tuple[str, ...]] = (
     "-v",
     "--tb=short",
     "-m",
-    "",
-    "--override-ini=addopts=-ra -q --strict-markers "
-    f"-n {LOCAL_PYTEST_WORKERS} --dist loadgroup",
+    "not benchmark",
+    "--override-ini=addopts=-ra -q --strict-markers",
+    "-n",
+    str(LOCAL_PYTEST_WORKERS),
+    "--dist",
+    "loadgroup",
+)
+ROOT_BENCHMARK_PYTEST_ARGS: Final[tuple[str, ...]] = (
+    "pytest",
+    "-v",
+    "--tb=short",
+    "-m",
+    "benchmark",
+    "--override-ini=addopts=-ra -q --strict-markers",
+    "-n",
+    "0",
 )
 PG_TEST_COMMAND: Final[tuple[str, ...]] = (
     "uv",
@@ -941,9 +954,9 @@ def _local_weft_pythonpath() -> str | None:
 def _is_root_test_command(command: tuple[str, ...]) -> bool:
     """Return whether command is the root pytest precheck."""
 
-    return (
-        command[: len(ROOT_TEST_COMMAND_PREFIX)] == ROOT_TEST_COMMAND_PREFIX
-        and command[-len(ROOT_TEST_PYTEST_ARGS) :] == ROOT_TEST_PYTEST_ARGS
+    return command[: len(ROOT_TEST_COMMAND_PREFIX)] == ROOT_TEST_COMMAND_PREFIX and any(
+        command[-len(pytest_args) :] == pytest_args
+        for pytest_args in (ROOT_TEST_PYTEST_ARGS, ROOT_BENCHMARK_PYTEST_ARGS)
     )
 
 
@@ -958,8 +971,19 @@ def _precheck_env_overrides(command: tuple[str, ...]) -> dict[str, str]:
     return env
 
 
-def _root_test_command() -> tuple[str, ...]:
-    return (*ROOT_TEST_COMMAND_PREFIX, *_local_weft_uv_args(), *ROOT_TEST_PYTEST_ARGS)
+def _root_test_command(
+    pytest_args: tuple[str, ...] = ROOT_TEST_PYTEST_ARGS,
+) -> tuple[str, ...]:
+    return (*ROOT_TEST_COMMAND_PREFIX, *_local_weft_uv_args(), *pytest_args)
+
+
+def _root_test_commands() -> tuple[tuple[str, ...], ...]:
+    """Run functional tests in parallel, then benchmarks without suite load."""
+
+    return (
+        _root_test_command(ROOT_TEST_PYTEST_ARGS),
+        _root_test_command(ROOT_BENCHMARK_PYTEST_ARGS),
+    )
 
 
 def build_precheck_commands_for_targets(
@@ -995,7 +1019,7 @@ def build_precheck_commands_for_targets(
         backend_tests.append(REDIS_TEST_COMMAND)
 
     return (
-        _root_test_command(),
+        *_root_test_commands(),
         *backend_tests,
         EXAMPLE_TEST_COMMAND,
         SHELLCHECK_EXAMPLES_COMMAND,

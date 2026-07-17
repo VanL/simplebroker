@@ -1028,6 +1028,17 @@ protocol rather than review guidance.
   Windows 3.11, 3.12, and 3.13; the earlier 3.13 timeout cluster did not recur
   and was not caused by stopping the separate local release helper. Windows
   3.14 also completed successfully; all four native Windows versions passed.
+- Two release preflight attempts then failed the same mixed-CLI timing check at
+  **4.34s** and **4.42s** against a roughly **3.98s** calibrated limit, while
+  three immediate isolated runs passed. The release helper had assigned all
+  benchmarks to one xdist group but still ran that group beside 16 unrelated
+  workers. That isolates benchmarks from each other, not from suite load. The
+  preflight now runs functional tests in the existing parallel phase with
+  `-m "not benchmark"`, followed by a separate `-m benchmark -n 0` phase. A
+  structural regression requires both commands and their marker/worker
+  boundaries. Worker selection is expressed as the final explicit CLI args so
+  ambient `PYTEST_ADDOPTS` cannot override either phase; opposing ambient modes
+  are covered before the release is retried.
 
 ## Review Log
 

@@ -56,3 +56,7 @@ Startup context is the Golden Rules plus entries after the watermark in
   before workers are spawned. That moves pytest-cov's own worker databases out
   of its managed combine lifecycle. Redirect child collectors from a
   session-scoped fixture inside each worker, after the worker collector starts.
+- A timing gate cannot share an xdist run with unrelated tests merely because
+  its own cases have one xdist group. The group serializes those cases with
+  each other, not with work on other workers. Run threshold-bearing benchmarks
+  in a separate `-n 0` phase.
