@@ -472,7 +472,11 @@ class BrokerConnection(Protocol):
 
 
 class ActivityWaiter(Protocol):
-    """Optional backend-native waiter used to wake idle watchers."""
+    """Optional backend-native waiter used to wake idle watchers.
+
+    ``close()`` must be idempotent. First-party waiters satisfy this contract;
+    custom backend waiters must also tolerate repeated defensive close calls.
+    """
 
     def wait(self, timeout: float) -> bool: ...
 

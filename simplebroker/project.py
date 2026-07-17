@@ -105,6 +105,9 @@ def resolve_broker_target(
 ) -> BrokerTarget | None:
     """Discover or synthesize a SimpleBroker target from a directory.
 
+    Calling this function explicitly opts into upward project discovery,
+    independent of the CLI's ``BROKER_PROJECT_SCOPE`` setting.
+
     Resolution order:
     1. Upward project config search using `BROKER_PROJECT_CONFIG_*`
     2. Legacy upward sqlite database discovery using `BROKER_DEFAULT_DB_NAME`

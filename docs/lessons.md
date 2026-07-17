@@ -34,3 +34,10 @@ Startup context is the Golden Rules plus entries after the watermark in
 - Optimize docs for agent usability, not just human readability. If something
   is human-clear but agent-ambiguous, call it out and suggest a specific fix.
   Check for missing owner, boundary, verification, or required action.
+- Treat documented contracts as executable inventories. Exception families,
+  exit-code sets, and other enumerable behavior need structural or behavioral
+  gates; prose review alone will not catch inheritance drift or phantom values.
+- A bounded storage scan must make progress over the candidate set, not just
+  the eligible subset. When reserved or filtered entries can fill a window,
+  carry an exclusive continuation cursor across bounded windows and test a
+  prefix longer than every internal window.

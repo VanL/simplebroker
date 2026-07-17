@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
@@ -11,13 +13,44 @@ from ._backend_plugins import get_backend_plugin
 from ._constants import (
     DEFAULT_PROJECT_CONFIG_NAME,
     MAX_PROJECT_TRAVERSAL_DEPTH,
+    _validate_safe_path_components,
     load_config,
     resolve_config,
 )
-from ._targets import BrokerTarget
+from ._targets import BrokerTarget, _backend_target_has_password
 
 PROJECT_CONFIG_FILENAME = DEFAULT_PROJECT_CONFIG_NAME
 SUPPORTED_PROJECT_CONFIG_VERSION = 1
+
+
+def _same_filesystem(current: Path, parent: Path) -> bool:
+    """Return whether an upward discovery step stays on one filesystem."""
+    try:
+        return current.stat().st_dev == parent.stat().st_dev
+    except OSError:
+        return False
+
+
+def _warn_for_insecure_project_config(config_path: Path, target: str) -> None:
+    """Emit best-effort credential-at-rest warnings without exposing secrets."""
+    if _backend_target_has_password(target):
+        print(
+            f"simplebroker: warning: {config_path} embeds a backend password; "
+            "store secrets in BROKER_BACKEND_PASSWORD or another environment variable",
+            file=sys.stderr,
+        )
+    if os.name != "posix":
+        return
+    try:
+        group_or_other_bits = config_path.stat().st_mode & 0o077
+    except OSError:
+        return
+    if group_or_other_bits:
+        print(
+            f"simplebroker: warning: {config_path} is group/other-readable; "
+            "restrict permissions when it contains sensitive configuration",
+            file=sys.stderr,
+        )
 
 
 def _validated_backend_options(raw_options: object) -> dict[str, Any]:
@@ -54,6 +87,8 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
         raise ValueError(".broker.toml requires a non-empty string 'backend'")
     if not isinstance(target, str) or not target:
         raise ValueError(".broker.toml requires a non-empty string 'target'")
+
+    _warn_for_insecure_project_config(config_path, target)
 
     return {
         "version": version,
@@ -113,7 +148,10 @@ def find_project_config(
             return candidate
         if current_dir.parent == current_dir:
             return None
-        current_dir = current_dir.parent
+        parent = current_dir.parent
+        if not _same_filesystem(current_dir, parent):
+            return None
+        current_dir = parent
         depth += 1
 
     return None
@@ -137,7 +175,11 @@ def resolve_project_target(
     backend_options = dict(config_data["backend_options"])
 
     if backend_name == "sqlite":
-        target = str((config_path.parent / target).expanduser().resolve())
+        resolved_target = (config_path.parent / target).expanduser().resolve()
+        _validate_safe_path_components(
+            str(resolved_target), ".broker.toml sqlite target"
+        )
+        target = str(resolved_target)
     else:
         config_dict = (
             dict(load_config()) if config is None else resolve_config(dict(config))

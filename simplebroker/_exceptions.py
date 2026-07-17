@@ -16,7 +16,18 @@ class BrokerError(Exception):
     pass
 
 
-class OperationalError(BrokerError, sqlite3.OperationalError):
+class DatabaseError(BrokerError, sqlite3.DatabaseError):
+    """Base class for package-defined database failures.
+
+    This deliberately does not inherit :class:`OSError`.  Storage failures
+    are database errors, while OS errors remain reserved for filesystem and
+    process operations.
+    """
+
+    pass
+
+
+class OperationalError(DatabaseError, sqlite3.OperationalError):
     """Database is locked, busy, or temporarily unavailable.
 
     Runners should raise this for retryable conditions.
@@ -42,7 +53,7 @@ class StopException(OperationalError):
     retryable = False
 
 
-class IntegrityError(BrokerError, sqlite3.IntegrityError):
+class IntegrityError(DatabaseError, sqlite3.IntegrityError):
     """Database integrity constraint violated.
 
     Raised for unique constraints, foreign keys, etc.
@@ -52,19 +63,10 @@ class IntegrityError(BrokerError, sqlite3.IntegrityError):
     pass
 
 
-class DataError(BrokerError, sqlite3.DataError, ValueError):
+class DataError(DatabaseError, sqlite3.DataError, ValueError):
     """Invalid data format or type.
 
     Inherits from sqlite3.DataError for compatibility.
-    """
-
-    pass
-
-
-class DatabaseError(BrokerError, sqlite3.DatabaseError, OSError):
-    """Database-related error.
-
-    This is a generic error for database access-related issues.
     """
 
     pass

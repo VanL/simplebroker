@@ -12,6 +12,7 @@ must not block acquisition); the file otherwise runs on Windows CI.
 from __future__ import annotations
 
 import multiprocessing
+import os
 import sqlite3
 import sys
 import time
@@ -21,6 +22,7 @@ from typing import Any
 import pytest
 
 from simplebroker._backends.sqlite.maintenance import vacuum_lock_path
+from simplebroker._phaselock import PhaseLockTimeout
 from simplebroker.db import BrokerDB
 
 pytestmark = pytest.mark.skipif(
@@ -136,3 +138,62 @@ def test_concurrent_vacuum_skips_while_lock_held(workdir: Path) -> None:
         with BrokerDB(str(db_path)) as db:
             db.vacuum()
     assert _claimed_rows(db_path) == 0
+
+
+def test_read_only_directory_makes_vacuum_report_lock_open_failure(
+    workdir: Path,
+) -> None:
+    """A real POSIX lock-file open failure must propagate, not silently skip."""
+    locked_dir = workdir / "read-only"
+    locked_dir.mkdir()
+    db_path = locked_dir / "test.db"
+    broker = BrokerDB(str(db_path))
+    original_mode = locked_dir.stat().st_mode
+    try:
+        for index in range(5):
+            broker.write("q", f"m{index}")
+        broker.claim_many("q", limit=1000, with_timestamps=False)
+        assert _claimed_rows(db_path) > 0
+        assert not vacuum_lock_path(db_path).exists()
+
+        os.chmod(locked_dir, 0o500)
+        with pytest.raises(PhaseLockTimeout) as exc_info:
+            broker.vacuum()
+
+        assert isinstance(exc_info.value.cause, PermissionError)
+        assert _claimed_rows(db_path) > 0
+    finally:
+        os.chmod(locked_dir, original_mode)
+        broker.shutdown()
+
+
+def test_lock_open_failure_keeps_automatic_vacuum_due(workdir: Path) -> None:
+    """A skipped lock open must not consume the maintenance interval."""
+    locked_dir = workdir / "automatic-read-only"
+    locked_dir.mkdir()
+    db_path = locked_dir / "test.db"
+    broker = BrokerDB(
+        str(db_path),
+        config={
+            "BROKER_AUTO_VACUUM": 1,
+            "BROKER_AUTO_VACUUM_INTERVAL": 2,
+            "BROKER_VACUUM_THRESHOLD": 0.1,
+            "BROKER_VACUUM_BATCH_SIZE": 10,
+        },
+    )
+    original_mode = locked_dir.stat().st_mode
+    try:
+        broker.write("q", "m0")
+        broker.write("q", "m1")
+        assert broker.claim_one("q", with_timestamps=False) == "m0"
+
+        os.chmod(locked_dir, 0o500)
+        broker.write("q", "m2")
+        assert broker.count_claimed_messages() == 1
+
+        os.chmod(locked_dir, original_mode)
+        broker.write("q", "m3")
+        assert broker.count_claimed_messages() == 0
+    finally:
+        os.chmod(locked_dir, original_mode)
+        broker.shutdown()

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "simplebroker"
-version = "5.3.3"
+version = "5.4.0"
 description = "A lightweight message queue backed by SQLite"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -51,7 +51,7 @@ pg = [
     "simplebroker-pg>=3.2.2",
 ]
 redis = [
-    "simplebroker-redis>=3.2.2",
+    "simplebroker-redis>=3.2.3",
 ]
 
 [dependency-groups]

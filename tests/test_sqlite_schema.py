@@ -55,6 +55,19 @@ class _FailOnceRunner:
         return getattr(self._runner, name)
 
 
+class _FailCommitRunner:
+    """Delegate to a real/race runner while injecting one commit failure."""
+
+    def __init__(self, runner) -> None:
+        self._runner = runner
+
+    def commit(self) -> None:
+        raise OperationalError("injected migration commit failure")
+
+    def __getattr__(self, name):
+        return getattr(self._runner, name)
+
+
 class _BarrierAfterFirstRun:
     """Synchronize two real runners after one named read operation."""
 
@@ -539,6 +552,32 @@ def test_ensure_schema_v3_handles_index_created_after_preflight(
         assert versions == [3]
         assert ts_unique_index_exists(runner) is True
         assert runner.get_connection().in_transaction is False
+    finally:
+        competitor.close()
+        runner.close()
+
+
+def test_ensure_schema_v3_repair_rolls_back_when_commit_fails(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v3-index-race-commit-failure.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    competitor = _runner(db_path)
+    versions: list[int] = []
+    try:
+        ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
+        race_runner = _CreateTsIndexBeforeFirstBegin(runner, competitor)
+
+        with pytest.raises(OperationalError, match="migration commit failure"):
+            ensure_schema_v3(
+                _FailCommitRunner(race_runner),
+                current_version=2,
+                write_schema_version=versions.append,
+            )
+
+        assert runner.get_connection().in_transaction is False
+        assert versions == [3]
     finally:
         competitor.close()
         runner.close()

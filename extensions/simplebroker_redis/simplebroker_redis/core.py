@@ -336,6 +336,12 @@ class RedisBrokerCore:
             for index in range(0, len(flat), 2)
         ]
 
+    def _rows_and_cursor_from_flat(
+        self, flat: list[Any]
+    ) -> tuple[list[tuple[str, int]], str]:
+        cursor = str(flat[0]) if flat else ""
+        return self._rows_from_flat(flat[1:]), cursor
+
     def _normalize_exact_timestamp(
         self, exact_timestamp: MessageIdInput | None
     ) -> int | None:
@@ -458,25 +464,29 @@ class RedisBrokerCore:
             if normalized_exact_timestamp is not None
             else max_bound(before_timestamp)
         )
-        try:
-            flat = response_list(
-                self._client.eval(
-                    scripts.CLAIM_MESSAGES,
-                    5,
-                    self._qkey(queue, "pending"),
-                    self._qkey(queue, "claimed"),
-                    self._qkey(queue, "reserved"),
-                    self._key("bodies"),
-                    self._key("queues"),
-                    queue,
-                    str(limit),
-                    minb,
-                    maxb,
+        while True:
+            try:
+                flat = response_list(
+                    self._client.eval(
+                        scripts.CLAIM_MESSAGES,
+                        5,
+                        self._qkey(queue, "pending"),
+                        self._qkey(queue, "claimed"),
+                        self._qkey(queue, "reserved"),
+                        self._key("bodies"),
+                        self._key("queues"),
+                        queue,
+                        str(limit),
+                        minb,
+                        maxb,
+                    )
                 )
-            )
-        except redis.RedisError as exc:
-            raise _translate_redis_error(exc) from exc
-        rows = self._rows_from_flat(flat)
+            except redis.RedisError as exc:
+                raise _translate_redis_error(exc) from exc
+            rows, cursor = self._rows_and_cursor_from_flat(flat)
+            if rows or not cursor:
+                break
+            minb = f"({cursor}"
         self._record_maintenance_activity(len(rows))
         return rows
 
@@ -506,31 +516,35 @@ class RedisBrokerCore:
             if normalized_exact_timestamp is not None
             else max_bound(before_timestamp)
         )
-        try:
-            flat = response_list(
-                self._client.eval(
-                    scripts.MOVE_MESSAGES,
-                    6,
-                    self._qkey(source_queue, "pending"),
-                    self._qkey(source_queue, "claimed"),
-                    self._qkey(source_queue, "reserved"),
-                    self._qkey(target_queue, "pending"),
-                    self._key("bodies"),
-                    self._key("queues"),
-                    source_queue,
-                    target_queue,
-                    str(limit),
-                    minb,
-                    maxb,
-                    encode_id(normalized_exact_timestamp)
-                    if normalized_exact_timestamp is not None
-                    else "",
-                    "1" if require_unclaimed else "0",
+        while True:
+            try:
+                flat = response_list(
+                    self._client.eval(
+                        scripts.MOVE_MESSAGES,
+                        6,
+                        self._qkey(source_queue, "pending"),
+                        self._qkey(source_queue, "claimed"),
+                        self._qkey(source_queue, "reserved"),
+                        self._qkey(target_queue, "pending"),
+                        self._key("bodies"),
+                        self._key("queues"),
+                        source_queue,
+                        target_queue,
+                        str(limit),
+                        minb,
+                        maxb,
+                        encode_id(normalized_exact_timestamp)
+                        if normalized_exact_timestamp is not None
+                        else "",
+                        "1" if require_unclaimed else "0",
+                    )
                 )
-            )
-        except redis.RedisError as exc:
-            raise _translate_redis_error(exc) from exc
-        rows = self._rows_from_flat(flat)
+            except redis.RedisError as exc:
+                raise _translate_redis_error(exc) from exc
+            rows, cursor = self._rows_and_cursor_from_flat(flat)
+            if rows or not cursor:
+                break
+            minb = f"({cursor}"
         if rows:
             self._publish(target_queue)
         self._record_maintenance_activity(len(rows))
@@ -643,30 +657,35 @@ class RedisBrokerCore:
             if normalized_exact_timestamp is not None
             else max_bound(before_timestamp)
         )
-        try:
-            flat = response_list(
-                self._client.eval(
-                    scripts.BEGIN_BATCH,
-                    6,
-                    self._keys.pending(queue),
-                    self._keys.reserved(queue),
-                    self._keys.bodies,
-                    self._keys.batch_ids(token),
-                    self._keys.batch_meta(token),
-                    self._keys.queues,
-                    queue,
-                    token,
-                    op,
-                    target_queue or "",
-                    str(time.time_ns()),
-                    str(batch_size),
-                    minb,
-                    maxb,
+        created_ns = str(time.time_ns())
+        while True:
+            try:
+                flat = response_list(
+                    self._client.eval(
+                        scripts.BEGIN_BATCH,
+                        6,
+                        self._keys.pending(queue),
+                        self._keys.reserved(queue),
+                        self._keys.bodies,
+                        self._keys.batch_ids(token),
+                        self._keys.batch_meta(token),
+                        self._keys.queues,
+                        queue,
+                        token,
+                        op,
+                        target_queue or "",
+                        created_ns,
+                        str(batch_size),
+                        minb,
+                        maxb,
+                    )
                 )
-            )
-        except redis.RedisError as exc:
-            raise _translate_redis_error(exc) from exc
-        return token, self._rows_from_flat(flat)
+            except redis.RedisError as exc:
+                raise _translate_redis_error(exc) from exc
+            rows, cursor = self._rows_and_cursor_from_flat(flat)
+            if rows or not cursor:
+                return token, rows
+            minb = f"({cursor}"
 
     def _commit_claim_batch(
         self, queue: str, token: str, rows: list[tuple[str, int]]
@@ -862,6 +881,7 @@ class RedisBrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
     ) -> Generator[tuple[str, int] | str, None, None]:
+        self._validate_queue_name(queue)
         effective_batch_size = batch_size or PEEK_BATCH_SIZE
         offset = 0
         while True:
@@ -1120,6 +1140,15 @@ class RedisBrokerCore:
                 )
 
     def delete(self, queue: str | None = None) -> int:
+        """Atomically delete the queues visible when this operation begins.
+
+        ``delete(None)`` retains the advisory global reserved-batch preflight.
+        Each selected queue is then deleted in one Lua invocation that rechecks
+        its reservation state. Queues created after the registry snapshot are
+        outside this operation, matching the existing delete-what-was-visible
+        semantics. If a reservation appears between per-queue invocations, the
+        operation raises after any earlier queues have already been deleted.
+        """
         self._assert_no_reentrant_mutation_during_batch("delete")
         self._refuse_reserved(queue)
         queues = (
@@ -1130,23 +1159,26 @@ class RedisBrokerCore:
         deleted = 0
         for name in queues:
             self._validate_queue_name(name)
-            pending = response_list(
-                self._client.zrange(self._qkey(name, "pending"), 0, -1)
-            )
-            claimed = response_list(
-                self._client.zrange(self._qkey(name, "claimed"), 0, -1)
-            )
-            ids = pending + claimed
-            deleted += len(ids)
-            with self._client.pipeline(transaction=True) as pipe:
-                if ids:
-                    pipe.hdel(self._key("bodies"), *ids)
-                    pipe.zrem(self._keys.all_ids, *ids)
-                pipe.delete(self._qkey(name, "pending"))
-                pipe.delete(self._qkey(name, "claimed"))
-                pipe.delete(self._qkey(name, "reserved"))
-                pipe.srem(self._key("queues"), name)
-                pipe.execute()
+            try:
+                result = self._client.eval(
+                    scripts.DELETE_QUEUE,
+                    6,
+                    self._keys.pending(name),
+                    self._keys.claimed(name),
+                    self._keys.reserved(name),
+                    self._keys.bodies,
+                    self._keys.all_ids,
+                    self._keys.queues,
+                    name,
+                )
+            except redis.RedisError as exc:
+                raise _translate_redis_error(exc) from exc
+            result_int = response_int(result)
+            if result_int < 0:
+                raise OperationalError(
+                    "Cannot delete queue while an at_least_once batch is active"
+                )
+            deleted += result_int
         return deleted
 
     def delete_message_ids(
@@ -1378,16 +1410,47 @@ class RedisBrokerCore:
         self._check_fork_safety()
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("broadcast")
-        queues = sorted(str(queue) for queue in self._queue_names())
         if pattern:
+            queues = sorted(str(queue) for queue in self._queue_names())
             queues = [queue for queue in queues if fnmatchcase(queue, pattern)]
-        if not queues:
-            return 0
+            if not queues:
+                return 0
+            for attempt in range(3):
+                try:
+                    records = [
+                        (queue, message, self.generate_timestamp()) for queue in queues
+                    ]
+                except TimestampError as exc:
+                    if isinstance(exc.__cause__, OperationalError):
+                        raise OperationalError(str(exc.__cause__)) from exc
+                    raise
 
-        for attempt in range(3):
+                try:
+                    self.insert_messages(records)
+                    return len(queues)
+                except IntegrityError as exc:
+                    self._ts_conflict_count += 1
+                    if attempt == 0:
+                        time.sleep(0.001)
+                    elif attempt == 1:
+                        self._resync_timestamp_generator()
+                    else:
+                        raise RuntimeError(
+                            "Failed to broadcast message after repeated timestamp conflicts"
+                        ) from exc
+
+            raise RuntimeError(
+                "Failed to broadcast message after repeated timestamp conflicts"
+            )
+
+        queue_count = response_int(self._client.scard(self._keys.queues))
+        timestamp_capacity = queue_count + max(8, (queue_count // 4) + 1)
+        growth_attempts = 0
+        conflict_attempts = 0
+        while True:
             try:
-                records = [
-                    (queue, message, self.generate_timestamp()) for queue in queues
+                timestamps = [
+                    self.generate_timestamp() for _ in range(timestamp_capacity)
                 ]
             except TimestampError as exc:
                 if isinstance(exc.__cause__, OperationalError):
@@ -1395,22 +1458,60 @@ class RedisBrokerCore:
                 raise
 
             try:
-                self.insert_messages(records)
-                return len(queues)
-            except IntegrityError as exc:
+                result = response_list(
+                    self._client.eval(
+                        scripts.BROADCAST_MESSAGE,
+                        4,
+                        self._keys.meta,
+                        self._keys.bodies,
+                        self._keys.all_ids,
+                        self._keys.queues,
+                        str(timestamps[-1]),
+                        encode_id(timestamps[-1]),
+                        str(timestamp_capacity),
+                        message,
+                        self._key("q", ""),
+                        *(encode_id(timestamp) for timestamp in timestamps),
+                    )
+                )
+            except redis.RedisError as exc:
+                raise _translate_redis_error(exc) from exc
+
+            code = int(result[0])
+            if code == 1:
+                affected_queues = [str(queue) for queue in result[1:]]
+                self.refresh_last_timestamp()
+                for queue in affected_queues:
+                    self._publish(queue)
+                self._record_maintenance_activity(len(affected_queues))
+                return len(affected_queues)
+            if code == -4:
+                growth_attempts += 1
+                required = int(result[1])
+                if growth_attempts >= 3:
+                    raise RuntimeError(
+                        "Failed to broadcast message after repeated queue growth"
+                    )
+                timestamp_capacity = max(
+                    timestamp_capacity * 2,
+                    required + max(8, (required // 4) + 1),
+                )
+                continue
+            if code in (-1, -3):
                 self._ts_conflict_count += 1
-                if attempt == 0:
+                conflict_attempts += 1
+                if conflict_attempts == 1:
                     time.sleep(0.001)
-                elif attempt == 1:
+                elif conflict_attempts == 2:
                     self._resync_timestamp_generator()
                 else:
                     raise RuntimeError(
                         "Failed to broadcast message after repeated timestamp conflicts"
-                    ) from exc
-
-        raise RuntimeError(
-            "Failed to broadcast message after repeated timestamp conflicts"
-        )
+                    )
+                continue
+            if code == -2:
+                raise OperationalError("Redis namespace is not initialized")
+            raise OperationalError(f"Unexpected Redis broadcast result: {code}")
 
     def queue_exists_and_has_messages(self, queue: str) -> bool:
         return self.queue_exists(queue)
@@ -1419,6 +1520,7 @@ class RedisBrokerCore:
         self, queue: str, after_timestamp: int | None = None
     ) -> bool:
         self._validate_queue_name(queue)
+        after_timestamp = validate_timestamp_bound("after_timestamp", after_timestamp)
         reserved = self._qkey(queue, "reserved")
         offset = 0
         while True:
@@ -1480,19 +1582,18 @@ class RedisBrokerCore:
             with self._lock:
                 batch_size = int(self._config["BROKER_VACUUM_BATCH_SIZE"])
                 for queue in [str(item) for item in self._queue_names()]:
-                    claimed_key = self._qkey(queue, "claimed")
-                    ids = response_list(
-                        self._client.zrange(claimed_key, 0, batch_size - 1)
+                    self._client.eval(
+                        scripts.VACUUM_CLAIMED,
+                        6,
+                        self._keys.claimed(queue),
+                        self._keys.pending(queue),
+                        self._keys.reserved(queue),
+                        self._keys.bodies,
+                        self._keys.all_ids,
+                        self._keys.queues,
+                        queue,
+                        str(batch_size),
                     )
-                    if not ids:
-                        continue
-                    with self._client.pipeline(transaction=True) as pipe:
-                        pipe.zrem(claimed_key, *ids)
-                        pipe.hdel(self._keys.bodies, *ids)
-                        pipe.zrem(self._keys.all_ids, *ids)
-                        pipe.execute()
-                    if not self.queue_exists(queue):
-                        self._client.srem(self._key("queues"), queue)
         except redis.RedisError as exc:
             raise _translate_redis_error(exc) from exc
 

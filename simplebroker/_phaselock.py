@@ -77,7 +77,16 @@ def _status_file_fsync_enabled() -> bool:
 
 
 class PhaseLockTimeout(TimeoutError):
-    """Raised when the phase lock cannot be acquired before the timeout."""
+    """Raised when the phase lock cannot be acquired before the timeout.
+
+    ``cause`` is set only when opening the lock sidecar itself failed. A lock
+    primitive reporting contention remains an ordinary timeout, even though
+    its diagnostic message may include the last operating-system error.
+    """
+
+    def __init__(self, message: str, *, cause: OSError | None = None) -> None:
+        super().__init__(message)
+        self.cause = cause
 
 
 class PhaseLockUnavailable(RuntimeError):
@@ -317,7 +326,8 @@ class _AdvisoryLock:
                             start,
                             last_error=last_error,
                             diagnostics=diagnostics,
-                        )
+                        ),
+                        cause=exc,
                     ) from None
                 time.sleep(self.retry_delay)
                 continue

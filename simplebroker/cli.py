@@ -15,6 +15,10 @@ from ._constants import (
     load_config,
 )
 from ._exceptions import DatabaseError
+from ._project_config import (
+    project_config_path_for_directory,
+    resolve_project_target,
+)
 from ._targets import BrokerTarget
 from .helpers import (
     _find_project_database,
@@ -669,6 +673,14 @@ class ArgumentProcessor:
                 i += 1
                 continue
 
+            # argparse accepts the short option with its value attached
+            # (``-pqueue*``).  Preserve that form as an option; callers can
+            # still broadcast a literal ``-p...`` message after ``--``.
+            if arg.startswith("-p") and len(arg) > 2:
+                protected.append(arg)
+                i += 1
+                continue
+
             if arg.startswith("-"):
                 protected.append("--")
             protected.extend(command_args[i:])
@@ -791,6 +803,18 @@ def _resolve_target(
         discovered_target = resolve_broker_target(root, config=config)
         if discovered_target is not None:
             return discovered_target
+    else:
+        # With scope disabled the check is exactly one directory deep.  An
+        # explicit -d selects that directory; otherwise the process CWD wins
+        # over BROKER_DEFAULT_DB_LOCATION for project-config discovery.
+        config_root = (
+            root
+            if getattr(args, "_dir_explicitly_provided", False)
+            else Path.cwd().resolve()
+        )
+        config_path = project_config_path_for_directory(config_root, config=config)
+        if config_path.is_file():
+            return resolve_project_target(config_path, config=config)
 
     configured_target = _configured_backend_target(
         root,
@@ -837,10 +861,15 @@ def main(*, config: dict[str, Any] = _config) -> int:
             return EXIT_SUCCESS
 
         raw_args = list(sys.argv[1:])
-        if "--status" in raw_args:
+        status_probe = ArgumentProcessor()
+        status_probe.process(raw_args)
+        if "--status" in status_probe.global_args:
             processed_args: list[str] = []
+            options_ended = False
             for arg in raw_args:
-                if arg == "--json":
+                if arg == "--":
+                    options_ended = True
+                if not options_ended and arg == "--json":
                     status_json_output = True
                     continue
                 processed_args.append(arg)
@@ -1280,6 +1309,9 @@ def main(*, config: dict[str, Any] = _config) -> int:
     except KeyboardInterrupt:
         # Handle Ctrl-C gracefully
         print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
+        return EXIT_SUCCESS
+    except BrokenPipeError:
+        commands._redirect_stdout_to_devnull()
         return EXIT_SUCCESS
     except Exception as e:
         if not args.quiet:

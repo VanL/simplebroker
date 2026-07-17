@@ -12,6 +12,7 @@ _CONNINFO_PASSWORD_RE = re.compile(
     r"(?i)(\bpassword\s*=\s*)(?:'[^']*'|\"[^\"]*\"|[^\s]+)"
 )
 _WHITESPACE_RE = re.compile(r"\s")
+_ASCII_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def _redact_parsed_url_password(target: str) -> str:
@@ -52,8 +53,22 @@ def _redact_raw_url_userinfo(target: str) -> str:
 
 def redact_backend_target(target: str) -> str:
     """Return a display-safe backend target with password material redacted."""
+    target = _ASCII_CONTROL_RE.sub(" ", target)
     redacted = _redact_raw_url_userinfo(_redact_parsed_url_password(target))
     return _CONNINFO_PASSWORD_RE.sub(r"\1***", redacted)
+
+
+def _backend_target_has_password(target: str) -> bool:
+    """Return whether a target embeds URL-userinfo or conninfo credentials."""
+    normalized = _ASCII_CONTROL_RE.sub(" ", target)
+    if _CONNINFO_PASSWORD_RE.search(normalized):
+        return True
+    if _redact_raw_url_userinfo(normalized) != normalized:
+        return True
+    try:
+        return urlsplit(normalized).password is not None
+    except ValueError:
+        return False
 
 
 @dataclass(frozen=True)

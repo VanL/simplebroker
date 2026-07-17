@@ -1567,6 +1567,7 @@ def test_lock_timeout_when_another_process_holds_lock(tmp_path: Path) -> None:
     assert "lock_size=" in message
     assert "target=" in message
     assert "missing=['connection-v1']" in message
+    assert exc_info.value.cause is None
 
 
 def test_lock_context_releases_after_exception(tmp_path: Path) -> None:
@@ -1672,6 +1673,34 @@ def test_advisory_lock_open_errors_timeout_with_diagnostics(
     message = str(exc_info.value)
     assert "last_error=" in message
     assert "diagnostic=present" in message
+
+
+def test_windows_permission_denied_open_is_classified_as_structural_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Windows lock-file open failure must not look like contention."""
+    lock = phaselock_module._AdvisoryLock(
+        tmp_path / "broker.lock",
+        timeout=0.0,
+        retry_delay=0.0,
+    )
+    denied = PermissionError(errno.EACCES, "permission denied")
+
+    def fail_open(self: Path, *args: object, **kwargs: object) -> object:
+        raise denied
+
+    # Exercise the Windows availability branch even when this test runs on a
+    # POSIX development host. The open fails before the msvcrt primitive is
+    # called; the contract under test is the structural failure classification.
+    monkeypatch.setattr(phaselock_module, "fcntl", None)
+    monkeypatch.setattr(phaselock_module, "msvcrt", object())
+    monkeypatch.setattr(Path, "open", fail_open)
+
+    with pytest.raises(PhaseLockTimeout) as exc_info:
+        lock.acquire()
+
+    assert exc_info.value.cause is denied
 
 
 def test_advisory_lock_stops_after_lock_attempt_failure(

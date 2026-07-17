@@ -9,6 +9,7 @@ exactly how an end-user would invoke it.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -168,6 +169,15 @@ def _postgres_schema_name(root: Path) -> str:
     return f"pytest_{digest}"
 
 
+def _postgres_target_without_password(dsn: str) -> tuple[str, str | None]:
+    """Split a test DSN so generated project files never store its password."""
+    from psycopg import conninfo
+
+    parts = conninfo.conninfo_to_dict(dsn)
+    password = parts.pop("password", None)
+    return conninfo.make_conninfo(**parts), password
+
+
 def _config_root_from_args(args: tuple[object, ...], cwd: Path) -> Path:
     """Return the directory where a PG test project config should live."""
     arg_list = [str(arg) for arg in args]
@@ -206,12 +216,13 @@ def _ensure_postgres_project_config(
     )
     config_path = project_config_path_for_directory(config_root)
     config_path.parent.mkdir(parents=True, exist_ok=True)
+    target, _password = _postgres_target_without_password(dsn)
     config_path.write_text(
         "\n".join(
             [
                 "version = 1",
                 'backend = "postgres"',
-                f'target = "{dsn}"',
+                f"target = {json.dumps(target)}",
                 "",
                 "[backend_options]",
                 f'schema = "{schema}"',
@@ -220,6 +231,7 @@ def _ensure_postgres_project_config(
         ),
         encoding="utf-8",
     )
+    config_path.chmod(0o600)
     return config_path
 
 
@@ -312,6 +324,7 @@ def _ensure_redis_project_config(config_root: Path, *, url: str) -> Path:
         ),
         encoding="utf-8",
     )
+    config_path.chmod(0o600)
     return config_path
 
 
@@ -389,12 +402,15 @@ def pg_worker_tmpdir(
         return None
     root = tmp_path_factory.mktemp("pg_worker")
     config_path = root / PROJECT_CONFIG_FILENAME
+    target, password = _postgres_target_without_password(pg_worker_dsn)
+    if password:
+        os.environ.setdefault("BROKER_BACKEND_PASSWORD", password)
     config_path.write_text(
         "\n".join(
             [
                 "version = 1",
                 'backend = "postgres"',
-                f'target = "{pg_worker_dsn}"',
+                f"target = {json.dumps(target)}",
                 "",
                 "[backend_options]",
                 f'schema = "{pg_worker_schema}"',
@@ -403,6 +419,7 @@ def pg_worker_tmpdir(
         ),
         encoding="utf-8",
     )
+    config_path.chmod(0o600)
     return root
 
 
@@ -553,6 +570,7 @@ def redis_worker_tmpdir(
         ),
         encoding="utf-8",
     )
+    config_path.chmod(0o600)
     return root
 
 
@@ -801,6 +819,9 @@ def run_cli(
             raise RuntimeError(
                 "BROKER_TEST_BACKEND=postgres requires SIMPLEBROKER_PG_TEST_DSN"
             )
+        _target, password = _postgres_target_without_password(dsn)
+        if password:
+            full_env.setdefault("BROKER_BACKEND_PASSWORD", password)
         config_root = _config_root_from_args(args, cwd)
         _ensure_postgres_project_config(config_root, dsn=dsn)
         # Schema is pre-initialized by the session-scoped pg_worker_runner

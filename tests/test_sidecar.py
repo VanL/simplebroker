@@ -102,6 +102,33 @@ def test_transaction_rolls_back_on_exception(tmp_path: Path) -> None:
     assert rows == []  # the insert was rolled back; the exception propagated
 
 
+def test_transaction_rolls_back_when_commit_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed COMMIT must not leave the connection's transaction poisoned."""
+    db = _db(tmp_path)
+    q = Queue("jobs", db_path=db)
+    with q.get_connection() as conn:
+        with conn.sidecar() as session:
+            session.run("CREATE TABLE app_kv (k TEXT PRIMARY KEY, v TEXT)")
+
+        original_commit = conn._runner.commit
+
+        def fail_commit() -> None:
+            raise sqlite3.OperationalError("injected sidecar commit failure")
+
+        monkeypatch.setattr(conn._runner, "commit", fail_commit)
+        with pytest.raises(sqlite3.OperationalError, match="injected sidecar"):
+            with conn.sidecar(transaction=True) as session:
+                session.run("INSERT INTO app_kv VALUES (?, ?)", ("poison", "1"))
+        monkeypatch.setattr(conn._runner, "commit", original_commit)
+
+        with conn.sidecar() as session:
+            rows = list(session.run("SELECT k FROM app_kv", fetch=True))
+
+    assert rows == []
+
+
 def test_queue_sidecar_ephemeral(tmp_path: Path) -> None:
     q = Queue("jobs", db_path=_db(tmp_path))
     with q.sidecar(transaction=True) as session:

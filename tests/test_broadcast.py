@@ -71,6 +71,31 @@ def test_broadcast_with_pattern_no_matches(workdir):
     assert out.splitlines() == ["seed_a"]
 
 
+def test_broadcast_with_attached_short_pattern(workdir):
+    run_cli("write", "queue-one", "original", cwd=workdir)
+    run_cli("write", "other", "original", cwd=workdir)
+
+    rc, _, stderr = run_cli("broadcast", "-pqueue*", "notice", cwd=workdir)
+
+    assert rc == 0, stderr
+    assert run_cli("peek", "queue-one", "--all", cwd=workdir)[1].splitlines() == [
+        "original",
+        "notice",
+    ]
+    assert run_cli("peek", "other", "--all", cwd=workdir)[1] == "original"
+
+
+def test_broadcast_attached_short_pattern_requires_message(workdir):
+    run_cli("write", "queue-one", "original", cwd=workdir)
+
+    rc, stdout, stderr = run_cli("broadcast", "-pqueue*", cwd=workdir)
+
+    assert rc == 1
+    assert stdout == ""
+    assert "required" in stderr
+    assert run_cli("peek", "queue-one", "--all", cwd=workdir)[1] == "original"
+
+
 def test_broadcast_no_queues(workdir):
     """Broadcast when no queues exist should return EXIT_QUEUE_EMPTY."""
     # Broadcast to no queues

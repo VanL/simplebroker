@@ -134,3 +134,13 @@ def test_flag_plus_literal_dash_message_via_escape(workdir):
     code, out, _ = run_cli("read", "q", cwd=workdir)
     assert code == 0
     assert out == "-t"
+
+
+def test_status_operand_after_double_dash_does_not_disable_write_json(workdir):
+    code, stdout, stderr = run_cli(
+        "write", "q", "--json", "--", "--status", cwd=workdir
+    )
+
+    assert code == 0, stderr
+    assert set(json.loads(stdout)) == {"timestamp"}
+    assert run_cli("read", "q", cwd=workdir)[1] == "--status"

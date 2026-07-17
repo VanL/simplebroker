@@ -10,6 +10,7 @@ usage and the ``DatabaseError`` note.
 """
 
 import json
+import os
 import sys
 import time
 import warnings
@@ -35,11 +36,31 @@ from .db import BrokerDB, DBConnection
 from .helpers import _is_valid_sqlite_db
 from .metadata import QueueRenameResult, QueueStats
 from .sbqueue import Queue
-from .watcher import QueueMoveWatcher, QueueWatcher
+from .watcher import QueueMoveWatcher, QueueWatcher, StopWatching
 
 DBTarget = str | BrokerTarget
 _config = load_config()
 _MOVE_ALL_LIMIT = 1_000_000
+
+
+def _redirect_stdout_to_devnull() -> None:
+    """Make later/interpreter flushes harmless after a downstream pipe closes."""
+    try:
+        stdout_fd = sys.stdout.fileno()
+        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+    except (AttributeError, OSError, ValueError):
+        return
+    try:
+        os.dup2(devnull_fd, stdout_fd)
+    finally:
+        os.close(devnull_fd)
+
+
+def _close_iterator(iterator: object) -> None:
+    """Close a generator-like iterator when it owns transactional cleanup."""
+    close = getattr(iterator, "close", None)
+    if callable(close):
+        close()
 
 
 def _status(message: str, *, quiet: bool = False) -> None:
@@ -391,11 +412,17 @@ def _process_queue_fetch(
             ),
         )
 
-        for message, timestamp in generator:
-            warned_newlines = _output_message(
-                message, timestamp, json_output, show_timestamps, warned_newlines
-            )
-            message_count += 1
+        try:
+            for message, timestamp in generator:
+                warned_newlines = _output_message(
+                    message, timestamp, json_output, show_timestamps, warned_newlines
+                )
+                message_count += 1
+        except BrokenPipeError:
+            _redirect_stdout_to_devnull()
+            return EXIT_SUCCESS
+        finally:
+            _close_iterator(generator)
 
         return EXIT_SUCCESS if message_count > 0 else EXIT_QUEUE_EMPTY
 
@@ -409,12 +436,18 @@ def _process_queue_fetch(
             ),
         )
         try:
-            message, timestamp = next(gen)
-        except StopIteration:
-            return EXIT_QUEUE_EMPTY
+            try:
+                message, timestamp = next(gen)
+            except StopIteration:
+                return EXIT_QUEUE_EMPTY
 
-        _output_message(message, timestamp, json_output, show_timestamps, False)
-        return EXIT_SUCCESS
+            _output_message(message, timestamp, json_output, show_timestamps, False)
+            return EXIT_SUCCESS
+        except BrokenPipeError:
+            _redirect_stdout_to_devnull()
+            return EXIT_SUCCESS
+        finally:
+            _close_iterator(gen)
 
     result = fetch_one(with_timestamps=with_timestamps)
     if result is None:
@@ -524,12 +557,14 @@ def cmd_read(
                     batch_processing=True,
                     commit_interval=commit_interval,
                 )
-
-                for message, timestamp in rows:
-                    if with_timestamps:
-                        yield message, timestamp
-                    else:
-                        yield message
+                try:
+                    for message, timestamp in rows:
+                        if with_timestamps:
+                            yield message, timestamp
+                        else:
+                            yield message
+                finally:
+                    _close_iterator(rows)
 
             selected_fetch_generator = stream_fetch_generator
 
@@ -987,8 +1022,15 @@ def cmd_dump(
     # Cross-queue operation: use DBConnection directly (same idiom as cmd_list)
     with DBConnection(db_path) as conn:
         broker = conn.get_connection()
-        for line in dump_lines(broker, include=include, exclude=exclude):
-            print(line)
+        lines = dump_lines(broker, include=include, exclude=exclude)
+        try:
+            for line in lines:
+                print(line)
+        except BrokenPipeError:
+            _redirect_stdout_to_devnull()
+            return EXIT_SUCCESS
+        finally:
+            _close_iterator(lines)
     return EXIT_SUCCESS
 
 
@@ -1127,10 +1169,14 @@ def cmd_watch(
     def handle_message(message: str, timestamp: int) -> None:
         """Message handler for watcher."""
         nonlocal warned_newlines
-        warned_newlines = _output_message(
-            message, timestamp, json_output, show_timestamps, warned_newlines
-        )
-        sys.stdout.flush()  # Ensure immediate output for real-time watching
+        try:
+            warned_newlines = _output_message(
+                message, timestamp, json_output, show_timestamps, warned_newlines
+            )
+            sys.stdout.flush()  # Ensure immediate output for real-time watching
+        except BrokenPipeError:
+            _redirect_stdout_to_devnull()
+            raise StopWatching from None
 
     watcher: QueueWatcher | QueueMoveWatcher | None = None
 
@@ -1165,7 +1211,10 @@ def cmd_watch(
         return EXIT_ERROR
     finally:
         # Ensure any final output is flushed
-        sys.stdout.flush()
+        try:
+            sys.stdout.flush()
+        except BrokenPipeError:
+            _redirect_stdout_to_devnull()
         sys.stderr.flush()
         if watcher is not None:
             watcher.stop()  # Ensure watcher is stopped cleanly

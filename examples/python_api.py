@@ -60,13 +60,14 @@ def timestamp_usage(db_path: Path) -> None:
     print("\n=== Timestamp Usage ===")
 
     with Queue("events", db_path=str(db_path)) as q:
-        # Write returns timestamp
-        # Note: write() doesn't return timestamps in the current API
-        q.write("Event 1")
+        # write() returns the committed timestamp/message ID.
+        ts = q.write("Event 1")
         q.write("Event 2")
         q.write("Event 3")
 
-        # Messages are stored with automatic timestamps
+        # The returned ID addresses exactly the message just written.
+        exact = q.read(message_id=ts)
+        print(f"Read exact message {ts}: {exact}")
 
         # Read messages in order
         msg = q.read()

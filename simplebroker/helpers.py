@@ -360,6 +360,14 @@ def _is_filesystem_root(path: Path) -> bool:
     return p.parent == p
 
 
+def _same_filesystem(current: Path, parent: Path) -> bool:
+    """Return whether an upward discovery step stays on one filesystem."""
+    try:
+        return current.stat().st_dev == parent.stat().st_dev
+    except OSError:
+        return False
+
+
 def is_ancestor(possible_ancestor: str | Path, possible_descendant: str | Path) -> bool:
     """Check if possible_ancestor is an ancestor of possible_descendant."""
     path_ancestor = Path(possible_ancestor).resolve()
@@ -400,8 +408,8 @@ def _find_project_database(
     Security Features:
         - Respects max_depth to prevent infinite loops
         - Validates database authenticity via magic string
-        - Stops at filesystem boundaries (root, home, etc.)
-        - Uses existing path resolution for symlink safety
+        - Stops at the filesystem root and before crossing mount boundaries
+        - Resolves the physical starting path and follows its parent chain
 
     Raises:
         ValueError: If starting_dir doesn't exist or max_depth exceeded
@@ -422,7 +430,10 @@ def _find_project_database(
             return candidate_path.resolve()
         else:
             # If the candidate path is not a valid SQLite DB, continue search
-            current_dir = current_dir.parent
+            parent = current_dir.parent
+            if not _same_filesystem(current_dir, parent):
+                break
+            current_dir = parent
             depth += 1
             continue
     return None

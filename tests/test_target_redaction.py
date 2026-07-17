@@ -1,3 +1,5 @@
+import pytest
+
 from simplebroker import BrokerTarget
 from simplebroker._targets import redact_backend_target
 
@@ -44,6 +46,25 @@ def test_redact_backend_target_redacts_conninfo_password() -> None:
         redact_backend_target("host=db.example.com user=app password='secret value'")
         == "host=db.example.com user=app password=***"
     )
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "\npostgresql://user:secret@db.example.com/app",
+        "postgresql://user:secret@db.example.com/app\r",
+        "postgresql://user:sec\tret@db.example.com/app",
+        "\nhost=db.example.com password=secret",
+        "host=db.example.com password=secret\r",
+        "host=db.example.com password=secret\napplication_name=worker",
+    ],
+)
+def test_redaction_neutralizes_all_ascii_control_characters(target: str) -> None:
+    redacted = redact_backend_target(target)
+
+    assert all(ord(character) >= 32 and ord(character) != 127 for character in redacted)
+    assert "password=secret" not in redacted
+    assert "user:secret" not in redacted
 
 
 def test_resolved_target_display_target_leaves_sqlite_paths_unchanged() -> None:

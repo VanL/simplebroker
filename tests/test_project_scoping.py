@@ -282,6 +282,25 @@ class TestProjectDatabaseSearch:
         finally:
             cleanup_func()
 
+    def test_find_database_stops_before_mount_boundary(
+        self, temp_db_cleanup, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        tmp_path, cleanup_func = temp_db_cleanup
+        parent_db = tmp_path / ".broker.db"
+        nested = tmp_path / "nested"
+        nested.mkdir()
+        with BrokerDB(str(parent_db)):
+            pass
+        monkeypatch.setattr(
+            "simplebroker.helpers._same_filesystem",
+            lambda current, parent: current != nested.resolve(),
+        )
+
+        try:
+            assert _find_project_database(".broker.db", nested) is None
+        finally:
+            cleanup_func()
+
     def test_no_database_found(self, temp_db_cleanup) -> None:
         """Test behavior when no database is found in hierarchy."""
         tmp_path, cleanup_func = temp_db_cleanup

@@ -9,7 +9,7 @@ import threading
 import weakref
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Union, cast
 
@@ -101,6 +101,18 @@ def _normalize_sqlite_waiter_target(target: str) -> str:
         return str(path.resolve())
     except (OSError, ValueError):
         return str(path)
+
+
+def _canonicalize_queue_target(target: str | BrokerTarget) -> str | BrokerTarget:
+    """Freeze SQLite targets to their construction-time absolute path."""
+    if isinstance(target, BrokerTarget):
+        if target.backend_name != "sqlite":
+            return target
+        return replace(
+            target,
+            target=_normalize_sqlite_waiter_target(target.target),
+        )
+    return _normalize_sqlite_waiter_target(str(target))
 
 
 def _default_target_from_config(config: dict[str, Any]) -> BrokerTarget:
@@ -196,7 +208,7 @@ class Queue:
         else:
             assert db_path is not None
             resolved_db_path = db_path
-        self._db_path: str | BrokerTarget = resolved_db_path
+        self._db_path: str | BrokerTarget = _canonicalize_queue_target(resolved_db_path)
         self._stop_event: threading.Event | None = None
 
         # Create DBConnection for persistent queues and injected-runner queues.
@@ -1197,6 +1209,18 @@ class Queue:
             self._activity_waiter = waiter
         return waiter
 
+    def _detach_activity_waiter(
+        self,
+        *,
+        expected: ActivityWaiter | None,
+    ) -> ActivityWaiter | None:
+        """Transfer the cached waiter without closing it on an exact match."""
+        waiter = self._activity_waiter
+        if waiter is not expected:
+            return None
+        self._activity_waiter = None
+        return waiter
+
     def _activity_waiter_identity(self) -> _ActivityWaiterIdentity:
         """Return backend identity and hook arguments for activity waiters."""
 
@@ -1233,7 +1257,11 @@ class Queue:
             return _ActivityWaiterIdentity(
                 plugin=plugin,
                 backend_name=self._db_path.backend_name,
-                target_key=f"resolved:{target_key}",
+                target_key=(
+                    f"sqlite:{target_key}"
+                    if self._db_path.backend_name == "sqlite"
+                    else f"resolved:{target_key}"
+                ),
                 backend_options_key=_freeze_for_waiter_identity(backend_options),
                 runner_id=None,
                 target_arg=target,
@@ -1245,7 +1273,7 @@ class Queue:
         return _ActivityWaiterIdentity(
             plugin=get_backend_plugin("sqlite"),
             backend_name="sqlite",
-            target_key=f"plain:{_normalize_sqlite_waiter_target(target)}",
+            target_key=f"sqlite:{_normalize_sqlite_waiter_target(target)}",
             backend_options_key=_freeze_for_waiter_identity({}),
             runner_id=None,
             target_arg=target,
@@ -1289,14 +1317,20 @@ class Queue:
         with self.get_connection() as connection:
             if peek:
                 if all_messages:
-                    # Type assertion after we know with_timestamps=True yields tuple[str, int]
-                    for result in connection.peek_generator(
+                    generator = connection.peek_generator(
                         self.name,
                         with_timestamps=True,
                         after_timestamp=after_timestamp,
                         before_timestamp=before_timestamp,
-                    ):
-                        yield result  # type: ignore[misc]
+                    )
+                    # Type assertion after we know with_timestamps=True yields tuple[str, int]
+                    try:
+                        for result in generator:
+                            yield result  # type: ignore[misc]
+                    finally:
+                        close_generator = getattr(generator, "close", None)
+                        if callable(close_generator):
+                            close_generator()
                 else:
                     generator = connection.peek_generator(
                         self.name,
@@ -1347,16 +1381,22 @@ class Queue:
                 commit_interval if delivery_guarantee == "at_least_once" else None
             )
 
-            # Type assertion after we know with_timestamps=True yields tuple[str, int]
-            for result in connection.claim_generator(
+            generator = connection.claim_generator(
                 self.name,
                 with_timestamps=True,
                 delivery_guarantee=delivery_guarantee,
                 batch_size=batch_size,
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
-            ):
-                yield result  # type: ignore[misc]
+            )
+            # Type assertion after we know with_timestamps=True yields tuple[str, int]
+            try:
+                for result in generator:
+                    yield result  # type: ignore[misc]
+            finally:
+                close_generator = getattr(generator, "close", None)
+                if callable(close_generator):
+                    close_generator()
 
     def cleanup_connections(self) -> None:
         """Clean up active database handles without releasing the queue lease.

@@ -77,8 +77,11 @@ def test_cleanup_nonexistent_database(workdir):
     else:
         config = load_project_config(workdir / PROJECT_CONFIG_FILENAME)
         backend_name = str(config["backend"])
+        target = str(config["target"])
+        if backend_name == "postgres":
+            target = os.environ["SIMPLEBROKER_PG_TEST_DSN"]
         get_backend_plugin(backend_name).cleanup_target(
-            str(config["target"]),
+            target,
             backend_options=dict(config["backend_options"]),
         )
 

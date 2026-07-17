@@ -98,7 +98,7 @@ wheels = [
 
 [[package]]
 name = "simplebroker"
-version = "5.3.3"
+version = "5.4.0"
 source = { editable = "../../" }
 
 [package.metadata]
@@ -130,7 +130,7 @@ release = [
 
 [[package]]
 name = "simplebroker-redis"
-version = "3.2.2"
+version = "3.2.3"
 source = { editable = "." }
 dependencies = [
     { name = "redis" },

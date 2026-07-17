@@ -5,6 +5,76 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.4.0] - 2026-07-17
+
+### Changed
+- Closed stdout pipes are a clean CLI shutdown. `watch`, `read --all`,
+  `peek --all`, and `dump` exit `0` without a traceback or interpreter flush
+  error, stop claiming further messages, and close transactional iterators.
+  With a configured at-least-once read batch, uncommitted messages are rolled
+  back instead of being lost. `watch` also exits cleanly on SIGTERM.
+- `DatabaseError` is now the common base for SimpleBroker's
+  `OperationalError`, `IntegrityError`, and `DataError`, while all remain under
+  `BrokerError`. Code that catches `DatabaseError` now catches those subclasses.
+  Conversely, `DatabaseError` no longer subclasses `OSError`; catch
+  `DatabaseError` and `OSError` separately when supporting both storage and OS
+  failures. This hierarchy is new in 5.4.0, so do not rely on it in code that
+  must also run against SimpleBroker 5.3.x. Plain `RuntimeError` escape paths
+  such as retry exhaustion remain outside `DatabaseError`.
+- With project scope disabled, the CLI now honors `.broker.toml` only in the
+  selected current directory. With scope enabled, discovery is git-like: it
+  walks the physical parent chain but stops at the filesystem root, a mount
+  boundary, or 100 levels. An explicit `-f` still wins, and a current-directory
+  project config wins over environment defaults.
+- Relative SQLite queue targets are bound to their construction directory.
+  Plain paths and equivalent resolved SQLite `BrokerTarget` values now compare
+  as the same storage target for moves and activity-waiter lookup.
+- Watchers now treat `StopWatching` and the internal `StopException` as clean
+  stops from either message or error handlers. Stop/join tracks the actual run
+  owner, peek batches observe stop requests between messages, and native
+  activity-waiter replacement has explicit single-owner cleanup semantics.
+- Documented the single-threaded first-touch assumption in SQLite fork
+  recovery and its bounded failure mode. A reproducible migration benchmark
+  found that 10M- and 50M-row legacy databases exceed the fixed schema-lock
+  wait budget; a separate migration-aware waiting proposal is required, with
+  no timeout behavior changed in this release.
+
+### Fixed
+- Preserved attached broadcast patterns such as `-pqueue*`, rejected missing
+  broadcast messages cleanly, and retained `--` as the escape for literal
+  option-looking messages. Global status JSON preprocessing no longer consumes
+  a post-command literal `--json`.
+- Sidecar writes and schema-v3 repair now roll back if commit fails, preserving
+  the original commit exception even if rollback also fails.
+- `has_pending_messages()` now consistently rejects boolean and string
+  timestamp bounds across first-party backends.
+- Opportunistic SQLite vacuum distinguishes ordinary lock contention from a
+  failure to open the lock sidecar. Contention remains a skip; open failures
+  propagate so maintenance records the failed attempt and retries later.
+- Backend target redaction now replaces every ASCII control character before
+  parsing or display, preventing embedded line and terminal-control injection.
+
+### Security
+- Loading `.broker.toml` warns when its target embeds a URL/conninfo password
+  and, on POSIX, when the file is group- or other-readable. Warnings never print
+  the credential and never block config loading; environment-supplied passwords
+  remain silent.
+
+### simplebroker-redis 3.2.3
+- Made per-queue deletion atomic across the registry, pending, claimed, body,
+  reserved, and global-ID structures. A reservation that begins during a
+  multi-queue delete stops later deletions without corrupting the reserved
+  queue.
+- Made claim, move, and batch reservation scan beyond large reserved prefixes
+  through bounded Lua windows with an exclusive continuation cursor.
+- Made claimed-message vacuum atomic with queue-registry preservation.
+- Made patternless broadcast select queues and write all copies atomically,
+  including timestamp-growth retries and waiter/accounting updates. Patterned
+  broadcast deliberately retains Python `fnmatchcase` snapshot semantics, now
+  documented in the extension README.
+- Added explicit queue-name and pending-bound validation at the Redis core
+  boundary. Storage layout and backend API version are unchanged.
+
 ## [5.3.3] - 2026-07-14
 
 ### Fixed

@@ -24,10 +24,10 @@ def test_redis_manual_vacuum_translates_client_errors(
         core.write("jobs", "payload")
         assert core.claim_one("jobs", with_timestamps=False) == "payload"
 
-        def fail_zrange(*_args: object, **_kwargs: object) -> NoReturn:
+        def fail_eval(*_args: object, **_kwargs: object) -> NoReturn:
             raise redis.RedisError("injected vacuum failure")
 
-        monkeypatch.setattr(core._client, "zrange", fail_zrange)
+        monkeypatch.setattr(core._client, "eval", fail_eval)
 
         with pytest.raises(
             OperationalError, match="injected vacuum failure"

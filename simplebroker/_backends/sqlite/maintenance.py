@@ -160,8 +160,9 @@ def vacuum(
 
     Vacuum is opportunistic maintenance: it serializes through a
     kernel-released advisory flock on the vacuum lock sidecar. If another
-    process holds the lock (or the lock file cannot be opened), this pass skips
-    silently and a later call retries -- nothing is lost. The lock file is
+    process holds the lock, this pass skips silently and a later call retries
+    -- nothing is lost. Failure to open the lock file propagates so automatic
+    maintenance records a failed attempt and remains due. The lock file is
     never unlinked (phaselock doctrine: the flock is ownership, the file is
     permanent), so a SIGKILL cannot strand the lock: the kernel releases the
     flock when the holder dies.
@@ -173,11 +174,12 @@ def vacuum(
     lock = AdvisoryFileLock(vacuum_lock_path(db_path), timeout=0.0, retry_delay=0.0)
     try:
         acquired = lock.acquire()
-    except PhaseLockTimeout:
-        # PhaseLockTimeout covers both held-lock contention and lock-file open
-        # failures. Both mean "skip this opportunistic maintenance pass"; the
-        # next vacuum call retries. Any other exception (e.g.
-        # PhaseLockUnavailable) propagates.
+    except PhaseLockTimeout as exc:
+        if exc.cause is not None:
+            raise
+        # Held-lock contention means "skip this opportunistic maintenance
+        # pass"; the next vacuum call retries. Open failures and any other
+        # exception (for example PhaseLockUnavailable) propagate.
         return
     if not acquired:
         return

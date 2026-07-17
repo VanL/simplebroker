@@ -56,6 +56,20 @@ class TestRearrangeArgs:
         args = ["broadcast", "--cleanup"]
         assert rearrange_args(args) == ["broadcast", "--", "--cleanup"]
 
+    def test_broadcast_attached_short_pattern_is_preserved(self):
+        assert rearrange_args(["broadcast", "-pqueue*", "notice"]) == [
+            "broadcast",
+            "-pqueue*",
+            "notice",
+        ]
+
+    def test_broadcast_dash_escape_keeps_attached_pattern_literal(self):
+        assert rearrange_args(["broadcast", "--", "-pqueue*"]) == [
+            "broadcast",
+            "--",
+            "-pqueue*",
+        ]
+
     def test_equals_form(self):
         """Test --option=value form."""
         args = ["--dir=/tmp", "--file=test.db", "write", "queue", "message"]

@@ -253,18 +253,20 @@ def test_create_activity_waiter_for_queues_rejects_injected_and_target_backed_mi
         runner.close()
 
 
-def test_create_activity_waiter_for_queues_rejects_plain_and_resolved_sqlite_mix(
+def test_create_activity_waiter_for_queues_accepts_plain_and_resolved_sqlite_mix(
     workdir: Path,
 ) -> None:
     db_path = str(workdir / "broker.db")
     queue_plain = Queue("a", db_path=db_path)
     queue_resolved = Queue("b", db_path=BrokerTarget("sqlite", db_path, {}))
 
-    with pytest.raises(ValueError, match="queues cannot safely share one"):
+    assert (
         create_activity_waiter_for_queues(
             [queue_plain, queue_resolved],
             stop_event=threading.Event(),
         )
+        is None
+    )
 
 
 def test_create_activity_waiter_for_queues_accepts_distinct_plugin_instances(

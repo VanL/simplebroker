@@ -12,6 +12,7 @@ import pytest
 
 from simplebroker._constants import load_config
 from simplebroker._project_config import (
+    _same_filesystem,
     find_project_config,
     load_project_config,
     project_config_path_for_directory,
@@ -74,6 +75,7 @@ def _write_project_config(
         lines.append("")
 
     path.write_text("\n".join(lines), encoding="utf-8")
+    path.chmod(0o600)
 
 
 def _project_backend_config(*, sqlite_target: str) -> tuple[str, str, dict[str, str]]:
@@ -98,6 +100,219 @@ def test_load_project_config_and_resolve_relative_sqlite_target(
     assert config_data["target"] == "data/queue.db"
     assert resolved.backend_name == "sqlite"
     assert resolved.target_path == (tmp_path / "data" / "queue.db").resolve()
+
+
+def test_project_config_warns_for_inline_url_password(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    _write_project_config(
+        config_path,
+        backend="postgres",
+        target="postgresql://user:inline-secret@db.example.com/app",
+    )
+    config_path.chmod(0o600)
+
+    load_project_config(config_path)
+
+    warning = capsys.readouterr().err
+    assert "BROKER_BACKEND_PASSWORD" in warning
+    assert "inline-secret" not in warning
+
+
+def test_project_config_warns_for_inline_conninfo_password(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    _write_project_config(
+        config_path,
+        backend="postgres",
+        target="host=db.example.com user=app password='inline-secret'",
+    )
+    config_path.chmod(0o600)
+
+    load_project_config(config_path)
+
+    warning = capsys.readouterr().err
+    assert "BROKER_BACKEND_PASSWORD" in warning
+    assert "inline-secret" not in warning
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+def test_project_config_warns_when_group_or_other_readable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    _write_project_config(config_path, backend="sqlite", target="queue.db")
+    config_path.chmod(0o644)
+
+    load_project_config(config_path)
+
+    warning = capsys.readouterr().err
+    assert "group/other-readable" in warning
+    assert str(config_path) in warning
+
+
+def test_project_config_env_password_does_not_trigger_inline_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / ".broker.toml"
+    _write_project_config(
+        config_path,
+        backend="postgres",
+        target="postgresql://user@db.example.com/app",
+    )
+    config_path.chmod(0o600)
+    monkeypatch.setenv("BROKER_BACKEND_PASSWORD", "env-secret")
+
+    load_project_config(config_path)
+
+    assert capsys.readouterr().err == ""
+
+
+def test_same_filesystem_compares_device_ids() -> None:
+    class FakePath:
+        def __init__(self, device: int) -> None:
+            self._device = device
+
+        def stat(self):
+            return type("Stat", (), {"st_dev": self._device})()
+
+    assert _same_filesystem(FakePath(1), FakePath(1)) is True  # type: ignore[arg-type]
+    assert _same_filesystem(FakePath(1), FakePath(2)) is False  # type: ignore[arg-type]
+
+
+def test_project_config_discovery_stops_before_mount_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "project"
+    nested = project_root / "nested"
+    nested.mkdir(parents=True)
+    config_path = project_root / ".broker.toml"
+    _write_project_config(config_path, backend="sqlite", target="queue.db")
+    monkeypatch.setattr(
+        "simplebroker._project_config._same_filesystem",
+        lambda current, parent: current != nested.resolve(),
+    )
+
+    assert find_project_config(nested) is None
+
+
+def test_cli_scope_off_uses_only_current_directory_project_config(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    _write_project_config(parent / ".broker.toml", backend="sqlite", target="parent.db")
+    _write_project_config(child / ".broker.toml", backend="sqlite", target="child.db")
+
+    env = {"BROKER_PROJECT_SCOPE": "0", "BROKER_TEST_BACKEND": "sqlite"}
+    code, _, stderr = run_cli("write", "jobs", "child", cwd=child, env=env)
+
+    assert code == 0, stderr
+    assert (child / "child.db").exists()
+    assert not (parent / "parent.db").exists()
+
+
+def test_cli_scope_off_does_not_walk_to_parent_project_config(tmp_path: Path) -> None:
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    _write_project_config(parent / ".broker.toml", backend="sqlite", target="parent.db")
+
+    env = {"BROKER_PROJECT_SCOPE": "0", "BROKER_TEST_BACKEND": "sqlite"}
+    code, _, stderr = run_cli("write", "jobs", "local", cwd=child, env=env)
+
+    assert code == 0, stderr
+    assert (child / ".broker.db").exists()
+    assert not (parent / "parent.db").exists()
+
+
+def test_cli_explicit_file_beats_scope_off_current_project_config(
+    tmp_path: Path,
+) -> None:
+    _write_project_config(tmp_path / ".broker.toml", backend="sqlite", target="toml.db")
+
+    code, _, stderr = run_cli(
+        "-f",
+        "explicit.db",
+        "write",
+        "jobs",
+        "explicit",
+        cwd=tmp_path,
+        env={"BROKER_PROJECT_SCOPE": "0", "BROKER_TEST_BACKEND": "sqlite"},
+    )
+
+    assert code == 0, stderr
+    assert (tmp_path / "explicit.db").exists()
+    assert not (tmp_path / "toml.db").exists()
+
+
+def test_scope_off_current_project_config_beats_environment_default(
+    tmp_path: Path,
+) -> None:
+    env_default = tmp_path / "environment"
+    env_default.mkdir()
+    _write_project_config(tmp_path / ".broker.toml", backend="sqlite", target="toml.db")
+    env = {
+        "BROKER_PROJECT_SCOPE": "0",
+        "BROKER_DEFAULT_DB_LOCATION": str(env_default),
+        "BROKER_TEST_BACKEND": "sqlite",
+    }
+
+    code, _, stderr = run_cli("write", "jobs", "toml", cwd=tmp_path, env=env)
+
+    assert code == 0, stderr
+    assert (tmp_path / "toml.db").exists()
+    assert not (env_default / ".broker.db").exists()
+
+
+def test_target_for_directory_never_walks_to_parent_project_config(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    _write_project_config(parent / ".broker.toml", backend="sqlite", target="parent.db")
+
+    target = target_for_directory(child)
+
+    assert target.config_path is None
+    assert target.target_path == (child / ".broker.db").resolve()
+
+
+@pytest.mark.sqlite_only
+def test_project_config_trust_anchor_allows_parent_target(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config_path = project / ".broker.toml"
+    _write_project_config(config_path, backend="sqlite", target="../outside.db")
+
+    target = resolve_project_target(config_path)
+
+    assert target.target_path == (tmp_path / "outside.db").resolve()
+
+
+@pytest.mark.sqlite_only
+def test_project_config_trust_anchor_follows_target_symlink(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    outside = tmp_path / "outside"
+    project.mkdir()
+    outside.mkdir()
+    link = project / "linked"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks unavailable: {exc}")
+    config_path = project / ".broker.toml"
+    _write_project_config(config_path, backend="sqlite", target="linked/queue.db")
+
+    target = resolve_project_target(config_path)
+
+    assert target.target_path == (outside / "queue.db").resolve()
 
 
 @pytest.mark.sqlite_only
@@ -450,7 +665,7 @@ def test_project_config_foreign_sqlite_db_reports_specific_primary_error(
 
     assert code == 1
     assert stdout == ""
-    assert stderr.startswith(expected_error)
+    assert expected_error in stderr
     assert "Database corruption or invalid format" not in stderr
 
 

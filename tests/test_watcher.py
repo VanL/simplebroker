@@ -389,10 +389,10 @@ class TestQueueWatcher(WatcherTestBase):
             watcher.stop(join=False)
 
     @pytest.mark.sqlite_only
-    def test_default_start_strategy_keeps_cached_queue_activity_waiter(
+    def test_default_start_strategy_transfers_cached_queue_activity_waiter(
         self, tmp_path, monkeypatch
     ):
-        """Restarting strategy should not close the cached Queue waiter."""
+        """A started strategy takes sole ownership of the Queue waiter."""
         from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
 
         from .helper_scripts.broker_factory import make_target
@@ -417,10 +417,12 @@ class TestQueueWatcher(WatcherTestBase):
         )
         try:
             watcher._start_strategy()
+            assert watcher._queue_obj._activity_waiter is None
             watcher._start_strategy()
 
             assert waiter.close_calls == 0
             assert watcher._strategy.uses_native_activity() is True
+            assert watcher._queue_obj._activity_waiter is None
 
             watcher._strategy.close()
             assert waiter.close_calls == 1

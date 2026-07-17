@@ -39,7 +39,7 @@ file locking is strict. Always use one of these patterns:
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
-    watcher.run_forever()  # Handles SIGINT (Ctrl+C) automatically
+    watcher.run_forever()  # Handles SIGINT/SIGTERM automatically
 
 WARNING: Not calling stop() can cause:
 - Thread leaks (threads continue running after main program exits)
@@ -341,6 +341,7 @@ class BaseWatcher(ABC):
 
         # Weak reference to the thread running this watcher (for cleanup warnings)
         self._thread: weakref.ref[threading.Thread] | None = None
+        self._run_thread: weakref.ref[threading.Thread] | None = None
 
         # Thread-local storage for database connections
         self._thread_local = threading.local()
@@ -446,11 +447,21 @@ class BaseWatcher(ABC):
             activity_waiter = self._create_activity_waiter(queue)
             self._check_stop()
 
-            self._strategy.start(
-                data_version_getter,
-                on_data_version_change=on_data_version_change,
-                activity_waiter=activity_waiter,
-            )
+            try:
+                self._strategy.start(
+                    data_version_getter,
+                    on_data_version_change=on_data_version_change,
+                    activity_waiter=activity_waiter,
+                )
+            except BaseException:
+                # A failed start does not complete the ownership handoff. If
+                # the strategy accepted the candidate before failing, detach
+                # it there and leave the Queue cache as the single closer.
+                self._strategy.detach_activity_waiter(expected=activity_waiter)
+                raise
+            # Queue owns a newly created waiter until strategy startup succeeds.
+            # After this handoff, only the strategy may close the waiter.
+            queue._detach_activity_waiter(expected=activity_waiter)
             self._check_stop()
 
     def _process_with_retry(
@@ -527,6 +538,9 @@ class BaseWatcher(ABC):
             StopWatching: If error handler returns False
 
         """
+        if isinstance(e, (StopWatching, StopException)):
+            raise StopWatching from e
+
         effective_config = self._config if config is None else resolve_config(config)
         stop_requested = False
         try:
@@ -535,6 +549,10 @@ class BaseWatcher(ABC):
                 # Error handler says stop
                 stop_requested = True
             # True or None means continue
+        except StopWatching:
+            raise
+        except StopException as stop_error:
+            raise StopWatching from stop_error
         except Exception as eh_error:
             # Error handler itself failed
             if effective_config["BROKER_LOGGING_ENABLED"]:
@@ -600,14 +618,16 @@ class BaseWatcher(ABC):
 
     def _perform_stop(self, join: bool, timeout: float) -> None:
         """Internal method to perform the actual stop operations."""
+        run_was_active = self._running_event.is_set()
         if not self._stop_event.is_set():
             self._stop_event.set()
             # Notify strategy to wake up wait_for_activity
             if hasattr(self._strategy, "notify_activity"):
                 self._strategy.notify_activity()  # Wake up wait_for_activity
 
-        if join and self._thread is not None:
-            thread = self._thread()  # Get strong reference from weak ref
+        run_thread_ref = self._run_thread or self._thread
+        if join and run_thread_ref is not None:
+            thread = run_thread_ref()
             if (
                 thread is not None
                 and thread.is_alive()
@@ -615,18 +635,17 @@ class BaseWatcher(ABC):
             ):
                 thread.join(timeout)
 
-        # After the thread is gone we can close the per-thread DB
-        thread_ref = self._thread
-        if thread_ref is None:
-            should_cleanup = True
-        else:
-            thread = thread_ref()
-            should_cleanup = thread is None or not thread.is_alive()
+        # A live run owns teardown. Its finally block is the only closer, even
+        # if join times out; stop() only cleans watchers that were not running.
+        finalizer = getattr(self, "_finalizer", None)
+        should_cleanup = (
+            not run_was_active
+            and not self._running_event.is_set()
+            and (finalizer is None or finalizer.alive)
+        )
 
         if should_cleanup:
-            self._cleanup_thread_local()
-            if hasattr(self._strategy, "close"):
-                self._strategy.close()
+            self._cleanup_runtime_resources()
 
         # Detach finalizer only once resources are actually released.
         if should_cleanup and hasattr(self, "_finalizer"):
@@ -641,6 +660,14 @@ class BaseWatcher(ABC):
         # Delegate to Queue's cleanup method
         self._queue_obj.cleanup_connections()
 
+    def _cleanup_runtime_resources(self) -> None:
+        """Release strategy-owned resources before queue-owned resources."""
+        try:
+            if hasattr(self._strategy, "close"):
+                self._strategy.close()
+        finally:
+            self._cleanup_thread_local()
+
     def is_running(self) -> bool:
         """Return whether run execution, including final cleanup, is active."""
         return self._running_event.is_set()
@@ -649,18 +676,24 @@ class BaseWatcher(ABC):
     def _drain_queue(self) -> None:
         """Process messages - must be implemented by subclasses."""
 
-    def _setup_signal_handler(self) -> SignalHandlerContext | None:
-        """Set up signal handler for SIGINT if in main thread.
+    def _setup_signal_handler(self) -> contextlib.ExitStack | None:
+        """Set up shutdown signal handlers if in the main thread.
 
         Returns:
-            SignalHandlerContext if handler was set up, None otherwise
+            ExitStack restoring installed handlers, or None otherwise.
         """
         if threading.current_thread() is threading.main_thread():
-            signal_context = SignalHandlerContext(
-                signal.SIGINT,
-                self._sigint_handler,
-            )
-            signal_context.__enter__()
+            signal_context = contextlib.ExitStack()
+            try:
+                signal_context.enter_context(
+                    SignalHandlerContext(signal.SIGINT, self._sigint_handler)
+                )
+                signal_context.enter_context(
+                    SignalHandlerContext(signal.SIGTERM, self._sigint_handler)
+                )
+            except BaseException:
+                signal_context.close()
+                raise
             return signal_context
         return None
 
@@ -804,12 +837,12 @@ class BaseWatcher(ABC):
                     break
 
     def _sigint_handler(self, signum: int, frame: Any) -> None:
-        """Convert SIGINT to graceful shutdown.
+        """Convert an installed termination signal to graceful shutdown.
 
         Can be overridden by subclasses for custom handling.
         """
         # Default implementation - just stop
-        logger.info("Received SIGINT, stopping watcher...")
+        logger.info("Received signal %s, stopping watcher...", signum)
         self.stop(join=False)
         raise KeyboardInterrupt
 
@@ -927,10 +960,14 @@ class BaseWatcher(ABC):
     def run_forever(self) -> None:
         """Run the watcher continuously until stopped.
 
-        This method blocks until stop() is called or SIGINT is received.
+        This method blocks until stop() is called or SIGINT/SIGTERM is received.
         """
-        signal_context: SignalHandlerContext | None = None
+        signal_context: contextlib.ExitStack | None = None
+        if hasattr(self, "_finalizer") and not self._finalizer.alive:
+            self._setup_finalizer()
+        self._run_thread = weakref.ref(threading.current_thread())
         self._running_event.set()
+        resources_released = False
         try:
             # Set up signal handler if in main thread
             signal_context = self._setup_signal_handler()
@@ -941,12 +978,16 @@ class BaseWatcher(ABC):
         finally:
             try:
                 try:
-                    self._cleanup_thread_local()
+                    self._cleanup_runtime_resources()
+                    resources_released = True
                 finally:
                     if signal_context is not None:
                         signal_context.__exit__(None, None, None)
             finally:
                 self._running_event.clear()
+                self._run_thread = None
+                if resources_released and hasattr(self, "_finalizer"):
+                    self._finalizer.detach()
 
     def run_in_thread(self) -> threading.Thread:
         """Start the watcher in a new background thread.
@@ -980,7 +1021,7 @@ class BaseWatcher(ABC):
 
         This method blocks until:
         - stop() is called from another thread
-        - SIGINT (Ctrl+C) is received (if in main thread)
+        - SIGINT or SIGTERM is received (if in main thread)
         - An unrecoverable error occurs
 
         No additional cleanup is needed after this method returns, as it
@@ -1628,6 +1669,7 @@ class QueueWatcher(BaseWatcher):
             after_timestamp=self._after_timestamp_filter(),
             commit_interval=1,
         ):
+            self._check_stop()
             if self._try_dispatch_message(body, ts):
                 # Only update timestamp after successful dispatch.
                 # Caveat: advancing the checkpoint here means a message later

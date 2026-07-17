@@ -34,3 +34,24 @@ pool_timeout = 5.0
 
 Pool exhaustion is bounded by `pool_timeout` and surfaces as an operational
 error from broker operations.
+
+## Concurrency semantics
+
+Queue deletion is atomic per queue. `delete()` first snapshots the queue
+registry, then one Lua invocation per selected queue rechecks active
+at-least-once reservations and removes that queue's pending, claimed, body,
+and global-ID state together. A queue created after the registry snapshot is
+outside the operation and is not deleted. If a reservation starts between
+per-queue invocations, deletion stops with an error; queues already processed
+remain deleted, while that reserved queue and later queues remain intact.
+
+Patternless `broadcast()` selects the current queue registry and inserts every
+copy in one Lua invocation. A queue cannot be missed or resurrected by a
+concurrent write or deletion that commits before that invocation. Activity
+notifications and maintenance accounting run after the atomic insert commits.
+
+Patterned broadcasts deliberately keep a client-side queue snapshot so their
+matching stays exactly Python `fnmatchcase` syntax. A queue created after the
+snapshot can miss that broadcast; a queue deleted after the snapshot can be
+recreated by it. Use a patternless broadcast when atomic registry selection is
+required.

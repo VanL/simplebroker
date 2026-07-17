@@ -1116,7 +1116,17 @@ class BrokerCore:
                 raise
             finally:
                 session.close()
-            self._runner.commit()
+            try:
+                self._runner.commit()
+            except BaseException:
+                # COMMIT failure can leave SQLite inside the transaction.  A
+                # later nominally autocommit operation would otherwise commit
+                # these caller-owned partial writes.
+                try:
+                    self._runner.rollback()
+                except BaseException:
+                    pass
+                raise
 
     def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
@@ -2774,6 +2784,7 @@ class BrokerCore:
         """
         self._check_fork_safety()
         self._validate_queue_name(queue)
+        after_timestamp = validate_timestamp_bound("after_timestamp", after_timestamp)
 
         def _do_check() -> bool:
             """Inner function to execute the check with retry logic."""

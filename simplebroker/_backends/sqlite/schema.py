@@ -215,7 +215,14 @@ def ensure_schema_v3(
         if "already exists" in str(exc):
             runner.begin_immediate()
             write_schema_version(3)
-            runner.commit()
+            try:
+                runner.commit()
+            except BaseException:
+                try:
+                    runner.rollback()
+                except BaseException:
+                    pass
+                raise
         else:
             raise
 

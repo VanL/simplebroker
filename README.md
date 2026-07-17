@@ -230,6 +230,9 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `load` | Restore a dump from stdin into a fresh broker (duplicate message IDs fail loudly); exit codes 0/1 |
 | `init` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
 
+`read --all`, `peek --all`, `dump`, and `watch` treat a downstream stdout
+consumer closing its pipe as a clean shutdown. See [Pipe behavior](#pipe-behavior).
+
 #### Queue Aliases
 
 Use aliases when two agents refer to the same underlying queue with different names. Aliases are stored in the database, persist across processes, and update atomically.
@@ -330,6 +333,9 @@ exits `1`. A well-formed ID that does not match a message is silent and exits
 - `0` - Success
 - `1` - General error (e.g., database access error, invalid arguments)
 - `2` - Queue empty or no matching messages
+
+`watch` exits `0` when stopped by SIGINT/SIGTERM or when its stdout consumer
+closes the pipe (see [Pipe behavior](#pipe-behavior)).
 
 **Note:** `delete <queue>`, `delete --all`, and `delete <queue> -m <id>` remove matching rows immediately. Reads still use claimed-row semantics and are reclaimed by `--vacuum`.
 
@@ -696,7 +702,22 @@ The watcher uses an efficient polling strategy:
 - **Burst mode**: First 100 checks with zero delay for immediate message pickup
 - **Smart backoff**: Gradually increases polling interval to 0.1s maximum
 - **Low overhead**: Uses SQLite's data_version to detect changes without querying
-- **Graceful shutdown**: Handles Ctrl-C (SIGINT) cleanly
+- **Graceful shutdown**: Handles SIGINT and SIGTERM cleanly
+
+### Pipe behavior
+
+When the process consuming SimpleBroker's stdout exits (for example,
+`broker watch q | head -1`), SimpleBroker stops at its next delivery attempt
+and exits `0`. An idle watcher does not learn the pipe closed until it next
+tries to write to it. With the default consume semantics, the message whose
+delivery detected the closed pipe was already claimed and is not returned to
+the queue; no further messages are claimed. A configured at-least-once
+`read --all` batch instead rolls back its still-uncommitted batch when the
+stream closes.
+
+Exit `0` means SimpleBroker shut down cleanly. It does not validate that the
+consumer processed any particular message; check the consumer's own exit
+status.
 
 ### Move Mode (`--move`)
 
@@ -983,9 +1004,10 @@ not process later message IDs past it. Returning `True` means “keep watching,�
 not “acknowledge” or “skip.” To skip a poison message, the error callback must
 explicitly delete it or move it to another queue.
 
-`StopException` is watcher control flow, not an ordinary handler failure. If a
-callback catches `Exception`, it must re-raise `StopException` so shutdown is
-not swallowed.
+Raise `simplebroker.watcher.StopWatching` from a message handler or error
+handler to stop the watcher cleanly. Handlers that catch broad `Exception`
+must re-raise `StopWatching` and the internal `StopException`, which the
+watcher converts, so shutdown is not swallowed.
 
 ### Thread-Based Background Processing
 
@@ -1377,7 +1399,7 @@ logged or exposed.
 `simplebroker.commands` is supported public embedding surface: the programmatic
 equivalent of the CLI. Each `cmd_*` function mirrors one CLI subcommand — it
 prints to stdout and returns an integer exit code (`0` success, `1` error, `2`
-not found / queue empty; `124` for a watch timeout) rather than raising for
+not found / queue empty) rather than raising for
 expected outcomes. Import them directly and drive the broker without shelling
 out:
 
@@ -1394,17 +1416,19 @@ cmd_list(db)                              # prints queue names, returns 0
 The names in `simplebroker.commands.__all__` are stable under the same
 compatibility policy as the package's other public exports.
 
-`DatabaseError` (the base class your error handling must catch for storage
-failures) is importable from `simplebroker.ext`:
+`DatabaseError` is importable from `simplebroker.ext`. It is the common base
+for SimpleBroker's package-defined `OperationalError`, `IntegrityError`, and
+`DataError` storage exceptions:
 
 ```python
 from simplebroker.ext import DatabaseError
 ```
 
-This narrowly overrides the earlier "extension seam is documentation only, no
-exports are added" decision: `DatabaseError` is error-handling surface that both
-first-party extensions and any embedder need to catch, not backend-author
-surface. Nothing else is promoted.
+`BrokerError` remains the root of every package-defined SimpleBroker exception.
+It is not an exhaustive catch for every runtime failure: connection-retry
+exhaustion, fork-safety violations, and repeated timestamp-conflict exhaustion
+can raise plain `RuntimeError`. `DatabaseError` no longer subclasses
+`OSError`; catch `OSError` separately for filesystem and process failures.
 
 ## Performance & Tuning
 
@@ -1533,8 +1557,10 @@ export BROKER_DEFAULT_DB_NAME=project-queue.db
 
 SimpleBroker provides flexible database scoping modes to handle different use cases:
 
-**Directory Scope (Default):** Each directory gets its own independent `.broker.db`  
-**Project Scope:** Git-like upward search for shared project database  
+**Directory Scope (Default):** A `.broker.toml` is honored only in the selected current directory; otherwise each directory gets its own independent `.broker.db`
+
+**Project Scope:** Git-like upward search for shared project config or database
+
 **Global Scope:** Use a specific location for all broker operations
 
 This allows multiple scripts and processes to share broker databases according to your needs.
@@ -1547,7 +1573,15 @@ Enable project scoping by setting the environment variable:
 export BROKER_PROJECT_SCOPE=true
 ```
 
-With project scoping enabled, SimpleBroker searches upward from the current directory to find an existing `.broker.db` file. If found, it uses that database instead of creating a new one in the current directory.
+With project scoping enabled, SimpleBroker searches upward from the current
+directory for `.broker.toml` and then an existing `.broker.db`. The walk follows
+the physical directory chain, stops before crossing a filesystem mount boundary,
+stops at the filesystem root, and examines at most 100 levels. A discovered
+`.broker.toml` is a trusted project anchor, like a discovered `.git` directory;
+its `target` may point outside the project directory and may traverse symlinks.
+
+With `BROKER_PROJECT_SCOPE` unset or false, there is no upward search. A
+`.broker.toml` in the selected current directory is still honored.
 
 ```bash
 # Project structure:
@@ -1702,13 +1736,15 @@ SimpleBroker resolves the active broker target in this order:
 
 1. **Explicit CLI SQLite file selection** (`-f`, or `-d/-f`) for non-`init`
    commands
-2. **Project config** discovered upward from the working directory when project
+2. **Project config in the selected current directory**, even when project
+   scope is disabled
+3. **Project config** discovered upward from the working directory when project
    scope is enabled, using `BROKER_PROJECT_CONFIG_PATH` and
    `BROKER_PROJECT_CONFIG_NAME`
-3. **Legacy project SQLite discovery** using `BROKER_DEFAULT_DB_NAME` when
+4. **Legacy project SQLite discovery** using `BROKER_DEFAULT_DB_NAME` when
    project scope is enabled
-4. **Env-selected non-SQLite backend** using `BROKER_BACKEND=...`
-5. **SQLite defaults** from `BROKER_DEFAULT_DB_LOCATION`, the current
+5. **Env-selected non-SQLite backend** using `BROKER_BACKEND=...`
+6. **SQLite defaults** from `BROKER_DEFAULT_DB_LOCATION`, the current
    directory, and `BROKER_DEFAULT_DB_NAME`
 
 **Notes:**
@@ -1764,12 +1800,14 @@ CLI flags (-f absolute path)?
 ├─ YES → Use absolute path
 └─ NO → CLI flags (-d + -f)?
    ├─ YES → Use directory + filename
-   └─ NO → BROKER_PROJECT_SCOPE=true?
-      ├─ NO → Use env defaults or built-in defaults
-      └─ YES → Search upward for project config, then legacy SQLite database
-         ├─ PROJECT CONFIG FOUND → Use configured project target
-         ├─ SQLITE DATABASE FOUND → Use project database
-         └─ NOTHING FOUND → Error with message to run 'broker init'
+   └─ NO → Current-directory project config exists?
+      ├─ YES → Use configured project target
+      └─ NO → BROKER_PROJECT_SCOPE=true?
+         ├─ NO → Use env defaults or built-in defaults
+         └─ YES → Search upward for project config, then legacy SQLite database
+            ├─ PROJECT CONFIG FOUND → Use configured project target
+            ├─ SQLITE DATABASE FOUND → Use project database
+            └─ NOTHING FOUND → Error with message to run 'broker init'
 ```
 
 ### Security Notes
@@ -1983,6 +2021,10 @@ This optimization is transparent - messages are still delivered exactly once.
 - **Queue names**: Validated (alphanumeric + underscore + hyphen + period only)
 - **Message size**: Limited to 10MB by default; override with `BROKER_MAX_MESSAGE_SIZE`
 - **Database files**: Created with 0600 permissions (user-only)
+- **Project config secrets**: Prefer `BROKER_BACKEND_PASSWORD` or another
+  environment variable over embedding passwords in `.broker.toml`. SimpleBroker
+  warns without printing the secret when a target embeds a password, and on
+  POSIX it also warns when the config is group- or other-readable.
 - **SQL injection**: Prevented via parameterized queries
 - **Message content**: Not validated - can contain any text including shell metacharacters
 </details>
@@ -2141,13 +2183,18 @@ object yourself when you want several queues to share an injected backend.
 For `PostgresRunner`, call `runner.close()` or `runner.shutdown()` when you are
 done with the explicitly created runner so its connection pool is closed.
 
+SQLite fork recovery assumes the child is single-threaded when a runner is
+first touched. If multiple child threads race that first touch, recovery can
+interleave. The bounded failure mode is an operation error or one extra
+abandoned inherited connection, not reuse of a parent SQLite connection.
+
 CLI/project usage is selected through a `.broker.toml` file in the project
 root:
 
 ```toml
 version = 1
 backend = "postgres"
-target = "postgresql://postgres:postgres@127.0.0.1:54329/simplebroker_test"
+target = "postgresql://postgres@127.0.0.1:54329/simplebroker_test"
 
 [backend_options]
 schema = "simplebroker_app"

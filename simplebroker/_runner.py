@@ -229,7 +229,11 @@ class SQLiteRunner:
         forever by parent threads that do not exist in this child, so the
         recovery must happen before any acquisition attempt. Cheap pid check
         in the normal (non-forked) case; idempotent — the pid check makes
-        re-entry a no-op, and the child is single-threaded at recovery time.
+        re-entry a no-op. Recovery assumes the child is single-threaded when
+        runner state is first touched. If multiple child threads race that
+        first touch, they can interleave state abandonment and lock replacement;
+        the bounded failure mode is an operation error or one extra abandoned
+        inherited connection, not parent-connection reuse.
 
         Recovery does NOT close inherited connections: sqlite3 close()
         implies rollback and may touch the shared WAL-index the parent is

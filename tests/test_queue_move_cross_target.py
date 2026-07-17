@@ -77,3 +77,54 @@ def test_queue_move_accepts_same_target_queue_destination(tmp_path) -> None:
     assert source.move_one(destination) == "payload"
     assert _queue_messages(source) == []
     assert _queue_messages(destination) == ["payload"]
+
+
+def test_queue_move_accepts_plain_and_broker_target_for_same_sqlite_file(
+    tmp_path,
+) -> None:
+    db_path = str(tmp_path / "broker.db")
+    source = Queue("inbox", db_path=db_path)
+    destination = Queue("outbox", db_path=BrokerTarget("sqlite", db_path, {}))
+    source.write("payload")
+
+    assert source.move_one(destination) == "payload"
+    assert _queue_messages(destination) == ["payload"]
+
+
+def test_queue_move_rejects_relative_paths_bound_to_different_directories(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_dir = tmp_path / "source"
+    destination_dir = tmp_path / "destination"
+    source_dir.mkdir()
+    destination_dir.mkdir()
+
+    monkeypatch.chdir(source_dir)
+    source = Queue("inbox", db_path="broker.db")
+    source.write("payload")
+    monkeypatch.chdir(destination_dir)
+    destination = Queue("outbox", db_path="broker.db")
+    monkeypatch.chdir(source_dir)
+
+    with pytest.raises(ValueError, match="different broker targets"):
+        source.move_one(destination)
+
+    assert _queue_messages(source) == ["payload"]
+
+
+def test_relative_ephemeral_queue_stays_bound_to_construction_directory(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    construction_dir = tmp_path / "construction"
+    later_dir = tmp_path / "later"
+    construction_dir.mkdir()
+    later_dir.mkdir()
+
+    monkeypatch.chdir(construction_dir)
+    queue = Queue("jobs", db_path="broker.db")
+    monkeypatch.chdir(later_dir)
+    queue.write("payload")
+
+    assert (construction_dir / "broker.db").exists()
+    assert not (later_dir / "broker.db").exists()
+    assert queue.peek() == "payload"
