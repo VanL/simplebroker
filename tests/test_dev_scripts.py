@@ -48,6 +48,12 @@ def _is_commands_coverage_path(path: str) -> bool:
     return path.replace("\\", "/").endswith("simplebroker/commands.py")
 
 
+def _coverage_shutdown_timeout(base_timeout: float) -> float:
+    if os.environ.get("CI") or os.environ.get("PYTEST_XDIST_WORKER"):
+        return base_timeout * 2
+    return base_timeout
+
+
 def _write_coverage_lines(
     data_file: Path,
     source_file: Path,
@@ -201,11 +207,11 @@ def test_coverage_sigterm_saves_readable_data_from_terminated_process(
         assert process.stdout is not None
         assert process.stdout.readline().strip() == "ready"
         process.terminate()
-        _stdout, stderr = process.communicate(timeout=5)
+        _stdout, stderr = process.communicate(timeout=_coverage_shutdown_timeout(5.0))
     finally:
         if process.poll() is None:
             process.kill()
-            process.wait(timeout=2)
+            process.wait(timeout=_coverage_shutdown_timeout(2.0))
 
     assert process.returncode == -signal.SIGTERM, stderr
     shards = list(tmp_path.glob(".coverage.*"))
@@ -216,6 +222,19 @@ def test_coverage_sigterm_saves_readable_data_from_terminated_process(
         measured.replace("\\", "/").endswith("simplebroker/_backend_plugins.py")
         for measured in data.measured_files()
     )
+
+
+@pytest.mark.parametrize("contention_env", ["CI", "PYTEST_XDIST_WORKER"])
+def test_coverage_shutdown_timeout_scales_for_contended_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    contention_env: str,
+) -> None:
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
+    assert _coverage_shutdown_timeout(5.0) == 5.0
+
+    monkeypatch.setenv(contention_env, "1")
+    assert _coverage_shutdown_timeout(5.0) == 10.0
 
 
 def test_combine_coverage_maps_ci_checkout_roots_to_repo_relative_paths(

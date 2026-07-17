@@ -1090,6 +1090,13 @@ protocol rather than review guidance.
   five seconds. It now uses the existing helper, preserving the five-second
   local SQLite budget while allowing ten seconds under CI; the other Windows
   versions completed the same invariant, so no production timing was changed.
+- The next local release preflight exposed the same contention assumption in
+  the POSIX coverage SIGTERM regression: a child had only five seconds to save
+  and re-raise SIGTERM while the functional phase ran 17 workers. Its shutdown
+  and forced-cleanup waits now double only under CI or an xdist worker; direct
+  local runs retain the original budgets. The scaling conditions have firing
+  tests, and the black-box test still requires a real `-SIGTERM` exit plus a
+  readable measured shard.
 
 ## Review Log
 
