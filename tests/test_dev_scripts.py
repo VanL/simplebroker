@@ -44,6 +44,10 @@ COMBINE_COVERAGE_SCRIPT = (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _is_commands_coverage_path(path: str) -> bool:
+    return path.replace("\\", "/").endswith("simplebroker/commands.py")
+
+
 def _write_coverage_lines(
     data_file: Path,
     source_file: Path,
@@ -593,18 +597,26 @@ def test_child_coverage(index):
     assert result.returncode == 0, result.stdout + result.stderr
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert any(
-        path.endswith("simplebroker/commands.py") for path in combined.measured_files()
-    )
+    assert any(_is_commands_coverage_path(path) for path in combined.measured_files())
     deferred_files = sorted(tmp_path.glob(".coverage-subprocess.*"))
     assert len(deferred_files) == 2
     for deferred_file in deferred_files:
         deferred = CoverageData(basename=str(deferred_file))
         deferred.read()
         assert any(
-            path.endswith("simplebroker/commands.py")
-            for path in deferred.measured_files()
+            _is_commands_coverage_path(path) for path in deferred.measured_files()
         )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/workspace/simplebroker/commands.py",
+        r"D:\a\simplebroker\simplebroker\commands.py",
+    ],
+)
+def test_coverage_source_matching_is_platform_neutral(path: str) -> None:
+    assert _is_commands_coverage_path(path)
 
 
 @pytest.mark.sqlite_only

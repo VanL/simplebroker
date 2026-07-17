@@ -1079,6 +1079,11 @@ protocol rather than review guidance.
   Arbitrary bytes and partial schemas with measurement rows remain hard
   failures. A red-green regression deletes only the marker from a measured
   shard and proves its lines survive the repair and strict merge.
+- Windows 3.11, 3.12, and 3.13 then exposed a platform bug in the new xdist
+  coverage regression itself: coverage stores native backslashes there, while
+  the assertion matched only a POSIX suffix. Source-path matching now
+  normalizes separators, with both path forms firing locally before the native
+  Windows matrix rerun.
 
 ## Review Log
 
