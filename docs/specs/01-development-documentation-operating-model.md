@@ -458,8 +458,15 @@ edit; escalate loudly the moment a trigger fires.
 
 This spec was authored and evolved in the agent-guidance repository;
 the plans below live there, not in this repository (quoted by name so
-no local path dangles). This copy: adopted from agent-guidance @
-`fc23eae` via `docs/plans/2026-07-16-agent-guidance-bootstrap-plan.md`.
+no local path dangles).
+
+Local adoption record (soft-retired; not a live path claim):
+
+- retired: 2026-07-16-agent-guidance-bootstrap-plan — source f133ce7; see docs/plans/README.md
+- retired: 2026-07-17-propagate-guidance-delta-wave-plan — source f133ce7; see docs/plans/README.md
+- retired: 2026-07-27-agent-docs-coalescing-and-status-hygiene-plan — source f133ce7; see docs/plans/README.md
+
+Hub plans (names only; live in agent-guidance):
 
 - "2026-04-07-development-documentation-foundation-plan"
 - "2026-04-07-plan-hardening-guidance-plan"

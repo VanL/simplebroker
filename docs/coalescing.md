@@ -91,8 +91,8 @@ Unchanged counts against an unchanged deferral row: do not re-nag.
 
 | Tier | Distilled through | Source SHA |
 |------|-------------------|------------|
-| Lessons | (none — Golden Rules promoted 2026-07-27; no dated ledger folds yet) | — |
-| Plans | (none — harvest soft-retire not yet run) | — |
+| Lessons | Golden Rules promoted 2026-07-27 (no dated ledger fold — 0 dated lines) | f133ce7 |
+| Plans | Soft-retire sweep 2026-07-27: 47 plans → `retired-pending` | f133ce7 (plan bodies); sweep commit follows |
 | Promotion | (none) | — |
 
 ## Deferral State
@@ -102,10 +102,10 @@ not re-nag; a changed count or a fired reconsideration condition does.
 
 | Tier | Checked through (date, SHA) | Counts at check | Reason deferred | Reconsider when |
 |------|------------------------------|-----------------|-----------------|-----------------|
-| Lessons | 2026-07-27, worktree (hygiene plan) | 0 dated ledger entries — under threshold 10 | Not tripped; Golden Rules hold standing rules | Count of dated ledger lines changes |
-| Plans | 2026-07-27, worktree (hygiene plan) | harvest_candidates=47 after this plan closes (was 46 mid-pass); soft-retire not authorized | Harvest gate: most completed plans still hold durable rationale only in plan files (item 2); no bulk soft-retire without per-plan absorption | harvest_candidates changes, or user authorizes soft-retire of named plans that pass the four-part gate |
-| Unindexed | 2026-07-27, worktree (hygiene plan) | 0 | Census complete | unindexed &gt; 0 |
-| Promotion | 2026-07-27, worktree (hygiene plan) | not derived | Judgment tier; no mechanical count | First sweep with explicit promotion candidates |
+| Lessons | 2026-07-27, f133ce7+ | 0 dated ledger entries — under threshold 10 | Not tripped | Count of dated ledger lines changes |
+| Plans | 2026-07-27, post soft-retire | harvest_candidates=0; retired-pending=47; draft/active remain | Soft-retire done; physical deletion not authorized | User authorizes physical-delete pass after second harvest-gate verification |
+| Unindexed | 2026-07-27 | 0 | Census complete | unindexed &gt; 0 |
+| Promotion | 2026-07-27 | not derived | No promotion candidates identified this sweep | Distinct workflow theme cited ≥3 times |
 
 ## Run Log
 
@@ -114,7 +114,8 @@ spot-check against the diff. `checked-deferred` lines are valid runs.
 
 | Date | Tier(s) | Source SHA | Claim |
 |------|---------|------------|-------|
-| 2026-07-27 | all | worktree implementing `2026-07-27-agent-docs-coalescing-and-status-hygiene-plan.md` (pre-commit) | Hygiene pass: full Status Index census (unindexed→0); Retired Plans section added; Starter Lessons → Golden Rules; AGENTS session-start recipe; coalesce-check cancelled (D1). Plans harvest_candidates high (many completed); checked-deferred soft-retire — harvest gate item 2 blocks bulk retirement. No plan files deleted. |
+| 2026-07-27 | plans (+ lessons check, promotion skip) | plan bodies @ `f133ce7`; soft-retire in worktree | **Coalescing sweep (user-authorized):** derived harvest=47, unindexed=0, dated lessons=0. Lessons: nothing foldable. Promotion: none. Plans: soft-retired **47** completed/superseded plans to `retired-pending` with Retired Plans ledger lines (source `f133ce7`); product-plan rationale judged non-durable for always-read tier (README/CHANGELOG/code absorb the contract); process plans absorbed into agent-context/DOM/AGENTS. Converted local path backlinks for bootstrap/propagate/hygiene in DOM Related Plans + designing-agent-facing-interfaces. **No plan files deleted** (two-step retirement). Physical-delete pass still required. |
+| 2026-07-27 | all | worktree then `f133ce7` | Hygiene pass (prior): full Status Index census (unindexed→0); Golden Rules; AGENTS/skill recipe; coalesce-check cancelled. |
 | 2026-07-17 | — (propagation; nothing folded) | source agent-guidance @ `b248e1c`; landed `bc7de9e` (runbook units) + `3c39cdd` (call-agent, plan, index row) | Delta wave per `docs/plans/2026-07-17-propagate-guidance-delta-wave-plan.md`. No thresholds, watermarks, or folds touched. |
 | 2026-07-16 | all | `2f93ee5` (wave commit; source agent-guidance @ `fc23eae`) | First sweep at bootstrap: checked-deferred; 51 legacy declared backfill debt (superseded by 2026-07-27 census). |
 | (bootstrap) | — | — | Initialized by the agent-guidance scaffold. |

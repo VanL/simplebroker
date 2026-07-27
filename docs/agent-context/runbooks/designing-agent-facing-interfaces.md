@@ -10,8 +10,9 @@ guidance doctrine, the rest generalize mm's design — lineage
 accounting in the agent-guidance repository's plan
 "2026-07-14-agent-facing-interfaces-runbook-plan" §2 (its repository,
 not this one).
-This copy: adopted from agent-guidance @ `fc23eae` via
-`docs/plans/2026-07-16-agent-guidance-bootstrap-plan.md`.
+This copy: adopted from agent-guidance @ `fc23eae` via local bootstrap
+(retired: 2026-07-16-agent-guidance-bootstrap-plan — source f133ce7; see
+docs/plans/README.md).
 
 Owner: whoever designs or reviews an agent-facing surface. Boundary:
 interface *design*; the probe floors for agent-built tools live in
