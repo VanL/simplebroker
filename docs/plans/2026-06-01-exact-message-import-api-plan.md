@@ -11,13 +11,17 @@ implementation contract.
 Current contract:
 
 ```python
-broker.insert_messages([
-    (queue, message, message_id),
-])
+broker.insert_messages(
+    [
+        (queue, message, message_id),
+    ]
+)
 
-queue.insert_messages([
-    (message, message_id),
-])
+queue.insert_messages(
+    [
+        (message, message_id),
+    ]
+)
 ```
 
 `insert_messages(...)` is the only public exact-ID insertion API. It accepts one
@@ -427,8 +431,7 @@ Parametrize invalid values:
 
 ```python
 @pytest.mark.parametrize("message_id", [True, -1, 9223372036854775807])
-def test_import_message_rejects_invalid_message_id(broker, message_id):
-    ...
+def test_import_message_rejects_invalid_message_id(broker, message_id): ...
 ```
 
 Use `ValueError` or `TypeError` according to the existing
@@ -560,9 +563,7 @@ def import_message(self, queue: str, message: str, *, message_id: int) -> None:
 
     current_last_ts = self.refresh_last_timestamp()
     if normalized_id >= current_last_ts:
-        raise ValueError(
-            "imported message_id must be lower than current last_ts"
-        )
+        raise ValueError("imported message_id must be lower than current last_ts")
 
     self._run_with_retry(
         lambda: self._do_write_transaction(queue, message, normalized_id)

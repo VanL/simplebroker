@@ -579,6 +579,7 @@ def rename_queue_messages(
     new_queue: str,
 ) -> int: ...
 
+
 def retarget_aliases(
     self,
     runner: SQLRunner,
@@ -638,6 +639,7 @@ def rename_queue_messages(
     old_queue: str,
     new_queue: str,
 ) -> int: ...
+
 
 def retarget_aliases(
     runner: SQLRunner,

@@ -253,8 +253,8 @@ INVALID_MESSAGE_ID_MESSAGE = (
 
 MessageIdInput = int | str
 
-def normalize_message_id(value: object, *, name: str = "message_id") -> int:
-    ...
+
+def normalize_message_id(value: object, *, name: str = "message_id") -> int: ...
 ```
 
 Required behavior:

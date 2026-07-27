@@ -691,13 +691,13 @@ In `bin/release.py`:
 - Change `ROOT_PACKAGING_SMOKE_COMMAND` from:
 
   ```python
-  "3.10",
+  ("3.10",)
   ```
 
   to:
 
   ```python
-  "3.11",
+  ("3.11",)
   ```
 
 In `tests/test_dev_scripts.py`:

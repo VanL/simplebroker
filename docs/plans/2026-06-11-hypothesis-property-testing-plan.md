@@ -723,7 +723,10 @@ def test_iso_datetimes_agree_with_unix_seconds(n: int) -> None:
     quantum away from the integer-math suffix path. Asserting exact equality
     here WILL flake — do not 'fix' a failure by tightening this."""
     iso = datetime.fromtimestamp(n, tz=UTC).isoformat()
-    assert abs(TimestampGenerator.validate(iso) - TimestampGenerator.validate(f"{n}s")) <= QUANTUM
+    assert (
+        abs(TimestampGenerator.validate(iso) - TimestampGenerator.validate(f"{n}s"))
+        <= QUANTUM
+    )
 
 
 @given(st.dates(min_value=date(1970, 1, 1), max_value=date(2200, 12, 31)))
@@ -759,7 +762,9 @@ def test_known_quirk_pre_epoch_iso_returns_negative_int() -> None:
 def test_known_quirk_non_ascii_digits_accepted() -> None:
     """FINDING F3 (pinned, not endorsed): int() accepts any Unicode decimal
     digits, so Eastern Arabic numerals parse like ASCII ones."""
-    assert TimestampGenerator.validate("١٢٣s") == (123 * NS_PER_S) & ~LOGICAL_COUNTER_MASK
+    assert (
+        TimestampGenerator.validate("١٢٣s") == (123 * NS_PER_S) & ~LOGICAL_COUNTER_MASK
+    )
 ```
 
 - [ ] **Step 6: Run the whole file.**
@@ -845,14 +850,16 @@ VALID_NAMES = st.from_regex(QUEUE_NAME_PATTERN).filter(
     lambda s: len(s) <= MAX_QUEUE_NAME_LENGTH - 24 and not s.endswith("\n")
 )
 
-BODIES = st.text(
-    alphabet=st.characters(exclude_characters="\x00"), max_size=50
-)
+BODIES = st.text(alphabet=st.characters(exclude_characters="\x00"), max_size=50)
 
 
 def _validator_accepts(s: str) -> bool:
     """Mirror db._validate_queue_name_cached's accept logic exactly."""
-    return bool(s) and len(s) <= MAX_QUEUE_NAME_LENGTH and bool(QUEUE_NAME_PATTERN.match(s))
+    return (
+        bool(s)
+        and len(s) <= MAX_QUEUE_NAME_LENGTH
+        and bool(QUEUE_NAME_PATTERN.match(s))
+    )
 
 
 @given(name=VALID_NAMES, body=BODIES)
@@ -863,7 +870,9 @@ def _validator_accepts(s: str) -> bool:
     # counts come from the active profile (see tests/conftest.py).
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )
-def test_grammar_valid_names_work_end_to_end(queue_factory, name: str, body: str) -> None:
+def test_grammar_valid_names_work_end_to_end(
+    queue_factory, name: str, body: str
+) -> None:
     q = queue_factory(f"{name}_{next(_uniq)}")
     q.write(body)
     assert q.read_one() == body
@@ -873,7 +882,9 @@ def test_grammar_valid_names_work_end_to_end(queue_factory, name: str, body: str
 @settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )
-def test_grammar_invalid_names_are_rejected_at_first_use(queue_factory, name: str) -> None:
+def test_grammar_invalid_names_are_rejected_at_first_use(
+    queue_factory, name: str
+) -> None:
     """FINDING F5 (pinned): rejection raises ValueError, although docstrings
     advertise QueueNameError (which is not a ValueError subclass). If this
     starts failing with QueueNameError, the implementation moved to match its
@@ -986,10 +997,10 @@ def test_bodies_round_trip_identically(queue_factory, body: str) -> None:
 
 
 @given(body=st.text(alphabet=st.characters(exclude_characters="\x00"), max_size=40))
-@example("a" * SIZE_LIMIT_BYTES)      # exactly at the limit: accepted
+@example("a" * SIZE_LIMIT_BYTES)  # exactly at the limit: accepted
 @example("a" * (SIZE_LIMIT_BYTES + 1))  # one byte over: rejected
-@example("é" * 32)                    # 64 UTF-8 bytes in 32 chars: accepted
-@example("é" * 33)                    # 66 bytes in 33 chars: rejected
+@example("é" * 32)  # 64 UTF-8 bytes in 32 chars: accepted
+@example("é" * 33)  # 66 bytes in 33 chars: rejected
 @settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )
@@ -1126,7 +1137,9 @@ QUEUE_KEYS = ("alpha", "bravo", "charlie")
 
 # Printable-ASCII bodies keep shrunk failure scripts readable; full-Unicode
 # body fidelity is already covered by test_property_message_roundtrip.py.
-BODIES = st.text(alphabet=st.characters(min_codepoint=32, max_codepoint=126), max_size=20)
+BODIES = st.text(
+    alphabet=st.characters(min_codepoint=32, max_codepoint=126), max_size=20
+)
 
 # Claimed rows must be deterministic for exact include_claimed/stats
 # predictions; see the Stage 3 design notes in the plan.
@@ -1181,7 +1194,9 @@ class QueueModelMachine(RuleBasedStateMachine):
         q.write(body)
         # Single-threaded, so meta.last_ts after our write IS our write's id.
         ts = q.refresh_last_ts()
-        assert ts > self._max_known_ts(), "timestamps must be globally strictly increasing"
+        assert ts > self._max_known_ts(), (
+            "timestamps must be globally strictly increasing"
+        )
         self.pending[key].append((ts, body))
 
     @rule(key=st.sampled_from(QUEUE_KEYS))
@@ -1273,26 +1288,27 @@ git commit -m "Add stateful queue model machine with write/read/stats coverage"
 - [ ] **Step 1: Add the two rules:**
 
 ```python
-    @rule(key=st.sampled_from(QUEUE_KEYS), limit=st.integers(min_value=1, max_value=5))
-    def read_many(self, key: str, limit: int) -> None:
-        got = self._queues[key].read_many(limit, with_timestamps=True)
-        expected = self.pending[key][:limit]
-        assert got == [(body, ts) for ts, body in expected]
-        del self.pending[key][: len(expected)]
-        for entry in expected:
-            insort(self.claimed[key], entry)
+@rule(key=st.sampled_from(QUEUE_KEYS), limit=st.integers(min_value=1, max_value=5))
+def read_many(self, key: str, limit: int) -> None:
+    got = self._queues[key].read_many(limit, with_timestamps=True)
+    expected = self.pending[key][:limit]
+    assert got == [(body, ts) for ts, body in expected]
+    del self.pending[key][: len(expected)]
+    for entry in expected:
+        insort(self.claimed[key], entry)
 
-    @rule(key=st.sampled_from(QUEUE_KEYS), include_claimed=st.booleans())
-    def peek_is_nondestructive_and_exact(self, key: str, include_claimed: bool) -> None:
-        got = self._queues[key].peek_many(
-            limit=1000, with_timestamps=True, include_claimed=include_claimed
-        )
-        rows = self.pending[key] + (self.claimed[key] if include_claimed else [])
-        # Merged in ascending message-ID order; sorted() never ties because
-        # timestamps are globally unique.
-        assert got == [(body, ts) for ts, body in sorted(rows)]
-        # Deliberately no model mutation: if a peek ever claimed or deleted
-        # anything, the very next counts_match_the_model invariant fails.
+
+@rule(key=st.sampled_from(QUEUE_KEYS), include_claimed=st.booleans())
+def peek_is_nondestructive_and_exact(self, key: str, include_claimed: bool) -> None:
+    got = self._queues[key].peek_many(
+        limit=1000, with_timestamps=True, include_claimed=include_claimed
+    )
+    rows = self.pending[key] + (self.claimed[key] if include_claimed else [])
+    # Merged in ascending message-ID order; sorted() never ties because
+    # timestamps are globally unique.
+    assert got == [(body, ts) for ts, body in sorted(rows)]
+    # Deliberately no model mutation: if a peek ever claimed or deleted
+    # anything, the very next counts_match_the_model invariant fails.
 ```
 
 - [ ] **Step 2: Run on SQLite.**
@@ -1333,49 +1349,43 @@ from hypothesis.stateful import (
   Then add, inside the machine after the peek rule:
 
 ```python
-    def _claimed_triples(self) -> list[tuple[str, int, str]]:
-        return [
-            (key, ts, body)
-            for key in QUEUE_KEYS
-            for ts, body in self.claimed[key]
-        ]
+def _claimed_triples(self) -> list[tuple[str, int, str]]:
+    return [(key, ts, body) for key in QUEUE_KEYS for ts, body in self.claimed[key]]
 
-    @rule(data=st.data())
-    def move_oldest_pending(self, data: st.DataObject) -> None:
-        src = data.draw(st.sampled_from(QUEUE_KEYS), label="src")
-        dst = data.draw(
-            st.sampled_from([k for k in QUEUE_KEYS if k != src]), label="dst"
-        )
-        got = self._queues[src].move_one(self._queues[dst].name, with_timestamps=True)
-        if not self.pending[src]:
-            assert got is None
-        else:
-            ts, body = self.pending[src].pop(0)
-            assert got == (body, ts)
-            # The message keeps its original timestamp, so an old message can
-            # jump ahead of newer ones at the destination — insort, not append.
-            insort(self.pending[dst], (ts, body))
 
-    @precondition(lambda self: self._claimed_triples())
-    @rule(data=st.data())
-    def move_claimed_by_id_redelivers(self, data: st.DataObject) -> None:
-        src, ts, body = data.draw(
-            st.sampled_from(self._claimed_triples()), label="claimed message"
-        )
-        dst = data.draw(
-            st.sampled_from([k for k in QUEUE_KEYS if k != src]), label="dst"
-        )
-        got = self._queues[src].move_one(
-            self._queues[dst].name,
-            exact_timestamp=ts,
-            require_unclaimed=False,
-            with_timestamps=True,
-        )
+@rule(data=st.data())
+def move_oldest_pending(self, data: st.DataObject) -> None:
+    src = data.draw(st.sampled_from(QUEUE_KEYS), label="src")
+    dst = data.draw(st.sampled_from([k for k in QUEUE_KEYS if k != src]), label="dst")
+    got = self._queues[src].move_one(self._queues[dst].name, with_timestamps=True)
+    if not self.pending[src]:
+        assert got is None
+    else:
+        ts, body = self.pending[src].pop(0)
         assert got == (body, ts)
-        self.claimed[src].remove((ts, body))
-        # Moving resets the claim (SQL: SET queue = ?, claimed = 0), i.e. a
-        # consumed message becomes deliverable again at the destination.
+        # The message keeps its original timestamp, so an old message can
+        # jump ahead of newer ones at the destination — insort, not append.
         insort(self.pending[dst], (ts, body))
+
+
+@precondition(lambda self: self._claimed_triples())
+@rule(data=st.data())
+def move_claimed_by_id_redelivers(self, data: st.DataObject) -> None:
+    src, ts, body = data.draw(
+        st.sampled_from(self._claimed_triples()), label="claimed message"
+    )
+    dst = data.draw(st.sampled_from([k for k in QUEUE_KEYS if k != src]), label="dst")
+    got = self._queues[src].move_one(
+        self._queues[dst].name,
+        exact_timestamp=ts,
+        require_unclaimed=False,
+        with_timestamps=True,
+    )
+    assert got == (body, ts)
+    self.claimed[src].remove((ts, body))
+    # Moving resets the claim (SQL: SET queue = ?, claimed = 0), i.e. a
+    # consumed message becomes deliverable again at the destination.
+    insort(self.pending[dst], (ts, body))
 ```
 
 - [ ] **Step 2: Run on SQLite.**
@@ -1407,49 +1417,51 @@ git commit -m "Cover pending and claimed-by-id moves in the queue model"
 - [ ] **Step 1: Add the purge, exact-ID delete, and bounded-read rules:**
 
 ```python
-    @rule(key=st.sampled_from(QUEUE_KEYS))
-    def purge(self, key: str) -> None:
-        had_rows = bool(self._entries(key))
-        assert self._queues[key].delete() == had_rows
-        self.pending[key].clear()
-        self.claimed[key].clear()
+@rule(key=st.sampled_from(QUEUE_KEYS))
+def purge(self, key: str) -> None:
+    had_rows = bool(self._entries(key))
+    assert self._queues[key].delete() == had_rows
+    self.pending[key].clear()
+    self.claimed[key].clear()
 
-    @precondition(lambda self: any(self._entries(k) for k in QUEUE_KEYS))
-    @rule(data=st.data())
-    def delete_exact_ids(self, data: st.DataObject) -> None:
-        key = data.draw(
-            st.sampled_from([k for k in QUEUE_KEYS if self._entries(k)]),
-            label="queue",
-        )
-        chosen = data.draw(
-            st.lists(st.sampled_from(self._entries(key)), min_size=1, unique=True),
-            label="targets",
-        )
-        ids = [ts for ts, _ in chosen]
-        if data.draw(st.booleans(), label="also pass a missing id"):
-            # 1 is never a real hybrid timestamp (real ones are ~1.8e18);
-            # missing ids must be ignored, not counted.
-            ids.append(1)
-        assert self._queues[key].delete_many(ids) == len(chosen)
-        for entry in chosen:
-            bucket = self.pending[key] if entry in self.pending[key] else self.claimed[key]
-            bucket.remove(entry)
 
-    @precondition(lambda self: any(self._entries(k) for k in QUEUE_KEYS))
-    @rule(data=st.data())
-    def read_after_bound(self, data: st.DataObject) -> None:
-        key = data.draw(st.sampled_from(QUEUE_KEYS), label="queue")
-        known_ts = [ts for k in QUEUE_KEYS for ts, _ in self._entries(k)]
-        bound = data.draw(st.sampled_from(known_ts), label="bound")
-        got = self._queues[key].read(after_timestamp=bound, with_timestamps=True)
-        matches = [(ts, body) for ts, body in self.pending[key] if ts > bound]
-        if not matches:
-            assert got is None
-        else:
-            ts, body = matches[0]
-            assert got == (body, ts)
-            self.pending[key].remove((ts, body))
-            insort(self.claimed[key], (ts, body))
+@precondition(lambda self: any(self._entries(k) for k in QUEUE_KEYS))
+@rule(data=st.data())
+def delete_exact_ids(self, data: st.DataObject) -> None:
+    key = data.draw(
+        st.sampled_from([k for k in QUEUE_KEYS if self._entries(k)]),
+        label="queue",
+    )
+    chosen = data.draw(
+        st.lists(st.sampled_from(self._entries(key)), min_size=1, unique=True),
+        label="targets",
+    )
+    ids = [ts for ts, _ in chosen]
+    if data.draw(st.booleans(), label="also pass a missing id"):
+        # 1 is never a real hybrid timestamp (real ones are ~1.8e18);
+        # missing ids must be ignored, not counted.
+        ids.append(1)
+    assert self._queues[key].delete_many(ids) == len(chosen)
+    for entry in chosen:
+        bucket = self.pending[key] if entry in self.pending[key] else self.claimed[key]
+        bucket.remove(entry)
+
+
+@precondition(lambda self: any(self._entries(k) for k in QUEUE_KEYS))
+@rule(data=st.data())
+def read_after_bound(self, data: st.DataObject) -> None:
+    key = data.draw(st.sampled_from(QUEUE_KEYS), label="queue")
+    known_ts = [ts for k in QUEUE_KEYS for ts, _ in self._entries(k)]
+    bound = data.draw(st.sampled_from(known_ts), label="bound")
+    got = self._queues[key].read(after_timestamp=bound, with_timestamps=True)
+    matches = [(ts, body) for ts, body in self.pending[key] if ts > bound]
+    if not matches:
+        assert got is None
+    else:
+        ts, body = matches[0]
+        assert got == (body, ts)
+        self.pending[key].remove((ts, body))
+        insort(self.claimed[key], (ts, body))
 ```
 
 - [ ] **Step 2: Run on SQLite, twice.**

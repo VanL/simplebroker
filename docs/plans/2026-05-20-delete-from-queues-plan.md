@@ -341,9 +341,7 @@ def delete_from_queues(
     self._assert_no_reentrant_mutation_during_batch("delete_from_queues")
     if isinstance(queue_names, (str, bytes)):
         raise TypeError("queue_names must be a sequence of queue names, not a string")
-    before_timestamp = validate_timestamp_bound(
-        "before_timestamp", before_timestamp
-    )
+    before_timestamp = validate_timestamp_bound("before_timestamp", before_timestamp)
 
     deduped = tuple(dict.fromkeys(queue_names))
     for queue in deduped:
@@ -682,8 +680,7 @@ DELETE FROM simplebroker_delete_queue_names
 Add an insert builder similar to `build_insert_delete_message_ids_query(...)`:
 
 ```python
-def build_insert_delete_queue_names_query(count: int) -> str:
-    ...
+def build_insert_delete_queue_names_query(count: int) -> str: ...
 ```
 
 It should build:
@@ -736,8 +733,7 @@ def delete_from_queues(
     *,
     queue_names: Sequence[str],
     before_timestamp: int | None = None,
-) -> int:
-    ...
+) -> int: ...
 ```
 
 Implementation notes:
@@ -974,8 +970,7 @@ def delete_from_queues(
     queue_names: Sequence[str],
     *,
     before_timestamp: int | None = None,
-) -> int:
-    ...
+) -> int: ...
 ```
 
 Implementation requirements:

@@ -749,30 +749,33 @@ with Queue("tasks") as q:
     print(q.stats())
     message = q.read()  # Returns: "process order 123"
 
+
 # Safe peek-and-acknowledge pattern (recommended for critical data)
 def process_message(message: str, timestamp: int):
     """Process message and acknowledge only on success."""
     logging.info(f"Processing: {message}")
-    
+
     # Simulate processing that might fail
     if "error" in message:
         raise ValueError("Simulated processing failure")
-    
+
     # If we get here, processing succeeded
     # Now explicitly acknowledge by deleting the message
     with Queue("tasks") as q:
         q.delete(message_id=timestamp)
     logging.info(f"Message {timestamp} acknowledged")
 
+
 def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
     """Log error and optionally move to dead-letter queue."""
     logging.error(f"Failed to process message {timestamp}: {exception}")
     # Message remains in queue for retry after we're using peek=True
-    
+
     # Optional: After N retries, move to dead-letter queue
     # Queue("errors").write(f"{timestamp}:{message}:{exception}")
-    
+
     return True  # Continue watching
+
 
 # Use peek=True for safe mode - messages aren't removed until explicitly acknowledged
 ```
@@ -823,9 +826,7 @@ loop may exit early, close the generator explicitly:
 ```python
 from contextlib import closing
 
-with closing(
-    q.read_generator(delivery_guarantee="at_least_once")
-) as messages:
+with closing(q.read_generator(delivery_guarantee="at_least_once")) as messages:
     for message in messages:
         process(message)
         if should_stop():
@@ -839,7 +840,7 @@ generators raise on first iteration.
 Peeks can also inspect claimed (consumed but not yet vacuumed) messages:
 
 ```python
-q.peek_many(10, include_claimed=True)   # pending + claimed, in message-ID order
+q.peek_many(10, include_claimed=True)  # pending + claimed, in message-ID order
 ```
 
 Claimed rows are deletion-pending — vacuum may remove them at any time — so
@@ -986,7 +987,7 @@ watcher = QueueWatcher(
     queue=Queue("tasks"),
     handler=process_message,
     error_handler=handle_error,
-    peek=True  # True = safe mode - just observe, don't consume
+    peek=True,  # True = safe mode - just observe, don't consume
 )
 
 # Start watching (blocks until stopped)
@@ -1017,8 +1018,10 @@ Use `run_in_thread()` to run watchers in background threads:
 from pathlib import Path
 from simplebroker import QueueWatcher
 
+
 def handle_message(msg: str, ts: int):
     print(f"Processing: {msg}")
+
 
 # Create watcher with database path (recommended for thread safety)
 watcher = QueueWatcher(
@@ -1049,15 +1052,17 @@ For cleaner resource management, watchers can be used as context managers which 
 import time
 from simplebroker import QueueWatcher
 
+
 def handle_message(msg: str, ts: int):
     print(f"Received: {msg}")
+
 
 # Automatic thread management with context manager
 with QueueWatcher("notifications", handle_message, db="my.db") as watcher:
     # Thread is started automatically
     # Do other work while watcher processes messages
     time.sleep(10)
-    
+
 # Thread is automatically stopped and joined when exiting the context
 # Ensures proper cleanup even if an exception occurs
 ```
@@ -1069,41 +1074,47 @@ import asyncio
 import concurrent.futures
 from simplebroker import Queue
 
+
 class AsyncQueue:
     """Async wrapper for SimpleBroker Queue using thread pool executor."""
-    
+
     def __init__(self, queue_name: str, db_path: str = ".broker.db"):
         self.queue_name = queue_name
         self.db_path = db_path
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        
+
     async def write(self, message: str) -> int:
         """Write message asynchronously."""
         loop = asyncio.get_event_loop()
+
         def _write():
             with Queue(self.queue_name, db_path=self.db_path) as q:
                 return q.write(message)
+
         return await loop.run_in_executor(self._executor, _write)
-    
+
     async def read(self) -> str | None:
         """Read message asynchronously."""
         loop = asyncio.get_event_loop()
+
         def _read():
             with Queue(self.queue_name, db_path=self.db_path) as q:
                 return q.read()
+
         return await loop.run_in_executor(self._executor, _read)
+
 
 # Usage
 async def main():
     tasks_queue = AsyncQueue("tasks")
-    
+
     # Write messages concurrently
     await asyncio.gather(
         tasks_queue.write("Task 1"),
         tasks_queue.write("Task 2"),
-        tasks_queue.write("Task 3")
+        tasks_queue.write("Task 3"),
     )
-    
+
     # Read messages
     while msg := await tasks_queue.read():
         print(f"Got: {msg}")
@@ -1188,18 +1199,19 @@ underscore-prefixed modules.
 ```python
 from simplebroker import Queue
 
+
 class PriorityQueueSystem:
     """Example: Priority queue system using multiple standard queues."""
-    
+
     def __init__(self, db_path: str = ".broker.db"):
         self.db_path = db_path
-    
+
     def write_with_priority(self, base_queue: str, message: str, priority: int = 0):
         """Write message with priority (higher = more important)."""
         queue_name = f"{base_queue}_p{priority}"
         with Queue(queue_name, db_path=self.db_path) as q:
             q.write(message)
-    
+
     def read_highest_priority(self, base_queue: str) -> str | None:
         """Read from highest priority queue first."""
         # Check queues in priority order
@@ -1408,9 +1420,9 @@ from simplebroker.commands import cmd_write, cmd_read, cmd_list
 
 db = "/srv/myapp/.myapp/broker.db"
 
-cmd_write(db, "jobs", "render invoice")   # -> 0
-rc = cmd_read(db, "jobs")                 # prints the message, returns 0 (or 2 if empty)
-cmd_list(db)                              # prints queue names, returns 0
+cmd_write(db, "jobs", "render invoice")  # -> 0
+rc = cmd_read(db, "jobs")  # prints the message, returns 0 (or 2 if empty)
+cmd_list(db)  # prints queue names, returns 0
 ```
 
 The names in `simplebroker.commands.__all__` are stable under the same

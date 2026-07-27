@@ -208,9 +208,7 @@ with Queue("myqueue") as q:
 
 # For watching queues
 watcher = QueueWatcher(
-    db=".broker.db",
-    queue="myqueue",
-    handler=lambda msg, ts: print(f"Got: {msg}")
+    db=".broker.db", queue="myqueue", handler=lambda msg, ts: print(f"Got: {msg}")
 )
 watcher.run_in_thread()
 ```
@@ -240,23 +238,24 @@ To create a custom runner:
    ```python
    from simplebroker.ext import SetupPhase
 
+
    class MyRunner(SQLRunner):
        def run(self, sql, params=(), *, fetch=False):
            # Your implementation
            pass
-       
+
        def begin_immediate(self):
            # Start transaction
            pass
-       
+
        def commit(self):
            # Commit transaction
            pass
-       
+
        def rollback(self):
            # Rollback transaction
            pass
-       
+
        def close(self):
            # Cleanup
            pass

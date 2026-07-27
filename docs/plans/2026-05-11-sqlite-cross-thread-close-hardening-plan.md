@@ -358,12 +358,14 @@ Confirm the current code fails in the way this plan describes.
 
    caught = []
 
+
    def closer() -> None:
        with warnings.catch_warnings(record=True) as ws:
            warnings.simplefilter("always", ResourceWarning)
            q.close()
            gc.collect()
            caught.extend(ws)
+
 
    thread = threading.Thread(target=closer)
    thread.start()
@@ -393,8 +395,7 @@ Pin the externally visible bug with a real integration test.
 Add a test named something like:
 
 ```python
-def test_persistent_queue_cross_thread_close_does_not_warn(tmp_path) -> None:
-    ...
+def test_persistent_queue_cross_thread_close_does_not_warn(tmp_path) -> None: ...
 ```
 
 Use real SQLite and real threads:
@@ -452,8 +453,7 @@ Add a test named something like:
 ```python
 def test_persistent_queue_close_cleans_connections_created_by_worker_threads(
     tmp_path,
-) -> None:
-    ...
+) -> None: ...
 ```
 
 Use this shape:

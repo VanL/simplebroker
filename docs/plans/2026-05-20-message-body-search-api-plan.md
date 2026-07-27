@@ -118,11 +118,12 @@ do not approximate this with `len(body_contains.strip())`.
 Examples:
 
 ```python
-"abc"      # valid
-" a b "    # invalid: only two non-whitespace characters
-"a b c"    # valid: three non-whitespace characters
-"   "      # invalid
-"OK"       # invalid in v1, even though some callers may want it
+"abc"  # valid
+
+" a b "  # invalid: only two non-whitespace characters
+"a b c"  # valid: three non-whitespace characters
+"   "  # invalid
+"OK"  # invalid in v1, even though some callers may want it
 ```
 
 The minimum length is a guardrail, not an index. A search can still scan the
@@ -566,12 +567,10 @@ BODY_SEARCH_MAX_NEEDLE_LENGTH = 1024
 BODY_SEARCH_REDIS_SCAN_CHUNK_SIZE = 500
 
 
-def validate_body_contains(value: str) -> str:
-    ...
+def validate_body_contains(value: str) -> str: ...
 
 
-def validate_body_search_limit(value: int) -> int:
-    ...
+def validate_body_search_limit(value: int) -> int: ...
 ```
 
 Validation details:
@@ -721,8 +720,7 @@ def build_find_message_ids_query(
     after_timestamp: int | None,
     before_timestamp: int | None,
     include_claimed: bool,
-) -> str:
-    ...
+) -> str: ...
 ```
 
 The generated query should be equivalent to:
@@ -839,8 +837,7 @@ def build_find_message_ids_query(
     after_timestamp: int | None,
     before_timestamp: int | None,
     include_claimed: bool,
-) -> str:
-    ...
+) -> str: ...
 ```
 
 The generated SQL should be equivalent to:

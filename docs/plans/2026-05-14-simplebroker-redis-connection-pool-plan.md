@@ -207,8 +207,7 @@ Use a helper:
 def pool_options_from_config(
     config: Mapping[str, Any] | None,
     backend_options: Mapping[str, Any] | None,
-) -> RedisPoolOptions:
-    ...
+) -> RedisPoolOptions: ...
 ```
 
 The helper may live in `runner.py` if only the runner uses it. If `plugin.py`

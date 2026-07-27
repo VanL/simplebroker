@@ -466,8 +466,7 @@ def _ensure_backend_api_version(plugin: object) -> None:
     package_context = f" ({package_name})" if package_name is not None else ""
     if type(plugin_version) is not int:
         raise RuntimeError(
-            f"Backend plugin '{plugin_name}' must declare integer "
-            "backend_api_version"
+            f"Backend plugin '{plugin_name}' must declare integer backend_api_version"
         )
     if plugin_version != BACKEND_API_VERSION:
         raise RuntimeError(

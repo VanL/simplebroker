@@ -93,8 +93,10 @@ Add these protected methods to `BaseWatcher` in `simplebroker/watcher.py`:
 def _start_strategy(self) -> None:
     """Initialize the polling strategy for this watcher instance."""
 
+
 def _create_activity_waiter(self, queue: Queue) -> ActivityWaiter | None:
     """Return the activity waiter passed into PollingStrategy.start()."""
+
 
 def _on_data_version_change(self, queue: Queue) -> None:
     """Refresh watcher-owned queue caches after data-version changes."""
@@ -761,6 +763,7 @@ Required test/gate signals:
    ```python
    from weft.core.tasks.multiqueue_watcher import MultiQueueWatcher
 
+
    def test_multi_queue_watcher_uses_base_retry_loop() -> None:
        assert "_run_with_retries" not in MultiQueueWatcher.__dict__
    ```
@@ -966,6 +969,7 @@ Required test/gate signals:
 
    ```python
    from taut.watcher import MultiQueueWatcher
+
 
    def test_multi_queue_watcher_uses_base_retry_loop() -> None:
        assert "_run_with_retries" not in MultiQueueWatcher.__dict__

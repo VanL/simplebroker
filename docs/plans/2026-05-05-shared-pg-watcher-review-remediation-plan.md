@@ -719,10 +719,12 @@ Pseudo-code:
 ```python
 self._strategy.consume_native_activity_hint()
 
+
 def check_func() -> bool:
     return self._queue_obj.has_pending(
         self._last_seen_ts if self._last_seen_ts > 0 else None
     )
+
 
 result = bool(self._process_with_retry(check_func, "pending_messages_check"))
 if result:

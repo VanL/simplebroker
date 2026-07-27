@@ -299,8 +299,7 @@ def __init__(self, idle_timeout: float | None = None) -> None:
 Bad:
 
 ```python
-def __init__(self, idle_timeout: float = SETUP_RETRY_MAX_ELAPSED) -> None:
-    ...
+def __init__(self, idle_timeout: float = SETUP_RETRY_MAX_ELAPSED) -> None: ...
 ```
 
 ### Retry Helper API
@@ -315,8 +314,7 @@ def execute_setup_with_retry(
     target: str,
     stop_event: threading.Event | None = None,
     progress_budget: SetupProgressBudget | None = None,
-) -> T:
-    ...
+) -> T: ...
 ```
 
 Replace the old `deadline` parameter rather than supporting both paths.
@@ -504,14 +502,11 @@ Suggested public surface inside the module:
 class SetupProgressBudget:
     """Track idle time between successful setup operations."""
 
-    def __init__(self, idle_timeout: float | None = None) -> None:
-        ...
+    def __init__(self, idle_timeout: float | None = None) -> None: ...
 
-    def remaining(self) -> float:
-        ...
+    def remaining(self) -> float: ...
 
-    def record_progress(self) -> None:
-        ...
+    def record_progress(self) -> None: ...
 ```
 
 If you need a helper to format the timeout message, keep it private and local to

@@ -28,18 +28,20 @@ uv add aiosqlite aiosqlitepool
 import asyncio
 from async_pooled_broker import AsyncQueue, async_broker
 
+
 async def main():
     # Create broker with connection pool
     async with async_broker("myqueue.db", pool_size=10) as broker:
         queue = AsyncQueue("tasks", broker)
-        
+
         # Write messages
         await queue.write("Task 1")
         await queue.write("Task 2")
-        
+
         # Read messages
         while msg := await queue.read():
             print(f"Processing: {msg}")
+
 
 asyncio.run(main())
 ```
@@ -100,10 +102,11 @@ async def worker(queue: AsyncQueue, worker_id: int):
         if msg is None:
             await asyncio.sleep(0.1)
             continue
-        
+
         # Process message
         print(f"Worker {worker_id}: {msg}")
         await process_message(msg)
+
 
 # Run multiple workers
 workers = [worker(queue, i) for i in range(5)]
@@ -125,7 +128,7 @@ async for msg in queue.stream(commit_interval=50):
 
 ```python
 high = AsyncQueue("high_priority", broker)
-medium = AsyncQueue("medium_priority", broker) 
+medium = AsyncQueue("medium_priority", broker)
 low = AsyncQueue("low_priority", broker)
 
 # Process by priority
@@ -212,11 +215,13 @@ For most users, the simpler async_wrapper.py provides async functionality while 
 ```python
 # Standard sync code
 from simplebroker import Queue
+
 with Queue("tasks") as q:
     q.write("sync message")
 
 # Async wrapper (RECOMMENDED)
 from async_wrapper import AsyncBroker
+
 async with AsyncBroker("broker.db") as broker:
     msg = await broker.pop("tasks")  # Gets "sync message"
 ```
@@ -228,6 +233,7 @@ The custom async_pooled_broker implementation can also coexist with the sync ver
 ```python
 # Custom async code (ADVANCED - uses internal APIs)
 from async_pooled_broker import AsyncQueue, async_broker
+
 async with async_broker("broker.db") as broker:
     queue = AsyncQueue("tasks", broker)
     msg = await queue.read()  # Gets "sync message"

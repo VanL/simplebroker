@@ -58,8 +58,7 @@ def create_activity_waiter_for_queues(
     queues: Sequence[Queue],
     *,
     stop_event: threading.Event,
-) -> ActivityWaiter | None:
-    ...
+) -> ActivityWaiter | None: ...
 ```
 
 Expose it from the public package through `simplebroker.__init__`, next to
@@ -80,8 +79,7 @@ def create_activity_waiter_for_queues(
     runner: SQLRunner | None = None,
     queue_names: Sequence[str],
     stop_event: Any,
-) -> ActivityWaiter | None:
-    ...
+) -> ActivityWaiter | None: ...
 ```
 
 Do not add this as a required method on `BackendPlugin`. The existing protocol

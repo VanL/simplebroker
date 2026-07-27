@@ -234,7 +234,7 @@ You can explain:
 `PostgresRunner._create_pool()` builds a DSN with:
 
 ```python
-options=f"-csearch_path={self._schema},public"
+options = f"-csearch_path={self._schema},public"
 ```
 
 Postgres folds unquoted identifiers. A schema named `SimpleBroker` can be
@@ -314,6 +314,7 @@ def configure(conn: psycopg.Connection[Any]) -> None:
     conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute(f"SET search_path TO {quote_ident(self._schema)}, public")
+
 
 pool = ConnectionPool(
     self._dsn,

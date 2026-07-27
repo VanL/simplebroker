@@ -505,8 +505,7 @@ Edit `simplebroker/db.py`.
 Add:
 
 ```python
-def queue_exists(self, queue: str) -> bool:
-    ...
+def queue_exists(self, queue: str) -> bool: ...
 ```
 
 Requirements:
@@ -528,8 +527,7 @@ Edit `simplebroker/db.py`.
 Add:
 
 ```python
-def get_queue_stat(self, queue: str) -> QueueStats:
-    ...
+def get_queue_stat(self, queue: str) -> QueueStats: ...
 ```
 
 Requirements:
@@ -564,8 +562,7 @@ def list_queue_stats(
     *,
     prefix: str | None = None,
     pattern: str | None = None,
-) -> list[QueueStats]:
-    ...
+) -> list[QueueStats]: ...
 ```
 
 Requirements:
@@ -700,8 +697,9 @@ def _queue_stats_payload(stats: QueueStats) -> dict[str, object]:
 Add:
 
 ```python
-def cmd_exists(db_path: DBTarget, queue_name: str, *, json_output: bool = False) -> int:
-    ...
+def cmd_exists(
+    db_path: DBTarget, queue_name: str, *, json_output: bool = False
+) -> int: ...
 ```
 
 Requirements:
@@ -715,8 +713,9 @@ Requirements:
 Add:
 
 ```python
-def cmd_stats(db_path: DBTarget, queue_name: str, *, json_output: bool = False) -> int:
-    ...
+def cmd_stats(
+    db_path: DBTarget, queue_name: str, *, json_output: bool = False
+) -> int: ...
 ```
 
 Requirements:

@@ -426,14 +426,12 @@ paragraph — keep the existing text verbatim.)
 Second, `_do_write_with_ts_retry` (~line 1253):
 
 ```python
-    def _do_write_with_ts_retry(self, queue: str, message: str) -> int:
-        """Execute write within retry context. Separates retry logic from transaction logic."""
-        # Use retry helper with stop-aware behavior for database lock handling
-        timestamp = self._run_with_retry(
-            lambda: self._do_write_transaction(queue, message)
-        )
-        self._record_maintenance_activity(1)
-        return timestamp
+def _do_write_with_ts_retry(self, queue: str, message: str) -> int:
+    """Execute write within retry context. Separates retry logic from transaction logic."""
+    # Use retry helper with stop-aware behavior for database lock handling
+    timestamp = self._run_with_retry(lambda: self._do_write_transaction(queue, message))
+    self._record_maintenance_activity(1)
+    return timestamp
 ```
 
 Third, `BrokerCore.write` (~line 1114). Change the signature and docstring:
@@ -648,9 +646,7 @@ def test_concurrent_writers_get_their_own_ids(queue_factory):
         except BaseException as exc:  # pragma: no cover - failure reporting
             errors.append(exc)
 
-    threads = [
-        threading.Thread(target=writer, args=(i,)) for i in range(n_threads)
-    ]
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(n_threads)]
     for t in threads:
         t.start()
     for t in threads:
@@ -806,9 +802,7 @@ def test_write_timestamps_flag_before_queue_prints_id(workdir):
 
 
 def test_write_timestamps_long_flag(workdir):
-    code, stdout, stderr = run_cli(
-        "write", "--timestamps", "q", "hello", cwd=workdir
-    )
+    code, stdout, stderr = run_cli("write", "--timestamps", "q", "hello", cwd=workdir)
 
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
@@ -828,9 +822,7 @@ def test_write_json_prints_timestamp_only(workdir):
 
 
 def test_write_json_wins_over_timestamps(workdir):
-    code, stdout, stderr = run_cli(
-        "write", "--json", "-t", "q", "hello", cwd=workdir
-    )
+    code, stdout, stderr = run_cli("write", "--json", "-t", "q", "hello", cwd=workdir)
 
     assert code == 0, stderr
     assert len(stdout.splitlines()) == 1
@@ -858,9 +850,7 @@ def test_write_flag_with_stdin_marker(workdir):
 
 
 def test_write_flag_with_omitted_message_stdin(workdir):
-    code, stdout, stderr = run_cli(
-        "write", "-t", "q", cwd=workdir, stdin="piped body"
-    )
+    code, stdout, stderr = run_cli("write", "-t", "q", cwd=workdir, stdin="piped body")
 
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
@@ -903,9 +893,7 @@ def test_dash_leading_operand_after_queue_stays_literal(workdir):
 
 
 def test_flag_plus_literal_dash_message_via_escape(workdir):
-    code, stdout, stderr = run_cli(
-        "write", "-t", "q", "--", "-t", cwd=workdir
-    )
+    code, stdout, stderr = run_cli("write", "-t", "q", "--", "-t", cwd=workdir)
 
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
@@ -1191,13 +1179,15 @@ In the `AsyncQueue` example, update the write wrapper to pass the ID
 through:
 
 ```python
-    async def write(self, message: str) -> int:
-        """Write message asynchronously."""
-        loop = asyncio.get_event_loop()
-        def _write():
-            with Queue(self.queue_name, db_path=self.db_path) as q:
-                return q.write(message)
-        return await loop.run_in_executor(self._executor, _write)
+async def write(self, message: str) -> int:
+    """Write message asynchronously."""
+    loop = asyncio.get_event_loop()
+
+    def _write():
+        with Queue(self.queue_name, db_path=self.db_path) as q:
+            return q.write(message)
+
+    return await loop.run_in_executor(self._executor, _write)
 ```
 
 - [ ] **Step 6: README — "Generating timestamps without writing" note**

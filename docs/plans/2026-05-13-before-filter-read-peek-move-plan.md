@@ -547,8 +547,7 @@ def _resolve_timestamp_filters(
     since_str: str | None,
     before_str: str | None,
     message_id_str: str | None,
-) -> tuple[int | None, int | None, int | None, int | None]:
-    ...
+) -> tuple[int | None, int | None, int | None, int | None]: ...
 ```
 
 Return shape:

@@ -74,35 +74,48 @@ Three related defects in the pre-argparse argument rearranger, all verified live
 Append to `tests/test_cli_rearrange_args.py`, inside class `TestRearrangeArgs` (match the existing test style in that file — plain asserts on `rearrange_args`):
 
 ```python
-    def test_write_help_flag_is_not_protected(self):
-        """--help/-h must reach argparse so help is shown, not enqueued."""
-        assert rearrange_args(["write", "--help"]) == ["write", "--help"]
-        assert rearrange_args(["write", "-h"]) == ["write", "-h"]
-        assert rearrange_args(["write", "q", "--help"]) == ["write", "q", "--help"]
+def test_write_help_flag_is_not_protected(self):
+    """--help/-h must reach argparse so help is shown, not enqueued."""
+    assert rearrange_args(["write", "--help"]) == ["write", "--help"]
+    assert rearrange_args(["write", "-h"]) == ["write", "-h"]
+    assert rearrange_args(["write", "q", "--help"]) == ["write", "q", "--help"]
 
-    def test_broadcast_help_flag_is_not_protected(self):
-        assert rearrange_args(["broadcast", "--help"]) == ["broadcast", "--help"]
-        assert rearrange_args(["broadcast", "-h"]) == ["broadcast", "-h"]
 
-    def test_explicit_double_dash_still_writes_literal_help(self):
-        """An explicit -- keeps the escape hatch for literal '--help' messages."""
-        assert rearrange_args(["write", "q", "--", "--help"]) == [
-            "write", "q", "--", "--help",
-        ]
+def test_broadcast_help_flag_is_not_protected(self):
+    assert rearrange_args(["broadcast", "--help"]) == ["broadcast", "--help"]
+    assert rearrange_args(["broadcast", "-h"]) == ["broadcast", "-h"]
 
-    def test_alias_is_a_recognized_subcommand(self):
-        """Tokens after 'alias' must never be hoisted to global position.
 
-        'alias' was missing from the subcommands set, so a trailing
-        global-looking flag was hoisted in front of the command:
-        'broker alias add a b --cleanup' deleted the database.
-        """
-        assert rearrange_args(["alias", "add", "a", "b", "--cleanup"]) == [
-            "alias", "add", "a", "b", "--cleanup",
-        ]
-        assert rearrange_args(["alias", "remove", "a", "-q"]) == [
-            "alias", "remove", "a", "-q",
-        ]
+def test_explicit_double_dash_still_writes_literal_help(self):
+    """An explicit -- keeps the escape hatch for literal '--help' messages."""
+    assert rearrange_args(["write", "q", "--", "--help"]) == [
+        "write",
+        "q",
+        "--",
+        "--help",
+    ]
+
+
+def test_alias_is_a_recognized_subcommand(self):
+    """Tokens after 'alias' must never be hoisted to global position.
+
+    'alias' was missing from the subcommands set, so a trailing
+    global-looking flag was hoisted in front of the command:
+    'broker alias add a b --cleanup' deleted the database.
+    """
+    assert rearrange_args(["alias", "add", "a", "b", "--cleanup"]) == [
+        "alias",
+        "add",
+        "a",
+        "b",
+        "--cleanup",
+    ]
+    assert rearrange_args(["alias", "remove", "a", "-q"]) == [
+        "alias",
+        "remove",
+        "a",
+        "-q",
+    ]
 ```
 
 And append a new class at module level (black-box, real subprocess, real DB):
@@ -425,9 +438,7 @@ def test_checkpoint_reader_sees_every_message(tmp_path: Path) -> None:
         drain()
 
     expected = {
-        f"w{wid}-{i}"
-        for wid in range(NUM_WRITERS)
-        for i in range(MESSAGES_PER_WRITER)
+        f"w{wid}-{i}" for wid in range(NUM_WRITERS) for i in range(MESSAGES_PER_WRITER)
     }
     missing = expected - seen
     reader.close()
@@ -516,46 +527,47 @@ Expected:
 In `simplebroker/db.py`, replace `_do_write_with_ts_retry` (lines 1234–1254) and `_do_write_transaction` (lines 1256–1268) with:
 
 ```python
-    def _do_write_with_ts_retry(
-        self, queue: str, message: str, *, config: dict[str, Any] = _config
-    ) -> None:
-        """Execute write within retry context. Separates retry logic from transaction logic."""
-        # Use retry helper with stop-aware behavior for database lock handling
-        self._run_with_retry(lambda: self._do_write_transaction(queue, message))
+def _do_write_with_ts_retry(
+    self, queue: str, message: str, *, config: dict[str, Any] = _config
+) -> None:
+    """Execute write within retry context. Separates retry logic from transaction logic."""
+    # Use retry helper with stop-aware behavior for database lock handling
+    self._run_with_retry(lambda: self._do_write_transaction(queue, message))
 
-        # Increment write counter and check vacuum need
-        # Only check if auto vacuum is enabled
-        if config["BROKER_AUTO_VACUUM"] == 1:
-            self._write_count += 1
-            if self._write_count >= self._vacuum_interval:
-                self._write_count = 0  # Reset counter
-                if self._should_vacuum():
-                    self._vacuum_claimed_messages()
+    # Increment write counter and check vacuum need
+    # Only check if auto vacuum is enabled
+    if config["BROKER_AUTO_VACUUM"] == 1:
+        self._write_count += 1
+        if self._write_count >= self._vacuum_interval:
+            self._write_count = 0  # Reset counter
+            if self._should_vacuum():
+                self._vacuum_claimed_messages()
 
-    def _do_write_transaction(self, queue: str, message: str) -> None:
-        """Allocate the timestamp and insert the message in ONE transaction.
 
-        The meta.last_ts advance and the message row must become visible in
-        the same commit.  Allocating in a separate autocommit statement lets
-        a concurrent writer commit a higher timestamp during this writer's
-        lock wait, so checkpoint readers (peek --after, peek-mode watchers)
-        advance past this message before it exists and permanently skip it.
-        The CAS UPDATE has no BEGIN of its own, so it joins this transaction;
-        _do_insert_messages_transaction and broadcast already use the same
-        allocate-inside-transaction pattern.
-        """
-        with self._lock:
-            self._runner.begin_immediate()
-            try:
-                timestamp = self.generate_timestamp()
-                self._runner.run(
-                    self._sql.INSERT_MESSAGE,
-                    (queue, message, timestamp),
-                )
-                self._runner.commit()
-            except Exception:
-                self._runner.rollback()
-                raise
+def _do_write_transaction(self, queue: str, message: str) -> None:
+    """Allocate the timestamp and insert the message in ONE transaction.
+
+    The meta.last_ts advance and the message row must become visible in
+    the same commit.  Allocating in a separate autocommit statement lets
+    a concurrent writer commit a higher timestamp during this writer's
+    lock wait, so checkpoint readers (peek --after, peek-mode watchers)
+    advance past this message before it exists and permanently skip it.
+    The CAS UPDATE has no BEGIN of its own, so it joins this transaction;
+    _do_insert_messages_transaction and broadcast already use the same
+    allocate-inside-transaction pattern.
+    """
+    with self._lock:
+        self._runner.begin_immediate()
+        try:
+            timestamp = self.generate_timestamp()
+            self._runner.run(
+                self._sql.INSERT_MESSAGE,
+                (queue, message, timestamp),
+            )
+            self._runner.commit()
+        except Exception:
+            self._runner.rollback()
+            raise
 ```
 
 What changed and why nothing else needs to change:
@@ -991,11 +1003,13 @@ In `extensions/simplebroker_pg/simplebroker_pg/runner.py`, add near `_translate_
 ```python
 # Postgres contention SQLSTATEs that must be retried even though their
 # messages do not contain SQLite's lock/busy phrases.
-_RETRYABLE_SQLSTATES = frozenset({
-    "40001",  # serialization_failure
-    "40P01",  # deadlock_detected
-    "55P03",  # lock_not_available
-})
+_RETRYABLE_SQLSTATES = frozenset(
+    {
+        "40001",  # serialization_failure
+        "40P01",  # deadlock_detected
+        "55P03",  # lock_not_available
+    }
+)
 ```
 
 and change the fallthrough of `_translate_error` from `return OperationalError(str(exc))` to:
@@ -1064,9 +1078,9 @@ def test_ambient_broker_env_is_sanitized():
     subprocess.  Per-test monkeypatch.setenv still works (it runs after
     the scrub).
     """
-    leaked = {
-        k for k in os.environ if k.startswith("BROKER_")
-    } - {"BROKER_TEST_BACKEND"}
+    leaked = {k for k in os.environ if k.startswith("BROKER_")} - {
+        "BROKER_TEST_BACKEND"
+    }
     assert leaked == set(), f"ambient BROKER_* vars leaked into the suite: {leaked}"
 ```
 

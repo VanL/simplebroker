@@ -519,8 +519,7 @@ def _execute_with_retry(
     stop_event=None,
     max_elapsed: float | None = None,
     max_retry_delay: float | None = None,
-) -> T:
-    ...
+) -> T: ...
 ```
 
 Behavior:
@@ -720,6 +719,7 @@ Test shape:
 
 ```python
 from simplebroker import Queue
+
 q = Queue("setup_contention", persistent=True, db_path=str(db_path))
 q.write("msg")
 q.close()

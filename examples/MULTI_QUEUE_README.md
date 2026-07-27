@@ -124,22 +124,25 @@ the queue policy, and `_close_reactor_resources()` for extra owned handles.
 ```python
 from multi_queue_watcher import MultiQueueWatcher
 
+
 # Define handlers for different queue types
 def orders_handler(message: str, timestamp: int) -> None:
     print(f"🛒 Processing order: {message}")
 
+
 def notifications_handler(message: str, timestamp: int) -> None:
     print(f"📧 Sending notification: {message}")
 
+
 # Create watcher with queue-specific handlers
 watcher = MultiQueueWatcher(
-    queues=['orders', 'notifications', 'analytics'],
+    queues=["orders", "notifications", "analytics"],
     queue_handlers={
-        'orders': orders_handler,
-        'notifications': notifications_handler,
+        "orders": orders_handler,
+        "notifications": notifications_handler,
         # 'analytics' will use default_handler
     },
-    db='my_app.db'
+    db="my_app.db",
 )
 
 # Start processing
@@ -156,12 +159,12 @@ watcher.stop()
 ```python
 # Different handlers for different message types
 watcher = MultiQueueWatcher(
-    queues=['urgent', 'normal', 'audit'],
+    queues=["urgent", "normal", "audit"],
     queue_handlers={
-        'urgent': urgent_handler,
-        'normal': normal_handler,
-        'audit': audit_handler,
-    }
+        "urgent": urgent_handler,
+        "normal": normal_handler,
+        "audit": audit_handler,
+    },
 )
 ```
 
@@ -171,7 +174,7 @@ watcher = MultiQueueWatcher(
 class PriorityMultiQueueWatcher(MultiQueueWatcher):
     def _drain_queue(self) -> None:
         # Process high-priority queue 3x more often
-        if 'high_priority' in self._active_queues:
+        if "high_priority" in self._active_queues:
             for _ in range(3):
                 # Process high priority message
                 pass
@@ -183,8 +186,7 @@ class PriorityMultiQueueWatcher(MultiQueueWatcher):
 ```python
 # Distribute similar work across multiple worker queues
 watcher = MultiQueueWatcher(
-    queues=['worker_a', 'worker_b', 'worker_c'],
-    default_handler=process_work_item
+    queues=["worker_a", "worker_b", "worker_c"], default_handler=process_work_item
 )
 
 # Round-robin distributes work fairly across workers
@@ -195,10 +197,10 @@ watcher = MultiQueueWatcher(
 ```python
 def custom_error_handler(exc: Exception, message: str, timestamp: int) -> bool:
     queue_name = get_current_queue()  # Custom logic
-    if 'critical' in queue_name:
+    if "critical" in queue_name:
         return False  # Stop on critical errors
     else:
-        return True   # Continue on non-critical errors
+        return True  # Continue on non-critical errors
 ```
 
 ### Pattern 5: Monitoring and Metrics
@@ -410,13 +412,13 @@ class CustomMultiQueueWatcher(MultiQueueWatcher):
     def _drain_queue(self) -> None:
         # Custom processing logic
         pass
-        
+
     def add_queue(self, queue_name: str, handler: Callable) -> None:
         # Dynamic queue addition
         pass
-        
+
     def remove_queue(self, queue_name: str) -> None:
-        # Dynamic queue removal  
+        # Dynamic queue removal
         pass
 ```
 

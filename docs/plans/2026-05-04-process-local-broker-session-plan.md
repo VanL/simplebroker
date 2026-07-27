@@ -446,10 +446,7 @@ persistent queues with the same file path and touch each queue.
 Desired test shape:
 
 ```python
-queues = [
-    Queue(f"q{i}", db_path=str(db_path), persistent=True)
-    for i in range(3)
-]
+queues = [Queue(f"q{i}", db_path=str(db_path), persistent=True) for i in range(3)]
 
 for queue in queues:
     queue.write("message")
@@ -624,17 +621,13 @@ The session should expose methods similar to:
 
 ```python
 class _ProcessBrokerSession:
-    def get_connection(self, stop_event: threading.Event | None):
-        ...
+    def get_connection(self, stop_event: threading.Event | None): ...
 
-    def cleanup_lease(self, lease_id: object) -> None:
-        ...
+    def cleanup_lease(self, lease_id: object) -> None: ...
 
-    def release(self, lease_id: object) -> None:
-        ...
+    def release(self, lease_id: object) -> None: ...
 
-    def close_all(self) -> None:
-        ...
+    def close_all(self) -> None: ...
 ```
 
 Do not copy all of `DBConnection` into this class. Extract or reuse small helper

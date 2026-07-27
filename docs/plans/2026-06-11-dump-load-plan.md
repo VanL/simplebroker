@@ -316,8 +316,14 @@ def test_dump_format_header_aliases_messages_in_order(tmp_path: Path) -> None:
     assert header["backend"] == "sqlite"
     assert isinstance(header["last_ts"], int)
 
-    assert [r["type"] for r in recs] == ["header", "alias", "message", "message",
-                                         "message", "message"]
+    assert [r["type"] for r in recs] == [
+        "header",
+        "alias",
+        "message",
+        "message",
+        "message",
+        "message",
+    ]
     assert recs[1] == {"alias": "al", "target": "alpha", "type": "alias"}
 
     msgs = recs[2:]
@@ -358,9 +364,7 @@ def test_round_trip_fixed_point(tmp_path: Path) -> None:
     # the watermark contract end-to-end: a write AFTER a restore always gets
     # an ID above every restored ID (insert_messages advanced last_ts; the
     # HLC's monotonicity does the rest, even under clock skew)
-    restored_ids = [
-        r["id"] for r in _records(redump)[1:] if r["type"] == "message"
-    ]
+    restored_ids = [r["id"] for r in _records(redump)[1:] if r["type"] == "message"]
     q.write("post-restore")
     with open_broker(dst) as broker:
         rows = _records(list(dump_lines(broker)))[1:]
@@ -460,8 +464,11 @@ def test_load_rejects_bad_input(tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="version"):
             load_lines(
                 broker,
-                [json.dumps({"type": "header", "format": "simplebroker-dump",
-                             "version": 2})],
+                [
+                    json.dumps(
+                        {"type": "header", "format": "simplebroker-dump", "version": 2}
+                    )
+                ],
             )
         with pytest.raises(ValueError, match="line 2"):
             load_lines(broker, [header, "not json"])
@@ -943,9 +950,7 @@ def test_filter_algebra_property(
         for ln in filtered[1:]
         if json.loads(ln)["type"] == "message"
     }
-    assert filtered_queues == {
-        q for q in full_queues if _selected(q, include, exclude)
-    }
+    assert filtered_queues == {q for q in full_queues if _selected(q, include, exclude)}
     # P2c: relative order is preserved
     positions = {ln: i for i, ln in enumerate(full)}
     kept = [positions[ln] for ln in filtered[1:]]
@@ -1075,8 +1080,14 @@ def test_dump_include_exclude_flags(workdir: Path) -> None:
     assert any(r["type"] == "alias" for r in recs)
 
     code, out, _ = run_cli(
-        "dump", "--include", "alpha", "--include", "beta",
-        "--exclude", "beta", cwd=workdir,
+        "dump",
+        "--include",
+        "alpha",
+        "--include",
+        "beta",
+        "--exclude",
+        "beta",
+        cwd=workdir,
     )
     assert code == 0
     recs = [json.loads(ln) for ln in _nonheader(out)]
@@ -1112,9 +1123,7 @@ def test_load_rejects_garbage_with_line_number(workdir: Path) -> None:
     assert code == 1
     assert "line 1" in err
 
-    header = json.dumps(
-        {"type": "header", "format": "simplebroker-dump", "version": 1}
-    )
+    header = json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1})
     code, _out, err = run_cli(
         "load", cwd=workdir, stdin=header + "\n" + '{"type": "mystery"}\n'
     )
@@ -1220,25 +1229,23 @@ def cmd_load(db_path: DBTarget) -> int:
      `alias_parser = ...` (:335), insert:
 
 ```python
-    dump_parser = subparsers.add_parser(
-        "dump", help="write all queues to stdout as ndjson"
-    )
-    dump_parser.add_argument(
-        "--include",
-        action="append",
-        metavar="GLOB",
-        help="only dump queues matching this fnmatch-style glob (repeatable)",
-    )
-    dump_parser.add_argument(
-        "--exclude",
-        action="append",
-        metavar="GLOB",
-        help="omit queues matching this fnmatch-style glob (repeatable)",
-    )
+dump_parser = subparsers.add_parser("dump", help="write all queues to stdout as ndjson")
+dump_parser.add_argument(
+    "--include",
+    action="append",
+    metavar="GLOB",
+    help="only dump queues matching this fnmatch-style glob (repeatable)",
+)
+dump_parser.add_argument(
+    "--exclude",
+    action="append",
+    metavar="GLOB",
+    help="omit queues matching this fnmatch-style glob (repeatable)",
+)
 
-    load_parser = subparsers.add_parser(  # noqa: F841
-        "load", help="restore a dump from stdin into this broker"
-    )
+load_parser = subparsers.add_parser(  # noqa: F841
+    "load", help="restore a dump from stdin into this broker"
+)
 ```
 
   (`load` takes no arguments; the `noqa` is only needed if ruff flags the unused
@@ -1406,9 +1413,7 @@ def test_sqlite_to_postgres_pipe(tmp_path: Path) -> None:
 
     pg_dir = tmp_path / "pg"
     pg_dir.mkdir()
-    code, _out, err = _run_cli(
-        "load", cwd=pg_dir, env=_pg_env(schema), stdin=dump_out
-    )
+    code, _out, err = _run_cli("load", cwd=pg_dir, env=_pg_env(schema), stdin=dump_out)
     assert code == 0, err
 
     code, redump, err = _run_cli("dump", cwd=pg_dir, env=_pg_env(schema))

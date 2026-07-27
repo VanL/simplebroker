@@ -318,6 +318,7 @@ def _attempt() -> Any:
     self._check_stop()
     return process_func()
 
+
 return _execute_watcher_operational_retry(_attempt, ...)
 ```
 
@@ -618,9 +619,7 @@ class stop_never(Stop):
 
 
 class Wait:
-    def __init__(
-        self, gen_func: Callable[..., Generator[float, Any, None]]
-    ) -> None:
+    def __init__(self, gen_func: Callable[..., Generator[float, Any, None]]) -> None:
         self._gen_func = gen_func
 
     def __call__(self, **kwargs: Any) -> Generator[float, Any, None]:
@@ -748,6 +747,7 @@ git commit -m "Add vendored retry module scaffold"
 
 ```python
 import threading
+
 
 def test_interruptible_sleep_returns_true_when_completed() -> None:
     assert interruptible_sleep(0.02) is True
@@ -1474,6 +1474,7 @@ def _attempt() -> Any:
     self._check_stop()
     return process_func()
 
+
 def _log_retry(_state: RetryState, exc: Exception, wait: float) -> None:
     if config["BROKER_LOGGING_ENABLED"]:
         logger.debug(
@@ -1481,6 +1482,7 @@ def _log_retry(_state: RetryState, exc: Exception, wait: float) -> None:
             f"(retry {_state.tries}/{max_retries}): {exc}. "
             f"Retrying in {wait:.3f} seconds...",
         )
+
 
 try:
     return _execute_watcher_operational_retry(
@@ -1651,7 +1653,9 @@ def _open() -> BrokerConnection:
     self._thread_local.db = connection
     return connection
 
+
 max_retries = 3
+
 
 def _log_connection_retry(state: RetryState, exc: Exception, wait: float) -> None:
     if config["BROKER_LOGGING_ENABLED"]:
@@ -1659,6 +1663,7 @@ def _log_connection_retry(state: RetryState, exc: Exception, wait: float) -> Non
             f"Database connection error (retry {state.tries}/{max_retries}): {exc}. "
             f"Retrying in {wait} seconds..."
         )
+
 
 try:
     return _execute_connection_retry(
@@ -1807,8 +1812,7 @@ def execute_retry(
     sleep: Callable[[float, threading.Event | None], bool] | None = None,
     stop_event: threading.Event | None = None,
     before_sleep: Callable[[RetryState, Exception, float], None] | None = None,
-) -> T:
-    ...
+) -> T: ...
 ```
 
 Defaults when omitted (coerced at loop entry — do not call `stop(state)` on `None`):

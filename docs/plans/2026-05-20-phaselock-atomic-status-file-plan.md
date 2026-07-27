@@ -502,8 +502,7 @@ Implementation guidance:
    Suggested shape:
 
    ```python
-   def _read_status_phases(self) -> tuple[set[str], str | None]:
-       ...
+   def _read_status_phases(self) -> tuple[set[str], str | None]: ...
    ```
 
    Return the completed phase set plus an optional diagnostic string. If the
@@ -514,8 +513,7 @@ Implementation guidance:
    Suggested shape:
 
    ```python
-   def _write_status_phases(self, phases: Iterable[str]) -> None:
-       ...
+   def _write_status_phases(self, phases: Iterable[str]) -> None: ...
    ```
 
    Required behavior:
@@ -534,8 +532,7 @@ Implementation guidance:
    Suggested helper:
 
    ```python
-   def _validate_phase_name(phase_name: str) -> None:
-       ...
+   def _validate_phase_name(phase_name: str) -> None: ...
    ```
 
 8. Do not write directly to `broker.status`.
@@ -686,8 +683,8 @@ Implementation guidance:
    Either remove explicit suffix arguments and rely on new defaults, or pass:
 
    ```python
-   lock_suffix=".lock",
-   status_suffix=".status",
+   lock_suffix = (".lock",)
+   status_suffix = (".status",)
    ```
 
    Prefer passing them explicitly in `_runner.py` so SimpleBroker's file naming
@@ -938,17 +935,24 @@ Suggested private helper structure:
 ```python
 _MAX_STATUS_BYTES = 64 * 1024
 
+
 def _validate_phase_name(phase_name: str) -> None: ...
+
 
 def _read_status_phases(self) -> tuple[set[str], str | None]: ...
 
+
 def _write_status_phases(self, phases: Iterable[str]) -> None: ...
+
 
 def _legacy_status_base_path(self) -> Path: ...
 
+
 def _legacy_status_path_for_phase(self, phase_name: str) -> Path: ...
 
+
 def _legacy_status_paths(self) -> list[Path]: ...
+
 
 def _cleanup_legacy_status_files(self) -> None: ...
 ```

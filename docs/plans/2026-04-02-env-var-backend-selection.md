@@ -212,11 +212,13 @@ def test_load_config_includes_broker_backend_default():
     config = load_config()
     assert config["BROKER_BACKEND"] == "sqlite"
 
+
 def test_load_config_reads_broker_backend_from_env(monkeypatch):
     """BROKER_BACKEND reads from environment."""
     monkeypatch.setenv("BROKER_BACKEND", "postgres")
     config = load_config()
     assert config["BROKER_BACKEND"] == "postgres"
+
 
 def test_load_config_includes_all_backend_vars():
     """All BROKER_BACKEND_* vars have defaults."""
@@ -363,13 +365,14 @@ class VerifiedPostgresEnv:
     target: str | None
     schema: str
 
+
 def verify_env(
     config: Mapping[str, Any],
     *,
     toml_target: str = "",
     toml_options: Mapping[str, Any] | None = None,
-) -> VerifiedPostgresEnv:
-    ...
+) -> VerifiedPostgresEnv: ...
+
 
 def init_backend(
     self,
@@ -422,9 +425,11 @@ selection exists. The message should mention both configuration paths, for examp
 
 ```python
 """Tests for Postgres verify_env()/init_backend() env var resolution."""
+
 import pytest
 from simplebroker._exceptions import DatabaseError
 from simplebroker_pg.plugin import PostgresBackendPlugin, verify_env
+
 
 def test_init_backend_constructs_dsn_from_individual_vars():
     plugin = PostgresBackendPlugin()
@@ -440,6 +445,7 @@ def test_init_backend_constructs_dsn_from_individual_vars():
     result = plugin.init_backend(config)
     assert result["target"] == "postgresql://myuser:secret@db.example.com:5433/mydb"
     assert result["backend_options"] == {"schema": "app_v1"}
+
 
 def test_init_backend_percent_encodes_reserved_characters():
     plugin = PostgresBackendPlugin()
@@ -457,6 +463,7 @@ def test_init_backend_percent_encodes_reserved_characters():
         "postgresql://user%3Aname:p%40ss%2Fw%3Ard@db.example.com:5432/db%2Fname"
     )
 
+
 def test_init_backend_omits_password_when_empty():
     plugin = PostgresBackendPlugin()
     config = {
@@ -469,7 +476,10 @@ def test_init_backend_omits_password_when_empty():
         "BROKER_BACKEND_TARGET": "",
     }
     result = plugin.init_backend(config)
-    assert ":" not in result["target"].split("@")[0].split("//")[1]  # no password in userinfo
+    assert (
+        ":" not in result["target"].split("@")[0].split("//")[1]
+    )  # no password in userinfo
+
 
 def test_verify_env_rejects_invalid_schema(monkeypatch):
     monkeypatch.setenv("BROKER_BACKEND_SCHEMA", "not-valid!")
@@ -480,6 +490,7 @@ def test_verify_env_rejects_invalid_schema(monkeypatch):
                 "BROKER_BACKEND_SCHEMA": "not-valid!",
             }
         )
+
 
 def test_init_backend_target_overrides_individual_vars():
     plugin = PostgresBackendPlugin()
@@ -495,6 +506,7 @@ def test_init_backend_target_overrides_individual_vars():
     result = plugin.init_backend(config)
     assert result["target"] == "postgresql://real@realhost:5432/realdb"
     assert result["backend_options"] == {"schema": "my_schema"}
+
 
 def test_init_backend_uses_defaults():
     plugin = PostgresBackendPlugin()
@@ -518,12 +530,16 @@ Also add tests for the toml merge behavior:
 def test_init_backend_toml_target_used_as_fallback():
     """toml_target is used when BROKER_BACKEND_TARGET env is empty."""
     plugin = PostgresBackendPlugin()
-    config = {"BROKER_BACKEND_TARGET": "", "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1"}
+    config = {
+        "BROKER_BACKEND_TARGET": "",
+        "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+    }
     result = plugin.init_backend(
         config,
         toml_target="postgresql://toml@tomlhost/tomldb",
     )
     assert result["target"] == "postgresql://toml@tomlhost/tomldb"
+
 
 def test_init_backend_env_target_overrides_toml_target():
     """BROKER_BACKEND_TARGET env overrides toml_target."""
@@ -537,6 +553,7 @@ def test_init_backend_env_target_overrides_toml_target():
         toml_target="postgresql://toml@tomlhost/tomldb",
     )
     assert result["target"] == "postgresql://env@envhost/envdb"
+
 
 def test_init_backend_individual_env_parts_do_not_rewrite_toml_target(monkeypatch):
     """Granular env vars do not rewrite a pre-existing toml target."""
@@ -553,22 +570,30 @@ def test_init_backend_individual_env_parts_do_not_rewrite_toml_target(monkeypatc
     )
     assert result["target"] == "postgresql://toml@tomlhost/tomldb"
 
+
 def test_init_backend_toml_schema_preserved_when_env_not_set(monkeypatch):
     """toml schema wins when BROKER_BACKEND_SCHEMA is not in os.environ."""
     monkeypatch.delenv("BROKER_BACKEND_SCHEMA", raising=False)
     plugin = PostgresBackendPlugin()
-    config = {"BROKER_BACKEND_TARGET": "postgresql://x@y/z", "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1"}
+    config = {
+        "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
+        "BROKER_BACKEND_SCHEMA": "simplebroker_pg_v1",
+    }
     result = plugin.init_backend(
         config,
         toml_options={"schema": "from_toml"},
     )
     assert result["backend_options"]["schema"] == "from_toml"
 
+
 def test_init_backend_env_schema_overrides_toml(monkeypatch):
     """Explicit BROKER_BACKEND_SCHEMA in os.environ overrides toml."""
     monkeypatch.setenv("BROKER_BACKEND_SCHEMA", "from_env")
     plugin = PostgresBackendPlugin()
-    config = {"BROKER_BACKEND_TARGET": "postgresql://x@y/z", "BROKER_BACKEND_SCHEMA": "from_env"}
+    config = {
+        "BROKER_BACKEND_TARGET": "postgresql://x@y/z",
+        "BROKER_BACKEND_SCHEMA": "from_env",
+    }
     result = plugin.init_backend(
         config,
         toml_options={"schema": "from_toml"},
@@ -624,13 +649,17 @@ def test_resolve_target_defaults_to_sqlite_without_toml(tmp_path, monkeypatch):
     # No toml, no existing db — returns None (sqlite discovery finds nothing)
     assert target is None
 
+
 def test_resolve_target_unknown_backend_raises(tmp_path, monkeypatch):
     """Unknown backend name produces clear error."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("BROKER_BACKEND", "mysql")
     config = load_config()
-    with pytest.raises(RuntimeError, match="Requested backend 'mysql' is not available"):
+    with pytest.raises(
+        RuntimeError, match="Requested backend 'mysql' is not available"
+    ):
         target_for_directory(tmp_path, config=config)
+
 
 def test_resolve_target_missing_postgres_plugin_has_install_hint(tmp_path, monkeypatch):
     """Missing postgres plugin gives an actionable install hint."""
@@ -647,6 +676,7 @@ def test_resolve_target_missing_postgres_plugin_has_install_hint(tmp_path, monke
         match="Requested backend 'postgres' is not available. Install simplebroker-pg.",
     ):
         target_for_directory(tmp_path, config=config)
+
 
 def test_toml_overrides_env_backend_in_public_helpers(tmp_path, monkeypatch):
     """A .broker.toml takes precedence over BROKER_BACKEND env var."""
@@ -728,7 +758,10 @@ def test_cli_uses_env_selected_postgres_without_toml(tmp_path: Path) -> None:
     code, stdout, stderr = _run_cli("--cleanup", cwd=project_root, env=env)
     assert code == 0, stderr
 
-def test_cli_bad_password_is_not_reported_as_backend_unavailable(tmp_path: Path) -> None:
+
+def test_cli_bad_password_is_not_reported_as_backend_unavailable(
+    tmp_path: Path,
+) -> None:
     """Auth failures should stay auth failures, not availability errors."""
     schema = _schema_name()
     project_root = tmp_path / "project"
@@ -775,13 +808,18 @@ def resolve_project_target(config_path: Path) -> ResolvedTarget:
     if backend_name == "sqlite":
         target = str((config_path.parent / toml_target).expanduser().resolve())
         return ResolvedTarget(
-            backend_name=backend_name, target=target, backend_options=toml_options,
-            project_root=config_path.parent, config_path=config_path,
-            used_project_scope=True, legacy_sqlite_path_mode=False,
+            backend_name=backend_name,
+            target=target,
+            backend_options=toml_options,
+            project_root=config_path.parent,
+            config_path=config_path,
+            used_project_scope=True,
+            legacy_sqlite_path_mode=False,
         )
 
     # Non-sqlite: plugin merges env vars with toml values
     from ._constants import load_config
+
     resolved = plugin.init_backend(
         load_config(),
         toml_target=toml_target,
@@ -820,6 +858,7 @@ def test_toml_schema_preserved_when_env_not_explicitly_set(tmp_path, monkeypatch
     target = resolve_project_target(toml_path)
     assert target.backend_options["schema"] == "custom_schema"
 
+
 def test_env_schema_overrides_toml_when_explicitly_set(tmp_path, monkeypatch):
     """BROKER_BACKEND_SCHEMA overrides toml when explicitly set."""
     monkeypatch.setenv("BROKER_BACKEND_SCHEMA", "env_schema")
@@ -832,6 +871,7 @@ def test_env_schema_overrides_toml_when_explicitly_set(tmp_path, monkeypatch):
     target = resolve_project_target(toml_path)
     assert target.backend_options["schema"] == "env_schema"
 
+
 def test_toml_target_not_rewritten_by_individual_env_parts(tmp_path, monkeypatch):
     """Granular env vars do not rewrite the toml target."""
     monkeypatch.setenv("BROKER_BACKEND_HOST", "envhost")
@@ -843,6 +883,7 @@ def test_toml_target_not_rewritten_by_individual_env_parts(tmp_path, monkeypatch
     )
     target = resolve_project_target(toml_path)
     assert target.target == "postgresql://postgres@tomlhost/mydb"
+
 
 def test_env_target_overrides_toml_target(tmp_path, monkeypatch):
     """BROKER_BACKEND_TARGET overrides the toml target wholesale."""

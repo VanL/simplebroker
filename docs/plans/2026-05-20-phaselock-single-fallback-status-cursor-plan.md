@@ -303,8 +303,7 @@ Do not scatter this tuple throughout the codebase:
 Define one private helper in `SQLiteRunner`, for example:
 
 ```python
-def _setup_phase_marker_names(self) -> tuple[str, ...]:
-    ...
+def _setup_phase_marker_names(self) -> tuple[str, ...]: ...
 ```
 
 Use that helper in:
@@ -513,8 +512,9 @@ Implementation guidance:
    Suggested shape:
 
    ```python
-   def _status_phase_order_for(self, phases: tuple[Phase, ...] = ()) -> tuple[str, ...]:
-       ...
+   def _status_phase_order_for(
+       self, phases: tuple[Phase, ...] = ()
+   ) -> tuple[str, ...]: ...
    ```
 
    Rules:
@@ -528,8 +528,7 @@ Implementation guidance:
    Suggested shape:
 
    ```python
-   def _status_cursor_phase(self, order: tuple[str, ...]) -> str | None:
-       ...
+   def _status_cursor_phase(self, order: tuple[str, ...]) -> str | None: ...
    ```
 
    Rules:
@@ -554,8 +553,7 @@ Implementation guidance:
        phase_name: str,
        *,
        order: tuple[str, ...] | None = None,
-   ) -> bool:
-       ...
+   ) -> bool: ...
    ```
 
 6. Update `_all_marked()`, `_run_status_phases()`, `_status_paths_for()`, and
@@ -571,8 +569,7 @@ Implementation guidance:
        phase_name: str,
        *,
        order: tuple[str, ...] | None = None,
-   ) -> None:
-       ...
+   ) -> None: ...
    ```
 
    Required sequence:
@@ -688,6 +685,7 @@ Implementation guidance:
    def _setup_phase_marker_names(self) -> tuple[str, ...]:
        return tuple(self._phase_marker_name(phase) for phase in self._setup_phase_order())
 
+
    def _setup_phase_order(self) -> tuple[SetupPhase, ...]:
        return (
            SetupPhase.CONNECTION,
@@ -704,7 +702,7 @@ Implementation guidance:
    Pass the full marker-name order:
 
    ```python
-   phase_order=self._setup_phase_marker_names()
+   phase_order = self._setup_phase_marker_names()
    ```
 
 3. Do not change `db.py` unless a red test proves the runner helper is not
@@ -979,32 +977,31 @@ mandatory exact patch.
 Suggested private helpers:
 
 ```python
-def _validate_phase_name(self, phase_name: str) -> None:
-    ...
+def _validate_phase_name(self, phase_name: str) -> None: ...
 
-def _validate_phase_order(self, phase_order: Iterable[str]) -> tuple[str, ...]:
-    ...
+
+def _validate_phase_order(self, phase_order: Iterable[str]) -> tuple[str, ...]: ...
+
 
 def _status_phase_order_for(
     self,
     phases: tuple[Phase, ...] = (),
-) -> tuple[str, ...]:
-    ...
+) -> tuple[str, ...]: ...
+
 
 def _status_cursor_phase(
     self,
     order: tuple[str, ...],
-) -> str | None:
-    ...
+) -> str | None: ...
+
 
 def _status_cursor_path(
     self,
     order: tuple[str, ...],
-) -> Path | None:
-    ...
+) -> Path | None: ...
 
-def _discard_obsolete_status_markers(self, keep: Path) -> None:
-    ...
+
+def _discard_obsolete_status_markers(self, keep: Path) -> None: ...
 ```
 
 Keep names short and local to the concepts. Do not build a `StatusCursor`

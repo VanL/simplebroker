@@ -628,11 +628,25 @@ scope first): `simplebroker.commands.__all__` equals EXACTLY this ordered
 
 ```python
 [
-    "cmd_write", "cmd_read", "cmd_peek", "cmd_exists", "cmd_stats",
-    "cmd_list", "cmd_delete", "cmd_move", "cmd_broadcast", "cmd_vacuum",
-    "cmd_watch", "cmd_init", "cmd_status",
-    "cmd_alias_list", "cmd_alias_add", "cmd_alias_remove",
-    "cmd_rename", "cmd_dump", "cmd_load",
+    "cmd_write",
+    "cmd_read",
+    "cmd_peek",
+    "cmd_exists",
+    "cmd_stats",
+    "cmd_list",
+    "cmd_delete",
+    "cmd_move",
+    "cmd_broadcast",
+    "cmd_vacuum",
+    "cmd_watch",
+    "cmd_init",
+    "cmd_status",
+    "cmd_alias_list",
+    "cmd_alias_add",
+    "cmd_alias_remove",
+    "cmd_rename",
+    "cmd_dump",
+    "cmd_load",
     "parse_exact_message_id",
 ]
 ```

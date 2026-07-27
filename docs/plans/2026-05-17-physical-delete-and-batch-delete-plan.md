@@ -482,8 +482,7 @@ Files to touch:
 Add a method near `delete()`:
 
 ```python
-def delete_message_ids(self, queue: str, message_ids: Sequence[int]) -> int:
-    ...
+def delete_message_ids(self, queue: str, message_ids: Sequence[int]) -> int: ...
 ```
 
 Import `Sequence` from `collections.abc` if `db.py` does not already import it.
@@ -710,8 +709,7 @@ Remove the comment saying exact delete uses `claim_one`.
 Add:
 
 ```python
-def delete_many(self, message_ids: Sequence[int]) -> int:
-    ...
+def delete_many(self, message_ids: Sequence[int]) -> int: ...
 ```
 
 Docstring requirements:

@@ -252,36 +252,34 @@ Add the tests near the existing after-timestamp watcher tests.
 Then add the batch variant:
 
 ```python
-    def test_after_timestamp_filters_consume_batch_drain(
-        self, broker, broker_target
-    ):
-        """Batch consume mode must use the same exclusive after filter."""
-        broker.write("test_queue", "old-1")
-        broker.write("test_queue", "boundary")
-        boundary_ts = list(broker.peek_generator("test_queue"))[-1][1]
-        broker.write("test_queue", "new-1")
-        broker.write("test_queue", "new-2")
+def test_after_timestamp_filters_consume_batch_drain(self, broker, broker_target):
+    """Batch consume mode must use the same exclusive after filter."""
+    broker.write("test_queue", "old-1")
+    broker.write("test_queue", "boundary")
+    boundary_ts = list(broker.peek_generator("test_queue"))[-1][1]
+    broker.write("test_queue", "new-1")
+    broker.write("test_queue", "new-2")
 
-        collector = MessageCollector()
-        watcher = QueueWatcher(
-            "test_queue",
-            collector.handler,
-            db=broker_target,
-            peek=False,
-            after_timestamp=boundary_ts,
-            batch_processing=True,
-        )
+    collector = MessageCollector()
+    watcher = QueueWatcher(
+        "test_queue",
+        collector.handler,
+        db=broker_target,
+        peek=False,
+        after_timestamp=boundary_ts,
+        batch_processing=True,
+    )
 
-        try:
-            watcher._drain_queue()
-        finally:
-            watcher.stop(join=False)
+    try:
+        watcher._drain_queue()
+    finally:
+        watcher.stop(join=False)
 
-        messages = collector.get_messages()
-        assert [body for body, _ in messages] == ["new-1", "new-2"]
-        assert all(ts > boundary_ts for _, ts in messages)
-        remaining = list(broker.peek_generator("test_queue", with_timestamps=False))
-        assert remaining == ["old-1", "boundary"]
+    messages = collector.get_messages()
+    assert [body for body, _ in messages] == ["new-1", "new-2"]
+    assert all(ts > boundary_ts for _, ts in messages)
+    remaining = list(broker.peek_generator("test_queue", with_timestamps=False))
+    assert remaining == ["old-1", "boundary"]
 ```
 
 The invariant is more important than the exact test names:
