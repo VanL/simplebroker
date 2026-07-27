@@ -54,11 +54,11 @@ When working with message queues:
 
 ### Bash Scripts
 
-- **[resilient_worker.sh](resilient_worker.sh)** - Production-ready message processor with checkpoint recovery
-  - Implements peek-and-acknowledge pattern to prevent data loss
-  - Atomic checkpoint updates for crash safety
-  - Per-message checkpointing with graceful shutdown
-  - Automatic retry on failure
+- **[resilient_worker.sh](resilient_worker.sh)** - Single-consumer peek-and-ack sketch with checkpoint recovery
+  - One `peek` per message (not `peek --all` + delete-in-loop)
+  - Explicit `-f` database path (`BROKER_DB` or first arg)
+  - Atomic checkpoint file updates; not safe under concurrent workers
+  - For concurrent job reservation see `docs/agent-kernel.md` (move-to-inflight)
 
 - **[dead_letter_queue.sh](dead_letter_queue.sh)** - Dead letter queue patterns for handling failures
   - Simple DLQ with retry mechanisms

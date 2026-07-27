@@ -1,0 +1,31 @@
+# SimpleBroker
+
+> A lightweight message queue with a Unix CLI and matching Python client.
+> Default install has no runtime dependencies; state is a local SQLite
+> database (optional Postgres/Redis backends). No server, no daemon.
+
+## Docs
+
+- [Agent kernel (use vs embedding)](docs/agent-kernel.md): Canonical agent-facing kernel — CLI/`Queue` use surface, delivery hazards, safe reservation recipes, embedding notes for Weft/Taut-style runtimes
+- [README](README.md): Full product contract — commands, flags, exit codes, safety, Python API, project scoping, architecture
+- [CHANGELOG](CHANGELOG.md): Behavior deltas for published releases
+- [AGENTS.md](AGENTS.md): Entry point for agents working *in this repository* (process, plans, reviews)
+- [SECURITY.md](SECURITY.md): Vulnerability reporting
+
+## Agent context
+
+- [Agent context hub](docs/agent-context/README.md): Shared guidance read order
+- [Decision hierarchy](docs/agent-context/decision-hierarchy.md): Conflict resolution for agents
+- [Engineering principles](docs/agent-context/engineering-principles.md): Floors, gates, cohesion rules
+- [Designing agent-facing interfaces](docs/agent-context/runbooks/designing-agent-facing-interfaces.md): Principles for CLIs and APIs agents consume
+
+## Examples
+
+- [Python API (recommended start)](examples/python_api.py): Public `Queue` / `QueueWatcher` usage
+- [Examples index](examples/README.md): Shell and advanced patterns (demo-quality unless noted)
+- [Resilient worker sketch](examples/resilient_worker.sh): Single-consumer peek-after-checkpoint pattern (requires defining process_event; prefer move-to-inflight under concurrency — see agent kernel)
+
+## Optional
+
+- [Coalescing state](docs/coalescing.md): Session-start doc-debt derivation for maintainers
+- [Plans index](docs/plans/README.md): Implementation plan status inventory

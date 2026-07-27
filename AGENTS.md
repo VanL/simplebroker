@@ -1,5 +1,12 @@
 # Agent Entry Point
 
+**Product use kernel (CLI + matching client API):**
+[`docs/agent-kernel.md`](docs/agent-kernel.md). Machine-readable doc index:
+[`llms.txt`](llms.txt). Read the kernel before deep-diving the README when
+you need SimpleBroker as a queue tool. This file is the entry for
+**working in this repository** (process, plans, reviews). Product behavior
+remains `README.md` + `CHANGELOG.md`.
+
 ## Agent Permissions and Attribution — Read First
 
 - YOU ARE EXPLICITLY AUTHORIZED TO USE SUB-AGENTS AS DIRECTED IN THE AGENT
