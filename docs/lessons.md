@@ -93,7 +93,44 @@ pass; bootstrap source `2f93ee5`)
 
 ## Ledger
 
-Dated moment-tier entries (foldable after age floor and distillation). None yet
-after Golden Rules promotion.
+Dated moment-tier entries (foldable after age floor and distillation).
 
-<!-- New entries: - YYYY-MM-DD: text. -->
+- 2026-07-27: Plan checklists and in-file `Status:` headers go stale. Before
+  treating a plan as open work, verify the claimed behavior in code and
+  CHANGELOG; open `- [ ]` boxes are not evidence that the feature is unshipped.
+  (Harvested from evaluation-fixes, independent-review-fixes, core-reliability,
+  and undated review-remediation plans left as `draft` after land.)
+- 2026-07-27: When plan B supersedes plan A, flip A's index status to
+  `superseded` in the same change as B is accepted — otherwise both remain
+  "open" in the inventory. (Phaselock cursor plan vs atomic status-file plan.)
+- 2026-07-27: Cross-thread finalization of SQL transactional generators cannot
+  be fixed with a poison flag or foreign-thread `rollback()`: the owner
+  connection and `RLock` stay held, waiters stay blocked, and Redis does not
+  share the failure mode. Same-thread create/iterate/close is the contract
+  until an owner-thread healing design is reviewed. (Unit D evidence matrix;
+  orphan-healing plan failed pre-implementation review.)
+- 2026-07-27: Stable hybrid timestamps as message IDs make `move` + consumer
+  `after`/checkpoint filters a permanent-skip hazard by design. Document and
+  test the skip; do not "fix" it by changing ID stability without a new
+  identity model. (checkpoint-move plans; characterization tests.)
+- 2026-07-27: "Exactly-once" in this codebase means claim commits before yield
+  (no double-delivery of that claim), not crash-safe end-to-end processing.
+  Default consume/`watch` can lose work if the handler dies after claim.
+  Safe workers use peek-ack or move-ack. (Repeated safety/delivery plans and
+  README Critical Safety.)
+- 2026-07-27: Multi-backend work splits into SQL `BrokerCore` vs direct Redis
+  cores; domain fixes must be proven on each released backend, and private
+  `db` helpers are not a stable third-party SDK. (redis/pg extension plans;
+  `simplebroker.ext` scope note.)
+- 2026-07-27: Setup/migration coordination (phase-lock) needs an atomic status
+  publish and independent completed-phase facts; a single "cursor phase name"
+  is weaker under crash/reorder. Large legacy migrations can exceed fixed
+  waiter budgets — measure before changing timeouts. (phaselock plans; F21
+  memo + migration-aware waiting proposal.)
+- 2026-07-27: Coverage + xdist + subprocess CLI tests are a first-class
+  reliability surface: do not redirect `COVERAGE_FILE` before workers spawn;
+  give children private shards and atomic publish; preserve SIGTERM saves.
+  (Already Golden Rules; re-cited from coverage/release plans.)
+- 2026-07-27: Coalescing harvest candidates must come from a complete Status
+  Index. Declaring legacy plans "not a count" hides debt forever; census
+  first, then soft-retire. (agent-docs hygiene plan F1/F7.)

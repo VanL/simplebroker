@@ -102,8 +102,8 @@ not re-nag; a changed count or a fired reconsideration condition does.
 
 | Tier | Checked through (date, SHA) | Counts at check | Reason deferred | Reconsider when |
 |------|------------------------------|-----------------|-----------------|-----------------|
-| Lessons | 2026-07-27, f133ce7+ | 0 dated ledger entries — under threshold 10 | Not tripped | Count of dated ledger lines changes |
-| Plans | 2026-07-27, post soft-retire | harvest_candidates=0; retired-pending=47; draft/active remain | Soft-retire done; physical deletion not authorized | User authorizes physical-delete pass after second harvest-gate verification |
+| Lessons | 2026-07-27, post audit | 9 dated ledger entries (under threshold 10; all same-day harvest) | Under age floor / still hot; not folded | Count ≥10 and age floor, or user requests distill |
+| Plans | 2026-07-27, post draft audit | harvest_candidates=0; retired-pending=56; true drafts=2 | Soft-retire done; physical deletion not authorized | User authorizes physical-delete pass after second harvest-gate verification |
 | Unindexed | 2026-07-27 | 0 | Census complete | unindexed &gt; 0 |
 | Promotion | 2026-07-27 | not derived | No promotion candidates identified this sweep | Distinct workflow theme cited ≥3 times |
 
@@ -114,6 +114,7 @@ spot-check against the diff. `checked-deferred` lines are valid runs.
 
 | Date | Tier(s) | Source SHA | Claim |
 |------|---------|------------|-------|
+| 2026-07-27 | plans + lessons | post-`7409242` worktree | **Draft-status audit + lesson harvest:** 9 plans mislabeled `draft` despite shipped code (body search, phaselock atomic, evaluation/independent/core-reliability/review remediations, F21 memo complete) → soft-retired with evidence ledger lines. 1 plan marked superseded-by-design (phaselock cursor). True remaining drafts: schema-migration-aware-waiting proposal; cross-thread orphan-healing (review FAIL). Retroactive dated lessons added to `docs/lessons.md` Ledger (stale Status checkboxes; supersede pairing; cross-thread generators; move+checkpoint; exactly-once vs processing; multi-backend dual core; phaselock atomic status; coverage/xdist; coalescing index completeness). No physical deletes. |
 | 2026-07-27 | plans (+ lessons check, promotion skip) | plan bodies @ `f133ce7`; soft-retire in worktree | **Coalescing sweep (user-authorized):** derived harvest=47, unindexed=0, dated lessons=0. Lessons: nothing foldable. Promotion: none. Plans: soft-retired **47** completed/superseded plans to `retired-pending` with Retired Plans ledger lines (source `f133ce7`); product-plan rationale judged non-durable for always-read tier (README/CHANGELOG/code absorb the contract); process plans absorbed into agent-context/DOM/AGENTS. Converted local path backlinks for bootstrap/propagate/hygiene in DOM Related Plans + designing-agent-facing-interfaces. **No plan files deleted** (two-step retirement). Physical-delete pass still required. |
 | 2026-07-27 | all | worktree then `f133ce7` | Hygiene pass (prior): full Status Index census (unindexed→0); Golden Rules; AGENTS/skill recipe; coalesce-check cancelled. |
 | 2026-07-17 | — (propagation; nothing folded) | source agent-guidance @ `b248e1c`; landed `bc7de9e` (runbook units) + `3c39cdd` (call-agent, plan, index row) | Delta wave per `docs/plans/2026-07-17-propagate-guidance-delta-wave-plan.md`. No thresholds, watermarks, or folds touched. |

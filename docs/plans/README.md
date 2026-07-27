@@ -37,9 +37,9 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-05-17-physical-delete-and-batch-delete-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-05-20-delete-from-queues-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-05-20-list-queues-names-only-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
-| 2026-05-20-message-body-search-api-plan.md | draft — header proposed; status-uncertain whether full surface shipped |
-| 2026-05-20-phaselock-atomic-status-file-plan.md | draft — header draft; may be superseded by later phaselock work |
-| 2026-05-20-phaselock-single-fallback-status-cursor-plan.md | draft — header draft; may be superseded by later phaselock work |
+| 2026-05-20-message-body-search-api-plan.md | retired-pending — soft-retired 2026-07-27 (status correction); source f133ce7 |
+| 2026-05-20-phaselock-atomic-status-file-plan.md | retired-pending — soft-retired 2026-07-27 (status correction); source f133ce7 |
+| 2026-05-20-phaselock-single-fallback-status-cursor-plan.md | retired-pending — soft-retired 2026-07-27 (status correction); source f133ce7 |
 | 2026-05-28-setup-forward-progress-budget-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-05-30-drop-python-310-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-06-01-exact-message-import-api-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
@@ -50,16 +50,16 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-06-11-hypothesis-property-testing-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-06-18-latest-pending-timestamp-api-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-06-18-queue-rename-api-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
-| 2026-07-02-evaluation-fixes-plan.md | draft — open checklist; status-uncertain |
+| 2026-07-02-evaluation-fixes-plan.md | retired-pending — soft-retired 2026-07-27 (status correction); source f133ce7 |
 | 2026-07-02-message-id-validation-and-diagnostics-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-02-watch-after-and-pg-rename-lock-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-03-backend-api-version-handshake-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-03-checkpoint-move-caveat-and-lock-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
-| 2026-07-05-independent-review-fixes-plan.md | draft — status-uncertain; no clear completion record |
+| 2026-07-05-independent-review-fixes-plan.md | retired-pending — soft-retired 2026-07-27 (status correction); source f133ce7 |
 | 2026-07-05-vendored-retry-consolidation-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-06-watcher-embedder-lifecycle-hooks-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
-| 2026-07-09-core-reliability-issues-1-5-plan.md | draft — header: proposed; implementation has not started |
-| 2026-07-09-review-findings-remediation-plan.md | draft — header: proposed; implementation has not started |
+| 2026-07-09-core-reliability-issues-1-5-plan.md | retired-pending — soft-retired 2026-07-27 (status correction); source f133ce7 |
+| 2026-07-09-review-findings-remediation-plan.md | retired-pending — soft-retired 2026-07-27 (status correction); source f133ce7 |
 | 2026-07-10-live-activity-waiter-replacement-api-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-11-write-returns-message-id-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-12-code-scanning-alert-triage-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
@@ -67,7 +67,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-13-project-assessment-remediation-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-16-agent-guidance-bootstrap-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-16-code-review-findings-remediation-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
-| 2026-07-16-code-review-findings-remediation-plan-f21-memo.md | draft — investigation memo; follow-up is schema-migration-aware-waiting proposal |
+| 2026-07-16-code-review-findings-remediation-plan-f21-memo.md | retired-pending — soft-retired 2026-07-27 (status correction); source f133ce7 |
 | 2026-07-17-propagate-guidance-delta-wave-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | draft — class 4; F21 threshold-triggered follow-up; design decision required |
 | 2026-07-27-agent-docs-coalescing-and-status-hygiene-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
@@ -75,7 +75,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-extension-monorepo-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
-| review-remediation-plan.md | draft — status-uncertain; undated historical remediation |
+| review-remediation-plan.md | retired-pending — soft-retired 2026-07-27 (status correction); source f133ce7 |
 | runner-and-batch-contract-remediation-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | sqlite-backend-package-cleanup-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | sqlite-isolation-foundation-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
@@ -133,6 +133,15 @@ Soft-retire ledger. Physical deletion requires a second verification pass per pl
 | runner-and-batch-contract-remediation-plan.md | 2026-07-27 | Feature/execution complete; public contract in README + CHANGELOG + code. | README.md / CHANGELOG.md / package code; plan rationale judged non-durable for always-read tier (git retains file until physical-delete pass) | `f133ce7` |
 | sqlite-backend-package-cleanup-plan.md | 2026-07-27 | Feature/execution complete; public contract in README + CHANGELOG + code. | README.md / CHANGELOG.md / package code; plan rationale judged non-durable for always-read tier (git retains file until physical-delete pass) | `f133ce7` |
 | sqlite-isolation-foundation-plan.md | 2026-07-27 | Feature/execution complete; public contract in README + CHANGELOG + code. | README.md / CHANGELOG.md / package code; plan rationale judged non-durable for always-read tier (git retains file until physical-delete pass) | `f133ce7` |
+| 2026-05-20-message-body-search-api-plan.md | 2026-07-27 | find_message_ids(body_contains=...) shipped in core/backends. | simplebroker/_message_search.py, sbqueue.find_message_ids, backend find_message_ids | `f133ce7` |
+| 2026-05-20-phaselock-atomic-status-file-plan.md | 2026-07-27 | Atomic fallback status file (os.replace) + phase set shipped in _phaselock.py. | simplebroker/_phaselock.py (status_base_path, _write_status_phases) | `f133ce7` |
+| 2026-05-20-phaselock-single-fallback-status-cursor-plan.md | 2026-07-27 | Superseded by atomic status-file plan; cursor design not current. | 2026-05-20-phaselock-atomic-status-file-plan (landed design) | `f133ce7` |
+| 2026-07-02-evaluation-fixes-plan.md | 2026-07-27 | Evaluation fixes landed (write-in-txn, CLI guards, READ_COMMIT_INTERVAL, move cap, etc.); plan checklists stale. | CHANGELOG 5.x; simplebroker/db.py _do_write_transaction; cli/commands | `f133ce7` |
+| 2026-07-05-independent-review-fixes-plan.md | 2026-07-27 | Independent-review findings landed (redaction, READ_COMMIT, scientific ts, redis broadcast/PID, release tag match, move cap). | CHANGELOG; _targets.py; commands.py; release-gate.yml; redis scripts/plugin | `f133ce7` |
+| 2026-07-09-core-reliability-issues-1-5-plan.md | 2026-07-27 | Core reliability items largely landed (redact/display, instance config, delivery_guarantee validate, vacuum policy, watcher dispatch/is_running); plan header 'not started' was stale. | CHANGELOG 5.1–5.4; watcher.py; _delivery.py; sbqueue config paths | `f133ce7` |
+| 2026-07-09-review-findings-remediation-plan.md | 2026-07-27 | Coverage combine/SIGTERM and related process fixes landed; plan status stale. | CHANGELOG/CI coverage path; docs/lessons Golden Rules on coverage | `f133ce7` |
+| review-remediation-plan.md | 2026-07-27 | stream_messages honors all_messages; re-entrant mutation guarded; delete() returns False when nothing deleted. | simplebroker/sbqueue.py stream_messages/delete; db.py generator batch guards | `f133ce7` |
+| 2026-07-16-code-review-findings-remediation-plan-f21-memo.md | 2026-07-27 | F21 investigation complete; follow-up is schema-migration-aware-waiting proposal (still draft). | 2026-07-17-schema-migration-aware-waiting-proposal.md; CHANGELOG 5.4.0 F21 note | `f133ce7` |
 
 ## Rules for agents
 
