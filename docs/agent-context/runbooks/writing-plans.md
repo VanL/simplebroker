@@ -594,6 +594,10 @@ ceremony inside the plan file.
   this repository.)
 - **Completed and superseded plans are harvest candidates.** They stay in
   the tree until the coalescing sweep retires them.
+- **Class ≥3 completion is not claimed until the Status Index row exists and
+  is `completed` or `superseded`.** Update `docs/plans/README.md` in the same
+  change as the completion claim. Do not require a binary status checker;
+  the index is the contract.
 - **The harvest gate — all four before deletion, no exceptions:**
   1. deviation log closed (no `pending` spec proposals)
   2. durable rationale absorbed into the governing spec or implementation

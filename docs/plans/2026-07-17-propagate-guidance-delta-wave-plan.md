@@ -2,8 +2,8 @@
 
 Date: 2026-07-17
 
-Status: active — delta wave from agent-guidance @ `b248e1c` (prior pin
-`fc23eae`)
+Status: completed — delta wave from agent-guidance @ `b248e1c` (prior pin
+`fc23eae`); runbook units landed at `bc7de9e`
 
 Owner: SimpleBroker
 

@@ -8,50 +8,92 @@ Boundary: lessons, plans, and skill/runbook promotion in this repository.
 Specs and implementation docs are living documents and are never coalesced.
 Verification: the run log below plus the repository's traceability gate.
 Required action: the session-start check is **read-only** — derive the
-counts, compare against the deferral state below, and report a new trip to
-the user in one sentence. All writes to this file or to coalesced material
-happen only inside an authorized maintenance task
+counts with the recipe below, compare against the deferral state, and
+report a new trip to the user in one sentence. All writes to this file or
+to coalesced material happen only inside an authorized maintenance task
 (`skills/coalescing/SKILL.md`); destructive steps additionally require
 landing authorization.
 
 Counts are always derived from watermarks and the current tree — never
-stored, never trusted from memory. See the skill for the exact commands and
-adapt them to this repository's ledger format.
+stored, never trusted from memory. There is **no** `bin/coalesce-check` in
+this repository; do not invent one. The skill and this file share one recipe.
 
-**Repo-local fold units and derivation commands** (per [DOM-14]'s
-declared-fold-unit requirement):
+## Derivation recipe (authoritative)
 
-- Lessons: dated bullets in `docs/lessons.md` (ledger is new, starts
-  empty). Derivation: `grep -c '^- 20' docs/lessons.md` past the
-  watermark date.
-- Plans: forward-only Status Index in `docs/plans/README.md`
-  (boundary 2026-07-16). The 51 legacy plans (44 dated, 7 undated) are
-  declared backfill debt, not a derived count; ~23 of them carry a
-  `Status:` header (`grep -l '^Status:' docs/plans/*.md`) — the
-  derivable source for that minority — while the remainder need
-  file-body and history judgment at backfill. Legacy status vocabulary
-  (`proposed`, `draft`, `implemented`, `completed`, `superseded`, …)
-  maps to the index vocabulary at backfill, never by bulk rewrite.
+Copy this block; keep it in sync with `skills/coalescing/SKILL.md` step 1.
+
+```bash
+# --- Plans: harvest candidates ---
+# Primary status token is the first word of the Status cell
+# (draft|active|completed|superseded|retired-pending|retired).
+# Count index rows whose token is completed or superseded, that are not
+# marked exemplar, and that have no matching plan name in Retired Plans.
+python3 - <<'PY'
+import re
+from pathlib import Path
+text = Path("docs/plans/README.md").read_text(encoding="utf-8")
+# Split Status Index vs Retired Plans
+idx = text.split("## Status Index", 1)[1].split("## Retired Plans", 1)[0]
+retired = text.split("## Retired Plans", 1)[1].split("## ", 1)[0]
+retired_names = set(re.findall(r"^\| ([^|]+\.md) \|", retired, re.M))
+harvest = []
+for plan, status in re.findall(r"^\| ([^|]+\.md) \| ([^|]+) \|", idx, re.M):
+    token = status.strip().split()[0].lower().strip("*,;")
+    if token in ("completed", "superseded") and "exemplar" not in status.lower():
+        if plan not in retired_names and plan != "*(none yet)*":
+            harvest.append(plan)
+print("harvest_candidates", len(harvest))
+for p in harvest:
+    print(" ", p)
+
+# --- Plans: unindexed (must be 0 after 2026-07-27 census) ---
+all_plans = sorted(
+    p.name for p in Path("docs/plans").glob("*.md") if p.name != "README.md"
+)
+indexed = set(re.findall(r"^\| ([^|]+\.md) \|", idx, re.M))
+unindexed = [p for p in all_plans if p not in indexed]
+print("unindexed", len(unindexed))
+for p in unindexed:
+    print(" ", p)
+PY
+
+# --- Lessons past watermark (dated ledger only) ---
+grep -E '^- 20[0-9]{2}-[0-9]{2}-[0-9]{2}:' docs/lessons.md || true
+```
+
+**Report when (one sentence to the user):**
+
+- `harvest_candidates` ≥ plans threshold (below), or
+- `unindexed` &gt; 0, or
+- a reconsideration condition in the deferral table has fired and counts
+  changed since `checked_through`.
+
+Unchanged counts against an unchanged deferral row: do not re-nag.
+
+**Repo-local fold units:**
+
+- Lessons: dated bullets under `## Ledger` in `docs/lessons.md` matching
+  `^- 20XX-MM-DD:`. Golden Rules are not a trigger count.
+- Plans: Status Index harvest candidates (above); unindexed is a separate
+  reportable backfill signal that must stay 0.
 - Promotion: judgment-clustered citation counting during sweeps.
 
 ## Thresholds
 
-Starter values from the agent-guidance scaffold. Calibrate to this
-repository's volume with a run-log note before relying on them.
-
 | Tier | Trigger (derived count) | Threshold | Age floor |
 |------|------------------------|-----------|-----------|
 | Lessons | dated ledger entries after the lessons watermark | 10 | 30 days, and never entries cited by an active plan or in a still-accumulating theme |
-| Plans | plans with status completed/superseded, not `exemplar`, and no retired-ledger line | 5 | none — the harvest gate and two-step retirement are the guards |
+| Plans | harvest candidates (completed/superseded, not exemplar, no retired-ledger line) | 5 | none — the harvest gate and two-step retirement are the guards |
+| Unindexed | plan files missing from Status Index | 0 (any positive is reportable) | none |
 | Promotion | distinct citations of the same workflow theme (judgment-clustered) since the promotion watermark | 3 | n/a |
 
 ## Watermarks
 
 | Tier | Distilled through | Source SHA |
 |------|-------------------|------------|
-| Lessons | (none — first sweep pending) | — |
-| Plans | (none — first sweep pending) | — |
-| Promotion | (none — first sweep pending) | — |
+| Lessons | (none — Golden Rules promoted 2026-07-27; no dated ledger folds yet) | — |
+| Plans | (none — harvest soft-retire not yet run) | — |
+| Promotion | (none) | — |
 
 ## Deferral State
 
@@ -60,19 +102,19 @@ not re-nag; a changed count or a fired reconsideration condition does.
 
 | Tier | Checked through (date, SHA) | Counts at check | Reason deferred | Reconsider when |
 |------|------------------------------|-----------------|-----------------|-----------------|
-| Lessons | 2026-07-16, `2f93ee5` | 0 dated entries (ledger new at bootstrap) — under threshold 10 | Not tripped; nothing foldable | Count changes |
-| Plans | 2026-07-16, `2f93ee5` | Index: 1 active (the bootstrap plan), 0 completed-unretired — not tripped. 51 legacy plans (44 dated, 7 undated) are declared backfill debt, not a derived count; ~23 carry `Status:` headers as the partial derivable source | Backfill is dedicated-session work, never bootstrap work; guessing 51 statuses at install time destroys evidence | A backfill session is authorized; the tier derives normally from the index thereafter |
-| Promotion | 2026-07-16, `2f93ee5` | not derived — no local citations yet (skills arrived with the scaffold) | Derive at the first real sweep | First sweep with local work history |
+| Lessons | 2026-07-27, worktree (hygiene plan) | 0 dated ledger entries — under threshold 10 | Not tripped; Golden Rules hold standing rules | Count of dated ledger lines changes |
+| Plans | 2026-07-27, worktree (hygiene plan) | harvest_candidates=47 after this plan closes (was 46 mid-pass); soft-retire not authorized | Harvest gate: most completed plans still hold durable rationale only in plan files (item 2); no bulk soft-retire without per-plan absorption | harvest_candidates changes, or user authorizes soft-retire of named plans that pass the four-part gate |
+| Unindexed | 2026-07-27, worktree (hygiene plan) | 0 | Census complete | unindexed &gt; 0 |
+| Promotion | 2026-07-27, worktree (hygiene plan) | not derived | Judgment tier; no mechanical count | First sweep with explicit promotion candidates |
 
 ## Run Log
 
 One line per run, newest first. Each line is a claim; it must survive a
-spot-check against the diff. `checked-deferred` lines are valid runs. Source
-SHA names a commit verifiably containing the raw material; the fold commit
-may be appended as metadata once it exists.
+spot-check against the diff. `checked-deferred` lines are valid runs.
 
 | Date | Tier(s) | Source SHA | Claim |
 |------|---------|------------|-------|
-| 2026-07-17 | — (propagation; nothing folded) | source agent-guidance @ `b248e1c`; landed `bc7de9e` (runbook units) + `3c39cdd` (call-agent, plan, index row) | Delta wave per `docs/plans/2026-07-17-propagate-guidance-delta-wave-plan.md`: two writing-plans rules (approval-attaches-to-reviewed-text; plans-record-evidence-not-transient-state), the two-question PASS/BLOCKED plan-review prompt, the §4a scoped-change template + round-2 variant, §6 verdict vocabulary, call-agent brief standard. Scoped review (grok, §4a-form brief): no blocker; F1 self-referential catch — the plan's own survey froze a git-status census, forbidden by the very rule it propagates; fixed pre-landing. Landing split across two concurrent-session commits with correct content; recorded here as the durable evidence. No thresholds, watermarks, or folds touched. |
-| 2026-07-16 | all | `2f93ee5` (wave commit; source agent-guidance @ `fc23eae`) | First sweep, run in the same unit as the bootstrap per the standing rule: checked-deferred across all tiers. Lessons 0 (new ledger); plans 1 active local, 51 legacy declared as backfill debt (~23 with `Status:` headers); promotion not derived. Nothing folded; no watermark advanced. Thresholds kept at scaffold defaults (10/5/3) — calibrate with a run-log note when volume warrants. Scoped adaptation review: grok round 1 FAIL (phantom hub plans index; census 23→51 — orchestrator errors, fixed), round 2 PASS. Two hub back-ports filed from this landing: bootstrap now generates a neutral plans README instead of copying the hub's, and the generated repository-map gained the interface-review row. |
-| (bootstrap) | — | — | Initialized by the agent-guidance scaffold. Derive counts and calibrate thresholds before first use. |
+| 2026-07-27 | all | worktree implementing `2026-07-27-agent-docs-coalescing-and-status-hygiene-plan.md` (pre-commit) | Hygiene pass: full Status Index census (unindexed→0); Retired Plans section added; Starter Lessons → Golden Rules; AGENTS session-start recipe; coalesce-check cancelled (D1). Plans harvest_candidates high (many completed); checked-deferred soft-retire — harvest gate item 2 blocks bulk retirement. No plan files deleted. |
+| 2026-07-17 | — (propagation; nothing folded) | source agent-guidance @ `b248e1c`; landed `bc7de9e` (runbook units) + `3c39cdd` (call-agent, plan, index row) | Delta wave per `docs/plans/2026-07-17-propagate-guidance-delta-wave-plan.md`. No thresholds, watermarks, or folds touched. |
+| 2026-07-16 | all | `2f93ee5` (wave commit; source agent-guidance @ `fc23eae`) | First sweep at bootstrap: checked-deferred; 51 legacy declared backfill debt (superseded by 2026-07-27 census). |
+| (bootstrap) | — | — | Initialized by the agent-guidance scaffold. |

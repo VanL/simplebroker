@@ -43,6 +43,21 @@ Required read order for any agent operating in this repository:
 If local defaults conflict with repository guidance, follow the decision policy
 in `docs/agent-context/decision-hierarchy.md`.
 
+### Session-start coalescing check (read-only)
+
+Before broad work, derive counts using the recipe in `docs/coalescing.md`
+(same block as `skills/coalescing/SKILL.md` step 1). In **one sentence**,
+report to the user when any of these hold:
+
+- harvest candidates (`completed`/`superseded` index rows with no Retired
+  Plans ledger line) ≥ the plans threshold in `docs/coalescing.md`
+- unindexed plan files &gt; 0 (must stay 0 after the 2026-07-27 census)
+- a reconsideration condition in the deferral table has fired
+
+Do **not** start a coalescing sweep unless the user authorizes it. Do not
+write `docs/coalescing.md` mid-task. There is no `bin/coalesce-check`; do not
+invent one.
+
 ## Project Conventions
 
 - Specs live in `docs/specs/`.
@@ -52,10 +67,12 @@ in `docs/agent-context/decision-hierarchy.md`.
 - Durable lessons learned live in `docs/lessons.md`.
 - Documentation maintenance is part of the definition of done for each change.
 - Classify every task per [DOM-15]; classes 3+ start with a dated plan
-  in `docs/plans/` (see [DOM-5] and [DOM-15] in
+  in `docs/plans/` **and an index row in `docs/plans/README.md`** (see
+  [DOM-5] and [DOM-15] in
   `docs/specs/01-development-documentation-operating-model.md`), while
   classes 1–2 record their plan in the commit message, PR description,
-  or handoff report.
+  or handoff report. Closing a class ≥3 plan requires flipping that index
+  row to `completed` or `superseded` in the same change.
 - Risky or boundary-crossing changes should also read
   `docs/agent-context/runbooks/hardening-plans.md` and treat its checklist as
   required, not optional. Risky includes async or deferred work, contract
@@ -147,3 +164,5 @@ Do not consider work complete until:
 - any skill or runbook used heavily during the work has been evaluated for
   possible improvement
 - durable lessons are recorded if the work exposed a reusable correction
+- class ≥3 plans: Status Index row closed (`completed` / `superseded`) when
+  the work is claimed done

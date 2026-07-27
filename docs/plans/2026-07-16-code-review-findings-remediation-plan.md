@@ -1,16 +1,10 @@
 # Code Review Findings Remediation Plan (5.3.3 review)
 
 **Date:** 2026-07-16
-**Status:** active — implementation landed at `b7c0077`; Python 3.11 CLI
-compatibility is committed at `f190291`; the Windows pipe correction has passed
-local gates and independent review, but its first native rerun exposed the
-Windows CRT's generic `EINVAL` closed-pipe form; the follow-up fix passes local
-gates and independent review. Its next native run passed Windows 3.11/3.12 but
-was blocked by an unrelated Windows 3.13 timeout cluster and a corrupt Redis
-coverage shard. The Windows rerun passed 3.11, 3.12, and 3.13. The repeated
-Redis corruption was traced to xdist worker databases being redirected out of
-pytest-cov's managed lifecycle; the lifecycle fix and exact-shard regression
-pass locally, and another native rerun is pending
+**Status:** completed — implementation landed through SimpleBroker 5.4.0
+(CHANGELOG). Residual F21 schema phase-lock wait is tracked separately in
+`2026-07-17-schema-migration-aware-waiting-proposal.md` / F21 memo; not a
+blocker for this plan's completion claim.
 **Class:** 4 — risky triggers fire per [DOM-5]: public CLI contract and exit-code
 semantics change (Units A, E), the same stop/pipe logic runs in more than one
 execution context (CLI command layer and library watcher), and Unit D changes

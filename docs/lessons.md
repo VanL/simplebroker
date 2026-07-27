@@ -3,8 +3,9 @@
 Use this file for durable, project-level lessons that should influence future
 sessions.
 
-Startup context is the Golden Rules plus entries after the watermark in
-`docs/coalescing.md`; the rest of this ledger is searchable history.
+Startup context is the **Golden Rules** section plus dated **Ledger** entries
+after the watermark in `docs/coalescing.md`; the rest of this file is
+searchable history.
 
 ## When To Add A Lesson
 
@@ -14,7 +15,22 @@ Startup context is the Golden Rules plus entries after the watermark in
 - A completed change revealed a stronger general rule than the repo previously
   encoded.
 
-## Starter Lessons
+New ledger entries **must** use this form (dated bullet):
+
+```text
+- YYYY-MM-DD: short durable lesson text.
+```
+
+Do not add undated bullets to the ledger. Durable standing rules belong under
+**Golden Rules** (explicit revision), not as undated ledger noise.
+
+## Golden Rules
+
+Standing rules. Change only by explicit revision with
+`(revised YYYY-MM-DD; was: <gist>)` when meaning shifts.
+
+(promoted from Starter Lessons at agent-guidance bootstrap / 2026-07-27 hygiene
+pass; bootstrap source `2f93ee5`)
 
 - Keep canonical agent guidance in shared repo-owned docs and make root agent
   files point to that context instead of carrying divergent copies.
@@ -32,7 +48,7 @@ Startup context is the Golden Rules plus entries after the watermark in
   to `AGENTS.md` when the environment supports them; thin pointer files are the
   fallback.
 - Optimize docs for agent usability, not just human readability. If something
-  is human-clear but agent-ambiguous, call it out and suggest a specific fix.
+  is human-clear but agent-ambiguous, call that out and suggest a specific fix.
   Check for missing owner, boundary, verification, or required action.
 - Treat documented contracts as executable inventories. Exception families,
   exit-code sets, and other enumerable behavior need structural or behavioral
@@ -71,3 +87,13 @@ Startup context is the Golden Rules plus entries after the watermark in
   its own cases have one xdist group. The group serializes those cases with
   each other, not with work on other workers. Run threshold-bearing benchmarks
   in a separate `-n 0` phase.
+- Plan status lives in `docs/plans/README.md` Status Index. Closing a class ≥3
+  plan requires an index flip to `completed` or `superseded` in the same change.
+  Incomplete indexes hide harvest debt from coalescing checks.
+
+## Ledger
+
+Dated moment-tier entries (foldable after age floor and distillation). None yet
+after Golden Rules promotion.
+
+<!-- New entries: - YYYY-MM-DD: text. -->

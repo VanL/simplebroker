@@ -67,47 +67,35 @@ small and hot while git history holds everything raw.
 
 ### 1. Derive the trigger counts (never trust a stored number)
 
-Read the watermarks in `docs/coalescing.md`, then compute. The state
-file owns the repo-local ledger format: when it declares a derivation
-command, use that command — the bullet grep below is the default for
-dated-bullet ledgers only.
+Read the watermarks and **Derivation recipe** in `docs/coalescing.md`, then
+run that recipe (keep this skill and the state file identical). Do **not**
+expect `bin/coalesce-check` — it is intentionally not maintained here.
 
 **Denominate the count in the repo's fold unit, and count only
-fold-eligible material.** A trigger is actionable only when its unit
-matches how the repo actually folds: a domain-grouped ledger counts per
-section, not repo-wide, and a repo-wide hot-inclusive count nags without
-pointing at a foldable cluster. Count only cold, unfolded material —
-entries within the age floor or already folded are not eligible and must
-not inflate the count. The progress model must match the fold unit too:
-domain-grouped ledgers carry per-section watermarks; a ledger folded by
-theme-cluster across dates uses a fold-records index, not a date cursor —
-a date cursor falsely claims older unfolded material behind it was folded.
+fold-eligible material.** Count only cold, unfolded material — entries
+within the age floor or already folded are not eligible and must not inflate
+the count.
 
-- Lessons past watermark — dated entries newer than the lessons watermark:
+Summary of what the shared recipe measures:
 
-  ```bash
-  grep -E '^- 20[0-9]{2}-[0-9]{2}-[0-9]{2}:' docs/lessons.md
-  ```
+- **Lessons:** dated ledger lines  
+  `grep -E '^- 20[0-9]{2}-[0-9]{2}-[0-9]{2}:' docs/lessons.md`  
+  after the lessons watermark. Golden Rules are not a trigger count.
+- **Plans harvest candidates:** Status Index rows whose primary token is
+  `completed` or `superseded`, not `exemplar`, and not listed under
+  Retired Plans. Prefer the index; do not fall through to in-file headers
+  when the index exists (even if you think it is incomplete — report
+  **unindexed** instead).
+- **Unindexed:** plan files under `docs/plans/*.md` (except README) missing
+  from the Status Index. **Any positive count is reportable** even when
+  harvest candidates are below threshold.
+- **Promotion:** judgment-clustered themes (attention signal, not a
+  mechanical gate). See step 4.
 
-  Count the lines with dates after the watermark date.
-
-- Completed-unretired plans — derivation chain, in order:
-  1. rows in the `docs/plans/README.md` status index with status
-     `completed` or `superseded`, no `exemplar` marker, and no matching
-     line in the Retired Plans ledger;
-  2. if no status index exists, `Status:` headers inside the plan files;
-  3. if neither exists, the tier is **not derivable** — record
-     "plans tier blocked: no status source" in the run log and move on.
-     Never guess plan status from file age or filename.
-
-- Skill candidates — recurring workflow themes across lesson entries and
-  review dispositions. This count is an **attention signal, not a
-  mechanical gate**: theme identity is a judgment call (see step 4 for
-  what counts as one theme). Use grep to gather candidates, judgment to
-  cluster them.
-
-Compare each count to the declared threshold. If none is tripped and you
-were not explicitly asked to sweep, stop — record nothing.
+Compare each count to the declared threshold and deferral table. **Report
+one sentence** when harvest ≥ threshold, unindexed &gt; 0, or a
+reconsideration condition fires. If none is tripped and you were not
+explicitly asked to sweep, stop — record nothing.
 
 ### 2. Lessons tier: distill, then retire
 
@@ -283,5 +271,6 @@ When the sweep is done, these exist and are verifiable:
 - If the harvest gate keeps blocking on the same item class, the gap is
   upstream (plans closing with open deviation logs) — fix the completion
   gate usage, not the sweep.
-- When an executable `coalesce-check` script exists, replace step 1's
-  manual derivation with it and keep the commands here as the fallback.
+- An executable `coalesce-check` is **out of scope** for this repository
+  unless a future plan reopens it after sustained harvest pain. Do not add
+  one opportunistically. Keep the shared recipe in `docs/coalescing.md`.
