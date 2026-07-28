@@ -40,6 +40,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no-resurrection and zero-target persisted-state guarantees, and backend API
   v4 compatibility.
 
+### Documented
+- Adopted layered product documentation ownership. Root `README.md` remains
+  normative for every concern still `readme-only`; sections marked
+  `canonical-spec` in `docs/specs/product-section-registry.md` win on conflict
+  and are updated in place. Process specs stay under `[DOM-*]`; product
+  sections use `[SB-*]`.
+- Promoted the first product vertical, `docs/specs/10-cli-contract.md`
+  (`[SB-CLI-1]`…`[SB-CLI-4]`): CLI exit codes `{0,1,2}`, stdout vs stderr,
+  global options before the subcommand, and message-line JSON fields for
+  `read` / `peek` / `move` / `dump --json` (not other `--json` shapes such as
+  `list --json`). README Exit Codes and `docs/agent-kernel.md` link the
+  section; contract tests bind each clause. No CLI runtime behavior changes.
+
 ## [5.5.0] - 2026-07-28
 
 ### Changed
