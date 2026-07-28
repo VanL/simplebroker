@@ -558,8 +558,10 @@ class Queue:
         """Generator that reads and removes messages from the queue.
 
         Transactional generators are thread-affine: create, iterate, exhaust,
-        and close them on the same thread. Foreign-thread finalization
-        permanently poisons the broker instance; restart the process.
+        and close them on the same thread. For SQL-backed broker instances,
+        finalization from another thread permanently poisons the instance;
+        restart the process. Redis/Valkey does not share the SQL poison
+        mechanism, but its behavior does not make cross-thread use portable.
 
         This is memory-efficient for processing large queues.
 
@@ -992,8 +994,10 @@ class Queue:
         """Generator that moves messages from this queue to another.
 
         Transactional generators are thread-affine: create, iterate, exhaust,
-        and close them on the same thread. Foreign-thread finalization
-        permanently poisons the broker instance; restart the process.
+        and close them on the same thread. For SQL-backed broker instances,
+        finalization from another thread permanently poisons the instance;
+        restart the process. Redis/Valkey does not share the SQL poison
+        mechanism, but its behavior does not make cross-thread use portable.
 
         Args:
             destination: Target queue (name or Queue instance)
@@ -1307,8 +1311,10 @@ class Queue:
 
         The transactional batch mode (``batch_processing=True`` with
         ``commit_interval > 1``) is thread-affine: create, iterate, exhaust,
-        and close it on the same thread. Foreign-thread finalization
-        permanently poisons the broker instance; restart the process.
+        and close it on the same thread. For SQL-backed broker instances,
+        finalization from another thread permanently poisons the instance;
+        restart the process. Redis/Valkey does not share the SQL poison
+        mechanism, but its behavior does not make cross-thread use portable.
 
         This is an iterator that yields messages as they are retrieved from the database.
         It's more memory-efficient than read_all for large queues.

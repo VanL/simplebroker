@@ -1458,28 +1458,20 @@ class QueueWatcher(BaseWatcher):
     specialized logging, or message transformation.
 
     ⚠️ WARNING: Message Loss in Consuming Mode (peek=False)
-    -----------------------------------------------
-    When running in consuming mode (the default), messages are PERMANENTLY
-    REMOVED from the queue immediately upon read, BEFORE your handler processes them.
+    -------------------------------------------------------
+    Consuming mode commits a claim before invoking the handler. The claimed
+    message is unavailable to normal delivery at that point, although its row
+    may remain physically present until vacuum.
 
-    The exact sequence is:
-    1. Database executes DELETE...RETURNING to remove message from queue
-    2. Message is returned to the watcher
-    3. Handler is called with the deleted message
-    4. If handler fails, the message is already gone forever
+    If the handler raises or the process crashes after the claim, the message
+    is not automatically returned to pending delivery. For concurrent workers,
+    prefer atomically moving work to an inflight or worker-private queue,
+    processing it there, and deleting the exact message id after success.
+    Peek-then-delete does not reserve work and is safe only for one consumer or
+    idempotent handlers.
 
-    This means:
-    - If your handler raises an exception, the message is already gone
-    - If your process crashes after reading but before processing, messages are lost
-    - There is no built-in retry mechanism for failed messages
-    - Messages are removed from the queue immediately, not after successful processing
-
-    For critical applications where message loss is unacceptable, consider:
-    1. Using peek mode (peek=True) with manual acknowledgment after successful processing
-    2. Implementing an error_handler that saves failed messages to a dead letter queue
-    3. Using the checkpoint pattern with timestamps to track processing progress
-
-    See the README for detailed examples of safe message processing patterns.
+    See ``docs/specs/11-delivery-contract.md`` [SB-DELIVERY-1] through
+    [SB-DELIVERY-4] for the normative delivery and reservation contract.
 
     ⚠️ Moved messages and checkpoints: ``move`` preserves a message's original
     timestamp, so a timestamp-checkpoint consumer (peek mode, or consume mode
@@ -1599,21 +1591,22 @@ class QueueWatcher(BaseWatcher):
 
         IMPORTANT: Message Consumption Timing
         ------------------------------------
-        In consuming mode (peek=False), messages are removed from the queue
-        by the database's DELETE...RETURNING operation BEFORE the handler is
-        called. This means:
+        In consuming mode (peek=False), a committed claim makes each message
+        unavailable to normal delivery BEFORE the handler is called. This
+        means:
 
-        1. Message is deleted from queue (point of no return)
+        1. Message is claimed and the claim is committed
         2. Message is returned to this method
         3. _dispatch() is called with the message
         4. Handler processes the message (may succeed or fail)
 
         If the handler fails or the process crashes after step 1, the message
-        is permanently lost. There is no way to recover it from the queue.
+        is not returned to pending delivery. The claimed row may remain
+        physically present until vacuum, but inspection does not recover it.
 
-        In peek mode (peek=True), messages are never removed from the queue
-        by this watcher. They remain available for other consumers or for
-        manual removal after successful processing.
+        In peek mode (peek=True), messages remain pending and can be observed
+        by rival consumers. Peek-then-delete is therefore not a concurrent
+        reservation protocol; use same-target move-to-inflight for that.
         """
         # Process messages based on mode using Queue API
         found_messages = False

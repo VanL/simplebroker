@@ -35,6 +35,14 @@ def test_agent_kernel_cites_cli_contract() -> None:
     assert "docs/specs/10-cli-contract.md" in section or "[SB-CLI-1]" in section
 
 
+def test_agent_kernel_cites_delivery_contract() -> None:
+    text = KERNEL.read_text(encoding="utf-8")
+    section = text.split("## Delivery (use-level)", 1)[1].split("## ", 1)[0]
+    assert "docs/specs/11-delivery-contract.md" in section
+    assert "[SB-DELIVERY-1]" in section
+    assert "[SB-DELIVERY-7]" in section
+
+
 def test_agent_kernel_forbids_delete_while_peek_stream() -> None:
     text = KERNEL.read_text(encoding="utf-8")
     assert "Do not delete while draining a peek stream" in text

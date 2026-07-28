@@ -31,14 +31,17 @@ the mechanism.
 
 ## Governing Contract and Plan
 
-- `README.md`, **Delivery guarantees**, owns the public same-thread contract,
-  diagnostic behavior, and restart instruction.
+- `docs/specs/11-delivery-contract.md` [SB-DELIVERY-5] and
+  [SB-DELIVERY-6] own the public same-thread contract, diagnostic behavior,
+  and restart instruction. `README.md`, **Delivery guarantees**, is the
+  user-facing restatement.
 - `docs/plans/2026-07-27-cross-thread-generator-orphan-healing-plan.md`
   records the design evidence, rejected recovery approaches, and verification
   matrix.
 
 Product ownership is layered (`docs/specs/product-section-registry.md`);
-delivery/generator concerns remain `readme-only` in the root README.
+delivery/generator concerns are `canonical-spec` in
+`docs/specs/11-delivery-contract.md`.
 This document explains why the
 implementation has its current boundaries; it does not create a second
 behavior contract.
@@ -184,7 +187,9 @@ process does not claim to recover them itself.
 
 Before changing this mechanism:
 
-1. Read the README Delivery guarantees section and the related plan.
+1. Read `docs/specs/11-delivery-contract.md` [SB-DELIVERY-5] and
+   [SB-DELIVERY-6], then the README Delivery guarantees restatement and the
+   related plan.
 2. Preserve the one-way lifecycle. Do not add rollback, lock release, latch
    clearing, or session-lease transfer on a foreign thread.
 3. Audit every lock-across-yield site before changing the lock wrapper or

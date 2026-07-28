@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension core floors to `simplebroker>=5.6.1`, and raised root optional
   backend floors to those extension versions.
 
+### Documented
+- Promoted delivery, reservation, peek/watch safety, and transactional
+  generator ownership into canonical `[SB-DELIVERY-*]` product specs. This is
+  a documentation-authority migration and does not change runtime behavior.
+
 ### simplebroker-pg 3.3.1
 - Added transactional full-requested-set exact broadcast creation while
   preserving default existing-only and no-resurrection behavior.

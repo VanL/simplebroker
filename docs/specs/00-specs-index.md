@@ -13,6 +13,9 @@ Product section authority: `product-section-registry.md`.
 
 1. `10-cli-contract.md` — `[SB-CLI-*]` (exit codes and CLI I/O when
    registry marks canonical)
+2. `11-delivery-contract.md` — `[SB-DELIVERY-*]` (claim, watch, move
+   reservation, peek safety, and transactional generators when the registry
+   marks canonical)
 
 ## Rules
 

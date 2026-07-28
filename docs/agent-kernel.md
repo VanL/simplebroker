@@ -89,6 +89,9 @@ Normative: `docs/specs/10-cli-contract.md` [SB-CLI-1]–[SB-CLI-4].
 
 ## Delivery (use-level)
 
+Normative: `docs/specs/11-delivery-contract.md`
+[SB-DELIVERY-1]–[SB-DELIVERY-7].
+
 | Path | What happens |
 |------|----------------|
 | Default `read` / consume `watch` | Claim is committed **before** your handler finishes. Crash after claim ⇒ **message gone**. This is exactly-once *delivery*, not crash-safe *processing*. |

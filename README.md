@@ -361,11 +361,25 @@ Messages can contain any characters including newlines, control characters, and 
 
 ### Robust message handling with `watch`
 
-When using `watch` in its default consuming mode, messages are **permanently removed** from the queue *before* your script or handler processes them. If your script fails or crashes, **the message is lost**. For critical data, you must use a safe processing pattern (move or peek-then-delete) that ensures that your data is not removed until you can acknowledge receipt. Example:
+When using `watch` in its default consuming mode, messages are
+**permanently removed** from the queue *before* your script or handler
+processes them. If your script fails or crashes, **the message is lost**.
+For critical work, prefer atomically moving each message to an inflight queue,
+then deleting it there after successful processing. Peek-then-delete is not a
+reservation: it is safe only for a single consumer or when duplicate handling
+is idempotent. Do not delete or move source rows while iterating `peek --all`
+or `Queue.peek_generator()`, because their live offset pagination can skip
+messages.
+
+Normative delivery contract:
+`docs/specs/11-delivery-contract.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
+
+Single-consumer example:
 
 ```bash
 #!/bin/bash
-# safe-worker.sh - A robust worker using the peek-and-acknowledge pattern
+# safe-worker.sh - single-consumer peek-and-acknowledge example
+# For concurrent workers, use move-to-inflight instead.
 
 # Watch in peek mode, which does not remove messages
 broker watch tasks --peek --json | while IFS= read -r line; do
@@ -867,6 +881,9 @@ can scan every message in the selected queue, so keep it out of hot request
 paths and prefer exact message IDs when possible.
 
 ### Delivery guarantees
+
+Normative detail:
+`docs/specs/11-delivery-contract.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
 
 Materialized batch APIs such as `Queue.read_many()` and `Queue.move_many()`
 commit before returning their result lists. Passing

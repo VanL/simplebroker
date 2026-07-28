@@ -2002,8 +2002,10 @@ class BrokerCore:
         """Generator that claims messages from a queue.
 
         Transactional generators are thread-affine: create, iterate, exhaust,
-        and close them on the same thread. Foreign-thread finalization
-        permanently poisons this broker instance; restart the process.
+        and close them on the same thread. For SQL-backed broker instances,
+        finalization from another thread permanently poisons the instance;
+        restart the process. Redis/Valkey does not share the SQL poison
+        mechanism, but its behavior does not make cross-thread use portable.
 
         Args:
             queue: Name of the queue
@@ -2350,8 +2352,10 @@ class BrokerCore:
         """Generator that moves messages from source queue to target queue.
 
         Transactional generators are thread-affine: create, iterate, exhaust,
-        and close them on the same thread. Foreign-thread finalization
-        permanently poisons this broker instance; restart the process.
+        and close them on the same thread. For SQL-backed broker instances,
+        finalization from another thread permanently poisons the instance;
+        restart the process. Redis/Valkey does not share the SQL poison
+        mechanism, but its behavior does not make cross-thread use portable.
 
         Args:
             source_queue: Queue to move from

@@ -7,7 +7,7 @@ concern family.** States: `readme-only` | `draft-spec` | `canonical-spec`
 | Concern | State | Spec section | README anchor / locus | Gate (obligation → impl → test) |
 |---------|-------|--------------|----------------------|----------------------------------|
 | CLI exit codes and CLI I/O contract | `canonical-spec` | `10-cli-contract.md` `[SB-CLI-1]`…`[SB-CLI-4]` | `### Exit Codes` (+ kernel Exit codes) | `tests/test_documented_exit_codes.py` (SB-CLI-1 + README link); `tests/test_agent_kernel_contract.py` (SB-CLI-1 + kernel link); `tests/test_cli_contract_sb_cli.py` (SB-CLI-2, SB-CLI-3, SB-CLI-4 behavioral binds) |
-| Delivery guarantees, claim/peek/watch safety | `readme-only` | — | README Critical Safety / Delivery; agent-kernel Delivery | (future) |
+| Delivery guarantees, claim/peek/watch safety | `canonical-spec` | `11-delivery-contract.md` `[SB-DELIVERY-1]`…`[SB-DELIVERY-7]` | README Critical Safety / Delivery; agent-kernel Delivery | `tests/test_delivery_contract_sb_delivery.py` (SB-DELIVERY-1…7 + registry/README/kernel binds); `tests/test_cross_thread_finalization_poisoning.py` + backend probe suites (SB-DELIVERY-6); `tests/test_cli_broken_pipe.py` (SB-DELIVERY-7) |
 | Message identity (hybrid ts, last_ts, move+checkpoint) | `readme-only` | — | README Core Concepts / agent-kernel Message IDs | (future) |
 | Dump/load and claimed-row I/O | `readme-only` | — | README dump/load | (future) |
 | Embedding targets, backends, sidecar | `readme-only` | — | README Embedding / Advanced | (future) |
@@ -28,3 +28,4 @@ forbidden. Abandoning an **unshipped** `draft-spec` may return to
 
 - `docs/plans/2026-07-27-product-docs-source-ownership-decision.md`
 - `docs/plans/2026-07-27-product-spec-doctrine-and-cli-vertical-plan.md`
+- `docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`
