@@ -184,8 +184,7 @@ def broadcast(
     *,
     pattern: str | None = None,
     queue_names: Sequence[str] | None = None,
-) -> int:
-    ...
+) -> int: ...
 ```
 
 ### Selector semantics

@@ -32,9 +32,7 @@ def test_agent_kernel_exit_codes_match_cli_constants() -> None:
 def test_agent_kernel_cites_cli_contract() -> None:
     text = KERNEL.read_text(encoding="utf-8")
     section = text.split("## Exit codes and I/O (CLI)", 1)[1].split("## ", 1)[0]
-    assert (
-        "docs/specs/10-cli-contract.md" in section or "[SB-CLI-1]" in section
-    )
+    assert "docs/specs/10-cli-contract.md" in section or "[SB-CLI-1]" in section
 
 
 def test_agent_kernel_forbids_delete_while_peek_stream() -> None:

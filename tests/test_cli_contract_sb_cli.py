@@ -22,7 +22,9 @@ def test_sb_cli_2_message_body_on_stdout(workdir: Path) -> None:
 
 def test_sb_cli_3_global_options_after_subcommand_fail(workdir: Path) -> None:
     db = workdir / "contract.db"
-    assert run_cli("-f", str(db), "write", "q", "payload", cwd=workdir)[0] == EXIT_SUCCESS
+    assert (
+        run_cli("-f", str(db), "write", "q", "payload", cwd=workdir)[0] == EXIT_SUCCESS
+    )
 
     bad_rc, bad_out, bad_err = run_cli("read", "q", "-f", str(db), cwd=workdir)
     assert bad_rc == EXIT_ERROR
