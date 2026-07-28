@@ -49,7 +49,7 @@ class SQLiteBackendPlugin:
 
     name = "sqlite"
     sql: BackendSQLNamespace = ensure_backend_sql_namespace(_sql)
-    backend_api_version = 4
+    backend_api_version = 5
     schema_version = SCHEMA_VERSION
 
     def init_backend(

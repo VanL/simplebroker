@@ -1412,12 +1412,17 @@ class RedisBrokerCore:
         *,
         pattern: str | None = None,
         queue_names: Sequence[str] | None = None,
+        create_missing: bool = False,
     ) -> int:
         self._check_fork_safety()
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("broadcast")
         if pattern is not None and queue_names is not None:
             raise ValueError("pattern and queue_names cannot be used together")
+        if not isinstance(create_missing, bool):
+            raise TypeError("create_missing must be a boolean")
+        if create_missing and queue_names is None:
+            raise ValueError("create_missing requires queue_names")
 
         exact_queues: tuple[str, ...] | None = None
         if queue_names is not None:
@@ -1464,9 +1469,14 @@ class RedisBrokerCore:
                 "Failed to broadcast message after repeated timestamp conflicts"
             )
 
-        selector_mode = "exact" if exact_queues is not None else "all"
+        if create_missing:
+            selector_mode = "exact_create"
+        elif exact_queues is not None:
+            selector_mode = "exact"
+        else:
+            selector_mode = "all"
         requested_queues = exact_queues or ()
-        if selector_mode == "exact":
+        if selector_mode != "all":
             timestamp_capacity = len(requested_queues)
         else:
             queue_count = response_int(self._client.scard(self._keys.queues))
@@ -1475,7 +1485,7 @@ class RedisBrokerCore:
         conflict_attempts = 0
         while True:
             try:
-                if selector_mode == "exact":
+                if selector_mode != "all":
                     timestamps = self._timestamp_gen._reserve_candidates(
                         timestamp_capacity
                     )

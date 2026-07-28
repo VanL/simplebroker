@@ -5,6 +5,34 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.6.1] - 2026-07-28
+
+### Added
+- Added Python exact-target provisioning through
+  `broker.broadcast(message, queue_names=..., create_missing=True)`. The
+  default remains existing-only. Creation validates and deduplicates every
+  literal name before mutation, inserts one ordinary pending message into the
+  complete requested set, and returns the unique requested-name count.
+- Creation mode intentionally recreates an exact requested queue deleted
+  before the backend atomic point. Empty exact input remains a state-neutral
+  `0`; selector-free, pattern, and CLI broadcast never create queues.
+
+### Changed
+- Bumped the direct backend handshake to API v5 so old direct backends fail at
+  resolution rather than rejecting `create_missing` at call time.
+- Bumped `simplebroker-pg` and `simplebroker-redis` to 3.3.1, raised both
+  extension core floors to `simplebroker>=5.6.1`, and raised root optional
+  backend floors to those extension versions.
+
+### simplebroker-pg 3.3.1
+- Added transactional full-requested-set exact broadcast creation while
+  preserving default existing-only and no-resurrection behavior.
+
+### simplebroker-redis 3.3.1
+- Added exact-create Lua selection. Anticipated validation and timestamp
+  conflicts are rejected before mutation; registry and message writes then run
+  in one non-interleaved script phase.
+
 ## [5.6.0] - 2026-07-28
 
 ### Added

@@ -131,3 +131,65 @@ def test_exact_broadcast_does_not_resurrect_queue_deleted_before_selection(
                 pass
         broadcast_core.close()
         delete_runner.shutdown()
+
+
+def test_exact_broadcast_create_missing_resurrects_queue_deleted_before_atomic_point(
+    pg_core: BrokerCore,
+    pg_dsn: str,
+    pg_plugin: BackendPlugin,
+    pg_schema: str,
+) -> None:
+    """Creation mode waits for an in-flight delete, then recreates the queue."""
+    pg_core.write("victim", "seed")
+    delete_runner = PostgresRunner(pg_dsn, schema=pg_schema)
+    broadcast_runner = PostgresRunner(pg_dsn, schema=pg_schema)
+    broadcast_core = BrokerCore(broadcast_runner, backend_plugin=pg_plugin)
+    finished = threading.Event()
+    results: list[int] = []
+    errors: list[BaseException] = []
+
+    def run_broadcast() -> None:
+        try:
+            results.append(
+                broadcast_core.broadcast(
+                    "notice",
+                    queue_names=("victim",),
+                    create_missing=True,
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    try:
+        delete_runner.begin_immediate()
+        assert (
+            pg_plugin.delete_from_queues(
+                delete_runner,
+                queue_names=("victim",),
+            )
+            == 1
+        )
+
+        thread = threading.Thread(target=run_broadcast, daemon=True)
+        thread.start()
+        assert finished.wait(0.2) is False
+
+        delete_runner.commit()
+        assert finished.wait(3.0) is True
+        thread.join(timeout=1.0)
+
+        assert errors == []
+        assert results == [1]
+        assert pg_core.peek_many("victim", limit=10, with_timestamps=False) == [
+            "notice"
+        ]
+    finally:
+        if not finished.is_set():
+            try:
+                delete_runner.rollback()
+            except Exception:
+                pass
+        broadcast_core.close()
+        delete_runner.shutdown()

@@ -2936,20 +2936,24 @@ class BrokerCore:
         *,
         pattern: str | None = None,
         queue_names: Sequence[str] | None = None,
+        create_missing: bool = False,
     ) -> int:
-        """Broadcast a message to selected existing queues atomically.
+        """Broadcast a message to selected queues atomically.
 
         Args:
             message: Message body to broadcast
             pattern: Optional fnmatch-style glob limiting target queues
             queue_names: Optional exact sequence of literal queue names
+            create_missing: Create exact ``queue_names`` that do not exist
 
         Returns:
             Number of queues that received the message
 
         Raises:
-            TypeError: If ``queue_names`` is a string or bytes
-            ValueError: If both selectors are supplied
+            TypeError: If ``queue_names`` is string-like or ``create_missing``
+                is not a boolean
+            ValueError: If both selectors are supplied or creation is enabled
+                without exact queue names
             RuntimeError: If called from a forked process or counter overflow
         """
         self._check_fork_safety()
@@ -2958,6 +2962,10 @@ class BrokerCore:
 
         if pattern is not None and queue_names is not None:
             raise ValueError("pattern and queue_names cannot be used together")
+        if not isinstance(create_missing, bool):
+            raise TypeError("create_missing must be a boolean")
+        if create_missing and queue_names is None:
+            raise ValueError("create_missing requires queue_names")
 
         exact_queue_names: tuple[str, ...] | None = None
         if queue_names is not None:
@@ -2981,21 +2989,26 @@ class BrokerCore:
                 try:
                     self._backend_plugin.prepare_broadcast(self._runner)
 
-                    # Get all unique queues first
-                    rows = self._runner.run(self._sql.GET_DISTINCT_QUEUES, fetch=True)
-                    queues = [row[0] for row in rows]
+                    if exact_queue_names is not None and create_missing:
+                        queues = list(exact_queue_names)
+                    else:
+                        rows = self._runner.run(
+                            self._sql.GET_DISTINCT_QUEUES,
+                            fetch=True,
+                        )
+                        queues = [row[0] for row in rows]
 
-                    if pattern:
-                        queues = [
-                            queue for queue in queues if fnmatchcase(queue, pattern)
-                        ]
-                    elif exact_queue_names is not None:
-                        existing_queues = set(queues)
-                        queues = [
-                            queue
-                            for queue in exact_queue_names
-                            if queue in existing_queues
-                        ]
+                        if pattern:
+                            queues = [
+                                queue for queue in queues if fnmatchcase(queue, pattern)
+                            ]
+                        elif exact_queue_names is not None:
+                            existing_queues = set(queues)
+                            queues = [
+                                queue
+                                for queue in exact_queue_names
+                                if queue in existing_queues
+                            ]
 
                     # Generate timestamps for all queues upfront (before inserts)
                     # This reduces transaction time and improves concurrency

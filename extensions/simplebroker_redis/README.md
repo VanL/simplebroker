@@ -57,11 +57,17 @@ the script selects targets is not resurrected; an all-missing request returns
 zero without advancing persisted `last_ts`, publishing wakeups, or scheduling
 maintenance.
 
+Python `create_missing=True` changes exact selection to the complete requested
+set. The script validates all anticipated failures before its first mutation,
+then adds missing names to the registry and inserts every message in one
+non-interleaved Lua phase. A queue deleted before that phase is intentionally
+recreated.
+
 Patterned broadcasts deliberately keep a client-side queue snapshot so their
 matching stays exactly Python `fnmatchcase` syntax. A queue created after the
 snapshot can miss that broadcast; a queue deleted after the snapshot can be
 recreated by it. Use a patternless or exact-target broadcast when atomic
 registry selection is required.
 
-Exact-target broadcast requires backend API v4: SimpleBroker 5.6.0 or newer
-and `simplebroker-redis` 3.3.0 or newer.
+Exact-target broadcast requires backend API v5: SimpleBroker 5.6.1 or newer
+and `simplebroker-redis` 3.3.1 or newer.

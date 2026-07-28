@@ -137,12 +137,15 @@ Broadcast selectors:
 | `broker broadcast MESSAGE` | `broker.broadcast(message)` | All existing queues |
 | `broker broadcast --pattern GLOB MESSAGE` | `broker.broadcast(message, pattern=glob)` | Existing names matching Python `fnmatchcase` |
 | `broker broadcast --queue A --queue B MESSAGE` | `broker.broadcast(message, queue_names=("A", "B"))` | Unique requested literal names that exist |
+| No CLI equivalent | `broker.broadcast(message, queue_names=("A", "B"), create_missing=True)` | Every unique requested literal name, creating missing queues with the message |
 
 `--pattern` and `--queue` are mutually exclusive. Missing exact names are
 ignored, never created; the return value is the number reached (CLI exit `2`
 when zero). Comma-separated lists are unsupported, and a comma-containing
 `--queue` value fails normal queue-name validation. Build large or
-application-derived recipient sets through the Python API.
+application-derived recipient sets through the Python API. Queue creation is
+Python-only and must be explicit; selector-free, pattern, and CLI broadcasts
+never create queues.
 
 ## Target (use-level)
 

@@ -54,6 +54,37 @@ def test_broadcast_exact_deduplicates_and_ignores_missing_names(broker: Any) -> 
     assert broker.get_queue_stat("missing").total == 0
 
 
+def test_broadcast_exact_create_missing_reaches_full_requested_set(
+    broker: Any,
+) -> None:
+    broker.write("alpha", "alpha seed")
+
+    delivered = broker.broadcast(
+        "notice",
+        queue_names=("missing", "alpha", "missing", "second-missing"),
+        create_missing=True,
+    )
+
+    assert delivered == 3
+    assert _messages(broker, "alpha") == ["alpha seed", "notice"]
+    assert _messages(broker, "missing") == ["notice"]
+    assert _messages(broker, "second-missing") == ["notice"]
+
+
+def test_broadcast_exact_create_missing_all_missing(broker: Any) -> None:
+    assert (
+        broker.broadcast(
+            "notice",
+            queue_names=("first", "second"),
+            create_missing=True,
+        )
+        == 2
+    )
+
+    assert _messages(broker, "first") == ["notice"]
+    assert _messages(broker, "second") == ["notice"]
+
+
 def test_broadcast_exact_all_missing_is_persisted_timestamp_noop(broker: Any) -> None:
     broker.write("existing", "seed")
     before = broker.refresh_last_timestamp()
@@ -75,6 +106,16 @@ def test_broadcast_exact_empty_sequence_is_noop_not_broadcast_all(broker: Any) -
     assert _messages(broker, "existing") == ["seed"]
 
 
+def test_broadcast_exact_create_missing_empty_sequence_is_noop(broker: Any) -> None:
+    broker.write("existing", "seed")
+    before = broker.refresh_last_timestamp()
+
+    assert broker.broadcast("notice", queue_names=(), create_missing=True) == 0
+
+    assert broker.refresh_last_timestamp() == before
+    assert _messages(broker, "existing") == ["seed"]
+
+
 @pytest.mark.parametrize("queue_names", ["alpha", b"alpha"])
 def test_broadcast_exact_rejects_string_like_sequence(
     broker: Any,
@@ -87,6 +128,39 @@ def test_broadcast_exact_rejects_string_like_sequence(
         match="queue_names must be a sequence of queue names, not a string",
     ):
         broker.broadcast("notice", queue_names=queue_names)
+
+    assert _messages(broker, "alpha") == ["seed"]
+
+
+@pytest.mark.parametrize("create_missing", [1, "false"])
+def test_broadcast_create_missing_requires_boolean(
+    broker: Any,
+    create_missing: Any,
+) -> None:
+    broker.write("alpha", "seed")
+
+    with pytest.raises(
+        TypeError,
+        match="create_missing must be a boolean",
+    ):
+        broker.broadcast(
+            "notice",
+            queue_names=("missing",),
+            create_missing=create_missing,
+        )
+
+    assert _messages(broker, "alpha") == ["seed"]
+    assert broker.get_queue_stat("missing").total == 0
+
+
+def test_broadcast_create_missing_requires_exact_names(broker: Any) -> None:
+    broker.write("alpha", "seed")
+
+    with pytest.raises(
+        ValueError,
+        match="create_missing requires queue_names",
+    ):
+        broker.broadcast("notice", create_missing=True)
 
     assert _messages(broker, "alpha") == ["seed"]
 
@@ -124,6 +198,25 @@ def test_broadcast_rejects_pattern_with_exact_names(
         match="pattern and queue_names cannot be used together",
     ):
         broker.broadcast("notice", pattern=pattern, queue_names=("alpha",))
+
+    assert _messages(broker, "alpha") == ["seed"]
+
+
+def test_broadcast_selector_conflict_precedes_create_missing_type(
+    broker: Any,
+) -> None:
+    broker.write("alpha", "seed")
+
+    with pytest.raises(
+        ValueError,
+        match="pattern and queue_names cannot be used together",
+    ):
+        broker.broadcast(
+            "notice",
+            pattern="",
+            queue_names=("alpha",),
+            create_missing="false",
+        )
 
     assert _messages(broker, "alpha") == ["seed"]
 
@@ -214,3 +307,28 @@ def test_broadcast_exact_rolls_back_all_targets_on_id_collision(
 
     assert _messages(broker, "alpha") == ["alpha seed"]
     assert _messages(broker, "beta") == ["beta seed"]
+
+
+def test_broadcast_exact_create_missing_rolls_back_new_queues_on_id_collision(
+    broker: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker.write("alpha", "alpha seed")
+    broker.write("beta", "beta seed")
+    monkeypatch.setattr(broker, "generate_timestamp", lambda: 1)
+    monkeypatch.setattr(
+        broker._timestamp_gen,
+        "_reserve_candidates",
+        lambda count: [broker.refresh_last_timestamp() + 1] * count,
+    )
+
+    with pytest.raises((IntegrityError, RuntimeError)):
+        broker.broadcast(
+            "notice",
+            queue_names=("alpha", "missing", "beta"),
+            create_missing=True,
+        )
+
+    assert _messages(broker, "alpha") == ["alpha seed"]
+    assert _messages(broker, "beta") == ["beta seed"]
+    assert broker.get_queue_stat("missing").total == 0

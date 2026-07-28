@@ -14,9 +14,12 @@ backend plugin hook.
 
 `public` is intentionally rejected.
 
-Exact-target broadcast requires backend API v4: SimpleBroker 5.6.0 or newer
-and `simplebroker-pg` 3.3.0 or newer. Selection of the requested existing
-queues and insertion of all copies occur in one PostgreSQL transaction.
+Exact-target broadcast requires backend API v5: SimpleBroker 5.6.1 or newer
+and `simplebroker-pg` 3.3.1 or newer. Default selection intersects requested
+names with existing queues. Python `create_missing=True` instead inserts into
+the complete requested set, intentionally recreating a queue deleted before
+the broadcast lock is acquired. Selection and insertion occur in one
+PostgreSQL transaction.
 
 ## Installation
 

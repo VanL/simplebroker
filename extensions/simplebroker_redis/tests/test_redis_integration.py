@@ -124,6 +124,45 @@ def test_exact_broadcast_retries_locally_reserved_stale_candidates(
         core.shutdown()
 
 
+def test_exact_create_broadcast_retries_locally_reserved_stale_candidates(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.write("existing", "seed")
+        original_reserve = core._timestamp_gen._reserve_candidates
+        calls = 0
+
+        def stale_then_fresh(count: int) -> list[int]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return [1] * count
+            return original_reserve(count)
+
+        monkeypatch.setattr(
+            core._timestamp_gen,
+            "_reserve_candidates",
+            stale_then_fresh,
+        )
+
+        assert (
+            core.broadcast(
+                "announcement",
+                queue_names=["created"],
+                create_missing=True,
+            )
+            == 1
+        )
+        assert calls == 2
+        assert core.peek_many("created", limit=10, with_timestamps=False) == [
+            "announcement"
+        ]
+    finally:
+        core.shutdown()
+
+
 def test_broadcast_success_with_pattern(redis_runner: RedisRunner) -> None:
     core = RedisBrokerCore(redis_runner)
     try:
@@ -171,6 +210,52 @@ def test_broadcast_success_with_exact_queue_names(redis_runner: RedisRunner) -> 
             "announcement",
         ]
         assert core.queue_exists("missing") is False
+    finally:
+        core.shutdown()
+
+
+def test_broadcast_exact_create_missing_updates_real_registry_and_storage(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(
+        redis_runner,
+        config={
+            "BROKER_AUTO_VACUUM": 1,
+            "BROKER_AUTO_VACUUM_INTERVAL": 100,
+        },
+    )
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core.write("alpha", "seed-alpha")
+        maintenance_before = core._maintenance_schedule._completed
+
+        assert (
+            core.broadcast(
+                "announcement",
+                queue_names=["missing", "alpha", "missing", "second-missing"],
+                create_missing=True,
+            )
+            == 3
+        )
+
+        assert core._client.smembers(keys.queues) == {
+            "alpha",
+            "missing",
+            "second-missing",
+        }
+        assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
+            "seed-alpha",
+            "announcement",
+        ]
+        assert core.peek_many("missing", limit=10, with_timestamps=False) == [
+            "announcement"
+        ]
+        assert core.peek_many("second-missing", limit=10, with_timestamps=False) == [
+            "announcement"
+        ]
+        assert core._client.zcard(keys.pending("missing")) == 1
+        assert core._client.zcard(keys.pending("second-missing")) == 1
+        assert core._maintenance_schedule._completed == maintenance_before + 3
     finally:
         core.shutdown()
 
@@ -235,6 +320,54 @@ def test_broadcast_empty_exact_queue_names_is_a_noop(
         assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
             "seed-alpha"
         ]
+    finally:
+        core.shutdown()
+
+
+def test_broadcast_empty_exact_create_missing_is_a_storage_and_maintenance_noop(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(
+        redis_runner,
+        config={
+            "BROKER_AUTO_VACUUM": 1,
+            "BROKER_AUTO_VACUUM_INTERVAL": 100,
+        },
+    )
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core.write("alpha", "seed-alpha")
+        state_before = {
+            "last_ts": core._client.hget(keys.meta, "last_ts"),
+            "queues": core._client.smembers(keys.queues),
+            "bodies": core._client.hgetall(keys.bodies),
+            "all_ids": core._client.zrange(keys.all_ids, 0, -1),
+            "maintenance": core._maintenance_schedule._completed,
+        }
+
+        def unexpected_reservation(count: int) -> list[int]:
+            raise AssertionError("empty exact broadcast must not reserve timestamps")
+
+        monkeypatch.setattr(
+            core._timestamp_gen,
+            "_reserve_candidates",
+            unexpected_reservation,
+        )
+
+        assert (
+            core.broadcast(
+                "announcement",
+                queue_names=(),
+                create_missing=True,
+            )
+            == 0
+        )
+        assert core._client.hget(keys.meta, "last_ts") == state_before["last_ts"]
+        assert core._client.smembers(keys.queues) == state_before["queues"]
+        assert core._client.hgetall(keys.bodies) == state_before["bodies"]
+        assert core._client.zrange(keys.all_ids, 0, -1) == state_before["all_ids"]
+        assert core._maintenance_schedule._completed == state_before["maintenance"]
     finally:
         core.shutdown()
 

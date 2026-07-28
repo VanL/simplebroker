@@ -213,7 +213,7 @@ def test_external_backend_plugin_with_stale_backend_api_version_is_rejected(
 
     message = str(excinfo.value)
     assert "dummy" in message
-    assert "backend API v3" in message
+    assert "backend API v4" in message
     assert f"backend API v{BACKEND_API_VERSION}" in message
     assert "upgrade" in message.lower()
     assert "pin simplebroker" in message
@@ -481,5 +481,5 @@ def test_first_party_extension_plugins_declare_literal_backend_api_version(
 ) -> None:
     plugin_source = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
 
-    assert "backend_api_version = 4" in plugin_source
+    assert "backend_api_version = 5" in plugin_source
     assert "backend_api_version = BACKEND_API_VERSION" not in plugin_source

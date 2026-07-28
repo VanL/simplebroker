@@ -95,9 +95,11 @@ local requested_count = tonumber(ARGV[7])
 if capacity == nil or capacity < 0 or capacity ~= math.floor(capacity)
     or requested_count == nil or requested_count < 0
     or requested_count ~= math.floor(requested_count)
-    or (selector_mode ~= 'all' and selector_mode ~= 'exact')
+    or (selector_mode ~= 'all' and selector_mode ~= 'exact'
+        and selector_mode ~= 'exact_create')
     or (selector_mode == 'all' and requested_count ~= 0)
-    or (selector_mode == 'exact' and capacity ~= requested_count)
+    or ((selector_mode == 'exact' or selector_mode == 'exact_create')
+        and capacity ~= requested_count)
     or #ARGV ~= 7 + requested_count + capacity then
   return {-5}
 end
@@ -111,16 +113,23 @@ if selector_mode == 'all' then
   if #queue_names > capacity then
     return {-4, #queue_names}
   end
-else
+elseif selector_mode == 'exact' then
   for index = 1, requested_count do
     local queue = ARGV[7 + index]
     if redis.call('SISMEMBER', queues, queue) == 1 then
       table.insert(queue_names, queue)
     end
   end
+else
+  for index = 1, requested_count do
+    table.insert(queue_names, ARGV[7 + index])
+  end
 end
 if #queue_names == 0 then
   return {1}
+end
+if selector_mode == 'exact_create' then
+  redis.call('SCARD', queues)
 end
 local seen = {}
 for index = 1, #queue_names do
@@ -132,6 +141,7 @@ for index = 1, #queue_names do
   if redis.call('HEXISTS', bodies, id) == 1 or redis.call('ZSCORE', all_ids, id) ~= false then
     return {-1}
   end
+  redis.call('ZCARD', pending_prefix .. queue_names[index] .. ':pending')
 end
 local function pad19(value)
   local text = tostring(value or '0')
@@ -139,7 +149,7 @@ local function pad19(value)
 end
 local current = pad19(redis.call('HGET', meta, 'last_ts') or '0')
 local first_id = ARGV[8 + requested_count]
-if selector_mode == 'exact' and current >= first_id then
+if selector_mode ~= 'all' and current >= first_id then
   return {-6}
 end
 if current < required_last_ts then
@@ -151,6 +161,9 @@ for index, queue in ipairs(queue_names) do
   redis.call('HSET', bodies, id, body)
   redis.call('ZADD', all_ids, 0, id)
   redis.call('ZADD', pending_prefix .. queue .. ':pending', 0, id)
+  if selector_mode == 'exact_create' then
+    redis.call('SADD', queues, queue)
+  end
   table.insert(response, queue)
 end
 return response

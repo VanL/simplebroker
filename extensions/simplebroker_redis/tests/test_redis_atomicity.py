@@ -333,6 +333,47 @@ def test_exact_broadcast_does_not_resurrect_deleted_queue(
         broadcaster.close()
 
 
+def test_exact_create_broadcast_resurrects_queue_deleted_before_atomic_point(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broadcaster = RedisBrokerCore(redis_runner)
+    deleting = RedisBrokerCore(redis_runner)
+    try:
+        broadcaster.write("jobs", "seed")
+        original_reserve = broadcaster._timestamp_gen._reserve_candidates
+        deleted = False
+
+        def delete_before_reservation(count: int) -> list[int]:
+            nonlocal deleted
+            if not deleted:
+                deleted = True
+                assert deleting.delete("jobs") == 1
+            return original_reserve(count)
+
+        monkeypatch.setattr(
+            broadcaster._timestamp_gen,
+            "_reserve_candidates",
+            delete_before_reservation,
+        )
+
+        assert (
+            broadcaster.broadcast(
+                "announcement",
+                queue_names=["jobs"],
+                create_missing=True,
+            )
+            == 1
+        )
+        assert broadcaster.queue_exists("jobs") is True
+        assert broadcaster.peek_many("jobs", limit=10, with_timestamps=False) == [
+            "announcement"
+        ]
+    finally:
+        deleting.close()
+        broadcaster.close()
+
+
 def test_patternless_broadcast_includes_queue_created_during_setup(
     redis_runner: RedisRunner,
     monkeypatch: pytest.MonkeyPatch,
@@ -449,6 +490,93 @@ def test_exact_broadcast_wakes_only_selected_existing_queues(
     finally:
         other_waiter.close()
         selected_waiter.close()
+        core.shutdown()
+        plugin.cleanup_target(
+            redis_url,
+            backend_options={"namespace": redis_namespace},
+        )
+
+
+def test_exact_create_broadcast_wakes_new_queue(
+    redis_url: str,
+    redis_namespace: str,
+) -> None:
+    from simplebroker_redis import get_backend_plugin
+
+    plugin = get_backend_plugin()
+    plugin.initialize_target(
+        redis_url,
+        backend_options={"namespace": redis_namespace},
+    )
+    runner = RedisRunner(redis_url, namespace=redis_namespace)
+    core = RedisBrokerCore(runner)
+    waiter = plugin.create_activity_waiter(
+        target=redis_url,
+        backend_options={"namespace": redis_namespace},
+        queue_name="created",
+        stop_event=None,
+    )
+    assert waiter is not None
+    try:
+        assert waiter.wait(0.05) is False
+
+        assert (
+            core.broadcast(
+                "announcement",
+                queue_names=["created"],
+                create_missing=True,
+            )
+            == 1
+        )
+
+        assert waiter.wait(2.0) is True
+        assert core.queue_exists("created") is True
+        assert core.peek_one("created", with_timestamps=False) == "announcement"
+    finally:
+        waiter.close()
+        core.shutdown()
+        plugin.cleanup_target(
+            redis_url,
+            backend_options={"namespace": redis_namespace},
+        )
+
+
+def test_empty_exact_create_broadcast_does_not_wake_queue(
+    redis_url: str,
+    redis_namespace: str,
+) -> None:
+    from simplebroker_redis import get_backend_plugin
+
+    plugin = get_backend_plugin()
+    plugin.initialize_target(
+        redis_url,
+        backend_options={"namespace": redis_namespace},
+    )
+    runner = RedisRunner(redis_url, namespace=redis_namespace)
+    core = RedisBrokerCore(runner)
+    waiter = plugin.create_activity_waiter(
+        target=redis_url,
+        backend_options={"namespace": redis_namespace},
+        queue_name="missing",
+        stop_event=None,
+    )
+    assert waiter is not None
+    try:
+        assert waiter.wait(0.05) is False
+
+        assert (
+            core.broadcast(
+                "announcement",
+                queue_names=(),
+                create_missing=True,
+            )
+            == 0
+        )
+
+        assert waiter.wait(0.05) is False
+        assert core.queue_exists("missing") is False
+    finally:
+        waiter.close()
         core.shutdown()
         plugin.cleanup_target(
             redis_url,
@@ -592,6 +720,18 @@ def test_broadcast_script_selects_queues_at_atomic_insertion_point(
             encode_id(1),
             encode_id(2),
         ],
+        [
+            "1",
+            encode_id(1),
+            "2",
+            "body",
+            "prefix",
+            "exact_create",
+            "1",
+            "new",
+            encode_id(1),
+            encode_id(2),
+        ],
     ],
 )
 def test_broadcast_script_rejects_malformed_layout(
@@ -602,6 +742,9 @@ def test_broadcast_script_rejects_malformed_layout(
     keys = RedisKeys(redis_runner.namespace)
     try:
         core.write("jobs", "seed")
+        last_ts_before = core._client.hget(keys.meta, "last_ts")
+        bodies_before = core._client.hgetall(keys.bodies)
+        all_ids_before = core._client.zrange(keys.all_ids, 0, -1)
 
         result = core._client.eval(
             scripts.BROADCAST_MESSAGE,
@@ -615,6 +758,11 @@ def test_broadcast_script_rejects_malformed_layout(
 
         assert result == [-5]
         assert core.peek_many("jobs", limit=10, with_timestamps=False) == ["seed"]
+        assert not core._client.sismember(keys.queues, "new")
+        assert core._client.exists(keys.pending("new")) == 0
+        assert core._client.hget(keys.meta, "last_ts") == last_ts_before
+        assert core._client.hgetall(keys.bodies) == bodies_before
+        assert core._client.zrange(keys.all_ids, 0, -1) == all_ids_before
     finally:
         core.close()
 
@@ -666,6 +814,180 @@ def test_exact_broadcast_script_rejects_candidates_not_above_persisted_last_ts(
         assert result == [-6]
         assert core.peek_many("jobs", limit=10, with_timestamps=False) == ["seed"]
     finally:
+        core.close()
+
+
+@pytest.mark.parametrize(
+    ("candidate_ids", "expected"),
+    [
+        ([encode_id(10), encode_id(11)], [-1]),
+        ([encode_id(11), encode_id(11)], [-3]),
+    ],
+)
+def test_exact_create_script_rejects_candidate_conflicts_before_mutation(
+    redis_runner: RedisRunner,
+    candidate_ids: list[str],
+    expected: list[int],
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core.insert_messages([("existing", "seed", 10)])
+        state_before = {
+            "last_ts": core._client.hget(keys.meta, "last_ts"),
+            "queues": core._client.smembers(keys.queues),
+            "bodies": core._client.hgetall(keys.bodies),
+            "all_ids": core._client.zrange(keys.all_ids, 0, -1),
+        }
+
+        result = core._client.eval(
+            scripts.BROADCAST_MESSAGE,
+            4,
+            keys.meta,
+            keys.bodies,
+            keys.all_ids,
+            keys.queues,
+            "11",
+            encode_id(11),
+            "2",
+            "announcement",
+            keys.key("q", ""),
+            "exact_create",
+            "2",
+            "new-a",
+            "new-b",
+            *candidate_ids,
+        )
+
+        assert result == expected
+        assert core._client.smembers(keys.queues) == state_before["queues"]
+        assert not core._client.sismember(keys.queues, "new-a")
+        assert not core._client.sismember(keys.queues, "new-b")
+        assert core._client.exists(keys.pending("new-a")) == 0
+        assert core._client.exists(keys.pending("new-b")) == 0
+        assert core._client.hget(keys.meta, "last_ts") == state_before["last_ts"]
+        assert core._client.hgetall(keys.bodies) == state_before["bodies"]
+        assert core._client.zrange(keys.all_ids, 0, -1) == state_before["all_ids"]
+    finally:
+        core.close()
+
+
+def test_exact_create_script_rejects_stale_candidates_before_mutation(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core.insert_messages([("existing", "seed", 10)])
+        state_before = {
+            "last_ts": core._client.hget(keys.meta, "last_ts"),
+            "queues": core._client.smembers(keys.queues),
+            "bodies": core._client.hgetall(keys.bodies),
+            "all_ids": core._client.zrange(keys.all_ids, 0, -1),
+        }
+
+        result = core._client.eval(
+            scripts.BROADCAST_MESSAGE,
+            4,
+            keys.meta,
+            keys.bodies,
+            keys.all_ids,
+            keys.queues,
+            "2",
+            encode_id(2),
+            "2",
+            "announcement",
+            keys.key("q", ""),
+            "exact_create",
+            "2",
+            "new-a",
+            "new-b",
+            encode_id(1),
+            encode_id(2),
+        )
+
+        assert result == [-6]
+        assert core._client.smembers(keys.queues) == state_before["queues"]
+        assert not core._client.sismember(keys.queues, "new-a")
+        assert not core._client.sismember(keys.queues, "new-b")
+        assert core._client.exists(keys.pending("new-a")) == 0
+        assert core._client.exists(keys.pending("new-b")) == 0
+        assert core._client.hget(keys.meta, "last_ts") == state_before["last_ts"]
+        assert core._client.hgetall(keys.bodies) == state_before["bodies"]
+        assert core._client.zrange(keys.all_ids, 0, -1) == state_before["all_ids"]
+    finally:
+        core.close()
+
+
+def test_exact_create_script_rejects_uninitialized_namespace_before_mutation(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    magic = core._client.hget(keys.meta, "magic")
+    try:
+        last_ts_before = core._client.hget(keys.meta, "last_ts")
+        core._client.hdel(keys.meta, "magic")
+
+        result = core._client.eval(
+            scripts.BROADCAST_MESSAGE,
+            4,
+            keys.meta,
+            keys.bodies,
+            keys.all_ids,
+            keys.queues,
+            "1",
+            encode_id(1),
+            "1",
+            "announcement",
+            keys.key("q", ""),
+            "exact_create",
+            "1",
+            "new",
+            encode_id(1),
+        )
+
+        assert result == [-2]
+        assert not core._client.sismember(keys.queues, "new")
+        assert core._client.exists(keys.pending("new")) == 0
+        assert core._client.hlen(keys.bodies) == 0
+        assert core._client.zcard(keys.all_ids) == 0
+        assert core._client.hget(keys.meta, "last_ts") == last_ts_before
+    finally:
+        if magic is not None:
+            core._client.hset(keys.meta, "magic", magic)
+        core.close()
+
+
+def test_exact_create_rejects_pending_layout_before_registry_or_message_mutation(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core._client.set(keys.pending("new-a"), "wrong-type")
+        state_before = {
+            "last_ts": core._client.hget(keys.meta, "last_ts"),
+            "bodies": core._client.hgetall(keys.bodies),
+            "all_ids": core._client.zrange(keys.all_ids, 0, -1),
+        }
+
+        with pytest.raises(OperationalError, match="WRONGTYPE"):
+            core.broadcast(
+                "announcement",
+                queue_names=["new-a", "new-b"],
+                create_missing=True,
+            )
+
+        assert not core._client.sismember(keys.queues, "new-a")
+        assert not core._client.sismember(keys.queues, "new-b")
+        assert core._client.get(keys.pending("new-a")) == "wrong-type"
+        assert core._client.exists(keys.pending("new-b")) == 0
+        assert core._client.hget(keys.meta, "last_ts") == state_before["last_ts"]
+        assert core._client.hgetall(keys.bodies) == state_before["bodies"]
+        assert core._client.zrange(keys.all_ids, 0, -1) == state_before["all_ids"]
+    finally:
+        core._client.delete(keys.pending("new-a"))
         core.close()
 
 

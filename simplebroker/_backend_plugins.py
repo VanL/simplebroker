@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .metadata import QueueRenameResult, QueueStats
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
-BACKEND_API_VERSION: Final[int] = 4
+BACKEND_API_VERSION: Final[int] = 5
 DEFAULT_BACKEND_NAME = "sqlite"
 FIRST_PARTY_BACKEND_PACKAGES: Final[dict[str, str]] = {
     "postgres": "simplebroker-pg",
@@ -410,6 +410,7 @@ class BrokerConnection(Protocol):
         *,
         pattern: str | None = None,
         queue_names: Sequence[str] | None = None,
+        create_missing: bool = False,
     ) -> int: ...
 
     def list_queues(
