@@ -37,7 +37,9 @@ the mechanism.
   records the design evidence, rejected recovery approaches, and verification
   matrix.
 
-The README is the product source of truth. This document explains why the
+Product ownership is layered (`docs/specs/product-section-registry.md`);
+delivery/generator concerns remain `readme-only` in the root README.
+This document explains why the
 implementation has its current boundaries; it does not create a second
 behavior contract.
 

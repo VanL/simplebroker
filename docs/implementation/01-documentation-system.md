@@ -53,9 +53,11 @@ what your product architecture should be.
 ## Boundaries and Invariants
 
 - `docs/agent-context/` is the canonical shared context surface.
-- `docs/specs/` is the source of truth for the development process
-  ([DOM-*]); in this repository, **product behavior remains specified by
-  the root `README.md`** (scope note: `docs/specs/README.md`).
+- `docs/specs/` holds process specs (`[DOM-*]`) and product specs
+  (`[SB-*]`) when present. Product authority is mechanical via
+  `docs/specs/product-section-registry.md` (`readme-only` → README;
+  `canonical-spec` → listed section). See `docs/README.md` and
+  `docs/specs/README.md`.
 - `docs/plans/` contains dated execution records.
 - `docs/implementation/` explains rationale and important edit points.
 - `skills/` stores reusable task-scoped workflow instructions.

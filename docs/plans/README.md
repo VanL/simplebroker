@@ -72,6 +72,9 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | draft — class 4; F21 threshold-triggered follow-up; design decision required |
 | 2026-07-27-agent-docs-coalescing-and-status-hygiene-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-27-cross-thread-generator-orphan-healing-plan.md | completed — class 4; revision-13 poison + fail-fast slice implemented, verified, independently reviewed, and bundled for the coordinated 2026-07-28 release |
+| 2026-07-27-information-architecture-improvement-plan.md | superseded — roadmap only; do not execute; see product-docs-source-ownership-decision + product-spec-doctrine-and-cli-vertical-plan |
+| 2026-07-27-product-docs-source-ownership-decision.md | completed — decision accepted: registry + readme-only→draft-spec→canonical-spec; canonical specs update in place (not retired) |
+| 2026-07-27-product-spec-doctrine-and-cli-vertical-plan.md | completed — Class 5+P: doctrine + registry + fully-bound SB-CLI-1..4 pilot landed 2026-07-28; no backstitch in unit |
 | 2026-07-28-explicit-broadcast-targets-plan.md | completed — class 5; exact existing-queue selector implemented, verified across SQLite/PostgreSQL/Redis, independently reviewed, and authorized for targeted landing 2026-07-28 |
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |

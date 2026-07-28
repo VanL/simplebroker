@@ -339,6 +339,8 @@ exits `1`. A well-formed ID that does not match a message is silent and exits
 - `1` - General error (e.g., database access error, invalid arguments)
 - `2` - Queue empty or no matching messages
 
+Normative detail: `docs/specs/10-cli-contract.md` ([SB-CLI-1]–[SB-CLI-4]).
+
 `watch` exits `0` when stopped by SIGINT/SIGTERM or when its stdout consumer
 closes the pipe (see [Pipe behavior](#pipe-behavior)).
 

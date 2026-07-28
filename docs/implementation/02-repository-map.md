@@ -10,7 +10,9 @@ Quick pointers to the key guidance documents in this repository.
 | `docs/agent-kernel.md` | Agent **use** kernel: CLI + matching client API, delivery hazards, safe recipes |
 | `llms.txt` | llmstxt.org-style link index (points at agent-kernel and key docs) |
 | `CLAUDE.md` | Alias for tools that expect Claude-style root guidance |
-| `README.md` | **Product source of truth**: user docs AND the de facto behavior contract (commands, exit codes, safety notes) |
+| `README.md` | Human product entry; normative for every concern still `readme-only` in `docs/specs/product-section-registry.md`; restates + links `canonical-spec` sections |
+| `docs/specs/product-section-registry.md` | Mechanical product-doc ownership states |
+| `docs/specs/10-cli-contract.md` | Canonical CLI exit codes / I/O contract `[SB-CLI-*]` |
 | `CHANGELOG.md` | Behavior deltas for the published package |
 | `SECURITY.md` | Security policy for external reporters |
 

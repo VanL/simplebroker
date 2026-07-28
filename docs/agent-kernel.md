@@ -76,6 +76,8 @@ dump/load). Prefer that over private `_` modules.
 | `1` | Error |
 | `2` | Empty / nothing to do (not a crash) |
 
+Normative: `docs/specs/10-cli-contract.md` [SB-CLI-1]–[SB-CLI-4].
+
 - **stdout = data**, stderr = diagnostics.
 - Prefer **`--json`** for any automation (bodies may contain newlines and
   shell metacharacters).

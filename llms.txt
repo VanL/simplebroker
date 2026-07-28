@@ -7,6 +7,9 @@
 ## Docs
 
 - [Agent kernel (use vs embedding)](docs/agent-kernel.md): Canonical agent-facing kernel — CLI/`Queue` use surface, delivery hazards, safe reservation recipes, embedding notes for Weft/Taut-style runtimes
+- [Product section registry](docs/specs/product-section-registry.md): Mechanical ownership state for product doc sections (`readme-only` / `draft-spec` / `canonical-spec`)
+- [CLI contract spec](docs/specs/10-cli-contract.md): Canonical CLI exit codes and stdout/stderr roles `[SB-CLI-*]`
+- [Specs index](docs/specs/00-specs-index.md): Process and product spec read order
 - [README](README.md): Full product contract — commands, flags, exit codes, safety, Python API, project scoping, architecture
 - [CHANGELOG](CHANGELOG.md): Behavior deltas for published releases
 - [AGENTS.md](AGENTS.md): Entry point for agents working *in this repository* (process, plans, reviews)

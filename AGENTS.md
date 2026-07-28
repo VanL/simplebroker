@@ -5,7 +5,10 @@
 [`llms.txt`](llms.txt). Read the kernel before deep-diving the README when
 you need SimpleBroker as a queue tool. This file is the entry for
 **working in this repository** (process, plans, reviews). Product behavior
-remains `README.md` + `CHANGELOG.md`.
+uses the layered SoT in `docs/README.md` and
+`docs/specs/product-section-registry.md` (`readme-only` residual in root
+`README.md`; `canonical-spec` sections under `docs/specs/` with `[SB-*]`
+codes). `CHANGELOG.md` records published deltas.
 
 ## Agent Permissions and Attribution — Read First
 
@@ -105,12 +108,14 @@ invent one.
 
 ## SimpleBroker Specifics
 
-- **Product behavior is specified by the root `README.md`** (declared in
-  `docs/README.md`; scope note in `docs/specs/README.md`). The spec tree
-  here governs the development process only. Changes to CLI behavior,
-  flags, exit codes, or safety semantics are README-contract changes —
-  update the README in the same change and record the delta in
-  `CHANGELOG.md`.
+- **Product behavior uses layered ownership** (declared in `docs/README.md`;
+  registry in `docs/specs/product-section-registry.md`). Process specs are
+  `[DOM-*]`; product sections use `[SB-*]` when `canonical-spec`. Root
+  `README.md` remains normative for every `readme-only` concern and may
+  restate canonical sections with a link. Changes to CLI behavior, flags,
+  exit codes, or safety semantics update the **winning** SoT (registry
+  state), keep README restatements/links aligned, and record user-visible
+  deltas in `CHANGELOG.md`.
 - **This is a published package with external users** (PyPI; see
   `SECURITY.md`). CLI and library surface changes are public-contract
   changes: risky by default, plan-worthy, and never quietly breaking.
