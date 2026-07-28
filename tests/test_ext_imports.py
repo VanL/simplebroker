@@ -45,7 +45,7 @@ def test_ext_imports():
 
     # Verify they're all importable
     assert RESERVED_TABLE_NAMES is not None
-    assert BACKEND_API_VERSION == 3
+    assert BACKEND_API_VERSION == 4
     assert ActivityWaiter is not None
     assert BaseWatcher is not None
     assert PollingStrategy is not None

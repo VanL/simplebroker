@@ -134,3 +134,10 @@ Dated moment-tier entries (foldable after age floor and distillation).
 - 2026-07-27: Coalescing harvest candidates must come from a complete Status
   Index. Declaring legacy plans "not a count" hides debt forever; census
   first, then soft-retire. (agent-docs hygiene plan F1/F7.)
+- 2026-07-28: When a direct backend selects targets inside an atomic server
+  script, do not persist shared allocation state before the script knows the
+  target set is nonempty. Reserve process-local candidates, fence them against
+  the persisted high-water mark inside the same script, and retry after a
+  refresh if another process advanced first. Otherwise zero-target calls mutate
+  metadata, or a race can insert IDs below the global high-water mark.
+  (Exact-target Redis broadcast.)

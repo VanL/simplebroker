@@ -33,6 +33,12 @@ standalone backend SDK.
 Backend API v2 adds the shared delivery-guarantee and automatic-maintenance
 contracts to this public facade. Backend packages must import those names from
 ``simplebroker.ext``, never their underscore-prefixed implementation modules.
+
+Backend API v4 adds exact existing-queue broadcast selection through
+``BrokerConnection.broadcast(..., queue_names=...)``. Direct backends must
+select and insert the exact target set atomically; all v3 plugins, including
+SQL-namespace plugins whose SQL hook is otherwise unchanged, are rejected by
+the exact-version handshake.
 """
 
 from ._backend_plugins import (

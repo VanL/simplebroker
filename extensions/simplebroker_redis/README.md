@@ -50,8 +50,18 @@ copy in one Lua invocation. A queue cannot be missed or resurrected by a
 concurrent write or deletion that commits before that invocation. Activity
 notifications and maintenance accounting run after the atomic insert commits.
 
+Exact-target `broadcast(..., queue_names=...)` also intersects the requested
+literal names with the registry and inserts all copies in one Lua invocation.
+Missing names are ignored and not created. A requested queue deleted before
+the script selects targets is not resurrected; an all-missing request returns
+zero without advancing persisted `last_ts`, publishing wakeups, or scheduling
+maintenance.
+
 Patterned broadcasts deliberately keep a client-side queue snapshot so their
 matching stays exactly Python `fnmatchcase` syntax. A queue created after the
 snapshot can miss that broadcast; a queue deleted after the snapshot can be
-recreated by it. Use a patternless broadcast when atomic registry selection is
-required.
+recreated by it. Use a patternless or exact-target broadcast when atomic
+registry selection is required.
+
+Exact-target broadcast requires backend API v4: SimpleBroker 5.6.0 or newer
+and `simplebroker-redis` 3.3.0 or newer.

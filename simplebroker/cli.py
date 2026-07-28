@@ -347,13 +347,23 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
 
     # Broadcast command
     broadcast_parser = subparsers.add_parser(
-        "broadcast", help="send message to all queues"
+        "broadcast",
+        help="send message to selected existing queues",
+        allow_abbrev=False,
     )
     broadcast_parser.add_argument("message", help="message content ('-' for stdin)")
-    broadcast_parser.add_argument(
+    broadcast_selectors = broadcast_parser.add_mutually_exclusive_group()
+    broadcast_selectors.add_argument(
         "-p",
         "--pattern",
         help="only broadcast to queues matching this fnmatch-style glob",
+    )
+    broadcast_selectors.add_argument(
+        "--queue",
+        dest="queue_names",
+        action="append",
+        metavar="QUEUE",
+        help="broadcast to this existing queue (repeatable)",
     )
 
     dump_parser = subparsers.add_parser(
@@ -676,7 +686,7 @@ class ArgumentProcessor:
         return command_args
 
     def _protect_broadcast_operands(self, command_args: list[str]) -> list[str]:
-        """Protect the broadcast message positional while preserving -p/--pattern."""
+        """Protect the broadcast message while preserving selector options."""
         if "--" in command_args[1:]:
             return command_args
 
@@ -685,7 +695,7 @@ class ArgumentProcessor:
         while i < len(command_args):
             arg = command_args[i]
 
-            if arg in {"-p", "--pattern"}:
+            if arg in {"-p", "--pattern", "--queue"}:
                 protected.append(arg)
                 if i + 1 < len(command_args):
                     protected.append(command_args[i + 1])
@@ -694,10 +704,24 @@ class ArgumentProcessor:
                     i += 1
                 continue
 
-            if arg.startswith("--pattern="):
+            if arg.startswith(("--pattern=", "--queue=")):
                 protected.append(arg)
                 i += 1
                 continue
+
+            # Do not turn abbreviated selector options into message data.
+            # The broadcast parser has abbreviation disabled, so leaving the
+            # token unprotected makes argparse reject it before any mutation.
+            option_name = arg.partition("=")[0]
+            if (
+                len(option_name) > 2
+                and option_name.startswith("--")
+                and any(
+                    option.startswith(option_name)
+                    for option in ("--pattern", "--queue")
+                )
+            ):
+                return command_args
 
             # argparse accepts the short option with its value attached
             # (``-pqueue*``).  Preserve that form as an option; callers can
@@ -1277,6 +1301,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 resolved_target,
                 args.message,
                 pattern=getattr(args, "pattern", None),
+                queue_names=getattr(args, "queue_names", None),
             )
         elif args.command == "dump":
             return commands.cmd_dump(

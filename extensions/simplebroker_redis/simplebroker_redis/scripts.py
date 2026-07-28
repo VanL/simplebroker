@@ -90,17 +90,41 @@ local required_last_ts = ARGV[2]
 local capacity = tonumber(ARGV[3])
 local body = ARGV[4]
 local pending_prefix = ARGV[5]
+local selector_mode = ARGV[6]
+local requested_count = tonumber(ARGV[7])
+if capacity == nil or capacity < 0 or capacity ~= math.floor(capacity)
+    or requested_count == nil or requested_count < 0
+    or requested_count ~= math.floor(requested_count)
+    or (selector_mode ~= 'all' and selector_mode ~= 'exact')
+    or (selector_mode == 'all' and requested_count ~= 0)
+    or (selector_mode == 'exact' and capacity ~= requested_count)
+    or #ARGV ~= 7 + requested_count + capacity then
+  return {-5}
+end
 if redis.call('HGET', meta, 'magic') == false then
   return {-2}
 end
-local queue_names = redis.call('SMEMBERS', queues)
-table.sort(queue_names)
-if #queue_names > capacity then
-  return {-4, #queue_names}
+local queue_names = {}
+if selector_mode == 'all' then
+  queue_names = redis.call('SMEMBERS', queues)
+  table.sort(queue_names)
+  if #queue_names > capacity then
+    return {-4, #queue_names}
+  end
+else
+  for index = 1, requested_count do
+    local queue = ARGV[7 + index]
+    if redis.call('SISMEMBER', queues, queue) == 1 then
+      table.insert(queue_names, queue)
+    end
+  end
+end
+if #queue_names == 0 then
+  return {1}
 end
 local seen = {}
 for index = 1, #queue_names do
-  local id = ARGV[5 + index]
+  local id = ARGV[7 + requested_count + index]
   if seen[id] == true then
     return {-3}
   end
@@ -114,12 +138,16 @@ local function pad19(value)
   return string.rep('0', 19 - string.len(text)) .. text
 end
 local current = pad19(redis.call('HGET', meta, 'last_ts') or '0')
+local first_id = ARGV[8 + requested_count]
+if selector_mode == 'exact' and current >= first_id then
+  return {-6}
+end
 if current < required_last_ts then
   redis.call('HSET', meta, 'last_ts', ARGV[1])
 end
 local response = {1}
 for index, queue in ipairs(queue_names) do
-  local id = ARGV[5 + index]
+  local id = ARGV[7 + requested_count + index]
   redis.call('HSET', bodies, id, body)
   redis.call('ZADD', all_ids, 0, id)
   redis.call('ZADD', pending_prefix .. queue .. ':pending', 0, id)

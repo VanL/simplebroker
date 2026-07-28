@@ -1406,10 +1406,31 @@ class RedisBrokerCore:
 
         return matches
 
-    def broadcast(self, message: str, *, pattern: str | None = None) -> int:
+    def broadcast(
+        self,
+        message: str,
+        *,
+        pattern: str | None = None,
+        queue_names: Sequence[str] | None = None,
+    ) -> int:
         self._check_fork_safety()
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("broadcast")
+        if pattern is not None and queue_names is not None:
+            raise ValueError("pattern and queue_names cannot be used together")
+
+        exact_queues: tuple[str, ...] | None = None
+        if queue_names is not None:
+            if isinstance(queue_names, (str, bytes)):
+                raise TypeError(
+                    "queue_names must be a sequence of queue names, not a string"
+                )
+            exact_queues = tuple(dict.fromkeys(queue_names))
+            for queue in exact_queues:
+                self._validate_queue_name(queue)
+            if not exact_queues:
+                return 0
+
         if pattern:
             queues = sorted(str(queue) for queue in self._queue_names())
             queues = [queue for queue in queues if fnmatchcase(queue, pattern)]
@@ -1443,15 +1464,25 @@ class RedisBrokerCore:
                 "Failed to broadcast message after repeated timestamp conflicts"
             )
 
-        queue_count = response_int(self._client.scard(self._keys.queues))
-        timestamp_capacity = queue_count + max(8, (queue_count // 4) + 1)
+        selector_mode = "exact" if exact_queues is not None else "all"
+        requested_queues = exact_queues or ()
+        if selector_mode == "exact":
+            timestamp_capacity = len(requested_queues)
+        else:
+            queue_count = response_int(self._client.scard(self._keys.queues))
+            timestamp_capacity = queue_count + max(8, (queue_count // 4) + 1)
         growth_attempts = 0
         conflict_attempts = 0
         while True:
             try:
-                timestamps = [
-                    self.generate_timestamp() for _ in range(timestamp_capacity)
-                ]
+                if selector_mode == "exact":
+                    timestamps = self._timestamp_gen._reserve_candidates(
+                        timestamp_capacity
+                    )
+                else:
+                    timestamps = [
+                        self.generate_timestamp() for _ in range(timestamp_capacity)
+                    ]
             except TimestampError as exc:
                 if isinstance(exc.__cause__, OperationalError):
                     raise OperationalError(str(exc.__cause__)) from exc
@@ -1471,6 +1502,9 @@ class RedisBrokerCore:
                         str(timestamp_capacity),
                         message,
                         self._key("q", ""),
+                        selector_mode,
+                        str(len(requested_queues)),
+                        *requested_queues,
                         *(encode_id(timestamp) for timestamp in timestamps),
                     )
                 )
@@ -1486,6 +1520,10 @@ class RedisBrokerCore:
                 self._record_maintenance_activity(len(affected_queues))
                 return len(affected_queues)
             if code == -4:
+                if selector_mode != "all":
+                    raise OperationalError(
+                        "Unexpected Redis broadcast capacity result for exact selector"
+                    )
                 growth_attempts += 1
                 required = int(result[1])
                 if growth_attempts >= 3:
@@ -1509,8 +1547,19 @@ class RedisBrokerCore:
                         "Failed to broadcast message after repeated timestamp conflicts"
                     )
                 continue
+            if code == -6:
+                self._ts_conflict_count += 1
+                conflict_attempts += 1
+                if conflict_attempts >= 3:
+                    raise RuntimeError(
+                        "Failed to broadcast message after repeated timestamp conflicts"
+                    )
+                self._timestamp_gen.refresh_last_ts()
+                continue
             if code == -2:
                 raise OperationalError("Redis namespace is not initialized")
+            if code == -5:
+                raise OperationalError("Malformed Redis broadcast script arguments")
             raise OperationalError(f"Unexpected Redis broadcast result: {code}")
 
     def queue_exists_and_has_messages(self, queue: str) -> bool:

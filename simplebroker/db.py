@@ -2930,22 +2930,46 @@ class BrokerCore:
 
         return self._run_with_retry(_do_rename_queue)
 
-    def broadcast(self, message: str, *, pattern: str | None = None) -> int:
-        """Broadcast a message to all existing queues atomically.
+    def broadcast(
+        self,
+        message: str,
+        *,
+        pattern: str | None = None,
+        queue_names: Sequence[str] | None = None,
+    ) -> int:
+        """Broadcast a message to selected existing queues atomically.
 
         Args:
-            message: Message body to broadcast to all queues
+            message: Message body to broadcast
             pattern: Optional fnmatch-style glob limiting target queues
+            queue_names: Optional exact sequence of literal queue names
 
         Returns:
             Number of queues that received the message
 
         Raises:
+            TypeError: If ``queue_names`` is a string or bytes
+            ValueError: If both selectors are supplied
             RuntimeError: If called from a forked process or counter overflow
         """
         self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("broadcast")
         self._validate_message_size(message)
+
+        if pattern is not None and queue_names is not None:
+            raise ValueError("pattern and queue_names cannot be used together")
+
+        exact_queue_names: tuple[str, ...] | None = None
+        if queue_names is not None:
+            if isinstance(queue_names, (str, bytes)):
+                raise TypeError(
+                    "queue_names must be a sequence of queue names, not a string"
+                )
+            exact_queue_names = tuple(dict.fromkeys(queue_names))
+            for queue in exact_queue_names:
+                self._validate_queue_name(queue)
+            if not exact_queue_names:
+                return 0
 
         # Variable to store the count
         queue_count = 0
@@ -2964,6 +2988,13 @@ class BrokerCore:
                     if pattern:
                         queues = [
                             queue for queue in queues if fnmatchcase(queue, pattern)
+                        ]
+                    elif exact_queue_names is not None:
+                        existing_queues = set(queues)
+                        queues = [
+                            queue
+                            for queue in exact_queue_names
+                            if queue in existing_queues
                         ]
 
                     # Generate timestamps for all queues upfront (before inserts)

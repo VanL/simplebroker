@@ -14,6 +14,7 @@ from simplebroker_redis.plugin import RedisMultiQueueActivityWaiter
 from simplebroker_redis.validation import key_prefix
 
 from simplebroker import Queue, create_activity_waiter_for_queues
+from simplebroker._exceptions import QueueNameError
 from simplebroker.ext import PollingStrategy
 
 pytestmark = [pytest.mark.redis_only]
@@ -65,6 +66,64 @@ def test_broadcast_is_atomic_when_generated_ids_collide(
         core.shutdown()
 
 
+def test_exact_broadcast_is_atomic_when_candidate_ids_collide(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.write("alpha", "seed-alpha")
+        core.write("beta", "seed-beta")
+        monkeypatch.setattr(
+            core._timestamp_gen,
+            "_reserve_candidates",
+            lambda count: [core.refresh_last_timestamp() + 1] * count,
+        )
+
+        with pytest.raises(RuntimeError, match="timestamp conflicts"):
+            core.broadcast("announcement", queue_names=["alpha", "beta"])
+
+        assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
+            "seed-alpha"
+        ]
+        assert core.peek_many("beta", limit=10, with_timestamps=False) == ["seed-beta"]
+    finally:
+        core.shutdown()
+
+
+def test_exact_broadcast_retries_locally_reserved_stale_candidates(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.write("alpha", "seed-alpha")
+        original_reserve = core._timestamp_gen._reserve_candidates
+        calls = 0
+
+        def stale_then_fresh(count: int) -> list[int]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return [1] * count
+            return original_reserve(count)
+
+        monkeypatch.setattr(
+            core._timestamp_gen,
+            "_reserve_candidates",
+            stale_then_fresh,
+        )
+
+        assert core.broadcast("announcement", queue_names=["alpha"]) == 1
+        assert calls == 2
+        assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
+            "seed-alpha",
+            "announcement",
+        ]
+    finally:
+        core.shutdown()
+
+
 def test_broadcast_success_with_pattern(redis_runner: RedisRunner) -> None:
     core = RedisBrokerCore(redis_runner)
     try:
@@ -83,6 +142,133 @@ def test_broadcast_success_with_pattern(redis_runner: RedisRunner) -> None:
             "announcement",
         ]
         assert core.peek_many("beta", limit=10, with_timestamps=False) == ["seed-beta"]
+    finally:
+        core.shutdown()
+
+
+def test_broadcast_success_with_exact_queue_names(redis_runner: RedisRunner) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.write("alpha", "seed-alpha")
+        core.write("beta", "seed-beta")
+        core.write("gamma", "seed-gamma")
+
+        assert (
+            core.broadcast(
+                "announcement",
+                queue_names=["gamma", "missing", "alpha", "gamma"],
+            )
+            == 2
+        )
+
+        assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
+            "seed-alpha",
+            "announcement",
+        ]
+        assert core.peek_many("beta", limit=10, with_timestamps=False) == ["seed-beta"]
+        assert core.peek_many("gamma", limit=10, with_timestamps=False) == [
+            "seed-gamma",
+            "announcement",
+        ]
+        assert core.queue_exists("missing") is False
+    finally:
+        core.shutdown()
+
+
+@pytest.mark.parametrize("pattern", ["a*", ""])
+def test_broadcast_rejects_pattern_with_exact_queue_names(
+    redis_runner: RedisRunner,
+    pattern: str,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        with pytest.raises(
+            ValueError,
+            match="pattern and queue_names cannot be used together",
+        ):
+            core.broadcast("announcement", pattern=pattern, queue_names=["alpha"])
+    finally:
+        core.shutdown()
+
+
+@pytest.mark.parametrize("queue_names", ["alpha", b"alpha"])
+def test_broadcast_rejects_string_like_queue_names(
+    redis_runner: RedisRunner,
+    queue_names: object,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        with pytest.raises(
+            TypeError,
+            match="queue_names must be a sequence of queue names, not a string",
+        ):
+            core.broadcast("announcement", queue_names=queue_names)  # type: ignore[arg-type]
+    finally:
+        core.shutdown()
+
+
+def test_broadcast_empty_exact_queue_names_is_a_noop(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.write("alpha", "seed-alpha")
+        last_ts_before = core._client.hget(
+            RedisKeys(redis_runner.namespace).meta, "last_ts"
+        )
+
+        def unexpected_reservation(count: int) -> list[int]:
+            raise AssertionError("empty exact broadcast must not reserve timestamps")
+
+        monkeypatch.setattr(
+            core._timestamp_gen,
+            "_reserve_candidates",
+            unexpected_reservation,
+        )
+
+        assert core.broadcast("announcement", queue_names=()) == 0
+        assert (
+            core._client.hget(RedisKeys(redis_runner.namespace).meta, "last_ts")
+            == last_ts_before
+        )
+        assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
+            "seed-alpha"
+        ]
+    finally:
+        core.shutdown()
+
+
+def test_broadcast_validates_all_exact_queue_names_before_mutation(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        core.write("alpha", "seed-alpha")
+
+        with pytest.raises(QueueNameError):
+            core.broadcast("announcement", queue_names=["alpha", "bad queue"])
+
+        assert core.peek_many("alpha", limit=10, with_timestamps=False) == [
+            "seed-alpha"
+        ]
+    finally:
+        core.shutdown()
+
+
+def test_broadcast_all_missing_exact_queue_names_preserves_persisted_last_ts(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core.write("alpha", "seed-alpha")
+        last_ts_before = core._client.hget(keys.meta, "last_ts")
+
+        assert core.broadcast("announcement", queue_names=["missing"]) == 0
+
+        assert core._client.hget(keys.meta, "last_ts") == last_ts_before
+        assert core.queue_exists("missing") is False
     finally:
         core.shutdown()
 

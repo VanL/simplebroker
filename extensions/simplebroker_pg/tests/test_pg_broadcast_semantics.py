@@ -72,3 +72,62 @@ def test_prepare_broadcast_excludes_concurrent_new_queue(
             pg_dsn,
             backend_options={"schema": pg_schema},
         )
+
+
+def test_exact_broadcast_does_not_resurrect_queue_deleted_before_selection(
+    pg_core: BrokerCore,
+    pg_dsn: str,
+    pg_plugin: BackendPlugin,
+    pg_schema: str,
+) -> None:
+    """Broadcast waits for an in-flight delete, then observes the committed absence."""
+    pg_core.write("victim", "seed")
+    delete_runner = PostgresRunner(pg_dsn, schema=pg_schema)
+    broadcast_runner = PostgresRunner(pg_dsn, schema=pg_schema)
+    broadcast_core = BrokerCore(broadcast_runner, backend_plugin=pg_plugin)
+    finished = threading.Event()
+    results: list[int] = []
+    errors: list[BaseException] = []
+
+    def run_broadcast() -> None:
+        try:
+            results.append(
+                broadcast_core.broadcast(
+                    "notice",
+                    queue_names=("victim",),
+                )
+            )
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            finished.set()
+
+    try:
+        delete_runner.begin_immediate()
+        assert (
+            pg_plugin.delete_from_queues(
+                delete_runner,
+                queue_names=("victim",),
+            )
+            == 1
+        )
+
+        thread = threading.Thread(target=run_broadcast, daemon=True)
+        thread.start()
+        assert finished.wait(0.2) is False
+
+        delete_runner.commit()
+        assert finished.wait(3.0) is True
+        thread.join(timeout=1.0)
+
+        assert errors == []
+        assert results == [0]
+        assert pg_core.peek_many("victim", limit=10, with_timestamps=False) == []
+    finally:
+        if not finished.is_set():
+            try:
+                delete_runner.rollback()
+            except Exception:
+                pass
+        broadcast_core.close()
+        delete_runner.shutdown()

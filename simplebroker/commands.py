@@ -15,7 +15,7 @@ import os
 import sys
 import time
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -1034,6 +1034,7 @@ def cmd_broadcast(
     message: str | None,
     pattern: str | None = None,
     *,
+    queue_names: Sequence[str] | None = None,
     config: dict[str, Any] = _config,
 ) -> int:
     """Send message to all queues.
@@ -1042,6 +1043,7 @@ def cmd_broadcast(
         db_path: Path to database file
         message: Message content, None to read piped stdin, or "-" for stdin
         pattern: Optional fnmatch-style pattern limiting target queues
+        queue_names: Optional sequence of exact existing queue names
 
     Returns:
         Exit code
@@ -1052,7 +1054,11 @@ def cmd_broadcast(
     # Broadcast is a cross-queue operation, use DBConnection
     with DBConnection(db_path, config=resolved_config) as conn:
         db = cast(BrokerDB, conn.get_connection())
-        queue_count = db.broadcast(content, pattern=pattern)
+        queue_count = db.broadcast(
+            content,
+            pattern=pattern,
+            queue_names=queue_names,
+        )
 
     # Return EXIT_QUEUE_EMPTY if no queues matched, EXIT_SUCCESS otherwise
     return EXIT_SUCCESS if queue_count > 0 else EXIT_QUEUE_EMPTY

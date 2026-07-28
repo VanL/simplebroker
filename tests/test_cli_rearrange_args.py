@@ -63,11 +63,36 @@ class TestRearrangeArgs:
             "notice",
         ]
 
+    def test_broadcast_queue_selectors_are_preserved(self):
+        assert rearrange_args(
+            ["broadcast", "--queue", "alpha", "--queue=beta", "notice"]
+        ) == ["broadcast", "--queue", "alpha", "--queue=beta", "notice"]
+
+    @pytest.mark.parametrize(
+        "abbreviation",
+        ["--q", "--qu", "--que", "--queu", "--p", "--pa", "--pat"],
+    )
+    def test_broadcast_selector_abbreviations_are_not_protected(
+        self, abbreviation: str
+    ):
+        assert rearrange_args(["broadcast", abbreviation, "notice"]) == [
+            "broadcast",
+            abbreviation,
+            "notice",
+        ]
+
     def test_broadcast_dash_escape_keeps_attached_pattern_literal(self):
         assert rearrange_args(["broadcast", "--", "-pqueue*"]) == [
             "broadcast",
             "--",
             "-pqueue*",
+        ]
+
+    def test_broadcast_dash_escape_keeps_queue_prefix_literal(self):
+        assert rearrange_args(["broadcast", "--", "--qu"]) == [
+            "broadcast",
+            "--",
+            "--qu",
         ]
 
     def test_equals_form(self):

@@ -186,6 +186,11 @@ $ broker list --prefix jobs. --stats
 $ broker broadcast "System maintenance at 5pm"
 # Target only matching queues using fnmatch-style globs
 $ broker broadcast --pattern 'jobs-*' "Pipeline paused"
+# Target an exact set of existing literal queues; --queue is repeatable
+$ broker broadcast \
+    --queue notify.alice \
+    --queue notify.carol \
+    "Thread updated"
 
 # Clean up when done
 $ broker --cleanup
@@ -223,7 +228,7 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `list [--stats] [--prefix PREFIX \| --pattern GLOB] [--json]` | Show queue names; `--stats` adds counts |
 | `delete <queue> [-m <id>]` | Delete a queue immediately, or physically delete a specific message by ID |
 | `delete --all` | Delete all queues immediately |
-| `broadcast <message\|->` | Send message to all existing queues |
+| `broadcast [--pattern GLOB \| --queue QUEUE ...] <message\|->` | Send one message atomically to all existing queues, matching existing queues, or a repeatable exact set of existing literal queue names |
 | `watch <queue> [options]` | Watch queue for new messages |
 | `alias <add\|remove\|list>` | Manage queue aliases |
 | `dump [--include <glob>] [--exclude <glob>]` | Write all queues to stdout as ndjson (pending messages only, deterministic; globs match queue names, aliases match on their own name or their target, exclude wins, the flags compose) |
@@ -521,17 +526,51 @@ metrics: 1
 # Send to all queues at once
 $ broker broadcast "shutdown signal"
 
+# Send to an exact existing set
+$ broker broadcast \
+    --queue worker1 \
+    --queue worker2 \
+    "targeted shutdown"
+
 # Each worker reads from its own queue
 $ broker read worker1  # -> "shutdown signal"
 $ broker read worker2  # -> "shutdown signal"
 ```
 
-**Note:** Broadcast sends to all *existing* queues at execution time. For the
-matched queue set, broadcast is atomic across supported backends: it commits to
-all matched queues or none. There's still a small race window for queues created
-during broadcast; newly created queues are not included.
+**Target selection [BCAST-1]:** With no selector, broadcast targets every queue
+that exists at the backend's selection point. A non-empty `--pattern GLOB` /
+`pattern=...` targets existing names using Python `fnmatchcase` semantics; the
+legacy empty value (`--pattern ""` or `pattern=""`) remains equivalent to no
+pattern. Repeatable `--queue QUEUE` /
+`queue_names: Sequence[str]` targets the unique requested names that exist at
+that point. Non-`None` `pattern` and `queue_names` are mutually exclusive,
+including `pattern=""`. An empty Python sequence or a selector with no existing
+matches returns `0` (CLI exit `2`) and writes nothing. Missing exact names are
+ignored and are not created.
 
-**Alias interaction:** Broadcast operations ignore aliases and work only on literal queue names. Pattern matching with `--pattern` matches queue names, not alias names.
+**Python exact selector [BCAST-2]:** `queue_names` accepts a non-string
+sequence, snapshots and deduplicates it before writing, and returns the number
+of unique existing queues reached. It cannot be combined with `pattern`.
+
+**Alias interaction [BCAST-3]:** Broadcast ignores aliases and works only on
+literal queue names. Patterns match queue names, not aliases. Exact names use
+the same queue-name validation as the rest of the Python API; `@alias` is not
+resolved.
+
+**Atomicity and result [BCAST-4]:** For the selected queue set, broadcast is
+atomic across supported backends: every selected queue receives one copy or
+none do. Queue creation and deletion can race with selector evaluation; the
+Redis extension documents its pattern-snapshot caveat separately.
+
+**CLI exact selector [BCAST-5]:** `--queue QUEUE` is repeatable and mutually
+exclusive with `--pattern`. Queue names are literal; commas are not split into
+multiple names. Long-option abbreviations are rejected; use `--` before a
+literal option-looking message.
+
+**Backend compatibility [BCAST-6]:** Exact-target broadcast is part of backend
+API v4. Direct backend extensions must accept `queue_names` and preserve the
+selector and atomicity rules above; incompatible extensions fail during
+backend resolution with upgrade-or-pin guidance.
 </details>
 
 <details>
@@ -1163,6 +1202,17 @@ with open_broker(target) as broker:
         print(f"{stats.queue}: {stats.pending} pending")
 
     broker.broadcast("System maintenance at 5pm")
+
+    recipients = [
+        f"notify.{member_id}"
+        for member_id in ("alice", "bob", "carol")
+        if member_id != "bob"
+    ]
+    delivered = broker.broadcast(
+        "Thread updated",
+        queue_names=recipients,
+    )
+    print(f"delivered to {delivered} existing inboxes")
 
     cutoff_ts = broker.get_cached_last_timestamp()
     deleted = broker.delete_from_queues(

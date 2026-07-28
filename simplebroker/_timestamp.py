@@ -154,6 +154,35 @@ class TimestampGenerator:
         # Fall back to resilience mechanism
         raise IntegrityError("unable to generate unique timestamp (exhausted retries)")
 
+    def _reserve_candidates(self, count: int) -> list[int]:
+        """Reserve unique local timestamp candidates without persisting them.
+
+        Direct backends use this when target selection and insertion happen in
+        one atomic server-side operation. The server-side operation remains
+        responsible for advancing persisted ``last_ts`` if it commits at least
+        one candidate. An empty target set may therefore leave a harmless gap
+        in this process-local cache without changing broker state.
+        """
+
+        if isinstance(count, bool) or not isinstance(count, int):
+            raise TypeError("count must be an int")
+        if count < 0:
+            raise ValueError("count must be non-negative")
+        if count == 0:
+            return []
+
+        with self._lock:
+            self._ensure_pid()
+            candidates: list[int] = []
+            for _ in range(count):
+                physical_ns, logical = self._next_components()
+                candidate = self._encode_hybrid_timestamp(physical_ns, logical)
+                if candidate >= SQLITE_MAX_INT64:
+                    raise TimestampError("Timestamp too far in future")
+                self._last_ts = candidate
+                candidates.append(candidate)
+            return candidates
+
     # -- internal helpers -------------------------------------
 
     def get_cached_last_ts(self) -> int:

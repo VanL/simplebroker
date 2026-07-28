@@ -72,6 +72,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | draft — class 4; F21 threshold-triggered follow-up; design decision required |
 | 2026-07-27-agent-docs-coalescing-and-status-hygiene-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-27-cross-thread-generator-orphan-healing-plan.md | completed — class 4; revision-13 poison + fail-fast slice implemented, verified, independently reviewed, and bundled for the coordinated 2026-07-28 release |
+| 2026-07-28-explicit-broadcast-targets-plan.md | completed — class 5; exact existing-queue selector implemented, verified across SQLite/PostgreSQL/Redis, independently reviewed, and authorized for targeted landing 2026-07-28 |
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-extension-monorepo-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |

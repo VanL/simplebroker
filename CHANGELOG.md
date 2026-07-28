@@ -5,6 +5,41 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.6.0] - 2026-07-28
+
+### Added
+- Added exact existing-queue broadcast selection through
+  `broker.broadcast(message, queue_names=...)` and repeatable CLI
+  `broker broadcast --queue QUEUE ... MESSAGE`. Exact names are snapshotted,
+  deduplicated, and validated before mutation; missing names are ignored and
+  are not created. The selector is mutually exclusive with `pattern`, including
+  the legacy empty pattern value.
+- Added backend-agnostic broadcast contract coverage plus PostgreSQL
+  concurrent-delete and Redis Lua atomicity probes.
+
+### Changed
+- Bumped the direct backend handshake to API v4. The exact-version check rejects
+  every v3 backend, including SQL-namespace plugins whose broadcast preparation
+  hook is otherwise unchanged, with the existing upgrade-or-pin diagnostic.
+- Bumped `simplebroker-pg` and `simplebroker-redis` to 3.3.0, raised both
+  extension core floors to `simplebroker>=5.6.0`, and raised the root optional
+  backend floors to those extension versions.
+- Redis exact-target broadcast intersects the requested names with the queue
+  registry and inserts all copies in one Lua invocation. An all-missing request
+  leaves persisted `last_ts`, wakeups, and maintenance scheduling unchanged.
+- Broadcast long-option abbreviations are rejected before mutation. Use the
+  full `--pattern` / `--queue` spelling, or `--` before a literal
+  option-looking message.
+
+### simplebroker-pg 3.3.0
+- Added transactional exact existing-queue broadcast selection and backend API
+  v4 compatibility.
+
+### simplebroker-redis 3.3.0
+- Added atomic Lua exact existing-queue broadcast selection, including
+  no-resurrection and zero-target persisted-state guarantees, and backend API
+  v4 compatibility.
+
 ## [5.5.0] - 2026-07-28
 
 ### Changed

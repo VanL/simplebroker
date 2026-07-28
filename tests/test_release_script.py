@@ -794,12 +794,12 @@ def test_extension_core_floor_guard_accepts_required_floor(tmp_path: Path) -> No
     )
 
 
-def test_repository_backend_api_v3_handshake_and_floors_match() -> None:
+def test_repository_backend_api_v4_handshake_and_floors_match() -> None:
     release.require_backend_api_versions_match()
     release.require_extension_core_floors_for_backend_api()
 
-    assert release.read_core_backend_api_version() == 3
-    assert release.BACKEND_API_MIN_CORE_VERSION[3] == "5.3.1"
+    assert release.read_core_backend_api_version() == 4
+    assert release.BACKEND_API_MIN_CORE_VERSION[4] == "5.6.0"
 
 
 def test_extension_core_floor_guard_rejects_too_low_floor(tmp_path: Path) -> None:

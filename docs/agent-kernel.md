@@ -128,6 +128,20 @@ Safe alternatives:
 Queue names: tight grammar (alphanumeric + `_` `-` `.`). `@alias` is a
 separate **CLI** naming layer; broadcast matches **queue names**, not aliases.
 
+Broadcast selectors:
+
+| CLI | Python | Targets |
+|-----|--------|---------|
+| `broker broadcast MESSAGE` | `broker.broadcast(message)` | All existing queues |
+| `broker broadcast --pattern GLOB MESSAGE` | `broker.broadcast(message, pattern=glob)` | Existing names matching Python `fnmatchcase` |
+| `broker broadcast --queue A --queue B MESSAGE` | `broker.broadcast(message, queue_names=("A", "B"))` | Unique requested literal names that exist |
+
+`--pattern` and `--queue` are mutually exclusive. Missing exact names are
+ignored, never created; the return value is the number reached (CLI exit `2`
+when zero). Comma-separated lists are unsupported, and a comma-containing
+`--queue` value fails normal queue-name validation. Build large or
+application-derived recipient sets through the Python API.
+
 ## Target (use-level)
 
 - Default: directory-local SQLite **database** (plus live WAL/SHM/lock

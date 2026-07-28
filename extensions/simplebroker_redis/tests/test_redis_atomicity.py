@@ -302,6 +302,37 @@ def test_patternless_broadcast_does_not_resurrect_deleted_queue(
         broadcaster.close()
 
 
+def test_exact_broadcast_does_not_resurrect_deleted_queue(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broadcaster = RedisBrokerCore(redis_runner)
+    deleting = RedisBrokerCore(redis_runner)
+    try:
+        broadcaster.write("jobs", "seed")
+        original_reserve = broadcaster._timestamp_gen._reserve_candidates
+        deleted = False
+
+        def delete_before_reservation(count: int) -> list[int]:
+            nonlocal deleted
+            if not deleted:
+                deleted = True
+                assert deleting.delete("jobs") == 1
+            return original_reserve(count)
+
+        monkeypatch.setattr(
+            broadcaster._timestamp_gen,
+            "_reserve_candidates",
+            delete_before_reservation,
+        )
+
+        assert broadcaster.broadcast("announcement", queue_names=["jobs"]) == 0
+        assert broadcaster.queue_exists("jobs") is False
+    finally:
+        deleting.close()
+        broadcaster.close()
+
+
 def test_patternless_broadcast_includes_queue_created_during_setup(
     redis_runner: RedisRunner,
     monkeypatch: pytest.MonkeyPatch,
@@ -372,6 +403,59 @@ def test_patternless_broadcast_wakes_queue_waiter(
         )
 
 
+def test_exact_broadcast_wakes_only_selected_existing_queues(
+    redis_url: str,
+    redis_namespace: str,
+) -> None:
+    from simplebroker_redis import get_backend_plugin
+
+    plugin = get_backend_plugin()
+    plugin.initialize_target(
+        redis_url,
+        backend_options={"namespace": redis_namespace},
+    )
+    runner = RedisRunner(redis_url, namespace=redis_namespace)
+    core = RedisBrokerCore(runner)
+    core.write("selected", "seed")
+    core.write("other", "seed")
+    selected_waiter = plugin.create_activity_waiter(
+        target=redis_url,
+        backend_options={"namespace": redis_namespace},
+        queue_name="selected",
+        stop_event=None,
+    )
+    other_waiter = plugin.create_activity_waiter(
+        target=redis_url,
+        backend_options={"namespace": redis_namespace},
+        queue_name="other",
+        stop_event=None,
+    )
+    assert selected_waiter is not None
+    assert other_waiter is not None
+    try:
+        assert selected_waiter.wait(0.05) is False
+        assert other_waiter.wait(0.05) is False
+
+        assert (
+            core.broadcast(
+                "announcement",
+                queue_names=["selected", "missing", "selected"],
+            )
+            == 1
+        )
+
+        assert selected_waiter.wait(2.0) is True
+        assert other_waiter.wait(0.05) is False
+    finally:
+        other_waiter.close()
+        selected_waiter.close()
+        core.shutdown()
+        plugin.cleanup_target(
+            redis_url,
+            backend_options={"namespace": redis_namespace},
+        )
+
+
 def test_broadcast_script_rejects_insufficient_timestamp_batch_atomically(
     redis_runner: RedisRunner,
 ) -> None:
@@ -394,6 +478,8 @@ def test_broadcast_script_rejects_insufficient_timestamp_batch_atomically(
             "1",
             "announcement",
             keys.key("q", ""),
+            "all",
+            "0",
             encode_id(timestamp),
         )
 
@@ -429,6 +515,8 @@ def test_broadcast_script_selects_queues_at_atomic_insertion_point(
             "2",
             "announcement",
             keys.key("q", ""),
+            "all",
+            "0",
             *(encode_id(timestamp) for timestamp in timestamps),
         )
 
@@ -438,6 +526,145 @@ def test_broadcast_script_selects_queues_at_atomic_insertion_point(
             "announcement",
         ]
         assert core.queue_exists("deleted") is False
+    finally:
+        core.close()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["1", encode_id(1), "1", "body", "prefix", "exact", "1"],
+        [
+            "1",
+            encode_id(1),
+            "1",
+            "body",
+            "prefix",
+            "all",
+            "0",
+            encode_id(1),
+            encode_id(2),
+        ],
+        [
+            "1",
+            encode_id(1),
+            "1",
+            "body",
+            "prefix",
+            "all",
+            "1",
+            "jobs",
+            encode_id(1),
+        ],
+        ["1", encode_id(1), "-1", "body", "prefix", "all", "0"],
+        [
+            "1",
+            encode_id(1),
+            "1.5",
+            "body",
+            "prefix",
+            "all",
+            "0",
+            encode_id(1),
+        ],
+        ["1", encode_id(1), "0", "body", "prefix", "exact", "-1"],
+        [
+            "1",
+            encode_id(1),
+            "1",
+            "body",
+            "prefix",
+            "exact",
+            "0.5",
+            "jobs",
+            encode_id(1),
+        ],
+        ["1", encode_id(1), "0", "body", "prefix", "unknown", "0"],
+        [
+            "1",
+            encode_id(1),
+            "2",
+            "body",
+            "prefix",
+            "exact",
+            "1",
+            "jobs",
+            encode_id(1),
+            encode_id(2),
+        ],
+    ],
+)
+def test_broadcast_script_rejects_malformed_layout(
+    redis_runner: RedisRunner,
+    arguments: list[str],
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core.write("jobs", "seed")
+
+        result = core._client.eval(
+            scripts.BROADCAST_MESSAGE,
+            4,
+            keys.meta,
+            keys.bodies,
+            keys.all_ids,
+            keys.queues,
+            *arguments,
+        )
+
+        assert result == [-5]
+        assert core.peek_many("jobs", limit=10, with_timestamps=False) == ["seed"]
+    finally:
+        core.close()
+
+
+def test_exact_broadcast_uses_request_capacity_not_registry_size(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+        for index in range(12):
+            core.write(f"queue-{index}", "seed")
+
+        assert core.broadcast("announcement", queue_names=["missing", "queue-7"]) == 1
+        assert core.peek_many("queue-7", limit=10, with_timestamps=False) == [
+            "seed",
+            "announcement",
+        ]
+        assert core.peek_many("queue-8", limit=10, with_timestamps=False) == ["seed"]
+    finally:
+        core.close()
+
+
+def test_exact_broadcast_script_rejects_candidates_not_above_persisted_last_ts(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core.write("jobs", "seed")
+
+        result = core._client.eval(
+            scripts.BROADCAST_MESSAGE,
+            4,
+            keys.meta,
+            keys.bodies,
+            keys.all_ids,
+            keys.queues,
+            "1",
+            encode_id(1),
+            "1",
+            "announcement",
+            keys.key("q", ""),
+            "exact",
+            "1",
+            "jobs",
+            encode_id(1),
+        )
+
+        assert result == [-6]
+        assert core.peek_many("jobs", limit=10, with_timestamps=False) == ["seed"]
     finally:
         core.close()
 

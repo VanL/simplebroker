@@ -104,6 +104,50 @@ class TestTimestampEdgeCases:
         assert len(set(timestamps)) == len(timestamps)
         assert max(timestamps) == plugin.last_ts
 
+    def test_reserve_candidates_advances_only_process_local_cache(self) -> None:
+        plugin = AtomicLastTimestampPlugin()
+        gen = TimestampGenerator(object(), backend_plugin=plugin)
+
+        with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
+            candidates = gen._reserve_candidates(3)
+
+        assert candidates == sorted(candidates)
+        assert len(set(candidates)) == 3
+        assert plugin.last_ts == 0
+        assert gen.get_cached_last_ts() == candidates[-1]
+
+        with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
+            persisted = gen.generate()
+
+        assert persisted > candidates[-1]
+        assert plugin.last_ts == persisted
+
+    @pytest.mark.parametrize(
+        ("count", "error", "message"),
+        [
+            (True, TypeError, "count must be an int"),
+            (1.5, TypeError, "count must be an int"),
+            (-1, ValueError, "count must be non-negative"),
+        ],
+    )
+    def test_reserve_candidates_validates_count(
+        self,
+        count: Any,
+        error: type[Exception],
+        message: str,
+    ) -> None:
+        gen = TimestampGenerator(object(), backend_plugin=AtomicLastTimestampPlugin())
+
+        with pytest.raises(error, match=message):
+            gen._reserve_candidates(count)
+
+    def test_reserve_zero_candidates_is_backend_noop(self) -> None:
+        plugin = AtomicLastTimestampPlugin()
+        gen = TimestampGenerator(object(), backend_plugin=plugin)
+
+        assert gen._reserve_candidates(0) == []
+        assert plugin.last_ts == 0
+
     def test_generate_fails_if_backend_timestamp_disappears_after_a_conflict(
         self,
     ) -> None:
