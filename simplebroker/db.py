@@ -87,6 +87,69 @@ logger = logging.getLogger(__name__)
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
 OPERATION_RETRY_MAX_ELAPSED = 30.0
 OPERATION_RETRY_MAX_DELAY = 0.25
+_LOCK_PROBE_QUANTUM = 0.1
+_CROSS_THREAD_FINALIZATION_ERROR = (
+    "cross-thread finalization: an at_least_once generator or sidecar session "
+    "was finalized on a foreign thread; this broker instance is permanently "
+    "unusable — restart the process to release its held lock and any transaction "
+    "state (see README 'Delivery guarantees')"
+)
+
+
+class _PoisonAwareRLock:
+    """RLock adapter that lets blocked context-manager users observe poison."""
+
+    def __init__(
+        self,
+        lock: Any,
+        poison_probe: Callable[[], None],
+    ) -> None:
+        self._lock = lock
+        self._poison_probe = poison_probe
+
+    def acquire(self, *args: Any, **kwargs: Any) -> bool:
+        """Delegate explicit acquisitions without changing their semantics."""
+
+        return bool(self._lock.acquire(*args, **kwargs))
+
+    def release(self) -> None:
+        """Delegate explicit releases without changing their semantics."""
+
+        self._lock.release()
+
+    def _is_owned(self) -> bool:
+        """Expose the audited CPython RLock ownership probe."""
+
+        return bool(self._lock._is_owned())
+
+    def acquire_held(self) -> bool:
+        """Acquire for a suspendable hold while checking permanent poison."""
+
+        self._poison_probe()
+        while not self._lock.acquire(timeout=_LOCK_PROBE_QUANTUM):
+            self._poison_probe()
+        try:
+            self._poison_probe()
+        except BaseException:
+            self._lock.release()
+            raise
+        return True
+
+    def release_held(self) -> None:
+        """Release a suspendable hold from its owning thread."""
+
+        self._lock.release()
+
+    def __enter__(self) -> bool:
+        return self.acquire_held()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: Any,
+    ) -> None:
+        self._lock.release()
 
 
 def _resolve_backend_plugin(
@@ -750,7 +813,13 @@ class BrokerCore:
         # callbacks. Mutating re-entry during an open at-least-once batch is
         # guarded explicitly because SQLite cannot nest write transactions on
         # the same connection.
-        self._lock = threading.RLock()
+        self._orphan_lock = threading.Lock()
+        self._poisoned = False
+        self._poison_cause: str | None = None
+        self._lock = _PoisonAwareRLock(
+            threading.RLock(),
+            self._raise_if_poisoned,
+        )
 
         # Store the process ID to detect fork()
         import os
@@ -1012,9 +1081,74 @@ class BrokerCore:
         self._active_generator_batch = operation
         self._active_generator_batch_owner = threading.get_ident()
 
+    def _new_poison_error(self) -> OperationalError:
+        error = OperationalError(_CROSS_THREAD_FINALIZATION_ERROR)
+        error.retryable = False
+        return error
+
+    def _is_poisoned(self) -> bool:
+        orphan_lock = getattr(self, "_orphan_lock", None)
+        if orphan_lock is None:
+            return False
+        with orphan_lock:
+            return self._poisoned
+
+    def _raise_if_poisoned(self) -> None:
+        orphan_lock = getattr(self, "_orphan_lock", None)
+        if orphan_lock is None:
+            return
+        with orphan_lock:
+            poisoned = self._poisoned
+        if poisoned:
+            raise self._new_poison_error()
+
+    def _publish_orphan_poison(
+        self,
+        kind: str,
+        operation: str,
+        owner_thread: threading.Thread,
+    ) -> None:
+        """Permanently poison this core and warn about foreign finalization."""
+
+        finalizer_thread = threading.current_thread()
+        cause = (
+            f"{kind}:{operation}:"
+            f"owner={owner_thread.name}/{owner_thread.ident}:"
+            f"finalizer={finalizer_thread.name}/{finalizer_thread.ident}"
+        )
+        with self._orphan_lock:
+            if not self._poisoned:
+                self._poisoned = True
+                self._poison_cause = cause
+
+        warnings.warn(
+            f"simplebroker: {kind} finalized on a foreign thread; "
+            "this broker instance is no longer usable "
+            "(see README 'Delivery guarantees')",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+    @staticmethod
+    def _add_cleanup_failure_note(
+        diagnostic: OperationalError,
+        cleanup_failure: BaseException | None,
+    ) -> None:
+        if cleanup_failure is None:
+            return
+        failure_type = type(cleanup_failure).__qualname__
+        diagnostic.add_note(f"cleanup failure: {failure_type}: {cleanup_failure}")
+
+    @staticmethod
+    def _raise_cleanup_failure(cleanup_failure: BaseException) -> None:
+        """Raise a legacy cleanup failure with the active error as context."""
+
+        raise cleanup_failure
+
     def _assert_no_reentrant_mutation_during_batch(self, operation_name: str) -> None:
         """Reject same-thread mutating re-entry during open at-least-once batches."""
 
+        self._raise_if_poisoned()
         if self._active_generator_batch is None:
             return
 
@@ -1062,6 +1196,10 @@ class BrokerCore:
     def sidecar(self, *, transaction: bool = False) -> Iterator[SidecarSession]:
         """Open a session for caller-owned sidecar tables in this database.
 
+        Sidecar sessions are thread-affine: create, use, and exit them on the
+        same thread. Foreign-thread finalization permanently poisons this broker
+        instance; restart the process before using the database again.
+
         Sidecar tables share the broker's database but are owned by the
         caller (see ``simplebroker.ext.RESERVED_TABLE_NAMES`` for the names
         you must not touch). Statements run through the broker's lock and
@@ -1087,7 +1225,11 @@ class BrokerCore:
         """
         self._check_fork_safety()
         self._assert_no_reentrant_mutation_during_batch("sidecar")
-        with self._lock:
+        self._lock.acquire_held()
+        owner_thread = threading.current_thread()
+        session: SidecarSession | None = None
+        transaction_open = False
+        try:
             if not transaction:
 
                 def _run_autocommit(
@@ -1101,32 +1243,84 @@ class BrokerCore:
                     )
 
                 session = SidecarSession(_run_autocommit)
-                try:
-                    yield session
-                finally:
-                    session.close()
-                return
+            else:
+                self._run_with_retry(self._runner.begin_immediate)
+                transaction_open = True
+                session = SidecarSession(self._runner.run)
 
-            self._run_with_retry(self._runner.begin_immediate)
-            session = SidecarSession(self._runner.run)
             try:
                 yield session
-            except BaseException:
-                self._runner.rollback()
+            except BaseException as original:
+                if threading.current_thread() is not owner_thread:
+                    try:
+                        self._publish_orphan_poison(
+                            "sidecar session",
+                            "sidecar",
+                            owner_thread,
+                        )
+                    except BaseException:
+                        pass
+                    raise
+
+                cleanup_failure: BaseException | None = None
+                if transaction_open:
+                    try:
+                        self._runner.rollback()
+                    except BaseException as cleanup_error:
+                        cleanup_failure = cleanup_error
+                    transaction_open = False
+
+                if self._is_poisoned():
+                    diagnostic = self._new_poison_error()
+                    self._add_cleanup_failure_note(diagnostic, cleanup_failure)
+                    raise diagnostic from original
+                if cleanup_failure is not None:
+                    self._raise_cleanup_failure(cleanup_failure)
                 raise
-            finally:
-                session.close()
-            try:
-                self._runner.commit()
-            except BaseException:
-                # COMMIT failure can leave SQLite inside the transaction.  A
-                # later nominally autocommit operation would otherwise commit
-                # these caller-owned partial writes.
+
+            if threading.current_thread() is not owner_thread:
                 try:
-                    self._runner.rollback()
+                    self._publish_orphan_poison(
+                        "sidecar session",
+                        "sidecar",
+                        owner_thread,
+                    )
                 except BaseException:
                     pass
+                return
+
+            try:
+                self._raise_if_poisoned()
+            except OperationalError as diagnostic:
+                cleanup_failure = None
+                if transaction_open:
+                    try:
+                        self._runner.rollback()
+                    except BaseException as cleanup_error:
+                        cleanup_failure = cleanup_error
+                    transaction_open = False
+                self._add_cleanup_failure_note(diagnostic, cleanup_failure)
                 raise
+
+            if transaction_open:
+                try:
+                    self._runner.commit()
+                    transaction_open = False
+                except BaseException:
+                    # COMMIT failure can leave SQLite inside the transaction. A
+                    # later nominally autocommit operation would otherwise commit
+                    # these caller-owned partial writes.
+                    try:
+                        self._runner.rollback()
+                    except BaseException:
+                        pass
+                    transaction_open = False
+                    raise
+        finally:
+            if session is not None:
+                session.close()
+            if threading.current_thread() is owner_thread:
+                self._lock.release_held()
 
     def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
         """Decode a 64-bit hybrid timestamp into physical time and logical counter.
@@ -1515,44 +1709,123 @@ class BrokerCore:
         query, params = self._sql.build_retrieve_query(operation, spec)
 
         while True:
-            with self._lock:
+            self._lock.acquire_held()
+            owner_thread = threading.current_thread()
+            transaction_open = False
+            active_batch = False
+            foreign_publication_attempted = False
+            try:
                 self._run_with_retry(self._runner.begin_immediate)
                 transaction_open = True
-                try:
-                    self._backend_plugin.prepare_queue_operation(
-                        self._runner,
-                        operation=operation,
-                        queue=queue,
-                    )
-                    results = self._runner.run(query, params, fetch=True)
-                    results_list = (
-                        results if isinstance(results, list) else list(results)
-                    )
-                    if not results_list:
-                        self._runner.rollback()
-                        return
-
-                    self._set_active_generator_batch(operation)
-                    try:
-                        for body, timestamp in results_list:
-                            if with_timestamps:
-                                yield (body, timestamp)
-                            else:
-                                yield body
-                    finally:
-                        self._set_active_generator_batch(None)
-
-                    self._runner.commit()
+                self._backend_plugin.prepare_queue_operation(
+                    self._runner,
+                    operation=operation,
+                    queue=queue,
+                )
+                results = self._runner.run(query, params, fetch=True)
+                results_list = results if isinstance(results, list) else list(results)
+                if not results_list:
+                    self._runner.rollback()
                     transaction_open = False
-                    self._record_maintenance_activity(len(results_list))
+                    return
 
-                except BaseException:
-                    if transaction_open:
+                self._set_active_generator_batch(operation)
+                active_batch = True
+                for body, timestamp in results_list:
+                    try:
+                        self._raise_if_poisoned()
+                        if with_timestamps:
+                            yield (body, timestamp)
+                        else:
+                            yield body
+                    except BaseException:
+                        if threading.current_thread() is not owner_thread:
+                            foreign_publication_attempted = True
+                            try:
+                                self._publish_orphan_poison(
+                                    "at_least_once generator",
+                                    operation,
+                                    owner_thread,
+                                )
+                            except BaseException:
+                                pass
+                        raise
+
+                    if threading.current_thread() is not owner_thread:
                         try:
-                            self._runner.rollback()
-                        except Exception:
+                            self._publish_orphan_poison(
+                                "at_least_once generator",
+                                operation,
+                                owner_thread,
+                            )
+                        except BaseException:
+                            pass
+                        return
+                    self._raise_if_poisoned()
+
+                self._set_active_generator_batch(None)
+                active_batch = False
+                self._raise_if_poisoned()
+                self._runner.commit()
+                transaction_open = False
+                self._record_maintenance_activity(len(results_list))
+
+            except BaseException as original:
+                if threading.current_thread() is not owner_thread:
+                    # A foreign exception resumption reaches this handler after
+                    # the yield-local publication branch. Publishing is
+                    # set-once, but do not emit a duplicate warning here.
+                    if not foreign_publication_attempted:
+                        try:
+                            self._publish_orphan_poison(
+                                "at_least_once generator",
+                                operation,
+                                owner_thread,
+                            )
+                        except BaseException:
                             pass
                     raise
+
+                if active_batch:
+                    self._set_active_generator_batch(None)
+                    active_batch = False
+
+                cleanup_failure: BaseException | None = None
+                if transaction_open:
+                    try:
+                        self._runner.rollback()
+                    except BaseException as cleanup_error:
+                        cleanup_failure = cleanup_error
+                    transaction_open = False
+
+                if self._is_poisoned():
+                    if (
+                        isinstance(original, OperationalError)
+                        and original.retryable is False
+                        and str(original).startswith("cross-thread finalization")
+                    ):
+                        diagnostic = original
+                    else:
+                        diagnostic = self._new_poison_error()
+                    self._add_cleanup_failure_note(diagnostic, cleanup_failure)
+                    if diagnostic is original:
+                        raise
+                    raise diagnostic from original
+
+                # Preserve the legacy batch cleanup rule: ordinary rollback
+                # failures are suppressed in favor of the original exception,
+                # while BaseException subclasses still replace it.
+                if cleanup_failure is not None and not isinstance(
+                    cleanup_failure,
+                    Exception,
+                ):
+                    self._raise_cleanup_failure(cleanup_failure)
+                raise
+            finally:
+                if threading.current_thread() is owner_thread:
+                    if active_batch:
+                        self._set_active_generator_batch(None)
+                    self._lock.release_held()
 
     def _retrieve(
         self,
@@ -1727,6 +2000,10 @@ class BrokerCore:
         config: Mapping[str, Any] | None = None,
     ) -> Iterator[tuple[str, int] | str]:
         """Generator that claims messages from a queue.
+
+        Transactional generators are thread-affine: create, iterate, exhaust,
+        and close them on the same thread. Foreign-thread finalization
+        permanently poisons this broker instance; restart the process.
 
         Args:
             queue: Name of the queue
@@ -2071,6 +2348,10 @@ class BrokerCore:
         config: Mapping[str, Any] | None = None,
     ) -> Iterator[tuple[str, int] | str]:
         """Generator that moves messages from source queue to target queue.
+
+        Transactional generators are thread-affine: create, iterate, exhaust,
+        and close them on the same thread. Foreign-thread finalization
+        permanently poisons this broker instance; restart the process.
 
         Args:
             source_queue: Queue to move from

@@ -813,15 +813,19 @@ commit before returning their result lists. Passing
 `delivery_guarantee="at_least_once"` is supported on those APIs and is
 satisfied by the stricter exactly-once materialization behavior.
 
-Use generator APIs such as `Queue.read_generator()` and `Queue.move_generator()`
-when you need retry-on-stop batch processing. In `delivery_guarantee="at_least_once"`
-generator mode, SimpleBroker commits a batch only after the full batch has been
-yielded; stopping mid-batch rolls that batch back for retry.
+Use generator APIs such as `Queue.read_generator()`, `Queue.move_generator()`,
+and `Queue.stream_messages(batch_processing=True, commit_interval=N)` with
+`N > 1` when you need retry-on-stop batch processing. In
+`delivery_guarantee="at_least_once"` generator mode, SimpleBroker commits a
+batch only after the full batch has been yielded; stopping mid-batch rolls that
+batch back for retry.
 
 Transactional generators are thread-affine: create, iterate, exhaust, and close
-them on the same thread. Closing or finalizing one from another thread is not
-supported and can leave a SQL-backed instance or transaction unusable. When a
-loop may exit early, close the generator explicitly:
+them on the same thread — and never abandon one. An abandoned generator may be
+finalized by the garbage collector on an arbitrary thread, which counts as
+foreign-thread finalization even though you never wrote any cross-thread code.
+The same applies to `sidecar()` sessions. When a loop may exit early, close the
+generator explicitly:
 
 ```python
 from contextlib import closing
@@ -832,6 +836,26 @@ with closing(q.read_generator(delivery_guarantee="at_least_once")) as messages:
         if should_stop():
             break
 ```
+
+If an `at_least_once` generator or a `sidecar()` session is nevertheless
+finalized from another thread, SimpleBroker records the violation and emits a
+`RuntimeWarning` instead of corrupting cleanup state. That broker instance is
+then permanently poisoned: core operations on it that reach a poison check
+promptly raise `OperationalError` (message prefix "cross-thread finalization",
+`retryable=False`) rather than blocking indefinitely. Poisoning never adds a
+hang to `Queue.close()`: depending on how the handle shares its session, close
+returns normally (possibly suppressing the internal error) or raises the same
+diagnostic. When foreign finalization happens through a persistent shared
+`Queue` wrapper, final close may first wait the existing five-second
+session-drain bound because the operation lease belongs to the original
+thread. Recovery is restarting the process: the interrupted batch's
+transaction is discarded when the process exits, and its messages remain
+available for delivery afterward — they are not lost and not silently
+committed. The poison state is per broker instance; other processes or
+instances sharing the same SQLite database do not see it, but their writes are
+already bounded by the database busy timeout and retry budgets in the default
+configuration. This is a safety net, not a supported pattern — the contract
+remains same-thread use.
 
 Only `"exactly_once"` and `"at_least_once"` are valid selector values. Unknown
 values raise `ValueError` before a connection or message-state mutation; lazy

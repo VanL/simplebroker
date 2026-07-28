@@ -5,6 +5,39 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.5.0] - 2026-07-28
+
+### Changed
+- Foreign-thread close or garbage-collector finalization of an
+  `at_least_once` transactional generator or a `sidecar()` session no longer
+  corrupts cleanup state and raises `RuntimeError: cannot release un-acquired
+  lock`, and no longer wedges the broker instance in a permanent silent
+  deadlock. The violation is recorded and a `RuntimeWarning` emitted; the
+  instance is permanently poisoned and core operations reaching a poison check
+  promptly raise `OperationalError` (`retryable=False`); poisoning never adds a
+  hang to closing a `Queue` handle. A persistent shared wrapper may first wait
+  the existing five-second session-drain bound. Recovery is restarting the
+  process; the interrupted batch's messages remain available for delivery
+  afterward. The supported contract is unchanged: these objects are
+  thread-affine and must be closed or exhausted, never abandoned.
+- Generator and sidecar docstrings now state the thread-affinity contract.
+- Bumped the coordinated first-party `simplebroker-pg` and
+  `simplebroker-redis` packages to 3.2.3 and 3.2.4, respectively, and raised
+  the root optional-backend dependency floors to those versions.
+
+### simplebroker-pg 3.2.3
+- Patch compatibility release for SimpleBroker 5.5.0. The extension now
+  requires `simplebroker>=5.5.0`; runtime schema behavior is unchanged.
+- Added PostgreSQL-backed parity coverage for poisoned owner mutation,
+  waiters, core shutdown, public queue close modes, and both sidecar modes and
+  foreign-resumption arms.
+
+### simplebroker-redis 3.2.4
+- Patch compatibility release for SimpleBroker 5.5.0. The extension now
+  requires `simplebroker>=5.5.0`; runtime queue behavior is unchanged.
+- Added a regression probe confirming that Redis cross-thread generator
+  behavior remains unchanged.
+
 ## [5.4.0] - 2026-07-17
 
 ### Changed

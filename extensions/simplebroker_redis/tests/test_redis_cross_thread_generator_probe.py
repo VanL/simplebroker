@@ -31,7 +31,20 @@ def test_redis_cross_thread_generator_probe(
         )
         print(json.dumps(result, sort_keys=True))
         assert result["parent_timeout"] is False
+        assert result["process_exitcode"] == 0
         assert "probe_error" not in result
+        assert result["foreign_close_blocked"] is False
+        assert result["foreign_close_error"] is None
+        assert result["foreign_warning_count"] == 0
+        assert result["poisoned_after_foreign_close"] is False
+        assert result["same_core_waiter_blocked_after_close"] is False
+        assert result["same_core_waiter_error"] is None
+        assert result["owner_error_after_poison"] is None
+        assert result["owner_mutation_error_after_poison"] is None
+        assert result["owner_close_error"] is None
+        assert result["owner_shutdown_error"] is None
+        assert result["active_batch_after_foreign_close"] is None
+        assert result["core_lock_available_after_close"] is True
     finally:
         get_backend_plugin().cleanup_target(
             redis_url,

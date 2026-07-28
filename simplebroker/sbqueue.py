@@ -311,6 +311,10 @@ class Queue:
     def sidecar(self, *, transaction: bool = False) -> Iterator[SidecarSession]:
         """Open a sidecar-table session against this queue's database.
 
+        Sidecar sessions are thread-affine: create, use, and exit them on the
+        same thread. Foreign-thread finalization permanently poisons the
+        underlying broker instance; restart the process.
+
         Connection lifetime follows this queue's mode: ephemeral queues open
         and close a connection for the session ("get in, get out");
         persistent queues reuse their held connection. See
@@ -552,6 +556,10 @@ class Queue:
         exact_timestamp: MessageIdInput | None = None,
     ) -> Iterator[str | tuple[str, int]]:
         """Generator that reads and removes messages from the queue.
+
+        Transactional generators are thread-affine: create, iterate, exhaust,
+        and close them on the same thread. Foreign-thread finalization
+        permanently poisons the broker instance; restart the process.
 
         This is memory-efficient for processing large queues.
 
@@ -983,6 +991,10 @@ class Queue:
     ) -> Iterator[str | tuple[str, int]]:
         """Generator that moves messages from this queue to another.
 
+        Transactional generators are thread-affine: create, iterate, exhaust,
+        and close them on the same thread. Foreign-thread finalization
+        permanently poisons the broker instance; restart the process.
+
         Args:
             destination: Target queue (name or Queue instance)
             with_timestamps: If True, yield (message, timestamp) tuples
@@ -1292,6 +1304,11 @@ class Queue:
         commit_interval: int = 1,
     ) -> Iterator[tuple[str, int]]:
         """Stream messages with timestamps from the queue.
+
+        The transactional batch mode (``batch_processing=True`` with
+        ``commit_interval > 1``) is thread-affine: create, iterate, exhaust,
+        and close it on the same thread. Foreign-thread finalization
+        permanently poisons the broker instance; restart the process.
 
         This is an iterator that yields messages as they are retrieved from the database.
         It's more memory-efficient than read_all for large queues.
