@@ -10,11 +10,13 @@ This copy: adopted from agent-guidance @ `fc23eae` via
 
 ## Purpose
 
-Run the compounding layer's maintenance pass: distill cold lesson entries
-into golden rules and runbook amendments, harvest and retire completed
-plans, promote recurring workflows to skills, and propose cross-repo
-fold-ups upward when a rule generalizes beyond this repository. Keeps the always-read documentation tier
-small and hot while git history holds everything raw.
+Run the compounding layer's maintenance pass: repair defects in the
+memory surfaces, distill cold lesson entries into golden rules and
+runbook amendments, harvest and retire completed plans, promote
+recurring workflows to skills, and propose cross-repo fold-ups upward
+when a rule generalizes beyond this repository. Keeps the always-read
+documentation tier small, accurate, and hot while git history holds
+everything raw.
 
 ## When To Use
 
@@ -67,9 +69,32 @@ small and hot while git history holds everything raw.
 
 ### 1. Derive the trigger counts (never trust a stored number)
 
+**Inspect and repair the coalescing surfaces first.** An authorized
+sweep is maintenance as well as compaction: before trusting a trigger
+count, inspect the affected ledger, index, watermark, cue, ownership
+record, and executable gate. Repair a defect in the same wave when all
+three hold — (1) it is inside the coalescing boundary (memory accuracy,
+derivability, retrieval, traceability, promotion ownership, or the
+coalescing gates); (2) the repair is reversible; (3) current-tree or
+source-SHA evidence determines the correction. Merely logging a
+repairable in-boundary defect is not a completed sweep. Coalescing is
+not generic cleanup: product behavior, unrelated documentation, and
+speculative redesign stay out of scope. Defer instead when the repair
+is ambiguous, destructive, or needs new authority — record the evidence
+gap, owner, and reconsideration condition; deletion, watermark
+advancement, plan soft-retirement, and archival transitions retain
+their landing-authorization requirements. Record every maintenance
+repair in the run log; a deferred defect is recorded as a blocker, not
+presented as maintenance accomplished. (Folded up from taut's
+repair-in-sweep doctrine, its commit `3706d73`, by owner direction
+2026-07-28.)
+
 Read the watermarks and **Derivation recipe** in `docs/coalescing.md`, then
-run that recipe (keep this skill and the state file identical). Do **not**
-expect `bin/coalesce-check` — it is intentionally not maintained here.
+run that recipe (keep this skill and the state file identical). This
+repository ships `bin/coalesce-check`: run it to verify the run log's
+SHA and retrieval cues and to quote a derived lessons count, but the
+state file's recipe — not the tool — remains authoritative for the
+plans and unindexed tiers.
 
 **Denominate the count in the repo's fold unit, and count only
 fold-eligible material.** Count only cold, unfolded material — entries
@@ -85,7 +110,13 @@ Summary of what the shared recipe measures:
   `completed` or `superseded`, not `exemplar`, and not listed under
   Retired Plans. Prefer the index; do not fall through to in-file headers
   when the index exists (even if you think it is incomplete — report
-  **unindexed** instead).
+  **unindexed** instead). Where the index is **structured and gated** (a
+  closed status vocabulary with an executable checker), the gate runs
+  first: a checker failure blocks the count until repaired or explicitly
+  deferred — never fall back past a structured index to free-form
+  headers, and never rewrite status data to make a checker pass.
+  `status-review` rows are a conservative quarantine and never count as
+  completed.
 - **Unindexed:** plan files under `docs/plans/*.md` (except README) missing
   from the Status Index. **Any positive count is reportable** even when
   harvest candidates are below threshold.
@@ -104,6 +135,14 @@ contains the raw material about to be folded — check with
 `git show <source_sha>:docs/lessons.md`. If the entries exist only in the
 worktree, there is no valid source yet: the destructive phase is blocked
 until the raw state is committed (or the sweep stays additive-only).
+
+**Cue portability:** where the repository has a published mirror, a cue
+must resolve in the published history too — a SHA that survives only on
+one machine is a claim the world cannot verify (the 2026-07-28 field
+audit found exactly this: cues true locally, unverifiable from the
+mirrors). If the pin is not yet published, the run-log line says
+`local-only pin`; where a coalesce-check tool is installed, it reports
+both conditions mechanically.
 
 For each tripped or requested fold:
 
@@ -271,6 +310,9 @@ When the sweep is done, these exist and are verifiable:
 - If the harvest gate keeps blocking on the same item class, the gap is
   upstream (plans closing with open deviation logs) — fix the completion
   gate usage, not the sweep.
-- An executable `coalesce-check` is **out of scope** for this repository
-  unless a future plan reopens it after sustained harvest pain. Do not add
-  one opportunistically. Keep the shared recipe in `docs/coalescing.md`.
+- `bin/coalesce-check` was adopted from the guidance hub 2026-07-28
+  (superseding the 2026-07-27 "no local invention" decision — the hub
+  shipping a canonical tool is a different fact than inventing one
+  locally). It is an evidence trail, not a second recipe: the shared
+  recipe in `docs/coalescing.md` remains authoritative, and when the
+  two disagree the file wins and the script is the defect.

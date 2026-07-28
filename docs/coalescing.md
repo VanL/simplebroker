@@ -15,8 +15,15 @@ to coalesced material happen only inside an authorized maintenance task
 landing authorization.
 
 Counts are always derived from watermarks and the current tree — never
-stored, never trusted from memory. There is **no** `bin/coalesce-check` in
-this repository; do not invent one. The skill and this file share one recipe.
+stored, never trusted from memory. The skill and this file share one
+recipe, and that recipe is authoritative. `bin/coalesce-check` (adopted
+from agent-guidance @ `e42762c`) is an **evidence trail, not a second
+recipe**: it verifies that every SHA and retrieval cue in the run log
+still resolves — locally, in an identified sibling, and in published
+history — and quotes the derived lessons count. It is read-only and
+never writes counts back. (This supersedes the 2026-07-27
+"coalesce-check cancelled" decision, which forbade inventing a local
+tool; the hub has since landed a canonical one.)
 
 ## Derivation recipe (authoritative)
 

@@ -6,8 +6,16 @@ This directory contains dated implementation plans.
 
 The Status Index is the **full inventory** of plan files under `docs/plans/`
 (except this README). Absence of a plan file from the index is a process
-defect. House vocabulary only: `draft`, `active`, `completed`, `superseded`,
-`retired-pending`, `retired`, plus optional `exemplar`.
+defect. House vocabulary only: `draft`, `active`, `status-review`, `completed`,
+`superseded`, `retired-pending`, plus optional `exemplar` (`retired`
+plans leave the index for the Retired Plans ledger; under two-step
+retirement a row goes `retired-pending`, then the deletion change moves
+it to the ledger).
+`status-review` is the conservative quarantine for a plan whose evidence
+cannot distinguish active from completed: it never counts as completed
+and never silently ages into it (see
+`docs/agent-context/runbooks/writing-plans.md`, *Plan Lifecycle and
+Retirement*).
 
 Legacy in-file `Status:` headers are not retro-converted en masse; the index
 token is authoritative. Optional in-file status should use the same primary
@@ -78,6 +86,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-28-delivery-contract-spec-promotion-plan.md | completed — class 5; canonical SB-DELIVERY-1..7 promotion implemented, cross-backend verified, independently reviewed, and authorized for targeted landing |
 | 2026-07-28-broadcast-create-missing-plan.md | completed — class 5; patch-level Python exact broadcast provisioning with full-requested-set atomicity and backend API v5 verified and landed in the containing commit |
 | 2026-07-28-explicit-broadcast-targets-plan.md | completed — class 5; exact existing-queue selector implemented, verified across SQLite/PostgreSQL/Redis, independently reviewed, and authorized for targeted landing 2026-07-28 |
+| 2026-07-28-propagate-guidance-delta-wave-plan.md | completed — hub delta b248e1c..e42762c landed; review blockers F1-F4 fixed |
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-extension-monorepo-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |

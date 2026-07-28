@@ -576,6 +576,22 @@ Plans move through: `draft` → `active` → `completed` or `superseded` →
 `retired`. Status lives in the plan index (`docs/plans/README.md`), not in
 ceremony inside the plan file.
 
+- **The status vocabulary is closed, and ambiguity has a name.** Valid
+  index-row statuses: `draft`, `active`, `status-review`, `completed`,
+  `superseded`, `retired-pending`, plus the explicit `exemplar` marker
+  (`retired` plans leave the index for the Retired Plans ledger).
+  `status-review` is a conservative quarantine for plans whose evidence
+  cannot distinguish active from completed — it never counts as
+  completed, is never a retirement candidate, and never silently ages
+  into either; free-text ambiguity phrases migrate to it at next touch. Prefer making the
+  index **structured and gated** (an executable checker for missing,
+  duplicate, dead-path, unknown-status, and malformed rows; a checker
+  failure blocks derivation until repaired or deferred — and status
+  data is never rewritten to make a checker pass). Folded up 2026-07-28
+  from taut's status-index contract (its commit `3706d73`; second
+  lineage: mm's backfill campaign independently invented the same
+  quarantine as free text under pressure), by owner direction.
+
 - **Active plans have a mutability boundary**: task instructions and
   checklists stay current and mutable — stale instructions are worse than
   edited ones, and git preserves prior versions; decision, deviation, and

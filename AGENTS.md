@@ -36,6 +36,12 @@ codes). `CHANGELOG.md` records published deltas.
   SUCH ATTRIBUTION. Authorship belongs to the repository owner; the work
   record lives in plans, lessons, and review logs — not in commit trailers.
 
+- Scope of the two overrides above: they override tool-default
+  instructions and metadata — the conventions tier of the decision
+  hierarchy. Harness-enforced controls are outside the hierarchy
+  entirely: not above it, simply not guidance — they are enforced
+  mechanically, and no repository text can or does claim to modify them.
+
 ## Shared Agent Context
 
 Canonical shared context lives in `docs/agent-context/`.
@@ -65,8 +71,10 @@ report to the user when any of these hold:
 - a reconsideration condition in the deferral table has fired
 
 Do **not** start a coalescing sweep unless the user authorizes it. Do not
-write `docs/coalescing.md` mid-task. There is no `bin/coalesce-check`; do not
-invent one.
+write `docs/coalescing.md` mid-task. `bin/coalesce-check` (adopted from the
+guidance hub 2026-07-28) is the evidence trail for this check — run it to
+verify cues and quote counts; the state file's declared recipe remains
+authoritative.
 
 ## Project Conventions
 
