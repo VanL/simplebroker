@@ -79,18 +79,18 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-17-propagate-guidance-delta-wave-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | draft — class 4; F21 threshold-triggered follow-up; design decision required |
 | 2026-07-27-agent-docs-coalescing-and-status-hygiene-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
-| 2026-07-27-cross-thread-generator-orphan-healing-plan.md | completed — class 4; revision-13 poison + fail-fast slice implemented, verified, independently reviewed, and bundled for the coordinated 2026-07-28 release |
-| 2026-07-27-information-architecture-improvement-plan.md | superseded — roadmap only; do not execute; see product-docs-source-ownership-decision + product-spec-doctrine-and-cli-vertical-plan |
-| 2026-07-27-product-docs-source-ownership-decision.md | completed — decision accepted: registry + readme-only→draft-spec→canonical-spec; canonical specs update in place (not retired) |
-| 2026-07-27-product-spec-doctrine-and-cli-vertical-plan.md | completed — Class 5+P: doctrine + registry + fully-bound SB-CLI-1..4 pilot landed 2026-07-28; no backstitch in unit |
-| 2026-07-28-delivery-contract-spec-promotion-plan.md | completed — class 5; canonical SB-DELIVERY-1..7 promotion implemented, cross-backend verified, independently reviewed, and authorized for targeted landing |
-| 2026-07-28-broadcast-create-missing-plan.md | completed — class 5; patch-level Python exact broadcast provisioning with full-requested-set atomicity and backend API v5 verified and landed in the containing commit |
-| 2026-07-28-explicit-broadcast-targets-plan.md | completed — class 5; exact existing-queue selector implemented, verified across SQLite/PostgreSQL/Redis, independently reviewed, and authorized for targeted landing 2026-07-28 |
-| 2026-07-28-propagate-guidance-delta-wave-plan.md | completed — hub delta b248e1c..e42762c landed; review blockers F1-F4 fixed |
-| 2026-07-29-code-quality-cleanup-plan.md | completed — class 3; implementation, synchronized patch metadata, verification, and independent review completed 2026-07-29 |
-| 2026-07-29-coalescing-sweep-plan.md | active — class 3; authorized plans/lessons/promotion coalescing maintenance run |
-| 2026-07-29-development-toolchain-refresh-plan.md | completed — class 3; dev/test/fuzz/build tools and uv 0.12 policy refreshed, verified, and independently reviewed 2026-07-29 |
-| 2026-07-29-process-session-core-factory-plan.md | completed — class 4; implementation, production-path verification, and independent review completed 2026-07-29 |
+| 2026-07-27-cross-thread-generator-orphan-healing-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-27-information-architecture-improvement-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-27-product-docs-source-ownership-decision.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-27-product-spec-doctrine-and-cli-vertical-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-28-delivery-contract-spec-promotion-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-28-broadcast-create-missing-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-28-explicit-broadcast-targets-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-28-propagate-guidance-delta-wave-plan.md | retired-pending — soft-retired 2026-07-29; source 54fa706 (local-only pin) |
+| 2026-07-29-code-quality-cleanup-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-29-coalescing-sweep-plan.md | completed — class 3; 11 plans soft-retired, hot lessons deferred, no promotion candidate, independently reviewed and verified |
+| 2026-07-29-development-toolchain-refresh-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-29-process-session-core-factory-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
 | 2026-07-29-ruff-lint-expansion-plan.md | active — class 3+P; Ruff 0.16 stable-default expansion and repository-wide cleanup in progress |
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
@@ -162,6 +162,17 @@ Soft-retire ledger. Physical deletion requires a second verification pass per pl
 | 2026-07-09-review-findings-remediation-plan.md | 2026-07-27 | Coverage combine/SIGTERM and related process fixes landed; plan status stale. | CHANGELOG/CI coverage path; docs/lessons Golden Rules on coverage | `f133ce7` |
 | review-remediation-plan.md | 2026-07-27 | stream_messages honors all_messages; re-entrant mutation guarded; delete() returns False when nothing deleted. | simplebroker/sbqueue.py stream_messages/delete; db.py generator batch guards | `f133ce7` |
 | 2026-07-16-code-review-findings-remediation-plan-f21-memo.md | 2026-07-27 | F21 investigation complete; follow-up is schema-migration-aware-waiting proposal (still draft). | 2026-07-17-schema-migration-aware-waiting-proposal.md; CHANGELOG 5.4.0 F21 note | `f133ce7` |
+| 2026-07-27-cross-thread-generator-orphan-healing-plan.md | 2026-07-29 | Cross-thread generator poisoning and fail-fast behavior implemented, verified, and released. | `docs/implementation/04-cross-thread-finalization-poisoning.md`; `docs/specs/11-delivery-contract.md` [SB-DELIVERY-5/6]; lesson already extracted | `36e2f356` |
+| 2026-07-27-information-architecture-improvement-plan.md | 2026-07-29 | Historical roadmap superseded before execution; successors separated doctrine, delivery promotions, and deferred programs. | `docs/README.md`; `docs/specs/product-section-registry.md`; ownership decision and doctrine outcomes | `36e2f356` |
+| 2026-07-27-product-docs-source-ownership-decision.md | 2026-07-29 | Layered product-document ownership decision accepted and implemented. | `docs/README.md`; `docs/specs/product-section-registry.md` | `36e2f356` |
+| 2026-07-27-product-spec-doctrine-and-cli-vertical-plan.md | 2026-07-29 | Product-spec doctrine, registry, and fully bound CLI contract landed. | `docs/README.md`; `docs/specs/product-section-registry.md`; `docs/specs/10-cli-contract.md`; invariant inventory | `36e2f356` |
+| 2026-07-28-delivery-contract-spec-promotion-plan.md | 2026-07-29 | Canonical delivery contract [SB-DELIVERY-1..7] promoted and verified across released backends. | `docs/specs/11-delivery-contract.md`; registry; invariant inventory; existing delivery lessons | `36e2f356` |
+| 2026-07-28-broadcast-create-missing-plan.md | 2026-07-29 | Exact broadcast provisioning of missing targets landed with atomic full-requested-set semantics. | README/agent-kernel contract, code and extension docs, CHANGELOG; Redis allocation lesson already extracted | `36e2f356` |
+| 2026-07-28-explicit-broadcast-targets-plan.md | 2026-07-29 | Exact existing-target broadcast selector landed across SQLite, PostgreSQL, and Redis. | README [BCAST-1..6], agent kernel, Redis docs; Redis allocation lesson already extracted | `36e2f356` |
+| 2026-07-28-propagate-guidance-delta-wave-plan.md | 2026-07-29 | Guidance delta, status vocabulary, harness scope, and two read-only gates landed; stale closure record repaired. | `skills/coalescing/SKILL.md`; writing-plans runbook; `AGENTS.md`; repository map; gate scripts | `54fa706` (local-only pin) |
+| 2026-07-29-code-quality-cleanup-plan.md | 2026-07-29 | Behavior-neutral quality cleanup landed; local rationale judged non-durable. | Code and tests; session/core boundary retained in `docs/implementation/06-process-session-core-ownership.md` | `36e2f356` |
+| 2026-07-29-development-toolchain-refresh-plan.md | 2026-07-29 | Development, test, fuzz, build, and uv policies refreshed and verified. | README uv policy, updater, workflow tests, manifests and locks; version inventory judged non-durable | `36e2f356` |
+| 2026-07-29-process-session-core-factory-plan.md | 2026-07-29 | Process-session construction and ownership boundary implemented and verified. | `docs/implementation/06-process-session-core-ownership.md`; production code and firing tests | `36e2f356` |
 
 ## Rules for agents
 

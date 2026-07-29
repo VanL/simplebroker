@@ -5,11 +5,10 @@ delivery vertical promotions. **Not normative.** Next promotions are
 separate Class 5 plans citing
 `docs/specs/product-section-registry.md`.
 
-Authority machine: `docs/plans/2026-07-27-product-docs-source-ownership-decision.md`.
+Authority machine: `docs/specs/product-section-registry.md`.
 First vertical: `docs/specs/10-cli-contract.md` (`canonical-spec`).
-Second vertical: `docs/specs/11-delivery-contract.md` (`canonical-spec`),
-promoted by
-`docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`.
+Second vertical: `docs/specs/11-delivery-contract.md` (`canonical-spec`).
+The retired promotion history is source-pinned under Related Plans below.
 
 | Family | Claim summary | Locus | Proposed codes | Known tests / notes | State |
 |--------|---------------|-------|----------------|---------------------|-------|
@@ -20,6 +19,9 @@ promoted by
 
 ## Related Plans
 
-- `docs/plans/2026-07-27-product-spec-doctrine-and-cli-vertical-plan.md`
-- `docs/plans/2026-07-27-product-docs-source-ownership-decision.md`
-- `docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`
+- retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
+  `36e2f356`; see the ledger in `docs/plans/README.md`
+- retired: 2026-07-27-product-docs-source-ownership-decision — source
+  `36e2f356`; see the ledger in `docs/plans/README.md`
+- retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
+  `36e2f356`; see the ledger in `docs/plans/README.md`

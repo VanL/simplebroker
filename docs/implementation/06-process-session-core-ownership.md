@@ -142,5 +142,7 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 ## Related Plans
 
 - `docs/plans/2026-05-04-process-local-broker-session-plan.md`
-- `docs/plans/2026-07-29-code-quality-cleanup-plan.md`
-- `docs/plans/2026-07-29-process-session-core-factory-plan.md`
+- retired: 2026-07-29-code-quality-cleanup-plan — source `36e2f356`; see
+  the ledger in `docs/plans/README.md`
+- retired: 2026-07-29-process-session-core-factory-plan — source
+  `36e2f356`; see the ledger in `docs/plans/README.md`

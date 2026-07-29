@@ -63,7 +63,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- `docs/plans/2026-07-27-product-spec-doctrine-and-cli-vertical-plan.md`
+- retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
+  `36e2f356`; see the ledger in `docs/plans/README.md`
 
 ## Verification
 

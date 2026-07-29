@@ -1,8 +1,8 @@
 # Product Section Registry
 
 Mechanical authority table for product documentation. **One row per
-concern family.** States: `readme-only` | `draft-spec` | `canonical-spec`
-(see `docs/plans/2026-07-27-product-docs-source-ownership-decision.md`).
+concern family.** States: `readme-only` | `draft-spec` | `canonical-spec`.
+The ownership rules live in `docs/README.md` and this registry.
 
 | Concern | State | Spec section | README anchor / locus | Gate (obligation → impl → test) |
 |---------|-------|--------------|----------------------|----------------------------------|
@@ -26,6 +26,9 @@ forbidden. Abandoning an **unshipped** `draft-spec` may return to
 
 ## Related Plans
 
-- `docs/plans/2026-07-27-product-docs-source-ownership-decision.md`
-- `docs/plans/2026-07-27-product-spec-doctrine-and-cli-vertical-plan.md`
-- `docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`
+- retired: 2026-07-27-product-docs-source-ownership-decision — source
+  `36e2f356`; see the ledger in `docs/plans/README.md`
+- retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
+  `36e2f356`; see the ledger in `docs/plans/README.md`
+- retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
+  `36e2f356`; see the ledger in `docs/plans/README.md`

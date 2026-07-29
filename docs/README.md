@@ -4,8 +4,8 @@ Design, planning, and specification record for SimpleBroker.
 
 ## Product documentation ownership
 
-Product behavior is governed by a **layered source-of-truth system** (decision:
-`docs/plans/2026-07-27-product-docs-source-ownership-decision.md`):
+Product behavior is governed by the **layered source-of-truth system**
+registered in `docs/specs/product-section-registry.md`:
 
 | Surface | Role |
 |---------|------|

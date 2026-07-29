@@ -35,7 +35,8 @@ the mechanism.
   [SB-DELIVERY-6] own the public same-thread contract, diagnostic behavior,
   and restart instruction. `README.md`, **Delivery guarantees**, is the
   user-facing restatement.
-- `docs/plans/2026-07-27-cross-thread-generator-orphan-healing-plan.md`
+- retired: 2026-07-27-cross-thread-generator-orphan-healing-plan — source
+  `36e2f356`; see the ledger in `docs/plans/README.md`
   records the design evidence, rejected recovery approaches, and verification
   matrix.
 

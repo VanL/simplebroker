@@ -5,8 +5,9 @@ principles, "Enumerable Contracts Get Executable Gates"); path claims
 are the corpus's most common rot class — three agent-guidance reviews
 caught instances by hand before this gate existed.
 
-Adopted from agent-guidance @ `e42762c` via
-`docs/plans/2026-07-28-propagate-guidance-delta-wave-plan.md`. Adapted
+Adopted from agent-guidance @ `e42762c` via retired plan
+2026-07-28-propagate-guidance-delta-wave-plan (source `54fa706`; see
+`docs/plans/README.md`). Adapted
 for this repository: the hub's `--scaffold` mode is dropped (no
 bootstrap generator here), the scan set covers this repo's extra agent
 surfaces (`docs/agent-kernel.md`, `llms.txt`), and path claims into the

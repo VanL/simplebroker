@@ -1,7 +1,7 @@
 # Coalescing Sweep Plan
 
 **Date:** 2026-07-29
-**Status:** active
+**Status:** completed
 **Class:** 3 — the sweep changes multiple normative documentation indexes and
 traceability links under the existing [DOM-14] process. It does not change the
 process itself or product behavior. Hardening: N/A — the sweep performs only
@@ -188,15 +188,39 @@ Read-only audit at published source pin `36e2f356`:
 | `2026-07-28-delivery-contract-spec-promotion-plan.md` | PASS | Closed process deviation; contract lives in [SB-DELIVERY-1..7]; relevant delivery lessons already exist | Convert delivery/registry Related Plans entries and surviving implementation references |
 | `2026-07-28-broadcast-create-missing-plan.md` | PASS | Empty deviation table; contract is absorbed by README, agent kernel, code, extension docs, and changelog; allocation lesson already extracted | No external exact-name backlink |
 | `2026-07-28-explicit-broadcast-targets-plan.md` | PASS | Closed deviation; contract is absorbed by README [BCAST-1..6], agent kernel, and Redis docs; allocation lesson remains hot | No external exact-name backlink |
-| `2026-07-28-propagate-guidance-delta-wave-plan.md` | **BLOCK pending checkpoint** | Closure drift was repaired from `42049aa`, the run log, and current green gates on 2026-07-29; source `36e2f356` predates that repair | Owner: this sweep; reconsider after the repaired final state is committed, then use that checkpoint as the retirement source SHA |
+| `2026-07-28-propagate-guidance-delta-wave-plan.md` | PASS | Closure drift was repaired from `42049aa`, the run log, and current green gates, then checkpointed in `54fa706` | Convert surviving references to retired form and use `54fa706` as the local-only retirement source pin |
 | `2026-07-29-code-quality-cleanup-plan.md` | PASS | Local cleanup rationale is non-durable; lasting session/core rationale lives in the ownership implementation doc | Convert the implementation-doc Related Plans entry |
 | `2026-07-29-development-toolchain-refresh-plan.md` | PASS | uv policy lives in README, updater, tests, and locks; release inventory facts are version-bound, not durable lessons | Active successor plan reference remains until its own reconciliation |
 | `2026-07-29-process-session-core-factory-plan.md` | PASS | Rationale is fully absorbed by `docs/implementation/06-process-session-core-ownership.md`; no separate lesson | Convert the implementation-doc Related Plans entry |
 
-Every PASS candidate has a closed deviation disposition and a byte-identical
-plan body at the source pin. The remaining candidate is now truthfully
-`completed`, but cannot be soft-retired until a durable checkpoint contains
-the repaired final state.
+Every candidate has a closed deviation disposition and a plan body at its
+declared source pin. Ten use published `36e2f356`; the repaired guidance-wave
+plan uses local-only checkpoint `54fa706`.
+
+## Completed-Work Review
+
+Independent review on 2026-07-29 verified all 11 status/ledger pairs, source
+pins, backlink conversions, lessons and promotion dispositions, and the
+no-deletion boundary. One blocker was accepted:
+
+| Finding | Disposition |
+|---------|-------------|
+| F1: Deferral State `checked_through` cells used provisional `post sweep` labels rather than DOM-14's required date + SHA | Accepted. Close this plan and commit the fully derived sweep tree first; then make a state-anchor commit that replaces every provisional label with that sweep commit SHA. |
+
+## Completion Evidence
+
+- Authoritative derivation before closure: harvest=0, retired-pending=67,
+  unindexed=0. Closing this plan makes harvest=1, still below threshold.
+- `bin/check-doc-paths`: PASS.
+- `bin/coalesce-check`: PASS; `54fa706`, `7409242`, and `f133ce7` are
+  accurately reported as local-only pins.
+- `python3 bin/check-dom15-fixtures`: PASS.
+- `git diff --check`: PASS.
+- Exact-name inventory: every surviving reference is a source-pinned retired
+  citation; candidate plan bodies remain in place for two-step retirement.
+- Lessons: 10 entries unchanged and deferred under the 30-day age floor.
+- Promotion: no coherent uncaptured workflow theme reached three independent
+  citations.
 
 ## 9. Out of Scope
 
