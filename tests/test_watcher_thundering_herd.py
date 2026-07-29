@@ -6,6 +6,7 @@ when unrelated queues receive messages.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 
@@ -212,15 +213,17 @@ def test_thundering_herd_mitigation(broker_target) -> None:
             # With pre-check, idle watchers should have high efficiency
             # (few wakes, mostly empty)
             assert idle_metrics.messages_processed == 0
-            if idle_metrics.wake_ups > 0:
-                if idle_metrics.empty_wakes != idle_metrics.wake_ups:
-                    mismatched_queues.append(
-                        (
-                            f"queue_{i}",
-                            idle_metrics.wake_ups,
-                            idle_metrics.empty_wakes,
-                        ),
-                    )
+            if (
+                idle_metrics.wake_ups > 0
+                and idle_metrics.empty_wakes != idle_metrics.wake_ups
+            ):
+                mismatched_queues.append(
+                    (
+                        f"queue_{i}",
+                        idle_metrics.wake_ups,
+                        idle_metrics.empty_wakes,
+                    ),
+                )
 
         if mismatched_queues:
             for _queue, _wake_ups, _empty_wakes in mismatched_queues:
@@ -234,10 +237,9 @@ def test_thundering_herd_mitigation(broker_target) -> None:
     finally:
         # Proper cleanup - stop() handles thread joining automatically
         for w in watchers:
-            try:
+            # Continue cleanup even if individual stop fails
+            with contextlib.suppress(Exception):
                 w.stop()
-            except Exception:
-                pass  # Continue cleanup even if individual stop fails
         broker.shutdown()
 
 
@@ -305,10 +307,9 @@ def test_thundering_herd_with_multiple_active_queues(broker_target) -> None:
     finally:
         # Proper cleanup - stop() handles thread joining automatically
         for w in watchers:
-            try:
+            # Continue cleanup even if individual stop fails
+            with contextlib.suppress(Exception):
                 w.stop()
-            except Exception:
-                pass  # Continue cleanup even if individual stop fails
         broker.shutdown()
 
 
@@ -337,10 +338,8 @@ def test_pre_check_correctness(broker_target) -> None:
         assert watcher._has_pending_messages() is True
     finally:
         if watcher is not None:
-            try:
+            with contextlib.suppress(Exception):
                 watcher.stop()
-            except Exception:
-                pass
         broker.shutdown()
 
 
@@ -386,10 +385,8 @@ def test_pre_check_with_timestamp_filtering(broker_target) -> None:
         assert handler_calls[1][0] == "message_4"
     finally:
         if watcher is not None:
-            try:
+            with contextlib.suppress(Exception):
                 watcher.stop()
-            except Exception:
-                pass
         broker.shutdown()
 
 
@@ -442,15 +439,11 @@ def test_disable_pre_check_via_env(broker_target) -> None:
 
         # Ensure watchers are stopped if they were started
         if watcher is not None:
-            try:
+            with contextlib.suppress(Exception):
                 watcher.stop()
-            except Exception:
-                pass
         if watcher2 is not None:
-            try:
+            with contextlib.suppress(Exception):
                 watcher2.stop()
-            except Exception:
-                pass
     finally:
         broker.shutdown()
 
@@ -500,10 +493,9 @@ def test_concurrent_pre_check_safety(broker_target) -> None:
     finally:
         # Proper cleanup - stop() handles thread joining automatically
         for w in watchers:
-            try:
+            # Continue cleanup even if individual stop fails
+            with contextlib.suppress(Exception):
                 w.stop()
-            except Exception:
-                pass  # Continue cleanup even if individual stop fails
         broker.shutdown()
 
 
@@ -548,10 +540,8 @@ def test_metrics_collection(broker_target) -> None:
         assert metrics.drain_calls > 0
     finally:
         if watcher is not None:
-            try:
+            with contextlib.suppress(Exception):
                 watcher.stop()
-            except Exception:
-                pass
         broker.shutdown()
 
 

@@ -1,5 +1,6 @@
 """Base test utilities for watcher tests with timeout safety."""
 
+import contextlib
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -82,7 +83,8 @@ class WatcherTestBase:
         try:
             yield watcher
         finally:
-            try:
+            # Ignore errors during cleanup
+            with contextlib.suppress(Exception):
                 # Check if a thread was started
                 if hasattr(watcher, "_thread") and watcher._thread:
                     # Stop and join the thread
@@ -90,8 +92,6 @@ class WatcherTestBase:
                 else:
                     # No thread started, just stop
                     watcher.stop()
-            except Exception:
-                pass  # Ignore errors during cleanup
 
     @contextmanager
     def create_test_move_watcher(
@@ -122,7 +122,7 @@ class WatcherTestBase:
         try:
             yield watcher
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 # Check if a thread was started
                 if hasattr(watcher, "_thread") and watcher._thread:
                     # Stop and join the thread
@@ -130,8 +130,6 @@ class WatcherTestBase:
                 else:
                     # No thread started, just stop
                     watcher.stop()
-            except Exception:
-                pass
 
     def run_watcher_until_messages(
         self,

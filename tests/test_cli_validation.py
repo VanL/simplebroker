@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from simplebroker._constants import _validate_safe_path_components
 from simplebroker.cli import main
 
 from .helper_scripts import create_dangerous_path
@@ -36,15 +37,16 @@ class TestCliArgumentValidation:
     def test_valid_directory_argument(self) -> None:
         """Test that valid directory arguments are accepted."""
         # Create a temporary directory for testing
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch("sys.argv", ["simplebroker", "-d", temp_dir, "list"]):
-                # This should not fail due to validation (might fail for other reasons like missing DB)
-                exit_code = main()
-                # The command might still fail because there's no database, but not due to validation
-                assert exit_code in [
-                    0,
-                    2,
-                ]  # 0 = success, 2 = queue empty (acceptable outcomes)
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("sys.argv", ["simplebroker", "-d", temp_dir, "list"]),
+        ):
+            exit_code = main()
+            # The command might still fail because there's no database, but not due to validation
+            assert exit_code in [
+                0,
+                2,
+            ]  # 0 = success, 2 = queue empty (acceptable outcomes)
 
     def test_valid_file_argument(self) -> None:
         """Test that valid file arguments are accepted."""
@@ -120,17 +122,4 @@ class TestCliArgumentValidation:
             ]
 
             for drive_path in valid_drive_formats:
-                # We can't actually create these paths in tests, but we can test validation passes
-                # The command might fail for other reasons, but not due to path validation
-                with patch("sys.argv", ["simplebroker", "-d", drive_path, "list"]):
-                    try:
-                        exit_code = main()
-                        # Could succeed or fail for other reasons, but not validation
-                        assert exit_code in [
-                            0,
-                            1,
-                            2,
-                        ]  # Any reasonable exit code is fine
-                    except Exception as e:
-                        # If it fails, it shouldn't be due to dangerous character validation
-                        assert "dangerous character" not in str(e).lower()
+                _validate_safe_path_components(drive_path)

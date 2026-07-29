@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """ADVANCED EXAMPLE: Async SQLite queue implementation using aiosqlitepool.
 
 NOTE: This is an ADVANCED SQLite-specific example. It shows how to build an
@@ -640,12 +639,13 @@ class AsyncBrokerCore:
                 return await operation()
             except OperationalError as e:
                 msg = str(e).lower()
-                if "locked" in msg or "busy" in msg:
-                    if attempt < max_retries - 1:
-                        jitter = (time.time() * 1000) % 25 / 1000
-                        wait = retry_delay * (2**attempt) + jitter
-                        await asyncio.sleep(wait)
-                        continue
+                if (
+                    "locked" in msg or "busy" in msg
+                ) and attempt < max_retries - 1:
+                    jitter = (time.time() * 1000) % 25 / 1000
+                    wait = retry_delay * (2**attempt) + jitter
+                    await asyncio.sleep(wait)
+                    continue
                 raise
 
     def _validate_queue_name(self, queue: str) -> None:
@@ -1297,11 +1297,11 @@ async def example_resilience() -> None:
                 try:
                     # Simulate processing that might fail
                     if "fail" in message and attempt < 2:
-                        raise Exception("Simulated processing error")
+                        raise RuntimeError("Simulated processing error")
 
                     print(f"  Successfully processed: {message}")
                     return True
-                except Exception as e:
+                except RuntimeError as e:
                     print(f"  Attempt {attempt + 1} failed for: {message} ({e})")
                     if attempt < max_retries - 1:
                         await asyncio.sleep(0.1 * (attempt + 1))

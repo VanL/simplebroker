@@ -347,15 +347,12 @@ def test_load_project_config_decodes_toml_basic_string_escapes(
     """Supported TOML basic-string escapes should decode without mojibake."""
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(
-        "\n".join(
-            [
-                "version = 1",
-                'backend = "sqlite"',
-                'target = "data\\u002Fqueue.db"',
-                "[backend_options]",
-                'note = "line\\nquote\\" slash\\\\ emoji\\U0001F600"',
-                "",
-            ]
+        (
+            "version = 1\n"
+            'backend = "sqlite"\n'
+            'target = "data\\u002Fqueue.db"\n'
+            "[backend_options]\n"
+            'note = "line\\nquote\\" slash\\\\ emoji\\U0001F600"\n'
         ),
         encoding="utf-8",
     )
@@ -372,15 +369,12 @@ def test_load_project_config_accepts_toml_literal_strings(
     """TOML literal strings should preserve Windows backslashes."""
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(
-        "\n".join(
-            [
-                "version = 1",
-                "backend = 'sqlite'",
-                "target = 'C:\\Users\\runner\\données#1\\queue.db' # comment",
-                "[backend_options]",
-                "note = 'slash\\n stays literal'",
-                "",
-            ]
+        (
+            "version = 1\n"
+            "backend = 'sqlite'\n"
+            "target = 'C:\\Users\\runner\\données#1\\queue.db' # comment\n"
+            "[backend_options]\n"
+            "note = 'slash\\n stays literal'\n"
         ),
         encoding="utf-8",
     )
@@ -398,14 +392,7 @@ def test_load_project_config_rejects_invalid_toml_basic_string_escape(
     """Unknown backslash escapes are not valid in TOML basic strings."""
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(
-        "\n".join(
-            [
-                "version = 1",
-                'backend = "sqlite"',
-                'target = "data\\qqueue.db"',
-                "",
-            ]
-        ),
+        ('version = 1\nbackend = "sqlite"\ntarget = "data\\qqueue.db"\n'),
         encoding="utf-8",
     )
 
@@ -417,14 +404,11 @@ def test_load_project_config_rejects_duplicate_toml_keys(tmp_path: Path) -> None
     """Duplicate TOML keys should be rejected instead of silently overwritten."""
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(
-        "\n".join(
-            [
-                "version = 1",
-                'backend = "sqlite"',
-                'target = "first.db"',
-                'target = "second.db"',
-                "",
-            ]
+        (
+            "version = 1\n"
+            'backend = "sqlite"\n'
+            'target = "first.db"\n'
+            'target = "second.db"\n'
         ),
         encoding="utf-8",
     )
@@ -437,16 +421,13 @@ def test_load_project_config_rejects_backend_option_arrays(tmp_path: Path) -> No
     """Backend options should remain a shallow scalar table."""
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(
-        "\n".join(
-            [
-                "version = 1",
-                'backend = "redis"',
-                'target = "redis://127.0.0.1:6379/0"',
-                "",
-                "[backend_options]",
-                'namespace = ["one", "two"]',
-                "",
-            ]
+        (
+            "version = 1\n"
+            'backend = "redis"\n'
+            'target = "redis://127.0.0.1:6379/0"\n'
+            "\n"
+            "[backend_options]\n"
+            'namespace = ["one", "two"]\n'
         ),
         encoding="utf-8",
     )
@@ -461,16 +442,13 @@ def test_load_project_config_rejects_nested_backend_option_tables(
     """Nested backend options should not leak through to backend plugins."""
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(
-        "\n".join(
-            [
-                "version = 1",
-                'backend = "redis"',
-                'target = "redis://127.0.0.1:6379/0"',
-                "",
-                "[backend_options.pool]",
-                "timeout = 5",
-                "",
-            ]
+        (
+            "version = 1\n"
+            'backend = "redis"\n'
+            'target = "redis://127.0.0.1:6379/0"\n'
+            "\n"
+            "[backend_options.pool]\n"
+            "timeout = 5\n"
         ),
         encoding="utf-8",
     )
@@ -514,14 +492,11 @@ def test_load_project_config_ignores_unknown_top_level_fields(
     """Unknown top-level data is ignored by the current config contract."""
     config_path = tmp_path / ".broker.toml"
     config_path.write_text(
-        "\n".join(
-            [
-                "version = 1",
-                'backend = "sqlite"',
-                'target = "queue.db"',
-                'description = "ignored"',
-                "",
-            ]
+        (
+            "version = 1\n"
+            'backend = "sqlite"\n'
+            'target = "queue.db"\n'
+            'description = "ignored"\n'
         ),
         encoding="utf-8",
     )
@@ -628,8 +603,10 @@ def test_project_config_roundtrip_from_nested_directory(workdir: Path) -> None:
         (None, "simplebroker: error: Database is missing SimpleBroker metadata:"),
         (
             "wrong-app",
-            "simplebroker: error: Database has incorrect magic string "
-            "(not a SimpleBroker database):",
+            (
+                "simplebroker: error: Database has incorrect magic string "
+                "(not a SimpleBroker database):"
+            ),
         ),
     ],
 )

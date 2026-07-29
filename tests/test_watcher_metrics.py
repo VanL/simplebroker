@@ -124,14 +124,13 @@ class MonitoredQueueWatcher(QueueWatcher):
         """Track drain performance and efficiency."""
         start = time.perf_counter()
 
-        if self._enable_pre_check:
-            # Check if there are pending messages using the parent's method
-            if not self._has_pending_messages():
-                self.metrics.record_wake_up(self._queue, empty=True)
-                self._maybe_log_stats()
-                elapsed_ms = (time.perf_counter() - start) * 1000
-                self.metrics.record_drain(self._queue, elapsed_ms)
-                return
+        # Check if there are pending messages using the parent's method
+        if self._enable_pre_check and not self._has_pending_messages():
+            self.metrics.record_wake_up(self._queue, empty=True)
+            self._maybe_log_stats()
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            self.metrics.record_drain(self._queue, elapsed_ms)
+            return
 
         # Record wake up before processing
         initial_count = getattr(self, "_total_messages", 0)

@@ -314,10 +314,12 @@ def _verify_postgres_test_dsn_from_env() -> None:
 
     while True:
         try:
-            with psycopg.connect(dsn, connect_timeout=5) as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                    assert cur.fetchone() == (1,)
+            with (
+                psycopg.connect(dsn, connect_timeout=5) as conn,
+                conn.cursor() as cur,
+            ):
+                cur.execute("SELECT 1")
+                assert cur.fetchone() == (1,)
             return
         except psycopg.OperationalError as exc:
             last_error = f"{type(exc).__name__}: {exc}"
@@ -590,7 +592,7 @@ def pytest_pg_main() -> int:
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         return 130
-    except Exception as exc:  # pragma: no cover - defensive CLI wrapper
+    except Exception as exc:  # pragma: no cover - defensive CLI wrapper  # noqa: BLE001 approved [DOM-10.1.1] exception
         print(str(exc), file=sys.stderr)
         return 1
     finally:
@@ -858,7 +860,7 @@ def packaging_smoke_main() -> int:
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         return 130
-    except Exception as exc:  # pragma: no cover - defensive CLI wrapper
+    except Exception as exc:  # pragma: no cover - defensive CLI wrapper  # noqa: BLE001 approved [DOM-10.1.1] exception
         print(str(exc), file=sys.stderr)
         return 1
 

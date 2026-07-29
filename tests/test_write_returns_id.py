@@ -16,6 +16,7 @@ tests/test_timestamp_resilience.py for the precedent.
 
 import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -120,26 +121,19 @@ def test_concurrent_writers_get_their_own_ids(queue_factory):
     per_thread = 10
     queues = [queue_factory("conc") for _ in range(n_threads)]
     results: list[dict[int, str]] = [{} for _ in range(n_threads)]
-    errors: list[BaseException] = []
     barrier = threading.Barrier(n_threads)
 
     def writer(idx: int) -> None:
-        try:
-            barrier.wait()
-            for i in range(per_thread):
-                body = f"w{idx}-{i}"
-                results[idx][queues[idx].write(body)] = body
-        except BaseException as exc:  # pragma: no cover - failure reporting
-            errors.append(exc)
+        barrier.wait()
+        for i in range(per_thread):
+            body = f"w{idx}-{i}"
+            results[idx][queues[idx].write(body)] = body
 
-    threads = [threading.Thread(target=writer, args=(i,)) for i in range(n_threads)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=30)
-    assert not any(t.is_alive() for t in threads), "writer threads hung"
+    with ThreadPoolExecutor(max_workers=n_threads) as executor:
+        futures = [executor.submit(writer, idx) for idx in range(n_threads)]
+        for future in futures:
+            future.result(timeout=30)
 
-    assert not errors
     combined: dict[int, str] = {}
     for partial in results:
         combined.update(partial)

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 MultiQueueWatcher Example
 
@@ -220,10 +219,9 @@ class MultiQueueWatcher(BaseWatcher):
         # Periodically check inactive queues (cold path)
         if self._check_counter % self._check_interval == 0:
             for queue_name, queue_info in self._queues.items():
-                if queue_name not in still_active:
-                    if queue_info["queue"].has_pending():
-                        still_active.append(queue_name)
-                        logger.debug(f"Queue '{queue_name}' became active")
+                if queue_name not in still_active and queue_info["queue"].has_pending():
+                    still_active.append(queue_name)
+                    logger.debug(f"Queue '{queue_name}' became active")
 
         # Update state if active queues changed
         if set(still_active) != set(self._active_queues):
@@ -289,7 +287,11 @@ class MultiQueueWatcher(BaseWatcher):
                 break
             except Exception as e:
                 # Log but continue processing other queues
-                logger.exception(f"Error processing queue {queue_name}: {e}")
+                logger.log(
+                    logging.ERROR,
+                    f"Error processing queue {queue_name}: {e}",
+                    exc_info=True,
+                )
 
         # Remove empty queues from active list
         if queues_to_remove:

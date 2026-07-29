@@ -54,16 +54,22 @@ def _warn_for_insecure_project_config(config_path: Path, target: str) -> None:
 
 
 def _validated_backend_options(raw_options: object) -> dict[str, Any]:
-    if not isinstance(raw_options, dict):
-        raise ValueError("'backend_options' must be a table in .broker.toml")
+    match raw_options:
+        case dict() as raw_options_dict:
+            pass
+        case _:
+            raise ValueError("'backend_options' must be a table in .broker.toml")
 
     options: dict[str, Any] = {}
-    for key, value in raw_options.items():
-        if not isinstance(value, str | int | float | bool):
-            raise ValueError(
-                "'backend_options' values must be strings, integers, floats, "
-                "or booleans in .broker.toml"
-            )
+    for key, value in raw_options_dict.items():
+        match value:
+            case str() | int() | float() | bool():
+                pass
+            case _:
+                raise ValueError(
+                    "'backend_options' values must be strings, integers, floats, "
+                    "or booleans in .broker.toml"
+                )
         options[str(key)] = value
     return options
 

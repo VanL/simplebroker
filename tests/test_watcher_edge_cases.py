@@ -1,5 +1,7 @@
 """Test edge cases in watcher.py to increase coverage."""
 
+import contextlib
+import logging
 import tempfile
 import threading
 import time
@@ -10,7 +12,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 import simplebroker.watcher as watcher_module
-from simplebroker._exceptions import OperationalError
+from simplebroker._exceptions import DatabaseError, OperationalError
 from simplebroker.helpers import interruptible_sleep
 from simplebroker.watcher import (
     PollingStrategy,
@@ -24,6 +26,10 @@ from .helper_scripts.database_errors import DatabaseErrorInjector
 from .helper_scripts.watcher_base import WatcherTestBase
 
 pytestmark = [pytest.mark.shared]
+
+
+class WatcherTestError(Exception):
+    """Exercise watcher boundaries with an otherwise unknown exception."""
 
 
 class TestWatcherEdgeCases(WatcherTestBase):
@@ -185,9 +191,11 @@ class TestWatcherEdgeCases(WatcherTestBase):
             raise OperationalError("database is locked")
 
         try:
-            with caplog.at_level("DEBUG", logger="simplebroker.watcher"):
-                with pytest.raises(OperationalError, match="database is locked"):
-                    watcher._process_with_retry(locked_operation, "locked-test")
+            with (
+                caplog.at_level("DEBUG", logger="simplebroker.watcher"),
+                pytest.raises(OperationalError, match="database is locked"),
+            ):
+                watcher._process_with_retry(locked_operation, "locked-test")
         finally:
             watcher.stop()
 
@@ -263,11 +271,12 @@ class TestWatcherEdgeCases(WatcherTestBase):
             ):
                 watcher._dispatch("test", 12345, config=test_config)
 
-            # Verify both errors were logged
-            mock_logger.exception.assert_called()
-            error_call_args = str(mock_logger.exception.call_args)
-            assert "Error handler failed" in error_call_args
-            assert "Handler error" in error_call_args
+            mock_logger.log.assert_called_once_with(
+                logging.ERROR,
+                "Error handler failed: Error handler failed\n"
+                "Original error: Handler error",
+                exc_info=True,
+            )
 
     def test_type_error_inside_error_handler_is_not_retried(
         self, broker, broker_target, caplog
@@ -368,7 +377,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
             try:
                 db = BrokerDB(str(db_path))
-            except Exception:
+            except (DatabaseError, OSError):
                 # If database is too corrupted to open, use mock for this specific test
                 # after we're testing the retry logic, not the corruption itself
                 stop_event = threading.Event()
@@ -376,7 +385,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
                 # Create a data version provider that always fails
                 def failing_provider():
-                    raise Exception("PRAGMA failed")
+                    raise WatcherTestError("PRAGMA failed")
 
                 strategy.start(failing_provider)
 
@@ -443,7 +452,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 drain_count += 1
                 if drain_count < 3:
                     msg = "Drain failed"
-                    raise Exception(msg)
+                    raise WatcherTestError(msg)
                 # Stop after successful drain
                 watcher.stop()
                 original_drain()
@@ -484,7 +493,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             def failing_drain() -> NoReturn:
                 nonlocal drain_count
                 drain_count += 1
-                raise Exception("retry sleep should be interrupted")
+                raise WatcherTestError("retry sleep should be interrupted")
 
             watcher._drain_queue = failing_drain
 
@@ -494,23 +503,67 @@ class TestWatcherEdgeCases(WatcherTestBase):
             assert retry_sleeps == [2]
             assert watcher._stop_event.is_set()
 
-    def test_watcher_max_retries_exceeded(self, broker_target) -> None:
-        """Test that watcher fails after max retries."""
+    def test_watcher_max_retries_exceeded(
+        self,
+        broker_target,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Terminal retry preserves the original failure and helper contract."""
         with self.create_test_watcher(
             broker_target,
             "queue",
             lambda m, t: None,
         ) as watcher:
-            # Mock drain_queue to always fail
+            cause = ValueError("underlying failure")
+            failure = WatcherTestError("Persistent failure")
+            retry_calls: list[tuple[Exception, int, int]] = []
+            retry_results: list[bool] = []
+            original_handle_retry = watcher._handle_retry
+
             def failing_drain() -> NoReturn:
-                msg = "Persistent failure"
-                raise Exception(msg)
+                try:
+                    raise cause
+                except ValueError:
+                    raise failure from cause
+
+            def recording_handle_retry(
+                error: Exception,
+                retry_count: int,
+                max_retries: int,
+            ) -> bool:
+                retry_calls.append((error, retry_count, max_retries))
+                result = original_handle_retry(error, retry_count, max_retries)
+                retry_results.append(result)
+                return result
 
             watcher._drain_queue = failing_drain
+            watcher._handle_retry = recording_handle_retry
+            monkeypatch.setattr(watcher_module, "interruptible_sleep", lambda *_: True)
 
-            # Should fail after max retries
-            with pytest.raises(Exception, match="Persistent failure"):
-                watcher.run_forever()
+            with (
+                caplog.at_level("ERROR", logger="simplebroker.watcher"),
+                pytest.raises(WatcherTestError, match="Persistent failure") as exc_info,
+            ):
+                watcher._run_with_retries(max_retries=3)
+
+            raised = exc_info.value
+            assert raised is failure
+            assert type(raised) is WatcherTestError
+            assert str(raised) == "Persistent failure"
+            assert raised.__cause__ is cause
+            assert raised.__context__ is cause
+            assert "failing_drain" in {frame.name for frame in exc_info.traceback}
+            assert retry_calls == [
+                (failure, 1, 3),
+                (failure, 2, 3),
+                (failure, 3, 3),
+            ]
+            assert retry_results == [True, True, False]
+            assert (
+                "Watcher failed after 3 retries. Last error: Persistent failure"
+                in caplog.text
+            )
 
     def test_cleanup_thread_local_delegates_and_propagates(self, broker_target) -> None:
         """Thread-local cleanup delegates once and leaves error policy to callers."""
@@ -577,18 +630,14 @@ class TestWatcherEdgeCases(WatcherTestBase):
                     original_stop(*args, **kwargs)
                     # Then raise the exception for testing
                     msg = "Stop failed"
-                    raise Exception(msg)
+                    raise WatcherTestError(msg)
                 # Subsequent calls - just call original
                 original_stop(*args, **kwargs)
 
             watcher.stop = failing_stop
 
             with patch("simplebroker.watcher.logger") as mock_logger:
-                # Simulate context manager exit
-                try:
-                    watcher.__exit__(None, None, None)
-                except Exception:
-                    pass  # Expected from our mock
+                watcher.__exit__(None, None, None)
 
                 # Wait a moment for thread to finish
                 thread.join(timeout=2.0)
@@ -609,11 +658,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
         finally:
             # Ensure thread cleanup even if test fails
             if thread and thread.is_alive():
-                try:
+                with contextlib.suppress(Exception):
                     watcher.stop()
                     thread.join(timeout=1.0)
-                except Exception:
-                    pass
 
     def test_signal_handler_not_main_thread(self, broker_target) -> None:
         """Test that signal handler is not installed in non-main threads."""
@@ -643,19 +690,15 @@ class TestWatcherEdgeCases(WatcherTestBase):
             thread.join(timeout=5)
             if thread.is_alive():
                 # Force cleanup if thread didn't finish
-                try:
+                with contextlib.suppress(Exception):
                     watcher.stop()
                     thread.join(timeout=1.0)
-                except Exception:
-                    pass
                 pytest.fail("Thread did not complete within timeout")
         finally:
             # Ensure thread cleanup
             if thread.is_alive():
-                try:
+                with contextlib.suppress(Exception):
                     watcher.stop()
-                except Exception:
-                    pass
 
     def test_absolute_timeout_exceeded(self, broker_target) -> None:
         """Test that watcher fails after MAX_TOTAL_RETRY_TIME."""
@@ -678,7 +721,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 # Use real sleep to let the retry loop run
                 time.sleep(0.01)
                 msg = "Persistent failure"
-                raise Exception(msg)
+                raise WatcherTestError(msg)
 
             watcher._drain_queue = failing_drain
 
@@ -758,11 +801,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
             finally:
                 # Ensure proper thread cleanup
                 if thread and thread.is_alive():
-                    try:
+                    with contextlib.suppress(Exception):
                         watcher.stop()
                         thread.join(timeout=1.0)
-                    except Exception:
-                        pass
 
     def test_concurrent_stop_safety(self, broker, broker_target) -> None:
         """Test stopping watcher from multiple threads."""
@@ -816,16 +857,12 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 # Ensure all threads are cleaned up
                 for t in stop_threads:
                     if t.is_alive():
-                        try:
+                        with contextlib.suppress(Exception):
                             t.join(timeout=0.5)
-                        except Exception:
-                            pass
                 if thread and thread.is_alive():
-                    try:
+                    with contextlib.suppress(Exception):
                         watcher.stop()
                         thread.join(timeout=1.0)
-                    except Exception:
-                        pass
 
 
 class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
@@ -905,17 +942,16 @@ class TestQueueMoveWatcherEdgeCases(WatcherTestBase):
             try:
                 # Creating the watcher should work, but drain operations should fail
                 # Due to the read-only database, we expect RuntimeError or OperationalError
-                with pytest.raises(
-                    (RuntimeError, OperationalError),
-                    match="readonly|read-only|attempt to write|Failed to get database connection",
+                with (
+                    pytest.raises(
+                        (RuntimeError, OperationalError),
+                        match="readonly|read-only|attempt to write|Failed to get database connection",
+                    ),
+                    self.create_test_move_watcher(
+                        str(db_path), "source", "dest", lambda m, t: None
+                    ) as watcher,
                 ):
-                    with self.create_test_move_watcher(
-                        str(db_path),
-                        "source",
-                        "dest",
-                        lambda m, t: None,
-                    ) as watcher:
-                        watcher._drain_queue()
+                    watcher._drain_queue()
             finally:
                 # Restore write permissions for cleanup
                 DatabaseErrorInjector.restore_writable(str(db_path))

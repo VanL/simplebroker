@@ -164,13 +164,12 @@ def test_execute_retry_gives_up_after_max_attempts() -> None:
     def always_fail() -> None:
         raise RuntimeError("nope")
 
-    with remove_backoff():
-        with pytest.raises(RuntimeError, match="nope"):
-            execute_retry(
-                always_fail,
-                retry_on=lambda e: True,
-                stop=stop_after_attempt(3),
-            )
+    with remove_backoff(), pytest.raises(RuntimeError, match="nope"):
+        execute_retry(
+            always_fail,
+            retry_on=lambda e: True,
+            stop=stop_after_attempt(3),
+        )
 
 
 def test_execute_retry_does_not_sleep_after_final_attempt() -> None:
@@ -279,13 +278,12 @@ def test_execute_retry_honors_delay_budget_via_stop(
 
     monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
 
-    with remove_backoff():
-        with pytest.raises(OSError):
-            execute_retry(
-                locked,
-                retry_on=lambda e: True,
-                stop=stop_after_delay(0.05),
-            )
+    with remove_backoff(), pytest.raises(OSError):
+        execute_retry(
+            locked,
+            retry_on=lambda e: True,
+            stop=stop_after_delay(0.05),
+        )
     assert calls == 2
 
 
@@ -317,14 +315,13 @@ def test_remove_backoff_zeroes_sleep() -> None:
     def fail() -> None:
         raise ValueError("x")
 
-    with remove_backoff():
-        with pytest.raises(ValueError):
-            execute_retry(
-                fail,
-                retry_on=lambda e: True,
-                stop=stop_after_attempt(2),
-                sleep=fake_sleep,
-            )
+    with remove_backoff(), pytest.raises(ValueError):
+        execute_retry(
+            fail,
+            retry_on=lambda e: True,
+            stop=stop_after_attempt(2),
+            sleep=fake_sleep,
+        )
     assert sleeps == []
 
 

@@ -7,7 +7,7 @@ import types
 
 import pytest
 
-import simplebroker.cli as cli
+from simplebroker import cli
 
 
 @pytest.fixture(autouse=True)

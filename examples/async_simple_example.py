@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """ADVANCED EXAMPLE: Demonstration of the custom async pooled broker implementation.
 
 NOTE: This example uses the ADVANCED async_pooled_broker.py implementation, which
@@ -72,7 +71,7 @@ async def worker(
             if shutdown_event.is_set():
                 break
             continue
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             print(f"Worker {worker_id}: Error processing message: {e}")
 
     print(f"Worker {worker_id}: Shutting down, processed {processed} items")

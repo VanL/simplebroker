@@ -49,7 +49,7 @@ class WatcherTracker:
                     if hasattr(watcher, "stop"):
                         logger.debug(f"Stopping watcher {watcher}")
                         watcher.stop()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
                     logger.warning(f"Error stopping watcher: {e}")
 
             # Wait for threads to stop

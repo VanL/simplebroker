@@ -107,28 +107,29 @@ def test_postgres_runner_quotes_mixed_case_search_path() -> None:
 
     try:
         core = BrokerCore(runner, backend_plugin=plugin)
-        current_schema = list(runner.run("SELECT current_schema()", fetch=True))[0][0]
+        current_schema = next(iter(runner.run("SELECT current_schema()", fetch=True)))[
+            0
+        ]
         assert current_schema == schema
 
         core.write("jobs", "hello")
         assert core.claim_one("jobs", with_timestamps=False) == "hello"
 
-        with connect(dsn) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     SELECT table_name
                     FROM information_schema.tables
                     WHERE table_schema = %s
                     ORDER BY table_name
                     """,
-                    (schema,),
-                )
-                assert {row[0] for row in cur.fetchall()} >= {
-                    "aliases",
-                    "messages",
-                    "meta",
-                }
+                (schema,),
+            )
+            assert {row[0] for row in cur.fetchall()} >= {
+                "aliases",
+                "messages",
+                "meta",
+            }
     finally:
         if core is not None:
             core.close()
@@ -502,7 +503,7 @@ def test_postgres_cli_missing_database_is_not_backend_unavailable(
     if "password" in parts:
         env["BROKER_BACKEND_PASSWORD"] = parts["password"]
 
-    code, stdout, stderr = _run_cli("init", cwd=project_root, env=env)
+    code, _stdout, stderr = _run_cli("init", cwd=project_root, env=env)
     assert code != 0
     assert "not available" not in stderr
     assert "Could not connect to Postgres target" in stderr

@@ -113,11 +113,13 @@ def test_ephemeral_queue_with_injected_runner_reuses_runner_backed_core():
         runner = RecordingRunner(db_path)
         queue = Queue("tasks", db_path=db_path, runner=runner, persistent=False)
         try:
-            with queue.get_connection() as conn1:
-                with queue.get_connection() as conn2:
-                    assert conn1 is conn2
-                    assert isinstance(conn1, BrokerCore)
-                    assert not isinstance(conn1, BrokerDB)
+            with (
+                queue.get_connection() as conn1,
+                queue.get_connection() as conn2,
+            ):
+                assert conn1 is conn2
+                assert isinstance(conn1, BrokerCore)
+                assert not isinstance(conn1, BrokerDB)
         finally:
             queue.close()
             runner.close()

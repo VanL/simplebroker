@@ -426,7 +426,7 @@ class TestDatabasePathResolution:
         """Test error when project scoping enabled but no database found."""
         import argparse
 
-        tmp_path, cleanup_func = temp_db_cleanup
+        _tmp_path, cleanup_func = temp_db_cleanup
 
         args = argparse.Namespace(file="missing.db", dir=Path.cwd(), command="write")
 

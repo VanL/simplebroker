@@ -63,8 +63,8 @@ def get_configured_backend(config: Mapping[str, object]) -> BuiltinBackend:
 
 
 __all__ = [
-    "BuiltinBackend",
     "DEFAULT_BACKEND",
+    "BuiltinBackend",
     "get_backend",
     "get_configured_backend",
     "sqlite",

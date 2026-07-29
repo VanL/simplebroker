@@ -306,7 +306,7 @@ class TestGeneratorMethods:
                 ):
                     broker.peek_one("test_queue", with_timestamps=False)
                     break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 errors.append(e)
             finally:
                 finished.set()

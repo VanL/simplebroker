@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from reference_reactor import (  # noqa: E402
+from reference_reactor import (
     BaseReactor,
     PendingOutput,
     Reactor,
@@ -23,8 +23,8 @@ from reference_reactor import (  # noqa: E402
     _write_json,
 )
 
-from simplebroker import Queue  # noqa: E402
-from simplebroker.ext import OperationalError  # noqa: E402
+from simplebroker import Queue
+from simplebroker.ext import OperationalError
 
 INBOX_A = "reactor.inbox.a"
 INBOX_B = "reactor.inbox.b"

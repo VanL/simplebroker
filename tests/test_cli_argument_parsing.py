@@ -12,7 +12,7 @@ def test_equals_form_for_global_options(workdir: Path):
     subdir.mkdir()
 
     # Test --dir= form
-    code, stdout, stderr = run_cli(
+    code, _stdout, _stderr = run_cli(
         f"--dir={subdir}", "write", "test_queue", "message1", cwd=workdir
     )
     assert code == 0
@@ -21,7 +21,7 @@ def test_equals_form_for_global_options(workdir: Path):
     assert (subdir / ".broker.db").exists()
 
     # Test --file= form
-    code, stdout, stderr = run_cli(
+    code, _stdout, _stderr = run_cli(
         "--file=custom.db", "write", "test_queue", "message2", cwd=workdir
     )
     assert code == 0
@@ -30,7 +30,7 @@ def test_equals_form_for_global_options(workdir: Path):
     assert (workdir / "custom.db").exists()
 
     # Test both together
-    code, stdout, stderr = run_cli(
+    code, _stdout, _stderr = run_cli(
         f"--dir={subdir}",
         "--file=another.db",
         "write",
@@ -53,7 +53,7 @@ def test_global_option_value_not_mistaken_for_subcommand(workdir: Path):
     read_file.touch()
 
     # Test -f with a value that matches a subcommand name
-    code, stdout, stderr = run_cli(
+    code, _stdout, _stderr = run_cli(
         "-f", "read.txt", "write", "test_queue", "message1", cwd=workdir
     )
     assert code == 0
@@ -68,7 +68,7 @@ def test_global_option_value_not_mistaken_for_subcommand(workdir: Path):
     assert ("messages",) in tables
 
     # Test with 'write' as filename after the write command
-    code, stdout, stderr = run_cli(
+    code, _stdout, _stderr = run_cli(
         "-f", "write", "write", "test_queue", "message2", cwd=workdir
     )
     assert code == 0
@@ -86,16 +86,16 @@ def test_global_options_after_subcommand_are_not_global(workdir: Path):
     subdir = workdir / "after_cmd"
     subdir.mkdir()
 
-    code, stdout, stderr = run_cli(
+    code, stdout, _stderr = run_cli(
         "write", "test_queue", "message1", f"--dir={subdir}", cwd=workdir
     )
     assert code != 0
     assert not (subdir / ".broker.db").exists()
 
-    code, stdout, stderr = run_cli("write", "test_queue", "--cleanup", cwd=workdir)
+    code, stdout, _stderr = run_cli("write", "test_queue", "--cleanup", cwd=workdir)
     assert code == 0
 
-    code, stdout, stderr = run_cli("read", "test_queue", cwd=workdir)
+    code, stdout, _stderr = run_cli("read", "test_queue", cwd=workdir)
     assert code == 0
     assert stdout.strip() == "--cleanup"
 
@@ -106,7 +106,7 @@ def test_complex_argument_combinations(workdir: Path):
     subdir.mkdir()
 
     # Global options before the command; command operands after it.
-    code, stdout, stderr = run_cli(
+    code, stdout, _stderr = run_cli(
         f"--dir={subdir}",
         "-f",
         "complex.db",
@@ -118,7 +118,7 @@ def test_complex_argument_combinations(workdir: Path):
     assert code == 0
     assert (subdir / "complex.db").exists()
 
-    code, stdout, stderr = run_cli(
+    code, stdout, _stderr = run_cli(
         f"--dir={subdir}", "-f", "complex.db", "read", "test_queue", cwd=workdir
     )
     assert code == 0

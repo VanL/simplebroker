@@ -367,7 +367,6 @@ class TimestampGenerator:
             if "Invalid timestamp" in str(e):
                 raise
             # Fall through to final error
-            pass
 
         raise TimestampError(f"Invalid timestamp: {timestamp_str}")
 

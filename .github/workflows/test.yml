@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 env:
-  UV_VERSION: "0.11.28"
+  UV_VERSION: "0.12.0"
 
 jobs:
   locks:
@@ -177,7 +177,7 @@ jobs:
 
     - name: Run linting with ruff
       run: |
-        uv run --frozen --no-sync ruff check simplebroker tests bin .github/scripts extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
+        uv run --frozen --no-sync ruff check .
 
     - name: Check formatting with ruff
       run: |

@@ -41,7 +41,7 @@ def test_absolute_path_with_explicit_dir(workdir: Path):
     abs_path = str(db_path.resolve())
 
     # Write using absolute path with explicit matching -d
-    code, stdout, stderr = run_cli(
+    code, _stdout, stderr = run_cli(
         "-d", str(subdir), "-f", abs_path, "write", "test", "message1", cwd=workdir
     )
     assert code == 0, f"Write failed: {stderr}"
@@ -63,7 +63,7 @@ def test_absolute_path_with_inconsistent_dir(workdir: Path):
     abs_path = str(db_path.resolve())
 
     # Try to use with -d pointing to different directory
-    code, stdout, stderr = run_cli(
+    code, _stdout, stderr = run_cli(
         "-d", str(subdir2), "-f", abs_path, "write", "test", "message1", cwd=workdir
     )
     assert code == 1
@@ -98,7 +98,7 @@ def test_cleanup_with_absolute_path(workdir: Path):
 def test_relative_path_still_works(workdir: Path):
     """Test that relative paths still work as before."""
     # Traditional usage with relative path
-    code, stdout, stderr = run_cli(
+    code, stdout, _stderr = run_cli(
         "-f", "relative.db", "write", "test", "message", cwd=workdir
     )
     assert code == 0
@@ -108,6 +108,6 @@ def test_relative_path_still_works(workdir: Path):
     assert db_path.exists()
 
     # Read back
-    code, stdout, stderr = run_cli("-f", "relative.db", "read", "test", cwd=workdir)
+    code, stdout, _stderr = run_cli("-f", "relative.db", "read", "test", cwd=workdir)
     assert code == 0
     assert stdout.strip() == "message"

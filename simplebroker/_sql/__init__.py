@@ -71,10 +71,6 @@ from .sqlite import (
 )
 
 __all__ = [
-    "BackendSQLNamespace",
-    "RetrieveOperation",
-    "RetrieveQuerySpec",
-    "ensure_backend_sql_namespace",
     "ALTER_MESSAGES_ADD_CLAIMED",
     "BEGIN_IMMEDIATE",
     "CHECK_CLAIMED_COLUMN",
@@ -115,9 +111,9 @@ __all__ = [
     "INSERT_ALIAS",
     "INSERT_ALIAS_VERSION_META",
     "INSERT_MESSAGE",
-    "LIST_QUEUE_STATS_PREFIX",
     "LIST_QUEUES_PREFIX",
     "LIST_QUEUES_UNCLAIMED",
+    "LIST_QUEUE_STATS_PREFIX",
     "RETRIEVE_CLAIM",
     "RETRIEVE_MOVE",
     "RETRIEVE_PEEK",
@@ -130,10 +126,14 @@ __all__ = [
     "UPDATE_LAST_TS",
     "UPDATE_LAST_TS_ATOMIC",
     "VACUUM",
+    "BackendSQLNamespace",
+    "RetrieveOperation",
+    "RetrieveQuerySpec",
     "build_claim_batch_query",
     "build_claim_single_query",
     "build_find_message_ids_query",
     "build_move_by_id_query",
     "build_peek_query",
     "build_retrieve_query",
+    "ensure_backend_sql_namespace",
 ]

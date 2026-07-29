@@ -1296,7 +1296,7 @@ def test_no_xattr_existing_status_marker_does_not_bypass_held_lock(
             result_holder["result"] = service.run_phases(
                 (Phase("connection-v1", lambda: calls.append("ran")),)
             )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
         finally:
             done.set()
@@ -1348,7 +1348,7 @@ def test_strict_lock_wait_can_be_cancelled(tmp_path: Path) -> None:
                 (Phase("connection-v1", lambda: calls.append("ran")),),
                 should_cancel=stop_waiting.is_set,
             )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
         finally:
             done.set()
@@ -1402,7 +1402,7 @@ def test_no_xattr_waiter_does_not_skip_when_phase_marked_while_lock_is_held(
             result_holder["result"] = service.run_phases(
                 (Phase("connection-v1", lambda: calls.append("ran")),)
             )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
         finally:
             done.set()
@@ -1512,7 +1512,7 @@ def test_process_local_lock_serializes_threads(
     def run_first() -> None:
         try:
             first_service.run_phases((Phase("connection-v1", first_action),))
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
 
     def run_second() -> None:
@@ -1520,7 +1520,7 @@ def test_process_local_lock_serializes_threads(
             results["second"] = second_service.run_phases(
                 (Phase("connection-v1", lambda: calls.append("second")),)
             )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
         finally:
             second_done.set()
@@ -1554,9 +1554,11 @@ def test_lock_timeout_when_another_process_holds_lock(tmp_path: Path) -> None:
     service = PhaseLockService(target, timeout=0.15, retry_delay=0.01)
     calls: list[str] = []
 
-    with _subprocess_holding_phase_lock(target):
-        with pytest.raises(PhaseLockTimeout) as exc_info:
-            service.run_phases((Phase("connection-v1", lambda: calls.append("ran")),))
+    with (
+        _subprocess_holding_phase_lock(target),
+        pytest.raises(PhaseLockTimeout) as exc_info,
+    ):
+        service.run_phases((Phase("connection-v1", lambda: calls.append("ran")),))
 
     assert calls == []
     assert service.lock_path.exists()
@@ -1575,9 +1577,8 @@ def test_lock_context_releases_after_exception(tmp_path: Path) -> None:
     target.touch()
     service = PhaseLockService(target, timeout=0.5, retry_delay=0.01)
 
-    with pytest.raises(RuntimeError, match="boom"):
-        with service.locked():
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"), service.locked():
+        raise RuntimeError("boom")
 
     with service.locked():
         assert service.lock_path.exists()
@@ -1589,10 +1590,9 @@ def test_advisory_file_lock_context_manager_releases_after_exception(
     lock_path = tmp_path / "resource.lock"
     lock = AdvisoryFileLock(lock_path, timeout=0.5, retry_delay=0.01)
 
-    with pytest.raises(RuntimeError, match="boom"):
-        with lock:
-            assert lock.locked
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"), lock:
+        assert lock.locked
+        raise RuntimeError("boom")
 
     assert not lock.locked
     with AdvisoryFileLock(lock_path, timeout=0.5, retry_delay=0.01) as second_lock:
@@ -1606,9 +1606,11 @@ def test_advisory_file_lock_rejects_same_instance_reentrant_context(
     lock = AdvisoryFileLock(lock_path, timeout=0.5, retry_delay=0.01)
 
     with lock:
-        with pytest.raises(RuntimeError, match="does not support re-entrant"):
-            with lock:
-                pass
+        with (
+            pytest.raises(RuntimeError, match="does not support re-entrant"),
+            lock,
+        ):
+            pass
         assert lock.locked
 
     assert not lock.locked
@@ -1622,7 +1624,7 @@ def test_advisory_file_lock_rejects_same_instance_reentrant_context(
             if second_lock.acquire():
                 result.append(True)
                 second_lock.release()
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
 
     thread = threading.Thread(target=acquire_from_other_thread)
@@ -1647,9 +1649,8 @@ def test_advisory_lock_unavailable_without_lock_primitives(
     with pytest.raises(PhaseLockUnavailable):
         lock.acquire()
 
-    with lock_path.open("a+b") as lock_file:
-        with pytest.raises(PhaseLockUnavailable):
-            lock._try_lock(lock_file)
+    with lock_path.open("a+b") as lock_file, pytest.raises(PhaseLockUnavailable):
+        lock._try_lock(lock_file)
 
 
 def test_advisory_lock_open_errors_timeout_with_diagnostics(
@@ -1748,7 +1749,7 @@ def test_process_local_lock_timeout_includes_diagnostics(tmp_path: Path) -> None
         )
         try:
             contender.acquire(diagnostics=lambda: "process_lock=busy")
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
 
     try:
@@ -1841,10 +1842,12 @@ def test_msvcrt_lock_blocks_second_process_on_windows(tmp_path: Path) -> None:
     target.touch()
     service = PhaseLockService(target, timeout=0.15, retry_delay=0.01)
 
-    with _subprocess_holding_phase_lock(target):
-        with pytest.raises(PhaseLockTimeout):
-            with service.locked():
-                pass
+    with (
+        _subprocess_holding_phase_lock(target),
+        pytest.raises(PhaseLockTimeout),
+        service.locked(),
+    ):
+        pass
 
 
 def test_empty_phase_or_attr_name_is_rejected(tmp_path: Path) -> None:

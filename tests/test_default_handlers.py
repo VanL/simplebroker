@@ -152,17 +152,19 @@ class TestDefaultErrorHandler:
     def test_default_error_handler_ignores_broker_config(self, caplog):
         """Test that default_error_handler always logs regardless of config."""
         # Test with BROKER_LOGGING_ENABLED = False
-        with patch("simplebroker.watcher._config", {"BROKER_LOGGING_ENABLED": False}):
-            with caplog.at_level(logging.ERROR, logger="simplebroker.watcher"):
-                exc = ValueError("Should still be logged")
-                result = default_error_handler(exc, "test", 7777777777)
+        with (
+            patch("simplebroker.watcher._config", {"BROKER_LOGGING_ENABLED": False}),
+            caplog.at_level(logging.ERROR, logger="simplebroker.watcher"),
+        ):
+            exc = ValueError("Should still be logged")
+            result = default_error_handler(exc, "test", 7777777777)
 
-                assert result is True
-                assert len(caplog.records) == 1
-                assert (
-                    "Handler error: Should still be logged"
-                    in caplog.records[0].getMessage()
-                )
+            assert result is True
+            assert len(caplog.records) == 1
+            assert (
+                "Handler error: Should still be logged"
+                in caplog.records[0].getMessage()
+            )
 
 
 class TestHandlerIntegration:

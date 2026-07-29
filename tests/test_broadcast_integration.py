@@ -41,9 +41,10 @@ def test_broadcast_with_after_filtering(workdir):
         run_cli("write", q, f"initial_{q}", cwd=workdir)
 
     # Get timestamp of last initial message to use as checkpoint
-    rc, out, _ = run_cli(
+    rc, out, err = run_cli(
         "peek", queues[-1], "--all", "--timestamps", "--json", cwd=workdir
     )
+    assert rc == 0, err
     initial_msg = json.loads(out.strip())
     checkpoint = initial_msg["timestamp"]
 
@@ -115,7 +116,8 @@ def test_broadcast_ordering_with_timestamps(workdir):
             timeout=3.0,
             interval=0.05,
         )
-        rc, out, _ = run_cli("peek", q, "--all", "--timestamps", cwd=workdir)
+        rc, out, err = run_cli("peek", q, "--all", "--timestamps", cwd=workdir)
+        assert rc == 0, err
         lines = [line for line in out.strip().split("\n") if line]
 
         # Extract timestamps and messages
@@ -187,10 +189,12 @@ def test_broadcast_race_condition_documentation(workdir):
     run_cli("write", "new_queue", "msg", cwd=workdir)
 
     # Existing queue has broadcast
-    rc, out, _ = run_cli("peek", "existing_queue", "--all", cwd=workdir)
+    rc, out, err = run_cli("peek", "existing_queue", "--all", cwd=workdir)
+    assert rc == 0, err
     assert "broadcast_msg" in out
 
     # New queue does not have broadcast (as documented)
-    rc, out, _ = run_cli("peek", "new_queue", "--all", cwd=workdir)
+    rc, out, err = run_cli("peek", "new_queue", "--all", cwd=workdir)
+    assert rc == 0, err
     assert "broadcast_msg" not in out
     assert out == "msg"

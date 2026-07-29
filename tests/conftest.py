@@ -8,6 +8,7 @@ exactly how an end-user would invoke it.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -300,7 +301,7 @@ def _cleanup_postgres_projects(root: Path) -> None:
     for config_path in config_paths:
         try:
             config = load_project_config(config_path)
-        except Exception:
+        except (OSError, ValueError):
             continue
         if config.get("backend") != POSTGRES_TEST_BACKEND:
             continue
@@ -378,7 +379,7 @@ def _cleanup_redis_projects(root: Path) -> None:
     for config_path in config_paths:
         try:
             config = load_project_config(config_path)
-        except Exception:
+        except (OSError, ValueError):
             continue
         if config.get("backend") != REDIS_TEST_BACKEND:
             continue
@@ -484,13 +485,11 @@ def pg_worker_runner(
         yield runner
     finally:
         # Teardown: drop the entire worker schema
-        try:
+        with contextlib.suppress(Exception):
             pg_worker_plugin.cleanup_target(
                 pg_worker_dsn,
                 backend_options={"schema": pg_worker_schema},
             )
-        except Exception:
-            pass
         if hasattr(runner, "shutdown"):
             runner.shutdown()
         else:
@@ -633,13 +632,11 @@ def redis_worker_runner(
     try:
         yield runner
     finally:
-        try:
+        with contextlib.suppress(Exception):
             redis_worker_plugin.cleanup_target(
                 redis_worker_url,
                 backend_options={"namespace": redis_worker_namespace},
             )
-        except Exception:
-            pass
         runner.shutdown()
 
 
@@ -725,10 +722,8 @@ def queue_factory(broker_target: BrokerTarget) -> Iterator[Callable[..., Queue]]
     yield _factory
 
     for q in created:
-        try:
+        with contextlib.suppress(Exception):
             q.close()
-        except Exception:
-            pass
 
 
 # --------------------------------------------------------------------------- #
@@ -1063,13 +1058,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
 # Export subprocess utilities for use in tests
 # --------------------------------------------------------------------------- #
 __all__ = [
-    "build_cli_env",
-    "run_cli",
-    "workdir",
-    "managed_subprocess",
-    "run_subprocess",
     "ManagedProcess",
-    "cleanup_watchers",
+    "build_cli_env",
     "cleanup_at_exit",
+    "cleanup_watchers",
+    "managed_subprocess",
     "patch_watchers",
+    "run_cli",
+    "run_subprocess",
+    "workdir",
 ]

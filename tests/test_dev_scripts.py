@@ -149,9 +149,11 @@ def test_coverage_exit_patch_saves_readable_data_from_os_exit(
         [
             sys.executable,
             "-c",
-            "import coverage; coverage.process_startup(); "
-            "import simplebroker._backend_plugins; "
-            "import os; os._exit(0)",
+            (
+                "import coverage; coverage.process_startup(); "
+                "import simplebroker._backend_plugins; "
+                "import os; os._exit(0)"
+            ),
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -192,10 +194,12 @@ def test_coverage_sigterm_saves_readable_data_from_terminated_process(
         [
             sys.executable,
             "-c",
-            "import coverage; coverage.process_startup(); "
-            "import simplebroker._backend_plugins; "
-            "print('ready', flush=True); "
-            "import signal; signal.pause()",
+            (
+                "import coverage; coverage.process_startup(); "
+                "import simplebroker._backend_plugins; "
+                "print('ready', flush=True); "
+                "import signal; signal.pause()"
+            ),
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -611,6 +615,7 @@ def test_child_coverage(index):
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr

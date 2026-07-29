@@ -84,21 +84,20 @@ def inspect_schema(
     """Inspect schema ownership and initialization state."""
     schema = require_schema_name(backend_options)
 
-    with connect(dsn) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
-                (schema,),
+    with connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
+            (schema,),
+        )
+        if cur.fetchone() is None:
+            return SchemaInspection(
+                schema=schema,
+                state=SchemaState.ABSENT,
+                objects=frozenset(),
             )
-            if cur.fetchone() is None:
-                return SchemaInspection(
-                    schema=schema,
-                    state=SchemaState.ABSENT,
-                    objects=frozenset(),
-                )
 
-            cur.execute(
-                """
+        cur.execute(
+            """
                 SELECT c.relname
                 FROM pg_class AS c
                 JOIN pg_namespace AS n
@@ -106,85 +105,83 @@ def inspect_schema(
                 WHERE n.nspname = %s
                   AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
                 """,
-                (schema,),
+            (schema,),
+        )
+        objects = frozenset(str(row[0]) for row in cur.fetchall())
+        if not objects:
+            return SchemaInspection(
+                schema=schema,
+                state=SchemaState.EMPTY,
+                objects=objects,
             )
-            objects = frozenset(str(row[0]) for row in cur.fetchall())
-            if not objects:
-                return SchemaInspection(
-                    schema=schema,
-                    state=SchemaState.EMPTY,
-                    objects=objects,
-                )
 
-            if "meta" in objects:
-                cur.execute(f"SET search_path TO {quote_ident(schema)}, public")
-                cur.execute(
-                    """
+        if "meta" in objects:
+            cur.execute(f"SET search_path TO {quote_ident(schema)}, public")
+            cur.execute(
+                """
                     SELECT column_name
                     FROM information_schema.columns
                     WHERE table_schema = %s
                       AND table_name = 'meta'
                     """,
-                    (schema,),
-                )
-                meta_columns = {str(row[0]) for row in cur.fetchall()}
-                if not TYPED_META_COLUMNS.issubset(meta_columns):
-                    return SchemaInspection(
-                        schema=schema,
-                        state=SchemaState.PARTIAL_SIMPLEBROKER,
-                        objects=objects,
-                    )
-
-                cur.execute(
-                    """
-                    SELECT magic, schema_version
-                    FROM meta
-                    WHERE singleton = TRUE
-                    """
-                )
-                typed_row = cur.fetchone()
-                magic_row = (typed_row[0],) if typed_row is not None else None
-                version_row = (typed_row[1],) if typed_row is not None else None
-
-                schema_version = (
-                    int(version_row[0]) if version_row is not None else None
-                )
-
-                if magic_row is not None and magic_row[0] == SIMPLEBROKER_MAGIC:
-                    if REQUIRED_TABLES.issubset(objects):
-                        return SchemaInspection(
-                            schema=schema,
-                            state=SchemaState.OWNED,
-                            objects=objects,
-                            schema_version=schema_version,
-                        )
-                    return SchemaInspection(
-                        schema=schema,
-                        state=SchemaState.PARTIAL_SIMPLEBROKER,
-                        objects=objects,
-                        schema_version=schema_version,
-                    )
-
-                if magic_row is not None or version_row is not None:
-                    return SchemaInspection(
-                        schema=schema,
-                        state=SchemaState.PARTIAL_SIMPLEBROKER,
-                        objects=objects,
-                        schema_version=schema_version,
-                    )
-
-            if REQUIRED_TABLES.intersection(objects):
+                (schema,),
+            )
+            meta_columns = {str(row[0]) for row in cur.fetchall()}
+            if not TYPED_META_COLUMNS.issubset(meta_columns):
                 return SchemaInspection(
                     schema=schema,
                     state=SchemaState.PARTIAL_SIMPLEBROKER,
                     objects=objects,
                 )
 
+            cur.execute(
+                """
+                    SELECT magic, schema_version
+                    FROM meta
+                    WHERE singleton = TRUE
+                    """
+            )
+            typed_row = cur.fetchone()
+            magic_row = (typed_row[0],) if typed_row is not None else None
+            version_row = (typed_row[1],) if typed_row is not None else None
+
+            schema_version = int(version_row[0]) if version_row is not None else None
+
+            if magic_row is not None and magic_row[0] == SIMPLEBROKER_MAGIC:
+                if REQUIRED_TABLES.issubset(objects):
+                    return SchemaInspection(
+                        schema=schema,
+                        state=SchemaState.OWNED,
+                        objects=objects,
+                        schema_version=schema_version,
+                    )
+                return SchemaInspection(
+                    schema=schema,
+                    state=SchemaState.PARTIAL_SIMPLEBROKER,
+                    objects=objects,
+                    schema_version=schema_version,
+                )
+
+            if magic_row is not None or version_row is not None:
+                return SchemaInspection(
+                    schema=schema,
+                    state=SchemaState.PARTIAL_SIMPLEBROKER,
+                    objects=objects,
+                    schema_version=schema_version,
+                )
+
+        if REQUIRED_TABLES.intersection(objects):
             return SchemaInspection(
                 schema=schema,
-                state=SchemaState.FOREIGN,
+                state=SchemaState.PARTIAL_SIMPLEBROKER,
                 objects=objects,
             )
+
+        return SchemaInspection(
+            schema=schema,
+            state=SchemaState.FOREIGN,
+            objects=objects,
+        )
 
 
 def validate_target(

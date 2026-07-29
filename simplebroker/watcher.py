@@ -80,6 +80,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, NamedTuple, Self, cast
 
 from ._constants import (
@@ -94,8 +95,6 @@ from .helpers import _execute_watcher_operational_retry, interruptible_sleep
 from .sbqueue import Queue
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from ._backend_plugins import ActivityWaiter
 
 __all__ = [
@@ -105,10 +104,10 @@ __all__ = [
     "QueueMoveWatcher",
     "QueueWatcher",
     "StopWatching",
-    "simple_print_handler",
+    "default_error_handler",
     "json_print_handler",
     "logger_handler",
-    "default_error_handler",
+    "simple_print_handler",
 ]
 
 _config = load_config()
@@ -512,8 +511,10 @@ class BaseWatcher(ABC):
             raise StopWatching from None
         except OperationalError as e:
             if effective_config["BROKER_LOGGING_ENABLED"]:
-                logger.exception(
+                logger.log(
+                    logging.ERROR,
                     f"Failed after {max_retries} operational errors: {e}",
+                    exc_info=True,
                 )
             raise
 
@@ -556,8 +557,10 @@ class BaseWatcher(ABC):
         except Exception as eh_error:
             # Error handler itself failed
             if effective_config["BROKER_LOGGING_ENABLED"]:
-                logger.exception(
+                logger.log(
+                    logging.ERROR,
                     f"Error handler failed: {eh_error}\nOriginal error: {e}",
+                    exc_info=True,
                 )
 
         # Raise StopWatching outside the try block to avoid catching it
@@ -764,16 +767,16 @@ class BaseWatcher(ABC):
             max_retries: Maximum number of retries allowed
 
         Returns:
-            True if should continue retrying, False otherwise
-
-        Raises:
-            Exception: Re-raises the exception if max retries exceeded
+            True if the retry should continue; False when retries are exhausted
+            or interrupted.
         """
         if retry_count >= max_retries:
-            logger.exception(
+            logger.log(
+                logging.ERROR,
                 f"Watcher failed after {max_retries} retries. Last error: {e}",
+                exc_info=(type(e), e, e.__traceback__),
             )
-            raise
+            return False
 
         wait_time = 2**retry_count  # Exponential backoff
         logger.debug(
@@ -833,7 +836,10 @@ class BaseWatcher(ABC):
                 raise
             except Exception as e:
                 retry_count += 1
-                if not self._handle_retry(e, retry_count, max_retries):
+                should_retry = self._handle_retry(e, retry_count, max_retries)
+                if retry_count >= max_retries:
+                    raise
+                if not should_retry:
                     break
 
     def _sigint_handler(self, signum: int, frame: Any) -> None:
@@ -868,7 +874,7 @@ class BaseWatcher(ABC):
         try:
             self._handler(message, timestamp)
             return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             self._handle_handler_error(
                 e, message, timestamp, error_handler, config=effective_config
             )
@@ -1036,7 +1042,7 @@ class BaseWatcher(ABC):
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: Any,
+        exc_tb: Any,  # noqa: PYI036 approved [DOM-10.1.1] exception
         *,
         config: Mapping[str, Any] | None = None,
     ) -> None:
@@ -1044,7 +1050,7 @@ class BaseWatcher(ABC):
         effective_config = self._config if config is None else resolve_config(config)
         try:
             self.stop()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             if effective_config["BROKER_LOGGING_ENABLED"]:
                 logger.warning(f"Error during stop in __exit__: {e}")
 
@@ -1088,10 +1094,8 @@ class BaseWatcher(ABC):
             if thr is not None:
                 thread = thr() if isinstance(thr, weakref.ref) else thr
                 if isinstance(thread, threading.Thread) and thread.is_alive():
-                    try:
+                    with contextlib.suppress(Exception):
                         thread.join(timeout=1.0)  # don't hang indefinitely
-                    except Exception:
-                        pass
 
             # Ensure the per-thread BrokerDB is closed
             with contextlib.suppress(Exception):
@@ -1135,7 +1139,7 @@ class SignalHandlerContext:
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: Any,
+        exc_tb: TracebackType | None,
     ) -> None:
         if self.original_handler is not None:
             signal.signal(self.signum, self.original_handler)
@@ -1421,7 +1425,7 @@ class PollingStrategy:
                 return True  # Change detected!
 
             return False
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             # Track PRAGMA failures
             self._pragma_failures += 1
             if self._pragma_failures >= 10:

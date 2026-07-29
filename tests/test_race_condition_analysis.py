@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from simplebroker._exceptions import DatabaseError
 from simplebroker.db import BrokerDB
 
 
@@ -53,7 +54,7 @@ class SubprocessMonitor:
                 with BrokerDB(str(self.db_path)):
                     # If we can create a BrokerDB instance, it's ready
                     break
-            except Exception:
+            except (DatabaseError, OSError):
                 # Not ready yet
                 time.sleep(0.001)
                 if time.time() - db_ready_start > 30:

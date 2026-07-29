@@ -18,7 +18,7 @@ _ID_RE = re.compile(r"^\d{19}$")
 
 
 def test_write_default_is_silent(workdir):
-    code, stdout, stderr = run_cli("write", "q", "hello", cwd=workdir)
+    code, stdout, _stderr = run_cli("write", "q", "hello", cwd=workdir)
 
     assert code == 0
     assert stdout == ""

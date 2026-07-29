@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sqlite3
 from pathlib import Path
@@ -89,15 +90,11 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:
         ) from exc
     finally:
         if cursor is not None:
-            try:
+            with contextlib.suppress(Exception):
                 cursor.close()
-            except Exception:
-                pass
         if conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
 
 
 def is_valid_database(file_path: Path, verify_magic: bool = True) -> bool:

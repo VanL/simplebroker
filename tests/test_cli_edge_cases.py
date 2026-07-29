@@ -12,43 +12,46 @@ class TestCLIEdgeCases:
 
     def test_system_exit_with_string_code(self):
         """Test handling of SystemExit with string code."""
-        with patch("sys.argv", ["simplebroker", "--invalid-option"]):
-            with patch("argparse.ArgumentParser.parse_args") as mock_parse:
-                # Simulate SystemExit with string code
-                mock_parse.side_effect = SystemExit("error message")
+        with (
+            patch("sys.argv", ["simplebroker", "--invalid-option"]),
+            patch("argparse.ArgumentParser.parse_args") as mock_parse,
+        ):
+            mock_parse.side_effect = SystemExit("error message")
 
-                result = main()
-                assert result == 1
+            result = main()
+            assert result == 1
 
     def test_system_exit_with_none_code(self):
         """Test handling of SystemExit with None code."""
-        with patch("sys.argv", ["simplebroker", "--invalid-option"]):
-            with patch("argparse.ArgumentParser.parse_args") as mock_parse:
-                # Simulate SystemExit with None code
-                mock_parse.side_effect = SystemExit(None)
+        with (
+            patch("sys.argv", ["simplebroker", "--invalid-option"]),
+            patch("argparse.ArgumentParser.parse_args") as mock_parse,
+        ):
+            mock_parse.side_effect = SystemExit(None)
 
-                result = main()
-                assert result == 1
+            result = main()
+            assert result == 1
 
     def test_cleanup_permission_error(self):
         """Test cleanup with permission denied error."""
-        with patch("sys.argv", ["simplebroker", "--cleanup"]):
-            with patch("pathlib.Path.exists", return_value=True):
-                with patch(
-                    "pathlib.Path.unlink",
-                    side_effect=PermissionError("Permission denied"),
-                ):
-                    result = main()
-                    assert result == 1
+        with (
+            patch("sys.argv", ["simplebroker", "--cleanup"]),
+            patch("pathlib.Path.exists", return_value=True),
+            patch(
+                "pathlib.Path.unlink", side_effect=PermissionError("Permission denied")
+            ),
+        ):
+            result = main()
+            assert result == 1
 
     def test_cleanup_general_error(self):
         """Test cleanup with general error."""
-        with patch("sys.argv", ["simplebroker", "--cleanup"]):
-            with patch(
-                "pathlib.Path.exists", side_effect=Exception("Unexpected error")
-            ):
-                result = main()
-                assert result == 1
+        with (
+            patch("sys.argv", ["simplebroker", "--cleanup"]),
+            patch("pathlib.Path.exists", side_effect=Exception("Unexpected error")),
+        ):
+            result = main()
+            assert result == 1
 
     def test_dir_is_file_error(self):
         """Test error when -d points to a file instead of directory."""
@@ -76,42 +79,40 @@ class TestCLIEdgeCases:
 
     def test_general_exception_quiet_mode(self):
         """Test that general exceptions respect quiet mode."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("sys.argv", ["simplebroker", "-d", tmpdir, "-q", "list"]):
-                # Patch the cmd_list function to raise an exception
-                with patch(
-                    "simplebroker.commands.cmd_list",
-                    side_effect=Exception("Database error"),
-                ):
-                    # In quiet mode, exception message should not be printed
-                    from io import StringIO
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("sys.argv", ["simplebroker", "-d", tmpdir, "-q", "list"]),
+            patch(
+                "simplebroker.commands.cmd_list",
+                side_effect=Exception("Database error"),
+            ),
+        ):
+            from io import StringIO
 
-                    captured_output = StringIO()
-                    with patch("sys.stderr", captured_output):
-                        result = main()
-                        assert result == 1
-                        # In quiet mode, error should not be printed
-                        output = captured_output.getvalue()
-                        assert "Database error" not in output
+            captured_output = StringIO()
+            with patch("sys.stderr", captured_output):
+                result = main()
+                assert result == 1
+                # In quiet mode, error should not be printed
+                output = captured_output.getvalue()
+                assert "Database error" not in output
 
     def test_keyboard_interrupt_handling(self):
         """Test graceful handling of Ctrl-C."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch("sys.argv", ["simplebroker", "-d", tmpdir, "list"]):
-                # Patch the cmd_list function to raise KeyboardInterrupt
-                with patch(
-                    "simplebroker.commands.cmd_list", side_effect=KeyboardInterrupt()
-                ):
-                    # Capture print output
-                    from io import StringIO
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("sys.argv", ["simplebroker", "-d", tmpdir, "list"]),
+            patch("simplebroker.commands.cmd_list", side_effect=KeyboardInterrupt()),
+        ):
+            from io import StringIO
 
-                    captured_output = StringIO()
-                    with patch("sys.stderr", captured_output):
-                        result = main()
-                        assert result == 0  # Ctrl-C returns 0
-                        output = captured_output.getvalue()
-                        # Check for the interrupted message
-                        assert "interrupted" in output.lower()
+            captured_output = StringIO()
+            with patch("sys.stderr", captured_output):
+                result = main()
+                assert result == 0  # Ctrl-C returns 0
+                output = captured_output.getvalue()
+                # Check for the interrupted message
+                assert "interrupted" in output.lower()
 
     def test_invalid_message_id_formats(self):
         """Test various invalid message ID formats return correct exit code."""
@@ -132,7 +133,6 @@ class TestCLIEdgeCases:
         ]
 
         for argv in test_cases:
-            with patch("sys.argv", argv):
-                with patch("simplebroker.db.BrokerDB"):
-                    result = main()
-                    assert result == 1
+            with patch("sys.argv", argv), patch("simplebroker.db.BrokerDB"):
+                result = main()
+                assert result == 1

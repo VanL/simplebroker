@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Require sibling workflow runs for the current SHA to be green before release."""
 
 from __future__ import annotations
@@ -179,8 +178,11 @@ def fetch_workflow_runs(
         url = f"{api_url.rstrip('/')}/repos/{repo_path}/actions/runs?{query}"
         payload = github_api_get(url, token=token)
         raw_runs = payload.get("workflow_runs", [])
-        if not isinstance(raw_runs, list):
-            raise RuntimeError("GitHub API response did not include workflow_runs")
+        match raw_runs:
+            case list():
+                pass
+            case _:
+                raise RuntimeError("GitHub API response did not include workflow_runs")
 
         runs.extend(
             WorkflowRun.from_api(run) for run in raw_runs if isinstance(run, Mapping)
@@ -212,9 +214,11 @@ def github_api_get(url: str, *, token: str) -> dict[str, object]:
     except urllib.error.URLError as exc:
         raise RuntimeError(f"GitHub API request failed: {exc}") from exc
 
-    if not isinstance(payload, dict):
-        raise RuntimeError("GitHub API response was not a JSON object")
-    return payload
+    match payload:
+        case dict():
+            return payload
+        case _:
+            raise RuntimeError("GitHub API response was not a JSON object")
 
 
 def wait_for_required_workflows(

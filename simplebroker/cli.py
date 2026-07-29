@@ -43,8 +43,6 @@ _config = load_config()
 class ArgumentParserError(Exception):
     """Custom exception for argument parsing errors."""
 
-    pass
-
 
 class CustomArgumentParser(argparse.ArgumentParser):
     """Custom ArgumentParser that doesn't exit on error."""
@@ -598,11 +596,9 @@ class ArgumentProcessor:
     def _handle_option_with_equals(self, arg: str) -> None:
         """Handle --option=value format."""
         option_name = arg.split("=")[0]
-        if option_name in self.options_with_values:
-            # Check if value is provided after =
-            if arg.endswith("="):
-                # Ends with = but no value
-                raise ArgumentParserError(f"option {option_name} requires an argument")
+        # Check if value is provided after =
+        if option_name in self.options_with_values and arg.endswith("="):
+            raise ArgumentParserError(f"option {option_name} requires an argument")
         self.global_args.append(arg)
 
     def _handle_global_option(self, arg: str) -> None:
@@ -1061,7 +1057,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                             f"Database not found, nothing to clean up: {display_target}"
                         )
             return EXIT_SUCCESS
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             commands._emit_error(
                 e,
                 code="ERROR",
@@ -1089,7 +1085,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 compact=args.compact,
                 quiet=args.quiet,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             commands._emit_error(
                 e,
                 code="ERROR",
@@ -1259,9 +1255,8 @@ def main(*, config: dict[str, Any] = _config) -> int:
             queue = None if args.all else args.queue
             message_id_str = getattr(args, "message_id", None)
 
-            if message_id_str is not None:
-                if queue is None:
-                    parser.error("--message requires a queue name")
+            if message_id_str is not None and queue is None:
+                parser.error("--message requires a queue name")
 
             return commands.cmd_delete(resolved_target, queue, message_id_str)
         elif args.command == "move":
@@ -1273,9 +1268,8 @@ def main(*, config: dict[str, Any] = _config) -> int:
             after_str = getattr(args, "after", None)
             before_str = getattr(args, "before", None)
 
-            if message_id_str is not None:
-                if after_str or before_str:
-                    parser.error("--message cannot be used with --after or --before")
+            if message_id_str is not None and (after_str or before_str):
+                parser.error("--message cannot be used with --after or --before")
 
             return commands.cmd_move(
                 resolved_target,
@@ -1361,7 +1355,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
         # Handle Ctrl-C gracefully
         print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
         return EXIT_SUCCESS
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         if not args.quiet:
             code = "INVALID_ARGUMENT" if isinstance(e, ArgumentParserError) else "ERROR"
             commands._emit_error(

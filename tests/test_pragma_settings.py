@@ -247,13 +247,12 @@ def test_invalid_wal_autocheckpoint_defaults(tmp_path) -> None:
     """Test that invalid BROKER_WAL_AUTOCHECKPOINT defaults to 1000 with warning."""
     db_path = tmp_path / "test.db"
 
-    with (
-        pytest.warns(
-            UserWarning,
-            match="Invalid BROKER_WAL_AUTOCHECKPOINT '-100'",
-        ),
-        BrokerDB(str(db_path), config={"BROKER_WAL_AUTOCHECKPOINT": -100}) as db,
+    with pytest.warns(
+        UserWarning,
+        match="Invalid BROKER_WAL_AUTOCHECKPOINT '-100'",
     ):
+        db = BrokerDB(str(db_path), config={"BROKER_WAL_AUTOCHECKPOINT": -100})
+    with db:
         result = db._runner.run("PRAGMA wal_autocheckpoint", fetch=True)
         autocheckpoint = result[0][0]
         assert autocheckpoint == 1000  # Default value

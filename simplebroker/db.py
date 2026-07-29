@@ -1,5 +1,6 @@
 """Database module for SimpleBroker - handles all SQLite operations."""
 
+import contextlib
 import logging
 import os
 import re
@@ -12,6 +13,7 @@ from contextlib import contextmanager
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
+from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -157,7 +159,7 @@ class _PoisonAwareRLock:
         self,
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
-        traceback: Any,
+        traceback: TracebackType | None,
     ) -> None:
         self._lock.release()
 
@@ -241,7 +243,7 @@ class _ProcessSessionCoreFactory:
             if leased:
                 try:
                     release_runner_thread_connection(runner)
-                except Exception as release_error:
+                except Exception as release_error:  # noqa: BLE001 approved [DOM-10.1.1] exception
                     exc.add_note(
                         f"Runner checkout release also failed: {release_error!r}"
                     )
@@ -623,8 +625,10 @@ class DBConnection:
             raise
         except Exception as e:
             if effective_config["BROKER_LOGGING_ENABLED"]:
-                logger.exception(
-                    f"Failed to get database connection after {max_retries} retries: {e}"
+                logger.log(
+                    logging.ERROR,
+                    f"Failed to get database connection after {max_retries} retries: {e}",
+                    exc_info=True,
                 )
             raise RuntimeError(f"Failed to get database connection: {e}") from e
 
@@ -677,8 +681,10 @@ class DBConnection:
             raise
         except Exception as e:
             if effective_config["BROKER_LOGGING_ENABLED"]:
-                logger.exception(
-                    f"Failed to get database connection after {max_retries} retries: {e}"
+                logger.log(
+                    logging.ERROR,
+                    f"Failed to get database connection after {max_retries} retries: {e}",
+                    exc_info=True,
                 )
             raise RuntimeError(f"Failed to get database connection: {e}") from e
 
@@ -796,7 +802,7 @@ class DBConnection:
                     connection.shutdown()
                 else:
                     connection.close()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 if effective_config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing registered connection: {e}")
 
@@ -820,7 +826,7 @@ class DBConnection:
                 return
             try:
                 owned_core.shutdown()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 if effective_config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing owned core: {e}")
             return
@@ -828,7 +834,7 @@ class DBConnection:
         if owned_runner is not None:
             try:
                 close_owned_runner(owned_runner)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 if effective_config["BROKER_LOGGING_ENABLED"]:
                     logger.warning(f"Error closing runner: {e}")
 
@@ -870,20 +876,19 @@ class DBConnection:
 
         self.cleanup()
 
-    def __enter__(self) -> "DBConnection":
+    def __enter__(self) -> "DBConnection":  # noqa: PYI034 approved [DOM-10.1.1] exception
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:  # noqa: PYI036 approved [DOM-10.1.1] exception
         """Exit context manager and release resources."""
         self.close()
 
     def __del__(self) -> None:
         """Destructor ensures cleanup."""
-        try:
+        # Ignore errors in destructor
+        with contextlib.suppress(Exception):
             self.close()
-        except Exception:
-            pass  # Ignore errors in destructor
 
 
 @contextmanager
@@ -1375,21 +1380,19 @@ class BrokerCore:
                 yield session
             except BaseException as original:
                 if threading.current_thread() is not owner_thread:
-                    try:
+                    with contextlib.suppress(BaseException):
                         self._publish_orphan_poison(
                             "sidecar session",
                             "sidecar",
                             owner_thread,
                         )
-                    except BaseException:
-                        pass
                     raise
 
                 cleanup_failure: BaseException | None = None
                 if transaction_open:
                     try:
                         self._runner.rollback()
-                    except BaseException as cleanup_error:
+                    except BaseException as cleanup_error:  # noqa: BLE001 approved [DOM-10.1.1] exception
                         cleanup_failure = cleanup_error
                     transaction_open = False
 
@@ -1402,14 +1405,12 @@ class BrokerCore:
                 raise
 
             if threading.current_thread() is not owner_thread:
-                try:
+                with contextlib.suppress(BaseException):
                     self._publish_orphan_poison(
                         "sidecar session",
                         "sidecar",
                         owner_thread,
                     )
-                except BaseException:
-                    pass
                 return
 
             try:
@@ -1419,7 +1420,7 @@ class BrokerCore:
                 if transaction_open:
                     try:
                         self._runner.rollback()
-                    except BaseException as cleanup_error:
+                    except BaseException as cleanup_error:  # noqa: BLE001 approved [DOM-10.1.1] exception
                         cleanup_failure = cleanup_error
                     transaction_open = False
                 self._add_cleanup_failure_note(diagnostic, cleanup_failure)
@@ -1433,10 +1434,8 @@ class BrokerCore:
                     # COMMIT failure can leave SQLite inside the transaction. A
                     # later nominally autocommit operation would otherwise commit
                     # these caller-owned partial writes.
-                    try:
+                    with contextlib.suppress(BaseException):
                         self._runner.rollback()
-                    except BaseException:
-                        pass
                     transaction_open = False
                     raise
         finally:
@@ -1850,25 +1849,21 @@ class BrokerCore:
                     except BaseException:
                         if threading.current_thread() is not owner_thread:
                             foreign_publication_attempted = True
-                            try:
+                            with contextlib.suppress(BaseException):
                                 self._publish_orphan_poison(
                                     "at_least_once generator",
                                     operation,
                                     owner_thread,
                                 )
-                            except BaseException:
-                                pass
                         raise
 
                     if threading.current_thread() is not owner_thread:
-                        try:
+                        with contextlib.suppress(BaseException):
                             self._publish_orphan_poison(
                                 "at_least_once generator",
                                 operation,
                                 owner_thread,
                             )
-                        except BaseException:
-                            pass
                         return
                     self._raise_if_poisoned()
 
@@ -1885,14 +1880,12 @@ class BrokerCore:
                     # the yield-local publication branch. Publishing is
                     # set-once, but do not emit a duplicate warning here.
                     if not foreign_publication_attempted:
-                        try:
+                        with contextlib.suppress(BaseException):
                             self._publish_orphan_poison(
                                 "at_least_once generator",
                                 operation,
                                 owner_thread,
                             )
-                        except BaseException:
-                            pass
                     raise
 
                 if active_batch:
@@ -1903,7 +1896,7 @@ class BrokerCore:
                 if transaction_open:
                     try:
                         self._runner.rollback()
-                    except BaseException as cleanup_error:
+                    except BaseException as cleanup_error:  # noqa: BLE001 approved [DOM-10.1.1] exception
                         cleanup_failure = cleanup_error
                     transaction_open = False
 
@@ -3457,11 +3450,11 @@ class BrokerCore:
                 self._runner.cleanup_marker_files()
             close_owned_runner(self._runner)
 
-    def __enter__(self) -> "BrokerCore":
+    def __enter__(self) -> "BrokerCore":  # noqa: PYI034 approved [DOM-10.1.1] exception
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:  # noqa: PYI036 approved [DOM-10.1.1] exception
         """Exit context manager and close connection."""
         self.close()
         return False
@@ -3486,11 +3479,9 @@ class BrokerCore:
 
     def __del__(self) -> None:
         """Ensure database connection is closed on object destruction."""
-        try:
+        # Ignore any errors during cleanup
+        with contextlib.suppress(Exception):
             self.close()
-        except Exception:
-            # Ignore any errors during cleanup
-            pass
 
 
 class BrokerDB(BrokerCore):
@@ -3570,7 +3561,7 @@ class BrokerDB(BrokerCore):
                     stacklevel=2,
                 )
 
-    def __enter__(self) -> "BrokerDB":
+    def __enter__(self) -> "BrokerDB":  # noqa: PYI034 approved [DOM-10.1.1] exception
         """Enter context manager."""
         return self
 

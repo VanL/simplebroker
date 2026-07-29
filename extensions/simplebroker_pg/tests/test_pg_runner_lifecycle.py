@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Any, cast
+from typing import Any, ClassVar, Self, cast
 
 import pytest
 import simplebroker_pg.runner as pg_runner_module
@@ -28,7 +28,7 @@ class FakeCursor:
         self._rows = rows
         self._execute_error = execute_error
 
-    def __enter__(self) -> FakeCursor:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -591,7 +591,7 @@ def test_shared_activity_registry_is_pid_scoped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeListener:
-        instances: list[FakeListener] = []
+        instances: ClassVar[list[FakeListener]] = []
 
         def __init__(self, dsn: str, *, schema: str) -> None:
             self.dsn = dsn

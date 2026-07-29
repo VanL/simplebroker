@@ -2393,18 +2393,25 @@ uv run ./bin/pytest-pg -q tests/test_watcher_metrics.py -k basic
 uv run ./bin/packaging-smoke --python 3.11
 
 # Lint and format
-uv run ruff check --fix simplebroker tests bin examples
-uv run ruff format simplebroker tests bin examples
+uv run ruff check .
+uv run ruff format simplebroker tests bin .github/scripts \
+  extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests \
+  extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 uv run mypy simplebroker bin/release.py
 ```
 
+The Ruff lint gate extends the locked release's stable defaults with the
+repository's existing `E`, `W`, `F`, `I`, `B`, `C4`, and `UP` families. Lint
+discovery covers all tracked Python files and Python-shebang tools. Formatting
+keeps the explicit path boundary shown above and does not format Markdown.
+
 CI uses one pinned uv release while local development accepts the compatible
-uv 0.11 line. Update both policies and all three lockfiles with one command:
+uv 0.12 line. Update both policies and all three lockfiles with one command:
 
 ```bash
 python bin/bump_uv.py \
-  --ci-version 0.11.28 \
-  --required-version '>=0.11.11,<0.12'
+  --ci-version 0.12.0 \
+  --required-version '>=0.12.0,<0.13'
 python bin/bump_uv.py --check
 ```
 

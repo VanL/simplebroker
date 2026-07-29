@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 MultiQueueWatcher Usage Patterns
 
@@ -27,7 +26,7 @@ from typing import Any
 # Add current directory to path for local imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multi_queue_watcher import MultiQueueWatcher  # noqa: E402
+from multi_queue_watcher import MultiQueueWatcher
 
 from simplebroker import Queue
 
@@ -324,7 +323,7 @@ def pattern_5_monitoring() -> None:
                     "total_processed": 0,
                     "queue_stats": {
                         queue: {"processed": 0, "errors": 0}
-                        for queue in self._queues.keys()
+                        for queue in self._queues
                     },
                     "start_time": time.time(),
                 }

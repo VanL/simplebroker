@@ -5,6 +5,7 @@ Tests the intelligent burst mode management that only resets on actual activity.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import threading
@@ -109,12 +110,17 @@ class InstrumentedQueueWatcher(QueueWatcher):
             self._message_count = 0
 
         # Check if we should drain using Queue's has_pending method
-        if self._has_pending_messages_enabled:
-            if hasattr(self, "_queue_obj") and not self._queue_obj.has_pending(
-                self._last_seen_ts if self._last_seen_ts > 0 else None
-            ):
-                self._found_messages_last_drain = False
-                return
+        if (
+            self._has_pending_messages_enabled
+            and hasattr(self, "_queue_obj")
+            and (
+                not self._queue_obj.has_pending(
+                    self._last_seen_ts if self._last_seen_ts > 0 else None
+                )
+            )
+        ):
+            self._found_messages_last_drain = False
+            return
 
         # Track if we found messages before calling parent
         initial_count = self._message_count
@@ -601,12 +607,11 @@ def test_polling_jitter(broker_target) -> None:
 
         # Cleanup watchers
         for w in watchers:
-            try:
+            # Ignore errors during cleanup
+            with contextlib.suppress(Exception):
                 w.stop()
                 if sys.platform == "win32":
                     time.sleep(0.5)  # Allow threads to terminate
-            except Exception:
-                pass  # Ignore errors during cleanup
     finally:
         # Restore original config value
         _config["BROKER_JITTER_FACTOR"] = original_jitter

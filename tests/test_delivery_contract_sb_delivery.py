@@ -26,9 +26,9 @@ LLMS = ROOT / "llms.txt"
 
 def _section(code: str) -> str:
     text = SPEC.read_text(encoding="utf-8")
-    match = re.search(rf"^## .+ \[{re.escape(code)}\]$", text, re.M)
+    match = re.search(rf"^## .+ \[{re.escape(code)}\]$", text, re.MULTILINE)
     assert match is not None
-    following = re.search(r"^## ", text[match.end() :], re.M)
+    following = re.search(r"^## ", text[match.end() :], re.MULTILINE)
     end = len(text) if following is None else match.end() + following.start()
     return text[match.start() : end]
 
@@ -55,7 +55,8 @@ def test_delivery_contract_clause_inventory_and_bindings() -> None:
     """Every canonical delivery clause has an implementation and firing gate."""
     text = SPEC.read_text(encoding="utf-8")
     heading_codes = {
-        int(code) for code in re.findall(r"^## .+ \[SB-DELIVERY-(\d+)\]$", text, re.M)
+        int(code)
+        for code in re.findall(r"^## .+ \[SB-DELIVERY-(\d+)\]$", text, re.MULTILINE)
     }
     assert heading_codes == set(range(1, 8))
 

@@ -528,7 +528,7 @@ class SQLiteRunner:
         self._prepare_connection_for_close(conn)
         try:
             conn.close()
-        except Exception as exc:
+        except sqlite3.Error as exc:
             if self._config["BROKER_LOGGING_ENABLED"]:
                 logger.warning("Error closing SQLite connection: %s", exc)
             return False
@@ -692,10 +692,7 @@ class SQLiteRunner:
             self._discard_stale_completion_markers()
             return False
 
-        if not service.has_phase(phase_name):
-            return False
-
-        return True
+        return service.has_phase(phase_name)
 
     def _discard_stale_completion_markers(self) -> None:
         """Remove fallback completion markers left behind after database deletion."""
@@ -744,7 +741,7 @@ class SQLiteRunner:
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:  # noqa: PYI036 approved [DOM-10.1.1] exception
         """Exit context manager - cleanup marker files."""
         self.cleanup_marker_files()
         self.close()

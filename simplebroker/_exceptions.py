@@ -13,8 +13,6 @@ import sqlite3
 class BrokerError(Exception):
     """Base exception for all SimpleBroker errors."""
 
-    pass
-
 
 class DatabaseError(BrokerError, sqlite3.DatabaseError):
     """Base class for package-defined database failures.
@@ -23,8 +21,6 @@ class DatabaseError(BrokerError, sqlite3.DatabaseError):
     are database errors, while OS errors remain reserved for filesystem and
     process operations.
     """
-
-    pass
 
 
 class OperationalError(DatabaseError, sqlite3.OperationalError):
@@ -60,8 +56,6 @@ class IntegrityError(DatabaseError, sqlite3.IntegrityError):
     Inherits from sqlite3.IntegrityError for compatibility.
     """
 
-    pass
-
 
 class DataError(DatabaseError, sqlite3.DataError, ValueError):
     """Invalid data format or type.
@@ -69,16 +63,12 @@ class DataError(DatabaseError, sqlite3.DataError, ValueError):
     Inherits from sqlite3.DataError for compatibility.
     """
 
-    pass
-
 
 class TimestampError(BrokerError):
     """Timestamp validation or generation error.
 
     This is SimpleBroker-specific and doesn't map to sqlite3.
     """
-
-    pass
 
 
 class QueueNameError(BrokerError, ValueError):
@@ -89,8 +79,6 @@ class QueueNameError(BrokerError, ValueError):
     plain ValueError before this class was put into use, so existing
     ``except ValueError`` handlers keep working.
     """
-
-    pass
 
 
 class MessageError(BrokerError, ValueError):
@@ -103,8 +91,6 @@ class MessageError(BrokerError, ValueError):
     keep working.
     """
 
-    pass
-
 
 class SidecarUnavailableError(BrokerError):
     """The active backend has no SQL storage for sidecar tables.
@@ -113,8 +99,6 @@ class SidecarUnavailableError(BrokerError):
     not store queues in a SQL database. Catch this to detect the capability:
     there is deliberately no separate ``supports_sidecar`` flag.
     """
-
-    pass
 
 
 # ~

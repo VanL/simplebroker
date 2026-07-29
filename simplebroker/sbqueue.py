@@ -8,7 +8,7 @@ import logging
 import threading
 import weakref
 from collections.abc import Iterable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Union, cast
@@ -258,16 +258,13 @@ class Queue:
         """Return cached meta.last_ts, fetching lazily on first access."""
 
         if self._last_ts is None:
-            try:
-                with self.get_connection() as connection:
-                    try:
-                        self._last_ts = connection.get_cached_last_timestamp()
-                    except AttributeError:
-                        # Older runners without hint support
-                        self._last_ts = connection.refresh_last_timestamp()
-            except Exception:
-                # Cache remains None; caller can use refresh_last_ts explicitly
-                return None
+            # Cache remains None on failure; callers can request an explicit refresh.
+            with suppress(Exception), self.get_connection() as connection:
+                try:
+                    self._last_ts = connection.get_cached_last_timestamp()
+                except AttributeError:
+                    # Older runners without hint support
+                    self._last_ts = connection.refresh_last_timestamp()
 
         return self._last_ts
 
@@ -294,9 +291,11 @@ class Queue:
         ``simplebroker.ext.RESERVED_TABLE_NAMES`` for tables you must not
         touch.
         """
-        with self.get_connection() as connection:
-            with connection.sidecar(transaction=transaction) as session:
-                yield session
+        with (
+            self.get_connection() as connection,
+            connection.sidecar(transaction=transaction) as session,
+        ):
+            yield session
 
     def _update_last_ts_hint(self, connection: BrokerConnection) -> None:
         """Update cached last_ts using the connection's generator state."""
@@ -1079,11 +1078,11 @@ class Queue:
                 include_claimed=include_claimed,
             )
 
-    def __enter__(self) -> "Queue":
+    def __enter__(self) -> "Queue":  # noqa: PYI034 approved [DOM-10.1.1] exception
         """Enter the context manager."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:  # noqa: PYI036 approved [DOM-10.1.1] exception
         """Exit the context manager and close the runner."""
         self.close()
 
@@ -1440,7 +1439,7 @@ class Queue:
                 if conn:
                     conn.close()
                 # Note: watcher_conn cleanup happens in cleanup_connections
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 if config.get("BROKER_LOGGING_ENABLED", True):
                     logger.warning(f"Error during Queue finalizer cleanup: {e}")
 

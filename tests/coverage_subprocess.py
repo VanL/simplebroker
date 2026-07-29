@@ -53,4 +53,4 @@ def run_with_coverage(
             new_cmd = [cmd[0], "-c", startup_code] + cmd[m_index + 2 :]
             cmd = new_cmd
 
-    return subprocess.run(cmd, **kwargs)
+    return subprocess.run(cmd, check=kwargs.pop("check", False), **kwargs)

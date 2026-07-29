@@ -10,6 +10,7 @@ import multiprocessing
 import sqlite3
 import time
 import unittest.mock
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from simplebroker._backends.sqlite.maintenance import vacuum_lock_path
@@ -113,9 +114,11 @@ def test_vacuum_lock_timeout_key_is_removed(workdir: Path) -> None:
             db.write("test_queue", f"message{i}")
         db.claim_many("test_queue", limit=100)
 
-    with _patch.dict(_os.environ, {"BROKER_VACUUM_LOCK_TIMEOUT": "0"}):
-        with BrokerDB(str(db_path)) as db:
-            db.vacuum()
+    with (
+        _patch.dict(_os.environ, {"BROKER_VACUUM_LOCK_TIMEOUT": "0"}),
+        BrokerDB(str(db_path)) as db,
+    ):
+        db.vacuum()
 
 
 def _schema_migration_worker(db_path: str, worker_id: int, results: list) -> None:
@@ -129,7 +132,7 @@ def _schema_migration_worker(db_path: str, worker_id: int, results: list) -> Non
         messages = db.peek_many(f"queue_{worker_id}", limit=100)
         db.close()
         results.append((worker_id, "success", len(messages)))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         results.append((worker_id, "error", str(e)))
 
 
@@ -232,56 +235,39 @@ def test_vacuum_with_concurrent_reads(workdir: Path) -> None:
     import threading
 
     stop_event = threading.Event()
-    reader_errors = []
+    reader_started = threading.Event()
 
     def continuous_reader() -> None:
         """Continuously read messages until stopped."""
-        try:
-            with BrokerDB(str(db_path)) as db:
-                while not stop_event.is_set():
-                    try:
-                        # Peek at messages (non-destructive)
-                        db.peek_one("test_queue")
-                        time.sleep(0.01)  # Small delay
-                    except Exception as e:
-                        reader_errors.append(e)
-        except Exception as e:
-            reader_errors.append(e)
-
-    # Start reader thread
-    reader_thread = threading.Thread(target=continuous_reader)
-    reader_started = threading.Event()
-
-    def continuous_reader_with_signal() -> None:
-        reader_started.set()  # Signal that reader has started
-        continuous_reader()
-
-    reader_thread = threading.Thread(target=continuous_reader_with_signal)
-    reader_thread.start()
-
-    try:
-        # Wait for reader to actually start (with timeout)
-        if not reader_started.wait(timeout=2.0):
-            msg = "Reader thread did not start within timeout"
-            raise TimeoutError(msg)
-
-        # Run vacuum while reader is active
         with BrokerDB(str(db_path)) as db:
-            db.vacuum()
+            reader_started.set()
+            while not stop_event.is_set():
+                # Peek at messages (non-destructive)
+                db.peek_one("test_queue")
+                time.sleep(0.01)  # Small delay
 
-        # Vacuum should complete successfully
-        conn = sqlite3.connect(str(db_path))
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-        assert cursor.fetchone()[0] == 0  # All claimed messages removed
-        cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 0")
-        assert cursor.fetchone()[0] == 50  # Unclaimed messages remain
-        conn.close()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        reader = executor.submit(continuous_reader)
+        try:
+            assert reader_started.wait(timeout=2.0), (
+                "Reader thread did not start within timeout"
+            )
 
-    finally:
-        # Stop reader
-        stop_event.set()
-        reader_thread.join(timeout=2)
+            # Run vacuum while reader is active
+            with BrokerDB(str(db_path)) as db:
+                db.vacuum()
+
+            # Vacuum should complete successfully
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
+            assert cursor.fetchone()[0] == 0  # All claimed messages removed
+            cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 0")
+            assert cursor.fetchone()[0] == 50  # Unclaimed messages remain
+            conn.close()
+        finally:
+            stop_event.set()
+        reader.result(timeout=2)
 
 
 def test_timestamp_overflow_protection(workdir: Path) -> None:

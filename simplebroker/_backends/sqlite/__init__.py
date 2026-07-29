@@ -23,6 +23,7 @@ from .schema import (
 from .validation import is_valid_database, validate_database
 
 __all__ = [
+    "SQLiteBackendPlugin",
     "apply_connection_settings",
     "apply_optimization_settings",
     "check_version",
@@ -33,11 +34,10 @@ __all__ = [
     "get_data_version",
     "initialize_database",
     "is_valid_database",
-    "migrate_schema",
     "meta_table_exists",
-    "SQLiteBackendPlugin",
+    "migrate_schema",
     "setup_connection_phase",
     "sqlite_backend_plugin",
-    "validate_database",
     "vacuum",
+    "validate_database",
 ]

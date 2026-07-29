@@ -9,7 +9,7 @@ Postgres and Redis coverage lives in the extension test directories.
 from __future__ import annotations
 
 import sqlite3
-import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -34,71 +34,72 @@ def _db(tmp_path: Path) -> str:
 
 def test_autocommit_create_insert_select(tmp_path: Path) -> None:
     q = Queue("jobs", db_path=_db(tmp_path))
-    with q.get_connection() as conn:
-        with conn.sidecar() as session:
-            assert isinstance(session, SidecarSession)
-            session.run(
-                "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
-            )
-            session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("a", "1"))
-            rows = list(
-                session.run("SELECT v FROM app_kv WHERE k = ?", ("a",), fetch=True)
-            )
+    with q.get_connection() as conn, conn.sidecar() as session:
+        assert isinstance(session, SidecarSession)
+        session.run("CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)")
+        session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("a", "1"))
+        rows = list(session.run("SELECT v FROM app_kv WHERE k = ?", ("a",), fetch=True))
     assert rows == [("1",)]
 
 
 def test_autocommit_rows_survive_across_connections(tmp_path: Path) -> None:
     db = _db(tmp_path)
-    with Queue("jobs", db_path=db).get_connection() as conn:
-        with conn.sidecar() as session:
-            session.run(
-                "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
-            )
-            session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("b", "2"))
+    with (
+        Queue("jobs", db_path=db).get_connection() as conn,
+        conn.sidecar() as session,
+    ):
+        session.run("CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)")
+        session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("b", "2"))
     # A completely fresh handle sees the committed data: proof the sidecar
     # table lives in the same database file and autocommit is durable.
-    with Queue("other", db_path=db).get_connection() as conn:
-        with conn.sidecar() as session:
-            rows = list(
-                session.run("SELECT v FROM app_kv WHERE k = ?", ("b",), fetch=True)
-            )
+    with (
+        Queue("other", db_path=db).get_connection() as conn,
+        conn.sidecar() as session,
+    ):
+        rows = list(session.run("SELECT v FROM app_kv WHERE k = ?", ("b",), fetch=True))
     assert rows == [("2",)]
 
 
 def test_transaction_commits_on_clean_exit(tmp_path: Path) -> None:
     db = _db(tmp_path)
-    with Queue("jobs", db_path=db).get_connection() as conn:
-        with conn.sidecar(transaction=True) as session:
-            session.run(
-                "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
-            )
-            session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("c", "3"))
-    with Queue("jobs", db_path=db).get_connection() as conn:
-        with conn.sidecar() as session:
-            rows = list(session.run("SELECT v FROM app_kv", fetch=True))
+    with (
+        Queue("jobs", db_path=db).get_connection() as conn,
+        conn.sidecar(transaction=True) as session,
+    ):
+        session.run("CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)")
+        session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("c", "3"))
+    with (
+        Queue("jobs", db_path=db).get_connection() as conn,
+        conn.sidecar() as session,
+    ):
+        rows = list(session.run("SELECT v FROM app_kv", fetch=True))
     assert rows == [("3",)]
 
 
 def test_transaction_rolls_back_on_exception(tmp_path: Path) -> None:
     db = _db(tmp_path)
-    with Queue("jobs", db_path=db).get_connection() as conn:
-        with conn.sidecar(transaction=True) as session:
-            session.run(
-                "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
-            )
+    with (
+        Queue("jobs", db_path=db).get_connection() as conn,
+        conn.sidecar(transaction=True) as session,
+    ):
+        session.run("CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)")
 
     class _Boom(Exception):
         pass
 
-    with pytest.raises(_Boom):
-        with Queue("jobs", db_path=db).get_connection() as conn:
-            with conn.sidecar(transaction=True) as session:
-                session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("d", "4"))
-                raise _Boom()
+    with (
+        pytest.raises(_Boom),
+        Queue("jobs", db_path=db).get_connection() as conn,
+        conn.sidecar(transaction=True) as session,
+    ):
+        session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("d", "4"))
+        raise _Boom()
 
-    with Queue("jobs", db_path=db).get_connection() as conn:
-        with conn.sidecar() as session:
-            rows = list(session.run("SELECT v FROM app_kv", fetch=True))
+    with (
+        Queue("jobs", db_path=db).get_connection() as conn,
+        conn.sidecar() as session,
+    ):
+        rows = list(session.run("SELECT v FROM app_kv", fetch=True))
     assert rows == []  # the insert was rolled back; the exception propagated
 
 
@@ -118,9 +119,11 @@ def test_transaction_rolls_back_when_commit_fails(
             raise sqlite3.OperationalError("injected sidecar commit failure")
 
         monkeypatch.setattr(conn._runner, "commit", fail_commit)
-        with pytest.raises(sqlite3.OperationalError, match="injected sidecar"):
-            with conn.sidecar(transaction=True) as session:
-                session.run("INSERT INTO app_kv VALUES (?, ?)", ("poison", "1"))
+        with (
+            pytest.raises(sqlite3.OperationalError, match="injected sidecar"),
+            conn.sidecar(transaction=True) as session,
+        ):
+            session.run("INSERT INTO app_kv VALUES (?, ?)", ("poison", "1"))
         monkeypatch.setattr(conn._runner, "commit", original_commit)
 
         with conn.sidecar() as session:
@@ -166,12 +169,16 @@ def test_sidecar_blocked_during_at_least_once_batch(tmp_path: Path) -> None:
             assert next(gen) == "m1"
             # The generator is suspended mid-batch: this thread holds an
             # open transaction. Both sidecar modes must refuse.
-            with pytest.raises(RuntimeError, match="at_least_once"):
-                with conn.sidecar():
-                    pass
-            with pytest.raises(RuntimeError, match="at_least_once"):
-                with conn.sidecar(transaction=True):
-                    pass
+            with (
+                pytest.raises(RuntimeError, match="at_least_once"),
+                conn.sidecar(),
+            ):
+                pass
+            with (
+                pytest.raises(RuntimeError, match="at_least_once"),
+                conn.sidecar(transaction=True),
+            ):
+                pass
             gen.close()  # rolls the batch back; m1/m2 stay claimable
 
 
@@ -194,32 +201,23 @@ def test_sidecar_write_retries_until_external_lock_clears(
     try:
         blocker.execute("BEGIN IMMEDIATE")  # hold the write lock
 
-        done = threading.Event()
-        errors: list[Exception] = []
-
         def writer() -> None:
-            try:
-                with q.sidecar(transaction=True) as session:
-                    session.run(
-                        "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
-                    )
-                    session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("g", "7"))
-            except Exception as exc:  # pragma: no cover - failure diagnostics
-                errors.append(exc)
-            finally:
-                done.set()
+            with q.sidecar(transaction=True) as session:
+                session.run(
+                    "CREATE TABLE IF NOT EXISTS app_kv (k TEXT PRIMARY KEY, v TEXT)"
+                )
+                session.run("INSERT INTO app_kv (k, v) VALUES (?, ?)", ("g", "7"))
 
-        thread = threading.Thread(target=writer, daemon=True)
-        thread.start()
-        # While the external lock is held the writer must not finish.
-        assert not done.wait(0.3), "writer finished while the db was locked"
-        blocker.rollback()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(writer)
+            # While the external lock is held the writer must not finish.
+            with pytest.raises(TimeoutError):
+                future.result(timeout=0.3)
+            blocker.rollback()
+            future.result(timeout=15)
     finally:
         blocker.close()
 
-    assert done.wait(15), "sidecar write never completed after lock release"
-    thread.join(5)
-    assert errors == []
     with q.sidecar() as session:
         rows = list(session.run("SELECT v FROM app_kv", fetch=True))
     assert rows == [("7",)]

@@ -144,9 +144,11 @@ def test_connection_failure_logs_retry_and_terminal_context(
 
     monkeypatch.setattr("simplebroker.db._execute_connection_retry", fail_retry)
 
-    with caplog.at_level("DEBUG", logger="simplebroker.db"):
-        with pytest.raises(RuntimeError, match="Failed to get database connection"):
-            connection.get_connection()
+    with (
+        caplog.at_level("DEBUG", logger="simplebroker.db"),
+        pytest.raises(RuntimeError, match="Failed to get database connection"),
+    ):
+        connection.get_connection()
 
     assert "Database connection error (retry 1/3)" in caplog.text
     assert "Failed to get database connection after 3 retries" in caplog.text

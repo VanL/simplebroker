@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 from unittest.mock import patch
@@ -722,48 +723,33 @@ class TestIntegration:
         manager = SQLiteConnectionManager(temp_db_path)
         manager.setup_database()
 
-        results = []
-        errors = []
-
         def worker(worker_id):
-            try:
-                conn = manager.get_connection()
+            conn = manager.get_connection()
 
-                # Each worker creates its own table
-                conn.execute(
-                    f"CREATE TABLE IF NOT EXISTS worker_{worker_id} (id INTEGER, data TEXT)"
-                )
-                conn.execute(
-                    f"INSERT INTO worker_{worker_id} (id, data) VALUES (?, ?)",
-                    (worker_id, f"data_{worker_id}"),
-                )
-                conn.commit()
+            # Each worker creates its own table
+            conn.execute(
+                f"CREATE TABLE IF NOT EXISTS worker_{worker_id} (id INTEGER, data TEXT)"
+            )
+            conn.execute(
+                f"INSERT INTO worker_{worker_id} (id, data) VALUES (?, ?)",
+                (worker_id, f"data_{worker_id}"),
+            )
+            conn.commit()
 
-                # Read back the data
-                cursor = conn.execute(
-                    f"SELECT data FROM worker_{worker_id} WHERE id = ?", (worker_id,)
-                )
-                result = cursor.fetchone()
-                results.append(result[0] if result else None)
+            # Read back the data
+            cursor = conn.execute(
+                f"SELECT data FROM worker_{worker_id} WHERE id = ?", (worker_id,)
+            )
+            result = cursor.fetchone()
+            return result[0] if result else None
 
-            except Exception as e:
-                errors.append(f"Worker {worker_id}: {e}")
-
-        # Start multiple worker threads
-        threads = []
-        for i in range(5):
-            thread = threading.Thread(target=worker, args=(i,))
-            threads.append(thread)
-            thread.start()
-
-        # Wait for all threads to complete
-        for thread in threads:
-            thread.join()
-
-        manager.close()
+        try:
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                results = list(executor.map(worker, range(5)))
+        finally:
+            manager.close()
 
         # Check results
-        assert len(errors) == 0, f"Errors occurred: {errors}"
         assert len(results) == 5
         assert all(f"data_{i}" in results for i in range(5))
 

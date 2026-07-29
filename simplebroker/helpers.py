@@ -4,6 +4,7 @@ import os
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from pathlib import Path, PurePath
 from typing import Any, TypeVar
 
@@ -82,10 +83,9 @@ class _StopAfterProgressStall(Stop):
         self._has_observed_token = False
 
     def _observe_progress(self, *, elapsed: float) -> None:
-        try:
+        token = None
+        with suppress(Exception):
             token = self._progress_token()
-        except Exception:
-            return
         if token is None:
             return
         if self._has_observed_token and token != self._observed_token:
@@ -185,9 +185,7 @@ def _is_locked_operational_error(exc: OperationalError) -> bool:
 def _is_watcher_operational_retry(exc: Exception) -> bool:
     if not isinstance(exc, OperationalError):
         return False
-    if getattr(exc, "retryable", None) is False:
-        return False
-    return True
+    return getattr(exc, "retryable", None) is not False
 
 
 def _execute_watcher_operational_retry(
@@ -655,12 +653,13 @@ def _validate_path_containment(
 
     if containment_check and not used_project_scope:
         raise ValueError("Database file must be within the working directory")
-    elif used_project_scope:
-        # Additional validation for project-scoped paths
-        if not _is_ancestor_of_working_directory(db_path, working_dir):
-            raise ValueError(
-                "Project-scoped database path must be in parent directory chain"
-            )
+    # Additional validation for project-scoped paths
+    if used_project_scope and not _is_ancestor_of_working_directory(
+        db_path, working_dir
+    ):
+        raise ValueError(
+            "Project-scoped database path must be in parent directory chain"
+        )
 
 
 def _validate_path_traversal_prevention(filename: str) -> None:

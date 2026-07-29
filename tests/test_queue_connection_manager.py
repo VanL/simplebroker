@@ -1,5 +1,6 @@
 """Tests for Queue.get_connection context manager behavior."""
 
+import concurrent.futures
 import gc
 import tempfile
 import threading
@@ -185,9 +186,8 @@ class TestQueueConnectionManager:
                 lock = threading.Lock()
 
                 def get_connection():
-                    with queue.get_connection() as conn:
-                        with lock:
-                            connection_ids.append(conn._runner.instance_id)
+                    with queue.get_connection() as conn, lock:
+                        connection_ids.append(conn._runner.instance_id)
 
                 # Create multiple threads
                 threads = [threading.Thread(target=get_connection) for _ in range(5)]
@@ -217,77 +217,55 @@ class TestQueueConnectionManager:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             queue = None
-            threads = []
             try:
                 with Queue("test", db_path=db_path, persistent=True) as queue:
                     # First, verify same thread gets cached connection
-                    with queue.get_connection() as first_conn:
-                        with queue.get_connection() as second_conn:
-                            assert first_conn is second_conn, (
-                                "Sequential calls in same thread should return same connection"
-                            )
+                    with (
+                        queue.get_connection() as first_conn,
+                        queue.get_connection() as second_conn,
+                    ):
+                        assert first_conn is second_conn, (
+                            "Sequential calls in same thread should return same connection"
+                        )
 
-                    connections = []
-                    connection_runner_ids = []
-                    lock = threading.Lock()
                     barrier = threading.Barrier(5)  # Synchronize thread starts
 
                     def get_connection():
-                        try:
-                            barrier.wait()  # Wait for all threads to be ready
-                            # Get connection twice to verify thread-local caching
-                            with queue.get_connection() as conn1:
-                                with queue.get_connection() as conn2:
-                                    with lock:
-                                        connections.append((conn1, conn2))
-                                        connection_runner_ids.append(
-                                            (
-                                                conn1._runner.instance_id,
-                                                conn2._runner.instance_id,
-                                            )
-                                        )
-                                        # Within same thread, should be cached
-                                        assert conn1 is conn2, (
-                                            "Same thread should get cached connection"
-                                        )
-                        except Exception:
-                            # Ignore exceptions in worker threads to prevent hanging
-                            pass
+                        barrier.wait()  # Wait for all threads to be ready
+                        with (
+                            queue.get_connection() as conn1,
+                            queue.get_connection() as conn2,
+                        ):
+                            assert conn1 is conn2, (
+                                "Same thread should get cached connection"
+                            )
+                            return (
+                                (conn1, conn2),
+                                (conn1._runner.instance_id, conn2._runner.instance_id),
+                            )
 
-                    # Create multiple threads
-                    threads = [
-                        threading.Thread(target=get_connection) for _ in range(5)
+                    with concurrent.futures.ThreadPoolExecutor(
+                        max_workers=5
+                    ) as executor:
+                        futures = [executor.submit(get_connection) for _ in range(5)]
+                        results = [future.result(timeout=5.0) for future in futures]
+
+                    connections = [pair for pair, _runner_ids in results]
+                    connection_runner_ids = [
+                        runner_ids for _pair, runner_ids in results
                     ]
-
-                    # Start all threads
-                    for t in threads:
-                        t.start()
-
-                    # Wait for all to complete
-                    for t in threads:
-                        t.join(timeout=5.0)  # Timeout to prevent hanging
-
-                    # Verify we got 5 pairs of connections (if all threads succeeded)
-                    if len(connections) == 5:
-                        # In persistent mode, each thread gets its own connection (no sharing)
-                        # This follows the principle "don't share across threads"
-                        unique_runner_ids = {
-                            runner_pair[0] for runner_pair in connection_runner_ids
-                        }
-                        assert len(unique_runner_ids) == 5, (
-                            "Each thread should have its own connection (no sharing across threads)"
-                        )
+                    assert len(connections) == 5
+                    unique_runner_ids = {
+                        runner_pair[0] for runner_pair in connection_runner_ids
+                    }
+                    assert len(unique_runner_ids) == 5, (
+                        "Each thread should have its own connection (no sharing across threads)"
+                    )
 
                     # But all should share the same underlying DBConnection object
                     assert queue.conn is not None, "Should have persistent DBConnection"
                 connections = None  # Clear to release references
             finally:
-                # Clean up threads first with longer timeout
-                for t in threads:
-                    if t.is_alive():
-                        t.join(timeout=2.0)
-                threads = None  # Clear to release references
-
                 # Force garbage collection to clean up any remaining references
                 gc.collect()
 
@@ -300,25 +278,15 @@ class TestQueueConnectionManager:
         queue.write("hello")
         assert list(queue.peek_generator()) == ["hello"]
 
-        caught_warnings = []
-        caught_errors = []
-
         def close_queue():
-            try:
-                with warnings.catch_warnings(record=True) as caught:
-                    warnings.simplefilter("always", ResourceWarning)
-                    queue.close()
-                    gc.collect()
-                    caught_warnings.extend(caught)
-            except BaseException as exc:  # pragma: no cover - asserted in parent
-                caught_errors.append(exc)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", ResourceWarning)
+                queue.close()
+                gc.collect()
+                return list(caught)
 
-        thread = threading.Thread(target=close_queue)
-        thread.start()
-        thread.join(timeout=5.0)
-
-        assert not thread.is_alive(), "close thread did not finish"
-        assert not caught_errors
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            caught_warnings = executor.submit(close_queue).result(timeout=5.0)
         resource_warnings = [
             warning
             for warning in caught_warnings
@@ -329,25 +297,15 @@ class TestQueueConnectionManager:
     def test_persistent_queue_close_cleans_worker_thread_connections(self, tmp_path):
         """Closing a persistent queue cleans connections created by workers."""
         queue = Queue("test", db_path=str(tmp_path / "test.db"), persistent=True)
-        caught_errors = []
-        errors_lock = threading.Lock()
 
         def use_queue(index):
-            try:
-                queue.write(f"message-{index}")
-                assert list(queue.peek_generator())
-            except BaseException as exc:  # pragma: no cover - asserted in parent
-                with errors_lock:
-                    caught_errors.append(exc)
+            queue.write(f"message-{index}")
+            assert list(queue.peek_generator())
 
-        threads = [threading.Thread(target=use_queue, args=(i,)) for i in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=5.0)
-
-        assert all(not thread.is_alive() for thread in threads)
-        assert not caught_errors
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(use_queue, index) for index in range(2)]
+            for future in futures:
+                future.result(timeout=5.0)
 
         with warnings.catch_warnings(record=True) as caught_warnings:
             warnings.simplefilter("always", ResourceWarning)
@@ -402,10 +360,11 @@ class TestQueueConnectionManager:
 
             # Test that exceptions in the context manager are propagated
             with Queue("test", db_path=db_path, persistent=False) as queue:
-                with pytest.raises(ValueError):
-                    with queue.get_connection() as conn:
-                        # Simulate an error during operation
-                        raise ValueError("Test error")
+                with (
+                    pytest.raises(ValueError),
+                    queue.get_connection() as conn,
+                ):
+                    raise ValueError("Test error")
 
                 # Queue should still be usable after error
                 with queue.get_connection() as conn:

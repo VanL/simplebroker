@@ -5,6 +5,5 @@ from __future__ import annotations
 
 from simplebroker._scripts import packaging_smoke_main
 
-
 if __name__ == "__main__":
     raise SystemExit(packaging_smoke_main())

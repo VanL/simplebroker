@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -33,7 +33,7 @@ class RecordingPlugin:
     backend_api_version = backend_plugins.BACKEND_API_VERSION
     schema_version = 1
     waiter = DummyWaiter()
-    calls: list[dict[str, Any]] = []
+    calls: ClassVar[list[dict[str, Any]]] = []
 
     def create_activity_waiter(
         self,

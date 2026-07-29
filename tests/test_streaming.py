@@ -74,10 +74,12 @@ def test_streaming_peek_all(workdir: Path):
 def test_json_output_now_ndjson(workdir: Path):
     """Test that JSON output now uses line-delimited JSON (ndjson) format."""
     for i in range(5):
-        code, _, stderr = run_cli("write", "test_queue", f"message_{i}", cwd=workdir)
+        code, _, _stderr = run_cli("write", "test_queue", f"message_{i}", cwd=workdir)
         assert code == 0
 
-    code, stdout, stderr = run_cli("read", "test_queue", "--all", "--json", cwd=workdir)
+    code, stdout, _stderr = run_cli(
+        "read", "test_queue", "--all", "--json", cwd=workdir
+    )
     assert code == 0
 
     lines = stdout.strip().split("\n")

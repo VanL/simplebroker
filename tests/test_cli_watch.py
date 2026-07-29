@@ -100,7 +100,7 @@ class TestWatchCommand:
         # Write a message
         from .conftest import run_cli
 
-        rc, out, err = run_cli("write", "watchtest", "hello", cwd=workdir)
+        rc, _out, _err = run_cli("write", "watchtest", "hello", cwd=workdir)
         assert rc == 0
 
         # Start watch in subprocess
@@ -115,7 +115,7 @@ class TestWatchCommand:
         from .conftest import run_cli
 
         # Write initial message
-        rc, out, err = run_cli("write", "siginttest", "message1", cwd=workdir)
+        rc, _out, _err = run_cli("write", "siginttest", "message1", cwd=workdir)
         assert rc == 0
 
         # Start watch command
@@ -153,7 +153,7 @@ class TestWatchCommand:
         from .conftest import run_cli
 
         # Write a message
-        rc, out, err = run_cli("write", "peektest", "peekmsg", cwd=workdir)
+        rc, out, _err = run_cli("write", "peektest", "peekmsg", cwd=workdir)
         assert rc == 0
 
         # Start watch in peek mode
@@ -172,7 +172,7 @@ class TestWatchCommand:
             )
 
         # Message should still be in queue
-        rc, out, err = run_cli("read", "peektest", cwd=workdir)
+        rc, out, _err = run_cli("read", "peektest", cwd=workdir)
         assert rc == 0
         assert out == "peekmsg"
 
@@ -182,7 +182,7 @@ class TestWatchCommand:
         from .conftest import run_cli
 
         # Write a message
-        rc, out, err = run_cli("write", "jsontest", "test message", cwd=workdir)
+        rc, _out, _err = run_cli("write", "jsontest", "test message", cwd=workdir)
         assert rc == 0
 
         # Start watch with JSON output
@@ -212,7 +212,9 @@ class TestWatchCommand:
         from .conftest import run_cli
 
         # Write a message to the queue
-        rc, out, err = run_cli("write", "timestamptest", "initial message", cwd=workdir)
+        rc, _out, _err = run_cli(
+            "write", "timestamptest", "initial message", cwd=workdir
+        )
         assert rc == 0
 
         # Start watch process with --json flag (not --timestamps)

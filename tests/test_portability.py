@@ -16,21 +16,23 @@ def test_chmod_windows_compatibility(tmp_path):
     db_path = tmp_path / "test.db"
 
     # Mock os.chmod to raise OSError (simulating Windows permission issue)
-    with unittest.mock.patch("os.chmod", side_effect=OSError("Permission denied")):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            # Should not crash, just warn
-            db = BrokerDB(str(db_path))
-            try:
-                pass  # Database created successfully despite chmod failure
-            finally:
-                db.close()
+    with (
+        unittest.mock.patch("os.chmod", side_effect=OSError("Permission denied")),
+        warnings.catch_warnings(record=True) as w,
+    ):
+        warnings.simplefilter("always")
+        # Should not crash, just warn
+        db = BrokerDB(str(db_path))
+        try:
+            pass  # Database created successfully despite chmod failure
+        finally:
+            db.close()
 
-            # Verify warning was issued
-            assert len(w) == 1
-            assert issubclass(w[0].category, RuntimeWarning)
-            assert "Could not set file permissions" in str(w[0].message)
-            assert str(db_path) in str(w[0].message)
+        # Verify warning was issued
+        assert len(w) == 1
+        assert issubclass(w[0].category, RuntimeWarning)
+        assert "Could not set file permissions" in str(w[0].message)
+        assert str(db_path) in str(w[0].message)
 
 
 def test_path_resolve_edge_case(tmp_path):
@@ -39,22 +41,24 @@ def test_path_resolve_edge_case(tmp_path):
     test_file = tmp_path / "test.db"
 
     # Mock Path.resolve to raise OSError
-    with unittest.mock.patch.object(
-        Path, "resolve", side_effect=OSError("Invalid path")
+    with (
+        unittest.mock.patch.object(
+            Path, "resolve", side_effect=OSError("Invalid path")
+        ),
+        warnings.catch_warnings(record=True) as w,
     ):
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            # Should fall back to expanduser without crashing
-            db = BrokerDB(str(test_file))
-            try:
-                pass  # Database created successfully despite path resolution failure
-            finally:
-                db.close()
+        warnings.simplefilter("always")
+        # Should fall back to expanduser without crashing
+        db = BrokerDB(str(test_file))
+        try:
+            pass  # Database created successfully despite path resolution failure
+        finally:
+            db.close()
 
-            # Verify warning was issued
-            assert len(w) == 1
-            assert issubclass(w[0].category, RuntimeWarning)
-            assert "Could not resolve path" in str(w[0].message)
+        # Verify warning was issued
+        assert len(w) == 1
+        assert issubclass(w[0].category, RuntimeWarning)
+        assert "Could not resolve path" in str(w[0].message)
 
 
 def test_chmod_called_on_new_database(tmp_path):

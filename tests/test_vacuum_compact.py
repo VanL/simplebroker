@@ -159,7 +159,7 @@ def test_cli_compact_requires_vacuum(workdir: Path):
     db_path = workdir / "test.db"
 
     # Try to use --compact without --vacuum
-    returncode, stdout, stderr = run_cli("-f", str(db_path), "--compact", cwd=workdir)
+    returncode, _stdout, stderr = run_cli("-f", str(db_path), "--compact", cwd=workdir)
     assert returncode == 1
     assert "--compact can only be used with --vacuum" in stderr
 
@@ -169,7 +169,7 @@ def test_cli_vacuum_exclusive_with_commands(workdir: Path):
     db_path = workdir / "test.db"
 
     # Try to use --vacuum with a command
-    returncode, stdout, stderr = run_cli(
+    returncode, _stdout, stderr = run_cli(
         "-f", str(db_path), "--vacuum", "list", cwd=workdir
     )
     assert returncode == 1

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 
 import pytest
@@ -97,7 +98,7 @@ def test_exact_broadcast_does_not_resurrect_queue_deleted_before_selection(
                     queue_names=("victim",),
                 )
             )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
         finally:
             finished.set()
@@ -125,10 +126,8 @@ def test_exact_broadcast_does_not_resurrect_queue_deleted_before_selection(
         assert pg_core.peek_many("victim", limit=10, with_timestamps=False) == []
     finally:
         if not finished.is_set():
-            try:
+            with contextlib.suppress(Exception):
                 delete_runner.rollback()
-            except Exception:
-                pass
         broadcast_core.close()
         delete_runner.shutdown()
 
@@ -157,7 +156,7 @@ def test_exact_broadcast_create_missing_resurrects_queue_deleted_before_atomic_p
                     create_missing=True,
                 )
             )
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
         finally:
             finished.set()
@@ -187,9 +186,7 @@ def test_exact_broadcast_create_missing_resurrects_queue_deleted_before_atomic_p
         ]
     finally:
         if not finished.is_set():
-            try:
+            with contextlib.suppress(Exception):
                 delete_runner.rollback()
-            except Exception:
-                pass
         broadcast_core.close()
         delete_runner.shutdown()

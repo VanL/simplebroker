@@ -45,9 +45,7 @@ def _selected(
     """Apply include/exclude fnmatch globs (case-sensitive) to a queue name."""
     if include and not any(fnmatchcase(queue, glob) for glob in include):
         return False
-    if exclude and any(fnmatchcase(queue, glob) for glob in exclude):
-        return False
-    return True
+    return not (exclude and any(fnmatchcase(queue, glob) for glob in exclude))
 
 
 def _alias_selected(
@@ -65,9 +63,7 @@ def _alias_selected(
     names = (alias, target)
     if include and not any(fnmatchcase(n, g) for n in names for g in include):
         return False
-    if exclude and any(fnmatchcase(n, g) for n in names for g in exclude):
-        return False
-    return True
+    return not (exclude and any(fnmatchcase(n, g) for n in names for g in exclude))
 
 
 def _line(record: dict[str, Any]) -> str:

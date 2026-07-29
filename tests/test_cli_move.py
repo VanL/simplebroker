@@ -380,11 +380,11 @@ class TestErrorCases:
     def test_empty_queue_returns_exit_code_2(self, workdir):
         """Test that moving from empty queue returns exit code 2."""
         # Try to move from non-existent queue
-        rc, out, _ = run_cli("move", "empty", "dest", cwd=workdir)
+        rc, _out, _ = run_cli("move", "empty", "dest", cwd=workdir)
         assert rc == 2
 
         # Try bulk move from empty queue
-        rc, out, _ = run_cli("move", "empty", "dest", "--all", cwd=workdir)
+        rc, _out, _ = run_cli("move", "empty", "dest", "--all", cwd=workdir)
         assert rc == 2
 
     def test_message_not_found_returns_exit_code_2(self, workdir):
@@ -393,7 +393,7 @@ class TestErrorCases:
 
         # Try to move with non-existent timestamp
         fake_ts = "1234567890123456789"
-        rc, out, _ = run_cli("move", "source", "dest", "-m", fake_ts, cwd=workdir)
+        rc, _out, _ = run_cli("move", "source", "dest", "-m", fake_ts, cwd=workdir)
         assert rc == 2
 
     def test_already_claimed_message_can_be_moved_by_id(self, workdir):
@@ -432,7 +432,7 @@ class TestErrorCases:
         ]
 
         for invalid_ts in invalid_timestamps:
-            rc, out, err = run_cli(
+            rc, _out, _err = run_cli(
                 "move", "source", "dest", "-m", invalid_ts, cwd=workdir
             )
             assert rc == 1, f"Expected exit code 1 for timestamp {invalid_ts}"
@@ -679,8 +679,8 @@ class TestEdgeCases:
         ]
 
         for name in dangerous_names:
-            rc, out, err = run_cli("move", name, "dest", cwd=workdir)
-            assert rc == 1, f"Should reject dangerous queue name: {repr(name)}"
+            rc, _out, _err = run_cli("move", name, "dest", cwd=workdir)
+            assert rc == 1, f"Should reject dangerous queue name: {name!r}"
 
 
 class TestOutputFormats:
@@ -869,7 +869,8 @@ class TestConcurrentOperations:
         """Test multiple workers trying to move the same specific message."""
         # Write a message and get its timestamp
         run_cli("write", "source", "target_message", cwd=workdir)
-        rc, out, _ = run_cli("peek", "source", "--json", cwd=workdir)
+        rc, out, err = run_cli("peek", "source", "--json", cwd=workdir)
+        assert rc == 0, err
         msg_ts = json.loads(out)["timestamp"]
 
         # Multiple workers try to move the same message
@@ -879,7 +880,7 @@ class TestConcurrentOperations:
 
         def specific_move_worker(worker_id):
             barrier.wait()  # Synchronize start
-            rc, out, err = run_cli(
+            rc, out, _err = run_cli(
                 "move", "source", f"dest{worker_id}", "-m", str(msg_ts), cwd=workdir
             )
             return (worker_id, rc, out)
@@ -912,7 +913,7 @@ class TestMutualExclusivity:
         run_cli("write", "source", "msg", cwd=workdir)
 
         # Try to use both -m and --all
-        rc, out, err = run_cli(
+        rc, _out, err = run_cli(
             "move", "source", "dest", "-m", "1234567890123456789", "--all", cwd=workdir
         )
         assert rc in [1, 2]  # Argument error (1) or argparse error (2)
@@ -1107,7 +1108,7 @@ class TestCommandLineValidation:
     def test_missing_arguments(self, workdir):
         """Test proper error messages for missing arguments."""
         # No arguments
-        rc, out, err = run_cli("move", cwd=workdir)
+        rc, _out, err = run_cli("move", cwd=workdir)
         assert rc in [1, 2]  # Argument error
         assert (
             "required" in err.lower()
@@ -1116,7 +1117,7 @@ class TestCommandLineValidation:
         )
 
         # Only source queue
-        rc, out, err = run_cli("move", "source", cwd=workdir)
+        rc, _out, err = run_cli("move", "source", cwd=workdir)
         assert rc in [1, 2]  # Argument error
         assert (
             "required" in err.lower()

@@ -9,7 +9,7 @@ from collections.abc import Iterator
 
 import pytest
 
-import simplebroker.commands as commands
+from simplebroker import commands
 from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
 from simplebroker.commands import (
     _get_message_content,
@@ -386,6 +386,7 @@ class TestProcessQueueFetch:
 
         closed_stdout = self._ClosedPipeStdout(BrokenPipeError(), fd=-1)
         monkeypatch.setattr(commands.sys, "stdout", closed_stdout)
+        replacement = closed_stdout
 
         try:
             rc = _process_queue_fetch(
@@ -398,8 +399,11 @@ class TestProcessQueueFetch:
                 json_output=False,
                 show_timestamps=False,
             )
-        finally:
             replacement = commands.sys.stdout
+            assert replacement is not closed_stdout
+            assert not replacement.closed
+            replacement.flush()
+        finally:
             if replacement is not closed_stdout:
                 replacement.close()
 

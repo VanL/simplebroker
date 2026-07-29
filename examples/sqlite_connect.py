@@ -45,7 +45,8 @@ import warnings
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path, PurePath
-from typing import Any, TypeVar, cast
+from types import TracebackType
+from typing import Any, Self, TypeVar, cast
 
 # Platform-specific imports for file locking
 try:
@@ -75,25 +76,17 @@ T = TypeVar("T")
 class SQLiteConnectError(Exception):
     """Base exception for sqlite_connect errors."""
 
-    pass
-
 
 class DatabaseError(SQLiteConnectError):
     """Database validation or access errors."""
-
-    pass
 
 
 class OperationalError(SQLiteConnectError):
     """Database operational errors."""
 
-    pass
-
 
 class StopException(SQLiteConnectError):
     """Exception raised when operations are interrupted."""
-
-    pass
 
 
 # ==============================================================================
@@ -304,14 +297,15 @@ def execute_with_retry(
             return operation()
         except (sqlite3.OperationalError, OperationalError) as e:
             msg = str(e).lower()
-            if any(marker in msg for marker in locked_markers):
-                if attempt < max_retries - 1:
-                    # Exponential backoff + jitter
-                    jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
-                    wait = retry_delay * (2**attempt) + jitter
-                    if not interruptible_sleep(wait, stop_event):
-                        raise StopException("Retry interrupted by stop event") from None
-                    continue
+            if (
+                any(marker in msg for marker in locked_markers)
+                and attempt < max_retries - 1
+            ):
+                jitter = (time.time() * 1000) % 25 / 1000  # 0-25ms jitter
+                wait = retry_delay * (2**attempt) + jitter
+                if not interruptible_sleep(wait, stop_event):
+                    raise StopException("Retry interrupted by stop event") from None
+                continue
             raise
 
     raise AssertionError("Unreachable code")
@@ -491,10 +485,8 @@ def validate_database_path(
         ) from e
     finally:
         if conn:
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
 
 
 def is_valid_sqlite_database(
@@ -594,10 +586,8 @@ class SQLiteConnectionManager:
     def _handle_fork(self, current_pid: int) -> None:
         """Handle process fork by cleaning up inherited connections."""
         if hasattr(self._thread_local, "conn"):
-            try:
+            with contextlib.suppress(Exception):
                 self._thread_local.conn.close()
-            except Exception:
-                pass
 
         self._thread_local = threading.local()
 
@@ -704,43 +694,51 @@ class SQLiteConnectionManager:
         # Try Unix fcntl first
         if HAS_FCNTL:
             try:
-                lock_file = open(lock_path, "w")
-                try:
-                    os.chmod(lock_path, 0o600)
-                except OSError:
-                    pass
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return lock_file
+                with contextlib.ExitStack() as stack:
+                    text_lock_file = stack.enter_context(open(lock_path, "w"))
+                    try:
+                        os.chmod(lock_path, 0o600)
+                    except OSError:
+                        pass
+                    fcntl.flock(text_lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    stack.pop_all()
+                    return text_lock_file
             except OSError:
-                if "lock_file" in locals():
-                    lock_file.close()
+                pass
 
         # Try Windows msvcrt
         if HAS_MSVCRT:
             try:
-                lock_file = open(lock_path, "a+b")  # type: ignore[assignment]
-                lock_file.seek(0)
-                try:
-                    os.chmod(lock_path, 0o600)
-                except OSError:
-                    pass
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)  # type: ignore[attr-defined]
-                return lock_file
+                with contextlib.ExitStack() as stack:
+                    binary_lock_file = stack.enter_context(open(lock_path, "a+b"))
+                    binary_lock_file.seek(0)
+                    try:
+                        os.chmod(lock_path, 0o600)
+                    except OSError:
+                        pass
+                    msvcrt.locking(  # type: ignore[attr-defined]
+                        binary_lock_file.fileno(),
+                        msvcrt.LK_NBLCK,  # type: ignore[attr-defined]
+                        1,
+                    )
+                    stack.pop_all()
+                    return binary_lock_file
             except OSError:
-                if "lock_file" in locals():
-                    lock_file.close()
+                pass
 
         # Fallback to exclusive create
         if lock_path.exists():
             return None
 
         try:
-            lock_file = open(lock_path, "x")
-            try:
-                os.chmod(lock_path, 0o600)
-            except OSError:
-                pass
-            return lock_file
+            with contextlib.ExitStack() as stack:
+                exclusive_lock_file = stack.enter_context(open(lock_path, "x"))
+                try:
+                    os.chmod(lock_path, 0o600)
+                except OSError:
+                    pass
+                stack.pop_all()
+                return exclusive_lock_file
         except FileExistsError:
             return None
 
@@ -854,10 +852,8 @@ class SQLiteConnectionManager:
         """Close all connections and clean up resources."""
         with self._connections_lock:
             for conn in self._all_connections:
-                try:
+                with contextlib.suppress(Exception):
                     conn.close()
-                except Exception:
-                    pass
             self._all_connections.clear()
 
         if hasattr(self._thread_local, "conn"):
@@ -873,20 +869,23 @@ class SQLiteConnectionManager:
                 pass
         self._created_files.clear()
 
-    def __enter__(self) -> SQLiteConnectionManager:
+    def __enter__(self) -> Self:
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Exit context manager."""
         self.close()
 
     def __del__(self) -> None:
         """Destructor cleanup."""
-        try:
+        with contextlib.suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
 
 # ==============================================================================

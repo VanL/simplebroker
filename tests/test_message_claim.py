@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from simplebroker._exceptions import OperationalError
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
@@ -283,7 +284,7 @@ def test_automatic_vacuum_failure_preserves_committed_operation(
 
 def _concurrent_reader_worker(args: tuple[int, str, str]) -> list[str]:
     """Worker function for concurrent read tests."""
-    worker_id, db_path, queue_name = args
+    _worker_id, db_path, queue_name = args
     messages = []
 
     with BrokerDB(db_path) as db:
@@ -573,7 +574,7 @@ def test_vacuum_lock_prevents_concurrent_vacuum(workdir: Path):
             with BrokerDB(db_path) as db:
                 db.vacuum()
             return True
-        except Exception:
+        except OperationalError:
             return False
 
     # Run multiple vacuum operations concurrently

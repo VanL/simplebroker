@@ -19,14 +19,14 @@ from .watcher import QueueMoveWatcher, QueueWatcher
 
 # Only export the new API
 __all__ = [
-    "BrokerTarget",
     "ActivityWaiter",
+    "BrokerTarget",
     "LoadResult",
     "Queue",
+    "QueueMoveWatcher",
     "QueueRenameResult",
     "QueueStats",
     "QueueWatcher",
-    "QueueMoveWatcher",
     "__version__",
     "broker_root",
     "create_activity_waiter_for_queues",
@@ -34,8 +34,8 @@ __all__ = [
     "dump_lines",
     "load_lines",
     "open_broker",
-    "resolve_config",
     "resolve_broker_target",
+    "resolve_config",
     "serialize_broker_target",
     "target_for_directory",
 ]

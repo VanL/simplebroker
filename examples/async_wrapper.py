@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Minimal async wrapper for SimpleBroker using only stdlib.
 
@@ -26,7 +25,8 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, TypeVar, cast
+from types import TracebackType
+from typing import Any, Self, TypeVar, cast
 
 from simplebroker import (
     BrokerTarget,
@@ -153,11 +153,16 @@ class AsyncBroker:
             client=BrokerClient.from_root(root, **overrides),
         )
 
-    async def __aenter__(self) -> "AsyncBroker":
+    async def __aenter__(self) -> Self:
         """Async context manager entry."""
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Async context manager exit with cleanup."""
         # Stop all watchers
         for watcher, _ in self._watchers:

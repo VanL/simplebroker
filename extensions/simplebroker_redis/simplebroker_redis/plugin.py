@@ -167,7 +167,7 @@ class _SharedRedisActivityListener:
                         if queue_name in self._versions:
                             self._versions[queue_name] += 1
                             self._conditions[queue_name].notify_all()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             if not self._stop_event.is_set():
                 self._error = exc
                 self._ready.set()

@@ -1805,9 +1805,9 @@ class RedisBrokerCore:
     def shutdown(self) -> None:
         self._runner.shutdown()
 
-    def __enter__(self) -> RedisBrokerCore:
+    def __enter__(self) -> RedisBrokerCore:  # noqa: PYI034 approved [DOM-10.1.1] exception
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:  # noqa: PYI036 approved [DOM-10.1.1] exception
         self.close()
         return False

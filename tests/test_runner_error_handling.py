@@ -77,12 +77,13 @@ class TestSQLiteRunnerErrorHandling:
             runner = SQLiteRunner(db_path)
             try:
                 # Create a locked database using the helper
-                with DatabaseErrorInjector.database_locked(db_path):
+                with (
+                    DatabaseErrorInjector.database_locked(db_path),
+                    pytest.raises(OperationalError, match="database is locked"),
+                ):
                     # Try to write from another connection - will get real lock error
-                    with pytest.raises(OperationalError, match="database is locked"):
-                        # Use a short timeout to trigger the error quickly
-                        runner._timeout = 0.01
-                        list(runner.run("CREATE TABLE test (id INTEGER)", fetch=False))
+                    runner._timeout = 0.01
+                    list(runner.run("CREATE TABLE test (id INTEGER)", fetch=False))
             finally:
                 runner.close()
 
@@ -249,9 +250,11 @@ class TestSQLiteRunnerErrorHandling:
                 runner._timeout = 0.01  # Short timeout
 
                 # Test real OperationalError with database lock
-                with DatabaseErrorInjector.database_locked(db_path):
-                    with pytest.raises(OperationalError, match="database is locked"):
-                        runner.begin_immediate()
+                with (
+                    DatabaseErrorInjector.database_locked(db_path),
+                    pytest.raises(OperationalError, match="database is locked"),
+                ):
+                    runner.begin_immediate()
             finally:
                 runner.close()
 
@@ -347,10 +350,11 @@ class TestSQLiteRunnerErrorHandling:
 
             # Mock the connection to raise an error on close
             mock_conn = Mock()
-            mock_conn.close.side_effect = Exception("close failed")
+            mock_conn.close.side_effect = sqlite3.Error("close failed")
 
             # Replace the real connection with the mock in both places
             real_conn = runner._thread_local.conn
+            real_conn.close()
             runner._thread_local.conn = mock_conn
             # Also update the set to contain the mock
             with runner._connections_lock:
@@ -373,10 +377,8 @@ class TestSQLiteRunnerErrorHandling:
             assert not hasattr(runner._thread_local, "conn")
 
             # Clean up the real connection manually
-            try:
+            with contextlib.suppress(Exception):
                 real_conn.close()
-            except Exception:
-                pass
 
     def test_wal_mode_failure(self):
         """Test handling of WAL mode setup failure."""
@@ -797,7 +799,7 @@ class TestSQLiteRunnerErrorHandling:
                     SetupPhase.SCHEMA,
                     operation,
                 )
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 errors.append(exc)
             finally:
                 contender_done.set()

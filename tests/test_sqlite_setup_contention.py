@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import queue
 import sqlite3
 import subprocess
 import sys
@@ -365,7 +366,7 @@ def test_mixed_version_lock_paths_setup_is_idempotent_safe(
     while len(results) < 2 and time.monotonic() < deadline:
         try:
             name, code, detail = result_queue.get(timeout=1.0)
-        except Exception:
+        except queue.Empty:
             continue
         results[name] = (code, detail)
 

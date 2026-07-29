@@ -694,13 +694,13 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
     def write_message() -> None:
         try:
             queue.write("payload")
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] exception
             operation_errors.append(exc)
 
     def close_queue() -> None:
         try:
             queue.close()
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] exception
             close_errors.append(exc)
         finally:
             close_returned.set()
@@ -976,7 +976,7 @@ def test_session_close_wins_race_with_core_creation(
     def get_connection() -> None:
         try:
             session.get_connection(None, lease_operation=False)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
 
     monkeypatch.setattr(CountingSQLiteRunner, "setup_with_stop_event", delayed_setup)
@@ -1061,7 +1061,7 @@ def test_non_sqlite_core_creation_after_close_does_not_retain_runner(
     def get_connection() -> None:
         try:
             session.get_connection(None, lease_operation=False)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
 
     workers = [threading.Thread(target=get_connection) for _ in range(3)]
@@ -1146,7 +1146,7 @@ def test_factory_close_does_not_cancel_checkout_rollback(
     def get_connection() -> None:
         try:
             session.get_connection(None, lease_operation=False)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             errors.append(exc)
 
     worker = threading.Thread(target=get_connection)

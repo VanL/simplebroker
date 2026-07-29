@@ -29,7 +29,7 @@ def test_symlink_path_traversal_attack(workdir: Path):
         evil_link.symlink_to(sensitive_file)
 
         # Try to access the sensitive file through the symlink
-        code, stdout, stderr = run_cli(
+        code, _stdout, stderr = run_cli(
             "-f", "evil.db", "write", "test_queue", "message", cwd=workdir
         )
 
@@ -65,7 +65,7 @@ def test_symlink_to_parent_directory(workdir: Path):
 
     try:
         # Try to use the symlink
-        code, stdout, stderr = run_cli(
+        code, _stdout, stderr = run_cli(
             "-f", "parent_link.db", "write", "test_queue", "message", cwd=workdir
         )
 
@@ -142,7 +142,7 @@ def test_symlink_chain_attack(workdir: Path):
 
         try:
             # Try to use the symlink chain
-            code, stdout, stderr = run_cli(
+            code, _stdout, stderr = run_cli(
                 "-f", "link1.db", "write", "test_queue", "message", cwd=workdir
             )
 

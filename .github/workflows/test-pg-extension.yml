@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 env:
-  UV_VERSION: "0.11.28"
+  UV_VERSION: "0.12.0"
 
 jobs:
   test-pg:

@@ -155,14 +155,7 @@ def test_project_config_sqlite_cleanup_rejects_foreign_db(workdir):
     db_path = workdir / "configured.db"
     _write_sqlite_meta_db(db_path, magic="not-simplebroker")
     (workdir / PROJECT_CONFIG_FILENAME).write_text(
-        "\n".join(
-            [
-                "version = 1",
-                'backend = "sqlite"',
-                'target = "configured.db"',
-                "",
-            ]
-        ),
+        ('version = 1\nbackend = "sqlite"\ntarget = "configured.db"\n'),
         encoding="utf-8",
     )
 
@@ -250,7 +243,7 @@ def test_cleanup_with_command_is_rejected(workdir):
     command; it is now rejected loudly, matching the --status/--vacuum
     guards.  Either way, the command must never execute.
     """
-    rc, out, err = run_cli("--cleanup", "write", "test", "message", cwd=workdir)
+    rc, _out, err = run_cli("--cleanup", "write", "test", "message", cwd=workdir)
 
     assert rc == 1
     assert "--cleanup cannot be used with commands" in err

@@ -452,9 +452,8 @@ class PostgresBackendPlugin:
                 f"{inspection.state.value}"
             )
 
-        with connect(target) as conn:
-            with conn.cursor() as cur:
-                cur.execute(f"DROP SCHEMA {quote_ident(inspection.schema)} CASCADE")
+        with connect(target) as conn, conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA {quote_ident(inspection.schema)} CASCADE")
         return True
 
     def check_version(self) -> None:
@@ -468,13 +467,11 @@ class PostgresBackendPlugin:
         optimization_complete: bool = False,
     ) -> None:
         del conn, config, optimization_complete
-        return None
 
     def apply_optimization_settings(
         self, conn: Any, *, config: Mapping[str, Any]
     ) -> None:
         del conn, config
-        return None
 
     def setup_connection_phase(
         self,

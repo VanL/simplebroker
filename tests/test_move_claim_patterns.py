@@ -20,7 +20,7 @@ def _concurrent_move_worker(
     args: tuple[int, str, str, str],
 ) -> list[str | tuple[str, int]]:
     """Worker function for concurrent move tests."""
-    worker_id, db_path, source_queue, dest_queue = args
+    _worker_id, db_path, source_queue, dest_queue = args
     moved = []
 
     with BrokerDB(db_path) as db:

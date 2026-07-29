@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from collections.abc import Sequence
@@ -135,10 +136,9 @@ def database_size_bytes(db_path: str | Path | None) -> int:
 
 def get_data_version(runner: SQLRunner) -> int | None:
     """Return SQLite ``PRAGMA data_version`` or ``None`` on error."""
-    try:
+    rows = None
+    with contextlib.suppress(Exception):
         rows = list(runner.run(GET_DATA_VERSION, fetch=True))
-    except Exception:
-        return None
 
     if rows and rows[0]:
         return int(rows[0][0])
@@ -216,10 +216,8 @@ def _vacuum_without_lock(
         runner.run(SET_AUTO_VACUUM_INCREMENTAL)
         runner.run(VACUUM)
     elif had_claimed_messages:
-        try:
+        with contextlib.suppress(Exception):
             _maybe_run_incremental_vacuum(runner)
-        except Exception:
-            pass
 
 
 def _has_claimed_messages(runner: SQLRunner) -> bool:

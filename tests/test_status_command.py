@@ -66,7 +66,7 @@ class TestStatusCommand:
         assert payload["db_size"] >= 0
 
     def test_status_mutually_exclusive(self, workdir):
-        rc, out, err = run_cli(
+        rc, _out, err = run_cli(
             "--status", "--json", "write", "queue", "msg", cwd=workdir
         )
 

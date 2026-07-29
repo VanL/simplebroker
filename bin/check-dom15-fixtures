@@ -16,6 +16,7 @@ of real tasks is judgment and is NOT checked here — see [DOM-15].
 Usage:
   check-dom15-fixtures [--spec PATH] [--self-test]
 """
+
 from __future__ import annotations
 
 import re
@@ -24,9 +25,7 @@ from pathlib import Path
 
 DEFAULT_SPEC = "docs/specs/01-development-documentation-operating-model.md"
 
-CLASS_CELL_RE = re.compile(
-    r"^(?:[0-5]\b|Class\s+[0-5]\+P\b|Escalate to [0-5]\b)"
-)
+CLASS_CELL_RE = re.compile(r"^(?:[0-5]\b|Class\s+[0-5]\+P\b|Escalate to [0-5]\b)")
 # Adopters: this marker list is repo-adapted by design. When your
 # fixtures use local phrasing (name-based triggers, different negation
 # wording), EXTEND this tuple — do not reword your fixtures back to
@@ -49,7 +48,7 @@ def strip_fenced_blocks(text: str) -> str:
     out, fenced = [], False
     for line in text.splitlines():
         stripped = line.lstrip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
+        if stripped.startswith(("```", "~~~")):
             fenced = not fenced
             continue
         if not fenced:
@@ -108,11 +107,14 @@ def check(section: str) -> list[str]:
             seen_classes.add(cls.split()[-1][0])
         else:
             seen_classes.add(cls[0])
-        if cls[0] in ("1", "2") and not cls.startswith("Escalate"):
-            if not any(m in fact for m in NEGATIVE_FACT_MARKERS):
-                problems.append(
-                    f"class-{cls[0]} fixture missing negative-trigger facts: {fact[:60]}..."
-                )
+        if (
+            cls[0] in ("1", "2")
+            and (not cls.startswith("Escalate"))
+            and not any(m in fact for m in NEGATIVE_FACT_MARKERS)
+        ):
+            problems.append(
+                f"class-{cls[0]} fixture missing negative-trigger facts: {fact[:60]}..."
+            )
 
     for required in ("0", "1", "2", "3", "4", "5", "+P"):
         if required not in seen_classes:
@@ -210,6 +212,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as exc:  # the no-traceback floor: fail loud, fail clean
+    except Exception as exc:  # the no-traceback floor: fail loud, fail clean  # noqa: BLE001 approved [DOM-10.1.1] exception
         print(f"check-dom15-fixtures: internal error: {exc}")
         sys.exit(2)

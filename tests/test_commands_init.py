@@ -312,7 +312,7 @@ class TestInitCommand:
 
     def test_init_integration_custom_database_name(self, workdir):
         """Test that init command ignores global -f."""
-        code, stdout, stderr = run_cli("-f", "custom.db", "init", cwd=workdir)
+        code, _stdout, _stderr = run_cli("-f", "custom.db", "init", cwd=workdir)
 
         # Should succeed
         assert code == 0
@@ -330,7 +330,7 @@ class TestInitCommand:
         subdir = workdir / "subdir"
         subdir.mkdir()
 
-        code, stdout, stderr = run_cli("-d", str(subdir), "init", cwd=workdir)
+        code, _stdout, _stderr = run_cli("-d", str(subdir), "init", cwd=workdir)
 
         # Should succeed
         assert code == 0
@@ -350,7 +350,7 @@ class TestInitCommand:
         subdir.mkdir()
 
         # Run init from subdirectory
-        code, stdout, stderr = run_cli("init", cwd=subdir)
+        code, _stdout, _stderr = run_cli("init", cwd=subdir)
 
         # Should succeed
         assert code == 0

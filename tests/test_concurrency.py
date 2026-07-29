@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+from simplebroker.ext import OperationalError
+
 from .conftest import run_cli
 
 
@@ -75,7 +77,7 @@ def test_execute_with_retry_survives_real_sqlite_lock(tmp_path):
                 conn.commit()
             finally:
                 conn.close()
-        except Exception as exc:  # pragma: no cover - surfaced below
+        except sqlite3.Error as exc:  # pragma: no cover - surfaced below
             holder_errors.append(exc)
             lock_ready.set()
         finally:
@@ -126,7 +128,7 @@ def test_parallel_writes(workdir):
             queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
             queue.write(f"msg_{idx:03d}")
             return 0, idx, ""
-        except Exception as e:
+        except OperationalError as e:
             if sys.platform == "win32":
                 # On Windows, retry once if we get a locking error
                 import time
@@ -136,7 +138,7 @@ def test_parallel_writes(workdir):
                     queue = Queue("concurrent", db_path=str(workdir / ".broker.db"))
                     queue.write(f"msg_{idx:03d}")
                     return 0, idx, ""
-                except Exception as e2:
+                except OperationalError as e2:
                     return 1, idx, str(e2)
             return 1, idx, str(e)
 

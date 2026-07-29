@@ -4,6 +4,7 @@ Tests watcher behavior across process boundaries to ensure proper
 isolation and coordination.
 """
 
+import contextlib
 import multiprocessing
 import queue
 import tempfile
@@ -99,7 +100,7 @@ def watcher_process(
             ("stats", process_id, {"processed": len(processed), "messages": processed}),
         )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         result_queue.put(("error", process_id, str(e)))
 
 
@@ -154,7 +155,7 @@ def shutdown_test_process(
             ),
         )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         result_queue.put(("error", process_id, str(e)))
 
 
@@ -227,7 +228,7 @@ def lock_test_process(
             ),
         )
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         result_queue.put(("error", process_id, str(e)))
 
 
@@ -384,20 +385,18 @@ def test_multiprocess_single_queue() -> None:
         finally:
             # Stop all processes
             for control_queue in control_queues:
-                try:
+                # Queue may be closed already
+                with contextlib.suppress(Exception):
                     control_queue.put("stop")
-                except Exception:
-                    pass  # Queue may be closed already
 
             # Wait for processes to finish and ensure cleanup
             for p in processes:
-                try:
+                # Process may already be terminated
+                with contextlib.suppress(Exception):
                     p.join(timeout=5.0)
                     if p.is_alive():
                         p.terminate()
                         p.join()
-                except Exception:
-                    pass  # Process may already be terminated
 
             broker.close()
 
@@ -514,20 +513,18 @@ def test_multiprocess_separate_queues() -> None:
         finally:
             # Stop processes
             for control_queue in control_queues:
-                try:
+                # Queue may be closed already
+                with contextlib.suppress(Exception):
                     control_queue.put("stop")
-                except Exception:
-                    pass  # Queue may be closed already
 
             # Wait for processes to finish and ensure cleanup
             for p in processes:
-                try:
+                # Process may already be terminated
+                with contextlib.suppress(Exception):
                     p.join(timeout=5.0)
                     if p.is_alive():
                         p.terminate()
                         p.join()
-                except Exception:
-                    pass  # Process may already be terminated
 
             broker.close()
 
@@ -653,13 +650,12 @@ def test_multiprocess_thundering_herd() -> None:
             finally:
                 # Wait for processes to finish and ensure cleanup
                 for p in processes:
-                    try:
+                    # Process may already be terminated
+                    with contextlib.suppress(Exception):
                         p.join(timeout=5.0)
                         if p.is_alive():
                             p.terminate()
                             p.join()
-                    except Exception:
-                        pass  # Process may already be terminated
 
 
 def test_multiprocess_graceful_shutdown() -> None:
@@ -761,13 +757,12 @@ def test_multiprocess_graceful_shutdown() -> None:
         finally:
             # Ensure all processes are cleaned up
             for p in processes:
-                try:
+                # Process may already be terminated
+                with contextlib.suppress(Exception):
                     p.join(timeout=5.0)
                     if p.is_alive():
                         p.terminate()
                         p.join()
-                except Exception:
-                    pass  # Process may already be terminated
 
 
 def test_multiprocess_database_locking() -> None:
@@ -866,20 +861,18 @@ def test_multiprocess_database_locking() -> None:
         finally:
             # Stop all processes
             for control_queue in control_queues:
-                try:
+                # Queue may be closed already
+                with contextlib.suppress(Exception):
                     control_queue.put("stop")
-                except Exception:
-                    pass  # Queue may be closed already
 
             # Clean up processes
             for p in processes:
-                try:
+                # Process may already be terminated
+                with contextlib.suppress(Exception):
                     p.join(timeout=5.0)
                     if p.is_alive():
                         p.terminate()
                         p.join()
-                except Exception:
-                    pass  # Process may already be terminated
 
             broker.close()
 

@@ -230,9 +230,11 @@ def deserialize_broker_target(
     raw: Mapping[str, Any]
     if isinstance(payload, str):
         decoded = json.loads(payload)
-        if not isinstance(decoded, dict):
-            raise ValueError("Broker target payload must decode to an object")
-        raw = cast(Mapping[str, Any], decoded)
+        match decoded:
+            case dict():
+                raw = cast(Mapping[str, Any], decoded)
+            case _:
+                raise ValueError("Broker target payload must decode to an object")
     else:
         raw = payload
 
@@ -244,8 +246,11 @@ def deserialize_broker_target(
         raise ValueError("Broker target payload missing target")
 
     backend_options = raw.get("backend_options", {})
-    if not isinstance(backend_options, dict):
-        raise ValueError("Broker target payload backend_options must be an object")
+    match backend_options:
+        case dict():
+            pass
+        case _:
+            raise ValueError("Broker target payload backend_options must be an object")
 
     project_root_raw = raw.get("project_root")
     config_path_raw = raw.get("config_path")

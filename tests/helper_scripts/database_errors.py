@@ -4,6 +4,7 @@ This module provides utilities to create real database error conditions
 instead of mocking them, ensuring tests validate actual error handling behavior.
 """
 
+import contextlib
 import sqlite3
 import threading
 import time
@@ -45,14 +46,10 @@ class DatabaseErrorInjector:
             conn.execute("BEGIN EXCLUSIVE")
             yield conn
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 conn.rollback()
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 conn.close()
-            except Exception:
-                pass
 
     @staticmethod
     @contextmanager
@@ -86,14 +83,10 @@ class DatabaseErrorInjector:
                 # Hold lock until stop event or timeout
                 stop_event.wait(timeout=hold_time)
             finally:
-                try:
+                with contextlib.suppress(Exception):
                     conn.rollback()
-                except Exception:
-                    pass
-                try:
+                with contextlib.suppress(Exception):
                     conn.close()
-                except Exception:
-                    pass
 
         thread = threading.Thread(target=hold_lock)
         thread.daemon = True
@@ -228,7 +221,7 @@ class DatabaseErrorInjector:
                 except sqlite3.OperationalError:
                     # Database might be locked by reader
                     time.sleep(0.001)
-                except Exception:
+                except sqlite3.Error:
                     break
             conn.close()
 

@@ -247,13 +247,13 @@ class TestCLIMissingValues:
 
     def test_missing_dir_value_at_end(self, workdir: Path):
         """Test missing value for --dir before command."""
-        code, stdout, stderr = run_cli("--dir", cwd=workdir)
+        code, _stdout, stderr = run_cli("--dir", cwd=workdir)
         assert code == 1
         assert "error: option --dir requires an argument" in stderr
 
     def test_missing_dir_value_before_flag(self, workdir: Path):
         """Test missing global value before another global flag."""
-        code, stdout, stderr = run_cli(
+        code, _stdout, stderr = run_cli(
             "--dir", "--quiet", "write", "queue", "message", cwd=workdir
         )
         assert code == 1
@@ -261,13 +261,13 @@ class TestCLIMissingValues:
 
     def test_missing_file_value_at_end(self, workdir: Path):
         """Test missing value for --file before command."""
-        code, stdout, stderr = run_cli("--file", cwd=workdir)
+        code, _stdout, stderr = run_cli("--file", cwd=workdir)
         assert code == 1
         assert "error: option --file requires an argument" in stderr
 
     def test_missing_file_value_before_flag(self, workdir: Path):
         """Test missing value for -f before another global flag."""
-        code, stdout, stderr = run_cli(
+        code, _stdout, stderr = run_cli(
             "-f", "-q", "write", "queue", "message", cwd=workdir
         )
         assert code == 1
@@ -275,7 +275,7 @@ class TestCLIMissingValues:
 
     def test_equals_without_value_dir(self, workdir: Path):
         """Test --dir= without value."""
-        code, stdout, stderr = run_cli(
+        code, _stdout, stderr = run_cli(
             "--dir=", "write", "queue", "message", cwd=workdir
         )
         assert code == 1
@@ -283,7 +283,7 @@ class TestCLIMissingValues:
 
     def test_equals_without_value_file(self, workdir: Path):
         """Test --file= without value."""
-        code, stdout, stderr = run_cli(
+        code, _stdout, stderr = run_cli(
             "--file=", "write", "queue", "message", cwd=workdir
         )
         assert code == 1
@@ -297,7 +297,7 @@ class TestCLIMissingValues:
         subdir.mkdir()
 
         # Test valid usage with values
-        code, stdout, stderr = run_cli(
+        code, stdout, _stderr = run_cli(
             "--dir",
             str(subdir),
             "--file",
@@ -311,7 +311,7 @@ class TestCLIMissingValues:
         assert (subdir / "test.db").exists()
 
         # Test reading back
-        code, stdout, stderr = run_cli(
+        code, stdout, _stderr = run_cli(
             "--dir", str(subdir), "--file", "test.db", "read", "queue", cwd=workdir
         )
         assert code == 0
@@ -319,10 +319,10 @@ class TestCLIMissingValues:
 
     def test_complex_scenario_from_review(self, workdir: Path):
         """Post-command global-looking message text is not destructive."""
-        code, stdout, stderr = run_cli("write", "q", "--cleanup", cwd=workdir)
+        code, stdout, _stderr = run_cli("write", "q", "--cleanup", cwd=workdir)
         assert code == 0
 
-        code, stdout, stderr = run_cli("read", "q", cwd=workdir)
+        code, stdout, _stderr = run_cli("read", "q", cwd=workdir)
         assert code == 0
         assert stdout.strip() == "--cleanup"
 
@@ -331,7 +331,7 @@ class TestHelpHasNoSideEffects:
     """A help request must never write to the database (evaluation finding #2)."""
 
     def test_write_help_shows_usage_and_exits_zero(self, workdir: Path):
-        rc, stdout, stderr = run_cli("write", "--help", cwd=workdir)
+        rc, stdout, _stderr = run_cli("write", "--help", cwd=workdir)
         assert rc == 0
         assert "usage:" in stdout.lower()
         # Help must not touch the filesystem: argparse exits before any
@@ -389,7 +389,7 @@ class TestDestructiveGlobalFlagHoisting:
     def test_alias_trailing_cleanup_does_not_delete_data(self, workdir: Path):
         rc, _, _ = run_cli("write", "tasks", "hello", cwd=workdir)
         assert rc == 0
-        rc, _, stderr = run_cli(
+        rc, _, _stderr = run_cli(
             "alias", "add", "foo", "tasks", "--cleanup", cwd=workdir
         )
         assert rc != 0

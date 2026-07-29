@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Helper script to test SIGINT handling in QueueWatcher."""
 
 import sys

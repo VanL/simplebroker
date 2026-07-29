@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
@@ -395,27 +396,20 @@ def test_ensure_schema_v2_handles_concurrent_column_migration(
         for runner in runners
     ]
     versions: list[list[int]] = [[], []]
-    errors: list[BaseException] = []
 
     def migrate(index: int) -> None:
-        try:
-            ensure_schema_v2(
-                wrapped[index],
-                current_version=1,
-                write_schema_version=versions[index].append,
-            )
-        except BaseException as exc:
-            errors.append(exc)
+        ensure_schema_v2(
+            wrapped[index],
+            current_version=1,
+            write_schema_version=versions[index].append,
+        )
 
-    threads = [threading.Thread(target=migrate, args=(index,)) for index in range(2)]
     try:
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=10.0)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(migrate, index) for index in range(2)]
+            for future in futures:
+                future.result(timeout=10.0)
 
-        assert all(not thread.is_alive() for thread in threads)
-        assert errors == []
         assert versions == [[2], [2]]
         assert messages_has_claimed_column(runners[0]) is True
         assert all(not runner.get_connection().in_transaction for runner in runners)

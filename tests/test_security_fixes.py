@@ -15,7 +15,7 @@ def test_stdin_size_limit_streaming(workdir: Path):
     large_input = "x" * (11 * 1024 * 1024)  # 11MB of 'x' characters
 
     # Try to write via stdin
-    code, stdout, stderr = run_cli(
+    code, _stdout, stderr = run_cli(
         "write", "test_queue", "-", cwd=workdir, stdin=large_input
     )
 
@@ -38,12 +38,12 @@ def test_path_traversal_protection(workdir: Path):
     for attack in relative_attacks:
         if len(attack) == 1:
             # Single argument with equals
-            code, stdout, stderr = run_cli(
+            code, _stdout, stderr = run_cli(
                 attack[0], "write", "test_queue", "message", cwd=workdir
             )
         else:
             # Separate flag and value
-            code, stdout, stderr = run_cli(
+            code, _stdout, stderr = run_cli(
                 *attack, "write", "test_queue", "message", cwd=workdir
             )
 
@@ -62,7 +62,7 @@ def test_path_traversal_protection(workdir: Path):
     ]
 
     for path_args in absolute_paths:
-        code, stdout, stderr = run_cli(
+        code, _stdout, stderr = run_cli(
             *path_args, "write", "test_queue", "message", cwd=workdir
         )
         # /etc/passwd should fail because it's not a valid database
@@ -100,12 +100,12 @@ def test_safe_path_within_directory(workdir: Path):
     for i, path_args in enumerate(safe_paths):
         if len(path_args) == 1:
             # Single argument with equals
-            code, stdout, stderr = run_cli(
+            code, _stdout, stderr = run_cli(
                 path_args[0], "write", "test_queue", f"message{i}", cwd=workdir
             )
         else:
             # Separate flag and value
-            code, stdout, stderr = run_cli(
+            code, _stdout, stderr = run_cli(
                 *path_args, "write", "test_queue", f"message{i}", cwd=workdir
             )
 
@@ -124,7 +124,7 @@ def test_message_size_validation_non_stdin(workdir: Path):
     large_message = "x" * (11 * 1024 * 1024)  # 11MB
 
     # Try to write via stdin
-    code, stdout, stderr = run_cli(
+    code, _stdout, stderr = run_cli(
         "write", "test_queue", "-", cwd=workdir, stdin=large_message
     )
 
@@ -139,17 +139,19 @@ def test_normal_sized_messages_work(workdir: Path):
     large_but_ok = "x" * (9 * 1024 * 1024)
 
     # Via stdin
-    code, stdout, stderr = run_cli(
+    code, stdout, _stderr = run_cli(
         "write", "test_queue", "-", cwd=workdir, stdin=large_but_ok
     )
     assert code == 0
 
     # Direct
-    code, stdout, stderr = run_cli("write", "test_queue", "normal message", cwd=workdir)
+    code, stdout, _stderr = run_cli(
+        "write", "test_queue", "normal message", cwd=workdir
+    )
     assert code == 0
 
     # Read them back
-    code, stdout, stderr = run_cli("read", "test_queue", "--all", cwd=workdir)
+    code, stdout, _stderr = run_cli("read", "test_queue", "--all", cwd=workdir)
     assert code == 0
     messages = stdout.strip().split("\n")
     assert len(messages) == 2

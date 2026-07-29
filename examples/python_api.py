@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Python API examples for SimpleBroker - RECOMMENDED STARTING POINT.
 
@@ -107,7 +106,7 @@ def error_handling_pattern(db_path: Path) -> None:
 
             print(f"Successfully processed: {data}")
 
-        except Exception as e:
+        except ValueError as e:
             logger.error(f"Error processing message {timestamp}: {e}")
 
             # Increment retry count
@@ -293,8 +292,7 @@ def checkpoint_processing(db_path: Path) -> None:
                     # Update checkpoint after successful processing
                     # Using index as a simple timestamp substitute
                     save_checkpoint(i)
-
-                except Exception as e:
+                except OSError as e:
                     logger.error(f"Failed to process message at index {i}: {e}")
                     # Stop processing batch on error
                     break

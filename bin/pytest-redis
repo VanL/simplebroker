@@ -102,7 +102,9 @@ def _uv_command(*args: str) -> list[str]:
     ]
 
 
-def _classify_targets(pytest_args: list[str]) -> tuple[list[str], list[str], bool, bool]:
+def _classify_targets(
+    pytest_args: list[str],
+) -> tuple[list[str], list[str], bool, bool]:
     shared_args: list[str] = []
     extension_args: list[str] = []
     shared_selected = False
@@ -206,7 +208,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         return 130
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
         print(str(exc), file=sys.stderr)
         return 1
     finally:

@@ -12,7 +12,9 @@ CLI_CONTRACT = ROOT / "docs" / "specs" / "10-cli-contract.md"
 def test_readme_exit_code_section_is_complete() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     section = readme.split("### Exit Codes", 1)[1].split("\n## ", 1)[0]
-    documented = {int(code) for code in re.findall(r"^- `(\d+)`", section, re.M)}
+    documented = {
+        int(code) for code in re.findall(r"^- `(\d+)`", section, re.MULTILINE)
+    }
 
     assert documented == {EXIT_SUCCESS, EXIT_ERROR, EXIT_QUEUE_EMPTY}
 
@@ -20,7 +22,9 @@ def test_readme_exit_code_section_is_complete() -> None:
 def test_cli_contract_sb_cli_1_codes_match_constants() -> None:
     text = CLI_CONTRACT.read_text(encoding="utf-8")
     section = text.split("## Exit code set [SB-CLI-1]", 1)[1].split("## ", 1)[0]
-    documented = {int(code) for code in re.findall(r"^\| `(\d+)` \|", section, re.M)}
+    documented = {
+        int(code) for code in re.findall(r"^\| `(\d+)` \|", section, re.MULTILINE)
+    }
     assert documented == {EXIT_SUCCESS, EXIT_ERROR, EXIT_QUEUE_EMPTY}
 
 

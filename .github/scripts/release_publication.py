@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Manage draft-first, immutable-compatible GitHub Release publication."""
 
 from __future__ import annotations
@@ -23,9 +22,11 @@ PYPI_RETRY_DELAYS: Final[tuple[int, ...]] = (15, 30, 60, 120)
 
 
 def _mapping(value: object, *, label: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise RuntimeError(f"{label} was not a JSON object")
-    return value
+    match value:
+        case Mapping() as mapping:
+            return mapping
+        case _:
+            raise RuntimeError(f"{label} was not a JSON object")
 
 
 def github_api_request(
@@ -80,8 +81,11 @@ def list_releases(repo: str, token: str) -> tuple[Mapping[str, object], ...]:
     while True:
         path = f"/repos/{encoded_repo}/releases?per_page=100&page={page}"
         payload = github_api_request("GET", path, token=token)
-        if not isinstance(payload, list):
-            raise RuntimeError("GitHub releases response was not a JSON list")
+        match payload:
+            case list():
+                pass
+            case _:
+                raise RuntimeError("GitHub releases response was not a JSON list")
         page_releases = [
             _mapping(release, label="GitHub release") for release in payload
         ]
@@ -151,7 +155,7 @@ def _require_expected_tag_sha(
 
 def _release_id(release: Mapping[str, object]) -> int:
     release_id = release.get("id")
-    if not isinstance(release_id, int) or isinstance(release_id, bool):
+    if type(release_id) is not int:
         raise RuntimeError("GitHub Release did not contain a numeric id")
     return release_id
 
@@ -175,8 +179,11 @@ def require_exact_assets(
         )
 
     raw_assets = release.get("assets")
-    if not isinstance(raw_assets, list):
-        raise RuntimeError("GitHub Release asset set was not a JSON list")
+    match raw_assets:
+        case list():
+            pass
+        case _:
+            raise RuntimeError("GitHub Release asset set was not a JSON list")
 
     names: list[str] = []
     incomplete: list[str] = []

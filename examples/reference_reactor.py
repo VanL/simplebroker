@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Reference reactor layered on the multi-queue watcher example.
 
 This example is intentionally stricter than the general ``MultiQueueWatcher``
@@ -67,10 +66,10 @@ from typing import Any, cast
 # Support running the file directly from the repository root.
 sys.path.insert(0, str(Path(__file__).parent))
 
-from multi_queue_watcher import MultiQueueWatcher  # noqa: E402
+from multi_queue_watcher import MultiQueueWatcher
 
-from simplebroker import Queue  # noqa: E402
-from simplebroker.ext import (  # noqa: E402
+from simplebroker import Queue
+from simplebroker.ext import (
     IntegrityError,
     OperationalError,
     StopWatching,
@@ -773,7 +772,7 @@ class Reactor(BaseReactor):
                         timestamp=item.timestamp,
                         value=value,
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
                     result = WorkerResult(
                         source_queue=item.source_queue,
                         timestamp=item.timestamp,
@@ -810,9 +809,8 @@ class Reactor(BaseReactor):
     def _handle_worker_result(self, result: WorkerResult) -> None:
         self._inflight.discard((result.source_queue, result.timestamp))
         pending = self._record_pending_result(result)
-        if pending is not None:
-            if not self._try_publish_output(pending):
-                self._output_backlog_blocked = True
+        if pending is not None and not self._try_publish_output(pending):
+            self._output_backlog_blocked = True
 
     def _request_reactor_workers_stop(self) -> None:
         self._worker_stopping.set()

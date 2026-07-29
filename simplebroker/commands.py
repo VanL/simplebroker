@@ -9,6 +9,7 @@ the package's public exports. See the README "Command layer" subsection for
 usage and the ``DatabaseError`` note.
 """
 
+import contextlib
 import errno
 import json
 import os
@@ -65,7 +66,7 @@ def _is_closed_pipe_error(error: OSError) -> bool:
 def _replace_stdout_with_devnull() -> None:
     """Replace a broken stdout wrapper when descriptor redirection is unavailable."""
     try:
-        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 approved [DOM-10.1.1] exception
     except OSError:
         # Pipe shutdown is already in progress. There is no safer output sink
         # if even the platform null device cannot be opened.
@@ -807,7 +808,7 @@ def cmd_status(db_path: DBTarget, *, json_output: bool = False) -> int:
         with DBConnection(db_path) as conn:
             db = cast(BrokerDB, conn.get_connection())
             stats = db.status()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         _emit_error(e, code="ERROR", json_output=json_output)
         return EXIT_ERROR
 
@@ -995,7 +996,7 @@ def cmd_move(
 
                 return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 _emit_error(e, code="ERROR", json_output=json_output)
                 return EXIT_ERROR
 
@@ -1271,7 +1272,7 @@ def cmd_watch(
     except KeyboardInterrupt:
         # Clean exit on Ctrl-C
         return EXIT_SUCCESS
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         _emit_error(e, code="ERROR", json_output=json_output)
         return EXIT_ERROR
     finally:
@@ -1337,15 +1338,15 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
                 return EXIT_ERROR
 
         else:
-            try:
+            target_exists = False
+            with contextlib.suppress(Exception):
                 db_path.plugin.validate_target(
                     target_str,
                     backend_options=db_path.backend_options,
                     verify_initialized=True,
                 )
-            except Exception:
-                pass
-            else:
+                target_exists = True
+            if target_exists:
                 _status(
                     f"SimpleBroker target already exists: {display_target}",
                     quiet=quiet,
@@ -1368,7 +1369,7 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
                     quiet=quiet,
                 )
             return EXIT_SUCCESS
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             print(f"Error initializing database: {e}", file=sys.stderr)
             return EXIT_ERROR
 
@@ -1403,32 +1404,32 @@ def cmd_init(db_path: DBTarget, quiet: bool) -> int:
 
         return EXIT_SUCCESS
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         print(f"Error initializing database: {e}", file=sys.stderr)
         return EXIT_ERROR
 
 
 # Export all command functions
 __all__ = [
-    "cmd_write",
-    "cmd_read",
-    "cmd_peek",
-    "cmd_exists",
-    "cmd_stats",
-    "cmd_list",
-    "cmd_delete",
-    "cmd_move",
+    "cmd_alias_add",
+    "cmd_alias_list",
+    "cmd_alias_remove",
     "cmd_broadcast",
+    "cmd_delete",
+    "cmd_dump",
+    "cmd_exists",
+    "cmd_init",
+    "cmd_list",
+    "cmd_load",
+    "cmd_move",
+    "cmd_peek",
+    "cmd_read",
+    "cmd_rename",
+    "cmd_stats",
+    "cmd_status",
     "cmd_vacuum",
     "cmd_watch",
-    "cmd_init",
-    "cmd_status",
-    "cmd_alias_list",
-    "cmd_alias_add",
-    "cmd_alias_remove",
-    "cmd_rename",
-    "cmd_dump",
-    "cmd_load",
+    "cmd_write",
     "parse_exact_message_id",
 ]
 

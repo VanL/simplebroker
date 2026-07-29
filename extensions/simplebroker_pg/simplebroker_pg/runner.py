@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 import time
@@ -63,13 +64,11 @@ def _should_prepare(sql: str) -> bool:
         and "UPDATE messages AS m SET claimed = TRUE" in normalized
     ):
         return True
-    if (
+    return (
         normalized.startswith("WITH target_queue AS ( SELECT %s AS queue_name )")
         and "UPDATE messages AS m SET queue = (SELECT queue_name FROM target_queue)"
         in normalized
-    ):
-        return True
-    return False
+    )
 
 
 # Postgres contention SQLSTATEs that must be retried even though their
@@ -168,7 +167,7 @@ class _SharedActivityListener:
                             for entry in self._fan_in_entries.values():
                                 if notify.payload in entry.queue_set:
                                     entry.condition.notify_all()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             if not self._stop_event.is_set():
                 self._error = exc
                 self._ready.set()
@@ -180,10 +179,8 @@ class _SharedActivityListener:
         finally:
             self._ready.set()
             if self._conn is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._conn.close()
-                except Exception:
-                    pass
 
     def register_queue(self, queue_name: str) -> tuple[int, int]:
         """Register a waiter queue and return its current notification versions."""
@@ -337,10 +334,8 @@ class _SharedActivityListener:
     def close(self) -> None:
         self._stop_event.set()
         if self._conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._conn.close()
-            except Exception:
-                pass
         with self._lock:
             for condition in self._conditions.values():
                 condition.notify_all()
@@ -659,20 +654,18 @@ class PostgresRunner:
                 delattr(self._thread_local, "in_transaction")
             if hasattr(self._thread_local, "transaction_uses_leased_conn"):
                 delattr(self._thread_local, "transaction_uses_leased_conn")
-            try:
+            # Pool may already be closed during teardown
+            with contextlib.suppress(Exception):
                 self._pool.putconn(conn)
-            except Exception:
-                pass  # Pool may already be closed during teardown
 
     def _return_leased_conn(self, conn: psycopg.Connection[Any]) -> None:
         with self._lease_lock:
             if conn is not self._leased_conn:
                 return
             self._leased_conn = None
-        try:
+        # Pool may already be closed during teardown
+        with contextlib.suppress(Exception):
             self._pool.putconn(conn)
-        except Exception:
-            pass  # Pool may already be closed during teardown
 
     def _return_thread_conn_after_operation(self) -> None:
         """Return non-leased operation checkouts to the pool."""
@@ -826,20 +819,18 @@ class PostgresRunner:
                 self._lease_depth = 0
             return
 
-        with self._leased_operation_lock:
-            with self._lease_lock:
-                if self._lease_depth > 1:
-                    self._lease_depth -= 1
-                    return
-                if self._lease_depth == 0 or self._leased_conn is not conn_to_return:
-                    return
-                self._lease_depth = 0
-                self._leased_conn = None
+        with self._leased_operation_lock, self._lease_lock:
+            if self._lease_depth > 1:
+                self._lease_depth -= 1
+                return
+            if self._lease_depth == 0 or self._leased_conn is not conn_to_return:
+                return
+            self._lease_depth = 0
+            self._leased_conn = None
 
-        try:
+        # Pool may already be closed during teardown
+        with contextlib.suppress(Exception):
             self._pool.putconn(conn_to_return)
-        except Exception:
-            pass  # Pool may already be closed during teardown
 
     def close(self) -> None:
         """Permanently close the connection pool and all connections."""
@@ -853,21 +844,15 @@ class PostgresRunner:
                 self._leased_conn = None
                 self._lease_depth = 0
             if leased_conn is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._pool.putconn(leased_conn)
-                except Exception:
-                    pass
         self._return_thread_conn()
-        try:
+        with contextlib.suppress(Exception):
             self._pool.close()
-        except Exception:
-            pass
 
     def __del__(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self._pool.close()
-        except Exception:
-            pass
 
     def setup(self, phase: SetupPhase) -> None:
         with self._setup_lock:

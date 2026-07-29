@@ -332,10 +332,13 @@ def _workload_status_json(
             settings=settings,
         )
         payload = json.loads(stdout)
-        if not isinstance(payload, dict):
-            raise RuntimeError(
-                f"Expected JSON object from --status --json, got {stdout}"
-            )
+        match payload:
+            case dict():
+                pass
+            case _:
+                raise RuntimeError(
+                    f"Expected JSON object from --status --json, got {stdout}"
+                )
     elapsed = time.perf_counter() - start
     return settings.status_iterations, elapsed
 
@@ -486,43 +489,43 @@ def run_benchmarks(settings: BenchmarkSettings) -> list[BenchmarkResult]:
 
     results: list[BenchmarkResult] = []
 
-    with _postgres_dsn_for_benchmark(settings) as pg_dsn:
-        with _redis_url_for_benchmark(settings) as redis_url:
-            for backend in settings.backends:
-                with _backend_env(backend, pg_dsn, redis_url) as env:
-                    for workload_name in settings.workloads:
-                        workload = WORKLOADS[workload_name]
-                        total_runs = settings.warmups + settings.iterations
-                        for run_index in range(total_runs):
-                            with tempfile.TemporaryDirectory(
-                                prefix=f"simplebroker-bench-{backend}-{workload.name}-"
-                            ) as tempdir:
-                                cwd = Path(tempdir)
-                                operations, elapsed = workload.runner(
-                                    cwd, env, settings
-                                )
-                                if backend == POSTGRES_TEST_BACKEND:
-                                    _cleanup_postgres_projects(cwd)
-                                if backend == REDIS_TEST_BACKEND:
-                                    _cleanup_redis_projects(cwd)
+    with (
+        _postgres_dsn_for_benchmark(settings) as pg_dsn,
+        _redis_url_for_benchmark(settings) as redis_url,
+    ):
+        for backend in settings.backends:
+            with _backend_env(backend, pg_dsn, redis_url) as env:
+                for workload_name in settings.workloads:
+                    workload = WORKLOADS[workload_name]
+                    total_runs = settings.warmups + settings.iterations
+                    for run_index in range(total_runs):
+                        with tempfile.TemporaryDirectory(
+                            prefix=f"simplebroker-bench-{backend}-{workload.name}-"
+                        ) as tempdir:
+                            cwd = Path(tempdir)
+                            operations, elapsed = workload.runner(cwd, env, settings)
+                            if backend == POSTGRES_TEST_BACKEND:
+                                _cleanup_postgres_projects(cwd)
+                            if backend == REDIS_TEST_BACKEND:
+                                _cleanup_redis_projects(cwd)
 
-                            if run_index < settings.warmups:
-                                continue
+                        if run_index < settings.warmups:
+                            continue
 
-                            iteration = run_index - settings.warmups + 1
-                            ops_per_second = (
-                                operations / elapsed if elapsed > 0 else float("inf")
+                        iteration = run_index - settings.warmups + 1
+                        ops_per_second = (
+                            operations / elapsed if elapsed > 0 else float("inf")
+                        )
+                        results.append(
+                            BenchmarkResult(
+                                backend=backend,
+                                workload=workload.name,
+                                iteration=iteration,
+                                operations=operations,
+                                elapsed_seconds=elapsed,
+                                ops_per_second=ops_per_second,
                             )
-                            results.append(
-                                BenchmarkResult(
-                                    backend=backend,
-                                    workload=workload.name,
-                                    iteration=iteration,
-                                    operations=operations,
-                                    elapsed_seconds=elapsed,
-                                    ops_per_second=ops_per_second,
-                                )
-                            )
+                        )
 
     return results
 
@@ -833,7 +836,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         results = run_benchmarks(settings)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
         parser.exit(1, f"{exc}\n")
 
     summaries = summarize_results(results)

@@ -33,16 +33,16 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = [
-    "build>=1.2",
-    "hypothesis>=6.100",
-    "pytest>=7.0",
-    "pytest-cov>=4.0",
-    "pytest-xdist>=3.0",
-    "mypy>=1.0",
+    "build>=1.5.0",
+    "hypothesis>=6.163.0",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
+    "mypy>=2.3.0",
     "psycopg[binary]>=3",
     "psycopg-pool>=3.1",
     "redis>=5",
-    "ruff>=0.1.0",
+    "ruff>=0.16.0",
     "pytest-timeout>=2.4.0",
     "aiosqlite>=0.22.1",
     "aiosqlitepool>=1.0.0",
@@ -56,10 +56,11 @@ redis = [
 
 [dependency-groups]
 fuzz = [
-    "atheris>=2.3.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "atheris>=3.0.0,<3.1; python_version < '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "atheris>=3.1.0; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 release = [
-    "build==1.5.1",
+    "build==1.5.0",
     "hatchling==1.31.0",
 ]
 
@@ -74,7 +75,7 @@ Repository = "https://github.com/VanL/simplebroker.git"
 Issues = "https://github.com/VanL/simplebroker/issues"
 
 [tool.uv]
-required-version = ">=0.11.11,<0.12"
+required-version = ">=0.12.0,<0.13"
 default-groups = []
 
 [tool.uv.sources]
@@ -98,7 +99,7 @@ exclude = [
 ]
 
 [tool.pytest.ini_options]
-minversion = "7.0"
+minversion = "9.1.1"
 testpaths = ["tests"]
 addopts = "-ra -q --strict-markers -m 'not benchmark' -n auto --dist loadgroup"
 filterwarnings = ["error"]
@@ -130,9 +131,10 @@ warn_unused_ignores = true
 [tool.ruff]
 target-version = "py311"
 line-length = 88
+extend-include = ["bin/*"]
 
 [tool.ruff.lint]
-select = [
+extend-select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
     "F",  # pyflakes

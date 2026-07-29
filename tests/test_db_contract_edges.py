@@ -33,9 +33,11 @@ def test_empty_queue_prefix_lists_all_queues(tmp_path: Path) -> None:
 def test_invalid_queue_prefixes_are_rejected(
     tmp_path: Path, prefix: str, message: str
 ) -> None:
-    with BrokerDB(str(tmp_path / "broker.db")) as broker:
-        with pytest.raises(ValueError, match=message):
-            broker.list_queues(prefix=prefix)
+    with (
+        BrokerDB(str(tmp_path / "broker.db")) as broker,
+        pytest.raises(ValueError, match=message),
+    ):
+        broker.list_queues(prefix=prefix)
 
 
 @pytest.mark.parametrize(
@@ -50,9 +52,11 @@ def test_invalid_queue_prefixes_are_rejected(
 def test_invalid_alias_names_and_targets_are_rejected(
     tmp_path: Path, alias: str, target: str, message: str
 ) -> None:
-    with BrokerDB(str(tmp_path / "broker.db")) as broker:
-        with pytest.raises(ValueError, match=message):
-            broker.add_alias(alias, target)
+    with (
+        BrokerDB(str(tmp_path / "broker.db")) as broker,
+        pytest.raises(ValueError, match=message),
+    ):
+        broker.add_alias(alias, target)
 
 
 def test_duplicate_alias_is_rejected(tmp_path: Path) -> None:

@@ -230,6 +230,63 @@ For risky changes, completion should also say whether the rollout or rollback
 assumptions still hold and whether post-deploy observation is pending or
 complete.
 
+### Repository Static-Analysis Gate [DOM-10.1]
+
+SimpleBroker's Python lint gate uses the stable default rule set of the Ruff
+version locked in `uv.lock`, extended with the repository's existing `E`, `W`,
+`F`, `I`, `B`, `C4`, and `UP` rule families. The configuration must extend
+Ruff's defaults rather than replace them.
+
+Owner: `pyproject.toml` owns rule selection; the root CI lint job enforces it.
+Boundary: every tracked first-party `.py`/`.pyi` file and Python-shebang script
+in the repository. Verification: `tests/test_ruff_policy.py` invokes the real
+locked Ruff binary, compares effective discovery and rule selection with
+reviewed inventories, and proves that a stable-default rule outside the legacy
+families and a retained legacy-family rule both fire. Required action: a Ruff
+version refresh reviews and intentionally updates the enabled-rule inventory
+before regenerating the lock.
+
+Requirements:
+
+- the root lint job uses repository discovery (`ruff check .`), and Ruff's
+  include configuration plus a tracked-file discovery test covers extensionless
+  Python-shebang tools that default discovery omits
+- Ruff preview rules remain opt-in and are not part of the default gate
+- global ignores are limited to explicitly documented repository-wide
+  conflicts; per-file ignores remain empty, and other suppressions are local,
+  narrow, carry a reason, protect a tested invariant, and require explicit
+  review before adoption
+- intentionally broad exception or best-effort cleanup boundaries retain their
+  runtime behavior through an explicit code structure where practical; a
+  suppression is the reviewed last resort, not the default alternative to a
+  behavior-changing rewrite
+- formatter paths stay explicit so widening lint discovery does not implicitly
+  widen Markdown formatting ownership
+
+#### Approved Ruff Suppression Registry [DOM-10.1.1]
+
+The following local suppressions are approved exceptions to [DOM-10.1]. This
+spec owns the durable registry. A plan may propose or review a candidate, but
+must not become the lasting source of truth for an adopted exception.
+
+Owner: this section owns the approved groups; the suppression remains local to
+the listed code boundary. Boundary: only the rule, location group, and invariant
+listed below. Verification: the named real proof plus `ruff check .` and
+`RUF100`. Required action: preserve the nearby reason and update this registry
+in the same change when an approved suppression is added, removed, regrouped,
+or materially changes its invariant.
+
+| Location group | Rule and count | Protected invariant | Real proof | Rejected alternatives | Approval |
+|----------------|----------------|---------------------|------------|-----------------------|----------|
+| `simplebroker/_phaselock.py:489`; `simplebroker/db.py:879,883,3453,3457,3564`; `simplebroker/sbqueue.py:1081,1085`; `simplebroker/_runner.py:744`; `simplebroker/_backend_plugins.py:257`; `simplebroker/watcher.py:1045`; `extensions/simplebroker_redis/simplebroker_redis/core.py:1808,1811` | `PYI034`, `PYI036` (25) | Existing concrete `__enter__` returns and permissive `Any`-typed `__exit__` parameters remain valid for downstream subclasses, manual calls, and runtime annotation inspection. | `tests/test_ruff_policy.py::test_public_context_manager_annotations_remain_override_compatible`; `tests/test_ruff_policy.py::test_public_exit_annotations_keep_any_typed_parameters`; full mypy partitions. | `Self` broke a downstream override that copied the former concrete return. Precise exception/traceback types broke formerly valid calls. `object` parameters still break formerly valid narrower overrides. Removing annotations weakens the public contract. | Independent T8 PASS; user approved 2026-07-29. |
+| `simplebroker/commands.py:69` | `SIM115` (1) | The replacement `sys.stdout` stream remains open through later and interpreter-shutdown flushes after a downstream pipe closes. | `tests/test_commands_helpers.py` closed-pipe cases on descriptor and wrapper fallback paths. | A local context manager closes the installed stream. A retained-handle registry adds lifecycle complexity solely for lint. Lower-level open spelling only evades the diagnostic. | Independent T8 PASS; user approved 2026-07-29. |
+| `bin/check-dom15-fixtures:215`; `bin/pytest-redis:211`; `simplebroker/_scripts.py:595,863`; `simplebroker/cli.py:1060,1088,1358`; `simplebroker/commands.py:811,999,1275,1372,1407` | `BLE001` (12) | Agent-facing CLI and development-tool entry points convert every ordinary internal, backend, plugin, filesystem, and configuration failure into the documented no-traceback exit/result boundary while leaving `KeyboardInterrupt` handling distinct. | CLI, command, development-script, release-workflow, Redis harness, DOM-15 fixture, and documented exit-code suites. | Enumerating current exception subclasses is incomplete across third-party backends and plugins. A generic wrapper hides boundary ownership. Propagation changes the CLI contract. | Independent T8 PASS; user approved 2026-07-29. |
+| `examples/async_simple_example.py:74`; `examples/reference_reactor.py:775`; `extensions/simplebroker_pg/simplebroker_pg/runner.py:170`; `extensions/simplebroker_redis/simplebroker_redis/plugin.py:170`; `simplebroker/watcher.py:877,1428` | `BLE001` (6) | Long-lived workers contain arbitrary user callback, backend listener, and injected polling-provider failures at their declared isolation or retry boundary. | Reference-reactor tests; watcher retry, handler, edge-case, and backend notification/listener suites. | Narrow backend types miss user code and adapter failures. Letting a background thread die loses stored-error/wakeup behavior. A generic helper obscures distinct retry and notification semantics. | Independent T8 PASS; user approved 2026-07-29. |
+| `simplebroker/db.py:246,805,829,837`; `simplebroker/sbqueue.py:1442`; `simplebroker/watcher.py:1053` | `BLE001` (6) | Checkout release, owned backend shutdown, weakref finalization, and context-exit cleanup remain best-effort and never replace the primary failure or make teardown fatal. | Connection lifecycle, queue connection-manager, cleanup, runner error-handling, and watcher edge-case suites. | Narrowing is unsound for arbitrary protocol/plugin implementations. Propagation changes cleanup semantics. `suppress(Exception)` would erase logging or failure-note behavior. | Independent T8 PASS; user approved 2026-07-29. |
+| `simplebroker/db.py:1395,1423,1899` | `BLE001` (3) | Generator and sidecar transaction arbitration observes `GeneratorExit`, cancellation, and ordinary failures; rollback failure never silently commits partial caller-owned work and primary exception/poison precedence is retained. | Cross-thread finalization poisoning, generator-method, sidecar, and database lifecycle suites. | `Exception` misses required `BaseException` paths. Suppression contexts lose cleanup-failure notes and precedence. Built-in subclass enumeration is incomplete. | Independent T8 PASS; user approved 2026-07-29. |
+| `extensions/simplebroker_pg/tests/test_pg_broadcast_semantics.py:101,159`; `extensions/simplebroker_pg/tests/test_pg_notify.py:448`; `extensions/simplebroker_pg/tests/test_pg_queue_rename.py:143,194`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py:118`; `tests/helper_scripts/cross_thread_generator_probe.py:132,154,159,166,186,203,235,245,277,321,336,360,372,398,566,573,582`; `tests/test_cross_thread_finalization_poisoning.py:100,188,199,470,617,843,876,943`; `tests/test_edge_cases.py:135`; `tests/test_fork_safety.py:44,87,188,226,275,374,441`; `tests/test_generator_methods.py:309`; `tests/test_phaselock.py:1299,1351,1405,1515,1523,1627,1752`; `tests/test_process_broker_session.py:697,703,979,1064,1149`; `tests/test_queue_move_watcher.py:352`; `tests/test_runner_error_handling.py:802`; `tests/test_watcher_concurrency.py:597`; `tests/test_watcher_multiprocess.py:103,158,231`; `tests/test_watcher_race_conditions.py:797` | `BLE001` (59) | Thread, process, fork, deadlock-timeout, and generator-resumption probes capture every child outcome, including `BaseException`, so the parent can assert identity, traceback, cleanup, poison, and liveness. | The named real concurrency, backend, phase-lock, fork-safety, watcher, process-session, and poisoning suites. | Futures replaced catches where timeout and lifecycle behavior stayed intact. They are unsafe for intentional daemon-thread deadlock, child-process serialization, and exact-`BaseException` assertions. Narrowing loses the behavior under test; generic capture helpers are lint evasion. | Independent T8 PASS; user approved 2026-07-29. |
+| `tests/backend_benchmark.py:839`; `tests/helper_scripts/cleanup.py:52`; `tests/helper_scripts/managed_subprocess.py:56`; `tests/helper_scripts/timing.py:151`; `tests/helper_scripts/watcher_sigint_script_improved.py:52,85,102,111`; `tests/helper_scripts/watcher_sigint_script_instrumented.py:35,57,73,92` | `BLE001` (12) | Test harness entry points, diagnostic readers, arbitrary condition callbacks, watcher cleanup, and signal scripts report or contain unknown support failures without masking the primary test result or hanging a subprocess. | Benchmark argument tests; helper-script subprocess tests; watcher SIGINT and cleanup suites; timing-helper users throughout watcher/process tests. | Exception enumeration is not closed over arbitrary callbacks, streams, and watcher implementations. Propagation loses structured diagnostics or cleanup. `suppress` loses intentional reporting. | Independent T8 PASS; user approved 2026-07-29. |
+
 ## 11. Independent Review Workflow [DOM-11]
 
 Non-trivial plans and completed work should receive an independent review.
@@ -465,6 +522,10 @@ Local adoption record (soft-retired; not a live path claim):
 - retired: 2026-07-16-agent-guidance-bootstrap-plan — source f133ce7; see docs/plans/README.md
 - retired: 2026-07-17-propagate-guidance-delta-wave-plan — source f133ce7; see docs/plans/README.md
 - retired: 2026-07-27-agent-docs-coalescing-and-status-hygiene-plan — source f133ce7; see docs/plans/README.md
+
+Active local plan:
+
+- `docs/plans/2026-07-29-ruff-lint-expansion-plan.md`
 
 Hub plans (names only; live in agent-guidance):
 

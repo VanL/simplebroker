@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from typing import Any, cast
+from typing import Any, Self, cast
 
 import pytest
 from simplebroker_pg import schema as pg_schema
@@ -80,7 +80,7 @@ class SchemaInspectionCursor:
         self._fetchalls = iter(fetchalls)
         self.statements: list[str] = []
 
-    def __enter__(self) -> SchemaInspectionCursor:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -101,7 +101,7 @@ class SchemaInspectionConnection:
     def __init__(self, cursor: SchemaInspectionCursor) -> None:
         self._cursor = cursor
 
-    def __enter__(self) -> SchemaInspectionConnection:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> None:

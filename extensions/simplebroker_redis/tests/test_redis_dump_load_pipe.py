@@ -56,6 +56,7 @@ def _run_cli(
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     return completed.returncode, completed.stdout, completed.stderr
 

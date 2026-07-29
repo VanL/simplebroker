@@ -434,13 +434,10 @@ def test_pre_check_drain_race(broker_target) -> None:
             # Use a separate broker instance
             other_broker = make_broker(broker_target)
             try:
-                consumed = []
                 # Use claim_generator to consume all messages
-                for msg in other_broker.claim_generator(
-                    "test_queue", with_timestamps=False
-                ):
-                    consumed.append(msg)
-                return consumed
+                return list(
+                    other_broker.claim_generator("test_queue", with_timestamps=False)
+                )
             finally:
                 other_broker.shutdown()
 
@@ -797,7 +794,7 @@ def test_pre_check_database_contention(broker_target) -> None:
                     for queue in queue_names:
                         broker.write(queue, f"contention_message_{round_idx}_{queue}")
                     time.sleep(0)
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 writer_errors.append(exc)
 
         contention_thread = threading.Thread(target=create_contention)

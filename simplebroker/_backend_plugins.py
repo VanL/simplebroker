@@ -254,7 +254,7 @@ class BrokerConnection(Protocol):
 
     def __enter__(self) -> Any: ...
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any: ...
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any: ...  # noqa: PYI036 approved [DOM-10.1.1] exception
 
     def set_stop_event(self, stop_event: Any) -> None: ...
 
@@ -529,11 +529,14 @@ def _ensure_backend_plugin_capabilities(plugin: BackendPlugin) -> None:
         )
 
     create_core = getattr(plugin, "create_core", None)
-    if not callable(create_core):
-        raise RuntimeError(
-            f"Backend plugin '{getattr(plugin, 'name', '<unknown>')}' must expose "
-            "create_core() when sql is None"
-        )
+    match create_core:
+        case _ if callable(create_core):
+            return
+        case _:
+            raise RuntimeError(
+                f"Backend plugin '{getattr(plugin, 'name', '<unknown>')}' must expose "
+                "create_core() when sql is None"
+            )
 
 
 def _backend_package_context(name: str) -> str:
@@ -645,13 +648,13 @@ def target_parent_directory(target: str) -> Path:
 
 
 __all__ = [
-    "ActivityWaiter",
     "BACKEND_API_VERSION",
     "BACKEND_ENTRY_POINT_GROUP",
-    "BackendAwareRunner",
-    "BrokerConnection",
-    "BackendPlugin",
     "DEFAULT_BACKEND_NAME",
+    "ActivityWaiter",
+    "BackendAwareRunner",
+    "BackendPlugin",
+    "BrokerConnection",
     "MultiQueueActivityWaiterHook",
     "get_backend_plugin",
     "resolve_runner_backend_plugin",

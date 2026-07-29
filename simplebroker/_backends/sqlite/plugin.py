@@ -332,15 +332,12 @@ class SQLiteBackendPlugin:
         queue: str,
     ) -> None:
         del runner, operation, queue
-        return None
 
     def prepare_broadcast(self, runner: SQLRunner) -> None:
         del runner
-        return None
 
     def prepare_alias_mutation(self, runner: SQLRunner) -> None:
         del runner
-        return None
 
     def vacuum(
         self,

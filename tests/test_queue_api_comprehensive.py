@@ -57,7 +57,7 @@ class TestQueueReadMethods:
         q = queue_factory("test")
 
         q.write("message1")
-        target_ts = list(q.peek_generator(with_timestamps=True))[0][1]
+        target_ts = next(iter(q.peek_generator(with_timestamps=True)))[1]
 
         assert q.read_one(exact_timestamp=f"{target_ts:019d}") == "message1"
 
@@ -306,9 +306,7 @@ class TestQueuePeekMethods:
             q.write(f"message{i}")
 
         # Peek with generator
-        messages = []
-        for msg in q.peek_generator(with_timestamps=False):
-            messages.append(msg)
+        messages = list(q.peek_generator(with_timestamps=False))
 
         assert messages == [f"message{i}" for i in range(5)]
 
@@ -941,7 +939,7 @@ class TestQueueMessageIdValidation:
         q = queue_factory("source")
 
         q.write("peek-me")
-        peek_ts = list(q.peek_generator(with_timestamps=True))[0][1]
+        peek_ts = next(iter(q.peek_generator(with_timestamps=True)))[1]
         assert q.peek(message_id=f"{peek_ts:019d}") == "peek-me"
 
         q.write("move-me")

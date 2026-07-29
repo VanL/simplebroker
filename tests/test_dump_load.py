@@ -138,9 +138,11 @@ def test_load_rejects_malformed_message_id_with_line_context(tmp_path: Path) -> 
         ),
     ]
 
-    with open_broker(db) as broker:
-        with pytest.raises(ValueError, match="line 2: invalid message ID"):
-            load_lines(broker, lines)
+    with (
+        open_broker(db) as broker,
+        pytest.raises(ValueError, match="line 2: invalid message ID"),
+    ):
+        load_lines(broker, lines)
 
     assert Queue("jobs", db_path=db).peek() is None
 

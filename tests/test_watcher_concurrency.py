@@ -1,5 +1,6 @@
 """Concurrency tests for the watcher feature."""
 
+import contextlib
 import json
 import sys
 import threading
@@ -142,13 +143,13 @@ class TestWorkerPool(WatcherTestBase):
         finally:
             # Ensure all workers are cleaned up
             for watcher, _thread, _db in workers:
-                try:
+                # Ignore stop errors
+                with contextlib.suppress(Exception):
                     watcher.stop()
-                except Exception:
-                    pass  # Ignore stop errors
 
             for watcher, thread, _db in workers:
-                try:
+                # Ignore join errors during cleanup
+                with contextlib.suppress(Exception):
                     thread.join(timeout=5.0)
                     # Verify thread termination
                     if thread.is_alive():
@@ -160,8 +161,6 @@ class TestWorkerPool(WatcherTestBase):
                             print(
                                 "Warning: Worker thread failed to stop after 6 seconds"
                             )
-                except Exception:
-                    pass  # Ignore join errors during cleanup
 
         # Collect all processed messages
         all_messages = []
@@ -257,16 +256,14 @@ class TestWorkerPool(WatcherTestBase):
         finally:
             # Ensure all workers are cleaned up
             for watcher, _thread in workers:
-                try:
+                # Ignore stop errors
+                with contextlib.suppress(Exception):
                     watcher.stop()
-                except Exception:
-                    pass  # Ignore stop errors
 
             for _watcher, thread in workers:
-                try:
+                # Ignore join errors during cleanup
+                with contextlib.suppress(Exception):
                     thread.join(timeout=5.0)
-                except Exception:
-                    pass  # Ignore join errors during cleanup
 
         # Should have processed all messages
         snapshot = processed_snapshot()
@@ -336,16 +333,14 @@ class TestWorkerPool(WatcherTestBase):
         finally:
             # Ensure all workers are cleaned up
             for watcher, _thread in workers:
-                try:
+                # Ignore stop errors
+                with contextlib.suppress(Exception):
                     watcher.stop()
-                except Exception:
-                    pass  # Ignore stop errors
 
             for _watcher, thread in workers:
-                try:
+                # Ignore join errors during cleanup
+                with contextlib.suppress(Exception):
                     thread.join(timeout=5.0)
-                except Exception:
-                    pass  # Ignore join errors during cleanup
 
         # Verify all messages processed
         all_messages = []
@@ -439,26 +434,18 @@ class TestMixedMode(WatcherTestBase):
         finally:
             # Cleanup all resources
             if peek_watcher:
-                try:
+                with contextlib.suppress(Exception):
                     peek_watcher.stop()
-                except Exception:
-                    pass
             if read_watcher:
-                try:
+                with contextlib.suppress(Exception):
                     read_watcher.stop()
-                except Exception:
-                    pass
 
             if peek_thread:
-                try:
+                with contextlib.suppress(Exception):
                     peek_thread.join(timeout=5.0)
-                except Exception:
-                    pass
             if read_thread:
-                try:
+                with contextlib.suppress(Exception):
                     read_thread.join(timeout=5.0)
-                except Exception:
-                    pass
 
         # All messages should be read (consumed)
         assert len(read_messages) == 10
@@ -526,16 +513,12 @@ class TestMixedMode(WatcherTestBase):
         finally:
             # Stop all watchers
             for watcher, _thread in watchers:
-                try:
+                with contextlib.suppress(Exception):
                     watcher.stop()
-                except Exception:
-                    pass
 
             for _watcher, thread in watchers:
-                try:
+                with contextlib.suppress(Exception):
                     thread.join(timeout=5.0)
-                except Exception:
-                    pass
 
         # Each peeker should have seen the messages
         for messages, lock in collectors:
@@ -611,7 +594,7 @@ class TestMixedMode(WatcherTestBase):
                             time.sleep(0.01)
                     finally:
                         db.shutdown()
-                except Exception:
+                except Exception:  # noqa: BLE001 approved [DOM-10.1.1] exception
                     with writer_errors_lock:
                         writer_errors.append((writer_id, traceback.format_exc()))
 

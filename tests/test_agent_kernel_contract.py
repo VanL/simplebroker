@@ -18,14 +18,16 @@ def test_llms_txt_points_at_agent_kernel() -> None:
     assert "docs/agent-kernel.md" in text
     # llmstxt.org-style: H1 + blockquote + H2 link sections
     assert text.lstrip().startswith("# ")
-    assert re.search(r"^> ", text, re.M)
-    assert re.search(r"^- \[.+\]\(docs/agent-kernel\.md\)", text, re.M)
+    assert re.search(r"^> ", text, re.MULTILINE)
+    assert re.search(r"^- \[.+\]\(docs/agent-kernel\.md\)", text, re.MULTILINE)
 
 
 def test_agent_kernel_exit_codes_match_cli_constants() -> None:
     text = KERNEL.read_text(encoding="utf-8")
     section = text.split("## Exit codes and I/O (CLI)", 1)[1].split("## ", 1)[0]
-    documented = {int(code) for code in re.findall(r"^\| `(\d+)` \|", section, re.M)}
+    documented = {
+        int(code) for code in re.findall(r"^\| `(\d+)` \|", section, re.MULTILINE)
+    }
     assert documented == {EXIT_SUCCESS, EXIT_ERROR, EXIT_QUEUE_EMPTY}
 
 

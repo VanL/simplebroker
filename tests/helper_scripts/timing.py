@@ -148,7 +148,7 @@ def _machine_performance_ratio(calibration_name: str | None = None) -> float:
         if calibration_name is not None:
             return get_calibration_ratio(calibration_name)
         return get_machine_performance_ratio()
-    except Exception:
+    except Exception:  # noqa: BLE001 approved [DOM-10.1.1] exception
         return 1.0
 
 

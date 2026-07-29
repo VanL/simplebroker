@@ -4,6 +4,7 @@ Utilities for testing timestamp-related functionality.
 
 import time
 from collections.abc import Callable
+from typing import Self
 
 from simplebroker.db import BrokerDB
 
@@ -28,7 +29,7 @@ class TimeController:
         self.time_sequence = list(timestamps)
         self.call_count = 0
 
-    def __enter__(self) -> "TimeController":
+    def __enter__(self) -> Self:
         time.time = self._mock_time
         return self
 
@@ -124,7 +125,7 @@ class ConflictSimulator:
 
         time.time = mock_time
 
-    def __enter__(self) -> "ConflictSimulator":
+    def __enter__(self) -> Self:
         if self.interceptor:
             self.db.generate_timestamp = self.interceptor  # type: ignore[method-assign]
         return self

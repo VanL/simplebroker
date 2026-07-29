@@ -41,7 +41,7 @@ def test_fork_safety_protection(workdir: Path):
             # Expected error
             assert "forked process" in str(e)
             os._exit(0)
-        except Exception:
+        except Exception:  # noqa: BLE001 approved [DOM-10.1.1] exception
             # Unexpected error
             os._exit(2)
     else:  # Parent process
@@ -84,7 +84,7 @@ def test_new_instance_after_fork_works(workdir: Path):
                 assert "parent_message" in messages
                 assert "child_message" in messages
             os._exit(0)
-        except Exception:
+        except Exception:  # noqa: BLE001 approved [DOM-10.1.1] exception
             os._exit(1)
     else:  # Parent process
         # Wait for child
@@ -185,7 +185,7 @@ def test_forked_child_guarded_methods_raise(workdir: Path, method: str) -> None:
             os._exit(1)  # no guard fired
         except RuntimeError as exc:
             os._exit(0 if "forked process" in str(exc) else 3)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] exception
             os._exit(2)  # wrong exception type
     else:
         _, status = os.waitpid(pid, 0)
@@ -223,7 +223,7 @@ def test_forked_child_queue_generate_timestamp_raises(workdir: Path) -> None:
         except RuntimeError as exc:
             os.write(write_conn, b"runtime" if "forked process" in str(exc) else b"x")
             os._exit(0)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] exception
             os.write(write_conn, b"other")
             os._exit(2)
     else:
@@ -272,7 +272,7 @@ def _abandon_fork_child(runner: object, result_w: object) -> None:
                 "new_works": new_conn is not None,
             }
         )
-    except BaseException as exc:  # pragma: no cover - unexpected
+    except BaseException as exc:  # pragma: no cover - unexpected  # noqa: BLE001 approved [DOM-10.1.1] exception
         result_w.send({"error": repr(exc)})  # type: ignore[attr-defined]
 
 
@@ -371,7 +371,7 @@ def test_fork_recovery_does_not_block_on_inherited_locks(workdir: Path) -> None:
             # inherited (permanently held) lock.
             runner.get_connection()
             os._exit(0)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] exception
             os._exit(1)
     else:
         try:
@@ -438,7 +438,7 @@ def test_fork_recovery_runs_before_operation_lock(workdir: Path) -> None:
         try:
             rows = list(runner.run("SELECT 1", fetch=True))
             os._exit(0 if rows == [(1,)] else 3)
-        except BaseException:
+        except BaseException:  # noqa: BLE001 approved [DOM-10.1.1] exception
             os._exit(1)
     else:
         try:

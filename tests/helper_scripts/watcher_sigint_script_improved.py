@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Improved SIGINT test script with race condition mitigation."""
 
 import sys
@@ -50,7 +49,7 @@ def main() -> None:
             db = BrokerDB(str(unique_db_path))
             break
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             if attempt < max_retries - 1:
                 # Exponential backoff with jitter
                 wait_time = (2**attempt) * 0.1 + (
@@ -83,7 +82,7 @@ def main() -> None:
             handler,
             db=db,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         print(f"Watcher creation failed: {e}", flush=True)
         db.close()
         sys.exit(1)
@@ -100,7 +99,7 @@ def main() -> None:
     except KeyboardInterrupt:
         # Treat external KeyboardInterrupt as graceful shutdown
         exit_code = 0
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
         print(f"Watcher error: {e}", flush=True)
         exit_code = 1
     finally:
@@ -109,7 +108,7 @@ def main() -> None:
             db.close()
             if unique_db_path.exists():
                 unique_db_path.unlink()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             print(f"Cleanup error: {e}", flush=True)
 
     sys.exit(exit_code)

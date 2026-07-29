@@ -145,16 +145,60 @@ def test_fuzz_dependency_group_is_opt_in() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["dependency-groups"]["fuzz"] == [
-        "atheris>=2.3.0; sys_platform == 'linux' and platform_machine == 'x86_64'"
+        (
+            "atheris>=3.0.0,<3.1; python_version < '3.12' and "
+            "sys_platform == 'linux' and platform_machine == 'x86_64'"
+        ),
+        (
+            "atheris>=3.1.0; python_version >= '3.12' and "
+            "sys_platform == 'linux' and platform_machine == 'x86_64'"
+        ),
     ]
     assert pyproject["tool"]["uv"]["default-groups"] == []
+
+
+def test_development_tool_floors_are_current() -> None:
+    root_pyproject = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert set(root_pyproject["project"]["optional-dependencies"]["dev"]) == {
+        "build>=1.5.0",
+        "hypothesis>=6.163.0",
+        "pytest>=9.1.1",
+        "pytest-cov>=7.1.0",
+        "pytest-xdist>=3.8.0",
+        "mypy>=2.3.0",
+        "psycopg[binary]>=3",
+        "psycopg-pool>=3.1",
+        "redis>=5",
+        "ruff>=0.16.0",
+        "pytest-timeout>=2.4.0",
+        "aiosqlite>=0.22.1",
+        "aiosqlitepool>=1.0.0",
+    }
+    assert root_pyproject["tool"]["pytest"]["ini_options"]["minversion"] == "9.1.1"
+
+    for extension in ("simplebroker_pg", "simplebroker_redis"):
+        extension_pyproject = tomllib.loads(
+            (ROOT / "extensions" / extension / "pyproject.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert set(extension_pyproject["project"]["optional-dependencies"]["dev"]) == {
+            "pytest>=9.1.1",
+            "pytest-timeout>=2.4.0",
+        }
+        assert (
+            extension_pyproject["tool"]["pytest"]["ini_options"]["minversion"]
+            == "9.1.1"
+        )
 
 
 def test_every_uv_workflow_uses_the_repository_pin() -> None:
     for workflow_path in UV_WORKFLOWS:
         workflow_text = _workflow_text(workflow_path)
 
-        assert workflow_text.count('UV_VERSION: "0.11.28"') == 1
+        assert workflow_text.count('UV_VERSION: "0.12.0"') == 1
         assert re.search(r"(?m)^jobs:\n  [a-z]", workflow_text)
         setup_count = workflow_text.count("uses: astral-sh/setup-uv@")
         assert setup_count > 0
@@ -251,7 +295,7 @@ def test_build_frontend_is_bounded_and_locked() -> None:
 
     root_pyproject = tomllib.loads(projects[0].read_text(encoding="utf-8"))
     assert root_pyproject["dependency-groups"]["release"] == [
-        "build==1.5.1",
+        "build==1.5.0",
         "hatchling==1.31.0",
     ]
 

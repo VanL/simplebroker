@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -218,10 +219,8 @@ def ensure_schema_v3(
             try:
                 runner.commit()
             except BaseException:
-                try:
+                with contextlib.suppress(BaseException):
                     runner.rollback()
-                except BaseException:
-                    pass
                 raise
         else:
             raise

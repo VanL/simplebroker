@@ -37,6 +37,7 @@ def _wait_for_move_output(
             ],
             capture_output=True,
             text=True,
+            check=False,
         )
         last_peek_stdout = peek.stdout
         last_peek_stderr = peek.stderr
@@ -80,6 +81,7 @@ def test_move_after_mutual_exclusion(tmp_path: Path) -> None:
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
 
     # Should fail with error
@@ -145,6 +147,7 @@ def test_move_without_after_works(tmp_path: Path) -> None:
         ],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0
     assert "test message" in result.stdout

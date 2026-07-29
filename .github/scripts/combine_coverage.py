@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Combine main and deferred subprocess coverage data."""
 
 from __future__ import annotations

@@ -142,7 +142,8 @@ def _darwin_xattr_provider() -> _XattrProvider | None:
     if _DARWIN_XATTR_PROVIDER is not _DARWIN_XATTR_PROVIDER_UNSET:
         return cast("_XattrProvider | None", _DARWIN_XATTR_PROVIDER)
 
-    try:
+    _DARWIN_XATTR_PROVIDER = None
+    with contextlib.suppress(Exception):
         import ctypes
         import ctypes.util
 
@@ -212,8 +213,6 @@ def _darwin_xattr_provider() -> _XattrProvider | None:
             get_value=get_value,
             set_value=set_value,
         )
-    except Exception:
-        _DARWIN_XATTR_PROVIDER = None
     return _DARWIN_XATTR_PROVIDER
 
 
@@ -487,7 +486,7 @@ class AdvisoryFileLock(_AdvisoryLock):
 
         return self._locked
 
-    def __enter__(self) -> AdvisoryFileLock:
+    def __enter__(self) -> AdvisoryFileLock:  # noqa: PYI034 approved [DOM-10.1.1] exception
         self.acquire()
         return self
 
@@ -641,12 +640,12 @@ class PhaseLockService:
         def cancellation_requested() -> bool:
             if should_cancel is None:
                 return False
-            try:
-                return bool(should_cancel())
-            except Exception:
-                # Cancellation is a best-effort hint. A broken callback must not
-                # strand a setup lock or prevent the phase from making progress.
-                return False
+            cancelled = False
+            # Cancellation is a best-effort hint. A broken callback must not
+            # strand a setup lock or prevent the phase from making progress.
+            with contextlib.suppress(Exception):
+                cancelled = bool(should_cancel())
+            return cancelled
 
         def should_stop_lock_wait() -> bool:
             if cancellation_requested():
@@ -977,8 +976,8 @@ class PhaseLockService:
 
 
 __all__ = [
-    "AdvisoryFileLock",
     "PHASELOCK_ENABLE_XATTRS",
+    "AdvisoryFileLock",
     "Phase",
     "PhaseLockCancelled",
     "PhaseLockService",

@@ -381,14 +381,18 @@ class TestLoadConfig:
     def test_invalid_numeric_values(self) -> None:
         """Test handling of invalid numeric environment values."""
         # Invalid integers should raise ValueError
-        with patch.dict(os.environ, {"BROKER_BUSY_TIMEOUT": "not_a_number"}):
-            with pytest.raises(ValueError):
-                load_config()
+        with (
+            patch.dict(os.environ, {"BROKER_BUSY_TIMEOUT": "not_a_number"}),
+            pytest.raises(ValueError),
+        ):
+            load_config()
 
         # Invalid floats should raise ValueError
-        with patch.dict(os.environ, {"BROKER_JITTER_FACTOR": "invalid"}):
-            with pytest.raises(ValueError):
-                load_config()
+        with (
+            patch.dict(os.environ, {"BROKER_JITTER_FACTOR": "invalid"}),
+            pytest.raises(ValueError),
+        ):
+            load_config()
 
     def test_all_config_keys_present(self) -> None:
         """Test that all expected configuration keys are present."""
@@ -504,19 +508,21 @@ class TestLoadConfig:
 
         # Use a simple relative path that's unambiguous on all platforms
         test_path = "testdir"
-        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}):
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")  # Catch all warnings
-                config = load_config()
+        with (
+            patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}),
+            warnings.catch_warnings(record=True) as w,
+        ):
+            warnings.simplefilter("always")  # Catch all warnings
+            config = load_config()
 
-                # Should issue a warning
-                assert len(w) == 1
-                assert issubclass(w[0].category, UserWarning)
-                assert "must be an absolute path" in str(w[0].message)
-                assert "testdir" in str(w[0].message)
+            # Should issue a warning
+            assert len(w) == 1
+            assert issubclass(w[0].category, UserWarning)
+            assert "must be an absolute path" in str(w[0].message)
+            assert "testdir" in str(w[0].message)
 
-                # Should be reset to empty string
-                assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
+            # Should be reset to empty string
+            assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
 
         # Absolute paths should remain unchanged
         import tempfile
@@ -524,14 +530,16 @@ class TestLoadConfig:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             absolute_path = str(Path(temp_dir) / "absolute" / "path")
-            with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": absolute_path}):
-                with warnings.catch_warnings(record=True) as w:
-                    warnings.simplefilter("always")
-                    config = load_config()
+            with (
+                patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": absolute_path}),
+                warnings.catch_warnings(record=True) as w,
+            ):
+                warnings.simplefilter("always")
+                config = load_config()
 
-                    # Should not issue a warning for absolute paths
-                    assert len(w) == 0
-                    assert config["BROKER_DEFAULT_DB_LOCATION"] == absolute_path
+                # Should not issue a warning for absolute paths
+                assert len(w) == 0
+                assert config["BROKER_DEFAULT_DB_LOCATION"] == absolute_path
 
 
 class TestParseBool:
@@ -574,12 +582,14 @@ class TestConfigValidation:
         with tempfile.TemporaryDirectory() as temp_dir:
             test_path = str(Path(temp_dir) / "broker.db")
 
-            with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": test_path}):
-                with pytest.raises(
+            with (
+                patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": test_path}),
+                pytest.raises(
                     ValueError,
                     match="BROKER_DEFAULT_DB_NAME must be a relative path, not absolute",
-                ):
-                    load_config()
+                ),
+            ):
+                load_config()
 
     def test_broker_default_db_name_windows_absolute_path_raises_error(self) -> None:
         """Test that Windows absolute paths in BROKER_DEFAULT_DB_NAME raise an error."""
@@ -593,22 +603,24 @@ class TestConfigValidation:
             # but skip this test after os.path.isabs behavior is platform-specific
             pytest.skip("Windows absolute path test only relevant on Windows")
 
-        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": test_path}):
-            with pytest.raises(
+        with (
+            patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": test_path}),
+            pytest.raises(
                 ValueError,
                 match="BROKER_DEFAULT_DB_NAME must be a relative path, not absolute",
-            ):
-                load_config()
+            ),
+        ):
+            load_config()
 
     def test_broker_default_db_name_nested_directories_raises_error(self) -> None:
         """Test that nested directories in BROKER_DEFAULT_DB_NAME raise an error."""
-        with patch.dict(
-            os.environ, {"BROKER_DEFAULT_DB_NAME": ".config/app/broker.db"}
-        ):
-            with pytest.raises(
+        with (
+            patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": ".config/app/broker.db"}),
+            pytest.raises(
                 ValueError, match="Database name must not contain nested directories"
-            ):
-                load_config()
+            ),
+        ):
+            load_config()
 
     def test_broker_default_db_name_valid_compound_path(self) -> None:
         """Test that valid compound paths are accepted."""
@@ -630,12 +642,14 @@ class TestConfigValidation:
         with tempfile.TemporaryDirectory() as temp_dir:
             test_path = create_dangerous_path(temp_dir, "|")
 
-            with patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}):
-                with pytest.raises(
+            with (
+                patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}),
+                pytest.raises(
                     ValueError,
                     match="BROKER_DEFAULT_DB_LOCATION validation failed.*dangerous character",
-                ):
-                    load_config()
+                ),
+            ):
+                load_config()
 
     def test_broker_default_db_location_valid_absolute_path(self) -> None:
         """Test that valid absolute paths in BROKER_DEFAULT_DB_LOCATION are accepted."""
@@ -654,12 +668,14 @@ class TestConfigValidation:
         """Test that dangerous characters are caught in compound database names at config load time."""
         # Since we now validate dangerous characters at config load time,
         # this should fail during load_config() itself
-        with patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "test|dir/broker.db"}):
-            with pytest.raises(
+        with (
+            patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "test|dir/broker.db"}),
+            pytest.raises(
                 ValueError,
                 match="BROKER_DEFAULT_DB_NAME validation failed.*dangerous character",
-            ):
-                load_config()
+            ),
+        ):
+            load_config()
 
     def test_broker_project_config_name_valid_compound_path(self) -> None:
         """Test that valid project config compound paths are accepted."""
@@ -677,12 +693,14 @@ class TestConfigValidation:
         with tempfile.TemporaryDirectory() as temp_dir:
             test_path = str(Path(temp_dir) / "broker.toml")
 
-            with patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_NAME": test_path}):
-                with pytest.raises(
+            with (
+                patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_NAME": test_path}),
+                pytest.raises(
                     ValueError,
                     match="BROKER_PROJECT_CONFIG_NAME must be a relative path",
-                ):
-                    load_config()
+                ),
+            ):
+                load_config()
 
     def test_broker_project_config_path_accepts_relative_directory(self) -> None:
         """Test that project config path can namespace discovery under a project."""
@@ -694,24 +712,27 @@ class TestConfigValidation:
         self,
     ) -> None:
         """Test that relative config path prefixes are limited to one directory."""
-        with patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_PATH": ".weft/config"}):
-            with pytest.raises(
-                ValueError,
-                match="BROKER_PROJECT_CONFIG_PATH must be an absolute path",
-            ):
-                load_config()
+        with (
+            patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_PATH": ".weft/config"}),
+            pytest.raises(
+                ValueError, match="BROKER_PROJECT_CONFIG_PATH must be an absolute path"
+            ),
+        ):
+            load_config()
 
     def test_broker_project_config_combined_nested_path_raises_error(self) -> None:
         """Test that path and name cannot combine into nested directories."""
-        with patch.dict(
-            os.environ,
-            {
-                "BROKER_PROJECT_CONFIG_PATH": ".weft",
-                "BROKER_PROJECT_CONFIG_NAME": "config/broker.toml",
-            },
-        ):
-            with pytest.raises(
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "BROKER_PROJECT_CONFIG_PATH": ".weft",
+                    "BROKER_PROJECT_CONFIG_NAME": "config/broker.toml",
+                },
+            ),
+            pytest.raises(
                 ValueError,
                 match="must not combine into nested directories",
-            ):
-                load_config()
+            ),
+        ):
+            load_config()

@@ -89,16 +89,16 @@ class TestTimestampEdgeCases:
             start.wait()
             return [gen.generate() for _ in range(per_thread)]
 
-        with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
-            with concurrent.futures.ThreadPoolExecutor(
-                max_workers=thread_count
-            ) as executor:
-                futures = [executor.submit(generate_many) for _ in range(thread_count)]
-                timestamps = [
-                    timestamp
-                    for future in futures
-                    for timestamp in future.result(timeout=5.0)
-                ]
+        with (
+            patch("simplebroker._timestamp.time.time_ns", return_value=2000000000),
+            concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor,
+        ):
+            futures = [executor.submit(generate_many) for _ in range(thread_count)]
+            timestamps = [
+                timestamp
+                for future in futures
+                for timestamp in future.result(timeout=5.0)
+            ]
 
         assert len(timestamps) == thread_count * per_thread
         assert len(set(timestamps)) == len(timestamps)
@@ -512,7 +512,7 @@ class TestTimestampEdgeCases:
             )
 
             # Decode the timestamp
-            decoded_ns, counter = gen._decode_hybrid_timestamp(ts)
+            decoded_ns, _counter = gen._decode_hybrid_timestamp(ts)
 
             # The decoded base should be close to the original time
             # (within the granularity of the counter bits)

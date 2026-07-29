@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """ADVANCED EXAMPLE: Creating a custom SQLRunner extension.
 
 This demonstrates how to extend SimpleBroker's functionality by creating

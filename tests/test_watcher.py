@@ -1,5 +1,6 @@
 """Tests for the watcher feature."""
 
+import contextlib
 import logging
 import signal
 import subprocess
@@ -907,15 +908,13 @@ class TestQueueWatcher(WatcherTestBase):
         finally:
             # Stop all workers
             for watcher, _thread in workers:
-                try:
+                # Ignore errors during cleanup
+                with contextlib.suppress(Exception):
                     watcher.stop()
-                except Exception:
-                    pass  # Ignore errors during cleanup
             for _watcher, thread in workers:
-                try:
+                # Ignore errors during cleanup
+                with contextlib.suppress(Exception):
                     thread.join(timeout=2.0)
-                except Exception:
-                    pass  # Ignore errors during cleanup
 
         # Collect all processed messages
         all_messages = []
@@ -974,16 +973,14 @@ class TestQueueWatcher(WatcherTestBase):
             time.sleep(0.4)
         finally:
             # Stop watchers
-            try:
+            # Ignore errors during cleanup
+            with contextlib.suppress(Exception):
                 peek_watcher.stop()
                 peek_thread.join(timeout=2.0)
-            except Exception:
-                pass  # Ignore errors during cleanup
-            try:
+            # Ignore errors during cleanup
+            with contextlib.suppress(Exception):
                 read_watcher.stop()
                 read_thread.join(timeout=2.0)
-            except Exception:
-                pass  # Ignore errors during cleanup
 
         # Check results
         peek_messages = [msg for msg, _ in peek_collector.get_messages()]

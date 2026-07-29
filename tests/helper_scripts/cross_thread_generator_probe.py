@@ -129,7 +129,7 @@ def _execute_probe(
         generator_box["generator"] = generator
         try:
             state["first_yield"] = next(generator)
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             state["owner_error"] = f"{type(exc).__name__}: {exc}"
         finally:
             advanced.set()
@@ -151,19 +151,19 @@ def _execute_probe(
         try:
             core.get_meta()
             state["owner_error_after_poison"] = None
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             state["owner_error_after_poison"] = f"{type(exc).__name__}: {exc}"
         try:
             core.write("jobs", "owner-write-after-poison")
             state["owner_mutation_error_after_poison"] = None
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             state["owner_mutation_error_after_poison"] = f"{type(exc).__name__}: {exc}"
         if bool(getattr(core, "_poisoned", False)):
             for method_name in ("close", "shutdown"):
                 try:
                     getattr(core, method_name)()
                     state[f"owner_{method_name}_error"] = None
-                except BaseException as exc:
+                except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
                     state[f"owner_{method_name}_error"] = f"{type(exc).__name__}: {exc}"
         else:
             state["owner_close_error"] = None
@@ -183,7 +183,7 @@ def _execute_probe(
         try:
             core.get_meta()
             state["same_core_waiter_error"] = None
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             state["same_core_waiter_error"] = f"{type(exc).__name__}: {exc}"
         finally:
             waiter_finished.set()
@@ -200,7 +200,7 @@ def _execute_probe(
             try:
                 generator_box["generator"].close()
                 state["foreign_close_error"] = None
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 state["foreign_close_error"] = f"{type(exc).__name__}: {exc}"
             state["foreign_warning_count"] = sum(
                 issubclass(warning.category, RuntimeWarning)
@@ -232,7 +232,7 @@ def _execute_probe(
             10,
             with_timestamps=False,
         )
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
         state["messages_visible_after_close"] = f"{type(exc).__name__}: {exc}"
 
     writer_finished = threading.Event()
@@ -242,7 +242,7 @@ def _execute_probe(
         try:
             second_core.write("jobs", "after-close")
             state["second_writer_error"] = None
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             state["second_writer_error"] = f"{type(exc).__name__}: {exc}"
         finally:
             state["second_writer_elapsed"] = time.monotonic() - started_at
@@ -274,7 +274,7 @@ def _probe_child(
             sqlite_default_config,
             second_writer_timeout,
         )
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
         result = {
             "backend": backend,
             "probe_error": f"{type(exc).__name__}: {exc}",
@@ -318,7 +318,7 @@ def _execute_sidecar_probe(
         try:
             session_box["session"] = manager.__enter__()
             state["owner_enter_error"] = None
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             state["owner_enter_error"] = f"{type(exc).__name__}: {exc}"
         finally:
             entered.set()
@@ -333,7 +333,7 @@ def _execute_sidecar_probe(
         try:
             core.close()
             state["owner_close_error"] = None
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             state["owner_close_error"] = f"{type(exc).__name__}: {exc}"
         owner_inspected.set()
 
@@ -357,7 +357,7 @@ def _execute_sidecar_probe(
             else:
                 state["foreign_close_result"] = manager_box["manager"].gen.throw(thrown)
             state["foreign_close_error"] = None
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
             state["foreign_close_error"] = f"{type(exc).__name__}: {exc}"
         state["foreign_warning_count"] = sum(
             issubclass(warning.category, RuntimeWarning)
@@ -369,7 +369,7 @@ def _execute_sidecar_probe(
     try:
         session_box["session"].run("SELECT 1", fetch=True)
         state["retained_session_error"] = None
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
         state["retained_session_error"] = f"{type(exc).__name__}: {exc}"
 
     inspect_owner.set()
@@ -395,7 +395,7 @@ def _sidecar_probe_child(
             transaction,
             action,
         )
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
         result = {
             "backend": backend,
             "probe_error": f"{type(exc).__name__}: {exc}",
@@ -563,14 +563,14 @@ def _queue_close_probe_child(
             try:
                 handle.close()
                 close_errors.append(None)
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 close_errors.append(f"{type(exc).__name__}: {exc}")
         if mode in {"shared_last", "shared_non_last"}:
             final_handle = sibling if sibling is not None else queue
             try:
                 final_handle.close()
                 repeated_close_error = None
-            except BaseException as exc:
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
                 repeated_close_error = f"{type(exc).__name__}: {exc}"
         else:
             repeated_close_error = None
@@ -579,7 +579,7 @@ def _queue_close_probe_child(
             "repeated_close_error": repeated_close_error,
             "warning_count": len(caught),
         }
-    except BaseException as exc:
+    except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
         result = {"probe_error": f"{type(exc).__name__}: {exc}"}
     try:
         send_connection.send(result)

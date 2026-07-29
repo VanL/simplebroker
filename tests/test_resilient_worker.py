@@ -120,27 +120,30 @@ def test_worker_failure_retry(workdir):
         run_cli("write", queue_name, msg, cwd=workdir)
 
     # Get timestamps for tracking
-    rc, out, _ = run_cli(
+    rc, out, err = run_cli(
         "peek", queue_name, "--all", "--timestamps", "--json", cwd=workdir
     )
+    assert rc == 0, err
     all_msgs = [json.loads(line) for line in out.strip().split("\n")]
 
     # Process first message successfully
     checkpoint = all_msgs[0]["timestamp"]
 
     # Try to process from checkpoint (includes bad_message)
-    rc, out, _ = run_cli(
+    rc, out, err = run_cli(
         "peek", queue_name, "--all", "--json", "--after", str(checkpoint), cwd=workdir
     )
+    assert rc == 0, err
     next_batch = [json.loads(line) for line in out.strip().split("\n")]
 
     # Simulate failure on bad_message - checkpoint NOT updated
     assert next_batch[0]["message"] == "bad_message"
 
     # On retry, we get the same messages again
-    rc, out, _ = run_cli(
+    rc, out, err = run_cli(
         "peek", queue_name, "--all", "--json", "--after", str(checkpoint), cwd=workdir
     )
+    assert rc == 0, err
     retry_batch = [json.loads(line) for line in out.strip().split("\n")]
 
     # Should get exact same messages
@@ -162,9 +165,10 @@ def test_concurrent_workers_with_checkpoints(workdir):
     worker2_checkpoint = 0
 
     # Get all messages
-    rc, out, _ = run_cli(
+    rc, out, err = run_cli(
         "peek", queue_name, "--all", "--timestamps", "--json", cwd=workdir
     )
+    assert rc == 0, err
     all_messages = [json.loads(line) for line in out.strip().split("\n")]
 
     # Simulate workers processing different subsets

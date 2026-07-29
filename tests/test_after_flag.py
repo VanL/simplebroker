@@ -163,10 +163,10 @@ def test_after_exact_boundary(workdir):
 
 def test_after_empty_queue(workdir):
     """Test --after on empty queue returns exit code 2."""
-    rc, out, _ = run_cli("read", "empty_queue", "--after", "0", cwd=workdir)
+    rc, _out, _ = run_cli("read", "empty_queue", "--after", "0", cwd=workdir)
     assert rc == 2  # EXIT_QUEUE_EMPTY
 
-    rc, out, _ = run_cli("peek", "empty_queue", "--after", "1000", cwd=workdir)
+    rc, _out, _ = run_cli("peek", "empty_queue", "--after", "1000", cwd=workdir)
     assert rc == 2  # EXIT_QUEUE_EMPTY
 
 
@@ -399,7 +399,7 @@ def test_after_valid_timestamps(workdir, ts_str, ts_val):
     run_cli("write", "valid_ts_queue", "test", cwd=workdir)
 
     # Try to read with valid timestamp
-    rc, out, err = run_cli("read", "valid_ts_queue", "--after", ts_str, cwd=workdir)
+    rc, _out, err = run_cli("read", "valid_ts_queue", "--after", ts_str, cwd=workdir)
     # Should succeed (either with message or empty)
     assert rc in [0, 2]
     assert "error" not in err.lower()
@@ -640,7 +640,7 @@ def test_after_mixed_timestamp_formats(workdir):
 @pytest.mark.parametrize("ts_str,expected_error", INVALID_TIMESTAMPS)
 def test_after_invalid_timestamps(workdir, ts_str, expected_error):
     """Test error handling for invalid timestamps."""
-    rc, out, err = run_cli("read", "invalid_queue", "--after", ts_str, cwd=workdir)
+    rc, _out, err = run_cli("read", "invalid_queue", "--after", ts_str, cwd=workdir)
     assert rc == 1
     assert expected_error in err
 
@@ -648,7 +648,7 @@ def test_after_invalid_timestamps(workdir, ts_str, expected_error):
 def test_after_missing_value(workdir):
     """Test --after without value shows proper error."""
     # This should be caught by argparse
-    rc, out, err = run_cli("read", "test_queue", "--after", cwd=workdir)
+    rc, _out, err = run_cli("read", "test_queue", "--after", cwd=workdir)
     assert rc == 1
     assert "error" in err.lower()
     assert "argument --after: expected one argument" in err
@@ -766,7 +766,8 @@ def test_after_multiple_readers(workdir):
     timestamps = []
     for i in range(10):
         run_cli("write", queue_name, f"msg{i}", cwd=workdir)
-        rc, out, _ = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
+        rc, out, err = run_cli("peek", queue_name, "--all", "--timestamps", cwd=workdir)
+        assert rc == 0, err
         lines = out.strip().split("\n")
         timestamps.append(int(lines[-1].split("\t")[0]))
         time.sleep(0.001)
@@ -875,7 +876,7 @@ def test_after_max_timestamp(workdir):
 
 def test_after_queue_not_found(workdir):
     """Test --after with non-existent queue."""
-    rc, out, _ = run_cli("read", "nonexistent", "--after", "1000", cwd=workdir)
+    rc, _out, _ = run_cli("read", "nonexistent", "--after", "1000", cwd=workdir)
     assert rc == 2  # EXIT_QUEUE_EMPTY
 
 
@@ -1015,7 +1016,7 @@ def test_after_hybrid_timestamp_ordering(workdir):
     lines = out.strip().split("\n")
     timestamps = []
     for line in lines:
-        ts, msg = line.split("\t")
+        ts, _msg = line.split("\t")
         timestamps.append(int(ts))
 
     # Verify timestamps are strictly increasing
@@ -1103,7 +1104,7 @@ def test_after_negative_timestamps(workdir):
     ]
 
     for ts_str, desc in negative_tests:
-        rc, out, err = run_cli("peek", queue_name, f"--after={ts_str}", cwd=workdir)
+        rc, _out, err = run_cli("peek", queue_name, f"--after={ts_str}", cwd=workdir)
         assert rc == 1, f"Expected error for {desc}"
         assert "Invalid timestamp" in err, f"Wrong error message for {desc}: {err}"
 
@@ -1119,7 +1120,7 @@ def test_after_scientific_notation_rejected(workdir):
     sci_tests = ["1e10", "1E10", "1.5e9", "1e-5", "1.23E+10"]
 
     for ts_str in sci_tests:
-        rc, out, err = run_cli("peek", queue_name, "--after", ts_str, cwd=workdir)
+        rc, _out, err = run_cli("peek", queue_name, "--after", ts_str, cwd=workdir)
         assert rc == 1, f"Expected error for {ts_str}"
         assert "Invalid timestamp" in err, f"Wrong error for {ts_str}: {err}"
         assert "scientific notation not supported" in err, (
@@ -1217,28 +1218,28 @@ def test_after_error_messages_are_helpful(workdir):
     run_cli("write", queue_name, "test", cwd=workdir)
 
     # Test 1: Scientific notation
-    rc, out, err = run_cli("peek", queue_name, "--after", "1.5e9", cwd=workdir)
+    rc, _out, err = run_cli("peek", queue_name, "--after", "1.5e9", cwd=workdir)
     assert rc == 1
     assert "Invalid timestamp: scientific notation not supported" in err
 
     # Test 2: Negative values
-    rc, out, err = run_cli("peek", queue_name, "--after=-1", cwd=workdir)
+    rc, _out, err = run_cli("peek", queue_name, "--after=-1", cwd=workdir)
     assert rc == 1
     assert "Invalid timestamp: cannot be negative" in err
 
     # Test 3: Invalid ISO format
-    rc, out, err = run_cli("peek", queue_name, "--after", "2024-13-45", cwd=workdir)
+    rc, _out, err = run_cli("peek", queue_name, "--after", "2024-13-45", cwd=workdir)
     assert rc == 1
     assert "Invalid timestamp" in err
 
     # Test 4: Overflow
     huge_value = str(2**64)
-    rc, out, err = run_cli("peek", queue_name, "--after", huge_value, cwd=workdir)
+    rc, _out, err = run_cli("peek", queue_name, "--after", huge_value, cwd=workdir)
     assert rc == 1
     assert "Invalid timestamp: exceeds maximum value" in err
 
     # Test 5: Empty string via equals syntax
-    rc, out, err = run_cli("peek", queue_name, "--after=", cwd=workdir)
+    rc, _out, err = run_cli("peek", queue_name, "--after=", cwd=workdir)
     assert rc == 1
     assert "Invalid timestamp: empty string" in err
 
@@ -1321,7 +1322,7 @@ def test_after_error_propagation(workdir):
 
     try:
         # Attempt to read with --after (should handle error gracefully)
-        rc, out, err = run_cli("read", "error_queue", "--after", "0", cwd=workdir)
+        rc, _out, _err = run_cli("read", "error_queue", "--after", "0", cwd=workdir)
         # Should get an error but not crash
         assert rc != 0
     finally:
