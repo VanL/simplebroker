@@ -41,7 +41,7 @@ CUE_RE = re.compile(r"git show ([0-9a-f]{7,40}):([A-Za-z0-9_./-]+)")
 # Sibling repositories in the guidance ecosystem. agent-guidance is the
 # hub this repository pins; the rest are peer consumers whose SHAs the
 # run log may cite as fold-up evidence.
-SIBLINGS = ["agent-guidance", "mm", "weft", "taut", "backstitch", "engram"]
+SIBLINGS = ["agent-theory", "mm", "weft", "taut", "backstitch", "engram"]
 SIBLING_ROOT = REPO_ROOT.parent
 
 
