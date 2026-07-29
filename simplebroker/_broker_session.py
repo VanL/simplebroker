@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
 from ._constants import load_config, resolve_config
+from ._key_material import FrozenValue, freeze_key_material
 from ._runner import (
     close_owned_runner,
     lease_runner_thread_connection,
@@ -26,47 +27,20 @@ if TYPE_CHECKING:
 _config = load_config()
 _CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
 
-_FrozenValue = (
-    tuple[tuple[str, "_FrozenValue"], ...]
-    | tuple["_FrozenValue", ...]
-    | str
-    | int
-    | float
-    | bool
-    | None
-)
-
 
 @dataclass(frozen=True)
 class _SessionKey:
     pid: int
     backend_name: str
     target: str
-    backend_options: _FrozenValue
-    config: _FrozenValue
+    backend_options: FrozenValue
+    config: FrozenValue
 
 
 @dataclass
 class _RegistryEntry:
     session: _ProcessBrokerSession
     refcount: int = 0
-
-
-def _freeze_for_key(value: Any) -> _FrozenValue:
-    """Freeze common Python data structures into deterministic key material."""
-
-    if isinstance(value, Mapping):
-        return tuple(
-            (str(key), _freeze_for_key(item))
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-        )
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_for_key(item) for item in value)
-    if isinstance(value, set):
-        return tuple(sorted((_freeze_for_key(item) for item in value), key=repr))
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return repr(value)
 
 
 def _normalize_sqlite_target(target: str) -> str:
@@ -104,8 +78,8 @@ def _session_key(db_path: str | BrokerTarget, config: Mapping[str, Any]) -> _Ses
         pid=os.getpid(),
         backend_name=backend_name,
         target=target,
-        backend_options=_freeze_for_key(backend_options),
-        config=_freeze_for_key(resolve_config(dict(config))),
+        backend_options=freeze_key_material(backend_options),
+        config=freeze_key_material(resolve_config(dict(config))),
     )
 
 

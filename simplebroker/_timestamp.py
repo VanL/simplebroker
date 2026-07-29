@@ -39,6 +39,12 @@ TS_RETRY_MAX_DELAY = 0.25
 _SCIENTIFIC_NOTATION_RE = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)[eE][+-]?\d+(?:ns|ms|s)?")
 
 
+def decode_hybrid_timestamp(ts: int) -> tuple[int, int]:
+    """Decode a hybrid timestamp into its physical base and logical counter."""
+    time_mask = ~LOGICAL_COUNTER_MASK
+    return ts & time_mask, ts & LOGICAL_COUNTER_MASK
+
+
 def validate_timestamp_bound(name: str, value: int | None) -> int | None:
     """Validate an integer timestamp filter bound."""
     if value is None:
@@ -107,20 +113,8 @@ class TimestampGenerator:
         return time_base | logical
 
     def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
-        """Decode a 64-bit hybrid timestamp into physical time and logical counter.
-
-        Args:
-            ts: 64-bit hybrid timestamp
-
-        Returns:
-            tuple of (physical_ns_base, logical_counter)
-        """
-        # Extract the time base (top bits)
-        time_mask = ~LOGICAL_COUNTER_MASK
-        physical_ns_base = ts & time_mask
-        # Extract the logical counter (bottom bits)
-        logical_counter = ts & LOGICAL_COUNTER_MASK
-        return physical_ns_base, logical_counter
+        """Decode a hybrid timestamp through the module-level implementation."""
+        return decode_hybrid_timestamp(ts)
 
     def generate(self) -> int:
         """

@@ -799,34 +799,26 @@ class TestErrorHandling:
             manager.close()
 
     def test_permission_errors(self, temp_dir):
-        """Test handling of permission errors."""
-        # Create read-only directory
-        readonly_dir = Path(temp_dir) / "readonly"
-        readonly_dir.mkdir()
-        readonly_path = readonly_dir / "test.db"
+        """Propagate SQLite permission failures without platform-dependent chmod."""
+        manager = SQLiteConnectionManager(str(Path(temp_dir) / "denied.db"))
 
+        with (
+            patch(
+                "sqlite_connect.sqlite3.connect",
+                side_effect=sqlite3.OperationalError("permission denied"),
+            ),
+            pytest.raises(sqlite3.OperationalError, match="permission denied"),
+        ):
+            manager.get_connection()
+
+    def test_writable_directory_connection_succeeds(self, temp_dir):
+        """Create and close a real connection in a writable temporary directory."""
+        manager = SQLiteConnectionManager(str(Path(temp_dir) / "writable.db"))
         try:
-            # Make directory read-only
-            os.chmod(readonly_dir, 0o444)
-
-            # Should handle permission error gracefully
-            manager = SQLiteConnectionManager(str(readonly_path))
-
-            # This might raise an error or handle it gracefully
-            # depending on the system and permissions
-            try:
-                manager.get_connection()
-                manager.close()
-            except (OperationalError, OSError, sqlite3.OperationalError):
-                # Expected on systems with strict permissions
-                pass
-
+            connection = manager.get_connection()
+            assert isinstance(connection, sqlite3.Connection)
         finally:
-            # Restore permissions for cleanup
-            try:
-                os.chmod(readonly_dir, 0o755)
-            except OSError:
-                pass
+            manager.close()
 
 
 # ==============================================================================

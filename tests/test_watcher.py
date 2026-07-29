@@ -1919,26 +1919,6 @@ class TestErrorScenarios(WatcherTestBase):
             or "Error handler failed" in caplog.text
         )
 
-    def test_database_connection_isolation(self, broker_target):
-        """Test that each watcher needs its own connection."""
-        # This is more of a documentation test
-        # Using the same target should work — each watcher creates its own connection
-        watcher1 = QueueWatcher(
-            "queue1",
-            lambda m, t: None,
-            db=broker_target,
-        )
-
-        watcher2 = QueueWatcher(
-            "queue2",
-            lambda m, t: None,
-            db=broker_target,
-        )
-
-        # Just verify they were created
-        assert watcher1 is not None
-        assert watcher2 is not None
-
     def test_consuming_watcher_queue_preservation_on_failure(
         self, broker, broker_target
     ):

@@ -1,6 +1,5 @@
 """Test edge cases in watcher.py to increase coverage."""
 
-import contextlib
 import tempfile
 import threading
 import time
@@ -513,53 +512,42 @@ class TestWatcherEdgeCases(WatcherTestBase):
             with pytest.raises(Exception, match="Persistent failure"):
                 watcher.run_forever()
 
-    def test_cleanup_thread_local_errors(self, broker_target) -> None:
-        """Test handling of errors during thread-local cleanup."""
+    def test_cleanup_thread_local_delegates_and_propagates(self, broker_target) -> None:
+        """Thread-local cleanup delegates once and leaves error policy to callers."""
         watcher = QueueWatcher("queue", lambda m, t: None, db=broker_target)
         try:
-            # Create a connection by accessing the queue's connection
-            with watcher._queue_obj.get_connection() as db:
-                assert db is not None
-
-            # Mock the cleanup method to fail
-            original_cleanup = watcher._queue_obj.cleanup_connections
-            mock_cleanup = Mock(side_effect=Exception("Cleanup failed"))
-            watcher._queue_obj.cleanup_connections = mock_cleanup
-
-            # Mock the config to enable logging just for this call
-            from simplebroker.watcher import _config
-
-            with (
-                patch(
-                    "simplebroker.watcher._config",
-                    {**_config, "BROKER_LOGGING_ENABLED": True},
-                ),
-                patch(
-                    "simplebroker.sbqueue._config",
-                    {"BROKER_LOGGING_ENABLED": True},
-                ),
-            ):
-                # Should not raise when suppressed (as it is in real usage)
-                with contextlib.suppress(Exception):
+            with patch.object(
+                watcher._queue_obj,
+                "cleanup_connections",
+                side_effect=RuntimeError("cleanup failed"),
+            ) as cleanup:
+                with pytest.raises(RuntimeError, match="cleanup failed"):
                     watcher._cleanup_thread_local()
-
-                # Verify cleanup method was called
-                mock_cleanup.assert_called_once()
-
-            # Restore original cleanup method
-            watcher._queue_obj.cleanup_connections = original_cleanup
+                cleanup.assert_called_once_with()
         finally:
-            # Ensure proper cleanup of watcher resources before tempdir cleanup
-            try:
-                # Stop the watcher to ensure all threads are cleaned up
-                if hasattr(watcher, "stop"):
-                    watcher.stop()
-                # Close the queue's underlying connections
-                if hasattr(watcher._queue_obj, "close"):
-                    watcher._queue_obj.close()
-            except Exception:
-                # Ignore cleanup errors to prevent masking the actual test
-                pass
+            watcher.stop()
+
+    def test_handle_retry_suppresses_cleanup_failure(
+        self,
+        broker_target,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Retry recovery continues when best-effort cleanup fails."""
+        watcher = QueueWatcher("queue", lambda m, t: None, db=broker_target)
+        cleanup = Mock(side_effect=RuntimeError("cleanup failed"))
+        try:
+            monkeypatch.setattr(watcher_module, "interruptible_sleep", lambda *_: True)
+            monkeypatch.setattr(watcher, "_cleanup_thread_local", cleanup)
+
+            assert watcher._handle_retry(
+                RuntimeError("operation failed"),
+                retry_count=1,
+                max_retries=3,
+            )
+            cleanup.assert_called_once_with()
+        finally:
+            monkeypatch.undo()
+            watcher.stop()
 
     def test_context_manager_error_handling(self, broker_target) -> None:
         """Test context manager handles errors during exit."""

@@ -7,7 +7,7 @@ queues without managing the underlying database connection.
 import logging
 import threading
 import weakref
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -23,6 +23,7 @@ from ._backend_plugins import (
 )
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
 from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
+from ._key_material import FrozenValue, freeze_key_material
 from ._message_id import MessageIdInput
 from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
@@ -37,55 +38,26 @@ logger = logging.getLogger(__name__)
 # Load configuration once at module level
 _config = load_config()
 
-_FrozenValue = (
-    tuple[tuple[str, "_FrozenValue"], ...]
-    | tuple["_FrozenValue", ...]
-    | str
-    | int
-    | float
-    | bool
-    | None
-)
-
 
 @dataclass(frozen=True)
 class _ActivityWaiterIdentity:
     plugin: BackendPlugin
     backend_name: str
     target_key: str | None
-    backend_options_key: _FrozenValue
+    backend_options_key: FrozenValue
     runner_id: int | None
     target_arg: str | None
     backend_options_arg: dict[str, Any] | None
     runner_arg: SQLRunner | None
 
     @property
-    def compatibility_key(self) -> tuple[str, str | None, _FrozenValue, int | None]:
+    def compatibility_key(self) -> tuple[str, str | None, FrozenValue, int | None]:
         return (
             self.backend_name,
             self.target_key,
             self.backend_options_key,
             self.runner_id,
         )
-
-
-def _freeze_for_waiter_identity(value: Any) -> _FrozenValue:
-    """Freeze common option structures for backend identity comparison."""
-
-    if isinstance(value, Mapping):
-        return tuple(
-            (str(key), _freeze_for_waiter_identity(item))
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-        )
-    if isinstance(value, (list, tuple)):
-        return tuple(_freeze_for_waiter_identity(item) for item in value)
-    if isinstance(value, set):
-        return tuple(
-            sorted((_freeze_for_waiter_identity(item) for item in value), key=repr)
-        )
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    return repr(value)
 
 
 def _display_broker_target(target: str | BrokerTarget) -> str:
@@ -1278,7 +1250,7 @@ class Queue:
                     if self._db_path.backend_name == "sqlite"
                     else f"resolved:{target_key}"
                 ),
-                backend_options_key=_freeze_for_waiter_identity(backend_options),
+                backend_options_key=freeze_key_material(backend_options),
                 runner_id=None,
                 target_arg=target,
                 backend_options_arg=backend_options,
@@ -1290,7 +1262,7 @@ class Queue:
             plugin=get_backend_plugin("sqlite"),
             backend_name="sqlite",
             target_key=f"sqlite:{_normalize_sqlite_waiter_target(target)}",
-            backend_options_key=_freeze_for_waiter_identity({}),
+            backend_options_key=freeze_key_material({}),
             runner_id=None,
             target_arg=target,
             backend_options_arg=None,

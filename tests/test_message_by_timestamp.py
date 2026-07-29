@@ -674,6 +674,36 @@ def test_mutual_exclusivity_with_after(workdir: Path):
     assert "cannot be used with" in err or "not allowed with argument" in err
 
 
+@pytest.mark.parametrize("command", ["read", "peek"])
+@pytest.mark.parametrize(
+    ("conflicting_args", "expected_option"),
+    [
+        (["--all"], "--all"),
+        (["--after", "0"], "--after"),
+        (["--before", "1234567890123456790"], "--before"),
+    ],
+)
+def test_message_selector_conflicts_are_symmetric(
+    workdir: Path,
+    command: str,
+    conflicting_args: list[str],
+    expected_option: str,
+) -> None:
+    """Read and peek reject every selector that conflicts with --message."""
+    rc, _out, err = run_cli(
+        command,
+        "test_queue",
+        "--message",
+        "1234567890123456789",
+        *conflicting_args,
+        cwd=workdir,
+    )
+
+    assert rc == 1
+    assert expected_option in err
+    assert "Traceback" not in err
+
+
 # ============================================================================
 # Vacuum Integration Tests
 # ============================================================================

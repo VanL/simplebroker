@@ -87,6 +87,22 @@ def _json_output_requested(
     return status_json_output or bool(getattr(args, "json", False))
 
 
+def _read_peek_filters(
+    args: argparse.Namespace,
+    parser: argparse.ArgumentParser,
+) -> tuple[str | None, str | None, str | None]:
+    """Return read/peek filters after enforcing message selector conflicts."""
+
+    after_str = getattr(args, "after", None)
+    before_str = getattr(args, "before", None)
+    message_id_str = getattr(args, "message_id", None)
+
+    if message_id_str is not None and (args.all or after_str or before_str):
+        parser.error("--message cannot be used with --all, --after, or --before")
+
+    return after_str, before_str, message_id_str
+
+
 def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
     """Add shared arguments for read and peek commands."""
     parser.add_argument("queue", help="queue name")
@@ -1188,15 +1204,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 show_timestamps=args.timestamps,
             )
         elif args.command == "read":
-            after_str = getattr(args, "after", None)
-            before_str = getattr(args, "before", None)
-            message_id_str = getattr(args, "message_id", None)
-
-            if message_id_str is not None:
-                if args.all or after_str or before_str:
-                    parser.error(
-                        "--message cannot be used with --all, --after, or --before"
-                    )
+            after_str, before_str, message_id_str = _read_peek_filters(args, parser)
 
             return commands.cmd_read(
                 resolved_target,
@@ -1210,15 +1218,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 config=config,
             )
         elif args.command == "peek":
-            after_str = getattr(args, "after", None)
-            before_str = getattr(args, "before", None)
-            message_id_str = getattr(args, "message_id", None)
-
-            if message_id_str is not None:
-                if args.all or after_str or before_str:
-                    parser.error(
-                        "--message cannot be used with --all, --after, or --before"
-                    )
+            after_str, before_str, message_id_str = _read_peek_filters(args, parser)
 
             return commands.cmd_peek(
                 resolved_target,

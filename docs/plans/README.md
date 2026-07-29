@@ -87,6 +87,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-28-broadcast-create-missing-plan.md | completed — class 5; patch-level Python exact broadcast provisioning with full-requested-set atomicity and backend API v5 verified and landed in the containing commit |
 | 2026-07-28-explicit-broadcast-targets-plan.md | completed — class 5; exact existing-queue selector implemented, verified across SQLite/PostgreSQL/Redis, independently reviewed, and authorized for targeted landing 2026-07-28 |
 | 2026-07-28-propagate-guidance-delta-wave-plan.md | completed — hub delta b248e1c..e42762c landed; review blockers F1-F4 fixed |
+| 2026-07-29-code-quality-cleanup-plan.md | completed — class 3; implementation, synchronized patch metadata, verification, and independent review completed 2026-07-29 |
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-extension-monorepo-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |

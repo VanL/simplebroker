@@ -5,6 +5,32 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.6.2] - 2026-07-29
+
+### Changed
+- Consolidated duplicate internal timestamp decoding, backend key-material
+  freezing, and `read` / `peek` selector validation paths without changing
+  public APIs, timestamp IDs, queue identity, CLI diagnostics, or exit codes.
+- Replaced weak or misleading tests with production-path coverage for watcher
+  retry cleanup, SQLite connection failures, and public `Queue.write`
+  message-size behavior. The size contract now runs against SQLite,
+  PostgreSQL, and Redis at the exact byte limit, above the limit, with
+  multibyte UTF-8, and with lone surrogates.
+- Bumped the synchronized first-party `simplebroker-pg` and
+  `simplebroker-redis` packages to 3.3.2, raised both extension core floors to
+  `simplebroker>=5.6.2`, and raised the root optional backend floors to those
+  extension versions.
+
+### simplebroker-pg 3.3.2
+- Synchronized patch release for SimpleBroker 5.6.2. Runtime backend behavior
+  is unchanged; shared conformance coverage now verifies the public
+  message-size contract through PostgreSQL.
+
+### simplebroker-redis 3.3.2
+- Synchronized patch release for SimpleBroker 5.6.2. Runtime backend behavior
+  is unchanged; shared conformance coverage now verifies the public
+  message-size contract through Redis.
+
 ## [5.6.1] - 2026-07-28
 
 ### Added

@@ -106,28 +106,6 @@ def test_cleanup_finalizer_with_exception():
         ensure_windows_cleanup()
 
 
-def test_cleanup_finalizer_with_none_runner():
-    """Test that cleanup handles None runner gracefully."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        str(Path(tmpdir) / "test.db")
-
-        # Patch the logger to verify no warning is logged
-        with patch("simplebroker.sbqueue.logger") as mock_logger:
-            # Create the cleanup function directly
-            def cleanup(runner):
-                try:
-                    if runner:
-                        runner.close()
-                except Exception as e:
-                    mock_logger.warning(f"Error during Queue finalizer cleanup: {e}")
-
-            # Call cleanup with None runner - should not raise or log
-            cleanup(None)
-
-            # Verify no warning was logged
-            mock_logger.warning.assert_not_called()
-
-
 def test_queue_persistent_with_custom_runner_no_finalizer():
     """Test that custom runner still installs finalizer."""
     from simplebroker._runner import SQLiteRunner

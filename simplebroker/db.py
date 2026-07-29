@@ -32,7 +32,6 @@ from ._broker_session import (
 )
 from ._constants import (
     ALIAS_PREFIX,
-    LOGICAL_COUNTER_BITS,
     MAX_QUEUE_NAME_LENGTH,
     PEEK_BATCH_SIZE,
     SIMPLEBROKER_MAGIC,
@@ -63,7 +62,11 @@ from ._runner import SetupPhase, SQLiteRunner, SQLRunner, close_owned_runner
 from ._sidecar import SidecarSession
 from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import BrokerTarget
-from ._timestamp import TimestampGenerator, validate_timestamp_bound
+from ._timestamp import (
+    TimestampGenerator,
+    decode_hybrid_timestamp,
+    validate_timestamp_bound,
+)
 from .helpers import (
     SetupProgressBudget,
     _execute_connection_retry,
@@ -289,9 +292,6 @@ def _literal_prefix_from_fnmatch(pattern: str) -> str:
         return pattern
     return pattern[: min(metachar_indexes)]
 
-
-# Hybrid timestamp constants
-MAX_LOGICAL_COUNTER = (1 << LOGICAL_COUNTER_BITS) - 1
 
 # Read commit interval for --all operations
 # Controls how many messages are deleted and committed at once
@@ -1321,20 +1321,6 @@ class BrokerCore:
                 session.close()
             if threading.current_thread() is owner_thread:
                 self._lock.release_held()
-
-    def _decode_hybrid_timestamp(self, ts: int) -> tuple[int, int]:
-        """Decode a 64-bit hybrid timestamp into physical time and logical counter.
-
-        Args:
-            ts: 64-bit hybrid timestamp
-
-        Returns:
-            tuple of (physical_ns_base, logical_counter)
-        """
-        time_mask = ~MAX_LOGICAL_COUNTER
-        physical_ns_base = ts & time_mask
-        logical_counter = ts & MAX_LOGICAL_COUNTER
-        return physical_ns_base, logical_counter
 
     def _validate_message_size(self, message: str) -> None:
         try:
@@ -2450,12 +2436,8 @@ class BrokerCore:
                     self._runner.commit()
 
                     # Decode timestamps for logging
-                    old_physical, old_logical = self._decode_hybrid_timestamp(
-                        old_last_ts
-                    )
-                    new_physical, new_logical = self._decode_hybrid_timestamp(
-                        max_msg_ts
-                    )
+                    old_physical, old_logical = decode_hybrid_timestamp(old_last_ts)
+                    new_physical, new_logical = decode_hybrid_timestamp(max_msg_ts)
 
                     warnings.warn(
                         f"Timestamp generator resynchronized. "

@@ -18,7 +18,6 @@ from simplebroker import Queue
 from simplebroker._backend_plugins import BACKEND_ENTRY_POINT_GROUP
 from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
 from simplebroker._broker_session import (
-    _freeze_for_key,
     _ProcessBrokerSession,
     _ProcessBrokerSessionRegistry,
     _session_key,
@@ -646,26 +645,6 @@ def test_process_session_key_includes_pid(
     child_key = _session_key(target, {})
 
     assert parent_key != child_key
-
-
-def test_session_key_freezes_nested_backend_options_deterministically() -> None:
-    class OpaqueOption:
-        def __repr__(self) -> str:
-            return "opaque-option"
-
-    frozen = _freeze_for_key(
-        {
-            "items": [2, 1],
-            "modes": {"write", "read"},
-            "opaque": OpaqueOption(),
-        }
-    )
-
-    assert frozen == (
-        ("items", (2, 1)),
-        ("modes", ("read", "write")),
-        ("opaque", "opaque-option"),
-    )
 
 
 def test_closed_session_rejects_connections_and_extra_releases(tmp_path: Path) -> None:

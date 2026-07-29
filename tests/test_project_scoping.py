@@ -17,7 +17,7 @@ import platform
 import tempfile
 from contextlib import closing
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -134,36 +134,13 @@ class TestFilesystemBoundaryDetection:
             with patch.object(Path, "resolve", return_value=root):
                 assert _is_filesystem_root(root) is True
 
-    @patch("pathlib.Path.home")
-    def test_home_directory_not_boundary(self, mock_home) -> None:
+    def test_home_directory_not_boundary(self) -> None:
         """Test that traversal does NOT stop at user home directory (removed restriction)."""
-        home_path = Path("/home/testuser")
-        mock_home.return_value = home_path
-
-        with patch.object(Path, "resolve", return_value=home_path):
-            # Home directory should NOT be a boundary anymore
-            assert _is_filesystem_root(home_path) is False
+        assert _is_filesystem_root(Path("/home/testuser")) is False
 
     def test_normal_directory_not_boundary(self) -> None:
         """Test that normal directories are not boundaries."""
-        normal_path = Path("/some/normal/path")
-        parent_path = Path("/some/normal")
-
-        # Create a mock path object that has the expected behavior
-        mock_path = MagicMock(spec=Path)
-        mock_path.parent = parent_path
-        mock_path.resolve.return_value = normal_path
-
-        # Test with the mock - normal directories should not be boundaries
-        with patch("pathlib.Path.home", side_effect=RuntimeError("No home")):
-            # Directly test with actual paths to avoid complex mocking
-            actual_normal_path = Path("/tmp/test/path")  # Use a real path structure
-            if actual_normal_path.parent != actual_normal_path:  # Not root
-                # This should not be a boundary after it's not root or home
-                result = _is_filesystem_root(actual_normal_path)
-                # The result depends on whether this path exists and is home
-                # Let's just verify the function doesn't crash
-                assert isinstance(result, bool)
+        assert _is_filesystem_root(Path("/tmp/test/path")) is False
 
 
 class TestDatabaseValidation:
@@ -646,17 +623,6 @@ class TestCrossPlatformCompatibility:
 
 class TestSecurityEdgeCases:
     """Test security edge cases and attack vectors."""
-
-    def test_path_traversal_prevention(self, temp_db_cleanup) -> None:
-        """Test that path traversal attempts are blocked."""
-        tmp_path, cleanup_func = temp_db_cleanup
-
-        try:
-            # Test that .. components in database filename are caught
-            # This should be handled by existing validation in main()
-            pass  # The actual validation is in the main() function
-        finally:
-            cleanup_func()
 
     def test_database_validation_prevents_foreign_dbs(self, temp_db_cleanup) -> None:
         """Test that only SimpleBroker databases are used."""

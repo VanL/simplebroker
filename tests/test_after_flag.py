@@ -1140,14 +1140,10 @@ def test_read_after_plain_word_with_e_reports_invalid_timestamp(workdir):
     assert "scientific notation" not in err
 
 
-def test_after_clock_regression(workdir):
-    """Test that --after continues to function correctly when system clock moves backward."""
-    queue_name = "clock_regression_queue"
+def test_after_uses_persisted_cross_process_timestamp_order(workdir):
+    """Test persisted timestamp ordering and --after across CLI processes."""
+    queue_name = "cross_process_order_queue"
 
-    # We can't actually mock time.time() in the subprocess, but we can verify
-    # that messages are still returned in correct order even if timestamps appear out of order
-
-    # Write messages with known timestamps
     run_cli("write", queue_name, "msg1", cwd=workdir)
     rc, out1, _ = run_cli("peek", queue_name, "--timestamps", cwd=workdir)
     ts1 = int(out1.split("\t")[0])
@@ -1157,44 +1153,15 @@ def test_after_clock_regression(workdir):
     lines = out2.strip().split("\n")
     ts2 = int(lines[1].split("\t")[0])
 
-    # Even if clock went backward, ts2 should be > ts1 due to logical clock
-    assert ts2 > ts1, "Logical clock should ensure monotonic timestamps"
+    assert ts2 > ts1, "Persisted timestamps should remain monotonic"
 
-    # Test that --after still works correctly
     rc, out, _ = run_cli("peek", queue_name, "--all", "--after", str(ts1), cwd=workdir)
     assert rc == 0
     assert out == "msg2"
 
-    # ORDER BY id ensures correct FIFO order regardless of timestamp values
     rc, out, _ = run_cli("read", queue_name, "--all", cwd=workdir)
     assert rc == 0
     assert out == "msg1\nmsg2"
-
-
-def test_clock_regression_timestamp_behavior():
-    """Test to document expected behavior during clock regression.
-
-    This test demonstrates what SHOULD happen when the system clock goes backward.
-    The hybrid timestamp implementation should maintain monotonicity by keeping
-    the previous physical time and incrementing the logical counter.
-    """
-    # Since we can't mock time.time() in a subprocess, we document the expected behavior
-    # The timestamp format is: (microseconds_after_epoch << 12) | logical_counter
-
-    # Example scenario:
-    # Time 1: 1700000000000 ms (physical), counter = 0
-    # Timestamp 1: (1700000000000000 << 12) | 0 = 6963200000000000000
-
-    # Clock regression: time goes back to 1699999999900 ms
-    # Time 2: 1699999999900 ms (physical)
-    # Expected behavior: keep previous physical time, increment counter
-    # Timestamp 2: (1700000000000000 << 12) | 1 = 6963200000000000001
-
-    # This ensures timestamps are always monotonically increasing
-    assert 1782579200000000001 > 1782579200000000000
-
-    # The actual implementation in db.py handles this correctly
-    # but we can't test it directly through the CLI
 
 
 def test_after_naive_datetime_utc_assumption(workdir):
