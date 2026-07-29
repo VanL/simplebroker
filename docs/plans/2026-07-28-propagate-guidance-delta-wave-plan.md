@@ -2,9 +2,9 @@
 
 Date: 2026-07-28
 
-Status: active — delta wave from agent-guidance @ `e42762c` (prior pin
-`b248e1c`); transplants applied in the worktree, landing not yet
-authorized
+Status: completed — delta wave from agent-guidance @ `e42762c` (prior pin
+`b248e1c`) landed in `42049aa`; payload, review dispositions, and gates
+verified
 
 Owner: SimpleBroker
 
@@ -254,13 +254,14 @@ retired-in-vocabulary coherence nit) also fixed — the index vocabulary
 now matches the hub polish: retired plans leave the index for the
 ledger. All three gates re-run green.
 
-Not yet run. Scope fence for the reviewer, stated verbatim when
-dispatched: *source content is already reviewed upstream — review ONLY
-the adaptation (placement, retargets, calibration, no-clobber,
-performative additions), and specifically the §3 row 4 reversal.*
-
-Findings and dispositions are appended here.
+The scoped review above was the required adaptation review. Its F1–F4
+findings were resolved before `42049aa` landed; the commit message records
+the dispositions and green reruns.
 
 ## 10. Fresh-Eyes Review
 
-Pending — see §9.
+Completed during the 2026-07-29 coalescing closure audit. The frozen payload
+checklist matches the landed files, `42049aa` is an ancestor of current
+`main`, and the three declared gates reran successfully. The two informational
+findings remain accurately carried by `docs/coalescing.md`; neither blocks
+closure.

@@ -88,6 +88,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-28-explicit-broadcast-targets-plan.md | completed — class 5; exact existing-queue selector implemented, verified across SQLite/PostgreSQL/Redis, independently reviewed, and authorized for targeted landing 2026-07-28 |
 | 2026-07-28-propagate-guidance-delta-wave-plan.md | completed — hub delta b248e1c..e42762c landed; review blockers F1-F4 fixed |
 | 2026-07-29-code-quality-cleanup-plan.md | completed — class 3; implementation, synchronized patch metadata, verification, and independent review completed 2026-07-29 |
+| 2026-07-29-coalescing-sweep-plan.md | active — class 3; authorized plans/lessons/promotion coalescing maintenance run |
 | 2026-07-29-development-toolchain-refresh-plan.md | completed — class 3; dev/test/fuzz/build tools and uv 0.12 policy refreshed, verified, and independently reviewed 2026-07-29 |
 | 2026-07-29-process-session-core-factory-plan.md | completed — class 4; implementation, production-path verification, and independent review completed 2026-07-29 |
 | 2026-07-29-ruff-lint-expansion-plan.md | active — class 3+P; Ruff 0.16 stable-default expansion and repository-wide cleanup in progress |
