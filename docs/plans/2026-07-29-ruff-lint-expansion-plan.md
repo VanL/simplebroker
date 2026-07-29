@@ -586,6 +586,7 @@ the firing test proves both rule sources, and normal CI remains green.
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
 | [DOM-10.1.1] | The eight reviewed groups covered every required local suppression. | Full core verification initially exposed `RUF022` after `simplebroker.commands.__all__` was sorted. The exact-order test was then found to encode presentation order without a documented or consumer-backed contract. The list remains sorted, the test now pins exact membership, and no suppression was added. | Ruff owns deterministic ordering; the public-surface test owns names. Treating list order as API added a false constraint and would have created an avoidable exception. | No spec exception required. |
+| [DOM-10.1.1] | The suppression-registry test would distinguish approved suppression comments from other source text. | Post-commit verification included the newly tracked policy-test file in `git ls-files`; the raw-line scanner then mistook its own `SUPPRESSION_REASON` string constant for a malformed suppression. The pre-commit run had excluded that untracked file. | The scanner now examines Python `COMMENT` tokens. String literals cannot self-match, while malformed approved `# noqa` comments still fail with an exact path and line. | No spec change required. Verification must reproduce tracked-file inventory when a test derives scope from Git. |
 
 ## Approved Suppression Disposition
 
@@ -636,6 +637,9 @@ Observed verification on 2026-07-29:
 - `tests/test_ruff_policy.py`: 8 passed, including real rule firing, discovery,
   effective-rule inventory, workflow shape, public typing compatibility,
   stdout lifetime, and exact suppression-registry fidelity.
+- Post-commit CI exposed a policy-scanner self-match that pre-commit
+  `git ls-files` omitted. Token-aware comment scanning now passes with the
+  policy test tracked and retains malformed-comment detection.
 - Core: 2018 passed, 17 skipped.
 - PostgreSQL fast partitions: 989 shared-core passed, 3 skipped; 146 extension
   passed, 5 skipped.

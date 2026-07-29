@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tokenize
 import tomllib
 from collections import Counter
 from pathlib import Path
@@ -141,15 +142,21 @@ def test_approved_suppressions_match_the_spec_registry() -> None:
     directive_counts: Counter[str] = Counter()
     directive_locations: set[tuple[str, int]] = set()
     for path in _tracked_python_files():
-        for line_number, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            if SUPPRESSION_REASON not in line:
-                continue
-            match = re.search(r"# noqa: ([A-Z0-9, ]+) approved", line)
-            assert match is not None, f"Malformed approved suppression: {path}: {line}"
-            directive_counts.update(code.strip() for code in match.group(1).split(","))
-            directive_locations.add((str(path.relative_to(ROOT)), line_number))
+        with tokenize.open(path) as source:
+            tokens = tokenize.generate_tokens(source.readline)
+            comments = (token for token in tokens if token.type == tokenize.COMMENT)
+            for comment in comments:
+                if SUPPRESSION_REASON not in comment.string:
+                    continue
+                match = re.search(r"# noqa: ([A-Z0-9, ]+) approved", comment.string)
+                assert match is not None, (
+                    f"Malformed approved suppression: {path}:{comment.start[0]}: "
+                    f"{comment.string}"
+                )
+                directive_counts.update(
+                    code.strip() for code in match.group(1).split(",")
+                )
+                directive_locations.add((str(path.relative_to(ROOT)), comment.start[0]))
     assert dict(directive_counts) == APPROVED_DIRECTIVE_COUNTS
     assert directive_locations == registered_locations
 
