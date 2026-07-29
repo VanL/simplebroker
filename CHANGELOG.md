@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message-size behavior. The size contract now runs against SQLite,
   PostgreSQL, and Redis at the exact byte limit, above the limit, with
   multibyte UTF-8, and with lone surrogates.
+- Separated process-session bookkeeping from backend-specific core
+  construction, removing the internal circular import while preserving public
+  behavior. Concurrent first use now publishes one shared runner, failed core
+  construction releases its checkout, and shutdown drains in-flight core
+  creation without retaining late runners.
 - Bumped the synchronized first-party `simplebroker-pg` and
   `simplebroker-redis` packages to 3.3.2, raised both extension core floors to
   `simplebroker>=5.6.2`, and raised the root optional backend floors to those
