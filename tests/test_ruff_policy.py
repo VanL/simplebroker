@@ -8,7 +8,7 @@ import subprocess
 import tokenize
 import tomllib
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
@@ -52,6 +52,10 @@ def _ruff_config() -> tuple[dict[str, object], dict[str, object]]:
     project = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     ruff = project["tool"]["ruff"]
     return ruff, ruff["lint"]
+
+
+def _repository_path(path: PurePath) -> str:
+    return path.as_posix()
 
 
 def _enabled_rules() -> set[str]:
@@ -121,6 +125,12 @@ def test_effective_ruff_rules_match_reviewed_inventory() -> None:
     assert _enabled_rules() == expected
 
 
+def test_repository_path_uses_forward_slashes() -> None:
+    assert _repository_path(PureWindowsPath("tests", "test_example.py")) == (
+        "tests/test_example.py"
+    )
+
+
 def test_approved_suppressions_match_the_spec_registry() -> None:
     spec = STATIC_ANALYSIS_SPEC.read_text(encoding="utf-8")
     heading = "#### Approved Ruff Suppression Registry [DOM-10.1.1]"
@@ -156,7 +166,9 @@ def test_approved_suppressions_match_the_spec_registry() -> None:
                 directive_counts.update(
                     code.strip() for code in match.group(1).split(",")
                 )
-                directive_locations.add((str(path.relative_to(ROOT)), comment.start[0]))
+                directive_locations.add(
+                    (_repository_path(path.relative_to(ROOT)), comment.start[0])
+                )
     assert dict(directive_counts) == APPROVED_DIRECTIVE_COUNTS
     assert directive_locations == registered_locations
 

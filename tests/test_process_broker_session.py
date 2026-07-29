@@ -210,6 +210,12 @@ queue._finalizer.detach()
 """
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    # This probe owns interpreter shutdown and must not inherit coverage.py's
+    # additional atexit hook. On Windows, automatic subprocess coverage can
+    # hang during finalization and changes the boundary being tested.
+    env.pop("COVERAGE_PROCESS_START", None)
+    env.pop("COVERAGE_PROCESS_CONFIG", None)
+    env.pop("COVERAGE_FILE", None)
     result = subprocess.run(
         [
             sys.executable,

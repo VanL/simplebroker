@@ -784,6 +784,7 @@ current test evidence before completion.
 
 | Source | Planned behavior | Actual behavior | Rationale | Follow-up |
 |--------|------------------|-----------------|-----------|-----------|
+| Post-landing Windows 3.14 coverage run `30493235231` | The import-order subprocess would isolate SimpleBroker's process-session `atexit` behavior. | The only Windows matrix cell with automatic subprocess coverage timed out both import orders while coverage.py's `a1_coverage.pth` added a second finalization hook. The same Windows test passed on 3.11–3.13 without coverage. | The probe now removes `COVERAGE_PROCESS_START`, `COVERAGE_PROCESS_CONFIG`, and `COVERAGE_FILE` from its child environment. This restores the intended single-owner shutdown boundary instead of increasing the timeout around an instrumentation hang. | Keep ordinary production-path coverage in the rest of the suite. Do not reintroduce automatic coverage into this isolated `atexit` probe while the upstream Windows hang remains reproducible. |
 
 ## Implementation Tasks
 
@@ -832,6 +833,10 @@ Observed 2026-07-29 from the implementation tree before targeted landing:
 - The first full-diff Claude invocation exhausted its eight-turn inspection
   cap without a verdict and was not counted. A bounded, file-scoped retry read
   the implementation and returned the completed verdict above.
+- Post-landing Windows follow-up: run `30493235231` showed that only the 3.14
+  coverage cell timed out the two import-order subprocesses; Windows 3.11–3.13
+  passed them. The child now excludes coverage's automatic process-start
+  variables so the test measures SimpleBroker's own finalization contract.
 
 ## Fresh-Eyes Checklist
 

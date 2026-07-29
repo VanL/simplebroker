@@ -587,6 +587,7 @@ the firing test proves both rule sources, and normal CI remains green.
 |----------|------------------|-----------------|-----------|---------------|
 | [DOM-10.1.1] | The eight reviewed groups covered every required local suppression. | Full core verification initially exposed `RUF022` after `simplebroker.commands.__all__` was sorted. The exact-order test was then found to encode presentation order without a documented or consumer-backed contract. The list remains sorted, the test now pins exact membership, and no suppression was added. | Ruff owns deterministic ordering; the public-surface test owns names. Treating list order as API added a false constraint and would have created an avoidable exception. | No spec exception required. |
 | [DOM-10.1.1] | The suppression-registry test would distinguish approved suppression comments from other source text. | Post-commit verification included the newly tracked policy-test file in `git ls-files`; the raw-line scanner then mistook its own `SUPPRESSION_REASON` string constant for a malformed suppression. The pre-commit run had excluded that untracked file. | The scanner now examines Python `COMMENT` tokens. String literals cannot self-match, while malformed approved `# noqa` comments still fail with an exact path and line. | No spec change required. Verification must reproduce tracked-file inventory when a test derives scope from Git. |
+| [DOM-10.1.1] | Exact registry locations would compare portably on every supported CI platform. | All four Windows jobs rendered `Path.relative_to()` with `\`, while the repository-owned spec correctly records portable `/` paths. Linux and macOS therefore passed the same assertion. | The scanner now serializes repository-relative paths with `Path.as_posix()`. The registry stays platform-neutral and Windows observes the same location keys as other platforms. | No spec change required. Repository path inventories must use repository syntax, not host-native display syntax. |
 
 ## Approved Suppression Disposition
 
@@ -634,12 +635,16 @@ Observed verification on 2026-07-29:
 
 - `ruff check .` and `ruff check --extend-select RUF100 .`: pass.
 - The exact CI formatter path set: 280 files already formatted.
-- `tests/test_ruff_policy.py`: 8 passed, including real rule firing, discovery,
+- `tests/test_ruff_policy.py`: 9 passed, including real rule firing, discovery,
   effective-rule inventory, workflow shape, public typing compatibility,
-  stdout lifetime, and exact suppression-registry fidelity.
+  stdout lifetime, portable repository-path serialization, and exact
+  suppression-registry fidelity.
 - Post-commit CI exposed a policy-scanner self-match that pre-commit
   `git ls-files` omitted. Token-aware comment scanning now passes with the
   policy test tracked and retains malformed-comment detection.
+- GitHub Actions run `30493235231` exposed host-native path serialization on
+  all four Windows jobs. POSIX serialization now matches the portable spec
+  inventory on every platform.
 - Core: 2018 passed, 17 skipped.
 - PostgreSQL fast partitions: 989 shared-core passed, 3 skipped; 146 extension
   passed, 5 skipped.
