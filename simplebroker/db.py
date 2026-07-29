@@ -58,7 +58,14 @@ from ._message_search import (
     validate_body_contains,
     validate_body_search_limit,
 )
-from ._runner import SetupPhase, SQLiteRunner, SQLRunner, close_owned_runner
+from ._runner import (
+    SetupPhase,
+    SQLiteRunner,
+    SQLRunner,
+    close_owned_runner,
+    lease_runner_thread_connection,
+    release_runner_thread_connection,
+)
 from ._sidecar import SidecarSession
 from ._sql import BackendSQLNamespace, RetrieveQuerySpec
 from ._targets import BrokerTarget
@@ -76,7 +83,7 @@ from .helpers import (
 from .metadata import QueueRenameResult, QueueStats
 
 if TYPE_CHECKING:
-    from ._broker_session import _ProcessBrokerSession, _SessionKey
+    from ._broker_session import _ProcessBrokerSession, _SessionKey, _SessionSpec
 
 # Type variable for generic return types
 T = TypeVar("T")
@@ -186,6 +193,120 @@ def _get_sql_namespace(plugin: BackendPlugin) -> BackendSQLNamespace:
 def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Overlay caller-provided config values onto the default config snapshot."""
     return resolve_config(config)
+
+
+class _ProcessSessionCoreFactory:
+    """Own concrete core construction and runners for one process session."""
+
+    def __init__(self, spec: "_SessionSpec") -> None:
+        self._backend_name = spec.backend_name
+        self._target = spec.target
+        self._backend_options = dict(spec.backend_options)
+        self._config = dict(spec.config)
+        self._backend_plugin = spec.backend_plugin
+        self._runner_condition = threading.Condition()
+        self._runner_state: Literal["empty", "creating", "ready", "closed"] = "empty"
+        self._runner: SQLRunner | None = None
+
+    def create(
+        self,
+        stop_event: threading.Event | None,
+    ) -> BrokerConnection:
+        if self._backend_name == "sqlite":
+            with self._runner_condition:
+                if self._runner_state == "closed":
+                    raise RuntimeError("Broker session is closed")
+            return BrokerDB(
+                self._target,
+                config=self._config,
+                stop_event=stop_event,
+            )
+
+        runner = self._ensure_runner()
+        leased = lease_runner_thread_connection(runner)
+        try:
+            if _is_direct_backend(self._backend_plugin):
+                return self._backend_plugin.create_core_from_runner(
+                    runner,
+                    config=self._config,
+                    stop_event=stop_event,
+                )
+            return BrokerCore(
+                runner,
+                config=self._config,
+                backend_plugin=self._backend_plugin,
+                stop_event=stop_event,
+            )
+        except Exception as exc:
+            if leased:
+                try:
+                    release_runner_thread_connection(runner)
+                except Exception as release_error:
+                    exc.add_note(
+                        f"Runner checkout release also failed: {release_error!r}"
+                    )
+            raise
+
+    def _ensure_runner(self) -> SQLRunner:
+        with self._runner_condition:
+            while True:
+                if self._runner_state == "closed":
+                    raise RuntimeError("Broker session is closed")
+                if self._runner_state == "ready":
+                    assert self._runner is not None
+                    return self._runner
+                if self._runner_state == "empty":
+                    self._runner_state = "creating"
+                    break
+                self._runner_condition.wait()
+
+        try:
+            candidate = self._backend_plugin.create_runner(
+                self._target,
+                backend_options=self._backend_options,
+                config=self._config,
+            )
+        except BaseException:
+            with self._runner_condition:
+                if self._runner_state == "creating":
+                    self._runner_state = "empty"
+                self._runner_condition.notify_all()
+            raise
+
+        with self._runner_condition:
+            if self._runner_state != "closed":
+                self._runner = candidate
+                self._runner_state = "ready"
+                self._runner_condition.notify_all()
+                return candidate
+            self._runner_condition.notify_all()
+
+        close_owned_runner(candidate)
+        raise RuntimeError("Broker session is closed")
+
+    def close_core(self, core: BrokerConnection) -> None:
+        if self._backend_name == "sqlite":
+            cast("BrokerDB", core).shutdown()
+            return
+        core.close()
+
+    def close(self) -> None:
+        with self._runner_condition:
+            if self._runner_state == "closed":
+                return
+            self._runner_state = "closed"
+            runner = self._runner
+            self._runner = None
+            self._runner_condition.notify_all()
+
+        if runner is not None:
+            close_owned_runner(runner)
+
+
+def _build_process_session_core_factory(
+    spec: "_SessionSpec",
+) -> _ProcessSessionCoreFactory:
+    return _ProcessSessionCoreFactory(spec)
 
 
 class _BorrowedRunner:
@@ -384,6 +505,7 @@ class DBConnection:
             self._shared_key, self._shared_session = acquire_process_broker_session(
                 self._db_path_arg,
                 config=self._config,
+                factory_builder=_build_process_session_core_factory,
             )
 
         # If we have an external runner, create a borrowed core immediately.
@@ -511,6 +633,7 @@ class DBConnection:
             self._shared_key, self._shared_session = acquire_process_broker_session(
                 self._db_path_arg,
                 config=self._config,
+                factory_builder=_build_process_session_core_factory,
             )
             self._shared_released = False
         assert self._shared_session is not None

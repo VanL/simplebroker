@@ -6,23 +6,15 @@ import atexit
 import os
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, Protocol, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
 from ._constants import load_config, resolve_config
 from ._key_material import FrozenValue, freeze_key_material
-from ._runner import (
-    close_owned_runner,
-    lease_runner_thread_connection,
-    release_runner_thread_connection,
-)
 from ._targets import BrokerTarget
-
-if TYPE_CHECKING:
-    from ._runner import SQLRunner
 
 _config = load_config()
 _CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
@@ -35,6 +27,32 @@ class _SessionKey:
     target: str
     backend_options: FrozenValue
     config: FrozenValue
+
+
+@dataclass(frozen=True)
+class _SessionSpec:
+    key: _SessionKey
+    backend_name: str
+    target: str
+    backend_options: Mapping[str, Any]
+    config: Mapping[str, Any]
+    backend_plugin: BackendPlugin
+
+
+class _SessionCoreFactory(Protocol):
+    """Construct and close the concrete cores owned by one process session."""
+
+    def create(
+        self,
+        stop_event: threading.Event | None,
+    ) -> BrokerConnection: ...
+
+    def close_core(self, core: BrokerConnection) -> None: ...
+
+    def close(self) -> None: ...
+
+
+_SessionCoreFactoryBuilder = Callable[[_SessionSpec], _SessionCoreFactory]
 
 
 @dataclass
@@ -73,13 +91,29 @@ def _target_parts(
 
 
 def _session_key(db_path: str | BrokerTarget, config: Mapping[str, Any]) -> _SessionKey:
-    backend_name, target, backend_options, _ = _target_parts(db_path)
-    return _SessionKey(
+    return _session_spec(db_path, config).key
+
+
+def _session_spec(
+    db_path: str | BrokerTarget,
+    config: Mapping[str, Any],
+) -> _SessionSpec:
+    backend_name, target, backend_options, backend_plugin = _target_parts(db_path)
+    resolved_config = resolve_config(dict(config))
+    key = _SessionKey(
         pid=os.getpid(),
         backend_name=backend_name,
         target=target,
         backend_options=freeze_key_material(backend_options),
-        config=freeze_key_material(resolve_config(dict(config))),
+        config=freeze_key_material(resolved_config),
+    )
+    return _SessionSpec(
+        key=key,
+        backend_name=backend_name,
+        target=target,
+        backend_options=dict(backend_options),
+        config=dict(resolved_config),
+        backend_plugin=backend_plugin,
     )
 
 
@@ -88,23 +122,15 @@ class _ProcessBrokerSession:
 
     def __init__(
         self,
-        db_path: str | BrokerTarget,
-        *,
-        config: Mapping[str, Any] = _config,
+        factory: _SessionCoreFactory,
     ) -> None:
-        self._config = resolve_config(dict(config))
-        (
-            self._backend_name,
-            self._target,
-            self._backend_options,
-            self._backend_plugin,
-        ) = _target_parts(db_path)
+        self._factory = factory
         self._thread_local = threading.local()
         self._lock = threading.RLock()
         self._operation_condition = threading.Condition(self._lock)
         self._active_operations = 0
+        self._active_core_creations = 0
         self._cores: set[BrokerConnection] = set()
-        self._runner: SQLRunner | None = None
         self._closing = False
         self._closed = False
 
@@ -118,41 +144,42 @@ class _ProcessBrokerSession:
 
         if lease_operation:
             self._begin_operation()
-        with self._lock:
-            if self._closed or self._closing:
-                if lease_operation:
-                    self._end_operation()
-                raise RuntimeError("Broker session is closed")
-
-            core = cast(
-                BrokerConnection | None, getattr(self._thread_local, "core", None)
-            )
-            if core is not None:
-                core.set_stop_event(stop_event)
-                return core
-
+        creation_started = False
         try:
-            core = self._create_core(stop_event)
+            with self._operation_condition:
+                if self._closed or self._closing:
+                    raise RuntimeError("Broker session is closed")
+
+                core = cast(
+                    BrokerConnection | None,
+                    getattr(self._thread_local, "core", None),
+                )
+                if core is not None:
+                    core.set_stop_event(stop_event)
+                    return core
+
+                self._active_core_creations += 1
+                creation_started = True
+
+            core = self._factory.create(stop_event)
+
+            with self._operation_condition:
+                discard_core = self._closed or self._closing
+                if not discard_core:
+                    self._thread_local.core = core
+                    self._cores.add(core)
+                    core.set_stop_event(stop_event)
+                    return core
+
+            self._factory.close_core(core)
+            raise RuntimeError("Broker session is closed")
         except Exception:
             if lease_operation:
                 self._end_operation()
             raise
-
-        with self._lock:
-            if self._closed or self._closing:
-                try:
-                    if self._backend_name == "sqlite":
-                        core.shutdown()
-                    else:
-                        core.close()
-                finally:
-                    if lease_operation:
-                        self._end_operation()
-                raise RuntimeError("Broker session is closed")
-            self._thread_local.core = core
-            self._cores.add(core)
-            core.set_stop_event(stop_event)
-            return core
+        finally:
+            if creation_started:
+                self._end_core_creation()
 
     def _begin_operation(self) -> None:
         """Retain the session while a queue operation is using a core."""
@@ -181,55 +208,13 @@ class _ProcessBrokerSession:
             if self._active_operations == 0:
                 self._operation_condition.notify_all()
 
-    def _create_core(self, stop_event: threading.Event | None) -> BrokerConnection:
-        if self._backend_name == "sqlite":
-            from .db import BrokerDB
-
-            return BrokerDB(self._target, config=self._config, stop_event=stop_event)
-
-        from .db import BrokerCore, _is_direct_backend
-
-        if _is_direct_backend(self._backend_plugin):
-            if self._runner is None:
-                with self._lock:
-                    if self._runner is None:
-                        self._runner = self._backend_plugin.create_runner(
-                            self._target,
-                            backend_options=self._backend_options,
-                            config=self._config,
-                        )
-            leased = lease_runner_thread_connection(self._runner)
-            try:
-                return self._backend_plugin.create_core_from_runner(
-                    self._runner,
-                    config=self._config,
-                    stop_event=stop_event,
-                )
-            except Exception:
-                if leased:
-                    release_runner_thread_connection(self._runner)
-                raise
-
-        if self._runner is None:
-            with self._lock:
-                if self._runner is None:
-                    self._runner = self._backend_plugin.create_runner(
-                        self._target,
-                        backend_options=self._backend_options,
-                        config=self._config,
-                    )
-        leased = lease_runner_thread_connection(self._runner)
-        try:
-            return BrokerCore(
-                self._runner,
-                config=self._config,
-                backend_plugin=self._backend_plugin,
-                stop_event=stop_event,
-            )
-        except Exception:
-            if leased:
-                release_runner_thread_connection(self._runner)
-            raise
+    def _end_core_creation(self) -> None:
+        with self._operation_condition:
+            if self._active_core_creations <= 0:
+                return
+            self._active_core_creations -= 1
+            if self._active_core_creations == 0:
+                self._operation_condition.notify_all()
 
     def cleanup_current_thread(self) -> None:
         """Recycle the current thread's cached core without releasing the session."""
@@ -241,10 +226,7 @@ class _ProcessBrokerSession:
             delattr(self._thread_local, "core")
             self._cores.discard(core)
 
-        if self._backend_name == "sqlite":
-            core.shutdown()
-        else:
-            core.close()
+        self._factory.close_core(core)
 
     def release_current_thread_connection(self) -> None:
         """Release this operation while keeping the backend checkout cached.
@@ -266,7 +248,7 @@ class _ProcessBrokerSession:
                 return
             self._closing = True
             deadline = time.monotonic() + _CLOSE_ACTIVE_OPERATION_TIMEOUT
-            while self._active_operations > 0:
+            while self._active_operations > 0 or self._active_core_creations > 0:
                 # Daemon threads may not release leases during interpreter shutdown.
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -277,19 +259,10 @@ class _ProcessBrokerSession:
             self._cores.clear()
             if hasattr(self._thread_local, "core"):
                 delattr(self._thread_local, "core")
-            runner = self._runner
-            self._runner = None
-
-        if self._backend_name == "sqlite":
-            for core in cores:
-                core.shutdown()
-            return
 
         for core in cores:
-            core.close()
-
-        if runner is not None:
-            close_owned_runner(runner)
+            self._factory.close_core(core)
+        self._factory.close()
 
 
 class _ProcessBrokerSessionRegistry:
@@ -304,13 +277,15 @@ class _ProcessBrokerSessionRegistry:
         db_path: str | BrokerTarget,
         *,
         config: Mapping[str, Any] = _config,
+        factory_builder: _SessionCoreFactoryBuilder,
     ) -> tuple[_SessionKey, _ProcessBrokerSession]:
-        key = _session_key(db_path, config)
+        spec = _session_spec(db_path, config)
+        key = spec.key
         with self._lock:
             entry = self._entries.get(key)
             if entry is None:
                 entry = _RegistryEntry(
-                    session=_ProcessBrokerSession(db_path, config=config)
+                    session=_ProcessBrokerSession(factory_builder(spec))
                 )
                 self._entries[key] = entry
             entry.refcount += 1
@@ -346,8 +321,13 @@ def acquire_process_broker_session(
     db_path: str | BrokerTarget,
     *,
     config: Mapping[str, Any] = _config,
+    factory_builder: _SessionCoreFactoryBuilder,
 ) -> tuple[_SessionKey, _ProcessBrokerSession]:
-    return _registry.acquire(db_path, config=config)
+    return _registry.acquire(
+        db_path,
+        config=config,
+        factory_builder=factory_builder,
+    )
 
 
 def release_process_broker_session(key: _SessionKey) -> None:

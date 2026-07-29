@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
+from typing import Any
 
 import pytest
 import redis
@@ -14,7 +16,9 @@ from simplebroker_redis.plugin import RedisMultiQueueActivityWaiter
 from simplebroker_redis.validation import key_prefix
 
 from simplebroker import Queue, create_activity_waiter_for_queues
+from simplebroker._broker_session import close_process_broker_sessions
 from simplebroker._exceptions import QueueNameError
+from simplebroker._targets import BrokerTarget
 from simplebroker.ext import PollingStrategy
 
 pytestmark = [pytest.mark.redis_only]
@@ -43,6 +47,62 @@ def test_plugin_core_round_trip(redis_url: str, redis_namespace: str) -> None:
     finally:
         core.shutdown()
         plugin.cleanup_target(redis_url, backend_options={"namespace": redis_namespace})
+
+
+def test_redis_persistent_queues_share_plugin_runner(
+    redis_url: str,
+    redis_namespace: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same-target persistent Queue handles should allocate one Redis runner."""
+
+    plugin = get_backend_plugin()
+    original_create_runner = plugin.create_runner
+    create_runner_calls = 0
+    runner_ids: list[int] = []
+    target = BrokerTarget(
+        "redis",
+        redis_url,
+        {"namespace": redis_namespace},
+    )
+
+    def tracked_create_runner(
+        target: str,
+        *,
+        backend_options: Any = None,
+        config: Any = None,
+    ) -> Any:
+        nonlocal create_runner_calls
+        create_runner_calls += 1
+        runner = original_create_runner(
+            target,
+            backend_options=backend_options,
+            config=config,
+        )
+        runner_ids.append(id(runner))
+        return runner
+
+    monkeypatch.setattr(plugin, "create_runner", tracked_create_runner)
+
+    try:
+        with contextlib.ExitStack() as stack:
+            queues = [
+                stack.enter_context(Queue(name, db_path=target, persistent=True))
+                for name in ("alpha", "beta", "gamma")
+            ]
+            for index, queue in enumerate(queues):
+                queue.write(f"message-{index}")
+            for index, queue in enumerate(queues):
+                assert queue.read() == f"message-{index}"
+    finally:
+        close_process_broker_sessions()
+        plugin.cleanup_target(
+            redis_url,
+            backend_options={"namespace": redis_namespace},
+        )
+
+    assert create_runner_calls == 1
+    assert len(set(runner_ids)) == 1
 
 
 def test_broadcast_is_atomic_when_generated_ids_collide(

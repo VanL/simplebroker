@@ -21,6 +21,8 @@ Quick pointers to the key guidance documents in this repository.
 | Path | Purpose |
 |------|---------|
 | `simplebroker/` | The package: CLI (`__main__.py`), broker session, delivery, backends (`_backends/`), constants, maintenance |
+| `simplebroker/_broker_session.py` | Process-session identity, registry/refcount, admission and drain, per-thread core cache |
+| `simplebroker/db.py` | Concrete process-session core factory, runner publication and checkout rollback, plus database operations |
 | `extensions/` | Optional extensions (Postgres support etc.) |
 | `examples/` | Runnable usage examples (async wrappers, multi-queue) — examples are claims; keep them working |
 | `tests/` | Pytest suite (~148 files), `uv run pytest` |
@@ -64,6 +66,7 @@ Quick pointers to the key guidance documents in this repository.
 | `docs/implementation/00-implementation-index.md` | Numbered entry point for implementation docs |
 | `docs/implementation/01-documentation-system.md` | Why the documentation system is shaped this way |
 | `docs/implementation/03-agent-inventory.md` | Current observed agent availability and review preference |
+| `docs/implementation/06-process-session-core-ownership.md` | Internal ownership and concurrency boundary between process sessions and concrete backend construction |
 | `docs/lessons.md` | Canonical lessons ledger |
 | `docs/coalescing.md` | Coalescing state: thresholds, watermarks, deferrals, run log |
 

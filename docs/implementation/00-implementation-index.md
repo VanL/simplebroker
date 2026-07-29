@@ -21,3 +21,4 @@ read order stay aligned instead of competing.
 3. `03-agent-inventory.md`
 4. `04-cross-thread-finalization-poisoning.md`
 5. `05-product-invariant-inventory.md`
+6. `06-process-session-core-ownership.md`
