@@ -322,8 +322,7 @@ def pattern_5_monitoring() -> None:
                 self.metrics: dict[str, Any] = {
                     "total_processed": 0,
                     "queue_stats": {
-                        queue: {"processed": 0, "errors": 0}
-                        for queue in self._queues
+                        queue: {"processed": 0, "errors": 0} for queue in self._queues
                     },
                     "start_time": time.time(),
                 }

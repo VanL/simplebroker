@@ -639,9 +639,7 @@ class AsyncBrokerCore:
                 return await operation()
             except OperationalError as e:
                 msg = str(e).lower()
-                if (
-                    "locked" in msg or "busy" in msg
-                ) and attempt < max_retries - 1:
+                if ("locked" in msg or "busy" in msg) and attempt < max_retries - 1:
                     jitter = (time.time() * 1000) % 25 / 1000
                     wait = retry_delay * (2**attempt) + jitter
                     await asyncio.sleep(wait)
