@@ -64,8 +64,8 @@ SUBPROCESS_TRANSITIONS = (
         event="leave the context normally",
         guard="the child remains alive",
         next_state="exited",
-        effects="the context sends its graceful termination signal",
-        expected_result="the child signal handler exits cleanly",
+        effects="the context sends the platform termination signal",
+        expected_result="the child stops; POSIX preserves the handler's zero exit",
         payload=SubprocessPayload("context-terminate"),
     ),
     TransitionCase(
@@ -193,7 +193,9 @@ def _fire_context_terminate() -> None:
     )
     with managed_subprocess(_python(script)) as process:
         assert process.wait_for_output("ready", timeout=2.0)
-    assert process.proc.returncode == 0
+    assert process.proc.returncode is not None
+    if sys.platform != "win32":
+        assert process.proc.returncode == 0
 
 
 def _fire_context_sigint_escalation() -> None:
@@ -348,14 +350,19 @@ class _UnkillablePopen:
 def _fire_terminal_failure() -> None:
     helper_module = import_module("tests.helper_scripts.managed_subprocess")
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(
-        helper_module.subprocess,
-        "Popen",
-        lambda *_args, **_kwargs: _UnkillablePopen(),
-    )
-    monkeypatch.setattr(helper_module.os, "kill", lambda *_args: None)
-    monkeypatch.setattr(helper_module.os, "killpg", lambda *_args: None)
     try:
+        monkeypatch.setattr(
+            helper_module.subprocess,
+            "Popen",
+            lambda *_args, **_kwargs: _UnkillablePopen(),
+        )
+        monkeypatch.setattr(helper_module.os, "kill", lambda *_args: None)
+        monkeypatch.setattr(
+            helper_module.os,
+            "killpg",
+            lambda *_args: None,
+            raising=False,
+        )
         with (
             pytest.raises(pytest.fail.Exception, match="Failed to terminate"),
             managed_subprocess(
@@ -393,3 +400,21 @@ def test_managed_subprocess_fires_transition_table(
     """Fire every lifecycle transition against a real child process."""
 
     SUBPROCESS_EXECUTORS[transition_case.payload.mode]()
+
+
+def test_terminal_failure_restores_popen_when_killpg_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing platform hook must not leak the injected Popen replacement."""
+
+    helper_module = import_module("tests.helper_scripts.managed_subprocess")
+    original_popen = helper_module.subprocess.Popen
+    monkeypatch.delattr(helper_module.os, "killpg", raising=False)
+
+    try:
+        _fire_terminal_failure()
+    finally:
+        popen_was_restored = helper_module.subprocess.Popen is original_popen
+        helper_module.subprocess.Popen = original_popen
+
+    assert popen_was_restored
