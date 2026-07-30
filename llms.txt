@@ -10,8 +10,9 @@
 - [Product section registry](docs/specs/product-section-registry.md): Mechanical ownership state for product doc sections (`readme-only` / `draft-spec` / `canonical-spec`)
 - [CLI contract spec](docs/specs/10-cli-contract.md): Canonical CLI exit codes and stdout/stderr roles `[SB-CLI-*]`
 - [Delivery contract spec](docs/specs/11-delivery-contract.md): Canonical claim, watch, move-reservation, peek-safety, and transactional-generator rules `[SB-DELIVERY-*]`
+- [Broadcast contract spec](docs/specs/12-broadcast-contract.md): Canonical target selection, creation, atomicity, CLI selector, and backend compatibility rules `[SB-BCAST-1]` through `[SB-BCAST-6]`
 - [Specs index](docs/specs/00-specs-index.md): Process and product spec read order
-- [README](README.md): Full product contract — commands, flags, exit codes, safety, Python API, project scoping, architecture
+- [README](README.md): Human product entry and full command/env/API catalogs; normative for the registry concerns still marked `readme-only`
 - [CHANGELOG](CHANGELOG.md): Behavior deltas for published releases
 - [AGENTS.md](AGENTS.md): Entry point for agents working *in this repository* (process, plans, reviews)
 - [SECURITY.md](SECURITY.md): Vulnerability reporting

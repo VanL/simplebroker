@@ -561,59 +561,16 @@ $ broker read worker1  # -> "shutdown signal"
 $ broker read worker2  # -> "shutdown signal"
 ```
 
-**Target selection [BCAST-1]:** With no selector, broadcast targets every
-queue that exists at the backend's selection point. A non-empty
-`--pattern GLOB` / `pattern=...` targets existing names using Python
-`fnmatchcase` semantics; the legacy empty value (`--pattern ""` or
-`pattern=""`) remains equivalent to no pattern. Repeatable `--queue QUEUE`
-and Python `queue_names: Sequence[str]` target the unique requested names
-that exist at that point by default. Python may additionally pass
-`create_missing=True` with `queue_names`; that mode targets every unique
-requested literal name, including names with no current row. Non-`None`
-`pattern` and `queue_names` are mutually exclusive, including `pattern=""`.
-An empty Python sequence returns `0` and writes nothing. Missing exact names
-are ignored and not created unless Python explicitly enables creation.
-Selector-free, pattern, and CLI broadcast never create queues.
+Broadcast can target all existing queues, names matching a pattern, or an
+exact set of literal queue names. Python callers may explicitly create missing
+exact targets. Selection, validation, result counts, queue-creation policy,
+atomicity, CLI behavior, and backend compatibility are normative in the
+[broadcast contract](docs/specs/12-broadcast-contract.md) `[SB-BCAST-1]`
+through `[SB-BCAST-6]`.
 
-**Python exact selector [BCAST-2]:** `queue_names` accepts a non-string
-sequence, snapshots and deduplicates it before writing, and validates every
-literal name before mutation. `create_missing` is a strict boolean and is
-valid only when `queue_names` is non-`None`. A non-boolean raises
-`TypeError("create_missing must be a boolean")`; true without exact names
-raises `ValueError("create_missing requires queue_names")`. With creation
-disabled, the result is the number of unique existing queues reached. With
-creation enabled, one ordinary pending message is inserted for every unique
-requested name and the result is that requested-name count. Exact selectors
-do not resolve aliases and cannot be combined with `pattern`.
-
-**Alias interaction [BCAST-3]:** Broadcast ignores aliases and works only on
-literal queue names. Patterns match queue names, not aliases. Exact names use
-the same queue-name validation as the rest of the Python API; `@alias` is not
-resolved.
-
-**Atomicity and result [BCAST-4]:** For the selected queue set, broadcast is
-atomic across supported backends: every selected queue receives one copy or
-none do. With `create_missing=True`, the selected set is the complete unique
-requested set, so a queue deleted before the atomic point is intentionally
-recreated by its new pending message; a later deletion may remove it. SQL
-failures roll back the transaction. Redis validates every anticipated layout,
-namespace, capacity, candidate, and timestamp conflict before its first
-mutation, then performs registry and message writes in one non-interleaved Lua
-phase. Queue creation and deletion can race with default selector evaluation;
-the Redis extension documents its pattern-snapshot caveat separately.
-
-**CLI exact selector [BCAST-5]:** `--queue QUEUE` is repeatable and mutually
-exclusive with `--pattern`. Queue names are literal; commas are not split into
-multiple names. Long-option abbreviations are rejected; use `--` before a
-literal option-looking message. CLI exact broadcast remains existing-only;
-this patch adds no CLI queue-creation option.
-
-**Backend compatibility [BCAST-6]:** Exact-target broadcast is part of backend
-API v5. Direct backend extensions must accept `queue_names` and
-`create_missing`, preserve default existing-only selection, implement
-full-requested-set creation when enabled, and preserve the selector and
-atomicity rules above; incompatible extensions fail during backend resolution
-with upgrade-or-pin guidance.
+Broadcast is queue fan-out, not pub/sub: it inserts ordinary pending messages
+into the selected queues. Aliases are not targets, and CLI broadcast never
+creates queues.
 </details>
 
 <details>

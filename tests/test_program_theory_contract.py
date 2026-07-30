@@ -117,6 +117,20 @@ CONCEPT_OWNERS = {
         "README Embedding / Advanced",
     ),
 }
+SPECIALIZED_CONTRACTS = {
+    "Queue": (
+        "Broadcast selection, creation, and atomicity",
+        "canonical-spec",
+        "specs/12-broadcast-contract.md",
+        "[SB-BCAST-*]",
+    ),
+    "Broker core": (
+        "Broadcast selection, creation, and atomicity",
+        "canonical-spec",
+        "specs/12-broadcast-contract.md",
+        "[SB-BCAST-*]",
+    ),
+}
 RECORD_HEADING = re.compile(
     r"^### \[(?P<kind>ALT|REV)-(?P<scope>[A-Z][A-Z0-9]*)-"
     r"(?P<number>\d{3})\] (?P<title>\S.*)$"
@@ -685,6 +699,23 @@ def test_core_concepts_resolve_to_registry_owners(theory_text: str) -> None:
             assert target.removeprefix("specs/") in registry_spec
         else:
             assert registry_locus == registry_owner
+
+
+def test_core_concepts_route_specialized_contracts(theory_text: str) -> None:
+    registry = PRODUCT_REGISTRY.read_text(encoding="utf-8")
+    theory_three = _section(theory_text, "[THEORY-3]")
+    registry_rows = _registry_rows(registry)
+    concept_rows = _concept_rows(theory_three)
+    for concept, (concern, state, target, code_family) in (
+        SPECIALIZED_CONTRACTS.items()
+    ):
+        owner = concept_rows[concept]
+        assert f"Registry `{concern}`" in owner
+        assert f"]({target})" in owner
+        assert code_family in owner
+        registry_state, registry_spec, _ = registry_rows[concern]
+        assert registry_state == state
+        assert target.removeprefix("specs/") in registry_spec
 
 
 def test_theory_links_and_stable_references_resolve(theory_text: str) -> None:

@@ -136,6 +136,9 @@ separate **CLI** naming layer; broadcast matches **queue names**, not aliases.
 
 Broadcast selectors:
 
+Normative: `docs/specs/12-broadcast-contract.md`
+[SB-BCAST-1]–[SB-BCAST-6].
+
 | CLI | Python | Targets |
 |-----|--------|---------|
 | `broker broadcast MESSAGE` | `broker.broadcast(message)` | All existing queues |

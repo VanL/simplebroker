@@ -3106,6 +3106,9 @@ class BrokerCore:
     ) -> int:
         """Broadcast a message to selected queues atomically.
 
+        Contract: ``docs/specs/12-broadcast-contract.md``,
+        ``[SB-BCAST-1]`` through ``[SB-BCAST-4]``.
+
         Args:
             message: Message body to broadcast
             pattern: Optional fnmatch-style glob limiting target queues

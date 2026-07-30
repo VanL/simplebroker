@@ -20,6 +20,9 @@ Product section authority: `product-section-registry.md`.
 2. `11-delivery-contract.md` — `[SB-DELIVERY-*]` (claim, watch, move
    reservation, peek safety, and transactional generators when the registry
    marks canonical)
+3. `12-broadcast-contract.md` — `[SB-BCAST-*]` (target selection, optional
+   exact-target creation, atomicity, CLI selector behavior, and backend
+   compatibility when the registry marks canonical)
 
 ## Rules
 

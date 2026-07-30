@@ -411,7 +411,12 @@ class BrokerConnection(Protocol):
         pattern: str | None = None,
         queue_names: Sequence[str] | None = None,
         create_missing: bool = False,
-    ) -> int: ...
+    ) -> int:
+        """Implement ``[SB-BCAST-1]`` through ``[SB-BCAST-6]``.
+
+        See ``docs/specs/12-broadcast-contract.md``.
+        """
+        ...
 
     def list_queues(
         self,

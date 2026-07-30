@@ -1072,7 +1072,10 @@ def cmd_broadcast(
     queue_names: Sequence[str] | None = None,
     config: dict[str, Any] = _config,
 ) -> int:
-    """Send message to all queues.
+    """Send a message to selected queues.
+
+    Contract: ``docs/specs/12-broadcast-contract.md``,
+    ``[SB-BCAST-1]`` and ``[SB-BCAST-5]``.
 
     Args:
         db_path: Path to database file

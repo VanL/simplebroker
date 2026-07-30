@@ -1414,6 +1414,10 @@ class RedisBrokerCore:
         queue_names: Sequence[str] | None = None,
         create_missing: bool = False,
     ) -> int:
+        """Implement ``[SB-BCAST-1]`` through ``[SB-BCAST-6]``.
+
+        See ``docs/specs/12-broadcast-contract.md``.
+        """
         self._check_fork_safety()
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("broadcast")

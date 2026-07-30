@@ -8,6 +8,7 @@ The ownership rules live in `docs/README.md` and this registry.
 |---------|-------|--------------|----------------------|----------------------------------|
 | CLI exit codes and CLI I/O contract | `canonical-spec` | `10-cli-contract.md` `[SB-CLI-1]`…`[SB-CLI-4]` | `### Exit Codes` (+ kernel Exit codes) | `tests/test_documented_exit_codes.py` (SB-CLI-1 + README link); `tests/test_agent_kernel_contract.py` (SB-CLI-1 + kernel link); `tests/test_cli_contract_sb_cli.py` (SB-CLI-2, SB-CLI-3, SB-CLI-4 behavioral binds) |
 | Delivery guarantees, claim/peek/watch safety | `canonical-spec` | `11-delivery-contract.md` `[SB-DELIVERY-1]`…`[SB-DELIVERY-7]` | README Critical Safety / Delivery; agent-kernel Delivery | `tests/test_delivery_contract_sb_delivery.py` (SB-DELIVERY-1…7 + registry/README/kernel binds); `tests/test_cross_thread_finalization_poisoning.py` + backend probe suites (SB-DELIVERY-6); `tests/test_cli_broken_pipe.py` (SB-DELIVERY-7) |
+| Broadcast selection, creation, and atomicity | `canonical-spec` | `12-broadcast-contract.md` `[SB-BCAST-1]`…`[SB-BCAST-6]` | README “Fan-out with Broadcast”; agent-kernel broadcast table | `tests/test_broadcast_contract_sb_bcast.py` (SB-BCAST-1…6 structural, registry, README, kernel, and mapping binds); `tests/test_broadcast.py` + `tests/test_broadcast_api.py` (selectors, validation, CLI, results); SQL/Redis atomicity and backend-resolution suites (SB-BCAST-4/6) |
 | Message identity (hybrid ts, last_ts, move+checkpoint) | `readme-only` | — | README Core Concepts / agent-kernel Message IDs | (future) |
 | Dump/load and claimed-row I/O | `readme-only` | — | README dump/load | (future) |
 | Embedding targets, backends, sidecar | `readme-only` | — | README Embedding / Advanced | (future) |
@@ -15,9 +16,9 @@ The ownership rules live in `docs/README.md` and this registry.
 
 The base operation row owns only the remaining command/API catalog and base
 operation meanings. It excludes CLI I/O and exits; delivery,
-claim/peek/watch safety; message identity and move/checkpoint rules; dump/load;
-and embedding, backends, and sidecar. Those concerns remain with their
-existing rows.
+claim/peek/watch safety; broadcast selection, creation, and atomicity; message
+identity and move/checkpoint rules; dump/load; and embedding, backends, and
+sidecar. Those concerns remain with their existing rows.
 
 ## Transition rule
 
@@ -40,3 +41,4 @@ forbidden. Abandoning an **unshipped** `draft-spec` may return to
 - retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
   `36e2f356`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md`
+- `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
