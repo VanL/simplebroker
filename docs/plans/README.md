@@ -92,6 +92,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-29-complexity-and-state-machine-hardening-plan.md | completed — class 5+P; implementation 86f73f5; C901 audit registry, complexity refactors, and explicit all-transition state-machine verification |
 | 2026-07-29-development-toolchain-refresh-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
 | 2026-07-29-process-session-core-factory-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
+| 2026-07-29-program-theory-and-negative-knowledge-plan.md | active — class 5+P; program theory, negative-knowledge lifecycle, agent read path, and later upstream export |
 | 2026-07-29-ruff-lint-expansion-plan.md | active — class 3+P; Ruff 0.16 stable-default expansion and repository-wide cleanup in progress |
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |

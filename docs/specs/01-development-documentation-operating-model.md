@@ -46,37 +46,58 @@ should not collapse multiple roles into one file without a strong reason.
 
 ## 3. Agent Startup Context [DOM-3]
 
-At the start of a session, agents should load:
+Two startup paths serve different jobs.
 
-1. the root agent entry point
-2. the read order defined in `docs/agent-context/README.md`
-3. the current agent availability inventory, if one exists
-4. the relevant spec, active plan, implementation note, and skill for the task
+For repository work, load in this relative order:
+
+1. the root agent entry point for safety, repository constraints, and routing
+2. the `docs/agent-context/context.index.yaml` `read_order`, whose first item
+   is `docs/program-theory.md`, before product-scope or design judgment
+3. the current agent inventory, when one exists
+4. the relevant winning product contract, active plan, implementation
+   rationale, code, tests, and task-specific skill or runbook
+
+For product use or embedding, load:
+
+1. `docs/agent-kernel.md`
+2. the winning root-README or canonical-spec section linked by the kernel and
+   product-section registry
+
+`docs/program-theory.md` owns the current conceptual account of purpose,
+mental model, concepts, desired feel, durable principles, non-goals, tensions,
+falsifiers, and revisions. It does not independently own exact product
+behavior. Entry points may shorten or route these paths; they may not define a
+competing order.
 
 The shared agent context should stay repository-owned so multiple agent tools
-can consume the same durable guidance.
-
-Tool-specific root aliases should symlink to the canonical root entry point
-when the environment supports symlinks. If symlinks are not practical, keep
-those files as thin pointers back to the canonical entry point.
+can consume the same durable guidance. Tool-specific root aliases should
+symlink to the canonical root entry point when the environment supports
+symlinks. If symlinks are not practical, keep those files as thin pointers
+back to the canonical entry point.
 
 ## 4. Traceability Requirements [DOM-4]
 
-For material behavior changes, as defined in [DOM-6], the repository should
-preserve the chain:
+For changes that affect product identity, concept meaning, a durable principle
+or non-goal, or a recorded decision case, preserve:
 
-`spec section <-> plan <-> implementation doc <-> code`
+`program theory <-> winning product contract <-> plan/decision <-> implementation rationale <-> code/test evidence`
+
+For other material behavior changes, the chain begins at the winning product
+contract.
 
 Requirements:
 
-- plans cite exact spec files and reference codes when they exist
-- specs maintain backlinks to related plans
-- implementation docs cite governing spec sections and key files or modules
-- code should point back to the governing spec where ownership would otherwise
-  be ambiguous
-
-_Implementation snapshot_: the current repository setup models this chain with
-the documentation system itself because product code has not been added yet.
+- theory-changing plans cite exact `[THEORY-*]`, `[REV-*]`, or `[ALT-*]`
+  references when they exist
+- plans cite exact winning product-contract files and reference codes when
+  they exist
+- theory and specs maintain backlinks to related plans
+- implementation docs cite governing theory or contract sections and key files
+  when ownership would otherwise be ambiguous
+- code points to the governing contract where ownership would otherwise be
+  ambiguous
+- theory may summarize a stable behavioral consequence only non-normatively
+  and with a precise link to the winning contract
 
 ## 5. Planning Standard [DOM-5]
 
@@ -521,11 +542,16 @@ change requires — not by what the author chooses to produce:
 | 2 — Small | Observable behavior changes but **conforms to existing intended behavior**, evidenced by something independently inspectable — a governing spec section, an explicit user requirement in the session, or an existing contract test. Author inference is not intent evidence; without it, the class is 3. Also requires: reversible, and **no [DOM-5] non-trivial or risky trigger fires** | The abbreviated preflight, pre-edit: (1) outcome checklist, (2) the intent evidence or `Source spec: None — <reason>`, (3) invariants that must not move, (4) the planned verification command. The observed result is appended at completion. Recorded in the commit/PR description or handoff report | Author fresh-eyes |
 | 3 — Standard | Any **[DOM-5] non-trivial trigger** | Full dated plan per `runbooks/writing-plans.md`, status-index row, deviation log | Independent review of the plan **and** of the completed work ([DOM-11]) |
 | 4 — Risky | Any **[DOM-5] risky trigger** | Class 3 plus the hardening-plans checklist | Class 3 plus review before implementation begins |
-| 5 — Spec-changing | **[DOM-6] requires a spec change** (whether or not one has been drafted), or any normative spec text is edited — including clarification-only edits, which use promotion strategy D per `writing-plans.md` §4c | Class 3 plus spec baseline, exact proposed delta, named promotion strategy; the hardening-plans checklist **only if a [DOM-5] risky trigger also fires** — otherwise declare `hardening: N/A — no risky trigger` | Class 3 reviews plus independent review of the delta before the spec-promotion slice; review-before-implementation when hardening applies |
+| 5 — Theory/spec-changing | **[DOM-16] requires a material program-theory change**; a normative theory claim is added, removed, or reworded; **[DOM-6] requires a spec change**; or normative spec text is edited, including clarification-only spec edits, which use promotion strategy D per `writing-plans.md` §4c | Class 3 plus theory/spec baseline, exact proposed delta, named promotion strategy; the hardening-plans checklist **only if a [DOM-5] risky trigger also fires** — otherwise declare `hardening: N/A — no risky trigger` and state that no risky trigger fires | Class 3 reviews plus independent review of the delta before promotion; review-before-implementation when hardening applies |
 | +P — Process-changing (modifier, not a class) | The change is [DOM-6]-material to how future work is **planned, implemented, reviewed, or verified** — regardless of which surface hosts it. A non-material edit to a skill or runbook (a typo, a link fix) is not +P; a material process change hiding in an "implementation" doc is | Declared as `Class N+P`; effective requirements are `max(N, 5)`'s | Effective class's review plus pre-landing review, different agent family preferred |
 
 Rules:
 
+- a material theory change adds, removes, or changes product purpose or desired
+  feel, a core concept or its owner, a durable principle or non-goal, or a
+  revision that changes current design judgment. Link repairs, source
+  corrections, metadata edits, and other changes with no behavior change and
+  no normative-force change do not trigger class 5 by file location alone
 - the review and verification floors accumulate; planning artifacts
   **subsume**: a higher-class plan replaces the lower-class records, it
   does not add to them (a class-3 plan is the planning record — no
@@ -591,6 +617,8 @@ checker enforces presence, review enforces meaning.
 | Introduce background or deferred processing whose intended behavior an existing spec already governs — a [DOM-5] risky trigger fires; no [DOM-6] spec change is required | 4 |
 | Clarify normative spec wording, behavior unchanged — normative spec text edited; no risky trigger, so `hardening: N/A` | 5 (strategy D) |
 | New feature whose intended behavior is undocumented and [DOM-6]-material — a spec is required first | 5 |
+| Materially revise a product non-goal or core-concept owner, with no runtime behavior change; [DOM-16] requires a material theory change | 5 |
+| Repair a broken program-theory evidence link; no behavior change, no normative-force change, and no [DOM-5] trigger fires | 1 |
 | Materially change a skill, runbook, or gate — [DOM-6]-material to future process; base class 3 | Class 3+P (effective 5) |
 | Typo fix inside a skill file — not [DOM-6]-material | 1 |
 | Class-2 fix discovers a storage-format edit is needed — a [DOM-5] risky trigger fires mid-flight | Escalate to 4 at that moment, declared |
@@ -603,6 +631,195 @@ Verification: the declared class line plus the class-required
 artifacts existing; new classification guidance checked against the
 fixture table. Required action: declare the class before the first
 edit; escalate loudly the moment a trigger fires.
+
+## 16. Program Theory and Negative Knowledge [DOM-16]
+
+A program theory is the working explanatory model used to understand and
+change a program coherently. It includes what the program is and is not, which
+concepts exist, what they mean, which component owns each concern, why the main
+boundaries exist, and what evidence would show the model is wrong.
+`docs/program-theory.md` is this repository's current best externalized account
+of that model.
+
+The term follows Peter Naur's “Programming as Theory Building.” It does not
+mean a formal theory, a requirements catalog, an architecture inventory, or a
+design document renamed. It means the working explanatory model that lets a
+maintainer connect the problem world to the program: explain why the system
+has this shape, predict how a change will propagate, diagnose a surprise,
+distinguish an extension from a category error, and revise the solution
+without losing its coherence.
+
+Theory owns the problem-world model, concept meanings, ownership boundaries,
+and conceptual constraints that guide realization. Implementation documents
+own concrete architectural and mechanical choices and why the current
+realization chose them. A theory principle may constrain an architecture
+without becoming the architecture record.
+
+Code, specifications, tests, plans, and implementation documents are
+expressions of and evidence about that model. None is the whole theory. A
+program-theory document is therefore the current best externalized account and
+a transfer surface, not a claim that tacit working understanding has been
+completely serialized.
+
+In this repository, agent-theory is the wager that a human and agents can
+iteratively reconstruct, challenge, and refine a sufficiently shared theory by
+keeping intent, code, tests, alternatives, and implementation surprises in
+contact. Reading the theory document is a starting condition for judgment, not
+proof that the reader possesses the theory.
+
+No method can mechanically derive a coherent program from an arbitrary
+problem. Executable gates nevertheless do more than educate or prompt: they
+bind selected consequences of the theory, reject known-invalid states, and
+force discrepancies into view. A green gate is binding evidence for the claim
+it covers, not proof that the whole theory is correct or that a reader
+possesses it. Judgment remains necessary to decide what a gate should express,
+whether its premise still holds, and how evidence should revise the theory.
+
+The model is provisional:
+
+```text
+concept → provisional theory → specification → implementation
+        → evidence or surprise → revised theory
+```
+
+Owner: the human product owner approves product identity, concept meaning,
+durable principles, and non-goals. Agents recover evidence, draft language,
+challenge inconsistencies, and propose revisions. They do not infer intent
+from current code or feature absence.
+
+Boundary: theory owns conceptual identity and judgment. Winning product
+contracts own exact behavior. Implementation docs own realization rationale.
+Plans own work in flight.
+
+Verification: structural gates check required metadata, sections, recognized
+record syntax, stable references, links, and read order. Dogfood and owner
+review judge meaning. Concrete consequences belong in the winning product
+contract and receive firing tests there.
+
+Required action: before materially changing a concept, boundary, principle, or
+non-goal, read the theory and either conform or propose a class-5 revision.
+Record the current account first, then the superseded account in summary,
+pressure, and evidence.
+
+The program-theory account must cover:
+
+- what “program theory” means and what the document can and cannot transfer
+- purpose and desired feel
+- whole-program mental model
+- core concepts and ownership
+- durable principles and design consequences
+- durable product non-goals
+- live tensions and falsifiers
+- founding continuity and evolution
+- material revisions and decision cases
+
+Exact current limitations live in the winning product contract. Theory may
+link a limitation when it creates a live tension, but must not duplicate the
+capability claim.
+
+Negative statements have four types:
+
+| Type | Meaning | Lifecycle |
+|------|---------|-----------|
+| Product non-goal | Durable identity boundary | Explicit theory revision and owner approval |
+| Current limitation | Capability not currently provided | Owned and changed by the winning product contract |
+| Rejected alternative | Plausible candidate declined under stated premises | Reopen only when its condition fires |
+| Plan out-of-scope | Boundary on one work unit | Expires with the plan; implies no product judgment |
+
+Do not record every local choice. A durable alternative is warranted when a
+competent future editor is likely to propose it again, material investigation
+cost was paid, it exposed a hidden constraint, or blind retry could cause harm.
+
+Every durable alternative uses this exact shape:
+
+```markdown
+### [ALT-<SCOPE>-<NNN>] Short title
+
+Disposition: adopted | rejected | deferred | superseded | invalidated
+Owner: <decision owner>
+Governs: <stable theory, spec, or implementation reference>
+Source record: none | [ALT-...] in <live plan path> | <plan filename> at <source SHA> [ALT-...]
+Candidate: <candidate>
+Why plausible: <steelman>
+Evidence:
+- contemporaneous | owner-recalled | inferred | unknown: <direct source>
+Reason: <reason for disposition>
+Current consequence: <what current work must do>
+Reconsider when: <observable condition>
+Promoted to: none | [ALT-...]
+```
+
+Every theory revision uses this exact shape:
+
+```markdown
+### [REV-<SCOPE>-<NNN>] Short title
+
+Current account: <revised theory>
+Supersedes: <short description of the prior account; do not make it compete with current theory>
+Pressure: <what made the prior account inadequate>
+Evidence:
+- contemporaneous | owner-recalled | inferred | unknown: <direct source>
+```
+
+`SCOPE` matches `[A-Z][A-Z0-9]*` and identifies the defining artifact, such as
+`PT20260729`, `THEORY`, `DOM16`, or `IMPL01`. `NNN` is three digits allocated
+by scanning existing definitions in that scope. Full IDs are unique across
+definitions in root `README.md`, `docs/**/*.md`, and `skills/**/*.md`.
+References may repeat; headings that define the record may not.
+
+The structural parser scans only those three corpora. Its malformed fixture
+strings remain inside the owning test module and are passed directly to parser
+helpers, not discovered as repository records. The provenance token is one of
+the four closed values shown above. Mixed provenance uses separate evidence
+rows, never a compound token.
+
+Revision records are current-account-first to reduce anchoring. Historical
+sources are evidence, not startup assignments. A dedicated lineage section may
+quote a few short founding phrases only when each is paired with explicit
+`Maintained` and `Evolved` analysis and a statement that the current theory
+governs. Do not reproduce the original README or obsolete theory at length.
+
+When work touches a recorded boundary, the proposer and reviewer must search
+the governing theory, spec, or implementation artifact for relevant
+`[ALT-*]` records. A fired `Reconsider when` condition reopens review; it does
+not adopt the old candidate. The proposal cites the old ID, presents new
+evidence, gains owner approval, and updates the old disposition or records its
+successor.
+
+Active plans keep genuine alternatives append-only. Before closure, durable
+content is copied to its steady-state owner under a new owner-scoped ID. The
+plan record adds `Promoted to`; the steady-state record adds `Source record`.
+The two records link reciprocally. The closed plan remains immutable
+historical evidence; the steady-state record alone is current authority:
+
+- identity, principle, or non-goal → program theory
+- exact behavior → winning product contract
+- architecture constraint → implementation doc
+- reusable process correction → lesson, runbook, or skill
+- temporary choice → immutable plan and git history
+
+Do not create an unowned alternatives graveyard.
+
+The reciprocal live-plan form is not permanent. Before physically deleting a
+retired plan, coalescing rewrites each steady-state `Source record` from:
+
+```text
+[ALT-...] in docs/plans/<plan>.md
+```
+
+to:
+
+```text
+<plan>.md at <retired source SHA> [ALT-...]
+```
+
+The source-pinned form is a one-way retrieval cue because the plan definition
+no longer exists in the worktree. Its plan name and SHA must match the Retired
+Plans ledger. The structural gate requires a reciprocal `Promoted to` only for
+the live-plan form. Before deleting the plan, the physical-deletion gate must
+retrieve the ledger source and prove that the exact `### [ALT-ID]` heading
+exists. A missing conversion, ledger mismatch, failed retrieval, or missing
+heading blocks deletion.
 
 ## Related Plans
 
@@ -620,6 +837,7 @@ Local plans:
 
 - `docs/plans/2026-07-29-ruff-lint-expansion-plan.md`
 - `docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md`
+- `docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md`
 
 Hub plans (names only; live in agent-guidance):
 

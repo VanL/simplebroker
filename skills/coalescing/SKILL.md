@@ -205,13 +205,15 @@ For each completed or superseded plan:
 
 0. Skip plans marked `exemplar` in the status index — they are exempt
    until the index note says their exemplar role has been superseded.
-1. Run the harvest gate — all four must pass, none waivable:
+1. Run the harvest gate — all five must pass, none waivable:
    - deviation log closed (no `pending` spec proposals)
    - durable rationale absorbed into the governing spec or implementation
      doc, or explicitly judged not durable (say so in the ledger line)
    - lessons extracted where applicable
    - every spec backlink converted to the retired citation form:
      `- retired: <plan-name> — source <source_sha>; see docs/plans/README.md`
+   - every durable alternative promoted to its steady-state owner, or
+     explicitly judged plan-local; each promoted live pair is reciprocal
 2. Superseded plans: confirm the successor names what it inherits before
    retiring the predecessor. If it does not, fix the successor first.
 3. **Soft-retire only** — the sweep never deletes plan files. Flip the
@@ -222,7 +224,13 @@ For each completed or superseded plan:
 4. Physical deletion is a dedicated follow-up change, made only after a
    second agent or the user re-verifies the harvest gate for each
    `retired-pending` plan. Never soft-retire and delete in the same
-   change.
+   change. Before deletion, rewrite every steady-state source for a promoted
+   alternative from `[ALT-...] in docs/plans/<plan>.md` to
+   `<plan>.md at <source SHA> [ALT-...]`; match the filename and SHA to the
+   Retired Plans ledger; run
+   `git show <source-sha>:docs/plans/<plan>.md`; and verify the exact
+   `### [ALT-ID]` heading exists. Any failed conversion, retrieval, or heading
+   check blocks deletion.
 5. A plan that fails the gate stays in the tree at its current status;
    note the blocking item in the run log if the threshold keeps nagging.
 

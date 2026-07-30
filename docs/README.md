@@ -9,6 +9,7 @@ registered in `docs/specs/product-section-registry.md`:
 
 | Surface | Role |
 |---------|------|
+| `docs/program-theory.md` | Current conceptual account: purpose, mental model, concept ownership, durable principles/non-goals, tensions, and revisions; **not** exact behavior authority |
 | Root `README.md` | Human entry, command/env catalogs, and **normative text for every product concern still in state `readme-only`** |
 | `docs/specs/` product sections (`[SB-*]`) | **Normative** when the product section registry marks the section `canonical-spec` |
 | `CHANGELOG.md` | Behavior deltas for published releases |
@@ -20,6 +21,11 @@ registered in `docs/specs/product-section-registry.md`:
 README prose. README may restate short tables and must link the section
 code. If the section is `readme-only` or `draft-spec`, root `README.md`
 wins.
+
+Program theory precedes and informs those contracts but does not override
+them. It owns conceptual identity and design judgment. The registry's winning
+README/spec owner controls exact current behavior; implementation docs explain
+the concrete realization.
 
 **Migration states** (see registry and ownership decision): `readme-only` →
 `draft-spec` → `canonical-spec` for extracting concerns from the README.
@@ -33,7 +39,7 @@ transitions are atomic (registry + spec + README pointer + gates).
 
 As of 2026-07-16 this repository carries the agent-guidance operating
 model (adopted from agent-guidance @ `fc23eae`): shared agent context in
-`docs/agent-context/` (start at its README for the read order), process
+`docs/agent-context/` (follow its machine index for the read order), process
 specs in `docs/specs/` (`[DOM-*]`), implementation docs in
 `docs/implementation/`, reusable skills in `skills/`, the lessons ledger
 in `docs/lessons.md`, and coalescing state in `docs/coalescing.md`.

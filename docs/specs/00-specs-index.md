@@ -3,6 +3,10 @@
 Numbered entry point for `docs/specs/`. Directory `README.md` is a thin
 pointer; this file is the read order.
 
+Before product-scope or design judgment, read
+`docs/program-theory.md`. It explains the conceptual model; the specs and
+registry below remain the owners of exact intended behavior.
+
 ## Process specs
 
 1. `01-development-documentation-operating-model.md` — `[DOM-*]`

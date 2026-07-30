@@ -115,7 +115,15 @@ dependencies and stores its state in one SQLite database.
 - **Simple IPC:** Communication between processes on the same machine
 
 **Good for:** Scripts, cron jobs, small services, development  
-**Not for:** Distributed systems, pub/sub, high-frequency trading
+**Not for:** Broker fleets, pub/sub, distributed task frameworks, application
+orchestration, or high-frequency trading
+
+This is an ownership boundary, not a host-count claim. Cooperating processes
+raise distributed-systems issues, and optional Postgres or Redis backends can
+serve clients on multiple hosts. SimpleBroker owns queue-operation semantics;
+the backend owns service topology, replication, availability, and recovery;
+the application owns work execution and business retries. SQLite files remain
+local-only: do not put them on NFS or another shared network filesystem.
 
 ## Installation
 

@@ -7,6 +7,7 @@ Quick pointers to the key guidance documents in this repository.
 | Path | Purpose |
 |------|---------|
 | `AGENTS.md` | Canonical agent entry point for *repository* work |
+| `docs/program-theory.md` | Current conceptual account: purpose, mental model, concept ownership, durable principles/non-goals, tensions, and revisions |
 | `docs/agent-kernel.md` | Agent **use** kernel: CLI + matching client API, delivery hazards, safe recipes |
 | `llms.txt` | llmstxt.org-style link index (points at agent-kernel and key docs) |
 | `CLAUDE.md` | Alias for tools that expect Claude-style root guidance |
@@ -90,3 +91,6 @@ When the repository grows:
 - keep descriptions short and navigational
 - prefer linking to the document that explains a concept, not every file that
   happens to mention it
+- route product-scope judgment through program theory, exact behavior through
+  the registered winning contract, and concrete design rationale through the
+  owning implementation document

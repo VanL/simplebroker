@@ -18,6 +18,7 @@
 
 ## Agent context
 
+- [Program theory](docs/program-theory.md): Current conceptual account for repository design judgment (not exact behavior authority)
 - [Agent context hub](docs/agent-context/README.md): Shared guidance read order
 - [Decision hierarchy](docs/agent-context/decision-hierarchy.md): Conflict resolution for agents
 - [Engineering principles](docs/agent-context/engineering-principles.md): Floors, gates, cohesion rules

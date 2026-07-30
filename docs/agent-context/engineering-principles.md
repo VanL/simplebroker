@@ -21,10 +21,11 @@ silently accept incompatible shapes unless compatibility is explicitly required.
 
 Do not infer behavior from file names or mental models alone. Read:
 
-1. the relevant spec
-2. the current implementation
-3. the closest existing test
-4. the active plan or implementation note
+1. the program theory when product scope, concepts, or ownership are at issue
+2. the relevant winning product contract
+3. the current implementation and its rationale
+4. the closest existing test
+5. the active plan
 
 Then decide what to change.
 
@@ -43,6 +44,7 @@ Treat documentation traceability as part of implementation, not optional
 cleanup.
 
 - Plans cite exact spec sections.
+- Theory-changing plans cite the governing theory and decision records.
 - Specs backlink the plans that implement them.
 - Implementation docs explain the current rationale and ownership.
 - Code points back to governing specs when ownership would otherwise be
@@ -54,6 +56,8 @@ cleanup.
   machine classification are different mechanisms. After promotion, the spec
   tree is the single governing contract — not plan appendix text. See
   `runbooks/writing-plans.md` §4b–4d.
+- Program theory can constrain a contract or architecture, but it cannot
+  silently replace exact behavior or concrete realization rationale.
 
 ## 6. Reuse Local Paths and Helpers Before Inventing New Ones
 

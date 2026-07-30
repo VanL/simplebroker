@@ -5,6 +5,18 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documented
+- Added the program-theory account used for product-scope and design judgment,
+  including concept ownership, durable non-goals, falsifiers, revision
+  provenance, and tried alternatives. Exact behavior remains with the
+  product-section registry's winning README/spec owner.
+- Clarified that SimpleBroker's boundary is ownership, not host count:
+  optional shared backends may serve cross-host clients while SimpleBroker
+  remains a queue primitive rather than a broker fleet, task framework, or
+  application control plane.
+
 ## [5.6.2] - 2026-07-29
 
 ### Changed

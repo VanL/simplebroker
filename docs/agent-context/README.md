@@ -6,6 +6,8 @@ agents, and human contributors working in this repository.
 ## Goals
 
 - Keep one repo-owned source of truth for durable execution standards.
+- Put the product's current conceptual model before process and implementation
+  detail without making it a second behavior contract.
 - Reduce drift across agent-specific root files.
 - Make planning, testing, and documentation maintenance explicit.
 - Make review loops, agent bootstrap, and skill maintenance explicit.
@@ -13,20 +15,22 @@ agents, and human contributors working in this repository.
 
 ## Read Order
 
-1. `decision-hierarchy.md`
-2. `principles.md`
-3. `engineering-principles.md`
-4. Relevant runbook(s) in `runbooks/`
-5. `lessons.md`
-6. `../lessons.md` — required startup reading is the **Golden Rules section
+1. `../program-theory.md`
+2. `README.md` (this hub overview)
+3. `decision-hierarchy.md`
+4. `principles.md`
+5. `engineering-principles.md`
+6. `runbooks/` (relevant runbook(s))
+7. `lessons.md`
+8. `../lessons.md` — required startup reading is the **Golden Rules section
    plus dated entries after the lessons watermark** (see `../coalescing.md`).
    Older entries are searchable reference material, not startup context.
 
 ## Runbooks
 
 - `writing-plans.md`: how to write executable implementation plans (including
-  spec baseline, proposed spec delta, promotion slices, and status
-  mechanisms)
+  spec baseline, proposed spec delta, promotion slices, negative-knowledge
+  routing, and status mechanisms)
 - `hardening-plans.md`: required companion for risky or boundary-crossing plans
   that must survive review
 - `review-loops-and-agent-bootstrap.md`: how to bootstrap available agents and
@@ -36,7 +40,8 @@ agents, and human contributors working in this repository.
 - `testing-patterns.md`: how to choose the right proof and avoid weak tests
 - `adversarial-acceptance-probes.md`: the black-box probe kit any
   implementation must pass before integration, independent of spec version
-- `maintaining-traceability.md`: how to keep docs synchronized during delivery
+- `maintaining-traceability.md`: how to keep theory, contracts, plans,
+  implementation rationale, decision records, and code synchronized
 - `skills-lifecycle.md`: how to add, update, and retire reusable skills
 - `designing-agent-facing-interfaces.md`: principles for designing APIs,
   CLIs, and docs that agents consume
@@ -51,7 +56,8 @@ agents, and human contributors working in this repository.
 
 ## What Does Not Belong Here
 
-- product or architecture specs that define the system itself
+- the program's conceptual identity (owned by `../program-theory.md`)
+- product contracts or architecture rationale that define the system itself
 - one-off execution notes for a single task
 - agent-vendor-specific syntax that is not reusable across tools
 

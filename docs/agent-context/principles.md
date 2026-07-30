@@ -2,7 +2,9 @@
 
 ## Core Standards
 
-- Specs are the source of truth for intended system behavior.
+- Program theory owns conceptual identity and design judgment. The winning
+  README/spec owner in the product-section registry owns exact intended
+  behavior. Implementation docs own realization rationale.
 - Keep changes minimal, local, and aligned to the request.
 - Verify behavior with concrete evidence before declaring completion.
 - Do not silently assume missing context; read the relevant spec, plan, test,
@@ -63,12 +65,16 @@ Common agent-confusing failure modes:
 
 ## Document Traceability
 
-Specs, plans, implementation notes, and code should form a navigable chain:
+Theory, winning contracts, plans, implementation notes, and code should form a
+navigable chain when conceptual identity or a recorded decision case changes:
 
-    spec section <-> plan(s) <-> implementation doc <-> code
+    program theory <-> winning contract <-> plan(s)
+                   <-> implementation doc <-> code/test evidence
 
 Rules:
 
+- Theory-changing plans cite exact `[THEORY-*]`, `[REV-*]`, or `[ALT-*]`
+  records and keep the current account distinct from historical evidence.
 - Plans link to the exact spec file(s) and section/reference code(s) they
   implement, or say plainly why no spec exists.
 - Specs keep a `## Related Plans` or `## Plans` section with backlinks to

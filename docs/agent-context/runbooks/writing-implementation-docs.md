@@ -3,7 +3,8 @@
 Implementation docs explain why the current design exists, which boundaries it
 owns, and what a future editor must understand before changing it.
 
-They complement specs; they do not replace them.
+They complement program theory and winning product contracts; they do not
+replace them.
 
 ## Purpose
 
@@ -55,12 +56,16 @@ What slice of the implementation this document explains.
 
 ### 2. Governing Spec References
 
-Exact spec files and reference codes that own the behavior.
+Exact theory references when conceptual constraints matter, plus the winning
+README/spec files and reference codes that own behavior.
 
 ### 3. Design Rationale
 
 Why the implementation is structured the current way. Include important
 tradeoffs or rejected alternatives when they still constrain future work.
+Durable rejected realizations use [DOM-16]'s exact `[ALT-*]` record grammar
+and point back to their live source-plan record. Do not copy product non-goals
+or current capability limits here; link their owning theory or contract.
 
 ### 4. Boundaries and Invariants
 
@@ -85,6 +90,8 @@ Which plans introduced or materially changed the design.
 - Add or refresh repository maps or code reference maps when new modules become
   important entry points.
 - Keep nearby spec backlinks aligned.
+- Before closing a source plan, copy durable architecture alternatives here
+  under an implementation-scoped ID and make the source links reciprocal.
 - Prefer short, durable explanations over exhaustive prose.
 - If a document feels legible to a human but leaves an agent unsure where to
   edit, what governs the behavior, or what must not drift, tighten it and

@@ -11,6 +11,13 @@ The ownership rules live in `docs/README.md` and this registry.
 | Message identity (hybrid ts, last_ts, move+checkpoint) | `readme-only` | — | README Core Concepts / agent-kernel Message IDs | (future) |
 | Dump/load and claimed-row I/O | `readme-only` | — | README dump/load | (future) |
 | Embedding targets, backends, sidecar | `readme-only` | — | README Embedding / Advanced | (future) |
+| Base queue/broker operation catalog residual | `readme-only` | — | README Command Reference / Python API | (future) |
+
+The base operation row owns only the remaining command/API catalog and base
+operation meanings. It excludes CLI I/O and exits; delivery,
+claim/peek/watch safety; message identity and move/checkpoint rules; dump/load;
+and embedding, backends, and sidecar. Those concerns remain with their
+existing rows.
 
 ## Transition rule
 
@@ -32,3 +39,4 @@ forbidden. Abandoning an **unshipped** `draft-spec` may return to
   `36e2f356`; see the ledger in `docs/plans/README.md`
 - retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
   `36e2f356`; see the ledger in `docs/plans/README.md`
+- `docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md`

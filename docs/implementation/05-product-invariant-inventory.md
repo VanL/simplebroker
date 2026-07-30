@@ -6,6 +6,8 @@ separate Class 5 plans citing
 `docs/specs/product-section-registry.md`.
 
 Authority machine: `docs/specs/product-section-registry.md`.
+Conceptual account: `docs/program-theory.md` (non-normative for exact
+behavior).
 First vertical: `docs/specs/10-cli-contract.md` (`canonical-spec`).
 Second vertical: `docs/specs/11-delivery-contract.md` (`canonical-spec`).
 The retired promotion history is source-pinned under Related Plans below.
@@ -16,6 +18,7 @@ The retired promotion history is source-pinned under Related Plans below.
 | Message identity / move+checkpoint | Hybrid timestamps as ids; `last_ts` / checkpoint patterns; move preserves identity semantics | README Core Concepts; agent-kernel Message IDs | `SB-ID-*` | Message-id / timestamp tests; move + filter suites | `readme-only` |
 | Dump/load / claimed | Dump/load line formats; claimed-row inspection; vacuum reclaim | README dump/load; agent-kernel Dump/load | `SB-IO-*` | Dump/load CLI tests | `readme-only` |
 | Embedding targets/backends | Optional backends, sidecar access, packaging boundaries | README Embedding / Advanced | `SB-EMBED-*` | Extension and backend suites; separate program | `readme-only` |
+| Base queue/broker operations | Remaining command/API catalog and base operation meanings, excluding the promoted/specialized rows above | README Command Reference / Python API | `SB-OPS-*` | Command and public API suites; future promotion plan required | `readme-only` |
 
 ## Related Plans
 

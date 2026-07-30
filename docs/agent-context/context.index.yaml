@@ -1,7 +1,9 @@
 schema_version: 1
-updated_at: 2026-07-14
+updated_at: 2026-07-29
 hub: docs/agent-context
 read_order:
+  - docs/program-theory.md
+  - docs/agent-context/README.md
   - docs/agent-context/decision-hierarchy.md
   - docs/agent-context/principles.md
   - docs/agent-context/engineering-principles.md
@@ -9,6 +11,8 @@ read_order:
   - docs/agent-context/lessons.md
   - docs/lessons.md  # startup: Golden Rules + entries after the docs/coalescing.md watermark
 documents:
+  - path: docs/program-theory.md
+    role: program_theory
   - path: docs/agent-context/README.md
     role: hub_overview
   - path: docs/agent-context/decision-hierarchy.md

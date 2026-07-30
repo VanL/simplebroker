@@ -46,18 +46,18 @@ codes). `CHANGELOG.md` records published deltas.
 
 Canonical shared context lives in `docs/agent-context/`.
 
-Required read order for any agent operating in this repository:
+After the safety, permission, and attribution rules above, follow the single
+machine-readable `read_order` in
+`docs/agent-context/context.index.yaml`. It starts with the program's current
+conceptual account before the process hierarchy and reusable guidance. Then
+read the current agent inventory when relevant, followed by the relevant
+winning product contract, active plan, implementation rationale, code, tests,
+and task-specific skill or runbook.
 
-1. `docs/agent-context/README.md`
-2. `docs/agent-context/decision-hierarchy.md`
-3. `docs/agent-context/principles.md`
-4. `docs/agent-context/engineering-principles.md`
-5. Relevant runbook(s) in `docs/agent-context/runbooks/`
-6. `docs/agent-context/lessons.md`
-7. `docs/lessons.md`
-
-If local defaults conflict with repository guidance, follow the decision policy
-in `docs/agent-context/decision-hierarchy.md`.
+For product use or embedding rather than repository work, start with
+`docs/agent-kernel.md`, then follow its product-section-registry links to the
+winning README or canonical-spec owner. The kernel is not a competing
+contract.
 
 ### Session-start coalescing check (read-only)
 
@@ -148,13 +148,12 @@ authoritative.
 
 Start with:
 
-1. `docs/README.md`
-2. `docs/specs/00-specs-index.md`
-3. `docs/specs/01-development-documentation-operating-model.md`
+1. the machine `read_order` above
+2. `docs/README.md`
+3. `docs/specs/00-specs-index.md`
 4. `docs/implementation/00-implementation-index.md`
-5. `docs/implementation/01-documentation-system.md`
-6. `docs/implementation/02-repository-map.md`
-7. `docs/implementation/03-agent-inventory.md`
+5. `docs/implementation/02-repository-map.md`
+6. `docs/implementation/03-agent-inventory.md`
 
 ## Definition of Done
 

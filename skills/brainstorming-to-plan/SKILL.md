@@ -42,8 +42,9 @@ conversation die in conversation.
 
 1. **Harvest the decisions.** From the exploration, write down: what was
    decided, what was explicitly rejected (and why), and what remains
-   open. Rejected alternatives are load-bearing — they stop the next
-   session from relitigating.
+   open. Rejected alternatives can be load-bearing, but do not preserve every
+   local choice. Apply [DOM-16]'s admission threshold: likely recurrence,
+   material investigation cost, a hidden constraint, or harm from blind retry.
 2. **Classify the outcome:**
    - **Behavior decided, spec must change** → the plan is spec-changing:
      it needs `## Spec Baseline` and `## Proposed Spec Delta` with a
@@ -76,8 +77,13 @@ conversation die in conversation.
    `## Assumptions and Open Questions` section in the plan, each with an
    owner and the condition that resolves or reopens it — not into
    out-of-scope (which offers no follow-up) and not into lessons (which
-   are for resolved, reusable rules). Ideas rejected for reasons that
-   will recur: one line in `docs/lessons.md`.
+   are for resolved, reusable rules). Route durable rejected alternatives by
+   owner: product identity/non-goals to program theory, exact limitations to
+   the winning product contract, architecture constraints to the governing
+   implementation doc, and reusable process corrections to a lesson, runbook,
+   or skill. Keep plan-local scope choices only in the plan and git. Use the
+   exact `[ALT-*]` grammar and reciprocal promotion lifecycle in [DOM-16];
+   do not create an alternatives graveyard.
 5. **Add the plan to the status index** in `docs/plans/README.md`.
 
 ## Output Standard

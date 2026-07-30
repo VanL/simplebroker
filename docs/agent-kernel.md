@@ -2,8 +2,9 @@
 
 Hand-written **use/embedding kernel** for agents. Prefer this over skimming
 the full README when you need a durable local queue. Product behavior is
-defined by root `README.md` and `CHANGELOG.md`; this file does not replace
-them.
+defined by the winning root-README or canonical-spec section in
+`docs/specs/product-section-registry.md`; `CHANGELOG.md` records published
+deltas. This file does not replace those owners.
 
 Discoverable index of project docs for link-following agents: root
 [`llms.txt`](../llms.txt) (llmstxt.org shape). **This file is the prose
@@ -11,7 +12,7 @@ kernel.**
 
 ## What it is
 
-A **local, durable, multi-process message queue** with:
+A **local-first, durable, multi-process message queue** with:
 
 - a Unix-style CLI (`broker` / `simplebroker`)
 - a **matching** Python client for **queue operations** (`Queue` and related
@@ -337,6 +338,8 @@ SimpleBroker will comply; your product will not.
 # One sentence
 
 **SimpleBroker is simple at the use surface: a CLI and a matching `Queue` API
-for queue operations over a local durable database. Everything else—context
-objects, multi-queue runtimes, history policies, sidecars—is embedding on
-those primitives, not a second product.**
+for queue operations over one resolved broker target. SQLite is the local
+default; optional shared backends do not turn SimpleBroker into a broker fleet
+or application runtime. Everything else—context objects, multi-queue runtimes,
+history policies, sidecars—is embedding on those primitives, not a second
+product.**

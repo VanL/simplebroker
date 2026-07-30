@@ -1,7 +1,10 @@
 # Writing Specs
 
-Specs define intended behavior. They are the source of truth for what the
-system should do, not a narration of how the current code happens to work.
+Specs define exact intended behavior. Together with root-README concerns
+registered `readme-only`, they are the product contracts for what the system
+should do. Program theory supplies the conceptual model and design judgment;
+it does not replace these contracts. Specs are not a narration of how the
+current code happens to work.
 
 ## Purpose
 
@@ -14,6 +17,12 @@ Use specs to document:
 - verification expectations
 
 Do not use specs for temporary implementation notes or task checklists.
+
+Before specifying behavior that changes a core concept, its owner, a durable
+principle, or a non-goal, read `docs/program-theory.md` and cite the governing
+`[THEORY-*]`, `[REV-*]`, or `[ALT-*]` record. A spec may refine a theory
+principle into observable obligations. It may not silently contradict theory,
+and theory may not duplicate the resulting exact behavior.
 
 Write specs so a strong zero-context agent can use them reliably, not just so a
 human reader finds them reasonable.

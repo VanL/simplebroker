@@ -10,6 +10,8 @@ read order stay aligned instead of competing.
 ## Rules
 
 - Implementation docs explain why the current design exists.
+- Program theory explains the conceptual model; winning contracts own exact
+  behavior. Implementation docs do not compete with either.
 - Implementation docs cite governing spec sections.
 - Implementation docs should help future editors decide where to read and edit.
 - Implementation docs should be updated when rationale or ownership changes.
@@ -23,3 +25,6 @@ read order stay aligned instead of competing.
 5. `05-product-invariant-inventory.md`
 6. `06-process-session-core-ownership.md`
 7. `07-complexity-and-state-machine-map.md`
+
+For product-scope or concept-ownership questions, begin with
+`../program-theory.md` before selecting the implementation document.

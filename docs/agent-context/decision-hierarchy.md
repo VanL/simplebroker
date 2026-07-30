@@ -6,7 +6,9 @@ Use this order whenever instructions or context seem inconsistent:
 2. Safety and repository constraints:
    dirty-tree discipline, no destructive commands, do-not-revert-others.
 3. Task source-of-truth documents:
-   relevant specs, invariants, active plan, and user-facing behavior docs.
+   program theory for conceptual identity and design judgment; the relevant
+   winning product contract for exact behavior; then invariants, active plan,
+   and implementation rationale for their owned concerns.
 4. Canonical repo context in `docs/agent-context/`.
 5. Root agent files such as `AGENTS.md` and `CLAUDE.md`.
 6. Existing code and test patterns.
@@ -27,6 +29,9 @@ The class is a claim; escalators are one-way and declared.
 
 - List the requested outcomes as a checklist.
 - Identify the governing spec, or record plainly that no spec exists.
+- For product-scope or design judgment, identify the governing `[THEORY-*]`,
+  `[REV-*]`, or `[ALT-*]` record, or state that the theory has no current
+  record for the concern. Do not infer product intent from feature absence.
 - Record a baseline identifier for the governing spec in the plan, so
   "compliant" always means compliant with a fixed, named object: the commit
   SHA when the spec is committed; otherwise the file path plus worktree

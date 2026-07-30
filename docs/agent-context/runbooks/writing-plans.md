@@ -570,6 +570,50 @@ When the touched spec already contains nearby implementation notes such as
 `_Implementation snapshot_`, `_Implementation status_`, or
 `_Implementation mapping_`, update those notes in the same change.
 
+## Negative Knowledge and Alternative Records
+
+Use [DOM-16] when exploration or implementation rejects a plausible path.
+Classify the negative statement before deciding where it lives:
+
+| Type | Steady-state owner |
+|------|--------------------|
+| Durable product identity or non-goal | `docs/program-theory.md` |
+| Exact current limitation or behavior exclusion | Product-section registry's winning README/spec owner |
+| Architecture constraint or rejected realization | Governing implementation document |
+| Reusable process correction | Lesson, runbook, or skill |
+| One plan's scope choice with no durable judgment | Closed plan and git history only |
+
+Admission is deliberately selective. Create a durable `[ALT-*]` record only
+when a competent future editor is likely to propose the candidate again,
+material investigation cost was paid, the rejection exposed a hidden
+constraint, or blind retry could cause harm. Do not record every local choice.
+
+Use the exact `[ALT-*]` and `[REV-*]` grammars, closed vocabularies, corpus,
+namespace allocation rule, and evidence rules in [DOM-16]. Allocate the next
+three-digit number by scanning definitions with the same scope in root
+`README.md`, `docs/**/*.md`, and `skills/**/*.md`. Definitions are headings;
+references may repeat, definitions may not.
+
+A fired `Reconsider when` condition reopens review. It does not adopt the old
+candidate. Cite the prior ID, present new evidence, obtain the named owner's
+approval, and update the disposition or add a successor record.
+
+Active plans keep genuine alternative records append-only. Before closure,
+route durable content to its steady-state owner under a new owner-scoped ID.
+The plan record's `Promoted to` and the steady-state record's `Source record`
+must point to one another while the plan remains in the worktree. Temporary
+choices stay in the immutable closed plan and git; do not create an
+alternatives directory or other unowned graveyard.
+
+The routing examples below are an enumerable structural contract:
+
+| Fixture | Example | Expected steady-state owner |
+|---------|---------|-----------------------------|
+| `NK-DURABLE-NONGOAL` | Durable non-goal: SimpleBroker does not own broker-cluster membership | `docs/program-theory.md` |
+| `NK-CURRENT-LIMITATION` | Current limitation: a named operation is not currently offered | `product-section registry winning README/spec owner` |
+| `NK-ARCHITECTURE-REJECTION` | Rejected backend resource abstraction with a governing implementation reference | `governing implementation document` |
+| `NK-PLAN-SCOPE` | One plan excludes an adjacent cleanup with no product judgment | `closed plan and git history only` |
+
 ## Plan Lifecycle and Retirement
 
 Plans move through: `draft` → `active` → `completed` or `superseded` →
@@ -614,13 +658,16 @@ ceremony inside the plan file.
   is `completed` or `superseded`.** Update `docs/plans/README.md` in the same
   change as the completion claim. Do not require a binary status checker;
   the index is the contract.
-- **The harvest gate — all four before deletion, no exceptions:**
+- **The harvest gate — all five before deletion, no exceptions:**
   1. deviation log closed (no `pending` spec proposals)
   2. durable rationale absorbed into the governing spec or implementation
      doc (or explicitly judged not durable)
   3. lessons extracted to `docs/lessons.md` where applicable
   4. every spec `## Related Plans` backlink converted to the retired
      citation form (see `maintaining-traceability.md`)
+  5. every durable alternative promoted to its steady-state owner, or
+     explicitly judged plan-local; no live `Promoted to` cue may lack its
+     reciprocal steady-state `Source record`
 - **Superseded plans additionally require** the superseding plan to name
   what it inherits (open deviation rows, decided-but-unbuilt behavior)
   before the predecessor retires.
@@ -632,6 +679,13 @@ ceremony inside the plan file.
   after a second agent or the user verifies the harvest gate. Never
   soft-retire and delete in the same change, and never create a
   retired/archived plans directory — git is the archive.
+- **Promoted alternatives survive physical deletion.** Before deleting a
+  retired plan, rewrite each reciprocal live `Source record` into the
+  source-pinned form `<plan>.md at <source SHA> [ALT-...]`. The filename and
+  SHA must match the Retired Plans ledger. Retrieve that source with
+  `git show <source-sha>:docs/plans/<plan>.md` and verify the exact
+  `### [ALT-ID]` heading before deletion. Any failed conversion, retrieval, or
+  heading check blocks deletion.
 - **Exemplar plans are exempt.** The status index may mark a plan
   `exemplar` (bootstrap or operating-model foundation plans that serve as
   onboarding examples). Exemplars are not retirement candidates until the
