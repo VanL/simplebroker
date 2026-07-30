@@ -172,6 +172,9 @@ jobs:
     - name: Test Python examples
       run: uv run --frozen --no-sync pytest -n auto examples
 
+    - name: Validate full state-machine manifest
+      run: SIMPLEBROKER_REQUIRE_FULL_MANIFEST=1 uv run --frozen --no-sync pytest -q tests/test_state_machine_policy.py
+
     - name: Type check Python examples
       run: uv run --frozen --no-sync python bin/release.py --check-example-types
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -10,6 +11,14 @@ class ManifestCoverage(StrEnum):
     """Whether the registry claims complete repository coverage."""
 
     COMPLETE = "complete"
+
+
+class ManifestComponent(StrEnum):
+    """Installable component that owns a state-machine contract."""
+
+    CORE = "core"
+    POSTGRES = "postgres"
+    REDIS = "redis"
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +31,16 @@ class StateMachineEntry:
     test_module: str
     table_name: str
     firing_test_name: str
+    component: ManifestComponent = ManifestComponent.CORE
+
+
+def entries_for_components(
+    entries: Sequence[StateMachineEntry],
+    components: Collection[ManifestComponent],
+) -> tuple[StateMachineEntry, ...]:
+    """Select contracts whose owning components exist in this environment."""
+
+    return tuple(entry for entry in entries if entry.component in components)
 
 
 INVENTORY_STATE_MACHINE_IDS = (
@@ -175,6 +194,7 @@ STATE_MACHINE_MANIFEST = (
         test_module="extensions.simplebroker_pg.tests.test_pg_state_machine_transitions",
         table_name="PG_LISTENER_TRANSITIONS",
         firing_test_name="test_pg_listener_fires_transition_table",
+        component=ManifestComponent.POSTGRES,
     ),
     StateMachineEntry(
         machine_id="SM-PG-VACUUM",
@@ -183,6 +203,7 @@ STATE_MACHINE_MANIFEST = (
         test_module="extensions.simplebroker_pg.tests.test_pg_state_machine_transitions",
         table_name="PG_VACUUM_TRANSITIONS",
         firing_test_name="test_pg_vacuum_fires_transition_table",
+        component=ManifestComponent.POSTGRES,
     ),
     StateMachineEntry(
         machine_id="SM-REDIS-BROADCAST",
@@ -193,6 +214,7 @@ STATE_MACHINE_MANIFEST = (
         ),
         table_name="REDIS_BROADCAST_TRANSITIONS",
         firing_test_name="test_redis_broadcast_fires_transition_table",
+        component=ManifestComponent.REDIS,
     ),
     StateMachineEntry(
         machine_id="SM-REDIS-ACTIVITY-LISTENER",
@@ -203,6 +225,7 @@ STATE_MACHINE_MANIFEST = (
         ),
         table_name="REDIS_ACTIVITY_LISTENER_TRANSITIONS",
         firing_test_name="test_redis_activity_listener_fires_transition_table",
+        component=ManifestComponent.REDIS,
     ),
     StateMachineEntry(
         machine_id="SM-REDIS-RUNNER",
@@ -213,6 +236,7 @@ STATE_MACHINE_MANIFEST = (
         ),
         table_name="REDIS_RUNNER_TRANSITIONS",
         firing_test_name="test_redis_runner_fires_transition_table",
+        component=ManifestComponent.REDIS,
     ),
     StateMachineEntry(
         machine_id="SM-COVERAGE-SETTLEMENT",

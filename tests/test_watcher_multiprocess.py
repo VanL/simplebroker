@@ -5,7 +5,7 @@ isolation and coordination.
 """
 
 import contextlib
-import multiprocessing
+import multiprocessing.queues
 import queue
 import tempfile
 import threading
@@ -34,7 +34,7 @@ def _deadline_after(timeout: float) -> float:
 
 
 def _get_before_deadline(
-    result_queue: queue.Queue | multiprocessing.Queue,
+    result_queue: queue.Queue | multiprocessing.queues.Queue,
     *,
     deadline: float,
     poll_interval: float = 0.1,
@@ -929,6 +929,15 @@ def test_multiprocess_database_locking() -> None:  # noqa: C901 approved [DOM-10
                 _cleanup_process(p)
 
             broker.close()
+
+
+def test_deadline_queue_type_hint_is_runtime_valid() -> None:
+    """Supported Python versions must be able to evaluate helper annotations."""
+    import typing
+
+    hints = typing.get_type_hints(_get_before_deadline)
+
+    assert "result_queue" in hints
 
 
 if __name__ == "__main__":

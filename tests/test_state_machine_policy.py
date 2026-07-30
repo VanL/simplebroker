@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
+import os
 import re
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -24,8 +26,10 @@ from tests.state_machine_manifest import (
     STATE_MACHINE_MANIFEST,
     STATE_MACHINE_MANIFEST_COVERAGE,
     STATE_MACHINE_MANIFEST_COVERAGE_NOTE,
+    ManifestComponent,
     ManifestCoverage,
     StateMachineEntry,
+    entries_for_components,
 )
 
 ModuleLoader = Callable[[str], ModuleType | SimpleNamespace]
@@ -43,6 +47,11 @@ REQUIRED_CASE_FIELDS = (
     "effects",
     "expected_result",
 )
+COMPONENT_IMPORT_ROOTS = {
+    ManifestComponent.CORE: "simplebroker",
+    ManifestComponent.POSTGRES: "simplebroker_pg",
+    ManifestComponent.REDIS: "simplebroker_redis",
+}
 
 
 def _loads_modules(modules: dict[str, ModuleType | SimpleNamespace]) -> ModuleLoader:
@@ -252,6 +261,7 @@ def test_complete_manifest_matches_inventory() -> None:
     registered_machine_ids = tuple(entry.machine_id for entry in STATE_MACHINE_MANIFEST)
 
     assert len(INVENTORY_STATE_MACHINE_IDS) == len(set(INVENTORY_STATE_MACHINE_IDS))
+    assert len(registered_machine_ids) == len(set(registered_machine_ids))
     assert set(INVENTORY_STATE_MACHINE_IDS) == set(inventory_machine_ids)
     assert set(registered_machine_ids) == set(INVENTORY_STATE_MACHINE_IDS)
 
@@ -259,8 +269,69 @@ def test_complete_manifest_matches_inventory() -> None:
     assert "complete" in STATE_MACHINE_MANIFEST_COVERAGE_NOTE.lower()
 
 
-def test_registered_state_machine_contracts_are_structurally_valid() -> None:
+@pytest.mark.parametrize("component", tuple(ManifestComponent))
+def test_registered_state_machine_contracts_are_structurally_valid(
+    component: ManifestComponent,
+) -> None:
+    import_root = COMPONENT_IMPORT_ROOTS[component]
+    if importlib.util.find_spec(import_root) is None:
+        pytest.skip(f"{component.value} component is not installed")
+
+    component_entries = entries_for_components(STATE_MACHINE_MANIFEST, {component})
+
+    assert component_entries
+    assert manifest_errors(component_entries) == []
+
+
+def test_full_manifest_contracts_are_structurally_valid_when_installed() -> None:
+    missing_components = [
+        component
+        for component, import_root in COMPONENT_IMPORT_ROOTS.items()
+        if importlib.util.find_spec(import_root) is None
+    ]
+    if missing_components:
+        missing_names = ", ".join(component.value for component in missing_components)
+        if os.environ.get("SIMPLEBROKER_REQUIRE_FULL_MANIFEST") == "1":
+            pytest.fail(
+                f"required manifest components are not installed: {missing_names}"
+            )
+        pytest.skip(f"full manifest components are not installed: {missing_names}")
+
     assert manifest_errors(STATE_MACHINE_MANIFEST) == []
+
+
+def test_manifest_component_scope_excludes_unavailable_optional_packages() -> None:
+    core_entries = entries_for_components(
+        STATE_MACHINE_MANIFEST,
+        {ManifestComponent.CORE},
+    )
+
+    assert core_entries
+    assert all(entry.component is ManifestComponent.CORE for entry in core_entries)
+    assert len(core_entries) < len(STATE_MACHINE_MANIFEST)
+
+
+def test_manifest_component_matches_owner_package() -> None:
+    for entry in STATE_MACHINE_MANIFEST:
+        expected_component = ManifestComponent.CORE
+        if entry.owner_module.startswith("simplebroker_pg."):
+            expected_component = ManifestComponent.POSTGRES
+        elif entry.owner_module.startswith("simplebroker_redis."):
+            expected_component = ManifestComponent.REDIS
+
+        assert entry.component is expected_component, entry.machine_id
+
+
+def test_all_extras_job_validates_the_full_state_machine_manifest() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text(encoding="utf-8")
+    lint_job = workflow.split("  lint:", 1)[1].split("  packaging:", 1)[0]
+
+    assert "uv sync --frozen --extra dev --extra pg --extra redis" in lint_job
+    assert (
+        "SIMPLEBROKER_REQUIRE_FULL_MANIFEST=1 "
+        "uv run --frozen --no-sync pytest -q tests/test_state_machine_policy.py"
+        in lint_job
+    )
 
 
 def test_policy_rejects_duplicate_machine_and_transition_ids() -> None:
