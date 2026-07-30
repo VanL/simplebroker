@@ -283,6 +283,24 @@ def test_redis_core_internal_state_edges_are_safe(
         core.close()
 
 
+def test_fork_safety_replaces_inherited_write_lock(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    inherited_lock = core._write_lock
+    inherited_lock.acquire()
+    try:
+        core._pid = -1
+        core._check_fork_safety()
+
+        assert core._write_lock is not inherited_lock
+        assert core._write_lock.acquire(blocking=False)
+        core._write_lock.release()
+    finally:
+        inherited_lock.release()
+        core.close()
+
+
 def test_redis_alias_api_validates_and_updates_alias_metadata(
     redis_runner: RedisRunner,
 ) -> None:

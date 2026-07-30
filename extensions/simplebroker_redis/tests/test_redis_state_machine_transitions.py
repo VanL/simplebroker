@@ -707,6 +707,300 @@ def test_redis_runner_fires_transition_table(
 
 
 @dataclass(frozen=True, slots=True)
+class _WriteProtocolScenario:
+    responses: tuple[tuple[object, ...] | BaseException, ...] = ()
+    reservation_error: bool = False
+    expected_error: str | None = None
+    expected_conflicts: int = 0
+    expected_sleeps: int = 0
+    expected_resyncs: int = 0
+    expected_refreshes: int = 0
+
+
+def _write_script_protocol(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: _WriteProtocolScenario,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    responses = list(scenario.responses)
+    eval_calls: list[tuple[object, ...]] = []
+    reserve_calls: list[int] = []
+    sleeps: list[float] = []
+    resyncs: list[None] = []
+    refreshes: list[None] = []
+    publishes: list[str | None] = []
+
+    def reserve(count: int) -> list[int]:
+        assert count == 1
+        if scenario.reservation_error:
+            try:
+                raise OperationalError("reservation transport failed")
+            except OperationalError as cause:
+                raise TimestampError("reservation failed") from cause
+        candidate = 100 + len(reserve_calls)
+        reserve_calls.append(candidate)
+        return [candidate]
+
+    def evaluate(script: str, *args: object) -> object:
+        assert script == scripts.WRITE_MESSAGE
+        eval_calls.append(args)
+        response = responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+    monkeypatch.setattr(core._timestamp_gen, "_reserve_candidates", reserve)
+    monkeypatch.setattr(core._client, "eval", evaluate)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    monkeypatch.setattr(
+        core, "_resync_timestamp_generator", lambda: resyncs.append(None)
+    )
+    monkeypatch.setattr(
+        core._timestamp_gen,
+        "refresh_last_ts",
+        lambda: refreshes.append(None) or 0,
+    )
+    monkeypatch.setattr(core, "_publish", publishes.append)
+
+    expectation = (
+        pytest.raises(Exception, match=scenario.expected_error)
+        if scenario.expected_error
+        else nullcontext()
+    )
+    try:
+        with expectation:
+            result = core.write("jobs", "message")
+            assert result == reserve_calls[-1]
+        assert len(eval_calls) == len(scenario.responses)
+        assert len(reserve_calls) == (
+            0 if scenario.reservation_error else len(scenario.responses)
+        )
+        assert core._ts_conflict_count == scenario.expected_conflicts
+        assert len(sleeps) == scenario.expected_sleeps
+        assert len(resyncs) == scenario.expected_resyncs
+        assert len(refreshes) == scenario.expected_refreshes
+        assert publishes == ([] if scenario.expected_error else ["jobs"])
+        for call, candidate in zip(eval_calls, reserve_calls, strict=True):
+            assert call[-4:] == (
+                "jobs",
+                str(candidate),
+                encode_id(candidate),
+                "message",
+            )
+    finally:
+        core.close()
+
+
+def _write_case(
+    scenario: _WriteProtocolScenario,
+) -> Callable[[RedisRunner, pytest.MonkeyPatch], None]:
+    def run(redis_runner: RedisRunner, monkeypatch: pytest.MonkeyPatch) -> None:
+        _write_script_protocol(redis_runner, monkeypatch, scenario)
+
+    return run
+
+
+REDIS_WRITE_TRANSITIONS = (
+    TransitionCase(
+        transition_id="LUA-SUCCESS",
+        start_state="candidate reserved locally",
+        event="Lua returns 1",
+        guard="namespace, stale fence, and duplicate preflight pass",
+        next_state="complete",
+        effects="publishes the post-commit queue activity hint",
+        expected_result="returns the committed candidate",
+        payload=_write_case(_WriteProtocolScenario(responses=((1,),))),
+    ),
+    TransitionCase(
+        transition_id="EXISTING-ID-SLEEP",
+        start_state="executing first Lua attempt",
+        event="Lua returns -1 then succeeds",
+        guard="one conflict retry remains before resync",
+        next_state="complete",
+        effects="records conflict, sleeps, reserves again, and retries",
+        expected_result="returns the second candidate",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-1,), (1,)),
+                expected_conflicts=1,
+                expected_sleeps=1,
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="EXISTING-ID-RESYNC",
+        start_state="executing after one ID conflict",
+        event="Lua returns -1 again then succeeds",
+        guard="the shared conflict budget permits a final attempt",
+        next_state="complete",
+        effects="resynchronizes monotonically, reserves again, and retries",
+        expected_result="returns the third candidate",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-1,), (-1,), (1,)),
+                expected_conflicts=2,
+                expected_sleeps=1,
+                expected_resyncs=1,
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="EXISTING-ID-TERMINAL",
+        start_state="executing after two ID conflicts",
+        event="Lua returns -1 a third time",
+        guard="the shared conflict budget is exhausted",
+        next_state="failed",
+        effects="records the third conflict without another retry",
+        expected_result="RuntimeError reports repeated conflicts",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-1,), (-1,), (-1,)),
+                expected_error="repeated timestamp conflicts",
+                expected_conflicts=3,
+                expected_sleeps=1,
+                expected_resyncs=1,
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="STALE-FENCE-REFRESH",
+        start_state="executing first Lua attempt",
+        event="Lua returns -6 then succeeds",
+        guard="another writer advanced persisted high-water",
+        next_state="complete",
+        effects="refreshes persisted state, reserves again, and retries",
+        expected_result="returns the fresh second candidate",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-6,), (1,)),
+                expected_conflicts=1,
+                expected_refreshes=1,
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="STALE-FENCE-SECOND",
+        start_state="executing after one stale fence",
+        event="Lua returns -6 again then succeeds",
+        guard="the shared conflict budget permits a final attempt",
+        next_state="complete",
+        effects="refreshes a second time and retries",
+        expected_result="returns the third candidate",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-6,), (-6,), (1,)),
+                expected_conflicts=2,
+                expected_refreshes=2,
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="MIXED-CONFLICT-TERMINAL",
+        start_state="executing after one ID conflict and one stale fence",
+        event="Lua returns -1 as the third shared conflict",
+        guard="both result codes consume one common budget",
+        next_state="failed",
+        effects="stops without another resync or reservation",
+        expected_result="RuntimeError reports repeated conflicts",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-1,), (-6,), (-1,)),
+                expected_error="repeated timestamp conflicts",
+                expected_conflicts=3,
+                expected_sleeps=1,
+                expected_refreshes=1,
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="NAMESPACE-MISSING",
+        start_state="executing Lua",
+        event="Lua returns -2",
+        guard="namespace metadata is absent",
+        next_state="failed",
+        effects="does not retry or publish",
+        expected_result="OperationalError reports the missing namespace",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((-2,),),
+                expected_error="namespace is not initialized",
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="UNEXPECTED-CODE",
+        start_state="executing Lua",
+        event="Lua returns an unknown status",
+        guard="Python and Lua protocols disagree",
+        next_state="failed",
+        effects="does not reinterpret or retry the status",
+        expected_result="OperationalError includes the unknown code",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((99,),),
+                expected_error="Unexpected Redis write result: 99",
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="EMPTY-RESPONSE",
+        start_state="executing Lua",
+        event="Lua returns no status element",
+        guard="the response violates the script protocol",
+        next_state="failed",
+        effects="does not crash with an indexing error",
+        expected_result="OperationalError identifies the empty response",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=((),),
+                expected_error="empty response",
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="RESERVATION-FAILURE",
+        start_state="reserving local candidate",
+        event="reservation fails from an operational cause",
+        guard="Lua has not started",
+        next_state="failed",
+        effects="does not retry an unstarted write",
+        expected_result="OperationalError preserves the cause",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                reservation_error=True,
+                expected_error="reservation transport failed",
+            )
+        ),
+    ),
+    TransitionCase(
+        transition_id="TRANSPORT-AMBIGUOUS",
+        start_state="executing Lua",
+        event="Redis transport raises without a script result",
+        guard="server commit outcome is ambiguous",
+        next_state="failed",
+        effects="translates once and does not retry",
+        expected_result="OperationalError preserves transport text",
+        payload=_write_case(
+            _WriteProtocolScenario(
+                responses=(redis.RedisError("eval failed"),),
+                expected_error="eval failed",
+            )
+        ),
+    ),
+)
+
+
+@fires_transition_table("SM-REDIS-WRITE", REDIS_WRITE_TRANSITIONS)
+def test_redis_write_fires_transition_table(
+    transition_case: TransitionCase[Callable[[RedisRunner, pytest.MonkeyPatch], None]],
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transition_case.payload(redis_runner, monkeypatch)
+
+
+@dataclass(frozen=True, slots=True)
 class _BroadcastProtocolScenario:
     responses: tuple[tuple[object, ...] | BaseException, ...]
     exact: bool = True
@@ -1018,6 +1312,7 @@ def _broadcast_all_refreshes_after_external_advance(
 ) -> None:
     core = RedisBrokerCore(redis_runner)
     advancing_core = RedisBrokerCore(redis_runner)
+    core.write("jobs", "seed")
     original_reserve = core._timestamp_gen._reserve_candidates
     reservations = 0
 
@@ -1037,7 +1332,6 @@ def _broadcast_all_refreshes_after_external_advance(
         reserve_then_advance,
     )
     try:
-        core.write("jobs", "seed")
         assert core.broadcast("announcement") == 1
         assert reservations == 2
         assert core._ts_conflict_count == 1

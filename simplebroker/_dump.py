@@ -20,6 +20,7 @@ from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from ._message_id import INVALID_MESSAGE_ID_MESSAGE, normalize_message_id
+from ._message_insert import RESERVED_MESSAGE_ID_MESSAGE
 
 if TYPE_CHECKING:
     from ._backend_plugins import BrokerConnection
@@ -228,6 +229,8 @@ def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:  #
                 normalized_id = normalize_message_id(message_id)
             except (TypeError, ValueError) as exc:
                 raise _error(line_number, INVALID_MESSAGE_ID_MESSAGE) from exc
+            if normalized_id == 0:
+                raise _error(line_number, RESERVED_MESSAGE_ID_MESSAGE)
             batch.append((queue, body, normalized_id))
             if len(batch) >= LOAD_BATCH_SIZE:
                 flush()

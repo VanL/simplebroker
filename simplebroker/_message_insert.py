@@ -10,6 +10,9 @@ from ._timestamp import validate_timestamp_bound
 
 MessageInsertRecord = tuple[str, str, MessageIdInput]
 NormalizedMessageInsertRecord = tuple[str, str, int]
+RESERVED_MESSAGE_ID_MESSAGE = (
+    "message_id 0 is reserved; use a positive compatible SimpleBroker message ID"
+)
 
 
 def normalize_insert_records(
@@ -35,6 +38,8 @@ def normalize_insert_records(
         validate_queue_name(queue)
         validate_message_size(message)
         normalized_id = normalize_message_id(message_id)
+        if normalized_id == 0:
+            raise ValueError(RESERVED_MESSAGE_ID_MESSAGE)
 
         if normalized_id in seen_ids:
             raise IntegrityError("duplicate message ID in insert batch")

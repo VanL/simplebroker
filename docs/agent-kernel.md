@@ -127,8 +127,13 @@ Normative identity, allocation, exact-ID, and preservation contract:
 [SB-ID-1]–[SB-ID-5].
 
 - Public id = signed-range hybrid timestamp integer (JSON field `timestamp`).
+- Generated and newly inserted ids are positive. ID `0` is the checkpoint
+  origin; exact selectors retain zero only for legacy-row recovery.
 - `Queue.write` returns the committed row's id. On the CLI, request it with
   `--json` or `-t` / `--timestamps`; plain write is quiet on success.
+- An ordinary Redis `write()` advances generated-id high-water and inserts the
+  row at one server-side visibility point. Moves, exact insertion, and
+  patterned broadcast can still introduce an older id behind a checkpoint.
 - `queue.last_ts` is a per-handle cache of a broker-global high-water mark, not
   “my last message.”
 - `move` preserves ids.

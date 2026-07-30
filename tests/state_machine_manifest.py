@@ -59,6 +59,7 @@ INVENTORY_STATE_MACHINE_IDS = (
     "SM-PG-LISTENER",
     "SM-PG-VACUUM",
     "SM-REDIS-BROADCAST",
+    "SM-REDIS-WRITE",
     "SM-REDIS-ACTIVITY-LISTENER",
     "SM-SQLITE-RUNNER",
     "SM-REDIS-RUNNER",
@@ -214,6 +215,17 @@ STATE_MACHINE_MANIFEST = (
         ),
         table_name="REDIS_BROADCAST_TRANSITIONS",
         firing_test_name="test_redis_broadcast_fires_transition_table",
+        component=ManifestComponent.REDIS,
+    ),
+    StateMachineEntry(
+        machine_id="SM-REDIS-WRITE",
+        owner_module="simplebroker_redis.core",
+        owner_name="RedisBrokerCore",
+        test_module=(
+            "extensions.simplebroker_redis.tests.test_redis_state_machine_transitions"
+        ),
+        table_name="REDIS_WRITE_TRANSITIONS",
+        firing_test_name="test_redis_write_fires_transition_table",
         component=ManifestComponent.REDIS,
     ),
     StateMachineEntry(

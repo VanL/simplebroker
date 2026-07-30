@@ -418,6 +418,13 @@ the ID returned by `Queue.write()` or printed by `broker write -t` / `--json`;
 `queue.last_ts` is a broker-global high-water cache, not the identity of that
 write.
 
+Broker-generated and newly inserted message IDs are positive. ID `0` is
+reserved as the lower-bound/checkpoint origin. Exact selectors still accept
+zero so legacy rows can be inspected and cleaned up. For an ordinary Redis
+`write()`, generated-ID high-water advancement and row insertion have one
+server-side visibility point. Moves, exact insertion, and patterned broadcast
+can still place an older ID behind an advanced checkpoint.
+
 ID representation and range, allocation, write returns, high-water/cache
 semantics, exact-ID normalization and insertion consequences, and
 ID-preserving move are normative in the
@@ -1001,6 +1008,10 @@ normalization, batch preflight, duplicate handling, and high-water
 consequences are normative in `[SB-ID-4]`. Dump/load line format,
 fresh-target policy, and cross-backend restore behavior remain with the
 persistence-I/O concern.
+
+New exact insertion requires a positive ID. A legacy dump containing ID `0`
+cannot be restored unchanged; inspect the source row and intentionally assign
+a compatible positive SimpleBroker ID before loading it into a new target.
 
 > **Supply IDs allocated by a compatible SimpleBroker timestamp generator.**
 > An arbitrarily far-future ID advances broker high-water into that interval

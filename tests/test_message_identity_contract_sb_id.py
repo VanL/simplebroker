@@ -39,6 +39,9 @@ FIRING_TESTS = {
         "tests/test_write_returns_id.py": {
             "test_broker_write_ids_strictly_increase",
         },
+        "tests/test_insert_messages.py": {
+            "test_fresh_generated_message_id_is_positive_and_after_zero_visible",
+        },
         "tests/test_message_id_validation.py": {
             "test_normalize_message_id_accepts_ints_and_exact_19_digit_strings",
             "test_normalize_message_id_rejects_out_of_range_ints",
@@ -59,6 +62,19 @@ FIRING_TESTS = {
             "test_retry_exhaustion_raises_without_returning",
             "test_concurrent_writers_get_their_own_ids",
             "test_write_return_id_remains_row_identity_after_global_last_ts_advances",
+        },
+        "tests/test_write_visibility.py": {
+            "test_write_allocates_timestamp_inside_the_insert_transaction",
+        },
+        "extensions/simplebroker_redis/tests/test_redis_atomicity.py": {
+            "test_write_script_rejects_stale_candidate_without_any_mutation",
+            "test_ordinary_write_retries_stale_local_candidate_above_reader_checkpoint",
+            "test_resync_cannot_overwrite_concurrent_high_water_backward",
+            "test_steady_state_ordinary_write_uses_one_data_eval",
+            "test_single_core_concurrent_writes_preserve_cross_writer_retry_budget",
+        },
+        "extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py": {
+            "test_redis_write_fires_transition_table",
         },
     },
     "SB-ID-3": {
@@ -97,6 +113,13 @@ FIRING_TESTS = {
             "test_broker_insert_messages_does_not_move_high_water_backward",
             "test_broker_insert_messages_rejects_unadvanceable_high_water",
             "test_far_future_exact_insert_can_stall_later_writes_until_clock_catches_up",
+            "test_broker_insert_messages_rejects_reserved_zero_before_mutation",
+            "test_broker_insert_messages_rejects_reserved_zero_in_mixed_batch",
+            "test_queue_insert_messages_rejects_reserved_zero",
+            "test_native_legacy_zero_remains_exactly_addressable_movable_and_deletable",
+        },
+        "tests/test_dump_load.py": {
+            "test_load_rejects_reserved_zero_with_line_context_before_batch_flush",
         },
     },
     "SB-ID-5": {
@@ -201,9 +224,30 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     )
 
     readme = README.read_text(encoding="utf-8")
+    normalized_spec = " ".join(text.split())
+    normalized_readme = " ".join(readme.split())
     assert "docs/specs/13-message-identity-contract.md" in readme
     assert "[SB-ID-1]" in readme
     assert "[SB-ID-5]" in readme
+    assert "ID `0` is reserved" in normalized_spec
+    assert (
+        "Exact selectors and storage decoders continue to accept zero"
+        in normalized_spec
+    )
+    assert "allocation/high-water advancement and insertion" in normalized_spec
+    assert "one backend-atomic outcome" in normalized_spec
+    assert (
+        "does not make `after_timestamp` a universal durable cursor" in normalized_spec
+    )
+    assert (
+        "`insert_messages(...)` requires each normalized ID to be greater than zero"
+        in normalized_spec
+    )
+    assert "generated and newly inserted message IDs are positive" in normalized_readme
+    assert "Exact selectors still accept zero" in normalized_readme
+    assert "ordinary Redis `write()`" in normalized_readme
+    assert "one server-side visibility point" in normalized_readme
+    assert "Moves, exact insertion, and patterned broadcast" in normalized_readme
     assert "High 52 bits: microseconds" not in readme
     assert "remains normative in this" in readme
     assert re.search(r"Phase\s*(?:>\s*)?2B", readme)
@@ -213,6 +257,16 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
         assert "docs/specs/13-message-identity-contract.md" in surface
         assert "[SB-ID-1]" in surface
         assert "[SB-ID-5]" in surface
+    kernel = KERNEL.read_text(encoding="utf-8")
+    normalized_kernel = " ".join(kernel.split())
+    assert "Generated and newly inserted ids are positive" in normalized_kernel
+    assert "ID `0` is the checkpoint origin" in normalized_kernel
+    assert (
+        "exact selectors retain zero only for legacy-row recovery" in normalized_kernel
+    )
+    assert "ordinary Redis `write()`" in normalized_kernel
+    assert "one server-side visibility point" in normalized_kernel
+    assert "Moves, exact insertion, and patterned broadcast" in normalized_kernel
 
     assert "13-message-identity-contract.md" in SPEC_INDEX.read_text(encoding="utf-8")
     invariant_text = INVARIANTS.read_text(encoding="utf-8")

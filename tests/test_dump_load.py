@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -145,6 +146,27 @@ def test_load_rejects_malformed_message_id_with_line_context(tmp_path: Path) -> 
         load_lines(broker, lines)
 
     assert Queue("jobs", db_path=db).peek() is None
+
+
+@pytest.mark.shared
+def test_load_rejects_reserved_zero_with_line_context_before_batch_flush(
+    broker: Any,
+) -> None:
+    lines = [
+        json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1}),
+        json.dumps({"type": "message", "queue": "jobs", "body": "valid", "id": 1000}),
+        json.dumps({"type": "message", "queue": "jobs", "body": "legacy", "id": 0}),
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="line 3: message_id 0 is reserved",
+    ):
+        load_lines(broker, lines)
+
+    assert broker.refresh_last_timestamp() == 0
+    assert broker.peek_one("jobs", exact_timestamp=1000) is None
+    assert broker.peek_one("jobs", exact_timestamp=0) is None
 
 
 def test_dump_canonicalizes_shuffled_exact_id_inserts(tmp_path: Path) -> None:

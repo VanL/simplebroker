@@ -68,6 +68,7 @@ Quick pointers to the key guidance documents in this repository.
 | `docs/implementation/01-documentation-system.md` | Why the documentation system is shaped this way |
 | `docs/implementation/03-agent-inventory.md` | Current observed agent availability and review preference |
 | `docs/implementation/06-process-session-core-ownership.md` | Internal ownership and concurrency boundary between process sessions and concrete backend construction |
+| `docs/implementation/08-message-identity-and-write-visibility.md` | Reserved-zero insertion boundary and SQL/Redis ordinary-write visibility rationale |
 | `docs/lessons.md` | Canonical lessons ledger |
 | `docs/coalescing.md` | Coalescing state: thresholds, watermarks, deferrals, run log |
 

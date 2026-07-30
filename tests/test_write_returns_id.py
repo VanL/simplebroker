@@ -8,9 +8,10 @@ bin/pytest-redis` (the `broker` and `queue_factory` fixtures resolve the
 active backend).
 
 No broker internals are mocked. The only sanctioned patch in this module is
-the repo's established timestamp fault-injection seam
-(``broker._timestamp_gen.generate``), used to force the timestamp-conflict
-retry path that cannot occur naturally; see
+the active backend's timestamp fault-injection seam: persisted
+``broker._timestamp_gen.generate`` for SQL or local
+``broker._timestamp_gen._reserve_candidates`` for Redis. These force the
+timestamp-conflict retry path that cannot occur naturally; see
 tests/test_timestamp_resilience.py for the precedent.
 """
 
@@ -19,6 +20,8 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+
+from .helper_scripts.broker_factory import active_backend
 
 pytestmark = pytest.mark.shared
 
@@ -55,23 +58,36 @@ def test_retry_path_returns_surviving_row_id(broker):
     rows = list(broker.peek_generator("retry", with_timestamps=True))
     occupant_ts = rows[0][1]
 
-    original = broker._timestamp_gen.generate
     calls = 0
+    if active_backend() == "redis":
+        seam = "_reserve_candidates"
+        original = broker._timestamp_gen._reserve_candidates
 
-    def collide_twice():
-        nonlocal calls
-        calls += 1
-        if calls <= 2:
-            return occupant_ts
-        return original()
+        def collide_twice(count):
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                return [occupant_ts]
+            return original(count)
 
-    broker._timestamp_gen.generate = collide_twice
+    else:
+        seam = "generate"
+        original = broker._timestamp_gen.generate
+
+        def collide_twice():
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                return occupant_ts
+            return original()
+
+    setattr(broker._timestamp_gen, seam, collide_twice)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             second = broker.write("retry", "retried")
     finally:
-        broker._timestamp_gen.generate = original
+        setattr(broker._timestamp_gen, seam, original)
 
     assert calls >= 3
     assert type(second) is int
@@ -86,15 +102,28 @@ def test_retry_exhaustion_raises_without_returning(broker):
     rows = list(broker.peek_generator("exhaust", with_timestamps=True))
     occupant_ts = rows[0][1]
 
-    original = broker._timestamp_gen.generate
-    broker._timestamp_gen.generate = lambda: occupant_ts
+    if active_backend() == "redis":
+        seam = "_reserve_candidates"
+        original = broker._timestamp_gen._reserve_candidates
+
+        def conflict(count):
+            return [occupant_ts]
+
+    else:
+        seam = "generate"
+        original = broker._timestamp_gen.generate
+
+        def conflict():
+            return occupant_ts
+
+    setattr(broker._timestamp_gen, seam, conflict)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             with pytest.raises(RuntimeError):
                 broker.write("exhaust", "never-committed")
     finally:
-        broker._timestamp_gen.generate = original
+        setattr(broker._timestamp_gen, seam, original)
 
     rows_after = list(broker.peek_generator("exhaust", with_timestamps=True))
     assert rows_after == [("occupant", occupant_ts)]

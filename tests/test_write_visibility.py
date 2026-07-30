@@ -11,7 +11,8 @@ Two tests pin the fix from opposite directions:
 - a multi-process stress test that reproduces the user-visible failure
   (probabilistic red pre-fix, deterministic green post-fix), and
 - a deterministic statement-ordering test using a pass-through spy over
-  a real SQLiteRunner (no behavior is faked; only ordering is recorded).
+  each SQL backend's real runner (no behavior is faked; only ordering is
+  recorded). Redis owns a separate real-Valkey Lua visibility proof.
 """
 
 import multiprocessing
@@ -20,10 +21,9 @@ from pathlib import Path
 import pytest
 
 from simplebroker import Queue
-from simplebroker._runner import SQLiteRunner
 from simplebroker.db import BrokerCore
 
-pytestmark = pytest.mark.sqlite_only
+from .helper_scripts.broker_factory import active_backend
 
 NUM_WRITERS = 16
 MESSAGES_PER_WRITER = 40
@@ -39,6 +39,7 @@ def _writer_proc(db_path: str, writer_id: int, barrier) -> None:
 
 
 @pytest.mark.xdist_group(name="write_visibility")
+@pytest.mark.sqlite_only
 def test_checkpoint_reader_sees_every_message(tmp_path: Path) -> None:
     """A checkpoint reader polling during concurrent writes misses nothing."""
     db_path = str(tmp_path / "race.db")
@@ -90,7 +91,7 @@ def test_checkpoint_reader_sees_every_message(tmp_path: Path) -> None:
 
 
 class _RecordingRunner:
-    """Pass-through spy over a real SQLiteRunner.
+    """Pass-through spy over one SQL backend's real runner.
 
     Delegates every call to the real runner (nothing is faked) and records
     the order of transaction boundaries, the last_ts CAS, and the message
@@ -98,39 +99,50 @@ class _RecordingRunner:
     between BEGIN IMMEDIATE and the COMMIT that publishes the insert.
     """
 
-    def __init__(self, inner: SQLiteRunner) -> None:
+    def __init__(self, inner: object) -> None:
         self._inner = inner
         self.events: list[str] = []
 
     def run(self, sql, params=(), *, fetch=False):
         normalized = " ".join(sql.split())
-        if normalized.startswith("UPDATE meta SET value"):
+        if normalized.startswith("UPDATE meta") and "last_ts" in normalized:
             self.events.append("advance_last_ts")
-        elif normalized.startswith("INSERT INTO messages"):
+        elif "INSERT INTO messages" in normalized:
             self.events.append("insert_message")
-        return self._inner.run(sql, params, fetch=fetch)
+        return self._inner.run(sql, params, fetch=fetch)  # type: ignore[attr-defined]
 
     def begin_immediate(self):
         self.events.append("begin")
-        return self._inner.begin_immediate()
+        return self._inner.begin_immediate()  # type: ignore[attr-defined]
 
     def commit(self):
         self.events.append("commit")
-        return self._inner.commit()
+        return self._inner.commit()  # type: ignore[attr-defined]
 
     def rollback(self):
         self.events.append("rollback")
-        return self._inner.rollback()
+        return self._inner.rollback()  # type: ignore[attr-defined]
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
 
 
+@pytest.mark.shared
 def test_write_allocates_timestamp_inside_the_insert_transaction(
-    tmp_path: Path,
+    broker: object,
 ) -> None:
-    runner = _RecordingRunner(SQLiteRunner(str(tmp_path / "spy.db")))
-    core = BrokerCore(runner)
+    if active_backend() == "redis":
+        pytest.skip(
+            "test_write_allocates_timestamp_inside_the_insert_transaction "
+            "is a SQL transaction-ordering proof; Redis uses the real-Valkey "
+            "ordinary-write visibility tests"
+        )
+
+    runner = _RecordingRunner(broker._runner)  # type: ignore[attr-defined]
+    core = BrokerCore(
+        runner,
+        backend_plugin=broker._backend_plugin,  # type: ignore[attr-defined]
+    )
     runner.events.clear()  # discard schema-setup noise
 
     core.write("q", "hello")

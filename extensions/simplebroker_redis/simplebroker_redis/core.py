@@ -84,6 +84,7 @@ class RedisBrokerCore:
         self._config = resolve_config(config)
         self._stop_event = stop_event or threading.Event()
         self._lock = threading.RLock()
+        self._write_lock = threading.Lock()
         self._pid = os.getpid()
         self._keys = RedisKeys(runner.namespace)
         self._prefix = self._keys.prefix
@@ -144,6 +145,7 @@ class RedisBrokerCore:
         current_pid = os.getpid()
         if current_pid != self._pid:
             self._pid = current_pid
+            self._write_lock = threading.Lock()
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         self._stop_event = stop_event or threading.Event()
@@ -205,7 +207,9 @@ class RedisBrokerCore:
         self._validate_queue_name(queue)
         self._validate_message_size(message)
         self._assert_no_reentrant_mutation_during_batch("write")
-        timestamp = self._write_message(queue, message)
+        with self._write_lock:
+            timestamp = self._write_message(queue, message)
+        self._publish(queue)
         self._record_maintenance_activity(1)
         return timestamp
 
@@ -260,14 +264,18 @@ class RedisBrokerCore:
             raise IntegrityError("duplicate message ID in insert batch")
         raise OperationalError(f"Unexpected Redis insert result: {code}")
 
+    def _reserve_write_candidate(self) -> int:
+        try:
+            return self._timestamp_gen._reserve_candidates(1)[0]
+        except TimestampError as exc:
+            if isinstance(exc.__cause__, OperationalError):
+                raise OperationalError(str(exc.__cause__)) from exc
+            raise
+
     def _write_message(self, queue: str, message: str) -> int:
-        for attempt in range(3):
-            try:
-                timestamp = self.generate_timestamp()
-            except TimestampError as exc:
-                if isinstance(exc.__cause__, OperationalError):
-                    raise OperationalError(str(exc.__cause__)) from exc
-                raise
+        conflict_attempts = 0
+        while True:
+            timestamp = self._reserve_write_candidate()
             encoded = encode_id(timestamp)
             try:
                 result = response_list(
@@ -280,26 +288,34 @@ class RedisBrokerCore:
                         self._keys.pending(queue),
                         self._keys.queues,
                         queue,
+                        str(timestamp),
                         encoded,
                         message,
                     )
                 )
             except redis.RedisError as exc:
                 raise _translate_redis_error(exc) from exc
+            if not result:
+                raise OperationalError("Unexpected Redis write result: empty response")
             code = int(result[0])
             if code == 1:
-                self._publish(queue)
                 return timestamp
             if code == -2:
                 raise OperationalError("Redis namespace is not initialized")
-            if code != -1:
+            if code not in (-1, -6):
                 raise OperationalError(f"Unexpected Redis write result: {code}")
             self._ts_conflict_count += 1
-            if attempt == 0:
+            conflict_attempts += 1
+            if conflict_attempts >= 3:
+                raise RuntimeError(
+                    "Failed to write message after repeated timestamp conflicts"
+                )
+            if code == -6:
+                self._timestamp_gen.refresh_last_ts()
+            elif conflict_attempts == 1:
                 time.sleep(0.001)
-            elif attempt == 1:
+            else:
                 self._resync_timestamp_generator()
-        raise RuntimeError("Failed to write message after repeated timestamp conflicts")
 
     def get_conflict_metrics(self) -> dict[str, int]:
         return {
@@ -326,7 +342,7 @@ class RedisBrokerCore:
         )
         if raw:
             max_ts = max(max_ts, decode_id(str(raw[0])))
-        self._backend_plugin.write_last_ts(self._runner, max_ts)
+        self._backend_plugin.advance_last_ts(self._runner, new_ts=max_ts)
         self._timestamp_gen.refresh_last_ts()
         self._ts_resync_count += 1
 

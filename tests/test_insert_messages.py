@@ -17,6 +17,8 @@ from simplebroker._exceptions import TimestampError
 from simplebroker._message_insert import normalize_insert_records
 from simplebroker.ext import IntegrityError
 
+from .helper_scripts.broker_factory import active_backend
+
 pytestmark = [pytest.mark.shared]
 
 
@@ -218,6 +220,101 @@ def test_broker_insert_messages_accepts_exact_string_message_id(broker: Any) -> 
     broker.insert_messages([("jobs", "body", "0000000000000001000")])
 
     assert broker.peek_one("jobs", exact_timestamp=1000) == ("body", 1000)
+
+
+@pytest.mark.parametrize(
+    "message_id",
+    [
+        0,
+        "0000000000000000000",
+        "٠٠٠٠٠٠٠٠٠٠٠٠٠٠٠٠٠٠٠",
+        "０００００００００００００００００００",
+        "0٠０0000000000000000",
+    ],
+    ids=["integer", "ascii", "arabic-indic", "fullwidth", "mixed-script"],
+)
+def test_broker_insert_messages_rejects_reserved_zero_before_mutation(
+    broker: Any,
+    message_id: int | str,
+) -> None:
+    with pytest.raises(ValueError, match="message_id 0 is reserved"):
+        broker.insert_messages([("jobs", "body", message_id)])
+
+    assert broker.refresh_last_timestamp() == 0
+    assert broker.peek_one("jobs", exact_timestamp=0) is None
+
+
+def test_broker_insert_messages_rejects_reserved_zero_in_mixed_batch(
+    broker: Any,
+) -> None:
+    with pytest.raises(ValueError, match="message_id 0 is reserved"):
+        broker.insert_messages(
+            [
+                ("jobs", "valid", 1000),
+                ("other", "reserved", 0),
+            ]
+        )
+
+    assert broker.refresh_last_timestamp() == 0
+    assert broker.peek_one("jobs", exact_timestamp=1000) is None
+    assert broker.peek_one("other", exact_timestamp=0) is None
+
+
+def test_queue_insert_messages_rejects_reserved_zero(queue_factory: Any) -> None:
+    queue = queue_factory("jobs")
+
+    with pytest.raises(ValueError, match="message_id 0 is reserved"):
+        queue.insert_messages([("body", "0000000000000000000")])
+
+    assert queue.refresh_last_ts() == 0
+    assert queue.peek(message_id=0) is None
+
+
+def test_fresh_generated_message_id_is_positive_and_after_zero_visible(
+    broker: Any,
+) -> None:
+    message_id = broker.write("jobs", "generated")
+
+    assert message_id > 0
+    assert broker.peek_many("jobs", after_timestamp=0, with_timestamps=True) == [
+        ("generated", message_id)
+    ]
+
+
+def _insert_native_legacy_zero(broker: Any) -> None:
+    """Create a pre-contract zero row without using a production insert surface."""
+    if active_backend() == "redis":
+        encoded = "0000000000000000000"
+        broker._client.hset(broker._keys.bodies, encoded, "legacy")
+        broker._client.zadd(broker._keys.all_ids, {encoded: 0})
+        broker._client.zadd(broker._keys.pending("legacy"), {encoded: 0})
+        broker._client.sadd(broker._keys.queues, "legacy")
+        return
+
+    broker._runner.run(
+        "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
+        ("legacy", "legacy", 0),
+    )
+    broker._runner.commit()
+
+
+def test_native_legacy_zero_remains_exactly_addressable_movable_and_deletable(
+    broker: Any,
+) -> None:
+    _insert_native_legacy_zero(broker)
+
+    assert broker.peek_one("legacy", exact_timestamp=0, with_timestamps=True) == (
+        "legacy",
+        0,
+    )
+    assert broker.peek_one(
+        "legacy",
+        exact_timestamp="0000000000000000000",
+        with_timestamps=True,
+    ) == ("legacy", 0)
+    assert broker.move_one("legacy", "recovered", exact_timestamp=0) == ("legacy", 0)
+    assert broker.delete_message_ids("recovered", [0]) == 1
+    assert broker.peek_one("recovered", exact_timestamp=0) is None
 
 
 @pytest.mark.parametrize(

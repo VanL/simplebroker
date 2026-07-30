@@ -21,14 +21,24 @@ local all_ids = KEYS[3]
 local pending = KEYS[4]
 local queues = KEYS[5]
 local queue = ARGV[1]
-local id = ARGV[2]
-local body = ARGV[3]
+local raw_id = ARGV[2]
+local id = ARGV[3]
+local body = ARGV[4]
 if redis.call('HGET', meta, 'magic') == false then
   return {-2}
 end
 if redis.call('HEXISTS', bodies, id) == 1 or redis.call('ZSCORE', all_ids, id) ~= false then
   return {-1}
 end
+local function pad19(value)
+  local text = tostring(value or '0')
+  return string.rep('0', 19 - string.len(text)) .. text
+end
+local current = pad19(redis.call('HGET', meta, 'last_ts') or '0')
+if current >= id then
+  return {-6}
+end
+redis.call('HSET', meta, 'last_ts', raw_id)
 redis.call('HSET', bodies, id, body)
 redis.call('ZADD', all_ids, 0, id)
 redis.call('ZADD', pending, 0, id)

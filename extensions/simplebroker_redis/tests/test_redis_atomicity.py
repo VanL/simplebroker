@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import threading
 
 import pytest
@@ -49,6 +50,231 @@ def test_has_pending_validates_after_timestamp(
         with pytest.raises(TypeError):
             core.has_pending_messages("jobs", after_timestamp=after_timestamp)  # type: ignore[arg-type]
     finally:
+        core.close()
+
+
+def test_write_script_rejects_stale_candidate_without_any_mutation(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        persisted = core.generate_timestamp()
+        before = {
+            "meta": core._client.hgetall(keys.meta),
+            "bodies": core._client.hgetall(keys.bodies),
+            "all_ids": core._client.zrange(keys.all_ids, 0, -1, withscores=True),
+            "pending": core._client.zrange(
+                keys.pending("jobs"), 0, -1, withscores=True
+            ),
+            "queues": core._client.smembers(keys.queues),
+        }
+
+        result = core._client.eval(
+            scripts.WRITE_MESSAGE,
+            5,
+            keys.meta,
+            keys.bodies,
+            keys.all_ids,
+            keys.pending("jobs"),
+            keys.queues,
+            "jobs",
+            str(persisted),
+            encode_id(persisted),
+            "stale",
+        )
+
+        assert result == [-6]
+        assert core._client.hgetall(keys.meta) == before["meta"]
+        assert core._client.hgetall(keys.bodies) == before["bodies"]
+        assert (
+            core._client.zrange(keys.all_ids, 0, -1, withscores=True)
+            == before["all_ids"]
+        )
+        assert (
+            core._client.zrange(keys.pending("jobs"), 0, -1, withscores=True)
+            == before["pending"]
+        )
+        assert core._client.smembers(keys.queues) == before["queues"]
+    finally:
+        core.close()
+
+
+def test_ordinary_write_retries_stale_local_candidate_above_reader_checkpoint(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    writer_a = RedisBrokerCore(redis_runner)
+    writer_b = RedisBrokerCore(redis_runner)
+    reader = RedisBrokerCore(redis_runner)
+    candidate_reserved = threading.Event()
+    allow_a_to_eval = threading.Event()
+    first_candidate: list[int] = []
+    original_reserve = writer_a._timestamp_gen._reserve_candidates
+
+    def pause_first_reservation(count: int) -> list[int]:
+        candidates = original_reserve(count)
+        if not first_candidate:
+            first_candidate.extend(candidates)
+            candidate_reserved.set()
+            if not allow_a_to_eval.wait(timeout=5):
+                raise AssertionError("writer A was not released")
+        return candidates
+
+    monkeypatch.setattr(
+        writer_a._timestamp_gen,
+        "_reserve_candidates",
+        pause_first_reservation,
+    )
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(writer_a.write, "jobs", "writer-a")
+            try:
+                assert candidate_reserved.wait(timeout=5)
+
+                persisted = writer_b.generate_timestamp()
+                while persisted <= first_candidate[0]:
+                    persisted = writer_b.generate_timestamp()
+                checkpoint = writer_b.write("jobs", "writer-b")
+                assert checkpoint > first_candidate[0]
+                assert reader.peek_many(
+                    "jobs",
+                    after_timestamp=first_candidate[0],
+                    with_timestamps=True,
+                ) == [("writer-b", checkpoint)]
+
+                allow_a_to_eval.set()
+                result_a = future.result(timeout=5)
+                assert result_a > checkpoint
+                assert reader.peek_many(
+                    "jobs",
+                    after_timestamp=checkpoint,
+                    with_timestamps=True,
+                ) == [("writer-a", result_a)]
+            finally:
+                allow_a_to_eval.set()
+    finally:
+        reader.close()
+        writer_b.close()
+        writer_a.close()
+
+
+def test_resync_cannot_overwrite_concurrent_high_water_backward(
+    redis_runner: RedisRunner,
+) -> None:
+    resyncing = RedisBrokerCore(redis_runner)
+    advancing = RedisBrokerCore(redis_runner)
+    advance_started = threading.Event()
+    release_stale_advance = threading.Event()
+    original_plugin = resyncing._backend_plugin
+
+    class PausingPlugin:
+        def __getattr__(self, name: str) -> object:
+            return getattr(original_plugin, name)
+
+        def advance_last_ts(self, runner: RedisRunner, *, new_ts: int) -> bool:
+            advance_started.set()
+            if not release_stale_advance.wait(timeout=5):
+                raise AssertionError("stale resync advance was not released")
+            return original_plugin.advance_last_ts(runner, new_ts=new_ts)
+
+    resyncing._backend_plugin = PausingPlugin()  # type: ignore[assignment]
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(resyncing._resync_timestamp_generator)
+            try:
+                assert advance_started.wait(timeout=5)
+                later = advancing.generate_timestamp()
+                assert later > 0
+                release_stale_advance.set()
+                future.result(timeout=5)
+
+                assert advancing.refresh_last_timestamp() == later
+                assert resyncing.get_cached_last_timestamp() == later
+            finally:
+                release_stale_advance.set()
+    finally:
+        resyncing.close()
+        advancing.close()
+
+
+def test_steady_state_ordinary_write_uses_one_data_eval(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    original_eval = core._client.eval
+    scripts_seen: list[str] = []
+
+    def track_eval(script: str, *args: object) -> object:
+        scripts_seen.append(script)
+        return original_eval(script, *args)
+
+    monkeypatch.setattr(core._client, "eval", track_eval)
+    try:
+        message_id = core.write("jobs", "one-round-trip")
+
+        assert message_id > 0
+        assert scripts_seen == [scripts.WRITE_MESSAGE]
+    finally:
+        core.close()
+
+
+def test_single_core_concurrent_writes_preserve_cross_writer_retry_budget(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    first_reserved = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    second_reserved = threading.Event()
+    observation_lock = threading.Lock()
+    reservation_count = 0
+    original_reserve = core._reserve_write_candidate
+
+    def pause_after_first_reservation() -> int:
+        nonlocal reservation_count
+        candidate = original_reserve()
+        with observation_lock:
+            reservation_count += 1
+            reservation_number = reservation_count
+        if reservation_number == 1:
+            first_reserved.set()
+            if not release_first.wait(timeout=5):
+                raise AssertionError("first write was not released")
+        else:
+            second_reserved.set()
+        return candidate
+
+    def second_write() -> int:
+        second_started.set()
+        return core.write("jobs", "second")
+
+    monkeypatch.setattr(core, "_reserve_write_candidate", pause_after_first_reservation)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            try:
+                first = executor.submit(core.write, "jobs", "first")
+                assert first_reserved.wait(timeout=5)
+                second = executor.submit(second_write)
+                assert second_started.wait(timeout=5)
+                assert not second_reserved.wait(timeout=0.25)
+
+                release_first.set()
+                first_id = first.result(timeout=5)
+                second_id = second.result(timeout=5)
+            finally:
+                release_first.set()
+
+        assert second_id > first_id
+        assert second_reserved.is_set()
+        assert core.get_conflict_metrics()["ts_conflict_count"] == 0
+    finally:
+        release_first.set()
         core.close()
 
 

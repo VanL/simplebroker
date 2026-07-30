@@ -177,7 +177,9 @@ semantics are not interchangeable.
 
 ## State-Machine Inventory
 
-All 30 reviewed seed entries are confirmed machines. None is merged or
+All 30 reviewed seed entries are confirmed machines. `SM-REDIS-WRITE` was
+added by the reserved-zero and Redis write-atomicity plan after the seed
+inventory, bringing the current inventory to 31. None is merged or
 reclassified as a non-machine. The detailed inventory preserves the baseline
 classification evidence and original table candidates for audit history; its
 candidate column is not the current ownership source. The executable ownership
@@ -193,7 +195,7 @@ table and manifest below are authoritative for the completed implementation.
 | `SM-SETUP-BUDGET` | `tests/test_helpers_coverage.py` |
 | `SM-POLLING`, `SM-WATCHER-LIFECYCLE`, `SM-CLI-WATCH` | `tests/test_watcher_transition_tables.py` |
 | `SM-PG-LISTENER`, `SM-PG-VACUUM` | `extensions/simplebroker_pg/tests/test_pg_state_machine_transitions.py` |
-| `SM-REDIS-BROADCAST`, `SM-REDIS-ACTIVITY-LISTENER`, `SM-REDIS-RUNNER` | `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py` |
+| `SM-REDIS-BROADCAST`, `SM-REDIS-WRITE`, `SM-REDIS-ACTIVITY-LISTENER`, `SM-REDIS-RUNNER` | `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py` |
 | `SM-COVERAGE-SETTLEMENT`, `SM-CLI-COVERAGE` | `tests/test_dev_scripts.py` |
 | `SM-RELEASE` | `tests/test_release_script.py` |
 | `SM-ASYNC-STREAM` | `tests/test_example_async_stream_transitions.py` |
@@ -205,8 +207,8 @@ table and manifest below are authoritative for the completed implementation.
 | `SM-SIGINT-PROBE` | `tests/test_watcher_sigint_probe_transitions.py` |
 
 `tests/state_machine_manifest.py` marks coverage `COMPLETE`.
-`tests/test_state_machine_policy.py` requires exact equality among these 30
-inventory IDs, the 30 manifest entries, and the implementation-map inventory.
+`tests/test_state_machine_policy.py` requires exact equality among these 31
+inventory IDs, the 31 manifest entries, and the implementation-map inventory.
 The example and reusable-protocol slice contains 74 firing rows; this includes
 15 `SM-REACTOR` rows and 7 `SM-REACTOR-OUTPUT` rows. Failure rows inject below
 the real persistent-state owner so the owner's rollback and replay behavior
@@ -229,6 +231,7 @@ remain observable.
 | `SM-PG-LISTENER` (confirmed) | `extensions/simplebroker_pg/simplebroker_pg/runner.py::_SharedActivityListener` | PostgreSQL notify/lifecycle table | PostgreSQL notify and runner-lifecycle suites | Readiness, registrations, listener-thread failure, notification routing, and closed state persist across callbacks and threads. |
 | `SM-PG-VACUUM` (confirmed) | `extensions/simplebroker_pg/simplebroker_pg/plugin.py::vacuum` plus maintenance lease | PostgreSQL maintenance table | PostgreSQL maintenance and plugin contract-edge suites | Durable lease, advisory lock, transaction result, and maintenance result govern later delete, compact, unlock, and release actions. |
 | `SM-REDIS-BROADCAST` (confirmed) | Redis `core.py::broadcast` plus Lua script and Redis allocation state | Redis broadcast table beside atomicity tests | Redis atomicity, broadcast, and integration suites | Atomic target selection, persisted high-water state, capacity, Lua status, and retry count govern the next Python and server action. |
+| `SM-REDIS-WRITE` (confirmed) | Redis `core.py::_write_message` plus `scripts.py::WRITE_MESSAGE`, persisted high-water, and row indexes; realizes `[SB-ID-2]` | `REDIS_WRITE_TRANSITIONS` | `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py::test_redis_write_fires_transition_table`; real-Valkey stale-fence, visibility, monotone-resync, and command-count tests in `test_redis_atomicity.py` | Locally reserved candidate, server high-water, Lua result, and shared conflict count govern refresh, monotone resync, retry, commit, or terminal failure. High-water and row publication share the successful Lua visibility point; Pub/Sub and maintenance remain post-commit. |
 | `SM-REDIS-ACTIVITY-LISTENER` (confirmed) | Redis `plugin.py::_SharedRedisActivityListener` | Redis listener lifecycle table | Redis plugin contract-edge and pool suites | Readiness, registrations/refcounts, read failure, notification routing, stop, and closed state persist across callbacks and threads. |
 | `SM-SQLITE-RUNNER` (confirmed) | `simplebroker/_runner.py::SQLiteRunner` | `tests/test_core_persistence_transition_tables.py` | runner ownership/error, poison, process-session, fork-safety, schema, and setup suites | Per-thread connection, transaction owner, admitted-call count, unusable state, process identity, setup marker, and tracked resources govern admission, terminal calls, fork reset, and cleanup. The ownership change is traced by `docs/plans/2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md`. |
 | `SM-REDIS-RUNNER` (confirmed) | Redis `runner.py::RedisRunner` | Redis runner lifecycle table | Redis pool, fork, and plugin contract suites | Lazy client/pool, ownership, process identity, and closed state govern reuse, reset, and cleanup across calls and forks. |
