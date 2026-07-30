@@ -77,10 +77,8 @@ class CountingSQLiteRunner(SQLiteRunner):
         self._thread_local.in_transaction = True
 
     def commit(self) -> None:
-        try:
-            super().commit()
-        finally:
-            self._finish_transaction()
+        super().commit()
+        self._finish_transaction()
 
     def rollback(self) -> None:
         try:

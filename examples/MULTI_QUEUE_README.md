@@ -103,6 +103,11 @@ The operational contract is:
 11. Do not hold long SQLite write transactions across worker CPU or IO time.
     This design keeps workers off broker handles and lets the reactor thread do
     short durable turns so SimpleBroker's contention retry model can work.
+    Single-thread reactor ownership avoids shared-runner lock inversion only
+    while every broker effect stays on that thread. Do not call a queue
+    operation through another same-target persistent handle from inside
+    `sidecar(transaction=True)`; allocate queue IDs before entering that
+    sidecar transaction and re-check durable state after entry.
 12. A stuck output replay backpressures new input dispatch, but it must not make
     the control lane unresponsive. `STATUS` reports `pending_output_backlog` and
     `output_backlog_blocked`; `STOP` still works while the output sink is stuck.

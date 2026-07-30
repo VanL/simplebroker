@@ -716,6 +716,34 @@ def _pending_result(reactor: Reactor, timestamp: int) -> PendingOutput:
     return pending
 
 
+def test_pending_output_id_is_allocated_outside_sidecar_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reactor = _make_reactor(tmp_path / "reactor-output-boundary.db")
+    transaction_states: list[bool] = []
+    original_generate_timestamp = reactor._output_queue.generate_timestamp
+
+    def generate_timestamp() -> int:
+        assert reactor._metadata_queue.conn is not None
+        core = reactor._metadata_queue.conn.get_core()
+        connection = core._runner.get_connection()
+        transaction_states.append(bool(connection.in_transaction))
+        return original_generate_timestamp()
+
+    monkeypatch.setattr(
+        reactor._output_queue,
+        "generate_timestamp",
+        generate_timestamp,
+    )
+    try:
+        pending = _pending_result(reactor, 200)
+        assert pending.output_message_id > 0
+        assert transaction_states == [False]
+    finally:
+        reactor.stop()
+
+
 @fires_transition_table("SM-REACTOR-OUTPUT", REACTOR_OUTPUT_TRANSITIONS)
 def test_reference_reactor_output_fires_transition_table(
     transition_case: TransitionCase[ReactorOutputPayload],

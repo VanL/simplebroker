@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message-size behavior. The size contract now runs against SQLite,
   PostgreSQL, and Redis at the exact byte limit, above the limit, with
   multibyte UTF-8, and with lone surrogates.
+- Preserved transaction-owner progress when one SQLite runner is shared by
+  several threads. Foreign reads and writes now wait without blocking the
+  owner's commit or rollback path, and fail within the configured busy timeout
+  if an orphaned owner cannot settle. The reference reactor also allocates
+  output IDs outside its sidecar transaction, removing an undocumented
+  same-core transaction join without changing replay or delivery guarantees.
 - Separated process-session bookkeeping from backend-specific core
   construction, removing the internal circular import while preserving public
   behavior. Concurrent first use now publishes one shared runner, failed core

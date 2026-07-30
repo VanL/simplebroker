@@ -49,6 +49,27 @@ The factory Protocol is private and owned by its caller in
 Backend packages do not implement it, and it is not exported through
 `simplebroker` or `simplebroker.ext`.
 
+Transaction-owner progress belongs to the runner, not the process session.
+When several thread-local cores share one runner, their separate core locks do
+not serialize a transaction. The runner must keep a successful transaction
+owner's path to `commit()` or `rollback()` clear. `SQLiteRunner` does this with
+condition-guarded admission: foreign operations wait without holding the
+per-call operation lock, while the owner continues to use its thread-local
+connection. Deliberately shared SQLite reads and writes both wait behind an
+active transaction, and that wait is bounded by the configured SQLite busy
+timeout.
+
+PostgreSQL uses its existing backend-specific equivalents: a leased operation
+lock for a shared retained connection, or a pool checkout retained for a
+non-leased transaction. Redis uses a direct core and does not enter the SQL
+runner transaction protocol.
+
+`SQLiteRunner.close()` observes the same admission boundary. An explicit close
+behind a foreign live owner can wait through the configured busy timeout and
+raise the retryable admission error without closing other tracked connections.
+First-party best-effort shutdown paths suppress that bounded cleanup failure;
+explicit callers must handle it. A foreign orphan is still restart-required.
+
 ## Acquisition
 
 `DBConnection.__init__()` and `DBConnection._ensure_shared_session()` are the
@@ -142,6 +163,7 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 ## Related Plans
 
 - `docs/plans/2026-05-04-process-local-broker-session-plan.md`
+- `docs/plans/2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md`
 - retired: 2026-07-29-code-quality-cleanup-plan — source `36e2f356`; see
   the ledger in `docs/plans/README.md`
 - retired: 2026-07-29-process-session-core-factory-plan — source

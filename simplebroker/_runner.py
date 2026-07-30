@@ -13,6 +13,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from enum import Enum
 from pathlib import Path
@@ -21,6 +22,7 @@ from typing import Any, Literal, Protocol, Self, cast
 from ._backends import get_configured_backend
 from ._constants import SCHEMA_VERSION, ConnectionPhase, load_config, resolve_config
 from ._exceptions import (
+    BrokerError,
     DatabaseError,
     DataError,
     IntegrityError,
@@ -52,6 +54,16 @@ logger = logging.getLogger(__name__)
 _ABANDONED_FORK_CONNECTIONS: list[Any] = []
 
 
+def _translate_sqlite_error(error: sqlite3.DatabaseError) -> BrokerError:
+    if isinstance(error, sqlite3.OperationalError):
+        return OperationalError(str(error))
+    if isinstance(error, sqlite3.IntegrityError):
+        return IntegrityError(str(error))
+    if isinstance(error, sqlite3.DataError):
+        return DataError(str(error))
+    return DatabaseError(str(error))
+
+
 class SetupPhase(Enum):
     """Generic setup phases that any SQL implementation might have."""
 
@@ -66,6 +78,10 @@ class SQLRunner(Protocol):
     Contract requirements:
     - Must handle thread-local or concurrency-safe connections
     - Must guarantee transactional boundaries as BrokerCore expects
+    - A runner shared across threads must preserve transaction-owner progress:
+      after begin_immediate() succeeds, another thread must not hold a runner
+      resource needed by the owner to reach commit() or rollback() while
+      waiting on storage state owned by that transaction
     - Must raise OperationalError on locking for retry logic; backends
       whose messages do not contain SQLite's lock/busy phrases must set
       OperationalError.retryable = True on contention errors (see
@@ -211,6 +227,10 @@ class SQLiteRunner:
         self._all_connections: set[sqlite3.Connection] = set()
         self._connections_lock = threading.Lock()
         self._operation_lock = threading.RLock()
+        self._transaction_condition = threading.Condition()
+        self._transaction_owner: threading.Thread | None = None
+        self._transaction_admitted_operations = 0
+        self._transaction_unusable_reason: str | None = None
         self._connection_generation = 0
         # For backward compatibility, expose _conn as a property
         # that returns the current thread's connection
@@ -265,6 +285,10 @@ class SQLiteRunner:
         self._setup_lock = threading.Lock()
         self._connections_lock = threading.Lock()
         self._operation_lock = threading.RLock()
+        self._transaction_condition = threading.Condition()
+        self._transaction_owner = None
+        self._transaction_admitted_operations = 0
+        self._transaction_unusable_reason = None
         # Clear thread-local storage for the new process
         self._thread_local = threading.local()
         # Also reset setup phases for the new process (fresh locks; the
@@ -415,6 +439,179 @@ class SQLiteRunner:
         cursor = conn.execute(f"PRAGMA busy_timeout={timeout_ms}")
         cursor.close()
 
+    def _transaction_wait_deadline(self) -> float:
+        timeout_ms = max(0, int(self._config["BROKER_BUSY_TIMEOUT"]))
+        return time.monotonic() + (timeout_ms / 1000)
+
+    def _raise_if_transaction_unusable(self) -> None:
+        if self._transaction_unusable_reason is None:
+            return
+        error = OperationalError(
+            "SQLiteRunner transaction state is unusable: "
+            f"{self._transaction_unusable_reason}"
+        )
+        error.retryable = False
+        raise error
+
+    def _wait_for_transaction_state(
+        self,
+        *,
+        operation: str,
+        predicate: Callable[[], bool],
+    ) -> None:
+        deadline = self._transaction_wait_deadline()
+        while not predicate():
+            self._raise_if_transaction_unusable()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                owner = self._transaction_owner
+                owner_description = (
+                    "unknown"
+                    if owner is None
+                    else f"{owner.name} ({owner.ident})"
+                )
+                error = OperationalError(
+                    "database is locked: "
+                    f"SQLiteRunner {self.instance_id} transaction is owned by "
+                    f"thread {owner_description}; {operation} timed out waiting "
+                    "for transaction admission"
+                )
+                error.retryable = True
+                raise error
+            self._transaction_condition.wait(timeout=remaining)
+
+    @contextlib.contextmanager
+    def _admit_operation(
+        self,
+        operation: str,
+        *,
+        allow_unusable: bool = False,
+    ) -> Iterator[None]:
+        """Admit one runner call without blocking a transaction owner.
+
+        SM-SQLITE-RUNNER requires foreign callers to wait on the condition,
+        which releases its mutex, before they can take _operation_lock. This
+        prevents a waiter blocked in SQLite from holding the owner's path to
+        commit or rollback.
+        """
+
+        current_thread = threading.current_thread()
+        counted = False
+        with self._transaction_condition:
+            if not allow_unusable:
+                self._raise_if_transaction_unusable()
+            self._wait_for_transaction_state(
+                operation=operation,
+                predicate=lambda: (
+                    self._transaction_owner is None
+                    or self._transaction_owner is current_thread
+                ),
+            )
+            if self._transaction_owner is None:
+                self._transaction_admitted_operations += 1
+                counted = True
+
+        try:
+            yield
+        finally:
+            if counted:
+                with self._transaction_condition:
+                    self._transaction_admitted_operations -= 1
+                    if self._transaction_admitted_operations == 0:
+                        self._transaction_condition.notify_all()
+
+    def _claim_transaction(self) -> bool:
+        """Reserve transaction admission, returning whether this is a new claim."""
+
+        current_thread = threading.current_thread()
+        with self._transaction_condition:
+            self._raise_if_transaction_unusable()
+            self._wait_for_transaction_state(
+                operation="begin_immediate",
+                predicate=lambda: (
+                    self._transaction_owner is current_thread
+                    or (
+                        self._transaction_owner is None
+                        and self._transaction_admitted_operations == 0
+                    )
+                ),
+            )
+            if self._transaction_owner is current_thread:
+                return False
+            self._transaction_owner = current_thread
+            return True
+
+    def _settle_transaction(self, owner: threading.Thread) -> None:
+        with self._transaction_condition:
+            if self._transaction_owner is owner:
+                self._transaction_owner = None
+                self._transaction_condition.notify_all()
+
+    def _invalidate_current_transaction_connection(
+        self,
+        *,
+        cause: BaseException,
+    ) -> None:
+        """Discard an unsettled owner connection after rollback failure."""
+
+        connection = cast(
+            "sqlite3.Connection | None",
+            getattr(self._thread_local, "conn", None),
+        )
+        closed = connection is None
+        if connection is not None:
+            closed = self._close_tracked_connection(connection)
+            if closed:
+                with self._connections_lock:
+                    self._all_connections.discard(connection)
+            with contextlib.suppress(AttributeError):
+                delattr(self._thread_local, "conn")
+            with contextlib.suppress(AttributeError):
+                delattr(self._thread_local, "conn_generation")
+
+        current_thread = threading.current_thread()
+        with self._transaction_condition:
+            if self._transaction_owner is current_thread:
+                self._transaction_owner = None
+            if not closed:
+                self._transaction_unusable_reason = (
+                    "rollback failed and the owning SQLite connection could "
+                    "not be closed"
+                )
+                cause.add_note(self._transaction_unusable_reason)
+            self._transaction_condition.notify_all()
+
+    @contextlib.contextmanager
+    def _admit_terminal_operation(self, operation: str) -> Iterator[bool]:
+        """Admit commit/rollback and report whether the caller owns a transaction."""
+
+        current_thread = threading.current_thread()
+        counted = False
+        with self._transaction_condition:
+            self._raise_if_transaction_unusable()
+            owner = self._transaction_owner
+            if owner is not None and owner is not current_thread:
+                error = OperationalError(
+                    f"SQLiteRunner {self.instance_id} transaction is owned by "
+                    f"thread {owner.name} ({owner.ident}); foreign thread cannot "
+                    f"{operation}"
+                )
+                error.retryable = False
+                raise error
+            owns_transaction = owner is current_thread
+            if owner is None:
+                self._transaction_admitted_operations += 1
+                counted = True
+
+        try:
+            yield owns_transaction
+        finally:
+            if counted:
+                with self._transaction_condition:
+                    self._transaction_admitted_operations -= 1
+                    if self._transaction_admitted_operations == 0:
+                        self._transaction_condition.notify_all()
+
     def run(
         self,
         sql: str,
@@ -424,7 +621,7 @@ class SQLiteRunner:
     ) -> Iterable[tuple[Any, ...]]:
         """Execute SQL and optionally return rows."""
         self._recover_after_fork_if_needed()
-        with self._operation_lock:
+        with self._admit_operation("run"), self._operation_lock:
             try:
                 conn = self.get_connection()
                 cursor = conn.execute(sql, params)
@@ -447,51 +644,69 @@ class SQLiteRunner:
     def begin_immediate(self) -> None:
         """Start an immediate transaction."""
         self._recover_after_fork_if_needed()
-        with self._operation_lock:
-            try:
-                conn = self.get_connection()
-                cursor = conn.execute("BEGIN IMMEDIATE")
-                cursor.close()
-            except sqlite3.OperationalError as e:
-                raise OperationalError(str(e)) from e
-            except sqlite3.IntegrityError as e:
-                raise IntegrityError(str(e)) from e
-            except sqlite3.DataError as e:
-                raise DataError(str(e)) from e
-            except sqlite3.DatabaseError as e:
-                raise DatabaseError(str(e)) from e
+        claimed = self._claim_transaction()
+        succeeded = False
+        try:
+            with self._operation_lock:
+                try:
+                    conn = self.get_connection()
+                    cursor = conn.execute("BEGIN IMMEDIATE")
+                    cursor.close()
+                    succeeded = True
+                except sqlite3.OperationalError as e:
+                    raise OperationalError(str(e)) from e
+                except sqlite3.IntegrityError as e:
+                    raise IntegrityError(str(e)) from e
+                except sqlite3.DataError as e:
+                    raise DataError(str(e)) from e
+                except sqlite3.DatabaseError as e:
+                    raise DatabaseError(str(e)) from e
+        finally:
+            if claimed and not succeeded:
+                self._settle_transaction(threading.current_thread())
 
     def commit(self) -> None:
         """Commit the current transaction."""
         self._recover_after_fork_if_needed()
-        with self._operation_lock:
-            try:
-                conn = self.get_connection()
-                conn.commit()
-            except sqlite3.OperationalError as e:
-                raise OperationalError(str(e)) from e
-            except sqlite3.IntegrityError as e:
-                raise IntegrityError(str(e)) from e
-            except sqlite3.DataError as e:
-                raise DataError(str(e)) from e
-            except sqlite3.DatabaseError as e:
-                raise DatabaseError(str(e)) from e
+        current_thread = threading.current_thread()
+        with self._admit_terminal_operation("commit") as owns_transaction:
+            with self._operation_lock:
+                try:
+                    conn = self.get_connection()
+                    conn.commit()
+                except sqlite3.OperationalError as e:
+                    raise OperationalError(str(e)) from e
+                except sqlite3.IntegrityError as e:
+                    raise IntegrityError(str(e)) from e
+                except sqlite3.DataError as e:
+                    raise DataError(str(e)) from e
+                except sqlite3.DatabaseError as e:
+                    raise DatabaseError(str(e)) from e
+            if owns_transaction:
+                self._settle_transaction(current_thread)
 
     def rollback(self) -> None:
         """Rollback the current transaction."""
         self._recover_after_fork_if_needed()
-        with self._operation_lock:
-            try:
-                conn = self.get_connection()
-                conn.rollback()
-            except sqlite3.OperationalError as e:
-                raise OperationalError(str(e)) from e
-            except sqlite3.IntegrityError as e:
-                raise IntegrityError(str(e)) from e
-            except sqlite3.DataError as e:
-                raise DataError(str(e)) from e
-            except sqlite3.DatabaseError as e:
-                raise DatabaseError(str(e)) from e
+        current_thread = threading.current_thread()
+        with self._admit_terminal_operation("rollback") as owns_transaction:
+            with self._operation_lock:
+                try:
+                    conn = self.get_connection()
+                    conn.rollback()
+                except sqlite3.DatabaseError as e:
+                    error = _translate_sqlite_error(e)
+                    if owns_transaction:
+                        self._invalidate_current_transaction_connection(cause=error)
+                    raise error from e
+                except BaseException as error:
+                    # An interrupted rollback cannot leave ownership published
+                    # against a connection whose transaction state is unknown.
+                    if owns_transaction:
+                        self._invalidate_current_transaction_connection(cause=error)
+                    raise
+            if owns_transaction:
+                self._settle_transaction(current_thread)
 
     def close(self) -> None:
         """Close all connections created by this runner and release resources."""
@@ -499,29 +714,42 @@ class SQLiteRunner:
         # closing them (cross-fork close is unsafe); this close then operates
         # on the child's own (empty) state under fresh locks.
         self._recover_after_fork_if_needed()
-        with self._operation_lock:
-            # Close ALL connections created by this runner instance across all threads.
-            # Keep failed closes tracked so cleanup does not drop the last reference.
-            with self._connections_lock:
-                self._connection_generation += 1
-                connections = list(self._all_connections)
+        current_thread = threading.current_thread()
+        with self._admit_operation("close", allow_unusable=True):
+            with self._operation_lock:
+                # Close ALL connections created by this runner instance across all threads.
+                # Keep failed closes tracked so cleanup does not drop the last reference.
+                with self._connections_lock:
+                    self._connection_generation += 1
+                    connections = list(self._all_connections)
 
-            closed_connections = []
-            for conn in connections:
-                if self._close_tracked_connection(conn):
-                    closed_connections.append(conn)
+                closed_connections = []
+                for conn in connections:
+                    if self._close_tracked_connection(conn):
+                        closed_connections.append(conn)
 
-            with self._connections_lock:
-                for conn in closed_connections:
-                    self._all_connections.discard(conn)
+                with self._connections_lock:
+                    for conn in closed_connections:
+                        self._all_connections.discard(conn)
 
-            # Also clean up the current thread's local storage for good hygiene
-            if hasattr(self._thread_local, "conn"):
-                with contextlib.suppress(Exception):
-                    delattr(self._thread_local, "conn")
-            if hasattr(self._thread_local, "conn_generation"):
-                with contextlib.suppress(Exception):
-                    delattr(self._thread_local, "conn_generation")
+                # Also clean up the current thread's local storage for good hygiene
+                if hasattr(self._thread_local, "conn"):
+                    with contextlib.suppress(Exception):
+                        delattr(self._thread_local, "conn")
+                if hasattr(self._thread_local, "conn_generation"):
+                    with contextlib.suppress(Exception):
+                        delattr(self._thread_local, "conn_generation")
+
+            with self._transaction_condition:
+                if self._transaction_owner is current_thread:
+                    self._transaction_owner = None
+                if len(closed_connections) == len(connections):
+                    self._transaction_unusable_reason = None
+                else:
+                    self._transaction_unusable_reason = (
+                        "close could not settle every tracked SQLite connection"
+                    )
+                self._transaction_condition.notify_all()
 
     def _close_tracked_connection(self, conn: sqlite3.Connection) -> bool:
         """Close one tracked connection, returning whether close succeeded."""

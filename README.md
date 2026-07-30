@@ -2316,6 +2316,16 @@ object yourself when you want several queues to share an injected backend.
 For `PostgresRunner`, call `runner.close()` or `runner.shutdown()` when you are
 done with the explicitly created runner so its connection pool is closed.
 
+A runner shared across threads must preserve transaction-owner progress. After
+`begin_immediate()` succeeds, another thread must not hold a runner resource
+needed by the owner to reach `commit()` or `rollback()` while waiting on
+storage state owned by that transaction. Implementations may satisfy this with
+a transaction-scoped lock, a retained connection checkout, or an equivalent
+backend mechanism. The required `SQLRunner` method set does not change.
+A deliberately shared `SQLiteRunner` serializes reads and writes behind its
+active transaction owner; foreign waits are bounded by the configured SQLite
+busy timeout.
+
 SQLite fork recovery assumes the child is single-threaded when a runner is
 first touched. If multiple child threads race that first touch, recovery can
 interleave. The bounded failure mode is an operation error or one extra

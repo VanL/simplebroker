@@ -22,8 +22,10 @@ import pytest
 
 from simplebroker import Queue, _broker_session
 from simplebroker._exceptions import OperationalError
+from simplebroker._runner import SQLiteRunner
 from simplebroker.db import (
     _LOCK_PROBE_QUANTUM,
+    BrokerCore,
     BrokerDB,
     _PoisonAwareRLock,
 )
@@ -34,7 +36,7 @@ from .helper_scripts.timing import scale_timeout_for_ci
 pytestmark = pytest.mark.sqlite_only
 
 _DIAGNOSTIC_PREFIX = "cross-thread finalization:"
-_TEST_CORES: list[BrokerDB] = []
+_TEST_CORES: list[BrokerCore] = []
 
 
 class _ForeignThrow(Exception):
@@ -66,13 +68,13 @@ def _dispose_test_runners() -> Iterator[None]:
     del _TEST_CORES[first_new_core:]
 
 
-def _prime_claim(core: BrokerDB) -> Generator[str | tuple[str, int], Any, Any]:
+def _prime_claim(core: BrokerCore) -> Generator[str | tuple[str, int], Any, Any]:
     core.write("jobs", "one")
     core.write("jobs", "two")
     return _open_claim(core)
 
 
-def _open_claim(core: BrokerDB) -> Generator[str | tuple[str, int], Any, Any]:
+def _open_claim(core: BrokerCore) -> Generator[str | tuple[str, int], Any, Any]:
     generator = core.claim_generator(
         "jobs",
         with_timestamps=False,
@@ -497,6 +499,36 @@ def test_preblocked_waiter_observes_poison_without_hanging(tmp_path: Path) -> No
     assert time.monotonic() - published_at <= deadline
     assert len(waiter_error) == 1
     _assert_poison_diagnostic(waiter_error[0])
+
+
+def test_shared_runner_sibling_times_out_after_foreign_generator_poison(
+    tmp_path: Path,
+) -> None:
+    config = {"BROKER_BUSY_TIMEOUT": 50}
+    runner = SQLiteRunner(str(tmp_path / "shared-runner-poison.db"), config=config)
+    core = BrokerCore(runner, config=config)
+    _TEST_CORES.append(core)
+    generator = _prime_claim(core)
+
+    _, close_error, caught = _call_in_thread(
+        generator.close,
+        name="foreign-generator-close",
+    )
+    assert close_error is None
+    assert core._poisoned is True
+    _assert_foreign_warning(caught, surface="at_least_once generator")
+
+    started_at = time.monotonic()
+    _, sibling_error, _ = _call_in_thread(
+        lambda: runner.run("SELECT 1", fetch=True),
+        name="shared-runner-sibling",
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert isinstance(sibling_error, OperationalError)
+    assert sibling_error.retryable is True
+    assert "timed out waiting for transaction admission" in str(sibling_error)
+    assert elapsed <= scale_timeout_for_ci(1.0)
 
 
 @pytest.mark.parametrize("transaction", [False, True])

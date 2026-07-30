@@ -11,6 +11,7 @@ import threading
 import time
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -26,7 +27,7 @@ from simplebroker._backends.sqlite.schema import (
 )
 from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._dump import LOAD_BATCH_SIZE, LoadResult, load_lines
-from simplebroker._exceptions import IntegrityError, TimestampError
+from simplebroker._exceptions import IntegrityError, OperationalError, TimestampError
 from simplebroker._runner import SetupPhase, SQLiteRunner
 from simplebroker._timestamp import MAX_LOGICAL_COUNTER
 from simplebroker.db import BrokerDB
@@ -842,6 +843,78 @@ SQLITE_RUNNER_TRANSITIONS = (
         "connections are distinct and both usable",
     ),
     _case(
+        "BEGIN_COMMIT",
+        "idle",
+        "owner begins and commits",
+        "idle",
+        "reserve owner until commit succeeds",
+        "transaction closes and admission reopens",
+    ),
+    _case(
+        "BEGIN_ROLLBACK",
+        "idle",
+        "owner begins and rolls back",
+        "idle",
+        "reserve owner until rollback succeeds",
+        "transaction closes and admission reopens",
+    ),
+    _case(
+        "BEGIN_FAILURE",
+        "idle",
+        "begin fails",
+        "idle",
+        "discard the new owner claim",
+        "later operations remain admissible",
+    ),
+    _case(
+        "COMMIT_FAILURE_ROLLBACK",
+        "owner transaction active",
+        "commit fails, then owner rolls back",
+        "idle",
+        "retain owner authority through rollback",
+        "original commit error propagates and rollback reopens admission",
+    ),
+    _case(
+        "TERMINAL_WITHOUT_TRANSACTION",
+        "idle",
+        "commit and rollback",
+        "idle",
+        "preserve SQLite terminal no-op behavior",
+        "no owner state is created or over-released",
+    ),
+    _case(
+        "FOREIGN_TERMINAL_REJECTED",
+        "owner transaction active",
+        "foreign thread commits and rolls back",
+        "owner transaction active",
+        "reject foreign settlement",
+        "both foreign calls fail and the owner can roll back",
+    ),
+    _case(
+        "FOREIGN_ADMISSION_TIMEOUT",
+        "owner transaction active",
+        "foreign thread runs SQL past the admission budget",
+        "owner transaction active",
+        "wait without operation lock, then fail retryably",
+        "owner remains able to roll back",
+    ),
+    _case(
+        "OWNER_CLOSE",
+        "owner transaction active",
+        "owner closes runner",
+        "idle with connections closed",
+        "settle the owner while closing tracked connections",
+        "old connection rejects use",
+    ),
+    _case(
+        "FORK_ACTIVE_RESET",
+        "parent transaction active",
+        "child touches runner after fork",
+        "child idle with fresh connection",
+        "discard inherited owner and synchronization state",
+        "child does not reuse or close the parent connection",
+    ),
+    _case(
         "SETUP_MARKER_SUCCESS",
         "phase incomplete",
         "setup connection phase",
@@ -872,6 +945,8 @@ def _assert_runner_fork_reset(runner: SQLiteRunner) -> None:
             state = (
                 connection.execute("SELECT 1").fetchone() == (1,)
                 and runner._pid == os.getpid()
+                and runner._transaction_owner is None
+                and runner._transaction_admitted_operations == 0
             )
             os.write(write_fd, b"1" if state else b"0")
         finally:
@@ -882,20 +957,137 @@ def _assert_runner_fork_reset(runner: SQLiteRunner) -> None:
     _assert_fork_probe(pid, read_fd, label="SQLite runner fork reset")
 
 
-@fires_transition_table("SM-SQLITE-RUNNER", SQLITE_RUNNER_TRANSITIONS)
-def test_sqlite_runner_fires_transition_table(
-    transition_case: TransitionCase[str],
-    tmp_path: Path,
+_SQLITE_TRANSACTION_TRANSITIONS = {
+    "BEGIN_COMMIT",
+    "BEGIN_ROLLBACK",
+    "BEGIN_FAILURE",
+    "COMMIT_FAILURE_ROLLBACK",
+    "TERMINAL_WITHOUT_TRANSACTION",
+    "FOREIGN_TERMINAL_REJECTED",
+    "FOREIGN_ADMISSION_TIMEOUT",
+    "OWNER_CLOSE",
+}
+_SQLITE_FOREIGN_TRANSACTION_TRANSITIONS = {
+    "FOREIGN_TERMINAL_REJECTED",
+    "FOREIGN_ADMISSION_TIMEOUT",
+    "OWNER_CLOSE",
+}
+
+
+def _fire_sqlite_foreign_transaction_transition(
+    payload: str,
+    runner: SQLiteRunner,
+    first: sqlite3.Connection,
+) -> None:
+    runner.begin_immediate()
+    if payload == "FOREIGN_TERMINAL_REJECTED":
+        errors: list[OperationalError] = []
+
+        def settle_from_foreign_thread() -> None:
+            for terminal in (runner.commit, runner.rollback):
+                try:
+                    terminal()
+                except OperationalError as exc:
+                    errors.append(exc)
+
+        thread = threading.Thread(target=settle_from_foreign_thread)
+        thread.start()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(errors) == 2
+        assert all(error.retryable is False for error in errors)
+        assert runner._transaction_owner is threading.current_thread()
+        runner.rollback()
+    elif payload == "FOREIGN_ADMISSION_TIMEOUT":
+        errors: list[OperationalError] = []
+
+        def run_from_foreign_thread() -> None:
+            try:
+                runner.run("SELECT 1", fetch=True)
+            except OperationalError as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=run_from_foreign_thread)
+        thread.start()
+        thread.join(2)
+        assert not thread.is_alive()
+        assert len(errors) == 1
+        assert errors[0].retryable is True
+        assert runner._transaction_owner is threading.current_thread()
+        runner.rollback()
+    else:
+        assert payload == "OWNER_CLOSE"
+        runner.close()
+        assert runner._transaction_owner is None
+        with pytest.raises(sqlite3.ProgrammingError):
+            first.execute("SELECT 1")
+
+
+def _fire_sqlite_transaction_transition(
+    payload: str,
+    runner: SQLiteRunner,
+    first: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _skip_unavailable_fork_transition(transition_case.payload)
-    runner = SQLiteRunner(str(tmp_path / f"{transition_case.payload}.db"))
-    first = runner.get_connection()
-    if transition_case.payload == "CREATE_REUSE":
+    if payload in _SQLITE_FOREIGN_TRANSACTION_TRANSITIONS:
+        _fire_sqlite_foreign_transaction_transition(payload, runner, first)
+    elif payload == "BEGIN_COMMIT":
+        runner.begin_immediate()
+        assert runner._transaction_owner is threading.current_thread()
+        runner.commit()
+        assert runner._transaction_owner is None
+        assert not first.in_transaction
+    elif payload == "BEGIN_ROLLBACK":
+        runner.begin_immediate()
+        assert runner._transaction_owner is threading.current_thread()
+        runner.rollback()
+        assert runner._transaction_owner is None
+        assert not first.in_transaction
+    elif payload == "BEGIN_FAILURE":
+        failed_connection = Mock()
+        failed_connection.execute.side_effect = sqlite3.OperationalError(
+            "begin failed"
+        )
+        with monkeypatch.context() as scoped:
+            scoped.setattr(runner, "get_connection", lambda: failed_connection)
+            with pytest.raises(OperationalError, match="begin failed"):
+                runner.begin_immediate()
+        assert runner._transaction_owner is None
+        assert list(runner.run("SELECT 1", fetch=True)) == [(1,)]
+    elif payload == "COMMIT_FAILURE_ROLLBACK":
+        runner.begin_immediate()
+        failed_connection = Mock()
+        failed_connection.commit.side_effect = sqlite3.OperationalError(
+            "commit failed"
+        )
+        with monkeypatch.context() as scoped:
+            scoped.setattr(runner, "get_connection", lambda: failed_connection)
+            with pytest.raises(OperationalError, match="commit failed"):
+                runner.commit()
+        assert runner._transaction_owner is threading.current_thread()
+        runner.rollback()
+        assert runner._transaction_owner is None
+    elif payload == "TERMINAL_WITHOUT_TRANSACTION":
+        runner.commit()
+        runner.rollback()
+        assert runner._transaction_owner is None
+        assert runner._transaction_admitted_operations == 0
+
+
+def _fire_sqlite_connection_transition(
+    payload: str,
+    runner: SQLiteRunner,
+    first: sqlite3.Connection,
+) -> None:
+    if payload == "CREATE_REUSE":
         assert runner.get_connection() is first
-    elif transition_case.payload == "FORK_RESET":
+    elif payload in {"FORK_RESET", "FORK_ACTIVE_RESET"}:
+        if payload == "FORK_ACTIVE_RESET":
+            runner.begin_immediate()
         _assert_runner_fork_reset(runner)
-    elif transition_case.payload == "PER_THREAD":
+        if payload == "FORK_ACTIVE_RESET":
+            runner.rollback()
+    elif payload == "PER_THREAD":
         worker_connections: list[sqlite3.Connection] = []
 
         def get_worker_connection() -> None:
@@ -913,6 +1105,39 @@ def test_sqlite_runner_fires_transition_table(
         for connection in (first, worker_connections[0]):
             with pytest.raises(sqlite3.ProgrammingError):
                 connection.execute("SELECT 1")
+    else:
+        runner.close()
+        if payload == "CLOSE":
+            with pytest.raises(sqlite3.ProgrammingError):
+                first.execute("SELECT 1")
+        else:
+            runner.close()
+
+
+@fires_transition_table("SM-SQLITE-RUNNER", SQLITE_RUNNER_TRANSITIONS)
+def test_sqlite_runner_fires_transition_table(
+    transition_case: TransitionCase[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _skip_unavailable_fork_transition(transition_case.payload)
+    config = (
+        {"BROKER_BUSY_TIMEOUT": 25}
+        if transition_case.payload == "FOREIGN_ADMISSION_TIMEOUT"
+        else None
+    )
+    runner = SQLiteRunner(
+        str(tmp_path / f"{transition_case.payload}.db"),
+        config=config,
+    )
+    first = runner.get_connection()
+    if transition_case.payload in _SQLITE_TRANSACTION_TRANSITIONS:
+        _fire_sqlite_transaction_transition(
+            transition_case.payload,
+            runner,
+            first,
+            monkeypatch,
+        )
     elif transition_case.payload == "SETUP_MARKER_SUCCESS":
         runner.setup(SetupPhase.CONNECTION)
         assert runner.is_setup_complete(SetupPhase.CONNECTION)
@@ -930,10 +1155,5 @@ def test_sqlite_runner_fires_transition_table(
             runner.setup(SetupPhase.CONNECTION)
         assert not runner.is_setup_complete(SetupPhase.CONNECTION)
     else:
-        runner.close()
-        if transition_case.payload == "CLOSE":
-            with pytest.raises(sqlite3.ProgrammingError):
-                first.execute("SELECT 1")
-        else:
-            runner.close()
+        _fire_sqlite_connection_transition(transition_case.payload, runner, first)
     runner.close()

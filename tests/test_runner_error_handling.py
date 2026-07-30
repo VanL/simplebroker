@@ -7,6 +7,8 @@ import os
 import sqlite3
 import tempfile
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, Mock, patch
@@ -296,6 +298,178 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 runner.close()
 
+    def test_shared_runner_transaction_owner_reaches_commit_before_busy_timeout(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A contender must not block the transaction owner's commit path."""
+
+        owner_began = threading.Event()
+        request_owner_commit = threading.Event()
+        owner_committed = threading.Event()
+        contender_at_connection = threading.Event()
+        release_contender = threading.Event()
+        start_barrier = threading.Barrier(3)
+        errors: list[Exception] = []
+        owner_commit_latency: list[float] = []
+
+        class CoordinatedSQLiteRunner(SQLiteRunner):
+            contender_ident: int | None = None
+
+            def get_connection(self) -> sqlite3.Connection:
+                connection = super().get_connection()
+                if (
+                    self.contender_ident == threading.get_ident()
+                    and owner_began.is_set()
+                    and not release_contender.is_set()
+                ):
+                    # On the broken implementation begin_immediate() reaches
+                    # this seam while holding _operation_lock. Releasing this
+                    # wait sends the real connection into SQLite's busy wait.
+                    contender_at_connection.set()
+                    if not release_contender.wait(
+                        timeout=scale_timeout_for_ci(3.0)
+                    ):
+                        raise TimeoutError("contender coordination timed out")
+                return connection
+
+        runner = CoordinatedSQLiteRunner(
+            str(tmp_path / "shared-runner-owner-progress.db"),
+            config={"BROKER_BUSY_TIMEOUT": 1500},
+        )
+
+        def capture_error(call: Callable[[], None]) -> None:
+            try:
+                call()
+            except (OperationalError, TimeoutError, threading.BrokenBarrierError) as exc:
+                errors.append(exc)
+
+        def owner_work() -> None:
+            runner.get_connection()
+            start_barrier.wait(timeout=scale_timeout_for_ci(3.0))
+            runner.begin_immediate()
+            owner_began.set()
+            if not request_owner_commit.wait(timeout=scale_timeout_for_ci(3.0)):
+                raise TimeoutError("owner commit was not requested")
+            started = time.monotonic()
+            runner.commit()
+            owner_commit_latency.append(time.monotonic() - started)
+            owner_committed.set()
+
+        def contender_work() -> None:
+            runner.get_connection()
+            runner.contender_ident = threading.get_ident()
+            start_barrier.wait(timeout=scale_timeout_for_ci(3.0))
+            if not owner_began.wait(timeout=scale_timeout_for_ci(3.0)):
+                raise TimeoutError("owner transaction did not begin")
+            runner.begin_immediate()
+            runner.commit()
+
+        owner_thread = threading.Thread(
+            target=lambda: capture_error(owner_work),
+            name="transaction-owner",
+        )
+        contender_thread = threading.Thread(
+            target=lambda: capture_error(contender_work),
+            name="transaction-contender",
+        )
+        owner_thread.start()
+        contender_thread.start()
+
+        try:
+            start_barrier.wait(timeout=scale_timeout_for_ci(3.0))
+            assert owner_began.wait(timeout=scale_timeout_for_ci(3.0))
+
+            # Broken path: observe that the contender reached get_connection()
+            # under _operation_lock, request the owner's commit, then let the
+            # contender enter real SQLite. Fixed path: admission keeps the
+            # contender above get_connection(), so the release is a no-op and
+            # the owner commits directly.
+            contender_at_connection.wait(timeout=scale_timeout_for_ci(0.25))
+            request_owner_commit.set()
+            release_contender.set()
+
+            owner_made_bounded_progress = owner_committed.wait(
+                timeout=scale_timeout_for_ci(0.5)
+            )
+        finally:
+            release_contender.set()
+            request_owner_commit.set()
+            owner_thread.join(timeout=scale_timeout_for_ci(4.0))
+            contender_thread.join(timeout=scale_timeout_for_ci(4.0))
+            runner.close()
+
+        assert not owner_thread.is_alive()
+        assert not contender_thread.is_alive()
+        assert owner_made_bounded_progress, (
+            "transaction owner could not commit before the contender's "
+            "SQLite busy timeout"
+        )
+        assert errors == []
+        assert len(owner_commit_latency) == 1
+        assert owner_commit_latency[0] < scale_timeout_for_ci(0.5)
+
+    def test_shared_runner_owner_rolls_back_before_three_contenders_enter(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        all_contenders_waiting = threading.Event()
+        contenders_finished = threading.Event()
+        results: list[list[tuple[int]]] = []
+        errors: list[OperationalError] = []
+
+        class ObservedSQLiteRunner(SQLiteRunner):
+            waiting_contenders = 0
+
+            def _wait_for_transaction_state(self, **kwargs: Any) -> None:
+                predicate = kwargs["predicate"]
+                if kwargs["operation"] == "run" and not predicate():
+                    self.waiting_contenders += 1
+                    if self.waiting_contenders == 3:
+                        all_contenders_waiting.set()
+                super()._wait_for_transaction_state(**kwargs)
+
+        runner = ObservedSQLiteRunner(
+            str(tmp_path / "shared-runner-three-contenders.db"),
+            config={"BROKER_BUSY_TIMEOUT": 1500},
+        )
+        runner.begin_immediate()
+
+        remaining = 3
+        remaining_lock = threading.Lock()
+
+        def contend() -> None:
+            nonlocal remaining
+            try:
+                results.append(list(runner.run("SELECT 1", fetch=True)))
+            except OperationalError as exc:
+                errors.append(exc)
+            finally:
+                with remaining_lock:
+                    remaining -= 1
+                    if remaining == 0:
+                        contenders_finished.set()
+
+        threads = [threading.Thread(target=contend) for _ in range(3)]
+        for thread in threads:
+            thread.start()
+
+        try:
+            assert all_contenders_waiting.wait(scale_timeout_for_ci(1.0))
+            assert not contenders_finished.is_set()
+            runner.rollback()
+            assert contenders_finished.wait(scale_timeout_for_ci(1.0))
+        finally:
+            if runner._transaction_owner is threading.current_thread():
+                runner.rollback()
+            for thread in threads:
+                thread.join(timeout=scale_timeout_for_ci(1.0))
+            runner.close()
+
+        assert all(not thread.is_alive() for thread in threads)
+        assert errors == []
+        assert results == [[(1,)], [(1,)], [(1,)]]
+
     def test_commit_errors_real(self):
         """Test real error handling in commit."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -337,8 +511,104 @@ class TestSQLiteRunnerErrorHandling:
                     )
                     with pytest.raises(OperationalError, match="disk full"):
                         runner.commit()
+                assert runner._transaction_owner is threading.current_thread()
+                runner.rollback()
+                assert runner._transaction_owner is None
             finally:
                 runner.close()
+
+    def test_rollback_failure_invalidates_transaction_connection(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A failed rollback must not leave an unsettled connection reusable."""
+
+        runner = SQLiteRunner(str(tmp_path / "rollback-failure.db"))
+        try:
+            runner.begin_immediate()
+            transaction_connection = runner.get_connection()
+
+            failed_connection = Mock()
+            failed_connection.rollback.side_effect = sqlite3.OperationalError(
+                "rollback I/O failure"
+            )
+            with (
+                patch.object(runner, "get_connection", return_value=failed_connection),
+                pytest.raises(OperationalError, match="rollback I/O failure"),
+            ):
+                runner.rollback()
+
+            with pytest.raises(sqlite3.ProgrammingError):
+                transaction_connection.execute("SELECT 1")
+
+            replacement = runner.get_connection()
+            assert replacement is not transaction_connection
+            assert list(runner.run("SELECT 1", fetch=True)) == [(1,)]
+        finally:
+            runner.close()
+
+    def test_rollback_close_failure_marks_runner_unusable_until_close(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """An unclosed failed transaction must fail fast until explicit cleanup."""
+
+        runner = SQLiteRunner(str(tmp_path / "rollback-close-failure.db"))
+        runner.begin_immediate()
+
+        failed_connection = Mock()
+        failed_connection.rollback.side_effect = sqlite3.OperationalError(
+            "rollback I/O failure"
+        )
+        with (
+            patch.object(runner, "get_connection", return_value=failed_connection),
+            patch.object(runner, "_close_tracked_connection", return_value=False),
+            pytest.raises(OperationalError, match="rollback I/O failure"),
+        ):
+            runner.rollback()
+
+        assert runner._transaction_owner is None
+        with pytest.raises(OperationalError, match="transaction state is unusable") as exc:
+            runner.run("SELECT 1", fetch=True)
+        assert exc.value.retryable is False
+
+        runner.close()
+        assert runner._transaction_unusable_reason is None
+
+    def test_foreign_close_cannot_overtake_transaction_owner(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A foreign close must not roll back the owner's live transaction."""
+
+        runner = SQLiteRunner(
+            str(tmp_path / "foreign-close.db"),
+            config={"BROKER_BUSY_TIMEOUT": 50},
+        )
+        runner.begin_immediate()
+        owner_connection = runner.get_connection()
+        errors: list[OperationalError] = []
+
+        def close_from_foreign_thread() -> None:
+            try:
+                runner.close()
+            except OperationalError as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=close_from_foreign_thread)
+        thread.start()
+        thread.join(timeout=scale_timeout_for_ci(1.0))
+
+        try:
+            assert not thread.is_alive()
+            assert len(errors) == 1
+            assert isinstance(errors[0], OperationalError)
+            assert errors[0].retryable is True
+            assert owner_connection.in_transaction
+            assert owner_connection.execute("SELECT 1").fetchone() == (1,)
+            runner.rollback()
+        finally:
+            runner.close()
 
     def test_rollback_releases_locks(self):
         """Test that rollback properly releases database locks."""

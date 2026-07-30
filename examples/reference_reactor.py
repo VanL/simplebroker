@@ -602,6 +602,27 @@ class Reactor(BaseReactor):
 
     def _record_pending_result(self, result: WorkerResult) -> PendingOutput | None:
         now = time.time_ns()
+        result_key = (result.source_queue, result.timestamp)
+
+        # Timestamp allocation is a queue operation. Keep it outside the
+        # transactional sidecar boundary, then re-check under the write
+        # transaction because another reactor may have inserted the durable
+        # result after this preflight read.
+        with self._metadata_queue.sidecar() as session:
+            preflight = list(
+                session.run(
+                    """
+                    SELECT 1
+                    FROM reactor_results
+                    WHERE source_queue = ? AND input_ts = ?
+                    """,
+                    result_key,
+                    fetch=True,
+                )
+            )
+        candidate_output_id = (
+            None if preflight else self._output_queue.generate_timestamp()
+        )
 
         with self._metadata_queue.sidecar(transaction=True) as session:
             existing = list(
@@ -611,7 +632,7 @@ class Reactor(BaseReactor):
                     FROM reactor_results
                     WHERE source_queue = ? AND input_ts = ?
                     """,
-                    (result.source_queue, result.timestamp),
+                    result_key,
                     fetch=True,
                 )
             )
@@ -627,11 +648,16 @@ class Reactor(BaseReactor):
                     payload=str(payload),
                 )
             else:
+                if candidate_output_id is None:
+                    raise RuntimeError(
+                        "reactor result disappeared after preflight; "
+                        "reactor_results rows are append-only"
+                    )
                 pending = PendingOutput(
                     source_queue=result.source_queue,
                     input_timestamp=result.timestamp,
                     output_queue=self.output_queue_name,
-                    output_message_id=self._output_queue.generate_timestamp(),
+                    output_message_id=candidate_output_id,
                     payload=self._result_payload(result),
                 )
                 session.run(
