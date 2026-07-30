@@ -449,7 +449,7 @@ CLI_WATCH_TRANSITIONS = (
         "watch two newline messages then interrupt",
         "stopped",
         "emit messages, warn once, and handle interrupt",
-        "clean zero exit with one warning",
+        "clean POSIX exit or terminal Windows status with one warning",
     ),
     _case(
         "CALLBACK_ERROR_CONTINUES",
@@ -550,7 +550,8 @@ def test_cli_watch_fires_transition_table(
                     stream="stderr",
                 )
                 return_code = process.wait_after_interrupt(timeout=5)
-                assert return_code == 0
+                expected_codes = {0, 1} if sys.platform == "win32" else {0}
+                assert return_code in expected_codes
                 stderr = str(process.stderr)
                 assert stderr.count("Message contains newline characters") == 1
             queue.close()

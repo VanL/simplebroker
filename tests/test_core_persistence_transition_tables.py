@@ -690,6 +690,11 @@ def _assert_timestamp_fork_reset(core: BrokerDB, first: int) -> None:
     _assert_fork_probe(pid, read_fd, label="timestamp fork reset")
 
 
+def _skip_unavailable_fork_transition(payload: str) -> None:
+    if payload == "FORK_RESET" and not hasattr(os, "fork"):
+        pytest.skip("real fork transition is unavailable on this platform")
+
+
 def _fire_timestamp_coordination_transition(
     payload: str,
     core: BrokerDB,
@@ -760,6 +765,7 @@ def test_timestamp_generator_fires_transition_table(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _skip_unavailable_fork_transition(transition_case.payload)
     core = BrokerDB(str(tmp_path / f"{transition_case.payload}.db"))
     try:
         payload = transition_case.payload
@@ -882,6 +888,7 @@ def test_sqlite_runner_fires_transition_table(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _skip_unavailable_fork_transition(transition_case.payload)
     runner = SQLiteRunner(str(tmp_path / f"{transition_case.payload}.db"))
     first = runner.get_connection()
     if transition_case.payload == "CREATE_REUSE":
