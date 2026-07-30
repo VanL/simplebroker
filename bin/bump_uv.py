@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 WORKFLOWS = (
+    "coverage-diagnostics.yml",
     "fuzz.yml",
     "release-gate.yml",
     "release-gate-pg.yml",

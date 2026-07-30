@@ -1,0 +1,99 @@
+name: Coverage diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Coverage suite to probe
+        required: true
+        default: linux
+        type: choice
+        options:
+        - linux
+        - postgres
+        - redis
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.12.0"
+
+jobs:
+  coverage-probe:
+    name: coverage-${{ inputs.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      UV_PYTHON: "3.12"
+      COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
+      COVERAGE_FILE: ${{ github.workspace }}/.coverage
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+    - name: Set up Python
+      id: sync-python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      with:
+        python-version: "3.12"
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+      with:
+        version: ${{ env.UV_VERSION }}
+        enable-cache: true
+        cache-dependency-glob: |
+          pyproject.toml
+          uv.lock
+          extensions/simplebroker_pg/pyproject.toml
+          extensions/simplebroker_pg/uv.lock
+          extensions/simplebroker_redis/pyproject.toml
+          extensions/simplebroker_redis/uv.lock
+
+    - name: Install dependencies
+      env:
+        COVERAGE_SUITE: ${{ inputs.suite }}
+      run: |
+        case "${COVERAGE_SUITE}" in
+          linux)
+            uv sync --frozen --extra dev --python "${{ steps.sync-python.outputs.python-path }}"
+            ;;
+          postgres)
+            uv sync --frozen --extra dev --extra pg --python "${{ steps.sync-python.outputs.python-path }}"
+            ;;
+          redis)
+            uv sync --frozen --extra dev --extra redis --python "${{ steps.sync-python.outputs.python-path }}"
+            ;;
+        esac
+
+    - name: Run selected coverage suite
+      env:
+        COVERAGE_SUITE: ${{ inputs.suite }}
+      run: |
+        set -euo pipefail
+        uv run --frozen --no-sync coverage erase
+        case "${COVERAGE_SUITE}" in
+          linux)
+            PYTEST_ADDOPTS="-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread" \
+              uv run --frozen --no-sync pytest --cov=simplebroker --cov-append --cov-report= --cov-fail-under=0 -m "not benchmark"
+            ;;
+          postgres)
+            PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast -vv --timeout=180 --timeout-method=thread \
+              --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov-append --cov-report= --cov-fail-under=0
+            ;;
+          redis)
+            PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast -vv --timeout=180 --timeout-method=thread \
+              --cov=simplebroker --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0
+            ;;
+        esac
+        uv run --frozen --no-sync python .github/scripts/combine_coverage.py
+        uv run --frozen --no-sync python -c "from pathlib import Path; Path('.coverage').replace('.coverage.${COVERAGE_SUITE}')"
+
+    - name: Upload diagnostic coverage data
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: coverage-diagnostics-${{ inputs.suite }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .coverage.${{ inputs.suite }}
+        include-hidden-files: true
+        if-no-files-found: error

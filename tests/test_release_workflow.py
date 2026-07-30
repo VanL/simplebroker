@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UV_WORKFLOWS = (
+    "coverage-diagnostics.yml",
     "fuzz.yml",
     "release-gate.yml",
     "release-gate-pg.yml",
@@ -13,6 +14,7 @@ UV_WORKFLOWS = (
     "test-redis-extension.yml",
 )
 TEST_WORKFLOWS = (
+    "coverage-diagnostics.yml",
     "test.yml",
     "test-pg-extension.yml",
     "test-redis-extension.yml",
@@ -207,6 +209,11 @@ def test_every_uv_workflow_uses_the_repository_pin() -> None:
 
 def test_test_workflows_sync_once_and_only_run_the_frozen_environment() -> None:
     expected_extras = {
+        "coverage-diagnostics.yml": (
+            "uv sync --frozen --extra dev",
+            "uv sync --frozen --extra dev --extra pg",
+            "uv sync --frozen --extra dev --extra redis",
+        ),
         "test.yml": (
             "uv sync --frozen --extra dev",
             "uv sync --frozen --extra dev --extra pg --extra redis",
@@ -566,6 +573,76 @@ def test_coverage_workflow_runs_four_independent_producers() -> None:
         assert "python .github/scripts/combine_coverage.py" in job
         assert "include-hidden-files: true" in job
         assert "if-no-files-found: error" in job
+
+
+def test_coverage_jobs_bound_hangs_and_report_the_active_test() -> None:
+    workflow_text = _workflow_text("test.yml")
+    linux_job = workflow_text.split("  coverage-linux:", 1)[1].split(
+        "  coverage-postgres:", 1
+    )[0]
+    postgres_job = workflow_text.split("  coverage-postgres:", 1)[1].split(
+        "  coverage-redis:", 1
+    )[0]
+    redis_job = workflow_text.split("  coverage-redis:", 1)[1].split(
+        "  coverage-report:", 1
+    )[0]
+    report_job = workflow_text.split("  coverage-report:", 1)[1]
+    windows_job = workflow_text.split("  test:", 1)[1].split("  lint:", 1)[0]
+
+    for job in (linux_job, postgres_job, redis_job):
+        assert "    timeout-minutes: 45" in job
+        assert "-vv" in job
+        assert "--timeout=180" in job
+        assert "--timeout-method=thread" in job
+
+    assert "    timeout-minutes: 45" in report_job
+
+    for step_name in (
+        "Run Windows tests with coverage",
+        "Run Windows phaselock fallback-path gate with coverage",
+    ):
+        step = windows_job.split(f"    - name: {step_name}", 1)[1].split(
+            "    - name:", 1
+        )[0]
+        assert "      timeout-minutes: 45" in step
+        assert "-vv" in step
+        assert "--timeout=180" in step
+        assert "--timeout-method=thread" in step
+
+
+def test_coverage_diagnostics_can_run_one_suite_from_gh() -> None:
+    workflow_text = _workflow_text("coverage-diagnostics.yml")
+    install_step = workflow_text.split("    - name: Install dependencies", 1)[1].split(
+        "    - name: Run selected coverage suite", 1
+    )[0]
+
+    assert workflow_text.startswith("name: Coverage diagnostics\n")
+    assert "  workflow_dispatch:" in workflow_text
+    assert "  push:" not in workflow_text
+    assert "  pull_request:" not in workflow_text
+    for suite in ("linux", "postgres", "redis"):
+        assert f"        - {suite}" in workflow_text
+        assert f"          {suite})" in workflow_text
+
+    expected_sync = {
+        "linux": "uv sync --frozen --extra dev --python",
+        "postgres": "uv sync --frozen --extra dev --extra pg --python",
+        "redis": "uv sync --frozen --extra dev --extra redis --python",
+    }
+    assert install_step.count("uv sync --frozen") == len(expected_sync)
+    for suite, command in expected_sync.items():
+        branch = install_step.split(f"          {suite})", 1)[1].split(
+            "            ;;", 1
+        )[0]
+        assert command in branch
+
+    assert "    timeout-minutes: 45" in workflow_text
+    assert "--timeout=180" in workflow_text
+    assert "--timeout-method=thread" in workflow_text
+    assert "-vv" in workflow_text
+    assert "COVERAGE_ITERATIONS" not in workflow_text
+    assert "python .github/scripts/combine_coverage.py" in workflow_text
+    assert "if-no-files-found: error" in workflow_text
 
 
 def test_codecov_keeps_secret_auth_and_reports_nonblocking_failures() -> None:

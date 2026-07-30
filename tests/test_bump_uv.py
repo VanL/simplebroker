@@ -11,6 +11,7 @@ import pytest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPOSITORY_ROOT / "bin" / "bump_uv.py"
 WORKFLOWS = (
+    "coverage-diagnostics.yml",
     "fuzz.yml",
     "release-gate.yml",
     "release-gate-pg.yml",
