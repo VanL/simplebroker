@@ -2,10 +2,9 @@
 
 Status: active — Phase 1 was promoted and verified at `249df9cb`. Phase 2 is
 split into Phase 2A (identity/allocation) and Phase 2B (ordered
-selection/checkpoints). The Phase 2A candidate implementation, cross-backend
-verification, outside navigation probe, and completed-work review are complete.
-Promotion and detached-commit verification remain pending. Phase 2B remains
-gated.
+selection/checkpoints). Phase 2A was promoted and verified at `090c689e`;
+its completed-work review and frozen post-promotion navigation probe pass.
+Phase 2B remains gated on its exact readiness amendment and reviews.
 
 Class: 5 — this program promotes normative product contracts from the root
 README into canonical `[SB-*]` specifications. It changes contract authority
@@ -1511,7 +1510,8 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Phase 2A ordinary-review second follow-up | Attached write-return and refresh behavior to the public broker-handle methods rather than to the handle object | First focused check found `F2a` in the `F2` wording fix | focused recheck pending |
 | 2026-07-30 | Phase 2A readiness closeout | Recorded focused recheck PASS and authorized implementation from the reviewed exact delta | All outside and ordinary readiness findings are dispositioned; no blocker remains | passed |
 | 2026-07-30 | Phase 2A completed-work correction | Restored the far-future high-water warning in `[SB-ID-4]` and README, corrected fresh `last_ts` to `0`, and added row-local shared evidence for every insertion branch | Completed-work review reproduced two P1 contract-loss/evidence gaps and one P2 stale example | focused follow-up passed |
-| 2026-07-30 | Phase 2A navigation result | Scored the frozen Grok post-candidate probe against the committed-baseline rubric | The candidate produced a confident ordered multi-owner locus with zero owner, boundary, join, or firing-evidence errors; the baseline could not produce a clause-level locus or resolve the owner shape | `authority_graph = advances`; `reasoning_surface = advances` for this navigation task, with medium confidence pending replication in later slices |
+| 2026-07-30 | Phase 2A navigation result | Scored the frozen Grok post-promotion probe at `090c689e` against the committed-baseline rubric | The promoted state produced a confident ordered multi-owner locus with zero owner, boundary, join, or firing-evidence errors; the baseline could not produce a clause-level locus or resolve the owner shape | `authority_graph = advances`; `reasoning_surface = advances` for this navigation task, with medium confidence pending replication in later slices |
+| 2026-07-30 | Phase 2A closeout | Recorded promotion `090c689e`, detached-worktree verification, completed-work PASS, and the repeated frozen post-promotion probe | Per-slice committed-state and learning-value gates | passed |
 
 ## Review Log
 
@@ -1530,7 +1530,7 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Independent ordinary exact-delta reviewer | Exact Phase 2A spec, owner split, derived views, implementation/test evidence, backend harnesses, rollback, and stop gates | PASS with four bounded corrections | Accepted all findings: stale status, internal class leakage, SQL-specific rollback wording, and a missing timestamp transition-table invocation. Focused verification pending. |
 | 2026-07-30 | Independent ordinary exact-delta reviewer, focused follow-up | Accepted `F1`…`F4` fixes only | FAIL on `F2a` | `F1`, `F3`, and `F4` verified. Corrected the new grammatical/public-owner ambiguity introduced by the first `F2` fix; focused recheck pending. |
 | 2026-07-30 | Independent ordinary exact-delta reviewer, focused recheck | `F2a` public-method wording only | PASS | Verified both sentences attach behavior to the correct public broker-handle methods and introduce no new defect. Phase 2A implementation is authorized. |
-| 2026-07-30 | Outside program-theory reviewer (Grok 4.5), frozen post-candidate navigation probe | Current allowed product docs and discoverable tests; plan, inventory, rationale, commits, and outside sources withheld | ZERO ERRORS; confident ordered multi-owner change locus | Recovered `[SB-ID-5]` as the canonical preservation owner, the README residual as the checkpoint owner, both boundary rows, derived views, and firing evidence. Compared with the blind baseline, this supports `reasoning_surface = advances` for the tested navigation task. Its two incidental observations are non-blocking: an additional CLI preservation test need not be exhaustive in the row-local map, and Phase 2B characterization remains intentionally ungated until its readiness amendment. |
+| 2026-07-30 | Outside program-theory reviewer (Grok 4.5), frozen post-promotion navigation probe | Exact commit `090c689e`; allowed product docs and discoverable tests only, with plan, inventory, rationale, other commits, and outside sources withheld | ZERO ERRORS; confident ordered multi-owner change locus | Recovered `[SB-ID-5]` as the canonical preservation owner, the README residual as the checkpoint owner, both boundary rows, derived views, and firing evidence. Compared with the blind baseline, this supports `reasoning_surface = advances` for the tested navigation task. Its incidental observations are non-blocking: an additional CLI preservation test need not be exhaustive in the row-local map, and Phase 2B characterization remains intentionally ungated until its readiness amendment. |
 | 2026-07-30 | Independent completed-work reviewer | Phase 2A candidate authority, safety retention, backend neutrality, clause firing, residual Phase 2B ownership, theory routing, and navigation | NEEDS REVISION: two P1, one P2 | Accepted all findings: restore the far-future insertion hazard, add shared evidence for every `[SB-ID-4]` branch, and correct fresh `Queue.last_ts` from `None` to `0`. |
 | 2026-07-30 | Independent completed-work reviewer, focused follow-up | The three accepted completed-work corrections and bounded plan amendment | PASS | Verified warning accuracy, row-local bindings, shared test coverage, README result, and plan alignment; no remaining finding. |
 
@@ -1539,7 +1539,7 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | Phase | Baseline | Promotion identifier | Verification | Completed-work review |
 |-------|----------|----------------------|--------------|-----------------------|
 | 1 — Broadcast | `b01bc3cb75800880408595a95c73041a2a417bd4` | `249df9cba691d4593136a1fd6b0476b882487055` | Detached commit: DOM-15, 99-test root Phase 1, PostgreSQL, Redis, doc-path, and diff checks pass | PASS after two structural-test corrections |
-| 2A — Identity/allocation | `249df9cba691d4593136a1fd6b0476b882487055` | pending | Candidate: DOM-15, 288-test root slice, PostgreSQL shared slice, Redis shared slice, doc-path, diff, Ruff, and frozen navigation gates pass; both extensions have one expected unsupported data-version skip | PASS after three accepted completed-work corrections |
+| 2A — Identity/allocation | `249df9cba691d4593136a1fd6b0476b882487055` | `090c689e7a951ef07cc481424fe8729fc6be7ed0` | Detached commit: DOM-15, 288-test root slice, PostgreSQL shared slice, Redis shared slice, doc-path, diff, Ruff, and frozen navigation gates pass; both extensions have one expected unsupported data-version skip | PASS after three accepted completed-work corrections |
 | 2B — Ordered selection/checkpoints | gated on Phase 2A | pending | pending | pending |
 | 3 — Persistence I/O | gated | pending | pending | pending |
 | 4 — Embedding | blocked by active runner plan | pending | pending | pending |
