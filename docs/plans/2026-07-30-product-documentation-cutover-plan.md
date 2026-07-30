@@ -1,9 +1,10 @@
 # Product Documentation Cutover Plan
 
-Status: active — Phase 1 was promoted and verified at `249df9cb`. Phase 2
-research and its committed-baseline navigation probe may proceed; Phase 2
-implementation remains gated until its exact delta and independent reviews
-are recorded.
+Status: active — Phase 1 was promoted and verified at `249df9cb`. The Phase 2
+baseline probe and implementation research are complete. Phase 2 is split into
+Phase 2A (identity/allocation) and Phase 2B (ordered selection/checkpoints).
+Phase 2A implementation is authorized by the completed outside program-theory
+and ordinary exact-delta reviews below. Phase 2B remains gated.
 
 Class: 5 — this program promotes normative product contracts from the root
 README into canonical `[SB-*]` specifications. It changes contract authority
@@ -209,10 +210,11 @@ Expected canonical families:
 | existing | CLI exit codes and I/O | `10-cli-contract.md` | `[SB-CLI-*]` |
 | existing | Delivery safety | `11-delivery-contract.md` | `[SB-DELIVERY-*]` |
 | 1 | Broadcast selection and atomicity | `12-broadcast-contract.md` | `[SB-BCAST-*]` |
-| 2 | Message identity and checkpoints | `13-message-identity-contract.md` | `[SB-ID-*]` |
-| 3 | Dump/load and claimed-row I/O | `14-persistence-io-contract.md` | `[SB-IO-*]` |
-| 4 | Embedding, targets, backends, and sidecars | `15-embedding-contract.md` | `[SB-EMBED-*]` |
-| 5 | Residual queue/broker operation catalog | `16-queue-operations-contract.md` | `[SB-OPS-*]` |
+| 2A | Message identity and allocation | `13-message-identity-contract.md` | `[SB-ID-*]` |
+| 2B | Ordered selection and checkpoint consequences | `14-ordered-selection-contract.md` | `[SB-SELECT-*]` |
+| 3 | Dump/load and claimed-row I/O | `15-persistence-io-contract.md` | `[SB-IO-*]` |
+| 4 | Embedding, targets, backends, and sidecars | `16-embedding-contract.md` | `[SB-EMBED-*]` |
+| 5 | Residual queue/broker operation catalog | `17-queue-operations-contract.md` | `[SB-OPS-*]` |
 
 The filenames and code families after Phase 1 are proposed allocations, not
 permission to create placeholder specs. A later phase may split a concern
@@ -735,78 +737,530 @@ different rule, or if promotion would require runtime code changes. Record the
 discrepancy as a deviation and decide whether the spec text or a separate
 behavior-change plan owns it.
 
-## Phase 2 — Message Identity and Checkpoints
+## Phase 2 — Message Identity, Ordered Selection, and Checkpoints
 
-Expected scope:
+Research found two contract families with one explicit handoff:
 
-- hybrid timestamp identity and exact-ID validation;
-- write-time ID returns versus broker-global `last_ts`;
-- stable IDs across move;
-- move-plus-checkpoint permanent-skip behavior;
-- generated/exactly inserted timestamp rules; and
-- strict `after`/`before` identity consequences, excluding delivery-state
-  ownership already in `[SB-DELIVERY-*]`.
+1. **Phase 2A — identity and allocation:** representation, allocation,
+   write-return identity, global high-water/cache meaning, exact-ID handling,
+   insertion consequences, and ID preservation across move.
+2. **Phase 2B — ordered selection and checkpoints:** strict `after` / `before`
+   selection, checkpoint progression, and the permanent-skip consequence when
+   an older preserved ID moves behind a checkpoint.
 
-### Phase 2 program-theory probe
+The bridge is directional. `[SB-ID-5]` owns “move preserves the ID.” Phase 2B
+will own “therefore a strict `after` checkpoint does not select the older ID.”
+Delivery and claim-state behavior remain with `[SB-DELIVERY-*]`; the residual
+base-operation concern owns move as an operation. This split avoids a
+mega-contract while keeping the causal chain navigable.
 
-This is a preliminary learning brief, not the exact Phase 2 delta and not
-implementation authorization.
+### Committed-baseline program-theory probe
 
-- **Observed baseline decision failure:** message identity is routed through
-  README Core Concepts, the kernel, characterization tests, the residual move
-  surface, and delivery-adjacent filters. The registry asserts one
-  `readme-only` family without a gated exact owner. A maintainer can recover the
-  facts but cannot machine-decide whether generation, move preservation, and
-  permanent checkpoint skipping should remain one contract or split, nor which
-  surface wins under conflict. Concrete failure modes include treating
-  permanent skip as delivery-only, treating broker-global `last_ts` as the
-  identity returned by a write, or editing residual move prose as if it owns
+Baseline: `249df9cba691d4593136a1fd6b0476b882487055`.
+
+The frozen prompt is:
+
+> For a hypothetical future behavior change to whether a move preserves
+> message identity and whether a checkpoint permanently skips the moved
+> message, identify every winning contract clause, registry row, and firing
+> test that would require review. Identify README/kernel summaries that must
+> not be treated as peer owners. Do not propose or make the behavior change.
+
+Allowed inputs are the committed baseline versions of `AGENTS.md`, `llms.txt`,
+`docs/README.md`, `docs/program-theory.md`,
+`docs/specs/product-section-registry.md`, `docs/specs/00-specs-index.md`,
+the root `README.md`, `docs/agent-kernel.md`, registered product specs, and
+tests discoverable from the named owners. The active cutover plan, invariant
+inventory proposed codes, Target End State allocation, and any proposed Phase
+2 delta or rationale are withheld. The agent may use repository search but
+must not use later commits or outside sources.
+
+Score the answer on four independently countable errors:
+
+- wrong normative owner or treating the kernel as peer authority;
+- omitted applicable owner or owner boundary;
+- unsupported join of identity, delivery, move, and checkpoint concerns; and
+- missing firing evidence for either ID preservation or checkpoint skipping.
+
+Success means zero errors and one confident ordered multi-owner change-locus
+checklist; it does not require one owner for both concerns. README use for
+orientation is allowed. The post-promotion probe must use this same prompt,
+allowed-input rule, and scoring rubric.
+
+**Observed baseline result (blind Grok 4.5 reconstruction):** the reviewer
+recovered the current behavior and product boundary, identified the
+`readme-only` message-identity row, treated the root README as normative and the
+kernel as derived, and found the relevant implementation/test families. It
+could not produce a clause-level change locus because none exists. It also
+found that move identity is split between the residual operation owner and the
+joined identity row, while durable checkpoint consequences sit beside delivery
+language. The reconstruction was complete but required many surfaces and left
+the reviewer unable to decide confidently whether one owner or an ordered
+multi-owner checklist was intended.
+
+**Inference:** the baseline authority graph is recoverable but not
+machine-decidable at clause level. The joined registry label hides a real owner
+split. This is not yet evidence that canonicalization improves reasoning; it
+is the pre-intervention measure.
+
+**Judgment:** split the concern. Identity/allocation is cohesive and can be
+verified across the released backends. Ordered selection/checkpoint behavior
+has a distinct rule set and should remain `readme-only` until Phase 2B receives
+its own exact delta.
+
+- **Observed decision failure:** a maintainer can recover the facts but cannot
+  name one sufficient clause/test checklist. Plausible wrong turns include
+  treating permanent skip as delivery-only, treating broker-global `last_ts`
+  as the ID returned by a write, or editing residual move prose as if it owns
   identity preservation.
-- **Proposed mechanism:** derive the contract from implementation and firing
-  tests, then either register one bounded identity family or split the concern
-  before promotion. Keep theory at the level of identity meaning and ownership;
-  route exact generation, preservation, and filtering rules to the winning
-  spec or specs.
-- **Learning question:** can the layered ownership model extract an entangled
-  cross-operation concern without inventing behavior, hiding distinct owners
-  in one family, or turning program theory into an operation index?
-- **Falsifier:** the cutover theory is weakened for this phase if a coherent
-  spec requires a new public promise, if generation and checkpoint filtering
-  prove to have different owners or verification harnesses but remain combined,
-  or if a zero-context reviewer must treat README or kernel text as a peer
-  normative owner, or reassemble the exact rule from multipolar prose, to
-  identify the winning clause, registry row, and tests. Using README as
-  orientation is not a failure.
-- **Agent-navigation probe:** ask a zero-context agent this locus-finding
-  question: “For a hypothetical future behavior change to whether a move
-  preserves message identity and whether a checkpoint permanently skips the
-  moved message, identify every winning contract clause, registry row, and
-  firing test that would require review. Identify README/kernel summaries that
-  must not be treated as peer owners. Do not propose or make the behavior
-  change.” The readiness amendment must freeze allowed inputs and objective
-  success criteria, then record the committed-baseline result. Completed-slice
-  evidence reruns the same probe and compares wrong-owner choices, omitted
-  owners, unsupported owner joins, and reliance on peer README/kernel
-  normativity.
-- **Current probe state:** design drafted; baseline result waits for the
-  committed Phase 1 promotion baseline and therefore provides no current
-  reasoning-performance evidence.
-- **Highest-risk failure:** README Core Concepts and the kernel Message IDs
-  section may remain the practical source of truth even after formal promotion,
-  or the registry may create an over-broad identity family to avoid a split.
-- **Countertheory:** the integrated README is better if the relational account
-  of generation, move, and checkpoint behavior loses coherence when divided
-  across specs, or if canonicalization adds navigation cost without changing
-  where maintainers actually reason about identity.
+- **Proposed mechanism:** introduce one canonical identity/allocation owner,
+  preserve a separate registered selection/checkpoint owner, and make the
+  bridge between them explicit in the registry, README, kernel, and theory
+  routes.
+- **Learning question:** does the explicit split yield a confident ordered
+  change locus without treating README or kernel prose as peer authority for
+  promoted identity clauses, while still recognizing README as the winning
+  owner for residual selection/checkpoint behavior until Phase 2B?
+- **Falsifier:** Phase 2A weakens the cutover theory if the post probe still
+  joins the two families, omits either owner, treats README/kernel summaries as
+  peer authority for identity, or cannot bind `[SB-ID-5]` to real
+  move-preservation tests without consulting multipolar normative prose.
+- **Highest-risk remaining failure:** the README checkpoint warning will
+  remain normative through Phase 2B. If the identity link and residual
+  checkpoint authority are not labeled precisely, the hybrid README/spec state
+  may be harder to navigate than the baseline.
+- **Countertheory:** the integrated README is better if separating the cause
+  (preserved ID) from the selection result (strict checkpoint invisibility)
+  makes maintainers miss the interaction, or if the added spec only duplicates
+  the README without changing the practical change locus.
 
-Primary evidence includes timestamp, exact-ID, write-return, move, and
-move-checkpoint suites across released backends.
+### Phase 2A — Message Identity and Allocation
 
-Before this phase starts, add its exact delta per the readiness gate. Do not
-infer a rule from README prose alone; verify it against implementation and
-tests. If message generation and checkpoint filtering prove to have different
-owners, split the registry concern before promotion rather than creating an
-over-broad spec.
+Promotion strategy: B — atomic. Baseline:
+`249df9cba691d4593136a1fd6b0476b882487055`.
+
+#### Exact files and derived-view delta
+
+Add:
+
+- `docs/specs/13-message-identity-contract.md`
+- `tests/test_message_identity_contract_sb_id.py`
+
+Update:
+
+- `docs/specs/product-section-registry.md`
+- `docs/specs/00-specs-index.md`
+- `README.md`
+- `docs/agent-kernel.md`
+- `llms.txt`
+- `docs/implementation/05-product-invariant-inventory.md`
+- `docs/implementation/07-complexity-and-state-machine-map.md`
+- `docs/program-theory.md`
+- `tests/test_program_theory_contract.py`
+- `tests/test_message_id_validation.py`
+- `tests/test_write_returns_id.py`
+- `tests/test_insert_messages.py`
+- `tests/test_move_by_id.py`
+
+Runtime implementation is evidence, not an intended edit. Stop and raise a
+behavior discrepancy if the exact delta cannot be proved without changing
+runtime code.
+
+#### Exact canonical spec
+
+Create `docs/specs/13-message-identity-contract.md` with this normative body:
+
+```markdown
+# Message Identity Contract
+
+Status: Active
+
+Owner: SimpleBroker message-identity and timestamp-allocation layer. Each
+backend owns the storage realization of ID allocation, high-water advancement,
+exact-ID insertion, and ID-preserving move.
+
+Boundary: public message-ID representation and range; broker-generated ID
+allocation; write-return identity; broker-global high-water and public cache
+semantics; exact-ID normalization and insertion consequences; and preservation
+of identity across move.
+
+Strict `after_timestamp` / `before_timestamp` selection, CLI timestamp-bound
+parsing, checkpoint progression, and the permanent-skip consequence of moving
+an older ID behind a checkpoint are excluded. They remain with the registered
+ordered-selection/checkpoint concern until Phase 2B. Claim state and delivery
+guarantees remain with `[SB-DELIVERY-*]`. Dump/load formats and restore policy
+remain with the persistence-I/O concern. Queue iteration and FIFO ordering are
+not defined by this contract.
+
+Required action: producers retain the ID returned by a successful write when
+they need that row's identity. Callers must not infer a write's ID from
+`last_ts`. Exact-ID callers use the accepted integer or exact-string forms.
+Consumers and backend implementers preserve an existing message ID when moving
+the row between queues.
+
+## Representation and identity [SB-ID-1]
+
+A stored message exposes one public message ID. JSON surfaces call this field
+`timestamp`. The ID is an integer in the signed storage range
+`0 <= message_id < 2**63`.
+
+Broker-generated IDs use a hybrid timestamp encoding: the physical component
+retains the magnitude of `time.time_ns()` with the low 12 bits cleared, and the
+low 12 bits hold the logical counter. The physical component is
+nanosecond-scaled with 4,096-nanosecond granularity; it is not a count of
+microseconds.
+
+Broker-generated IDs increase monotonically within one resolved broker target.
+The stored message relation enforces uniqueness for rows that coexist. Message
+bodies are payload, not identity, and may duplicate. SimpleBroker keeps no
+permanent tombstone or application deduplication ledger after physical removal.
+
+This clause does not promise that queue iteration is ordered by numeric message
+ID or that every stored ID was generated from the current wall clock. Exact-ID
+insertion may supply an earlier valid ID.
+
+## Allocation and write result [SB-ID-2]
+
+`generate_timestamp()` and its `get_ts()` alias allocate and persist a new
+broker-compatible ID without inserting a message row.
+
+Both `write()` on the broker handle returned by `open_broker()` and
+`Queue.write()` return the ID of the row that committed. If an attempted ID
+conflicts and the write retries, only the surviving committed row's ID is
+returned. If no row commits, no ID is returned. Concurrent writers may advance
+broker-global high-water after a write; that later advancement does not change
+the ID returned for the earlier row. CLI display of the returned ID remains
+governed by `[SB-CLI-*]`.
+
+This clause does not promise one universal cross-backend visibility point for
+high-water advancement and row insertion. Ordered visibility to checkpoint
+readers remains outside this contract.
+
+## Global high-water and caches [SB-ID-3]
+
+Persisted `last_ts` is a broker-target-global allocation high-water mark. It is
+not scoped to one queue, is not the ID of the caller's most recent write, and
+need not identify a current message row. It may reflect another queue, another
+writer, a generated ID with no row, or exact-ID insertion.
+
+`get_cached_last_timestamp()` exposes the broker handle's current generator
+view. `Queue.last_ts` is a per-`Queue` cache of the broker-global value and may
+be stale relative to other writers. `Queue.refresh_last_ts()` and
+`refresh_last_timestamp()` on the broker handle explicitly refresh from
+backend high-water state. `Queue.latest_pending_timestamp()` is a different
+queue-local query and is not an alias for `last_ts`.
+
+Callers needing one write's identity use the value returned by `write()`, not
+any high-water or cache surface.
+
+## Exact-ID normalization and insertion [SB-ID-4]
+
+Public exact-ID operations accept either:
+
+- an integer satisfying `0 <= value < 2**63`; or
+- a string which, after surrounding whitespace is stripped, contains exactly
+  19 Unicode decimal digits and parses to an integer in that range.
+
+`bool` and other unsupported types raise `TypeError`. Negative or out-of-range
+integers and malformed string IDs raise `ValueError`. Range-bound parsing is a
+different contract and is not widened by these exact-ID forms.
+
+`insert_messages(...)` snapshots and validates the complete input before
+mutation. IDs are normalized before duplicate detection. Duplicate normalized
+IDs within the batch raise `IntegrityError`. Invalid input or an ID already
+present in storage aborts the operation with no inserted rows and no
+high-water change. An empty input is a no-op.
+
+A successful exact-ID insertion operation atomically stores the
+caller-supplied numeric IDs and advances persisted high-water when necessary
+to at least one greater than the largest inserted ID; high-water never moves
+backward. An inserted ID must therefore leave room below `2**63` for that
+advancement. SQL backends realize this outcome with a transaction; Redis uses
+one atomic server-side operation. Dump/load record format, fresh-target policy,
+and migration behavior remain outside this contract.
+
+## Move preserves identity [SB-ID-5]
+
+A successful move changes the message's queue without allocating a replacement
+message ID. Single-message, materialized-batch, and generator move surfaces
+preserve each moved row's original public ID. When a move result includes a
+timestamp, it reports that preserved ID.
+
+This clause does not define claim eligibility, commit-before-yield behavior,
+rollback, queue ordering, or checkpoint visibility. Those concerns remain with
+their registered delivery, base-operation, and ordered-selection owners.
+```
+
+Append non-normative `Implementation mapping`, `Verification`, and
+`Related Plans` sections. The implementation map is:
+
+| Contract area | Owner |
+|---------------|-------|
+| Hybrid encoding, monotonic allocation, generator cache, persisted high-water interaction | `simplebroker/_timestamp.py::TimestampGenerator` |
+| Exact-ID normalization | `simplebroker/_message_id.py::normalize_message_id` |
+| Exact-ID batch validation and required high-water computation | `simplebroker/_message_insert.py` |
+| SQL/core write, insertion, cache access, and move orchestration | `simplebroker/db.py::BrokerCore` |
+| Public queue write, `last_ts`, refresh, insert, and move surfaces | `simplebroker/sbqueue.py::Queue` |
+| CLI exact-ID boundary and write-result rendering | `simplebroker/commands.py`; `simplebroker/cli.py` |
+| SQLite realization | `simplebroker/_backends/sqlite/plugin.py`; shared SQL namespace |
+| PostgreSQL realization | `extensions/simplebroker_pg/simplebroker_pg/plugin.py`; `extensions/simplebroker_pg/simplebroker_pg/_sql.py` |
+| Redis realization | `extensions/simplebroker_redis/simplebroker_redis/core.py`; `extensions/simplebroker_redis/simplebroker_redis/scripts.py` |
+| Backend connection protocol | `simplebroker/_backend_plugins.py` |
+
+Update `docs/implementation/07-complexity-and-state-machine-map.md` to add
+`[SB-ID-*]` to Governing Contracts and bind
+`SM-TIMESTAMP-GENERATOR` to `[SB-ID-1]` through `[SB-ID-3]`. Exact-ID insertion
+is mapped separately and is not folded into that generator state machine. Do
+not rewrite the historical complexity inventory.
+
+#### Exact registry split
+
+Replace the current joined message-identity row with:
+
+```markdown
+| Message identity, allocation, exact-ID handling, and preservation | `canonical-spec` | `13-message-identity-contract.md` `[SB-ID-1]`…`[SB-ID-5]` | README “Timestamps as Message IDs,” timestamp generation/insertion/cache sections, and move-preservation summaries; agent-kernel Message IDs | `tests/test_message_identity_contract_sb_id.py` (SB-ID-1…5 structural, authority, and row-local firing binds); shared timestamp, write-return, exact-ID, insertion, cache, and move-preservation suites across SQLite/PostgreSQL/Redis |
+| Ordered timestamp selection and checkpoint consequences | `readme-only` | — | README Command Options and Checkpoint-based Processing; agent-kernel move/checkpoint warning | Phase 2B exact delta required |
+```
+
+Change the base-residual explanation to exclude “message identity, allocation,
+exact-ID handling, and preservation” and “ordered timestamp selection and
+checkpoint consequences” as separate concerns.
+
+#### Exact README reduction
+
+Keep examples and operational warnings. Make these replacements:
+
+1. Under `### Timestamps as Message IDs`, replace the normative identity,
+   encoding, write-return, and exact-ID prose with:
+
+   ```markdown
+   Every stored message has a public integer message ID, exposed as `timestamp`
+   in JSON. Message bodies are payload and may duplicate. Producers should
+   retain the ID returned by `Queue.write()` or printed by `broker write -t` /
+   `--json`; `queue.last_ts` is a broker-global high-water cache, not the
+   identity of that write.
+
+   ID representation and range, allocation, write returns, high-water/cache
+   semantics, exact-ID normalization and insertion consequences, and
+   ID-preserving move are normative in the
+   [message identity contract](docs/specs/13-message-identity-contract.md)
+   `[SB-ID-1]` through `[SB-ID-5]`.
+
+   SimpleBroker retains no permanent tombstone or application deduplication
+   ledger after physical removal. Applications needing durable idempotency
+   persist the message ID themselves.
+
+   Exact-ID Python operations accept an integer ID or an exact 19-digit string
+   ID. Their normalization and failure rules are normative in `[SB-ID-4]`.
+   Python `after_timestamp` and `before_timestamp` arguments remain integer
+   bounds owned by the ordered-selection/checkpoint concern; the CLI's date
+   and unit-suffix parsing applies only to CLI range flags.
+   ```
+
+2. Keep each moved-message checkpoint warning normative. Change its opening to:
+
+   ```markdown
+   > **Moved messages and checkpoints.** `move` preserves the message's public
+   > ID (`[SB-ID-5]`). The checkpoint consequence below remains normative in
+   > this README until the ordered-selection/checkpoint concern is promoted in
+   > Phase 2B.
+   ```
+
+3. Under “Generating timestamps without writing,” replace the notes with:
+
+   ```markdown
+   `generate_timestamp()` and `get_ts()` allocate a broker-compatible ID and
+   advance broker-global high-water state without writing a message row. Exact
+   allocation behavior is normative in `[SB-ID-2]` and `[SB-ID-3]`.
+   ```
+
+4. Under “Inserting messages with exact IDs,” retain the examples and replace
+   detailed validation/high-water prose with:
+
+   ```markdown
+   `insert_messages(...)` stores caller-supplied IDs unchanged. Exact-ID
+   normalization, batch preflight, duplicate handling, and high-water
+   consequences are normative in `[SB-ID-4]`. Dump/load line format,
+   fresh-target policy, and cross-backend restore behavior remain with the
+   persistence-I/O concern.
+   ```
+
+5. Rename “Tracking the last generated timestamp” to “Tracking broker-global
+   timestamp high-water,” retain the refresh example, and replace its opening
+   prose with:
+
+   ```markdown
+   `Queue.last_ts` is a per-handle cache of broker-global allocation high-water
+   state. It is not queue-local and need not identify a current message row.
+   `Queue.refresh_last_ts()` explicitly refreshes it. Exact cache and
+   high-water semantics are normative in `[SB-ID-3]`.
+   ```
+
+#### Kernel, indexes, inventory, and theory routing
+
+Replace the kernel `## Message IDs` section with:
+
+```markdown
+## Message IDs
+
+Normative identity, allocation, exact-ID, and preservation contract:
+`docs/specs/13-message-identity-contract.md`
+[SB-ID-1]–[SB-ID-5].
+
+- Public id = signed-range hybrid timestamp integer (JSON field `timestamp`).
+- `Queue.write` returns the committed row's id. On the CLI, request it with
+  `--json` or `-t` / `--timestamps`; plain write is quiet on success.
+- `queue.last_ts` is a per-handle cache of a broker-global high-water mark, not
+  “my last message.”
+- `move` preserves ids.
+
+Strict `after` / `before` selection and the permanent-skip consequence for a
+moved older id remain normative in the README until the registered
+ordered-selection/checkpoint concern is promoted in Phase 2B. Until then, do
+not checkpoint-filter a queue that receives moves unless periodic rescanning
+is intentional.
+```
+
+Add the spec and `[SB-ID-1]` through `[SB-ID-5]` to `llms.txt` and
+`docs/specs/00-specs-index.md`. Split the invariant-inventory row into the same
+canonical Phase 2A and residual Phase 2B families.
+
+In `[THEORY-3]`, preserve the conceptual meanings and owners:
+
+- route `Message identity` to registry concern `Message identity, allocation,
+  exact-ID handling, and preservation` and `[SB-ID-*]`;
+- keep `Move` primarily routed to the base-operation residual, then add
+  `[SB-ID-5]` for identity preservation and the ordered-selection/checkpoint
+  registry row for the residual checkpoint consequence; and
+- do not change `[THEORY-4]` or add an operation-level concept.
+
+Extend `tests/test_program_theory_contract.py` so its specialized-route table
+proves the exact registry label, canonical state, spec path, and `[SB-ID-*]`
+family while preserving Move's primary base-operation owner.
+
+#### Clause-to-test matrix
+
+`tests/test_message_identity_contract_sb_id.py` must bind each clause to its
+own verification row, AST-check every named test function including
+class-qualified methods, and check the registry, README, kernel, specs index,
+`llms.txt`, invariant inventory, complexity/state-machine map, and
+program-theory routes.
+
+| Clause | Firing evidence |
+|--------|-----------------|
+| `[SB-ID-1]` | Structural gate; `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`; `tests/test_timestamp_edge_cases.py::TestTimestampEdgeCases::test_timestamp_magnitude_preservation`, `test_clock_regression_keeps_generator_monotonic`, `test_shared_timestamp_generator_serializes_threads`; `tests/test_timestamp_helpers.py::TestTimestampHelpers::test_db_generate_timestamp_monotonic`; `tests/test_write_returns_id.py::test_broker_write_ids_strictly_increase`; exact-ID range cases |
+| `[SB-ID-2]` | Structural gate; `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`; timestamp generation tests; `tests/test_write_returns_id.py::test_broker_write_returns_committed_id`, `test_queue_write_returns_committed_id`, `test_retry_path_returns_surviving_row_id`, `test_retry_exhaustion_raises_without_returning`, `test_concurrent_writers_get_their_own_ids`, and new `test_write_return_id_remains_row_identity_after_global_last_ts_advances` |
+| `[SB-ID-3]` | Structural gate; `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`; `tests/test_queue_api_comprehensive.py::TestQueueLastTimestampCaching::test_last_ts_updates_after_generate_and_write`, `test_refresh_last_ts_detects_external_writes`; insert high-water cases; `tests/test_latest_pending_timestamp.py`; the new write/high-water distinction test |
+| `[SB-ID-4]` | Structural gate; exact-ID normalization cases, including surrounding-whitespace and Unicode-decimal characterization; insert preserve/high-water cases; duplicate rollback cases; new `test_exact_insert_preflights_mixed_valid_invalid_batch_without_mutation` |
+| `[SB-ID-5]` | Structural gate; `tests/test_move_by_id.py::test_move_by_id_preserves_timestamp`; new `test_move_many_preserves_original_message_ids`; new parameterized `test_move_generator_preserves_original_message_ids_in_each_delivery_mode`; `tests/test_cli_move.py::TestEdgeCases::test_move_preserves_timestamps` |
+
+The four new shared behavior functions run unchanged on SQLite, PostgreSQL,
+and Redis. The generator preservation test fires once for `exactly_once` and
+once for `at_least_once`. Do not add an early-close case; that is delivery
+semantics, not identity.
+
+#### Verification
+
+```bash
+python3 bin/check-dom15-fixtures
+
+uv run pytest -q -n 0 \
+  tests/test_message_identity_contract_sb_id.py \
+  tests/test_core_persistence_transition_tables.py \
+  tests/test_timestamp_helpers.py \
+  tests/test_timestamp_edge_cases.py \
+  tests/test_write_returns_id.py \
+  tests/test_message_id_validation.py \
+  tests/test_insert_messages.py \
+  tests/test_queue_api_comprehensive.py \
+  tests/test_latest_pending_timestamp.py \
+  tests/test_move_by_id.py \
+  tests/test_cli_move.py \
+  tests/test_agent_kernel_contract.py \
+  tests/test_program_theory_contract.py
+
+uv run ./bin/pytest-pg -q -n 0 \
+  tests/test_message_identity_contract_sb_id.py \
+  tests/test_timestamp_helpers.py \
+  tests/test_write_returns_id.py \
+  tests/test_message_id_validation.py \
+  tests/test_insert_messages.py \
+  tests/test_queue_api_comprehensive.py \
+  tests/test_latest_pending_timestamp.py \
+  tests/test_move_by_id.py
+
+uv run ./bin/pytest-redis -q -n 0 \
+  tests/test_message_identity_contract_sb_id.py \
+  tests/test_timestamp_helpers.py \
+  tests/test_write_returns_id.py \
+  tests/test_message_id_validation.py \
+  tests/test_insert_messages.py \
+  tests/test_queue_api_comprehensive.py \
+  tests/test_latest_pending_timestamp.py \
+  tests/test_move_by_id.py
+
+bin/check-doc-paths
+git diff --check
+```
+
+Stop if the physical-bit wording cannot be reconciled with
+`TimestampGenerator._encode_hybrid_timestamp`; if any released backend fails
+shared high-water, batch-preflight, or multi-shape move-preservation tests; if
+implementation requires numeric-ID queue ordering; or if exact insertion must
+be described as dump/load-only. These are behavior discrepancies, not
+documentation-extraction details.
+
+Rollback before published adoption is one complete commit revert: spec,
+registry split, README reductions, kernel, indexes, inventory, theory routes,
+implementation pointers, structural gate, and shared tests together. Do not
+revert only the registry row or restore removed README prose while retaining a
+canonical spec. After published `[SB-ID-*]` adoption, correct forward in the
+canonical spec.
+
+#### Phase 2A review state
+
+- Outside Pass 1, independent reconstruction: complete against `249df9cb`.
+- Outside Pass 2, intervention test: `INTERVENTION PASS`. The reviewer found
+  that the split changes the missing-clause/joined-owner mechanism rather than
+  only rearranging prose. No P1/P2 findings.
+- Outside Pass 3, adversarial comparison: `PASS 3 PASS`.
+  `authority_graph = advances` (medium-high confidence);
+  `reasoning_surface = untested` (high confidence). The integrated-README
+  countertheory remains live until the post-promotion probe.
+- Ordinary exact-delta review: `PASS` after four accepted bounded corrections
+  and a focused correction/recheck loop.
+- Implementation authorization: granted. There is no unresolved `distorts`
+  verdict or ordinary-review blocker.
+
+Pass 2 dispositions:
+
+| Finding | Disposition |
+|---------|-------------|
+| `I2-1` Target End State still joined identity/checkpoints | Accepted: split the north-star row into 2A `[SB-ID-*]` and 2B `[SB-SELECT-*]`, shifting later proposed allocations. |
+| `I2-2` normative clause named internal `TimestampGenerator` | Accepted: keep the encoding behavior normative and move the symbol to implementation mapping only. |
+| `I2-3` “single checklist” could imply single owner | Accepted: success now requires one ordered multi-owner checklist. |
+| `A3-1` learning question could reject correct residual README authority | Accepted: limit the peer-authority prohibition to promoted identity clauses and state that README remains the winning Phase 2B owner. |
+| `F1` plan index still said outside review pending | Accepted: report outside review complete and ordinary review corrections accepted. |
+| `F2` normative clauses named internal `BrokerCore` | Accepted: describe the public broker handle and public methods; keep the concrete class in implementation mapping. |
+| `F3` transaction/rollback wording erased the Redis atomic-Lua distinction | Accepted: specify no-mutation and atomic-success outcomes, then state the distinct SQL and Redis realizations. |
+| `F4` timestamp state-machine mapping lacked its executable transition-table gate | Accepted with a boundary correction: bind `SM-TIMESTAMP-GENERATOR` to `[SB-ID-1]` through `[SB-ID-3]`, not exact insertion in `[SB-ID-4]`; add its firing test to those rows and the root command. |
+| `F2a` first `F2` fix made the broker handle, rather than its `write()` method, the grammatical return owner and left refresh bare | Accepted: name `write()` on both public handles and attach `refresh_last_timestamp()` explicitly to the broker handle. |
+
+Product-owner disposition: accept both scoped verdicts. Phase 2A may be cited
+as evidence that the authority model handles a split concern. It must not be
+cited as evidence that the reasoning surface improved unless the frozen
+post-promotion probe supports that claim. If post evidence meets conditions
+`C2` or `C3` from the countertheory (multi-owner errors do not improve, or
+agents treat the hybrid residual as non-normative), reconsider the slice before
+Phase 2B rather than assuming the next promotion will cure it.
+
+### Phase 2B — Ordered Selection and Checkpoint Consequences
+
+Phase 2B remains gated. Its expected scope is strict `after` / `before`
+selection across Python and CLI forms, checkpoint progression, move-plus-
+checkpoint permanent skip, and the boundary with delivery state. It cannot
+start until Phase 2A is promoted, verified, independently reviewed, and
+committed, then receives its own exact readiness amendment from that baseline.
 
 ## Phase 3 — Persistence I/O and Claimed Rows
 
@@ -1037,6 +1491,12 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Program / Phase 2 readiness | Added a three-pass outside program-theory evaluation gate and a preliminary identity stress-test brief | Phase 1 external review found that broadcast proves the authority machinery but not the harder performance or entanglement theory | needs revision |
 | 2026-07-30 | Program / Phase 2 readiness | Split authority and reasoning verdicts; separated probe design, baseline, and post results; tightened blind inputs, identity failure framing, falsifier, locus probe, evidence authority, and proportionality | Outside amendment trial showed that the first gate could still reward authority success as reasoning success | focused follow-up passed |
 | 2026-07-30 | Phase 1 closeout | Recorded promotion `249df9cb` and detached-worktree verification; established the same commit as the Phase 2 baseline | Per-phase closeout and committed-baseline gate | passed |
+| 2026-07-30 | Phase 2A readiness | Recorded the blind baseline probe; split identity/allocation from ordered selection/checkpoints; added the exact `[SB-ID-1]`…`[SB-ID-5]` delta, derived-view reductions, implementation map, firing matrix, verification, and rollback | Independent reconstruction and two implementation/test evidence sweeps found distinct owners joined by one explicit causal handoff | outside intervention and ordinary delta reviews pending |
+| 2026-07-30 | Phase 2A outside intervention follow-up | Split the Target End State, removed an internal class name from normative text, and clarified ordered multi-owner probe success | Accepted all three Pass 2 P3 findings | Pass 3 pending |
+| 2026-07-30 | Phase 2A adversarial follow-up | Scoped the learning question to promoted identity authority and recorded the owner disposition for both outside verdicts | Accepted Pass 3 P3 finding `A3-1`; retained the live integrated-README falsifiers | ordinary exact-delta review pending |
+| 2026-07-30 | Phase 2A ordinary-review follow-up | Corrected index status; removed `BrokerCore` from normative prose; expressed exact insertion as backend-neutral atomic outcomes; added the timestamp transition-table gate and narrowed its clause binding | Accepted `F1`…`F4`; preserved the SQL-transaction/Redis-Lua distinction | focused follow-up pending |
+| 2026-07-30 | Phase 2A ordinary-review second follow-up | Attached write-return and refresh behavior to the public broker-handle methods rather than to the handle object | First focused check found `F2a` in the `F2` wording fix | focused recheck pending |
+| 2026-07-30 | Phase 2A readiness closeout | Recorded focused recheck PASS and authorized implementation from the reviewed exact delta | All outside and ordinary readiness findings are dispositioned; no blocker remains | passed |
 
 ## Review Log
 
@@ -1049,13 +1509,20 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Outside program-theory reviewer (Grok 4.5) | Phase 1 as an intervention in the ownership model, including countertheory and falsifiers | ADVANCES, medium-high confidence | Accepted the distinction: Phase 1 advances the authority theory but is only a low-information probe of agent/maintainer performance. Added a learning-value gate and made Phase 2 the first entanglement stress test. |
 | 2026-07-30 | Outside program-theory reviewer (Grok 4.5) | Three-pass evaluation amendment and preliminary Phase 2 identity probe | NEEDS REVISION | Accepted nine findings, led by conflated authority/reasoning verdicts, missing baseline/post probe separation, residual Pass 1 anchoring, and imprecise identity failure/falsifier language. |
 | 2026-07-30 | Outside program-theory reviewer (Grok 4.5), focused follow-up | Nine amendment findings and contradiction check | PASS | Verified all findings resolved with no blocking contradiction. Phase 2 remains correctly blocked until the committed Phase 1 baseline, exact delta, baseline navigation result, full outside evaluation, and ordinary delta review exist. |
+| 2026-07-30 | Outside program-theory reviewer (Grok 4.5), blind Pass 1 | Committed Phase 2 baseline with proposed delta, rationale, Target End State allocation, and proposed codes withheld | RECONSTRUCTION COMPLETE; owner shape undetermined | Recovered the behavior and product boundary but found no single clause-level change locus. Its join-versus-split uncertainty was resolved by implementation and firing-test evidence in favor of two registered families with an explicit handoff. No reasoning-surface verdict is inferred before Passes 2 and 3. |
+| 2026-07-30 | Outside program-theory reviewer (Grok 4.5), Pass 2 | Exact Phase 2A readiness amendment tested against the frozen blind account | INTERVENTION PASS | Found a real authority-graph intervention: numbered identity clauses, a registry split, directional bridge, and firing binds address the missing locus and hidden join. Accepted all three P3 cleanup findings; no P1/P2 issue or behavior overclaim found in its spot-check. |
+| 2026-07-30 | Outside program-theory reviewer (Grok 4.5), Pass 3 | Exact Phase 2A amendment and rationale after accepted Pass 2 fixes, adversarially compared with an integrated-README alternative | PASS 3 PASS; `authority_graph = advances` (medium-high), `reasoning_surface = untested` (high) | Accepted `A3-1` wording polish. Product owner accepts both verdicts and preserves the post-probe gate; Phase 2A is not reasoning-performance evidence yet. |
+| 2026-07-30 | Independent ordinary exact-delta reviewer | Exact Phase 2A spec, owner split, derived views, implementation/test evidence, backend harnesses, rollback, and stop gates | PASS with four bounded corrections | Accepted all findings: stale status, internal class leakage, SQL-specific rollback wording, and a missing timestamp transition-table invocation. Focused verification pending. |
+| 2026-07-30 | Independent ordinary exact-delta reviewer, focused follow-up | Accepted `F1`…`F4` fixes only | FAIL on `F2a` | `F1`, `F3`, and `F4` verified. Corrected the new grammatical/public-owner ambiguity introduced by the first `F2` fix; focused recheck pending. |
+| 2026-07-30 | Independent ordinary exact-delta reviewer, focused recheck | `F2a` public-method wording only | PASS | Verified both sentences attach behavior to the correct public broker-handle methods and introduce no new defect. Phase 2A implementation is authorized. |
 
 ## Execution Log
 
 | Phase | Baseline | Promotion identifier | Verification | Completed-work review |
 |-------|----------|----------------------|--------------|-----------------------|
 | 1 — Broadcast | `b01bc3cb75800880408595a95c73041a2a417bd4` | `249df9cba691d4593136a1fd6b0476b882487055` | Detached commit: DOM-15, 99-test root Phase 1, PostgreSQL, Redis, doc-path, and diff checks pass | PASS after two structural-test corrections |
-| 2 — Identity | `249df9cba691d4593136a1fd6b0476b882487055` | pending | baseline navigation probe pending | pending |
+| 2A — Identity/allocation | `249df9cba691d4593136a1fd6b0476b882487055` | pending | blind baseline reconstruction complete: behavior recovered, clause-level change locus absent, owner split unresolved until evidence sweep | pending |
+| 2B — Ordered selection/checkpoints | gated on Phase 2A | pending | pending | pending |
 | 3 — Persistence I/O | gated | pending | pending | pending |
 | 4 — Embedding | blocked by active runner plan | pending | pending | pending |
 | 5 — Residual operations | gated | pending | pending | pending |
