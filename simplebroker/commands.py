@@ -37,7 +37,7 @@ from ._timestamp import TimestampGenerator
 from .db import BrokerDB, DBConnection
 from .helpers import _is_valid_sqlite_db
 from .metadata import QueueRenameResult, QueueStats
-from .sbqueue import Queue
+from .sbqueue import Queue, _close_iterator
 from .watcher import QueueMoveWatcher, QueueWatcher, StopWatching
 
 DBTarget = str | BrokerTarget
@@ -102,13 +102,6 @@ def _print_stdout(value: str) -> None:
             raise
         _redirect_stdout_to_devnull()
         raise _StdoutClosed from None
-
-
-def _close_iterator(iterator: object) -> None:
-    """Close a generator-like iterator when it owns transactional cleanup."""
-    close = getattr(iterator, "close", None)
-    if callable(close):
-        close()
 
 
 def _status(message: str, *, quiet: bool = False) -> None:
@@ -418,7 +411,7 @@ FetchOneFn = Callable[..., str | tuple[str, int] | None]
 FetchGeneratorFn = Callable[..., Iterator[str | tuple[str, int]]]
 
 
-def _process_queue_fetch(
+def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] exception
     *,
     fetch_one: FetchOneFn,
     fetch_generator: FetchGeneratorFn,
@@ -893,6 +886,101 @@ def cmd_rename(
     return EXIT_SUCCESS if result.renamed else EXIT_QUEUE_EMPTY
 
 
+def _print_moved_message(
+    result: tuple[str, int] | None,
+    *,
+    json_output: bool,
+    show_timestamps: bool,
+) -> int:
+    """Print one moved message and return its command exit code."""
+    if result is None:
+        return EXIT_QUEUE_EMPTY
+    message, timestamp = result
+    _output_message(message, timestamp, json_output, show_timestamps, False)
+    return EXIT_SUCCESS
+
+
+def _move_all_messages(
+    queue: Queue,
+    destination: str,
+    *,
+    json_output: bool,
+    show_timestamps: bool,
+    after_timestamp: int | None,
+    before_timestamp: int | None,
+) -> int:
+    """Move and print every selected message under the command error policy."""
+    try:
+        results = queue.move_many(
+            destination,
+            limit=_MOVE_ALL_LIMIT,
+            with_timestamps=True,
+            delivery_guarantee="exactly_once",
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
+        )
+
+        warned_newlines = False
+        for result in results:
+            message, timestamp = cast(tuple[str, int], result)
+            warned_newlines = _output_message(
+                message,
+                timestamp,
+                json_output,
+                show_timestamps,
+                warned_newlines,
+            )
+
+        if len(results) == _MOVE_ALL_LIMIT:
+            print(
+                "broker move --all: capped at "
+                f"{_MOVE_ALL_LIMIT} messages; messages may remain "
+                "in the source queue",
+                file=sys.stderr,
+            )
+        return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        _emit_error(error, code="ERROR", json_output=json_output)
+        return EXIT_ERROR
+
+
+def _move_next_message(
+    queue: Queue,
+    destination: str,
+    *,
+    json_output: bool,
+    show_timestamps: bool,
+    after_timestamp: int | None,
+    before_timestamp: int | None,
+) -> int:
+    """Move and print the next selected message."""
+    if after_timestamp is None and before_timestamp is None:
+        result = queue.move_one(destination, with_timestamps=True)
+        return _print_moved_message(
+            cast(tuple[str, int] | None, result),
+            json_output=json_output,
+            show_timestamps=show_timestamps,
+        )
+
+    generator = queue.move_generator(
+        destination,
+        with_timestamps=True,
+        after_timestamp=after_timestamp,
+        before_timestamp=before_timestamp,
+    )
+    try:
+        result = next(generator)
+        return _print_moved_message(
+            cast(tuple[str, int], result),
+            json_output=json_output,
+            show_timestamps=show_timestamps,
+        )
+    except StopIteration:
+        return EXIT_QUEUE_EMPTY
+    finally:
+        _close_iterator(generator)
+
+
 def cmd_move(
     db_path: DBTarget,
     source_queue: str,
@@ -945,89 +1033,35 @@ def cmd_move(
 
     # Create source queue instance
     with Queue(canonical_source, db_path=db_path) as queue:
-        # Handle different move patterns
         if exact_timestamp is not None:
-            # Move specific message by ID
             result = queue.move_one(
                 canonical_dest,
                 exact_timestamp=exact_timestamp,
                 require_unclaimed=False,  # Allow moving claimed messages by ID
                 with_timestamps=True,
             )
-            if result is None:
-                return EXIT_QUEUE_EMPTY
-
-            message, timestamp = cast(tuple[str, int], result)
-            _output_message(message, timestamp, json_output, show_timestamps, False)
-            return EXIT_SUCCESS
-
-        elif all_messages:
-            # Move all messages using atomic batch operation
-            # Use a large limit to move all available messages in one transaction
-            try:
-                results = queue.move_many(
-                    canonical_dest,
-                    limit=_MOVE_ALL_LIMIT,
-                    with_timestamps=True,
-                    delivery_guarantee="exactly_once",
-                    after_timestamp=after_timestamp,
-                    before_timestamp=before_timestamp,
-                )
-
-                # Output each moved message
-                warned_newlines = False
-                for result in results:
-                    message, timestamp = cast(tuple[str, int], result)
-                    warned_newlines = _output_message(
-                        message,
-                        timestamp,
-                        json_output,
-                        show_timestamps,
-                        warned_newlines,
-                    )
-
-                if len(results) == _MOVE_ALL_LIMIT:
-                    print(
-                        "broker move --all: capped at "
-                        f"{_MOVE_ALL_LIMIT} messages; messages may remain "
-                        "in the source queue",
-                        file=sys.stderr,
-                    )
-
-                return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
-
-            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
-                _emit_error(e, code="ERROR", json_output=json_output)
-                return EXIT_ERROR
-
-        else:
-            # Move single message
-            if after_timestamp is not None or before_timestamp is not None:
-                # Use generator for range-filter support
-                gen = queue.move_generator(
-                    canonical_dest,
-                    with_timestamps=True,
-                    after_timestamp=after_timestamp,
-                    before_timestamp=before_timestamp,
-                )
-                try:
-                    result = next(gen)
-                    message, timestamp = cast(tuple[str, int], result)
-                    _output_message(
-                        message, timestamp, json_output, show_timestamps, False
-                    )
-                    return EXIT_SUCCESS
-                except StopIteration:
-                    return EXIT_QUEUE_EMPTY
-            else:
-                # Simple single message move
-                result = queue.move_one(canonical_dest, with_timestamps=True)
-                if result is None:
-                    return EXIT_QUEUE_EMPTY
-
-                message, timestamp = cast(tuple[str, int], result)
-                _output_message(message, timestamp, json_output, show_timestamps, False)
-                return EXIT_SUCCESS
+            return _print_moved_message(
+                cast(tuple[str, int] | None, result),
+                json_output=json_output,
+                show_timestamps=show_timestamps,
+            )
+        if all_messages:
+            return _move_all_messages(
+                queue,
+                canonical_dest,
+                json_output=json_output,
+                show_timestamps=show_timestamps,
+                after_timestamp=after_timestamp,
+                before_timestamp=before_timestamp,
+            )
+        return _move_next_message(
+            queue,
+            canonical_dest,
+            json_output=json_output,
+            show_timestamps=show_timestamps,
+            after_timestamp=after_timestamp,
+            before_timestamp=before_timestamp,
+        )
 
 
 def cmd_broadcast(
@@ -1164,6 +1198,133 @@ def cmd_vacuum(db_path: DBTarget, compact: bool = False, *, quiet: bool = False)
     return EXIT_SUCCESS
 
 
+def _resolve_watch_inputs(
+    db_path: DBTarget,
+    queue_name: str,
+    *,
+    move_to: str | None,
+    after_str: str | None,
+    json_output: bool,
+) -> tuple[str, str | None, int | None] | None:
+    """Resolve aliases and timestamp input for one watch command."""
+    if move_to and after_str:
+        _emit_error(
+            "--move drains ALL messages from source queue, "
+            "incompatible with --after filtering",
+            json_output=json_output,
+            code="INVALID_ARGUMENT",
+        )
+        return None
+
+    after_timestamp = None
+    if after_str is not None:
+        try:
+            after_timestamp = _validate_timestamp(after_str)
+        except ValueError as error:
+            _emit_error(
+                error,
+                json_output=json_output,
+                code="INVALID_TIMESTAMP",
+            )
+            return None
+
+    canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
+    canonical_move_to = None
+    if move_to is not None:
+        canonical_move_to, _ = _resolve_alias_name(db_path, move_to)
+    return canonical_queue, canonical_move_to, after_timestamp
+
+
+def _announce_watch(
+    canonical_queue: str,
+    *,
+    canonical_move_to: str | None,
+    peek: bool,
+    quiet: bool,
+) -> None:
+    """Print the selected watch mode unless diagnostics are quiet."""
+    if quiet:
+        return
+    mode = "peek" if peek else "consume"
+    if canonical_move_to is not None:
+        mode = f"move to {canonical_move_to}"
+    print(
+        f"Watching queue '{canonical_queue}' ({mode} mode)...",
+        file=sys.stderr,
+    )
+    sys.stderr.flush()
+
+
+def _watch_message_handler(
+    *,
+    json_output: bool,
+    show_timestamps: bool,
+) -> Callable[[str, int], None]:
+    """Build the stateful output callback for a watch command."""
+    warned_newlines = False
+
+    def handle_message(message: str, timestamp: int) -> None:
+        nonlocal warned_newlines
+        try:
+            warned_newlines = _output_message(
+                message,
+                timestamp,
+                json_output,
+                show_timestamps,
+                warned_newlines,
+            )
+        except _StdoutClosed:
+            raise StopWatching from None
+        try:
+            sys.stdout.flush()
+        except OSError as error:
+            if not _is_closed_pipe_error(error):
+                raise
+            _redirect_stdout_to_devnull()
+            raise StopWatching from None
+
+    return handle_message
+
+
+def _create_watcher(
+    db_path: DBTarget,
+    canonical_queue: str,
+    canonical_move_to: str | None,
+    handle_message: Callable[[str, int], None],
+    *,
+    peek: bool,
+    after_timestamp: int | None,
+) -> QueueWatcher | QueueMoveWatcher:
+    """Create the watcher selected by the command mode."""
+    if canonical_move_to is not None:
+        return QueueMoveWatcher(
+            canonical_queue,
+            canonical_move_to,
+            handle_message,
+            db=db_path,
+        )
+    return QueueWatcher(
+        canonical_queue,
+        handle_message,
+        db=db_path,
+        peek=peek,
+        after_timestamp=after_timestamp,
+    )
+
+
+def _finish_watch(watcher: QueueWatcher | QueueMoveWatcher | None) -> None:
+    """Flush command output and stop an initialized watcher."""
+    try:
+        sys.stdout.flush()
+    except OSError as error:
+        if not _is_closed_pipe_error(error):
+            raise
+        _redirect_stdout_to_devnull()
+    sys.stderr.flush()
+    if watcher is not None:
+        watcher.stop()
+
+
 def cmd_watch(
     db_path: DBTarget,
     queue_name: str,
@@ -1189,224 +1350,145 @@ def cmd_watch(
     Returns:
         Exit code
     """
-
-    # Check for incompatible options
-    if move_to and after_str:
-        _emit_error(
-            "--move drains ALL messages from source queue, "
-            "incompatible with --after filtering",
-            json_output=json_output,
-            code="INVALID_ARGUMENT",
-        )
+    watch_inputs = _resolve_watch_inputs(
+        db_path,
+        queue_name,
+        move_to=move_to,
+        after_str=after_str,
+        json_output=json_output,
+    )
+    if watch_inputs is None:
         return EXIT_ERROR
+    canonical_queue, canonical_move_to, after_timestamp = watch_inputs
 
-    # Validate timestamp if provided
-    after_timestamp = None
-    if after_str is not None:
-        try:
-            after_timestamp = _validate_timestamp(after_str)
-        except ValueError as e:
-            _emit_error(e, json_output=json_output, code="INVALID_TIMESTAMP")
-            return EXIT_ERROR
-
-    canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
-    canonical_move_to = None
-    if move_to is not None:
-        canonical_move_to, _ = _resolve_alias_name(db_path, move_to)
-
-    # Print startup message (unless quiet)
-    if not quiet:
-        mode = "peek" if peek else "consume"
-        if canonical_move_to is not None:
-            mode = f"move to {canonical_move_to}"
-        print(
-            f"Watching queue '{canonical_queue}' ({mode} mode)...",
-            file=sys.stderr,
-        )
-        sys.stderr.flush()
-
-    warned_newlines = False
-
-    def handle_message(message: str, timestamp: int) -> None:
-        """Message handler for watcher."""
-        nonlocal warned_newlines
-        try:
-            warned_newlines = _output_message(
-                message, timestamp, json_output, show_timestamps, warned_newlines
-            )
-        except _StdoutClosed:
-            raise StopWatching from None
-        try:
-            sys.stdout.flush()  # Ensure immediate output for real-time watching
-        except OSError as error:
-            if not _is_closed_pipe_error(error):
-                raise
-            _redirect_stdout_to_devnull()
-            raise StopWatching from None
+    _announce_watch(
+        canonical_queue,
+        canonical_move_to=canonical_move_to,
+        peek=peek,
+        quiet=quiet,
+    )
+    handle_message = _watch_message_handler(
+        json_output=json_output,
+        show_timestamps=show_timestamps,
+    )
 
     watcher: QueueWatcher | QueueMoveWatcher | None = None
 
     try:
-        # Create appropriate watcher
-        if canonical_move_to is not None:
-            # Use QueueMoveWatcher for move operations
-            watcher = QueueMoveWatcher(
-                canonical_queue,
-                canonical_move_to,
-                handle_message,
-                db=db_path,
-            )
-        else:
-            # Use regular QueueWatcher for consume/peek
-            watcher = QueueWatcher(
-                canonical_queue,
-                handle_message,
-                db=db_path,
-                peek=peek,
-                after_timestamp=after_timestamp,
-            )
-
-        # Start watching (blocks until interrupted)
+        watcher = _create_watcher(
+            db_path,
+            canonical_queue,
+            canonical_move_to,
+            handle_message,
+            peek=peek,
+            after_timestamp=after_timestamp,
+        )
         watcher.run_forever()
-
     except KeyboardInterrupt:
-        # Clean exit on Ctrl-C
         return EXIT_SUCCESS
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
-        _emit_error(e, code="ERROR", json_output=json_output)
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        _emit_error(error, code="ERROR", json_output=json_output)
         return EXIT_ERROR
     finally:
-        # Ensure any final output is flushed
-        try:
-            sys.stdout.flush()
-        except OSError as error:
-            if not _is_closed_pipe_error(error):
-                raise
-            _redirect_stdout_to_devnull()
-        sys.stderr.flush()
-        if watcher is not None:
-            watcher.stop()  # Ensure watcher is stopped cleanly
+        _finish_watch(watcher)
 
     return EXIT_SUCCESS
 
 
-def cmd_init(db_path: DBTarget, quiet: bool) -> int:
-    """Initialize a SimpleBroker database at the specified path.
-
-    Args:
-        db_path: Absolute path where database should be created
-        quiet: If True, suppresses informational output
-
-    Returns:
-        EXIT_SUCCESS (0) on success, 1 on error
-
-    Behavior:
-        - Creates database file and initializes schema if doesn't exist
-        - If database exists and is valid SimpleBroker DB: Reports existence and returns success
-        - If database exists but is not SimpleBroker DB: Error with instructions to remove manually
-
-    Notes:
-        Uses DBConnection context manager which handles:
-        - Directory creation if needed
-        - File permission setting (0o600)
-        - Schema initialization and validation
-        - WAL mode setup and optimization
-
-    Security Note:
-        Never destroys existing data. SimpleBroker init is non-destructive by design.
-    """
-    if isinstance(db_path, BrokerTarget):
-        target_str = db_path.target
-        display_target = db_path.display_target
-        target_path = db_path.target_path
-
-        if db_path.backend_name == "sqlite" and target_path is not None:
-            if target_path.exists():
-                if _is_valid_sqlite_db(target_path):
-                    _status(
-                        f"SimpleBroker database already exists: {display_target}",
-                        quiet=quiet,
-                    )
-                    return EXIT_SUCCESS
-
-                print(
-                    "Error: File exists but is not a SimpleBroker database: "
-                    f"{display_target}\n"
-                    f"Please remove the file manually and run 'broker init' again.",
-                    file=sys.stderr,
-                )
-                return EXIT_ERROR
-
-        else:
-            target_exists = False
-            with contextlib.suppress(Exception):
-                db_path.plugin.validate_target(
-                    target_str,
-                    backend_options=db_path.backend_options,
-                    verify_initialized=True,
-                )
-                target_exists = True
-            if target_exists:
-                _status(
-                    f"SimpleBroker target already exists: {display_target}",
-                    quiet=quiet,
-                )
-                return EXIT_SUCCESS
-
-        try:
-            db_path.plugin.initialize_target(
-                target_str,
-                backend_options=db_path.backend_options,
-            )
-            if db_path.backend_name == "sqlite":
-                _status(
-                    f"Initialized SimpleBroker database: {display_target}",
-                    quiet=quiet,
-                )
-            else:
-                _status(
-                    f"Initialized SimpleBroker target: {display_target}",
-                    quiet=quiet,
-                )
-            return EXIT_SUCCESS
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
-            print(f"Error initializing database: {e}", file=sys.stderr)
-            return EXIT_ERROR
-
-    db_path_obj = Path(db_path)
-
-    # Check if database already exists
-    if db_path_obj.exists():
-        # Check if it's a valid SimpleBroker database
-        if _is_valid_sqlite_db(db_path_obj):
-            _status(f"SimpleBroker database already exists: {db_path}", quiet=quiet)
-            return EXIT_SUCCESS
-        else:
-            print(
-                f"Error: File exists but is not a SimpleBroker database: {db_path}\n"
-                f"Please remove the file manually and run 'broker init' again.",
-                file=sys.stderr,
-            )
-            return EXIT_ERROR
-
-    # Initialize database using existing infrastructure
-    try:
-        # Create parent directories if needed
-        db_path_obj.parent.mkdir(parents=True, exist_ok=True)
-
-        # Use DBConnection context manager for proper setup
-        with DBConnection(db_path) as conn:
-            # Getting connection triggers database creation and schema setup
-            conn.get_connection()
-            # Additional initialization could be added here if needed
-
-        _status(f"Initialized SimpleBroker database: {db_path}", quiet=quiet)
-
+def _reject_invalid_existing_database(
+    path: Path,
+    display_target: str,
+    *,
+    quiet: bool,
+) -> int | None:
+    """Report an existing SQLite target or return None when it is absent."""
+    if not path.exists():
+        return None
+    if _is_valid_sqlite_db(path):
+        _status(
+            f"SimpleBroker database already exists: {display_target}",
+            quiet=quiet,
+        )
         return EXIT_SUCCESS
+    print(
+        "Error: File exists but is not a SimpleBroker database: "
+        f"{display_target}\n"
+        f"Please remove the file manually and run 'broker init' again.",
+        file=sys.stderr,
+    )
+    return EXIT_ERROR
 
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
-        print(f"Error initializing database: {e}", file=sys.stderr)
+
+def _init_broker_target(db_target: BrokerTarget, *, quiet: bool) -> int:
+    """Initialize one resolved backend target without replacing state."""
+    target_path = db_target.target_path
+    if db_target.backend_name == "sqlite" and target_path is not None:
+        existing_result = _reject_invalid_existing_database(
+            target_path,
+            db_target.display_target,
+            quiet=quiet,
+        )
+        if existing_result is not None:
+            return existing_result
+    else:
+        target_exists = False
+        with contextlib.suppress(Exception):
+            db_target.plugin.validate_target(
+                db_target.target,
+                backend_options=db_target.backend_options,
+                verify_initialized=True,
+            )
+            target_exists = True
+        if target_exists:
+            _status(
+                f"SimpleBroker target already exists: {db_target.display_target}",
+                quiet=quiet,
+            )
+            return EXIT_SUCCESS
+
+    try:
+        db_target.plugin.initialize_target(
+            db_target.target,
+            backend_options=db_target.backend_options,
+        )
+        target_kind = "database" if db_target.backend_name == "sqlite" else "target"
+        _status(
+            f"Initialized SimpleBroker {target_kind}: {db_target.display_target}",
+            quiet=quiet,
+        )
+        return EXIT_SUCCESS
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        print(f"Error initializing database: {error}", file=sys.stderr)
         return EXIT_ERROR
+
+
+def _init_sqlite_path(db_path: str, *, quiet: bool) -> int:
+    """Initialize one legacy SQLite path without replacing state."""
+    path = Path(db_path)
+    existing_result = _reject_invalid_existing_database(
+        path,
+        db_path,
+        quiet=quiet,
+    )
+    if existing_result is not None:
+        return existing_result
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with DBConnection(db_path) as connection:
+            connection.get_connection()
+        _status(f"Initialized SimpleBroker database: {db_path}", quiet=quiet)
+        return EXIT_SUCCESS
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        print(f"Error initializing database: {error}", file=sys.stderr)
+        return EXIT_ERROR
+
+
+def cmd_init(db_path: DBTarget, quiet: bool) -> int:
+    """Initialize a target non-destructively, preserving any existing state."""
+    if isinstance(db_path, BrokerTarget):
+        return _init_broker_target(db_path, quiet=quiet)
+    return _init_sqlite_path(db_path, quiet=quiet)
 
 
 # Export all command functions

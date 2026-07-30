@@ -886,7 +886,7 @@ class Reactor(BaseReactor):
             )
         self._check_counter += 1
 
-    def _drain_queue(self) -> None:
+    def _drain_queue(self) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
         self._update_active_queues()
         if not self._active_queues:
             return

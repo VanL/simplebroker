@@ -468,9 +468,10 @@ class TestMixedMode(WatcherTestBase):
         # Peek messages should be subset of original messages
         assert set(peek_messages).issubset({f"msg_{i}" for i in range(10)})
 
-    def test_multiple_peek_watchers(self, broker_target):
+    def test_multiple_peek_watchers(self, broker_target):  # noqa: C901 approved [DOM-10.1.1] exception
         """Test multiple peek watchers see same messages."""
         num_peekers = 3
+        expected_messages = [f"broadcast_{i}" for i in range(5)]
         collectors = []
         watchers = []
 
@@ -502,13 +503,21 @@ class TestMixedMode(WatcherTestBase):
             # Write messages
             db = make_broker(broker_target)
             try:
-                for i in range(5):
-                    db.write("broadcast", f"broadcast_{i}")
+                for message in expected_messages:
+                    db.write("broadcast", message)
                     time.sleep(0.05)  # Small delay to ensure order
             finally:
                 db.shutdown()
 
-            time.sleep(0.5)
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                snapshots = []
+                for messages, lock in collectors:
+                    with lock:
+                        snapshots.append(messages.copy())
+                if all(snapshot == expected_messages for snapshot in snapshots):
+                    break
+                time.sleep(0.02)
 
         finally:
             # Stop all watchers
@@ -520,18 +529,10 @@ class TestMixedMode(WatcherTestBase):
                 with contextlib.suppress(Exception):
                     thread.join(timeout=5.0)
 
-        # Each peeker should have seen the messages
+        # Every peeker has an independent cursor and must see the whole sequence.
         for messages, lock in collectors:
             with lock:
-                # Should have seen at least some messages
-                assert len(messages) > 0
-                # Messages should be in order
-                for i, msg in enumerate(messages):
-                    if i > 0:
-                        # Extract number from message
-                        prev_num = int(messages[i - 1].split("_")[1])
-                        curr_num = int(msg.split("_")[1])
-                        assert curr_num > prev_num
+                assert messages == expected_messages
 
         # Messages should still be in queue
         db = make_broker(broker_target)
@@ -550,7 +551,7 @@ class TestMixedMode(WatcherTestBase):
         finally:
             db.shutdown()
 
-    def test_concurrent_writes_during_watch(self, broker_target):
+    def test_concurrent_writes_during_watch(self, broker_target):  # noqa: C901 approved [DOM-10.1.1] exception
         """Test handling concurrent writes while watching."""
         # Filter out the timestamp conflict warning which is expected in this test
         warnings.filterwarnings(

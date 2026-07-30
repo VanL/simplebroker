@@ -295,7 +295,7 @@ class TimestampGenerator:
         return self._backend_plugin.read_last_ts(self._runner)
 
     @staticmethod
-    def validate(timestamp_str: str, exact: bool = False) -> int:
+    def validate(timestamp_str: str, exact: bool = False) -> int:  # noqa: C901 approved [DOM-10.1.1] exception
         """Validate and parse timestamp string into a 64-bit hybrid timestamp.
 
         This is the canonical validation logic used by the -m flag and other
@@ -390,37 +390,17 @@ class TimestampGenerator:
     def _parse_with_unit_suffix(timestamp_str: str) -> int | None:
         """Parse timestamp with explicit unit suffixes (s, ms, ns)."""
         original_str = timestamp_str
-        unit = None  # Default to None if no suffix found
-
-        if timestamp_str.endswith("ns"):
-            unit = "ns"
-            timestamp_str = timestamp_str[:-2]
-        elif timestamp_str.endswith("ms"):
-            unit = "ms"
-            timestamp_str = timestamp_str[:-2]
-        elif timestamp_str.endswith("s") and not timestamp_str.endswith("Z"):
-            # Check if it's actually part of an ISO format
-            if timestamp_str[-2:-1].isdigit():
-                unit = "s"
-                timestamp_str = timestamp_str[:-1]
-
-        if not unit:
+        suffixed_value = TimestampGenerator._split_unit_suffix(timestamp_str)
+        if suffixed_value is None:
             return None
+        timestamp_str, multiplier = suffixed_value
 
         try:
             val = float(timestamp_str) if "." in timestamp_str else int(timestamp_str)
             if val < 0:
                 raise TimestampError("Invalid timestamp: cannot be negative")
 
-            if unit == "s":
-                # Unix seconds to nanoseconds
-                ns_after_epoch = int(val * 1_000_000_000)
-            elif unit == "ms":
-                # Unix milliseconds to nanoseconds
-                ns_after_epoch = int(val * 1_000_000)
-            elif unit == "ns":
-                # Already in nanoseconds
-                ns_after_epoch = int(val)
+            ns_after_epoch = int(val * multiplier)
 
             # Clear bottom bits for counter (hybrid timestamp format)
             time_mask = ~LOGICAL_COUNTER_MASK
@@ -432,6 +412,21 @@ class TimestampGenerator:
             if "Invalid timestamp" in str(e):
                 raise
             raise TimestampError(f"Invalid timestamp: {original_str}") from None
+
+    @staticmethod
+    def _split_unit_suffix(timestamp_str: str) -> tuple[str, int] | None:
+        """Split a timestamp value from its explicit nanosecond multiplier."""
+        if timestamp_str.endswith("ns"):
+            return timestamp_str[:-2], 1
+        if timestamp_str.endswith("ms"):
+            return timestamp_str[:-2], 1_000_000
+        if (
+            timestamp_str.endswith("s")
+            and not timestamp_str.endswith("Z")
+            and timestamp_str[-2:-1].isdigit()
+        ):
+            return timestamp_str[:-1], 1_000_000_000
+        return None
 
     @staticmethod
     def _parse_native_or_unix(timestamp_str: str) -> int | None:
@@ -522,7 +517,7 @@ class TimestampGenerator:
         return hybrid_ts
 
     @staticmethod
-    def _parse_numeric_timestamp(timestamp_str: str) -> int | None:
+    def _parse_numeric_timestamp(timestamp_str: str) -> int | None:  # noqa: C901 approved [DOM-10.1.1] exception
         """Parse numeric timestamp with unit heuristic."""
         try:
             # Handle decimal numbers

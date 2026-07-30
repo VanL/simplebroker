@@ -1400,7 +1400,7 @@ def _setting_payload(
         return None
 
 
-def repository_settings_issues(repo_slug: str, token: str) -> tuple[str, ...]:
+def repository_settings_issues(repo_slug: str, token: str) -> tuple[str, ...]:  # noqa: C901 approved [DOM-10.1.1] exception
     """Return targeted issues for every required release repository setting."""
 
     issues: list[str] = []
@@ -2179,7 +2179,7 @@ def _print_publish_note() -> None:
     )
 
 
-def _run_batch_release(args: argparse.Namespace) -> int:
+def _run_batch_release(args: argparse.Namespace) -> int:  # noqa: C901 approved [DOM-10.1.1] exception
     """Run one release pass for every current unpublished package version."""
 
     if args.version is not None:
@@ -2305,21 +2305,12 @@ def _run_batch_release(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-    if args.check_shell_examples:
-        return run_shellcheck_examples()
-    if args.check_example_types:
-        run_command(_examples_mypy_command(frozen=True))
-        return 0
-    if args.check_repository_settings:
-        require_repository_settings()
-        return 0
-    if args.target == ALL_RELEASE_TARGET_KEY:
-        return _run_batch_release(args)
+def _run_single_release(  # noqa: C901 approved [DOM-10.1.1] exception
+    args: argparse.Namespace,
+    target: ReleaseTarget,
+) -> int:
+    """Run the release workflow for one resolved package target."""
 
-    target = RELEASE_TARGETS[args.target]
     require_backend_api_release_invariants((target,))
 
     current_version = read_target_version(target)
@@ -2508,6 +2499,22 @@ def main(argv: list[str] | None = None) -> int:
         "It will publish to PyPI via Trusted Publishing and create the GitHub Release."
     )
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.check_shell_examples:
+        return run_shellcheck_examples()
+    if args.check_example_types:
+        run_command(_examples_mypy_command(frozen=True))
+        return 0
+    if args.check_repository_settings:
+        require_repository_settings()
+        return 0
+    if args.target == ALL_RELEASE_TARGET_KEY:
+        return _run_batch_release(args)
+    return _run_single_release(args, RELEASE_TARGETS[args.target])
 
 
 if __name__ == "__main__":

@@ -491,7 +491,7 @@ def test_burst_mode_with_errors_batch_processing(no_jitter, broker_target) -> No
         broker.shutdown()
 
 
-def test_polling_jitter(broker_target) -> None:
+def test_polling_jitter(broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Test that polling includes jitter to prevent synchronization."""
     # Import and directly modify the config
     from simplebroker.watcher import _config
@@ -705,7 +705,7 @@ def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
         broker.shutdown()
 
 
-def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:
+def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Test transitions between burst and backed-off states."""
     broker = make_broker(broker_target)
     watcher = None

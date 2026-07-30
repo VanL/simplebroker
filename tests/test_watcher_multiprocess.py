@@ -29,7 +29,39 @@ def _process_diagnostics(
     ]
 
 
-def watcher_process(
+def _deadline_after(timeout: float) -> float:
+    return time.monotonic() + scale_timeout_for_ci(timeout)
+
+
+def _get_before_deadline(
+    result_queue: queue.Queue | multiprocessing.Queue,
+    *,
+    deadline: float,
+    poll_interval: float = 0.1,
+):
+    """Poll one protocol queue without extending its aggregate deadline."""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise queue.Empty
+    return result_queue.get(timeout=min(remaining, scale_timeout_for_ci(poll_interval)))
+
+
+def _cleanup_process(process: multiprocessing.Process) -> None:
+    """Bound graceful join, terminate fallback, and final reap on every runner."""
+
+    process.join(timeout=scale_timeout_for_ci(5.0))
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=scale_timeout_for_ci(2.0))
+    if process.is_alive():
+        process.kill()
+        process.join(timeout=scale_timeout_for_ci(2.0))
+    if process.is_alive():
+        raise AssertionError(f"multiprocess watcher child {process.pid} leaked")
+
+
+def watcher_process(  # noqa: C901 approved [DOM-10.1.1] exception
     db_path: str,
     queue_name: str,
     result_queue: multiprocessing.Queue,
@@ -70,8 +102,8 @@ def watcher_process(
         # Run until stop signal
         thread = watcher.run_in_thread()
 
-        ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
-        while not watcher._initial_drain_seen.wait(timeout=0.05):
+        ready_deadline = _deadline_after(10.0)
+        while not watcher._initial_drain_seen.wait(timeout=scale_timeout_for_ci(0.05)):
             if not thread.is_alive():
                 raise RuntimeError("Watcher thread exited before initial drain")
             if time.monotonic() >= ready_deadline:
@@ -82,7 +114,7 @@ def watcher_process(
 
         while True:
             try:
-                command = control_queue.get(timeout=0.1)
+                command = control_queue.get(timeout=scale_timeout_for_ci(0.1))
                 if command == "stop":
                     break
             except queue.Empty:
@@ -93,7 +125,9 @@ def watcher_process(
                 continue
 
         watcher.stop()
-        thread.join(timeout=2.0)
+        thread.join(timeout=scale_timeout_for_ci(2.0))
+        if thread.is_alive():
+            raise TimeoutError("Watcher thread did not stop before deadline")
 
         # Send final stats
         result_queue.put(
@@ -132,7 +166,7 @@ def shutdown_test_process(
         # Wait for stop signal
         while True:
             try:
-                command = control_queue.get(timeout=0.1)
+                command = control_queue.get(timeout=scale_timeout_for_ci(0.1))
                 if command == "stop":
                     watcher.stop()
                     stop_requested = True
@@ -141,7 +175,7 @@ def shutdown_test_process(
                 continue
 
         # Ensure thread stops
-        thread.join(timeout=5.0)
+        thread.join(timeout=scale_timeout_for_ci(5.0))
 
         result_queue.put(
             (
@@ -159,7 +193,7 @@ def shutdown_test_process(
         result_queue.put(("error", process_id, str(e)))
 
 
-def lock_test_process(
+def lock_test_process(  # noqa: C901 approved [DOM-10.1.1] exception
     db_path, queue_name, result_queue, control_queue, process_id
 ) -> None:
     """Process function for testing database locking behavior."""
@@ -193,28 +227,37 @@ def lock_test_process(
         # child is ready, weakening the intended contention phase.
         while True:
             try:
-                command = control_queue.get(timeout=0.1)
+                command = control_queue.get(timeout=scale_timeout_for_ci(0.1))
             except queue.Empty:
                 continue
             if command == "start":
                 break
             if command == "stop":
                 watcher.stop()
-                thread.join(timeout=2.0)
+                thread.join(timeout=scale_timeout_for_ci(2.0))
+                if thread.is_alive():
+                    raise TimeoutError("Lock watcher did not stop before deadline")
                 return
 
         # Run for a fixed time
-        start_time = time.monotonic()
-        while time.monotonic() - start_time < 2.0:
+        observation_deadline = _deadline_after(2.0)
+        while time.monotonic() < observation_deadline:
             try:
-                command = control_queue.get(timeout=0.1)
+                command = control_queue.get(
+                    timeout=min(
+                        max(0.0, observation_deadline - time.monotonic()),
+                        scale_timeout_for_ci(0.1),
+                    )
+                )
                 if command == "stop":
                     break
             except queue.Empty:
                 continue
 
         watcher.stop()
-        thread.join(timeout=2.0)
+        thread.join(timeout=scale_timeout_for_ci(2.0))
+        if thread.is_alive():
+            raise TimeoutError("Lock watcher did not stop before deadline")
 
         result_queue.put(
             (
@@ -245,25 +288,29 @@ def test_lock_test_process_waits_for_parent_start(tmp_path: Path) -> None:
 
     try:
         worker.start()
-        assert result_queue.get(timeout=5.0) == ("ready", 0, None)
+        assert result_queue.get(timeout=scale_timeout_for_ci(5.0)) == (
+            "ready",
+            0,
+            None,
+        )
 
         with pytest.raises(queue.Empty):
-            result_queue.get(timeout=0.25)
+            result_queue.get(timeout=scale_timeout_for_ci(0.25))
 
         control_queue.put("start")
-        msg_type, process_id, data = result_queue.get(timeout=5.0)
+        msg_type, process_id, data = result_queue.get(timeout=scale_timeout_for_ci(5.0))
         assert msg_type == "lock_stats"
         assert process_id == 0
         assert data["attempts"] > 0
     finally:
         control_queue.put("stop")
-        worker.join(timeout=5.0)
+        worker.join(timeout=scale_timeout_for_ci(5.0))
         broker.close()
 
     assert not worker.is_alive()
 
 
-def test_multiprocess_single_queue() -> None:
+def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Test multiple processes watching the same queue."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -289,13 +336,16 @@ def test_multiprocess_single_queue() -> None:
             def collect_until_seen(
                 expected_messages: set[str], *, timeout: float
             ) -> None:
-                deadline = time.monotonic() + scale_timeout_for_ci(timeout)
+                deadline = _deadline_after(timeout)
                 while time.monotonic() < deadline:
                     if expected_messages <= seen_messages:
                         return
 
                     try:
-                        msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                        msg_type, proc_id, data = _get_before_deadline(
+                            result_queue,
+                            deadline=deadline,
+                        )
                     except queue.Empty:
                         continue
 
@@ -330,13 +380,16 @@ def test_multiprocess_single_queue() -> None:
 
             # Wait for all processes to be ready
             ready_processes = set()
-            ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+            ready_deadline = _deadline_after(10.0)
             while (
                 len(ready_processes) < num_processes
                 and time.monotonic() < ready_deadline
             ):
                 try:
-                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    msg_type, proc_id, data = _get_before_deadline(
+                        result_queue,
+                        deadline=ready_deadline,
+                    )
                 except queue.Empty:
                     continue
 
@@ -391,17 +444,12 @@ def test_multiprocess_single_queue() -> None:
 
             # Wait for processes to finish and ensure cleanup
             for p in processes:
-                # Process may already be terminated
-                with contextlib.suppress(Exception):
-                    p.join(timeout=5.0)
-                    if p.is_alive():
-                        p.terminate()
-                        p.join()
+                _cleanup_process(p)
 
             broker.close()
 
 
-def test_multiprocess_separate_queues() -> None:
+def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Test multiple processes each watching their own queue."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -429,7 +477,7 @@ def test_multiprocess_separate_queues() -> None:
             def collect_until_counts(
                 targets: dict[int, int], *, timeout: float
             ) -> None:
-                deadline = time.monotonic() + scale_timeout_for_ci(timeout)
+                deadline = _deadline_after(timeout)
                 while time.monotonic() < deadline:
                     if all(
                         process_message_counts[i] >= target
@@ -438,7 +486,10 @@ def test_multiprocess_separate_queues() -> None:
                         return
 
                     try:
-                        msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                        msg_type, proc_id, data = _get_before_deadline(
+                            result_queue,
+                            deadline=deadline,
+                        )
                     except queue.Empty:
                         continue
 
@@ -468,13 +519,16 @@ def test_multiprocess_separate_queues() -> None:
 
             # Wait for ready
             ready_processes = set()
-            ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+            ready_deadline = _deadline_after(10.0)
             while (
                 len(ready_processes) < num_processes
                 and time.monotonic() < ready_deadline
             ):
                 try:
-                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    msg_type, proc_id, data = _get_before_deadline(
+                        result_queue,
+                        deadline=ready_deadline,
+                    )
                 except queue.Empty:
                     continue
 
@@ -519,17 +573,12 @@ def test_multiprocess_separate_queues() -> None:
 
             # Wait for processes to finish and ensure cleanup
             for p in processes:
-                # Process may already be terminated
-                with contextlib.suppress(Exception):
-                    p.join(timeout=5.0)
-                    if p.is_alive():
-                        p.terminate()
-                        p.join()
+                _cleanup_process(p)
 
             broker.close()
 
 
-def test_multiprocess_thundering_herd() -> None:
+def test_multiprocess_thundering_herd() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Test thundering herd mitigation across processes."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -573,13 +622,16 @@ def test_multiprocess_thundering_herd() -> None:
                 # retain child errors and process state for a useful failure.
                 ready_processes = set()
                 errors: list[tuple[int, str]] = []
-                ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+                ready_deadline = _deadline_after(10.0)
                 while (
                     len(ready_processes) < num_processes
                     and time.monotonic() < ready_deadline
                 ):
                     try:
-                        msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                        msg_type, proc_id, data = _get_before_deadline(
+                            result_queue,
+                            deadline=ready_deadline,
+                        )
                     except queue.Empty:
                         continue
 
@@ -606,7 +658,7 @@ def test_multiprocess_thundering_herd() -> None:
                 # Collect stats with robust error handling
                 stats = {}
                 errors = []
-                stats_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+                stats_deadline = _deadline_after(10.0)
 
                 # Wait for all processes to send their stats
                 while (
@@ -614,7 +666,11 @@ def test_multiprocess_thundering_herd() -> None:
                     and time.monotonic() < stats_deadline
                 ):
                     try:
-                        msg_type, proc_id, data = result_queue.get(timeout=0.5)
+                        msg_type, proc_id, data = _get_before_deadline(
+                            result_queue,
+                            deadline=stats_deadline,
+                            poll_interval=0.5,
+                        )
                         if msg_type == "stats":
                             stats[proc_id] = data
                         elif msg_type == "error":
@@ -650,15 +706,10 @@ def test_multiprocess_thundering_herd() -> None:
             finally:
                 # Wait for processes to finish and ensure cleanup
                 for p in processes:
-                    # Process may already be terminated
-                    with contextlib.suppress(Exception):
-                        p.join(timeout=5.0)
-                        if p.is_alive():
-                            p.terminate()
-                            p.join()
+                    _cleanup_process(p)
 
 
-def test_multiprocess_graceful_shutdown() -> None:
+def test_multiprocess_graceful_shutdown() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Test graceful shutdown of watchers across processes."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -691,14 +742,17 @@ def test_multiprocess_graceful_shutdown() -> None:
             ready_processes = set()
             processed_processes = set()
             errors = []
-            deadline = time.monotonic() + 10
+            deadline = _deadline_after(10.0)
 
             while (
                 len(ready_processes) < num_processes
                 or len(processed_processes) < num_processes
             ) and time.monotonic() < deadline:
                 try:
-                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    msg_type, proc_id, data = _get_before_deadline(
+                        result_queue,
+                        deadline=deadline,
+                    )
                 except queue.Empty:
                     continue
 
@@ -727,14 +781,18 @@ def test_multiprocess_graceful_shutdown() -> None:
 
             # Collect shutdown stats with robust error handling
             shutdown_stats = {}
-            timeout_start = time.monotonic()
+            shutdown_deadline = _deadline_after(10.0)
 
             while (
                 len(shutdown_stats) + len(errors) < num_processes
-                and time.monotonic() - timeout_start < 10
+                and time.monotonic() < shutdown_deadline
             ):
                 try:
-                    msg_type, proc_id, data = result_queue.get(timeout=1.0)
+                    msg_type, proc_id, data = _get_before_deadline(
+                        result_queue,
+                        deadline=shutdown_deadline,
+                        poll_interval=1.0,
+                    )
 
                     if msg_type == "shutdown_stats":
                         shutdown_stats[proc_id] = data
@@ -757,15 +815,10 @@ def test_multiprocess_graceful_shutdown() -> None:
         finally:
             # Ensure all processes are cleaned up
             for p in processes:
-                # Process may already be terminated
-                with contextlib.suppress(Exception):
-                    p.join(timeout=5.0)
-                    if p.is_alive():
-                        p.terminate()
-                        p.join()
+                _cleanup_process(p)
 
 
-def test_multiprocess_database_locking() -> None:
+def test_multiprocess_database_locking() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Test database locking behavior with multiple processes."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -794,13 +847,16 @@ def test_multiprocess_database_locking() -> None:
             # imported the test process under the full xdist matrix.
             ready_processes: set[int] = set()
             errors: list[tuple[int, str]] = []
-            ready_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+            ready_deadline = _deadline_after(10.0)
             while (
                 len(ready_processes) < num_processes
                 and time.monotonic() < ready_deadline
             ):
                 try:
-                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    msg_type, proc_id, data = _get_before_deadline(
+                        result_queue,
+                        deadline=ready_deadline,
+                    )
                 except queue.Empty:
                     continue
 
@@ -832,10 +888,13 @@ def test_multiprocess_database_locking() -> None:
 
             # Collect lock stats
             lock_stats: dict[int, dict[str, int | float]] = {}
-            stats_deadline = time.monotonic() + scale_timeout_for_ci(10.0)
+            stats_deadline = _deadline_after(10.0)
             while len(lock_stats) < num_processes and time.monotonic() < stats_deadline:
                 try:
-                    msg_type, proc_id, data = result_queue.get(timeout=0.1)
+                    msg_type, proc_id, data = _get_before_deadline(
+                        result_queue,
+                        deadline=stats_deadline,
+                    )
                     if msg_type == "lock_stats":
                         lock_stats[proc_id] = data
                     elif msg_type == "error":
@@ -867,12 +926,7 @@ def test_multiprocess_database_locking() -> None:
 
             # Clean up processes
             for p in processes:
-                # Process may already be terminated
-                with contextlib.suppress(Exception):
-                    p.join(timeout=5.0)
-                    if p.is_alive():
-                        p.terminate()
-                        p.join()
+                _cleanup_process(p)
 
             broker.close()
 

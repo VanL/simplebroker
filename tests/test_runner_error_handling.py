@@ -8,6 +8,7 @@ import sqlite3
 import tempfile
 import threading
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -65,6 +66,43 @@ def _run_schema_setup_probe(args: tuple[str, str, int]) -> None:
 
     with BrokerDB(db_path) as db:
         db.write("schema_probe", str(child_id))
+
+
+class _SetupRunner:
+    def run_exclusive_setup(self, phase, operation):  # type: ignore[no-untyped-def]
+        assert phase == SetupPhase.SCHEMA
+        operation()
+        return True
+
+
+class _SetupBackendPlugin:
+    def __init__(self, *operations):  # type: ignore[no-untyped-def]
+        self._operations = operations
+
+    def initialize_database(self, runner, *, run_with_retry):  # type: ignore[no-untyped-def]
+        del runner
+        for operation in self._operations:
+            run_with_retry(operation)
+
+
+class _MinimalBrokerCore(BrokerCore):
+    def __init__(self) -> None:
+        pass
+
+    def _verify_database_magic(self) -> None:
+        pass
+
+    def _migrate_schema(self) -> None:
+        pass
+
+
+def _setup_budget_core(*operations: Any) -> Any:
+    core: Any = _MinimalBrokerCore()
+    core._runner = _SetupRunner()
+    core._backend_plugin = _SetupBackendPlugin(*operations)
+    core._lock = threading.RLock()
+    core._stop_event = threading.Event()
+    return core
 
 
 class TestSQLiteRunnerErrorHandling:
@@ -501,28 +539,6 @@ class TestSQLiteRunnerErrorHandling:
     ):
         """Schema bootstrap should refresh its idle budget after progress."""
 
-        class FakeRunner:
-            def run_exclusive_setup(self, phase, operation):
-                assert phase == SetupPhase.SCHEMA
-                operation()
-                return True
-
-        class FakeBackendPlugin:
-            def initialize_database(self, runner, *, run_with_retry):
-                del runner
-                run_with_retry(first_operation)
-                run_with_retry(second_operation)
-
-        class MinimalBrokerCore(BrokerCore):
-            def __init__(self):
-                pass
-
-            def _verify_database_magic(self):
-                pass
-
-            def _migrate_schema(self):
-                pass
-
         monotonic_time = 0.0
         first_calls = 0
         second_ran = False
@@ -546,11 +562,7 @@ class TestSQLiteRunnerErrorHandling:
             nonlocal second_ran
             second_ran = True
 
-        core = MinimalBrokerCore()
-        core._runner = FakeRunner()
-        core._backend_plugin = FakeBackendPlugin()
-        core._lock = threading.RLock()
-        core._stop_event = threading.Event()
+        core = _setup_budget_core(first_operation, second_operation)
 
         monkeypatch.setattr(helpers_module.time, "monotonic", fake_monotonic)
         monkeypatch.setattr(helpers_module.time, "time", lambda: 0.0)
@@ -569,27 +581,6 @@ class TestSQLiteRunnerErrorHandling:
     ):
         """Schema bootstrap should fail when no setup operation succeeds."""
 
-        class FakeRunner:
-            def run_exclusive_setup(self, phase, operation):
-                assert phase == SetupPhase.SCHEMA
-                operation()
-                return True
-
-        class FakeBackendPlugin:
-            def initialize_database(self, runner, *, run_with_retry):
-                del runner
-                run_with_retry(first_operation)
-
-        class MinimalBrokerCore(BrokerCore):
-            def __init__(self):
-                pass
-
-            def _verify_database_magic(self):
-                pass
-
-            def _migrate_schema(self):
-                pass
-
         monotonic_time = 0.0
 
         def fake_monotonic():
@@ -604,10 +595,7 @@ class TestSQLiteRunnerErrorHandling:
         def first_operation():
             raise OperationalError("database is locked")
 
-        core = MinimalBrokerCore()
-        core._runner = FakeRunner()
-        core._backend_plugin = FakeBackendPlugin()
-        core._lock = threading.RLock()
+        core = _setup_budget_core(first_operation)
         core._stop_event = threading.Event()
 
         monkeypatch.setattr(helpers_module.time, "monotonic", fake_monotonic)

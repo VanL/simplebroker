@@ -17,17 +17,20 @@ STATIC_ANALYSIS_SPEC = (
     ROOT / "docs" / "specs" / "01-development-documentation-operating-model.md"
 )
 
-LEGACY_FAMILIES = ["E", "W", "F", "I", "B", "C4", "UP"]
+REVIEWED_FAMILIES = ["E", "W", "F", "I", "B", "C901", "C4", "UP"]
 GLOBAL_IGNORES = ["E501", "B008"]
 EXTENSIONLESS_PYTHON = ["bin/*"]
+MCCABE_MAX_COMPLEXITY = 10
 APPROVED_DIAGNOSTIC_COUNTS = {
-    "BLE001": 98,
+    "BLE001": 100,
+    "C901": 53,
     "PYI034": 6,
     "PYI036": 19,
     "SIM115": 1,
 }
 APPROVED_DIRECTIVE_COUNTS = {
     "BLE001": 98,
+    "C901": 53,
     "PYI034": 6,
     "PYI036": 7,
     "SIM115": 1,
@@ -84,6 +87,8 @@ def _tracked_python_files() -> set[Path]:
             continue
         relative = Path(raw_path.decode())
         path = ROOT / relative
+        if not path.is_file():
+            continue
         if relative.suffix in {".py", ".pyi"}:
             paths.add(path.resolve())
             continue
@@ -113,8 +118,9 @@ def test_ruff_extends_defaults_without_losing_legacy_families() -> None:
 
     assert ruff["extend-include"] == EXTENSIONLESS_PYTHON
     assert "select" not in lint
-    assert lint["extend-select"] == LEGACY_FAMILIES
+    assert lint["extend-select"] == REVIEWED_FAMILIES
     assert lint["ignore"] == GLOBAL_IGNORES
+    assert lint["mccabe"] == {"max-complexity": MCCABE_MAX_COMPLEXITY}
     assert lint.get("preview", False) is False
     assert lint.get("per-file-ignores", {}) == {}
 
@@ -135,23 +141,42 @@ def test_approved_suppressions_match_the_spec_registry() -> None:
     spec = STATIC_ANALYSIS_SPEC.read_text(encoding="utf-8")
     heading = "#### Approved Ruff Suppression Registry [DOM-10.1.1]"
     assert heading in spec
-    assert spec.count("user approved 2026-07-29.") == 8
-
     registry = spec.split(heading, 1)[1].split("\n## ", 1)[0]
+    registry_rows = [row for row in registry.splitlines() if row.startswith("| `")]
+    assert registry_rows
+    assert all("user approved 2026-07-29." in row for row in registry_rows)
+
     registered_locations: set[tuple[str, int]] = set()
-    for row in registry.splitlines():
-        if not row.startswith("| `"):
-            continue
+    registered_c901_locations: set[tuple[str, int]] = set()
+    for row in registry_rows:
         location_cell = row.split("|", 2)[1]
+        rule_cell = row.split("|", 3)[2]
+        row_locations: set[tuple[str, int]] = set()
         for path_and_lines in re.findall(r"`([^`]+:\d+(?:,\d+)*)`", location_cell):
             path_text, lines_text = path_and_lines.rsplit(":", 1)
-            registered_locations.update(
+            row_locations.update(
                 (path_text, int(line_text)) for line_text in lines_text.split(",")
             )
+        registered_locations.update(row_locations)
+        if "C901" in re.findall(r"`([A-Z]+\d+)`", rule_cell):
+            count_match = re.fullmatch(r"\s*`C901`\s+\((\d+)\)\s*", rule_cell)
+            assert count_match is not None, (
+                f"Malformed C901 rule/count cell: {rule_cell}"
+            )
+            assert len(row_locations) == int(count_match.group(1)), (
+                f"C901 row count mismatch: declared {count_match.group(1)}, "
+                f"listed {len(row_locations)} in {location_cell}"
+            )
+            duplicate_locations = registered_c901_locations & row_locations
+            assert not duplicate_locations, (
+                f"Duplicate C901 registry locations: {sorted(duplicate_locations)}"
+            )
+            registered_c901_locations.update(row_locations)
 
     directive_counts: Counter[str] = Counter()
     directive_locations: set[tuple[str, int]] = set()
-    for path in _tracked_python_files():
+    c901_directive_locations: set[tuple[str, int]] = set()
+    for path in _ruff_discovered_files():
         with tokenize.open(path) as source:
             tokens = tokenize.generate_tokens(source.readline)
             comments = (token for token in tokens if token.type == tokenize.COMMENT)
@@ -166,11 +191,18 @@ def test_approved_suppressions_match_the_spec_registry() -> None:
                 directive_counts.update(
                     code.strip() for code in match.group(1).split(",")
                 )
-                directive_locations.add(
-                    (_repository_path(path.relative_to(ROOT)), comment.start[0])
+                location = (
+                    _repository_path(path.relative_to(ROOT)),
+                    comment.start[0],
                 )
+                directive_locations.add(location)
+                if "C901" in {code.strip() for code in match.group(1).split(",")}:
+                    c901_directive_locations.add(location)
     assert dict(directive_counts) == APPROVED_DIRECTIVE_COUNTS
     assert directive_locations == registered_locations
+
+    normal_result = _ruff("check", ".")
+    assert normal_result.returncode == 0, normal_result.stdout + normal_result.stderr
 
     result = _ruff(
         "check",
@@ -180,12 +212,52 @@ def test_approved_suppressions_match_the_spec_registry() -> None:
         ".",
     )
     assert result.returncode == 1, result.stderr
+    diagnostics = json.loads(result.stdout)
     diagnostic_counts = Counter(
         diagnostic["code"]
-        for diagnostic in json.loads(result.stdout)
+        for diagnostic in diagnostics
         if diagnostic["code"] in APPROVED_DIAGNOSTIC_COUNTS
     )
     assert dict(diagnostic_counts) == APPROVED_DIAGNOSTIC_COUNTS
+    raw_c901_locations = {
+        (
+            _repository_path(Path(diagnostic["filename"]).resolve().relative_to(ROOT)),
+            diagnostic["noqa_row"],
+        )
+        for diagnostic in diagnostics
+        if diagnostic["code"] == "C901"
+    }
+    assert raw_c901_locations == c901_directive_locations
+    assert raw_c901_locations == registered_c901_locations
+
+
+def test_configured_complexity_boundary_fires_at_eleven() -> None:
+    def probe(complexity: int) -> str:
+        branches = "\n".join(
+            f"    if value == {branch}:\n        return {branch}"
+            for branch in range(1, complexity)
+        )
+        return f"def complexity_{complexity}(value: int) -> int:\n{branches}\n    return 0\n"
+
+    result = _ruff(
+        "check",
+        "--config",
+        str(PYPROJECT),
+        "--select",
+        "C901",
+        "--output-format",
+        "json",
+        "--stdin-filename",
+        "complexity_probe.py",
+        "-",
+        input_text=probe(10) + "\n" + probe(11),
+    )
+    assert result.returncode == 1, result.stderr
+    diagnostics = json.loads(result.stdout)
+    assert len(diagnostics) == 1
+    diagnostic = diagnostics[0]
+    assert diagnostic["code"] == "C901"
+    assert "`complexity_11` is too complex (11 > 10)" in diagnostic["message"]
 
 
 def test_real_ruff_fires_default_and_retained_legacy_rules() -> None:

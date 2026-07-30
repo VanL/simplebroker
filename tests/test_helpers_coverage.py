@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,168 @@ from simplebroker.helpers import (
     interruptible_sleep,
     is_ancestor,
 )
+from tests.helpers.state_machine_contracts import (
+    TransitionCase,
+    fires_transition_table,
+)
+
+
+class SetupBudgetEvent(StrEnum):
+    """Executable events for the setup-progress budget contract."""
+
+    CREATE = "create"
+    OBSERVE = "observe"
+    ADVANCE_AND_OBSERVE = "advance-and-observe"
+    RECORD_PROGRESS = "record-progress"
+
+
+@dataclass(frozen=True, slots=True)
+class SetupBudgetPayload:
+    """Machine-local inputs and expected observations for one transition."""
+
+    event: SetupBudgetEvent
+    elapsed_before_event: float
+    elapsed_during_event: float
+    expected_remaining: float
+
+
+SETUP_PROGRESS_BUDGET_TRANSITIONS = (
+    TransitionCase(
+        transition_id="INITIALIZE",
+        start_state="uninitialized",
+        event="create budget",
+        guard="an idle timeout is configured",
+        next_state="tracking",
+        effects="the current monotonic time becomes the progress baseline",
+        expected_result="the full idle budget remains",
+        payload=SetupBudgetPayload(
+            event=SetupBudgetEvent.CREATE,
+            elapsed_before_event=0.0,
+            elapsed_during_event=0.0,
+            expected_remaining=5.0,
+        ),
+    ),
+    TransitionCase(
+        transition_id="OBSERVE-ACTIVE",
+        start_state="tracking",
+        event="observe remaining time before timeout",
+        guard="elapsed idle time is below the timeout",
+        next_state="tracking",
+        effects="the progress baseline is unchanged",
+        expected_result="the remaining budget reflects elapsed time",
+        payload=SetupBudgetPayload(
+            event=SetupBudgetEvent.ADVANCE_AND_OBSERVE,
+            elapsed_before_event=0.0,
+            elapsed_during_event=2.0,
+            expected_remaining=3.0,
+        ),
+    ),
+    TransitionCase(
+        transition_id="EXPIRE",
+        start_state="tracking",
+        event="observe remaining time at timeout",
+        guard="elapsed idle time equals the timeout",
+        next_state="expired",
+        effects="the progress baseline is unchanged",
+        expected_result="no idle budget remains",
+        payload=SetupBudgetPayload(
+            event=SetupBudgetEvent.ADVANCE_AND_OBSERVE,
+            elapsed_before_event=0.0,
+            elapsed_during_event=5.0,
+            expected_remaining=0.0,
+        ),
+    ),
+    TransitionCase(
+        transition_id="REMAIN-EXPIRED",
+        start_state="expired",
+        event="observe remaining time after timeout",
+        guard="elapsed idle time exceeds the timeout",
+        next_state="expired",
+        effects="the progress baseline is unchanged",
+        expected_result="the remaining budget is negative",
+        payload=SetupBudgetPayload(
+            event=SetupBudgetEvent.OBSERVE,
+            elapsed_before_event=6.0,
+            elapsed_during_event=0.0,
+            expected_remaining=-1.0,
+        ),
+    ),
+    TransitionCase(
+        transition_id="REFRESH-ACTIVE",
+        start_state="tracking",
+        event="record successful progress",
+        guard="the budget has not expired",
+        next_state="tracking",
+        effects="the current monotonic time replaces the progress baseline",
+        expected_result="the full idle budget remains",
+        payload=SetupBudgetPayload(
+            event=SetupBudgetEvent.RECORD_PROGRESS,
+            elapsed_before_event=2.0,
+            elapsed_during_event=0.0,
+            expected_remaining=5.0,
+        ),
+    ),
+    TransitionCase(
+        transition_id="REFRESH-EXPIRED",
+        start_state="expired",
+        event="record successful progress",
+        guard="the budget has expired",
+        next_state="tracking",
+        effects="the current monotonic time replaces the progress baseline",
+        expected_result="the full idle budget remains",
+        payload=SetupBudgetPayload(
+            event=SetupBudgetEvent.RECORD_PROGRESS,
+            elapsed_before_event=6.0,
+            elapsed_during_event=0.0,
+            expected_remaining=5.0,
+        ),
+    ),
+)
+
+
+class DeterministicClock:
+    """Controllable monotonic clock used at the public clock seam."""
+
+    def __init__(self, initial: float = 100.0) -> None:
+        self.now = initial
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@fires_transition_table("SM-SETUP-BUDGET", SETUP_PROGRESS_BUDGET_TRANSITIONS)
+def test_setup_progress_budget_fires_transition_table(
+    transition_case: TransitionCase[SetupBudgetPayload],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fire every declared setup-budget transition against the real owner."""
+
+    clock = DeterministicClock()
+    monkeypatch.setattr(helpers.time, "monotonic", clock)
+    payload = transition_case.payload
+
+    budget = SetupProgressBudget(idle_timeout=5.0)
+    clock.advance(payload.elapsed_before_event)
+    if transition_case.start_state == "uninitialized":
+        assert payload.event is SetupBudgetEvent.CREATE
+    else:
+        initial_remaining = budget.remaining()
+        initial_state = "tracking" if initial_remaining > 0 else "expired"
+        assert initial_state == transition_case.start_state
+
+    if payload.event is SetupBudgetEvent.ADVANCE_AND_OBSERVE:
+        clock.advance(payload.elapsed_during_event)
+    elif payload.event is SetupBudgetEvent.RECORD_PROGRESS:
+        budget.record_progress()
+
+    remaining = budget.remaining()
+    next_state = "tracking" if remaining > 0 else "expired"
+
+    assert remaining == pytest.approx(payload.expected_remaining)
+    assert next_state == transition_case.next_state
 
 
 def test_interruptible_sleep_handles_zero_and_interrupts() -> None:

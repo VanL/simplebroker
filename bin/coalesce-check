@@ -97,22 +97,16 @@ def in_local_checkout(sha: str) -> str | None:
     return None
 
 
-def main() -> int:
-    if not STATE.is_file():
-        print("coalesce-check: no docs/coalescing.md — nothing to check")
-        return 0
-    text = STATE.read_text()
+def classify_sha_claims(
+    text: str,
+    *,
+    remote_ok: bool,
+) -> tuple[set[str], list[str], list[str], list[str]]:
+    """Classify each distinct cited commit without changing retrieval truth."""
 
-    sha_hits = [(m.group(1), m.start()) for m in SHA_RE.finditer(text)]
-    cues = sorted(set(CUE_RE.findall(text)))
-
-    remote_ok = (
-        git("rev-parse", "--verify", "origin/HEAD").returncode == 0
-        or git("rev-parse", "--verify", "origin/main").returncode == 0
-    )
-
+    sha_hits = ((match.group(1), match.start()) for match in SHA_RE.finditer(text))
     broken, local_only, foreign = [], [], []
-    seen = set()
+    seen: set[str] = set()
     for sha, pos in sha_hits:
         if sha in seen:
             continue
@@ -137,29 +131,56 @@ def main() -> int:
                 f"`{sha}` resolves nowhere here and names no "
                 "repository — a cue must say where it is retrievable"
             )
+    return seen, broken, local_only, foreign
 
+
+def broken_retrieval_cues(cues: list[tuple[str, str]]) -> list[str]:
+    """Return every explicit git-show cue that cannot be retrieved locally."""
+
+    broken = []
     for sha, path in cues:
         if not (
             resolves_locally(sha)
             and git("cat-file", "-e", f"{sha}:{path}").returncode == 0
         ):
             broken.append(f"cue `git show {sha}:{path}` does not resolve here")
+    return broken
+
+
+def count_lesson_entries() -> int:
+    """Derive the lessons tier with the repository's documented recipe."""
 
     # Lessons-tier derivation. This repository's documented ledger form is a
     # dated bullet WITH a colon (docs/lessons.md, "New ledger entries must use
     # this form"); the docs/coalescing.md recipe greps the same pattern.
     lessons = REPO_ROOT / "docs" / "lessons.md"
-    count = 0
-    if lessons.is_file():
-        count = len(
-            re.findall(
-                r"^- 20[0-9]{2}-[0-9]{2}-[0-9]{2}:", lessons.read_text(), re.MULTILINE
-            )
+    if not lessons.is_file():
+        return 0
+    return len(
+        re.findall(
+            r"^- 20[0-9]{2}-[0-9]{2}-[0-9]{2}:",
+            lessons.read_text(),
+            re.MULTILINE,
         )
+    )
+
+
+def report_results(
+    *,
+    claim_count: int,
+    cue_count: int,
+    lesson_count: int,
+    remote_ok: bool,
+    broken: list[str],
+    local_only: list[str],
+    foreign: list[str],
+) -> int:
+    """Print the evidence trail and return its truthful command status."""
 
     print(
-        f"coalesce-check: {len(seen)} SHA claim(s) ({len(foreign)} foreign claim(s)), "
-        f"{len(cues)} retrieval cue(s); lessons dated entries: {count}"
+        f"coalesce-check: {claim_count} SHA claim(s) "
+        f"({len(foreign)} foreign claim(s)), {cue_count} retrieval cue(s); "
+        f"lessons dated entries: {lesson_count}"
     )
     if foreign:
         print(
@@ -182,6 +203,32 @@ def main() -> int:
         + ("" if remote_ok else "  [no origin remote — publication check skipped]")
     )
     return 0
+
+
+def main() -> int:
+    if not STATE.is_file():
+        print("coalesce-check: no docs/coalescing.md — nothing to check")
+        return 0
+    text = STATE.read_text()
+    cues = sorted(set(CUE_RE.findall(text)))
+    remote_ok = (
+        git("rev-parse", "--verify", "origin/HEAD").returncode == 0
+        or git("rev-parse", "--verify", "origin/main").returncode == 0
+    )
+    seen, broken, local_only, foreign = classify_sha_claims(
+        text,
+        remote_ok=remote_ok,
+    )
+    broken.extend(broken_retrieval_cues(cues))
+    return report_results(
+        claim_count=len(seen),
+        cue_count=len(cues),
+        lesson_count=count_lesson_entries(),
+        remote_ok=remote_ok,
+        broken=broken,
+        local_only=local_only,
+        foreign=foreign,
+    )
 
 
 if __name__ == "__main__":

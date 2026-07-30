@@ -117,7 +117,13 @@ class _QueueWaiterRegistration:
 class _SharedRedisActivityListener:
     """Process-local Pub/Sub listener for one target and namespace."""
 
-    def __init__(self, target: str, namespace: str) -> None:
+    def __init__(
+        self,
+        target: str,
+        namespace: str,
+        *,
+        startup_timeout: float = 5.0,
+    ) -> None:
         self._target = target
         self._namespace = namespace
         self._prefix = key_prefix(namespace)
@@ -135,7 +141,7 @@ class _SharedRedisActivityListener:
             daemon=True,
         )
         self._thread.start()
-        if not self._ready.wait(timeout=5.0):
+        if not self._ready.wait(timeout=startup_timeout):
             self.close()
             raise OperationalError("Redis activity listener did not start")
         if self._error is not None:
@@ -237,6 +243,9 @@ class _SharedRedisActivityListener:
         with self._lock:
             for condition in self._conditions.values():
                 condition.notify_all()
+        thread = getattr(self, "_thread", None)
+        if thread is not None and threading.current_thread() is not thread:
+            thread.join(timeout=1.0)
 
 
 class RedisActivityWaiter:
@@ -435,7 +444,7 @@ class RedisBackendPlugin:
             verify_initialized=verify_initialized,
         )
 
-    def cleanup_target(
+    def cleanup_target(  # noqa: C901 approved [DOM-10.1.1] exception
         self,
         target: str,
         *,

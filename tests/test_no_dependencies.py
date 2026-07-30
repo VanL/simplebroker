@@ -7,17 +7,39 @@ These tests ensure this promise is maintained.
 import ast
 import sys
 import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 pytestmark = [pytest.mark.shared]
+PROJECT_ROOT = Path(__file__).parent.parent
+SIMPLEBROKER_DIR = PROJECT_ROOT / "simplebroker"
 
 
-def test_pyproject_has_no_dependencies():
+def _parsed_source_files() -> Iterator[tuple[Path, ast.AST]]:
+    """Yield each syntactically valid package source with its parsed tree."""
+
+    for path in SIMPLEBROKER_DIR.rglob("*.py"):
+        try:
+            yield path, ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue
+
+
+def _absolute_imports(tree: ast.AST) -> Iterator[tuple[str, int]]:
+    """Yield absolute imported module names and their source lines."""
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            yield from ((alias.name, node.lineno) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            yield node.module, node.lineno
+
+
+def test_pyproject_has_no_dependencies() -> None:
     """Verify pyproject.toml declares no runtime dependencies."""
-    project_root = Path(__file__).parent.parent
-    pyproject_path = project_root / "pyproject.toml"
+    pyproject_path = PROJECT_ROOT / "pyproject.toml"
 
     with open(pyproject_path, "rb") as f:
         pyproject = tomllib.load(f)
@@ -28,58 +50,19 @@ def test_pyproject_has_no_dependencies():
     )
 
 
-def test_no_external_imports():
+def test_no_external_imports() -> None:
     """Verify that no external packages are imported.
 
     This test parses all Python files in simplebroker/ and ensures
     only standard library modules are imported.
     """
-    project_root = Path(__file__).parent.parent
-    simplebroker_dir = project_root / "simplebroker"
-
-    # Standard library modules (not exhaustive, but covers common ones)
-    # This is a list of modules known to be in stdlib
     stdlib_modules = set(sys.stdlib_module_names)
-
-    # Also allow relative imports (starting with .)
-    # and special typing imports that fall back to stdlib
-    external_imports = []
-
-    for py_file in simplebroker_dir.rglob("*.py"):
-        if py_file.name.startswith("_") and py_file.name != "__init__.py":
-            # Still check private modules
-            pass
-
-        with open(py_file, encoding="utf-8") as f:
-            try:
-                tree = ast.parse(f.read(), filename=str(py_file))
-            except SyntaxError:
-                continue
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    module_name = alias.name.split(".")[0]
-                    if module_name not in stdlib_modules:
-                        external_imports.append((py_file.name, alias.name))
-
-            elif isinstance(node, ast.ImportFrom):
-                if node.module is None:
-                    continue  # relative import like "from . import foo"
-
-                module_name = node.module.split(".")[0]
-
-                # Allow relative imports (start with .)
-                if node.level > 0:
-                    continue
-
-                # Check if it's a stdlib module
-                if module_name not in stdlib_modules:
-                    # typing_extensions is explicitly forbidden
-                    if module_name == "typing_extensions":
-                        external_imports.append((py_file.name, node.module))
-                    else:
-                        external_imports.append((py_file.name, node.module))
+    external_imports = [
+        (path.name, module)
+        for path, tree in _parsed_source_files()
+        for module, _line in _absolute_imports(tree)
+        if module.split(".")[0] not in stdlib_modules
+    ]
 
     assert not external_imports, (
         "Found imports from non-stdlib packages:\n"
@@ -88,40 +71,18 @@ def test_no_external_imports():
     )
 
 
-def test_typing_extensions_not_imported():
+def test_typing_extensions_not_imported() -> None:
     """Specifically verify typing_extensions is never imported.
 
     This was a bug that snuck in - ensure it doesn't happen again.
     typing_extensions should never be imported; use stdlib typing instead.
     """
-    project_root = Path(__file__).parent.parent
-    simplebroker_dir = project_root / "simplebroker"
-
-    violations = []
-
-    for py_file in simplebroker_dir.rglob("*.py"):
-        with open(py_file, encoding="utf-8") as f:
-            content = f.read()
-
-        # Check for typing_extensions in imports
-        if "typing_extensions" in content:
-            # Parse to find the actual import lines
-            try:
-                tree = ast.parse(content, filename=str(py_file))
-                for node in ast.walk(tree):
-                    if isinstance(node, ast.ImportFrom):
-                        if node.module == "typing_extensions":
-                            violations.append(
-                                (py_file.relative_to(project_root), node.lineno)
-                            )
-                    elif isinstance(node, ast.Import):
-                        for alias in node.names:
-                            if alias.name == "typing_extensions":
-                                violations.append(
-                                    (py_file.relative_to(project_root), node.lineno)
-                                )
-            except SyntaxError:
-                pass
+    violations = [
+        (path.relative_to(PROJECT_ROOT), line)
+        for path, tree in _parsed_source_files()
+        for module, line in _absolute_imports(tree)
+        if module == "typing_extensions"
+    ]
 
     assert not violations, (
         "Found typing_extensions imports:\n"

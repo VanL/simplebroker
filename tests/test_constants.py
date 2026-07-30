@@ -46,6 +46,7 @@ from simplebroker._constants import (
     _parse_bool,
     # Functions
     load_config,
+    resolve_config,
 )
 
 from .helper_scripts import create_dangerous_path
@@ -386,6 +387,94 @@ class TestLoadConfig:
             pytest.raises(ValueError),
         ):
             load_config()
+
+    @pytest.mark.parametrize(
+        ("key", "raw_value", "expected"),
+        [
+            ("BROKER_BUSY_TIMEOUT", "6000", 6000),
+            ("BROKER_CACHE_MB", "20", 20),
+            ("BROKER_SYNC_MODE", "normal", "NORMAL"),
+            ("BROKER_WAL_AUTOCHECKPOINT", "2000", 2000),
+            ("BROKER_MAX_MESSAGE_SIZE", "2048", 2048),
+            ("BROKER_READ_COMMIT_INTERVAL", "2", 2),
+            ("BROKER_GENERATOR_BATCH_SIZE", "50", 50),
+            ("BROKER_AUTO_VACUUM", "0", 0),
+            ("BROKER_AUTO_VACUUM_INTERVAL", "25", 25),
+            ("BROKER_VACUUM_THRESHOLD", "25", 0.25),
+            ("BROKER_VACUUM_BATCH_SIZE", "250", 250),
+            ("BROKER_SKIP_IDLE_CHECK", "1", True),
+            ("BROKER_JITTER_FACTOR", "0.2", 0.2),
+            ("BROKER_INITIAL_CHECKS", "10", 10),
+            ("BROKER_MAX_INTERVAL", "0.5", 0.5),
+            ("BROKER_BURST_SLEEP", "0.001", 0.001),
+            ("BROKER_DEBUG", "debug", True),
+            ("BROKER_LOGGING_ENABLED", "1", True),
+            (
+                "BROKER_DEFAULT_DB_LOCATION",
+                os.path.abspath("config-location"),
+                os.path.abspath("config-location"),
+            ),
+            ("BROKER_DEFAULT_DB_NAME", "data/broker.db", "data/broker.db"),
+            ("BROKER_PROJECT_CONFIG_PATH", ".weft", ".weft"),
+            ("BROKER_PROJECT_CONFIG_NAME", "broker.toml", "broker.toml"),
+            ("BROKER_PROJECT_SCOPE", "yes", True),
+            ("BROKER_BACKEND", "postgres", "postgres"),
+            ("BROKER_BACKEND_HOST", "db.example", "db.example"),
+            ("BROKER_BACKEND_PORT", "5433", 5433),
+            ("BROKER_BACKEND_USER", "broker", "broker"),
+            ("BROKER_BACKEND_PASSWORD", "secret", "secret"),
+            ("BROKER_BACKEND_DATABASE", "app", "app"),
+            ("BROKER_BACKEND_SCHEMA", "broker_v1", "broker_v1"),
+            ("BROKER_BACKEND_TARGET", "postgresql://db/app", "postgresql://db/app"),
+        ],
+    )
+    def test_environment_and_override_use_the_same_field_schema(
+        self,
+        key: str,
+        raw_value: str,
+        expected: object,
+    ) -> None:
+        """Every declared key must use one coercion rule on both input paths."""
+        with patch.dict(os.environ, {key: raw_value}, clear=True):
+            environment_value = load_config()[key]
+        with patch.dict(os.environ, {}, clear=True):
+            override_value = resolve_config({key: raw_value})[key]
+
+        assert environment_value == expected
+        assert override_value == expected
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "BROKER_BUSY_TIMEOUT",
+            "BROKER_CACHE_MB",
+            "BROKER_WAL_AUTOCHECKPOINT",
+            "BROKER_MAX_MESSAGE_SIZE",
+            "BROKER_READ_COMMIT_INTERVAL",
+            "BROKER_GENERATOR_BATCH_SIZE",
+            "BROKER_AUTO_VACUUM",
+            "BROKER_AUTO_VACUUM_INTERVAL",
+            "BROKER_VACUUM_THRESHOLD",
+            "BROKER_VACUUM_BATCH_SIZE",
+            "BROKER_JITTER_FACTOR",
+            "BROKER_INITIAL_CHECKS",
+            "BROKER_MAX_INTERVAL",
+            "BROKER_BURST_SLEEP",
+            "BROKER_BACKEND_PORT",
+        ],
+    )
+    def test_numeric_fields_reject_invalid_values_on_both_paths(
+        self,
+        key: str,
+    ) -> None:
+        """Invalid numeric text must fail consistently for env and overrides."""
+        with (
+            patch.dict(os.environ, {key: "invalid"}, clear=True),
+            pytest.raises(ValueError),
+        ):
+            load_config()
+        with patch.dict(os.environ, {}, clear=True), pytest.raises(ValueError):
+            resolve_config({key: "invalid"})
 
         # Invalid floats should raise ValueError
         with (

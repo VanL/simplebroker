@@ -565,6 +565,41 @@ class DBConnection:
         core.set_stop_event(self._stop_event)
         return core
 
+    def _open_connection_with_retry(
+        self,
+        open_connection: Callable[[], BrokerConnection],
+        *,
+        config: Mapping[str, Any],
+    ) -> BrokerConnection:
+        """Open a connection under the manager's retry and diagnostic policy."""
+        max_retries = 3
+
+        def log_retry(state: Any, exc: Exception, wait: float) -> None:
+            if config["BROKER_LOGGING_ENABLED"]:
+                logger.debug(
+                    f"Database connection error "
+                    f"(retry {state.tries}/{max_retries}): {exc}. "
+                    f"Retrying in {wait} seconds..."
+                )
+
+        try:
+            return _execute_connection_retry(
+                open_connection,
+                stop_event=self._stop_event,
+                before_sleep=log_retry,
+            )
+        except StopException:
+            raise
+        except Exception as exc:
+            if config["BROKER_LOGGING_ENABLED"]:
+                logger.log(
+                    logging.ERROR,
+                    "Failed to get database connection after "
+                    f"{max_retries} retries: {exc}",
+                    exc_info=True,
+                )
+            raise RuntimeError(f"Failed to get database connection: {exc}") from exc
+
     def get_connection(
         self, *, config: Mapping[str, Any] | None = None
     ) -> BrokerConnection:
@@ -596,9 +631,7 @@ class DBConnection:
         if hasattr(self._thread_local, "db"):
             return cast("BrokerDB", self._thread_local.db)
 
-        max_retries = 3
-
-        def _open() -> BrokerConnection:
+        def open_connection() -> BrokerConnection:
             # For persistent connections in single-threaded use: create one
             # BrokerDB per thread, but cache it within the thread.
             connection = self._create_managed_connection()
@@ -607,30 +640,10 @@ class DBConnection:
             self._thread_local.db = connection
             return connection
 
-        def _log_connection_retry(_state: Any, exc: Exception, wait: float) -> None:
-            if effective_config["BROKER_LOGGING_ENABLED"]:
-                logger.debug(
-                    f"Database connection error "
-                    f"(retry {_state.tries}/{max_retries}): {exc}. "
-                    f"Retrying in {wait} seconds..."
-                )
-
-        try:
-            return _execute_connection_retry(
-                _open,
-                stop_event=self._stop_event,
-                before_sleep=_log_connection_retry,
-            )
-        except StopException:
-            raise
-        except Exception as e:
-            if effective_config["BROKER_LOGGING_ENABLED"]:
-                logger.log(
-                    logging.ERROR,
-                    f"Failed to get database connection after {max_retries} retries: {e}",
-                    exc_info=True,
-                )
-            raise RuntimeError(f"Failed to get database connection: {e}") from e
+        return self._open_connection_with_retry(
+            open_connection,
+            config=effective_config,
+        )
 
     def _ensure_shared_session(self) -> "_ProcessBrokerSession":
         if self._shared_session is None or self._shared_released:
@@ -651,9 +664,7 @@ class DBConnection:
 
         effective_config = self._config if config is None else resolve_config(config)
 
-        max_retries = 3
-
-        def _open() -> BrokerConnection:
+        def open_connection() -> BrokerConnection:
             session = self._ensure_shared_session()
             connection = session.get_connection(self._stop_event)
             try:
@@ -663,30 +674,10 @@ class DBConnection:
                 raise
             return connection
 
-        def _log_connection_retry(_state: Any, exc: Exception, wait: float) -> None:
-            if effective_config["BROKER_LOGGING_ENABLED"]:
-                logger.debug(
-                    f"Database connection error "
-                    f"(retry {_state.tries}/{max_retries}): {exc}. "
-                    f"Retrying in {wait} seconds..."
-                )
-
-        try:
-            return _execute_connection_retry(
-                _open,
-                stop_event=self._stop_event,
-                before_sleep=_log_connection_retry,
-            )
-        except StopException:
-            raise
-        except Exception as e:
-            if effective_config["BROKER_LOGGING_ENABLED"]:
-                logger.log(
-                    logging.ERROR,
-                    f"Failed to get database connection after {max_retries} retries: {e}",
-                    exc_info=True,
-                )
-            raise RuntimeError(f"Failed to get database connection: {e}") from e
+        return self._open_connection_with_retry(
+            open_connection,
+            config=effective_config,
+        )
 
     def _push_shared_operation_session(self, session: "_ProcessBrokerSession") -> None:
         stack = cast(
@@ -767,6 +758,50 @@ class DBConnection:
         assert self._core is not None
         return self._core
 
+    def _drain_owned_connections(
+        self,
+    ) -> tuple[list[BrokerConnection], BrokerConnection | None, SQLRunner | None]:
+        """Detach the private resources owned by this manager."""
+        current_thread_connection = cast(
+            "BrokerConnection | None",
+            getattr(self._thread_local, "db", None),
+        )
+        with self._registry_lock:
+            connections = list(self._connection_registry)
+            self._connection_registry.clear()
+
+        if current_thread_connection is not None and not any(
+            connection is current_thread_connection for connection in connections
+        ):
+            connections.append(current_thread_connection)
+        if hasattr(self._thread_local, "db"):
+            delattr(self._thread_local, "db")
+
+        if self._external_runner:
+            self._core = None
+            return connections, None, None
+
+        owned_core = self._core
+        owned_runner = self._runner
+        self._core = None
+        self._runner = None
+        return connections, owned_core, owned_runner
+
+    @staticmethod
+    def _close_best_effort(
+        resource: object,
+        *,
+        operation: str,
+        logging_enabled: bool,
+        label: str,
+    ) -> None:
+        """Close one detached resource without replacing the caller's failure."""
+        try:
+            getattr(resource, operation)()
+        except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+            if logging_enabled:
+                logger.warning(f"Error closing {label}: {exc}")
+
     def cleanup(self, *, config: Mapping[str, Any] | None = None) -> None:
         """Clean up active handles without releasing a shared session lease.
 
@@ -781,62 +816,42 @@ class DBConnection:
                 self._shared_session.cleanup_current_thread()
             return
 
-        current_thread_connection = getattr(self._thread_local, "db", None)
+        connections_to_close, owned_core, owned_runner = self._drain_owned_connections()
+        logging_enabled = bool(effective_config["BROKER_LOGGING_ENABLED"])
 
-        # Clean up ALL registered connections (cross-thread cleanup)
-        with self._registry_lock:
-            # Create a list copy to avoid modification during iteration
-            connections_to_close = list(self._connection_registry)
-        if current_thread_connection is not None and not any(
-            connection is current_thread_connection
-            for connection in connections_to_close
-        ):
-            connections_to_close.append(current_thread_connection)
-        if hasattr(self._thread_local, "db"):
-            delattr(self._thread_local, "db")
-
-        # Close connections outside the lock to avoid deadlocks
         for connection in connections_to_close:
-            try:
-                if not self._external_runner and hasattr(connection, "shutdown"):
-                    connection.shutdown()
-                else:
-                    connection.close()
-            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
-                if effective_config["BROKER_LOGGING_ENABLED"]:
-                    logger.warning(f"Error closing registered connection: {e}")
-
-        # Clear the registry
-        with self._registry_lock:
-            self._connection_registry.clear()
+            operation = (
+                "shutdown"
+                if not self._external_runner and hasattr(connection, "shutdown")
+                else "close"
+            )
+            self._close_best_effort(
+                connection,
+                operation=operation,
+                logging_enabled=logging_enabled,
+                label="registered connection",
+            )
 
         if self._external_runner:
-            self._core = None
             return
-
-        # get_core() may lazily create an owned BrokerDB/BrokerCore without
-        # populating self._runner, so always shut down the owned core explicitly.
-        owned_core = self._core
-        owned_runner = self._runner
-        self._core = None
-        self._runner = None
 
         if owned_core is not None:
             if any(connection is owned_core for connection in connections_to_close):
                 return
-            try:
-                owned_core.shutdown()
-            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
-                if effective_config["BROKER_LOGGING_ENABLED"]:
-                    logger.warning(f"Error closing owned core: {e}")
+            self._close_best_effort(
+                owned_core,
+                operation="shutdown",
+                logging_enabled=logging_enabled,
+                label="owned core",
+            )
             return
 
         if owned_runner is not None:
             try:
                 close_owned_runner(owned_runner)
-            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
-                if effective_config["BROKER_LOGGING_ENABLED"]:
-                    logger.warning(f"Error closing runner: {e}")
+            except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+                if logging_enabled:
+                    logger.warning(f"Error closing runner: {exc}")
 
     def release_connection_after_use(self) -> None:
         """Release transient pooled resources after one queue operation."""
@@ -1321,7 +1336,7 @@ class BrokerCore:
             return self._timestamp_gen.refresh_last_ts()
 
     @contextmanager
-    def sidecar(self, *, transaction: bool = False) -> Iterator[SidecarSession]:
+    def sidecar(self, *, transaction: bool = False) -> Iterator[SidecarSession]:  # noqa: C901 approved [DOM-10.1.1] exception
         """Open a session for caller-owned sidecar tables in this database.
 
         Sidecar sessions are thread-affine: create, use, and exit them on the
@@ -1777,7 +1792,7 @@ class BrokerCore:
                 if should_commit:
                     self._runner.commit()
 
-    def _yield_transactional_batches(
+    def _yield_transactional_batches(  # noqa: C901 approved [DOM-10.1.1] exception
         self,
         queue: str,
         *,
@@ -3032,6 +3047,55 @@ class BrokerCore:
 
         return self._run_with_retry(_do_rename_queue)
 
+    def _normalize_broadcast_queue_names(
+        self,
+        *,
+        pattern: str | None,
+        queue_names: Sequence[str] | None,
+        create_missing: bool,
+    ) -> tuple[str, ...] | None:
+        """Validate broadcast selectors and snapshot exact queue names."""
+        if pattern is not None and queue_names is not None:
+            raise ValueError("pattern and queue_names cannot be used together")
+        if not isinstance(create_missing, bool):
+            raise TypeError("create_missing must be a boolean")
+        if create_missing and queue_names is None:
+            raise ValueError("create_missing requires queue_names")
+        if queue_names is None:
+            return None
+        if isinstance(queue_names, (str, bytes)):
+            raise TypeError(
+                "queue_names must be a sequence of queue names, not a string"
+            )
+
+        exact_queue_names = tuple(dict.fromkeys(queue_names))
+        for queue in exact_queue_names:
+            self._validate_queue_name(queue)
+        return exact_queue_names
+
+    def _select_broadcast_queues(
+        self,
+        *,
+        pattern: str | None,
+        exact_queue_names: tuple[str, ...] | None,
+        create_missing: bool,
+    ) -> list[str]:
+        """Select broadcast targets inside the active write transaction."""
+        if exact_queue_names is not None and create_missing:
+            return list(exact_queue_names)
+
+        rows = self._runner.run(
+            self._sql.GET_DISTINCT_QUEUES,
+            fetch=True,
+        )
+        queues = [row[0] for row in rows]
+        if pattern:
+            return [queue for queue in queues if fnmatchcase(queue, pattern)]
+        if exact_queue_names is not None:
+            existing_queues = set(queues)
+            return [queue for queue in exact_queue_names if queue in existing_queues]
+        return queues
+
     def broadcast(
         self,
         message: str,
@@ -3062,26 +3126,14 @@ class BrokerCore:
         self._assert_no_reentrant_mutation_during_batch("broadcast")
         self._validate_message_size(message)
 
-        if pattern is not None and queue_names is not None:
-            raise ValueError("pattern and queue_names cannot be used together")
-        if not isinstance(create_missing, bool):
-            raise TypeError("create_missing must be a boolean")
-        if create_missing and queue_names is None:
-            raise ValueError("create_missing requires queue_names")
+        exact_queue_names = self._normalize_broadcast_queue_names(
+            pattern=pattern,
+            queue_names=queue_names,
+            create_missing=create_missing,
+        )
+        if exact_queue_names == ():
+            return 0
 
-        exact_queue_names: tuple[str, ...] | None = None
-        if queue_names is not None:
-            if isinstance(queue_names, (str, bytes)):
-                raise TypeError(
-                    "queue_names must be a sequence of queue names, not a string"
-                )
-            exact_queue_names = tuple(dict.fromkeys(queue_names))
-            for queue in exact_queue_names:
-                self._validate_queue_name(queue)
-            if not exact_queue_names:
-                return 0
-
-        # Variable to store the count
         queue_count = 0
 
         def _do_broadcast() -> None:
@@ -3091,26 +3143,11 @@ class BrokerCore:
                 try:
                     self._backend_plugin.prepare_broadcast(self._runner)
 
-                    if exact_queue_names is not None and create_missing:
-                        queues = list(exact_queue_names)
-                    else:
-                        rows = self._runner.run(
-                            self._sql.GET_DISTINCT_QUEUES,
-                            fetch=True,
-                        )
-                        queues = [row[0] for row in rows]
-
-                        if pattern:
-                            queues = [
-                                queue for queue in queues if fnmatchcase(queue, pattern)
-                            ]
-                        elif exact_queue_names is not None:
-                            existing_queues = set(queues)
-                            queues = [
-                                queue
-                                for queue in exact_queue_names
-                                if queue in existing_queues
-                            ]
+                    queues = self._select_broadcast_queues(
+                        pattern=pattern,
+                        exact_queue_names=exact_queue_names,
+                        create_missing=create_missing,
+                    )
 
                     # Generate timestamps for all queues upfront (before inserts)
                     # This reduces transaction time and improves concurrency

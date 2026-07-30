@@ -21,6 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   behavior. Concurrent first use now publishes one shared runner, failed core
   construction releases its checkout, and shutdown drains in-flight core
   creation without retaining late runners.
+- Closed bounded move iterators on every early-return path so filtered
+  one-message moves release transactional resources immediately.
+- Made Redis zero-target all-queue broadcasts state-neutral: they no longer
+  advance persisted `last_ts` when no message is inserted.
+- Corrected the copyable `MultiQueueWatcher` example so a queue without a
+  queue-specific error handler uses the configured default instead of
+  inheriting the preceding queue's handler.
 - Bumped the synchronized first-party `simplebroker-pg` and
   `simplebroker-redis` packages to 3.3.2, raised both extension core floors to
   `simplebroker>=5.6.2`, and raised the root optional backend floors to those
@@ -32,9 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message-size contract through PostgreSQL.
 
 ### simplebroker-redis 3.3.2
-- Synchronized patch release for SimpleBroker 5.6.2. Runtime backend behavior
-  is unchanged; shared conformance coverage now verifies the public
-  message-size contract through Redis.
+- Synchronized patch release for SimpleBroker 5.6.2. Zero-target all-queue
+  broadcasts now leave persisted `last_ts` unchanged; shared conformance
+  coverage verifies the public message-size contract through Redis.
 
 ## [5.6.1] - 2026-07-28
 

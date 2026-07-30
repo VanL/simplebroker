@@ -28,7 +28,7 @@ import contextvars
 import re
 import time
 import warnings
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Protocol, cast
 
@@ -229,6 +229,32 @@ class PooledAsyncSQLiteRunner:
         wal_autocheckpoint = int(self._config["BROKER_WAL_AUTOCHECKPOINT"])
         await conn.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
 
+    async def _run_on_connection(
+        self,
+        conn: aiosqlite.Connection,
+        sql: str,
+        params: tuple[Any, ...],
+        *,
+        fetch: bool,
+        commit: bool,
+    ) -> list[tuple[Any, ...]]:
+        try:
+            cursor = await conn.execute(sql, params)
+            if fetch:
+                result = await cursor.fetchall()
+                return cast(list[tuple[Any, ...]], list(result))
+            if commit:
+                await conn.commit()
+            return []
+        except aiosqlite.OperationalError as exc:
+            raise OperationalError(str(exc)) from exc
+        except aiosqlite.IntegrityError as exc:
+            raise IntegrityError(str(exc)) from exc
+        except aiosqlite.DatabaseError as exc:
+            if "DATATYPE MISMATCH" in str(exc).upper():
+                raise DataError(str(exc)) from exc
+            raise
+
     async def run(
         self, sql: str, params: tuple[Any, ...] = (), *, fetch: bool = False
     ) -> list[tuple[Any, ...]]:
@@ -238,41 +264,21 @@ class PooledAsyncSQLiteRunner:
         # Check if we're in a transaction
         transaction_conn = self._transaction_conn.get()
         if transaction_conn is not None:
-            # Use the transaction connection
-            try:
-                cursor = await transaction_conn.execute(sql, params)
-                if fetch:
-                    result = await cursor.fetchall()
-                    return cast(list[tuple[Any, ...]], list(result))
-                return []
-            except aiosqlite.OperationalError as e:
-                raise OperationalError(str(e)) from e
-            except aiosqlite.IntegrityError as e:
-                raise IntegrityError(str(e)) from e
-            except aiosqlite.DatabaseError as e:
-                # aiosqlite doesn't expose DataError directly
-                if "DATATYPE MISMATCH" in str(e).upper():
-                    raise DataError(str(e)) from e
-                raise
-        else:
-            # Get connection from pool
-            async with pool.connection() as conn:
-                try:
-                    cursor = await conn.execute(sql, params)
-                    if fetch:
-                        result = await cursor.fetchall()
-                        return list(result)
-                    await conn.commit()
-                    return []
-                except aiosqlite.OperationalError as e:
-                    raise OperationalError(str(e)) from e
-                except aiosqlite.IntegrityError as e:
-                    raise IntegrityError(str(e)) from e
-                except aiosqlite.DatabaseError as e:
-                    # aiosqlite doesn't expose DataError directly
-                    if "DATATYPE MISMATCH" in str(e).upper():
-                        raise DataError(str(e)) from e
-                    raise
+            return await self._run_on_connection(
+                transaction_conn,
+                sql,
+                params,
+                fetch=fetch,
+                commit=False,
+            )
+        async with pool.connection() as conn:
+            return await self._run_on_connection(
+                conn,
+                sql,
+                params,
+                fetch=fetch,
+                commit=True,
+            )
 
     async def begin_immediate(self) -> None:
         """Start an immediate transaction."""
@@ -714,6 +720,110 @@ class AsyncBrokerCore:
             messages.append(message)
         return messages
 
+    async def _stream_peek(
+        self,
+        where_conditions: list[str],
+        params: list[Any],
+        *,
+        all_messages: bool,
+    ) -> AsyncGenerator[str]:
+        offset = 0
+        batch_size = 100 if all_messages else 1
+        while True:
+            rows = await self._runner.run(
+                build_peek_query(where_conditions),
+                tuple(params + [batch_size, offset]),
+                fetch=True,
+            )
+            if not rows:
+                return
+            for row in rows:
+                yield row[0]
+            if not all_messages:
+                return
+            offset += batch_size
+
+    async def _stream_all_exactly_once(
+        self,
+        where_conditions: list[str],
+        params: list[Any],
+    ) -> AsyncGenerator[str]:
+        while True:
+            async with self._lock:
+                await self._execute_with_retry(self._runner.begin_immediate)
+                try:
+                    rows = await self._runner.run(
+                        build_claim_single_query(where_conditions),
+                        tuple(params),
+                        fetch=True,
+                    )
+                    if not rows:
+                        await self._runner.rollback()
+                        return
+                    await self._runner.commit()
+                    message = rows[0]
+                except Exception:
+                    await self._runner.rollback()
+                    raise
+            yield message[0]
+
+    async def _stream_all_at_least_once(
+        self,
+        where_conditions: list[str],
+        params: list[Any],
+        *,
+        commit_interval: int,
+    ) -> AsyncGenerator[str]:
+        while True:
+            async with self._lock:
+                await self._execute_with_retry(self._runner.begin_immediate)
+                try:
+                    batch_messages = await self._runner.run(
+                        build_claim_batch_query(where_conditions),
+                        tuple(params + [commit_interval]),
+                        fetch=True,
+                    )
+                    if not batch_messages:
+                        await self._runner.rollback()
+                        return
+                except Exception:
+                    await self._runner.rollback()
+                    raise
+
+            batch_committed = False
+            try:
+                for row in batch_messages:
+                    yield row[0]
+                async with self._lock:
+                    await self._runner.commit()
+                    batch_committed = True
+            except BaseException:
+                if not batch_committed:
+                    await self._runner.rollback()
+                raise
+
+    async def _stream_one(
+        self,
+        where_conditions: list[str],
+        params: list[Any],
+    ) -> AsyncGenerator[str]:
+        async with self._lock:
+            await self._execute_with_retry(self._runner.begin_immediate)
+            try:
+                rows = await self._runner.run(
+                    build_claim_single_query(where_conditions),
+                    tuple(params),
+                    fetch=True,
+                )
+                if rows:
+                    await self._runner.commit()
+                    yield rows[0][0]
+                else:
+                    await self._runner.rollback()
+            except Exception:
+                await self._runner.rollback()
+                raise
+
     async def stream_read(
         self,
         queue: str,
@@ -739,102 +849,29 @@ class AsyncBrokerCore:
                 where_conditions.append("ts > ?")
                 params.append(after_timestamp)
 
+        stream: AsyncGenerator[str]
         if peek:
-            # Peek mode - no locking needed
-            offset = 0
-            batch_size = 100 if all_messages else 1
-
-            while True:
-                query = build_peek_query(where_conditions)
-                rows = await self._runner.run(
-                    query, tuple(params + [batch_size, offset]), fetch=True
-                )
-
-                if not rows:
-                    break
-
-                for row in rows:
-                    yield row[0]  # body
-
-                if not all_messages:
-                    break
-
-                offset += batch_size
+            stream = self._stream_peek(
+                where_conditions,
+                params,
+                all_messages=all_messages,
+            )
+        elif all_messages and commit_interval == 1:
+            stream = self._stream_all_exactly_once(where_conditions, params)
+        elif all_messages:
+            stream = self._stream_all_at_least_once(
+                where_conditions,
+                params,
+                commit_interval=commit_interval,
+            )
         else:
-            # Delete mode
-            if all_messages:
-                # Process in batches
-                while True:
-                    if commit_interval == 1:
-                        # Exactly-once delivery
-                        async with self._lock:
-                            await self._execute_with_retry(self._runner.begin_immediate)
+            stream = self._stream_one(where_conditions, params)
 
-                            try:
-                                query = build_claim_single_query(where_conditions)
-                                rows = await self._runner.run(
-                                    query, tuple(params), fetch=True
-                                )
-
-                                if not rows:
-                                    await self._runner.rollback()
-                                    break
-
-                                await self._runner.commit()
-                                message = rows[0]
-                            except Exception:
-                                await self._runner.rollback()
-                                raise
-
-                        yield message[0]  # body
-                    else:
-                        # At-least-once delivery
-                        batch_messages = []
-
-                        async with self._lock:
-                            await self._execute_with_retry(self._runner.begin_immediate)
-
-                            try:
-                                query = build_claim_batch_query(where_conditions)
-                                batch_messages = await self._runner.run(
-                                    query, tuple(params + [commit_interval]), fetch=True
-                                )
-
-                                if not batch_messages:
-                                    await self._runner.rollback()
-                                    break
-                            except Exception:
-                                await self._runner.rollback()
-                                raise
-
-                        # Yield messages
-                        for row in batch_messages:
-                            yield row[0]  # body
-
-                        # Commit after yielding
-                        async with self._lock:
-                            try:
-                                await self._runner.commit()
-                            except Exception:
-                                await self._runner.rollback()
-                                raise
-            else:
-                # Single message
-                async with self._lock:
-                    await self._execute_with_retry(self._runner.begin_immediate)
-
-                    try:
-                        query = build_claim_single_query(where_conditions)
-                        rows = await self._runner.run(query, tuple(params), fetch=True)
-
-                        if rows:
-                            await self._runner.commit()
-                            yield rows[0][0]  # body
-                        else:
-                            await self._runner.rollback()
-                    except Exception:
-                        await self._runner.rollback()
-                        raise
+        try:
+            async for message in stream:
+                yield message
+        finally:
+            await stream.aclose()
 
     async def list_queues(self) -> list[str]:
         """List queue names."""
@@ -1079,13 +1116,20 @@ class AsyncQueue:
         commit_interval: int = 1,
     ) -> AsyncIterator[str]:
         """Stream messages from this queue."""
-        async for message in self._broker.stream_read(
-            self.name,
-            peek=peek,
-            all_messages=all_messages,
-            commit_interval=commit_interval,
-        ):
-            yield message
+        stream = cast(
+            AsyncGenerator[str, None],
+            self._broker.stream_read(
+                self.name,
+                peek=peek,
+                all_messages=all_messages,
+                commit_interval=commit_interval,
+            ),
+        )
+        try:
+            async for message in stream:
+                yield message
+        finally:
+            await stream.aclose()
 
     async def size(self) -> int:
         """Get the number of unclaimed messages in this queue."""

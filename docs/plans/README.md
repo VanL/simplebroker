@@ -89,6 +89,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-28-propagate-guidance-delta-wave-plan.md | retired-pending — soft-retired 2026-07-29; source 54fa706 (local-only pin) |
 | 2026-07-29-code-quality-cleanup-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
 | 2026-07-29-coalescing-sweep-plan.md | completed — class 3; 11 plans soft-retired, hot lessons deferred, no promotion candidate, independently reviewed and verified |
+| 2026-07-29-complexity-and-state-machine-hardening-plan.md | active — class 5+P; C901 audit registry, complexity refactors, and explicit all-transition state-machine verification |
 | 2026-07-29-development-toolchain-refresh-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
 | 2026-07-29-process-session-core-factory-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
 | 2026-07-29-ruff-lint-expansion-plan.md | active — class 3+P; Ruff 0.16 stable-default expansion and repository-wide cleanup in progress |

@@ -4,10 +4,17 @@ import importlib.util
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
+
+from tests.helpers.state_machine_contracts import (
+    TransitionCase,
+    fires_transition_table,
+)
 
 
 def _load_release_module() -> ModuleType:
@@ -1720,3 +1727,855 @@ def test_remote_tag_is_read_again_after_ci_wait(
 
     with pytest.raises(RuntimeError, match="Choose a new version"):
         release.publish_release_tags_after_ci((candidate,), sha)
+
+
+def _release_state(
+    target: Any,
+    version: str,
+    *,
+    local: str | None = None,
+    remote: str | None = None,
+    github: bool = False,
+    pypi: bool = False,
+) -> object:
+    return release.ReleaseState(
+        target=target,
+        version=version,
+        tag_name=target.tag_name(version),
+        github_release_exists=github,
+        pypi_release_exists=pypi,
+        local_tag_commit=local,
+        remote_tag_commit=remote,
+    )
+
+
+def _tag_create(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del monkeypatch, capsys
+    assert (
+        release.plan_tag_action(
+            _state(),
+            head_commit="a" * 40,
+            version_changed=False,
+        )
+        == "create"
+    )
+
+
+def _tag_push_local(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del monkeypatch, capsys
+    sha = "a" * 40
+    assert (
+        release.plan_tag_action(
+            _state(local=sha),
+            head_commit=sha,
+            version_changed=False,
+        )
+        == "push_local"
+    )
+
+
+def _tag_reuse_remote(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del monkeypatch, capsys
+    sha = "a" * 40
+    assert (
+        release.plan_tag_action(
+            _state(local=sha, remote=sha),
+            head_commit=sha,
+            version_changed=False,
+        )
+        == "reuse_remote"
+    )
+
+
+def _tag_replace_local(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del monkeypatch, capsys
+    assert (
+        release.plan_tag_action(
+            _state(local="b" * 40),
+            head_commit="a" * 40,
+            version_changed=True,
+        )
+        == "replace_local"
+    )
+
+
+def _tag_reject_remote_move(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del monkeypatch, capsys
+    with pytest.raises(RuntimeError, match="remote tag|origin"):
+        release.plan_tag_action(
+            _state(remote="b" * 40),
+            head_commit="a" * 40,
+            version_changed=False,
+        )
+
+
+def _install_single_release_scenario(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    current_version: str,
+    release_version: str,
+    dirty: bool,
+    files_changed: bool = False,
+    head_commits: tuple[str, ...] | None = None,
+) -> dict[str, list[Any]]:
+    records: dict[str, list[Any]] = {
+        "commands": [],
+        "writes": [],
+        "publications": [],
+    }
+    sha = "a" * 40
+    monkeypatch.setattr(
+        release,
+        "require_backend_api_release_invariants",
+        lambda targets: None,
+    )
+    monkeypatch.setattr(
+        release,
+        "read_target_version",
+        lambda target: (
+            current_version
+            if target.key == release.ROOT_RELEASE_TARGET.key
+            else "3.3.2"
+        ),
+    )
+    monkeypatch.setattr(release, "is_dirty_worktree", lambda: dirty)
+    monkeypatch.setattr(
+        release,
+        "resolve_target_version",
+        lambda requested, current_version, target, dry_run=False: (
+            release_version,
+            _release_state(target, release_version),
+        ),
+    )
+    if head_commits is None:
+        monkeypatch.setattr(release, "current_head_commit", lambda: sha)
+    else:
+        head_commit_values = iter(head_commits)
+        monkeypatch.setattr(
+            release,
+            "current_head_commit",
+            lambda: next(head_commit_values),
+        )
+    monkeypatch.setattr(release, "require_main_branch", lambda: None)
+    monkeypatch.setattr(release, "require_repository_settings", lambda: None)
+    monkeypatch.setattr(release, "_require_command", lambda name: None)
+    monkeypatch.setattr(release, "require_published_pg_baseline", lambda version: None)
+    monkeypatch.setattr(
+        release,
+        "require_published_redis_baseline",
+        lambda version: None,
+    )
+    monkeypatch.setattr(release, "read_pg_extension_version", lambda: "3.3.2")
+    monkeypatch.setattr(release, "read_redis_extension_version", lambda: "3.3.2")
+    monkeypatch.setattr(release, "sync_root_pg_extra_dependency", lambda: None)
+    monkeypatch.setattr(release, "sync_root_redis_extra_dependency", lambda: None)
+    monkeypatch.setattr(release, "build_postupdate_steps", lambda target: ())
+    monkeypatch.setattr(
+        release,
+        "release_files_changed",
+        lambda target: files_changed,
+    )
+    monkeypatch.setattr(
+        release,
+        "write_target_version",
+        lambda target, version: records["writes"].append((target.key, version)),
+    )
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: records["commands"].append((command, kwargs)),
+    )
+    monkeypatch.setattr(
+        release,
+        "publish_release_tags_after_ci",
+        lambda candidates, release_sha, **kwargs: records["publications"].append(
+            (candidates, release_sha, kwargs)
+        ),
+    )
+    return records
+
+
+def _release_rejects_dirty_real_run(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del capsys
+    _install_single_release_scenario(
+        monkeypatch,
+        current_version="5.6.2",
+        release_version="5.6.3",
+        dirty=True,
+    )
+    with pytest.raises(RuntimeError, match="Working tree must be clean"):
+        release.main(["core", "--version", "5.6.3", "--skip-checks"])
+
+
+def _release_dry_run_reports_dirty_without_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    records = _install_single_release_scenario(
+        monkeypatch,
+        current_version="5.6.2",
+        release_version="5.6.3",
+        dirty=True,
+    )
+
+    assert (
+        release.main(["core", "--version", "5.6.3", "--dry-run", "--skip-checks"]) == 0
+    )
+
+    assert records["writes"] == []
+    assert "working tree is dirty; a real release would fail" in capsys.readouterr().out
+    assert records["publications"]
+    assert records["publications"][0][2] == {"dry_run": True}
+    assert records["publications"][0][1] == release.PENDING_RELEASE_COMMIT
+    assert records["commands"]
+    assert all(
+        kwargs.get("dry_run") is True for _command, kwargs in records["commands"]
+    )
+
+
+def _release_changed_version_creates_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del capsys
+    records = _install_single_release_scenario(
+        monkeypatch,
+        current_version="5.6.2",
+        release_version="5.6.3",
+        dirty=False,
+        head_commits=("a" * 40, "b" * 40),
+    )
+
+    assert release.main(["core", "--version", "5.6.3", "--skip-checks"]) == 0
+
+    assert records["writes"] == [("core", "5.6.3")]
+    commands = [item[0] for item in records["commands"]]
+    assert any(command[:2] == ("git", "add") for command in commands)
+    assert any(command[:2] == ("git", "commit") for command in commands)
+    assert all(
+        kwargs.get("dry_run", False) is False
+        for command, kwargs in records["commands"]
+        if command[:2] in {("git", "add"), ("git", "commit")}
+    )
+    assert records["publications"][0][1] == "b" * 40
+
+
+def _release_current_version_reuses_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del capsys
+    records = _install_single_release_scenario(
+        monkeypatch,
+        current_version="5.6.3",
+        release_version="5.6.3",
+        dirty=False,
+        files_changed=False,
+    )
+
+    assert release.main(["core", "--skip-checks"]) == 0
+
+    assert records["writes"] == []
+    commands = [item[0] for item in records["commands"]]
+    assert not any(command[:2] == ("git", "commit") for command in commands)
+    assert records["publications"][0][1] == "a" * 40
+
+
+def _release_unchanged_version_commits_generated_files(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del capsys
+    records = _install_single_release_scenario(
+        monkeypatch,
+        current_version="5.6.3",
+        release_version="5.6.3",
+        dirty=False,
+        files_changed=True,
+        head_commits=("a" * 40, "b" * 40),
+    )
+
+    assert release.main(["core", "--skip-checks"]) == 0
+
+    assert records["writes"] == []
+    commands = [item[0] for item in records["commands"]]
+    assert sum(command[:2] == ("git", "add") for command in commands) == 1
+    assert sum(command[:2] == ("git", "commit") for command in commands) == 1
+    assert records["publications"][0][1] == "b" * 40
+
+
+def _release_ci_success_publishes_tag(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del capsys
+    sha = "a" * 40
+    candidate = release.ReleaseCandidate(
+        target=release.ROOT_RELEASE_TARGET,
+        current_version="5.6.3",
+        release_version="5.6.3",
+        state=_release_state(release.ROOT_RELEASE_TARGET, "5.6.3"),
+    )
+    events: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: events.append(
+            ("command:" + " ".join(command), kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        release,
+        "wait_for_release_workflows",
+        lambda targets, release_sha, **kwargs: events.append(
+            (f"wait:{release_sha}", kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        release,
+        "require_release_sha_on_origin_main",
+        lambda release_sha, **kwargs: events.append(
+            (f"ancestry:{release_sha}", kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        release,
+        "inspect_release_state",
+        lambda version, target: _release_state(target, version),
+    )
+
+    release.publish_release_tags_after_ci((candidate,), sha)
+
+    assert events == [
+        ("command:git push origin main", {"dry_run": False}),
+        (f"wait:{sha}", {"dry_run": False}),
+        (f"ancestry:{sha}", {"dry_run": False}),
+        (f"command:git tag v5.6.3 {sha}", {"dry_run": False}),
+        ("command:git push origin v5.6.3", {"dry_run": False}),
+    ]
+
+
+def _release_ci_failure_stops_before_tag(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del capsys
+    candidate = release.ReleaseCandidate(
+        target=release.ROOT_RELEASE_TARGET,
+        current_version="5.6.3",
+        release_version="5.6.3",
+        state=_release_state(release.ROOT_RELEASE_TARGET, "5.6.3"),
+    )
+    commands: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: commands.append((command, kwargs)),
+    )
+    monkeypatch.setattr(
+        release,
+        "wait_for_release_workflows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("required workflow failed")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="required workflow failed"):
+        release.publish_release_tags_after_ci((candidate,), "a" * 40)
+
+    assert commands == [
+        (("git", "push", "origin", "main"), {"dry_run": False}),
+    ]
+
+
+def _release_publication_race_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del capsys
+    candidate = release.ReleaseCandidate(
+        target=release.ROOT_RELEASE_TARGET,
+        current_version="5.6.3",
+        release_version="5.6.3",
+        state=_release_state(release.ROOT_RELEASE_TARGET, "5.6.3"),
+    )
+    commands: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: commands.append((command, kwargs)),
+    )
+    monkeypatch.setattr(
+        release,
+        "wait_for_release_workflows",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        release,
+        "require_release_sha_on_origin_main",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        release,
+        "inspect_release_state",
+        lambda version, target: _release_state(target, version, pypi=True),
+    )
+
+    with pytest.raises(RuntimeError, match="published during the pre-tag wait"):
+        release.publish_release_tags_after_ci((candidate,), "a" * 40)
+
+    assert commands == [
+        (("git", "push", "origin", "main"), {"dry_run": False}),
+    ]
+
+
+def _release_safe_rerun_reuses_remote_tag(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    sha = "a" * 40
+    candidate = release.ReleaseCandidate(
+        target=release.ROOT_RELEASE_TARGET,
+        current_version="5.6.3",
+        release_version="5.6.3",
+        state=_release_state(release.ROOT_RELEASE_TARGET, "5.6.3"),
+    )
+    commands: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: commands.append((command, kwargs)),
+    )
+    monkeypatch.setattr(
+        release,
+        "wait_for_release_workflows",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        release,
+        "require_release_sha_on_origin_main",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        release,
+        "inspect_release_state",
+        lambda version, target: _release_state(
+            target,
+            version,
+            local=sha,
+            remote=sha,
+        ),
+    )
+
+    release.publish_release_tags_after_ci((candidate,), sha)
+
+    assert commands == [
+        (("git", "push", "origin", "main"), {"dry_run": False}),
+    ]
+    assert "already exists on origin at HEAD" in capsys.readouterr().out
+
+
+def _release_batch_no_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(release, "is_dirty_worktree", lambda: False)
+    monkeypatch.setattr(release, "discover_unpublished_releases", lambda: ())
+
+    assert release.main(["all", "--skip-checks"]) == 0
+    assert "No unpublished release targets found" in capsys.readouterr().out
+
+
+def _release_batch_dry_run_plans_one_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del capsys
+    candidates = (
+        release.ReleaseCandidate(
+            target=release.PG_RELEASE_TARGET,
+            current_version="3.3.2",
+            release_version="3.3.2",
+            state=_release_state(release.PG_RELEASE_TARGET, "3.3.2"),
+        ),
+        release.ReleaseCandidate(
+            target=release.ROOT_RELEASE_TARGET,
+            current_version="5.6.3",
+            release_version="5.6.3",
+            state=_release_state(release.ROOT_RELEASE_TARGET, "5.6.3"),
+        ),
+    )
+    commands: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+    publications: list[
+        tuple[
+            tuple[release.ReleaseCandidate, ...],
+            str,
+            dict[str, Any],
+        ]
+    ] = []
+    monkeypatch.setattr(release, "is_dirty_worktree", lambda: True)
+    monkeypatch.setattr(
+        release,
+        "discover_unpublished_releases",
+        lambda: candidates,
+    )
+    monkeypatch.setattr(
+        release,
+        "require_backend_api_release_invariants",
+        lambda targets: None,
+    )
+    monkeypatch.setattr(release, "current_head_commit", lambda: "a" * 40)
+    monkeypatch.setattr(
+        release,
+        "read_target_version",
+        lambda target: "3.3.2" if target.key != "core" else "5.6.3",
+    )
+    monkeypatch.setattr(
+        release,
+        "build_postupdate_steps_for_targets",
+        lambda targets: (),
+    )
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: commands.append((command, kwargs)),
+    )
+    monkeypatch.setattr(
+        release,
+        "publish_release_tags_after_ci",
+        lambda candidates, release_sha, **kwargs: publications.append(
+            (candidates, release_sha, kwargs)
+        ),
+    )
+
+    assert release.main(["all", "--dry-run", "--skip-checks"]) == 0
+
+    assert sum(command[:2] == ("git", "commit") for command, _kwargs in commands) == 1
+    assert commands
+    assert all(kwargs.get("dry_run") is True for _command, kwargs in commands)
+    assert publications == [
+        (
+            candidates,
+            release.PENDING_RELEASE_COMMIT,
+            {"dry_run": True},
+        )
+    ]
+
+
+def _install_real_batch_scenario(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    files_changed: bool,
+    head_commits: tuple[str, str],
+) -> dict[str, list[Any]]:
+    candidates = (
+        release.ReleaseCandidate(
+            target=release.PG_RELEASE_TARGET,
+            current_version="3.3.2",
+            release_version="3.3.2",
+            state=_release_state(release.PG_RELEASE_TARGET, "3.3.2"),
+        ),
+        release.ReleaseCandidate(
+            target=release.ROOT_RELEASE_TARGET,
+            current_version="5.6.3",
+            release_version="5.6.3",
+            state=_release_state(release.ROOT_RELEASE_TARGET, "5.6.3"),
+        ),
+    )
+    records: dict[str, list[Any]] = {"commands": [], "publications": []}
+    head_values = iter(head_commits)
+    monkeypatch.setattr(release, "is_dirty_worktree", lambda: False)
+    monkeypatch.setattr(
+        release,
+        "discover_unpublished_releases",
+        lambda: candidates,
+    )
+    monkeypatch.setattr(
+        release,
+        "require_backend_api_release_invariants",
+        lambda targets: None,
+    )
+    monkeypatch.setattr(release, "current_head_commit", lambda: next(head_values))
+    monkeypatch.setattr(release, "require_main_branch", lambda: None)
+    monkeypatch.setattr(release, "require_repository_settings", lambda: None)
+    monkeypatch.setattr(release, "_require_command", lambda name: None)
+    monkeypatch.setattr(
+        release,
+        "_require_core_baselines_or_batch_releases",
+        lambda selected: None,
+    )
+    monkeypatch.setattr(release, "sync_root_pg_extra_dependency", lambda: None)
+    monkeypatch.setattr(release, "sync_root_redis_extra_dependency", lambda: None)
+    monkeypatch.setattr(
+        release,
+        "build_postupdate_steps_for_targets",
+        lambda targets: (),
+    )
+    monkeypatch.setattr(
+        release,
+        "release_files_changed_for_targets",
+        lambda targets: files_changed,
+    )
+    monkeypatch.setattr(
+        release,
+        "run_command",
+        lambda command, **kwargs: records["commands"].append((command, kwargs)),
+    )
+    monkeypatch.setattr(
+        release,
+        "publish_release_tags_after_ci",
+        lambda selected, release_sha, **kwargs: records["publications"].append(
+            (selected, release_sha, kwargs)
+        ),
+    )
+    return records
+
+
+def _release_batch_commits_generated_files(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    del capsys
+    records = _install_real_batch_scenario(
+        monkeypatch,
+        files_changed=True,
+        head_commits=("a" * 40, "b" * 40),
+    )
+
+    assert release.main(["all", "--skip-checks"]) == 0
+
+    commands = [command for command, _kwargs in records["commands"]]
+    assert sum(command[:2] == ("git", "add") for command in commands) == 1
+    assert sum(command[:2] == ("git", "commit") for command in commands) == 1
+    assert records["publications"][0][1] == "b" * 40
+
+
+def _release_batch_reuses_existing_head(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    records = _install_real_batch_scenario(
+        monkeypatch,
+        files_changed=False,
+        head_commits=("a" * 40, "a" * 40),
+    )
+
+    assert release.main(["all", "--skip-checks"]) == 0
+
+    commands = [command for command, _kwargs in records["commands"]]
+    assert not any(command[:2] == ("git", "commit") for command in commands)
+    assert records["publications"][0][1] == "a" * 40
+    assert "No release commit needed" in capsys.readouterr().out
+
+
+RELEASE_TRANSITIONS = (
+    TransitionCase(
+        transition_id="TAG-CREATE",
+        start_state="unpublished without tags",
+        event="tag action is planned",
+        guard="release files already match HEAD",
+        next_state="tag-create-planned",
+        effects="does not mutate an existing tag",
+        expected_result="create action",
+        payload=_tag_create,
+    ),
+    TransitionCase(
+        transition_id="TAG-PUSH-LOCAL",
+        start_state="unpublished with matching local tag",
+        event="tag action is planned",
+        guard="origin has no tag and local tag equals HEAD",
+        next_state="local-tag-push-planned",
+        effects="preserves the matching local tag",
+        expected_result="push_local action",
+        payload=_tag_push_local,
+    ),
+    TransitionCase(
+        transition_id="TAG-REUSE-REMOTE",
+        start_state="unpublished with matching remote tag",
+        event="tag action is planned",
+        guard="remote and local tag both equal HEAD",
+        next_state="remote-tag-reuse-planned",
+        effects="does not move or recreate the permanent remote tag",
+        expected_result="reuse_remote action",
+        payload=_tag_reuse_remote,
+    ),
+    TransitionCase(
+        transition_id="TAG-REPLACE-LOCAL",
+        start_state="new version with stale local-only tag",
+        event="tag action is planned",
+        guard="origin has no tag for the new version",
+        next_state="local-tag-replacement-planned",
+        effects="allows deletion and recreation of only the local tag",
+        expected_result="replace_local action",
+        payload=_tag_replace_local,
+    ),
+    TransitionCase(
+        transition_id="TAG-REJECT-REMOTE-MOVE",
+        start_state="unpublished with wrong remote tag",
+        event="tag action is planned",
+        guard="remote release tags are permanent",
+        next_state="failed",
+        effects="does not plan a remote delete or force push",
+        expected_result="RuntimeError requires a new version",
+        payload=_tag_reject_remote_move,
+    ),
+    TransitionCase(
+        transition_id="DIRTY-REAL-REJECT",
+        start_state="release-planning",
+        event="real release starts",
+        guard="working tree is dirty",
+        next_state="failed",
+        effects="stops before version resolution or file mutation",
+        expected_result="RuntimeError requires a clean tree",
+        payload=_release_rejects_dirty_real_run,
+    ),
+    TransitionCase(
+        transition_id="DIRTY-DRY-RUN",
+        start_state="release-planning",
+        event="dry run starts",
+        guard="working tree is dirty",
+        next_state="dry-run-complete",
+        effects="reports the real-run failure while performing no mutation",
+        expected_result="returns success with an explicit warning",
+        payload=_release_dry_run_reports_dirty_without_mutation,
+    ),
+    TransitionCase(
+        transition_id="VERSION-CHANGED-COMMIT",
+        start_state="preflight-complete",
+        event="requested version differs from package files",
+        guard="branch and repository safety gates passed",
+        next_state="release-commit-ready",
+        effects="writes versions, stages release files, and creates one commit",
+        expected_result="publication receives the resulting exact SHA",
+        payload=_release_changed_version_creates_commit,
+    ),
+    TransitionCase(
+        transition_id="VERSION-UNCHANGED-REUSE-COMMIT",
+        start_state="preflight-complete",
+        event="current unpublished version is reused",
+        guard="generated release files are unchanged",
+        next_state="release-commit-ready",
+        effects="does not write versions or create another commit",
+        expected_result="publication receives the existing HEAD SHA",
+        payload=_release_current_version_reuses_commit,
+    ),
+    TransitionCase(
+        transition_id="VERSION-UNCHANGED-GENERATED-COMMIT",
+        start_state="preflight-complete",
+        event="post-update generation changes release files",
+        guard="the package version itself is already the unpublished target",
+        next_state="release-commit-ready",
+        effects="stages generated files and creates one commit without rewriting versions",
+        expected_result="publication receives the new post-commit SHA",
+        payload=_release_unchanged_version_commits_generated_files,
+    ),
+    TransitionCase(
+        transition_id="CI-SUCCESS-TAG",
+        start_state="release-commit-ready",
+        event="exact-SHA workflows and ancestry check succeed",
+        guard="version remains unpublished after the wait",
+        next_state="tag-pushed",
+        effects="pushes main, waits, verifies ancestry, creates tag, then pushes tag",
+        expected_result="tag publication order is exact",
+        payload=_release_ci_success_publishes_tag,
+    ),
+    TransitionCase(
+        transition_id="CI-FAILURE-NO-TAG",
+        start_state="release-commit-ready",
+        event="required exact-SHA workflow fails",
+        guard="main was pushed but tag creation has not begun",
+        next_state="failed-before-tag",
+        effects="stops without creating or pushing a tag",
+        expected_result="CI failure propagates",
+        payload=_release_ci_failure_stops_before_tag,
+    ),
+    TransitionCase(
+        transition_id="PUBLICATION-RACE-FAIL-CLOSED",
+        start_state="ci-green",
+        event="version becomes published during the pre-tag wait",
+        guard="release state is re-read after CI",
+        next_state="failed-before-tag",
+        effects="does not tag an externally published version",
+        expected_result="RuntimeError names the publication race",
+        payload=_release_publication_race_fails_closed,
+    ),
+    TransitionCase(
+        transition_id="SAFE-RERUN-REMOTE-TAG",
+        start_state="ci-green with exact remote tag",
+        event="interrupted release is rerun",
+        guard="remote tag still equals the tested SHA and version is unpublished",
+        next_state="tag-reused",
+        effects="does not recreate or push the existing tag",
+        expected_result="prints the workflow rerun instruction",
+        payload=_release_safe_rerun_reuses_remote_tag,
+    ),
+    TransitionCase(
+        transition_id="BATCH-NONE",
+        start_state="batch-discovery",
+        event="all package versions are already published",
+        guard="no unpublished candidate exists",
+        next_state="complete-no-op",
+        effects="does not run gates, mutate files, or publish tags",
+        expected_result="returns success with no-candidate notice",
+        payload=_release_batch_no_candidates,
+    ),
+    TransitionCase(
+        transition_id="BATCH-DRY-RUN",
+        start_state="batch-discovery",
+        event="multiple unpublished targets are planned",
+        guard="dry run permits a dirty tree but performs no mutation",
+        next_state="dry-run-complete",
+        effects="plans one synchronized commit and one publication pass",
+        expected_result="all candidate tags share the pending release commit",
+        payload=_release_batch_dry_run_plans_one_commit,
+    ),
+    TransitionCase(
+        transition_id="BATCH-GENERATED-COMMIT",
+        start_state="batch-postupdate-complete",
+        event="generated files differ for the selected release targets",
+        guard="the real synchronized release passed safety gates",
+        next_state="batch-release-commit-ready",
+        effects="creates one shared commit for every selected target",
+        expected_result="publication receives the new post-commit SHA",
+        payload=_release_batch_commits_generated_files,
+    ),
+    TransitionCase(
+        transition_id="BATCH-REUSE-HEAD",
+        start_state="batch-postupdate-complete",
+        event="all generated files already match",
+        guard="the real synchronized release passed safety gates",
+        next_state="batch-release-commit-ready",
+        effects="creates no commit and preserves the existing HEAD",
+        expected_result="publication receives the unchanged exact SHA",
+        payload=_release_batch_reuses_existing_head,
+    ),
+)
+
+
+@fires_transition_table("SM-RELEASE", RELEASE_TRANSITIONS)
+def test_release_fires_transition_table(
+    transition_case: TransitionCase[
+        Callable[[pytest.MonkeyPatch, pytest.CaptureFixture[str]], None]
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    transition_case.payload(monkeypatch, capsys)

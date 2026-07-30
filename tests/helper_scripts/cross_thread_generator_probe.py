@@ -81,13 +81,14 @@ def _transaction_state(backend: str, runner: Any, owner_connection: Any) -> Any:
     return None
 
 
-def _execute_probe(
+def _execute_probe(  # noqa: C901 approved [DOM-10.1.1] exception
     backend: str,
     target: str,
     scope: str,
     operation: str,
     sqlite_default_config: bool,
     second_writer_timeout: float,
+    operation_retry_timeout: float | None,
 ) -> dict[str, Any]:
     runner, core, _second_runner, second_core = _build_backend(
         backend,
@@ -97,14 +98,15 @@ def _execute_probe(
     )
     core.write("jobs", "one")
     core.write("jobs", "two")
-
+    if operation_retry_timeout is not None:
+        _limit_probe_retry(backend, operation_retry_timeout)
     state: dict[str, Any] = {"backend": backend}
     generator_box: dict[str, Any] = {}
     advanced = threading.Event()
     inspect_owner = threading.Event()
     owner_inspected = threading.Event()
 
-    def owner() -> None:
+    def owner() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
         owner_connection = None
         if backend == "sqlite":
             owner_connection = runner.get_connection()
@@ -264,6 +266,7 @@ def _probe_child(
     operation: str,
     sqlite_default_config: bool,
     second_writer_timeout: float,
+    operation_retry_timeout: float | None,
 ) -> None:
     try:
         result = _execute_probe(
@@ -273,6 +276,7 @@ def _probe_child(
             operation,
             sqlite_default_config,
             second_writer_timeout,
+            operation_retry_timeout,
         )
     except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
         result = {
@@ -286,7 +290,7 @@ def _probe_child(
         os._exit(0)
 
 
-def _execute_sidecar_probe(
+def _execute_sidecar_probe(  # noqa: C901 approved [DOM-10.1.1] exception
     backend: str,
     target: str,
     scope: str,
@@ -415,6 +419,7 @@ def run_cross_thread_generator_probe(
     operation: str = "claim",
     sqlite_default_config: bool = False,
     second_writer_timeout: float = 1.0,
+    operation_retry_timeout: float | None = None,
     timeout: float = 10.0,
 ) -> dict[str, Any]:
     """Run one backend probe in a spawned process with a hard timeout."""
@@ -430,6 +435,7 @@ def run_cross_thread_generator_probe(
             operation,
             sqlite_default_config,
             second_writer_timeout,
+            operation_retry_timeout,
         ),
     )
     process.start()
@@ -497,7 +503,7 @@ def run_cross_thread_sidecar_probe(
     return result
 
 
-def _queue_close_probe_child(
+def _queue_close_probe_child(  # noqa: C901 approved [DOM-10.1.1] exception
     send_connection: Any,
     backend: str,
     target: str,
@@ -624,3 +630,68 @@ def run_queue_close_mode_probe(
     result["parent_timeout"] = False
     result["process_exitcode"] = process.exitcode
     return result
+
+
+def _blocked_probe_child(
+    send_connection: Any,
+    ready_event: Any,
+    blocker_event: Any,
+) -> None:
+    """Publish deterministic readiness, then wait without producing a result."""
+
+    ready_event.set()
+    blocker_event.wait(timeout=30.0)
+    try:
+        send_connection.send({"unexpected": "blocker released"})
+        send_connection.close()
+    finally:
+        os._exit(0)
+
+
+def run_blocked_cross_thread_timeout_probe(
+    *,
+    timeout: float,
+    ready_timeout: float = 5.0,
+) -> dict[str, Any]:
+    """Exercise the parent timeout only after the child proves it is blocked."""
+
+    context = mp.get_context("spawn")
+    receive_connection, send_connection = context.Pipe(duplex=False)
+    ready_event = context.Event()
+    blocker_event = context.Event()
+    process = context.Process(
+        target=_blocked_probe_child,
+        args=(send_connection, ready_event, blocker_event),
+    )
+    process.start()
+    send_connection.close()
+    child_ready = ready_event.wait(timeout=ready_timeout)
+    result_available = receive_connection.poll(timeout) if child_ready else False
+    if result_available:
+        result = cast(dict[str, Any], receive_connection.recv())
+    else:
+        process.terminate()
+        process.join(timeout=2.0)
+        result = {
+            "parent_timeout": child_ready,
+            "child_ready_before_timeout": child_ready,
+        }
+    receive_connection.close()
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=2.0)
+    result["process_exitcode"] = process.exitcode
+    result["process_alive_after_join"] = process.is_alive()
+    return result
+
+
+def _limit_probe_retry(backend: str, timeout: float) -> None:
+    """Keep the SQLite writer retry inside the probe's declared wait budget."""
+
+    if backend != "sqlite":
+        return
+    from simplebroker import _timestamp as timestamp_module
+    from simplebroker import db as db_module
+
+    db_module.OPERATION_RETRY_MAX_ELAPSED = timeout
+    timestamp_module.TS_RETRY_MAX_ELAPSED = timeout

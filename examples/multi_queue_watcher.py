@@ -45,6 +45,44 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _validate_watcher_configuration(
+    queues: list[str],
+    default_handler: Callable[[str, int], None],
+    queue_handlers: dict[str, Callable[[str, int], None]] | None,
+    queue_error_handlers: dict[
+        str,
+        Callable[[Exception, str, int], bool | None],
+    ]
+    | None,
+    error_handler: Callable[[Exception, str, int], bool | None],
+) -> None:
+    """Reject invalid queue and handler configuration."""
+    if not queues:
+        raise ValueError("queues list cannot be empty")
+
+    if not callable(default_handler):
+        raise TypeError(
+            f"default_handler must be callable, got {type(default_handler).__name__}"
+        )
+
+    if queue_handlers:
+        for queue_name, handler in queue_handlers.items():
+            if not callable(handler):
+                raise TypeError(f"handler for queue '{queue_name}' must be callable")
+
+    if queue_error_handlers:
+        for queue_name, queue_error_handler in queue_error_handlers.items():
+            if not callable(queue_error_handler):
+                raise TypeError(
+                    f"error_handler for queue '{queue_name}' must be callable"
+                )
+
+    if not callable(error_handler):
+        raise TypeError(
+            f"error_handler must be callable, got {type(error_handler).__name__}"
+        )
+
+
 class MultiQueueWatcher(BaseWatcher):
     """Watches multiple queues and processes them with round-robin scheduling.
 
@@ -93,33 +131,13 @@ class MultiQueueWatcher(BaseWatcher):
             yield_strategy: Queue selection strategy ("round_robin" supported)
             check_interval: How often to refresh active queue list (iterations)
         """
-        # Input validation
-        if not queues:
-            raise ValueError("queues list cannot be empty")
-
-        if not callable(default_handler):
-            raise TypeError(
-                f"default_handler must be callable, got {type(default_handler).__name__}"
-            )
-
-        if queue_handlers:
-            for queue_name, handler in queue_handlers.items():
-                if not callable(handler):
-                    raise TypeError(
-                        f"handler for queue '{queue_name}' must be callable"
-                    )
-
-        if queue_error_handlers:
-            for queue_name, error_handler_func in queue_error_handlers.items():
-                if not callable(error_handler_func):
-                    raise TypeError(
-                        f"error_handler for queue '{queue_name}' must be callable"
-                    )
-
-        if not callable(error_handler):
-            raise TypeError(
-                f"error_handler must be callable, got {type(error_handler).__name__}"
-            )
+        _validate_watcher_configuration(
+            queues,
+            default_handler,
+            queue_handlers,
+            queue_error_handlers,
+            error_handler,
+        )
 
         # Store handlers before calling super().__init__() to prevent BaseWatcher from overriding
         self._handler = default_handler
@@ -161,24 +179,16 @@ class MultiQueueWatcher(BaseWatcher):
 
         # Create Queue objects for each queue (sharing same database)
         for queue_name in queues:
-            handler = (queue_handlers or {}).get(queue_name, default_handler)
-            error_handler = (queue_error_handlers or {}).get(queue_name, error_handler)
-
-            if queue_name == initial_queue.name:
-                # Reuse the initial queue object
-                queue_obj = initial_queue
-            else:
-                # Create new Queue object sharing same database
-                queue_obj = Queue(queue_name, db_path=db_path, persistent=persistent)
-
-            if hasattr(queue_obj, "set_stop_event"):
-                queue_obj.set_stop_event(self._stop_event)
-
-            self._queues[queue_name] = {
-                "queue": queue_obj,
-                "handler": handler,
-                "error_handler": error_handler,
-            }
+            self._queues[queue_name] = self._build_queue_entry(
+                queue_name,
+                initial_queue=initial_queue,
+                db_path=db_path,
+                handler=(queue_handlers or {}).get(queue_name, default_handler),
+                error_handler=(queue_error_handlers or {}).get(
+                    queue_name,
+                    self._default_error_handler,
+                ),
+            )
 
         # Multi-queue processing state
         self._active_queues: list[str] = []
@@ -190,6 +200,29 @@ class MultiQueueWatcher(BaseWatcher):
         logger.info(
             f"MultiQueueWatcher initialized with {len(queues)} queues: {queues}"
         )
+
+    def _build_queue_entry(
+        self,
+        queue_name: str,
+        *,
+        initial_queue: Queue,
+        db_path: str | BrokerTarget,
+        handler: Callable[[str, int], None],
+        error_handler: Callable[[Exception, str, int], bool | None],
+    ) -> dict[str, Any]:
+        """Build one queue entry with the watcher's shared stop event."""
+        queue = (
+            initial_queue
+            if queue_name == initial_queue.name
+            else Queue(queue_name, db_path=db_path, persistent=self._persistent)
+        )
+        if hasattr(queue, "set_stop_event"):
+            queue.set_stop_event(self._stop_event)
+        return {
+            "queue": queue,
+            "handler": handler,
+            "error_handler": error_handler,
+        }
 
     def _has_pending_messages(self) -> bool:
         """Check if ANY queue has pending messages.

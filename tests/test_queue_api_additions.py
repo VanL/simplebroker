@@ -1,7 +1,9 @@
 """Test the new Queue API additions (delete and move methods)."""
 
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, get_args, get_origin, get_type_hints
 
 import pytest
 
@@ -9,6 +11,53 @@ from simplebroker import Queue
 from simplebroker._targets import BrokerTarget
 
 pytestmark = [pytest.mark.shared]
+
+
+def test_queue_move_return_type_matches_runtime_paths() -> None:
+    """The public annotation must describe dict, iterator, and empty results."""
+
+    return_type = get_type_hints(Queue.move)["return"]
+    return_origins = {get_origin(member) for member in get_args(return_type)}
+
+    assert list not in return_origins
+    assert dict in return_origins
+    assert Iterator in return_origins
+
+
+def test_queue_filtered_move_closes_bounded_generator(
+    queue_factory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The high-level API must close its one-item transactional generator."""
+
+    closed: list[bool] = []
+    retained_iterators: list[Iterator[tuple[str, int]]] = []
+
+    def tracked_results() -> Iterator[tuple[str, int]]:
+        try:
+            yield "message", 123
+        finally:
+            closed.append(True)
+
+    def move_generator(
+        self: Queue,
+        destination: str,
+        **kwargs: Any,
+    ) -> Iterator[tuple[str, int]]:
+        del self, destination, kwargs
+        iterator = tracked_results()
+        retained_iterators.append(iterator)
+        return iterator
+
+    monkeypatch.setattr(Queue, "move_generator", move_generator)
+    queue = queue_factory("source")
+
+    assert queue.move("destination", after_timestamp=0) == {
+        "message": "message",
+        "timestamp": 123,
+    }
+    assert retained_iterators
+    assert closed == [True]
 
 
 def test_queue_delete_all(queue_factory):

@@ -139,7 +139,7 @@ class _SharedActivityListener:
                 raise _translate_error(self._error) from self._error
             raise OperationalError(str(self._error)) from self._error
 
-    def _run(self) -> None:
+    def _run(self) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
         try:
             conn = psycopg.connect(self._dsn, autocommit=True)
             self._conn = conn

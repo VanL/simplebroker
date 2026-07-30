@@ -105,6 +105,18 @@ class _XattrProvider:
 
 _DARWIN_XATTR_PROVIDER_UNSET = object()
 _DARWIN_XATTR_PROVIDER: _XattrProvider | None | object = _DARWIN_XATTR_PROVIDER_UNSET
+_DARWIN_XATTR_PROVIDER_LOCK = threading.Lock()
+
+
+def _reset_darwin_xattr_lock_after_fork() -> None:
+    """Give a fork child an unlocked discovery guard."""
+    global _DARWIN_XATTR_PROVIDER_LOCK
+
+    _DARWIN_XATTR_PROVIDER_LOCK = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_darwin_xattr_lock_after_fork)
 
 
 def _xattr_provider() -> _XattrProvider | None:
@@ -135,14 +147,23 @@ def _xattr_env_mode() -> bool | None:
 
 
 def _darwin_xattr_provider() -> _XattrProvider | None:
-    global _DARWIN_XATTR_PROVIDER
-
+    """Return the process-cached Darwin provider after single-flight discovery."""
     if sys.platform != "darwin":
         return None
     if _DARWIN_XATTR_PROVIDER is not _DARWIN_XATTR_PROVIDER_UNSET:
         return cast("_XattrProvider | None", _DARWIN_XATTR_PROVIDER)
 
-    _DARWIN_XATTR_PROVIDER = None
+    with _DARWIN_XATTR_PROVIDER_LOCK:
+        if _DARWIN_XATTR_PROVIDER is not _DARWIN_XATTR_PROVIDER_UNSET:
+            return cast("_XattrProvider | None", _DARWIN_XATTR_PROVIDER)
+        return _discover_darwin_xattr_provider()
+
+
+def _discover_darwin_xattr_provider() -> _XattrProvider | None:  # noqa: C901 approved [DOM-10.1.1] exception
+    """Discover and cache libc xattr functions while holding the cache lock."""
+    global _DARWIN_XATTR_PROVIDER
+
+    provider: _XattrProvider | None = None
     with contextlib.suppress(Exception):
         import ctypes
         import ctypes.util
@@ -209,11 +230,12 @@ def _darwin_xattr_provider() -> _XattrProvider | None:
             if setxattr(path_bytes, key_bytes, buffer, len(value_bytes), 0, 0) != 0:
                 raise_oserror(path)
 
-        _DARWIN_XATTR_PROVIDER = _XattrProvider(
+        provider = _XattrProvider(
             get_value=get_value,
             set_value=set_value,
         )
-    return _DARWIN_XATTR_PROVIDER
+    _DARWIN_XATTR_PROVIDER = provider
+    return provider
 
 
 def _validate_phase_name(phase_name: str) -> None:
@@ -298,7 +320,6 @@ class _AdvisoryLock:
 
         self.path.parent.mkdir(parents=True, exist_ok=True)
         start = time.monotonic()
-        last_error: OSError | None = None
         if not self._acquire_process_lock(
             start,
             should_stop_waiting=should_stop_waiting,
@@ -314,21 +335,14 @@ class _AdvisoryLock:
             try:
                 lock_file = self.path.open("a+b")
             except OSError as exc:
-                last_error = exc
-                if should_stop_waiting is not None and should_stop_waiting():
-                    self._release_process_lock()
+                if not self._wait_to_retry(
+                    start,
+                    last_error=exc,
+                    cause=exc,
+                    should_stop_waiting=should_stop_waiting,
+                    diagnostics=diagnostics,
+                ):
                     return False
-                if time.monotonic() - start >= self.timeout:
-                    self._release_process_lock()
-                    raise PhaseLockTimeout(
-                        self._timeout_message(
-                            start,
-                            last_error=last_error,
-                            diagnostics=diagnostics,
-                        ),
-                        cause=exc,
-                    ) from None
-                time.sleep(self.retry_delay)
                 continue
 
             try:
@@ -337,26 +351,46 @@ class _AdvisoryLock:
                 self._prepare_lock_file(lock_file)
                 self._try_lock(lock_file)
             except OSError as exc:
-                last_error = exc
                 lock_file.close()
-                if should_stop_waiting is not None and should_stop_waiting():
-                    self._release_process_lock()
+                if not self._wait_to_retry(
+                    start,
+                    last_error=exc,
+                    cause=None,
+                    should_stop_waiting=should_stop_waiting,
+                    diagnostics=diagnostics,
+                ):
                     return False
-                if time.monotonic() - start >= self.timeout:
-                    self._release_process_lock()
-                    raise PhaseLockTimeout(
-                        self._timeout_message(
-                            start,
-                            last_error=last_error,
-                            diagnostics=diagnostics,
-                        )
-                    ) from None
-                time.sleep(self.retry_delay)
                 continue
 
             self._file = lock_file
             self._locked = True
             return True
+
+    def _wait_to_retry(
+        self,
+        start: float,
+        *,
+        last_error: OSError,
+        cause: OSError | None,
+        should_stop_waiting: Callable[[], bool] | None,
+        diagnostics: Callable[[], str] | None,
+    ) -> bool:
+        """Wait for another lock attempt or finish the current acquisition."""
+        if should_stop_waiting is not None and should_stop_waiting():
+            self._release_process_lock()
+            return False
+        if time.monotonic() - start >= self.timeout:
+            self._release_process_lock()
+            raise PhaseLockTimeout(
+                self._timeout_message(
+                    start,
+                    last_error=last_error,
+                    diagnostics=diagnostics,
+                ),
+                cause=cause,
+            ) from None
+        time.sleep(self.retry_delay)
+        return True
 
     def _prepare_lock_file(self, lock_file: BinaryIO) -> None:
         """Ensure byte-range locking has at least one byte to lock."""
@@ -594,7 +628,7 @@ class PhaseLockService:
         finally:
             lock.release()
 
-    def run_phases(
+    def run_phases(  # noqa: C901 approved [DOM-10.1.1] exception
         self,
         phases: Iterable[Phase],
         *,

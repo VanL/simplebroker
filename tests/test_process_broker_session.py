@@ -808,7 +808,7 @@ def test_closed_session_rejects_connections_and_extra_releases(tmp_path: Path) -
         ("sql", True, True),
     ],
 )
-def test_failed_core_creation_releases_any_runner_lease(
+def test_failed_core_creation_releases_any_runner_lease(  # noqa: C901 approved [DOM-10.1.1] exception
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     branch: str,
@@ -1013,7 +1013,7 @@ def test_session_close_wins_race_with_core_creation(
     assert counting_backend.runner_close_calls == 1
 
 
-def test_non_sqlite_core_creation_after_close_does_not_retain_runner(
+def test_non_sqlite_core_creation_after_close_does_not_retain_runner(  # noqa: C901 approved [DOM-10.1.1] exception
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     creation_admitted = threading.Event()

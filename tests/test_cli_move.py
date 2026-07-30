@@ -4,7 +4,10 @@ import datetime
 import json
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
 
 from simplebroker import Queue, commands
 
@@ -252,6 +255,52 @@ class TestBasicFunctionality:
         rc, out, _ = run_cli("read", "new_dest", cwd=workdir)
         assert rc == 0
         assert out == "test message"
+
+
+def test_filtered_single_move_closes_bounded_generator(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Moving one filtered item must close the transactional generator."""
+
+    closed: list[bool] = []
+    retained_iterators: list[Iterator[tuple[str, int]]] = []
+
+    def tracked_results() -> Iterator[tuple[str, int]]:
+        try:
+            yield "message", 123
+        finally:
+            closed.append(True)
+
+    def move_generator(
+        self: Queue,
+        destination: str,
+        **kwargs: Any,
+    ) -> Iterator[tuple[str, int]]:
+        del self, destination, kwargs
+        iterator = tracked_results()
+        retained_iterators.append(iterator)
+        return iterator
+
+    monkeypatch.setattr(Queue, "move_generator", move_generator)
+    monkeypatch.setattr(
+        commands,
+        "_resolve_timestamp_filters",
+        lambda *args, **kwargs: (None, 0, None, None),
+    )
+
+    result = commands.cmd_move(
+        tmp_path / "move.db",
+        "source",
+        "destination",
+        after_str="0",
+    )
+
+    assert result == commands.EXIT_SUCCESS
+    assert capsys.readouterr().out == "message\n"
+    assert retained_iterators
+    assert closed == [True]
 
 
 class TestTimestampFormats:

@@ -1,5 +1,6 @@
 """Improved SIGINT test script with race condition mitigation."""
 
+import signal
 import sys
 import time
 from pathlib import Path
@@ -12,7 +13,7 @@ from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     if len(sys.argv) != 3:
         print("Usage: watcher_sigint_script_improved.py <db_path> <ready_file>")
         sys.exit(1)
@@ -87,8 +88,16 @@ def main() -> None:
         db.close()
         sys.exit(1)
 
-    # Strategy 4: Signal readiness BEFORE starting watcher loop
-    # This ensures the subprocess is ready to receive signals
+    # Install a bootstrap handler before publishing readiness. run_forever()
+    # replaces it with the watcher's handler and restores it on exit, but a
+    # signal arriving in that narrow handoff window must still request the
+    # same graceful stop.
+    previous_sigint_handler = signal.getsignal(signal.SIGINT)
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        watcher.stop(join=False)
+
+    signal.signal(signal.SIGINT, request_stop)
     ready_file.touch()
     print("READY_FOR_SIGNALS", flush=True)
 
@@ -110,6 +119,8 @@ def main() -> None:
                 unique_db_path.unlink()
         except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
             print(f"Cleanup error: {e}", flush=True)
+        finally:
+            signal.signal(signal.SIGINT, previous_sigint_handler)
 
     sys.exit(exit_code)
 

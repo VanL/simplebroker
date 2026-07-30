@@ -22,3 +22,4 @@ read order stay aligned instead of competing.
 4. `04-cross-thread-finalization-poisoning.md`
 5. `05-product-invariant-inventory.md`
 6. `06-process-session-core-ownership.md`
+7. `07-complexity-and-state-machine-map.md`

@@ -176,7 +176,7 @@ def ensure_schema_v2(
         raise
 
 
-def ensure_schema_v3(
+def ensure_schema_v3(  # noqa: C901 approved [DOM-10.1.1] exception
     runner: SQLRunner,
     *,
     current_version: int,

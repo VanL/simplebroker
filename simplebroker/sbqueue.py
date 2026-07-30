@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 _config = load_config()
 
 
+def _close_iterator(iterator: object) -> None:
+    """Close a generator-like iterator when it exposes explicit cleanup."""
+    close = getattr(iterator, "close", None)
+    if callable(close):
+        close()
+
+
 @dataclass(frozen=True)
 class _ActivityWaiterIdentity:
     plugin: BackendPlugin
@@ -761,7 +768,7 @@ class Queue:
                 include_claimed=include_claimed,
             )
 
-    def move(
+    def move(  # noqa: C901 approved [DOM-10.1.1] exception
         self,
         destination: Union[str, "Queue"],
         *,
@@ -769,7 +776,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: bool = False,
-    ) -> dict[str, Any] | None | list[dict[str, Any]] | Iterator[dict[str, Any]]:
+    ) -> dict[str, Any] | None | Iterator[dict[str, Any]]:
         """Move messages from this queue to another (CLI-mirroring method).
 
         This is the high-level method that mirrors CLI behavior. For more precise
@@ -786,7 +793,6 @@ class Queue:
         Returns:
             Depends on parameters:
             - Single dict with 'message' and 'timestamp' if moving one message
-            - list of dicts if moving many messages with limit
             - Generator of dicts if all_messages=True
             - None if no messages to move
 
@@ -850,6 +856,8 @@ class Queue:
                     return {"message": msg, "timestamp": ts}
                 except StopIteration:
                     return None
+                finally:
+                    _close_iterator(gen)
             else:
                 result = self.move_one(dest_name, with_timestamps=True)
                 if result:
@@ -1322,9 +1330,7 @@ class Queue:
                         for result in generator:
                             yield result  # type: ignore[misc]
                     finally:
-                        close_generator = getattr(generator, "close", None)
-                        if callable(close_generator):
-                            close_generator()
+                        _close_iterator(generator)
                 else:
                     generator = connection.peek_generator(
                         self.name,
@@ -1340,9 +1346,7 @@ class Queue:
                         assert isinstance(result, tuple)
                         yield result
                     finally:
-                        close_generator = getattr(generator, "close", None)
-                        if callable(close_generator):
-                            close_generator()
+                        _close_iterator(generator)
                 return
 
             if not all_messages:
@@ -1361,9 +1365,7 @@ class Queue:
                     assert isinstance(result, tuple)
                     yield result
                 finally:
-                    close_generator = getattr(generator, "close", None)
-                    if callable(close_generator):
-                        close_generator()
+                    _close_iterator(generator)
                 return
 
             delivery_guarantee: DeliveryGuarantee = (
@@ -1388,9 +1390,7 @@ class Queue:
                 for result in generator:
                     yield result  # type: ignore[misc]
             finally:
-                close_generator = getattr(generator, "close", None)
-                if callable(close_generator):
-                    close_generator()
+                _close_iterator(generator)
 
     def cleanup_connections(self) -> None:
         """Clean up active database handles without releasing the queue lease.

@@ -140,6 +140,7 @@ extend-select = [
     "F",  # pyflakes
     "I",  # isort
     "B",  # flake8-bugbear
+    "C901", # mccabe complexity visibility and auditability
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
 ]
@@ -150,6 +151,9 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["simplebroker"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
 
 [tool.coverage.run]
 source = [

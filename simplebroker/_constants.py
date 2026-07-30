@@ -27,7 +27,8 @@ import os
 import platform
 import re
 import warnings
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import PurePath
 from typing import Any, Final
 
@@ -276,6 +277,63 @@ _WINDOWS_RESERVED_NAMES = {
 }
 
 
+def _reject_dangerous_path_characters(
+    path: str,
+    context: str,
+    *,
+    is_windows: bool,
+    dangerous_regex: re.Pattern[str],
+) -> None:
+    """Reject the first unsafe character while allowing a Windows drive colon."""
+    match = dangerous_regex.search(path)
+    if match is None:
+        return
+
+    if is_windows and ":" in path and re.match(r"^[A-Za-z]:", path):
+        match = dangerous_regex.search(path[2:])
+        if match is None:
+            return
+
+    dangerous_char = match.group()
+    raise ValueError(
+        f"{context} contains dangerous character '{dangerous_char}': {path}. "
+        "Path components must not contain shell metacharacters or control characters."
+    )
+
+
+def _validate_path_component(
+    part: str,
+    path: str,
+    context: str,
+    *,
+    is_windows: bool,
+) -> None:
+    """Validate one already-separated path component."""
+    if part == "..":
+        raise ValueError(
+            f"{context} must not contain parent directory references: {path}"
+        )
+    if part == ".":
+        raise ValueError(
+            f"{context} must not contain current directory references: {path}"
+        )
+
+    if is_windows and part.split(".")[0].upper() in _WINDOWS_RESERVED_NAMES:
+        raise ValueError(
+            f"{context} contains Windows reserved name '{part}': {path}. "
+            "Avoid names like CON, PRN, AUX, NUL, COM1-9, LPT1-9."
+        )
+
+    if part.startswith(" ") or part.endswith(" "):
+        raise ValueError(
+            f"{context} component cannot start or end with spaces: '{part}' in {path}"
+        )
+    if len(part) > 255:
+        raise ValueError(
+            f"{context} component too long (max 255 chars): '{part[:50]}...' in {path}"
+        )
+
+
 def _validate_safe_path_components(path: str, context: str = "path") -> None:
     """Validate that path components don't contain dangerous characters or reserved names.
 
@@ -310,84 +368,23 @@ def _validate_safe_path_components(path: str, context: str = "path") -> None:
     is_windows = platform.system() == "Windows"
     dangerous_regex = _WINDOWS_DANGEROUS_REGEX if is_windows else _UNIX_DANGEROUS_REGEX
 
-    # Check for dangerous characters using optimized regex
-    if dangerous_regex.search(path):
-        # On Windows, check if colon is part of a legitimate drive letter
-        if is_windows and ":" in path:
-            # Windows drive letter pattern: C:, D:, etc. at the beginning of absolute paths
-            drive_pattern = re.compile(r"^[A-Za-z]:")
-
-            # If it's just a drive letter, allow it
-            if drive_pattern.match(path):
-                # Check if there are other dangerous characters besides the drive colon
-                path_without_drive = path[2:]  # Remove "C:" part
-                if dangerous_regex.search(path_without_drive):
-                    match = dangerous_regex.search(path_without_drive)
-                    dangerous_char = match.group() if match else "unknown"
-                    raise ValueError(
-                        f"{context} contains dangerous character '{dangerous_char}': {path}. "
-                        f"Path components must not contain shell metacharacters or control characters."
-                    )
-                # Drive letter is OK, continue with other validations
-            else:
-                # Colon is not part of drive letter, it's dangerous
-                match = dangerous_regex.search(path)
-                dangerous_char = match.group() if match else "unknown"
-                raise ValueError(
-                    f"{context} contains dangerous character '{dangerous_char}': {path}. "
-                    f"Path components must not contain shell metacharacters or control characters."
-                )
-        else:
-            # Not Windows or no colon, regular dangerous character
-            match = dangerous_regex.search(path)
-            dangerous_char = match.group() if match else "unknown"
-            raise ValueError(
-                f"{context} contains dangerous character '{dangerous_char}': {path}. "
-                f"Path components must not contain shell metacharacters or control characters."
-            )
+    _reject_dangerous_path_characters(
+        path,
+        context,
+        is_windows=is_windows,
+        dangerous_regex=dangerous_regex,
+    )
 
     # Check each path component
     for part in pure_path.parts:
         if not part:  # Empty component (e.g., double slashes)
             continue
-
-        # Check for parent directory references
-        if part == "..":
-            raise ValueError(
-                f"{context} must not contain parent directory references: {path}"
-            )
-
-        # Check for current directory references (usually not dangerous but suspicious)
-        if part == ".":
-            raise ValueError(
-                f"{context} must not contain current directory references: {path}"
-            )
-
-        # Windows reserved name validation using pre-compiled set
-        if is_windows:
-            # Remove extension for reserved name check
-            name_without_ext = part.split(".")[0].upper()
-            if name_without_ext in _WINDOWS_RESERVED_NAMES:
-                raise ValueError(
-                    f"{context} contains Windows reserved name '{part}': {path}. "
-                    f"Avoid names like CON, PRN, AUX, NUL, COM1-9, LPT1-9."
-                )
-
-        # Check for names that start or end with spaces/periods (problematic on Windows)
-        if part.startswith(" ") or part.endswith(" "):
-            raise ValueError(
-                f"{context} component cannot start or end with spaces: '{part}' in {path}"
-            )
-
-        if is_windows and (part.startswith(".") and part != "." and part != ".."):
-            # On Windows, leading dots can be problematic in some contexts
-            pass  # Allow hidden files but we already blocked . and ..
-
-        # Check for excessively long path components
-        if len(part) > 255:  # Most filesystems have 255 byte filename limits
-            raise ValueError(
-                f"{context} component too long (max 255 chars): '{part[:50]}...' in {path}"
-            )
+        _validate_path_component(
+            part,
+            path,
+            context,
+            is_windows=is_windows,
+        )
 
     # Also check for current directory in the original path before PurePath processing
     # (PurePath normalizes some patterns away)
@@ -467,42 +464,57 @@ def _parse_vacuum_threshold(value: Any) -> float:
     return numeric
 
 
-_CONFIG_NORMALIZERS: Final[dict[str, Any]] = {
-    "BROKER_BUSY_TIMEOUT": int,
-    "BROKER_CACHE_MB": int,
-    "BROKER_SYNC_MODE": lambda value: str(value).upper(),
-    "BROKER_WAL_AUTOCHECKPOINT": int,
-    "BROKER_MAX_MESSAGE_SIZE": int,
-    "BROKER_READ_COMMIT_INTERVAL": int,
-    "BROKER_GENERATOR_BATCH_SIZE": int,
-    "BROKER_AUTO_VACUUM": int,
-    "BROKER_AUTO_VACUUM_INTERVAL": int,
-    "BROKER_VACUUM_THRESHOLD": _parse_vacuum_threshold,
-    "BROKER_VACUUM_BATCH_SIZE": int,
-    "BROKER_SKIP_IDLE_CHECK": _parse_strict_one_bool,
-    "BROKER_JITTER_FACTOR": float,
-    "BROKER_INITIAL_CHECKS": int,
-    "BROKER_MAX_INTERVAL": float,
-    "BROKER_BURST_SLEEP": float,
-    "BROKER_DEBUG": _parse_debug_flag,
-    "BROKER_LOGGING_ENABLED": _parse_strict_one_bool,
-    "BROKER_DEFAULT_DB_LOCATION": str,
-    "BROKER_DEFAULT_DB_NAME": str,
-    "BROKER_PROJECT_CONFIG_PATH": str,
-    "BROKER_PROJECT_CONFIG_NAME": str,
-    "BROKER_PROJECT_SCOPE": lambda value: (
-        value if isinstance(value, bool) else _parse_bool(str(value))
-    ),
-    "BROKER_BACKEND": str,
-    "BROKER_BACKEND_HOST": str,
-    "BROKER_BACKEND_PORT": int,
-    "BROKER_BACKEND_USER": str,
-    "BROKER_BACKEND_PASSWORD": str,
-    "BROKER_BACKEND_DATABASE": str,
-    "BROKER_BACKEND_SCHEMA": str,
-    "BROKER_BACKEND_TARGET": str,
+def _parse_project_scope(value: Any) -> bool:
+    """Normalize project-scope values from the environment or typed overrides."""
+    return value if isinstance(value, bool) else _parse_bool(str(value))
+
+
+@dataclass(frozen=True, slots=True)
+class _ConfigField:
+    """One configuration key's environment default and shared coercion."""
+
+    default: str
+    normalize: Callable[[Any], Any]
+
+
+_CONFIG_FIELDS: Final[dict[str, _ConfigField]] = {
+    "BROKER_BUSY_TIMEOUT": _ConfigField("5000", int),
+    "BROKER_CACHE_MB": _ConfigField("10", int),
+    "BROKER_SYNC_MODE": _ConfigField("FULL", lambda value: str(value).upper()),
+    "BROKER_WAL_AUTOCHECKPOINT": _ConfigField("1000", int),
+    "BROKER_MAX_MESSAGE_SIZE": _ConfigField(str(MAX_MESSAGE_SIZE), int),
+    "BROKER_READ_COMMIT_INTERVAL": _ConfigField("1", int),
+    "BROKER_GENERATOR_BATCH_SIZE": _ConfigField("100", int),
+    "BROKER_AUTO_VACUUM": _ConfigField("1", int),
+    "BROKER_AUTO_VACUUM_INTERVAL": _ConfigField("100", int),
+    "BROKER_VACUUM_THRESHOLD": _ConfigField("10", _parse_vacuum_threshold),
+    "BROKER_VACUUM_BATCH_SIZE": _ConfigField("1000", int),
+    "BROKER_SKIP_IDLE_CHECK": _ConfigField("0", _parse_strict_one_bool),
+    "BROKER_JITTER_FACTOR": _ConfigField("0.15", float),
+    "BROKER_INITIAL_CHECKS": _ConfigField("100", int),
+    "BROKER_MAX_INTERVAL": _ConfigField("0.1", float),
+    "BROKER_BURST_SLEEP": _ConfigField("0.00001", float),
+    "BROKER_DEBUG": _ConfigField("", _parse_debug_flag),
+    "BROKER_LOGGING_ENABLED": _ConfigField("0", _parse_strict_one_bool),
+    "BROKER_DEFAULT_DB_LOCATION": _ConfigField("", str),
+    "BROKER_DEFAULT_DB_NAME": _ConfigField(DEFAULT_DB_NAME, str),
+    "BROKER_PROJECT_CONFIG_PATH": _ConfigField("", str),
+    "BROKER_PROJECT_CONFIG_NAME": _ConfigField(DEFAULT_PROJECT_CONFIG_NAME, str),
+    "BROKER_PROJECT_SCOPE": _ConfigField("0", _parse_project_scope),
+    "BROKER_BACKEND": _ConfigField("sqlite", str),
+    "BROKER_BACKEND_HOST": _ConfigField("localhost", str),
+    "BROKER_BACKEND_PORT": _ConfigField("5432", int),
+    "BROKER_BACKEND_USER": _ConfigField("postgres", str),
+    "BROKER_BACKEND_PASSWORD": _ConfigField("", str),
+    "BROKER_BACKEND_DATABASE": _ConfigField("simplebroker", str),
+    "BROKER_BACKEND_SCHEMA": _ConfigField("simplebroker_pg_v1", str),
+    "BROKER_BACKEND_TARGET": _ConfigField("", str),
 }
-"""Canonical coercion rules for config overrides."""
+"""Canonical defaults and coercion shared by environment and overrides."""
+
+_CONFIG_NORMALIZERS: Final[dict[str, Callable[[Any], Any]]] = {
+    key: field.normalize for key, field in _CONFIG_FIELDS.items()
+}
 
 
 def resolve_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -527,6 +539,109 @@ def resolve_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]
         config["BROKER_SYNC_MODE"] = "FULL"
 
     return config
+
+
+def _validate_default_database_location(config: dict[str, Any]) -> None:
+    db_location = config["BROKER_DEFAULT_DB_LOCATION"]
+    if not isinstance(db_location, str) or not db_location:
+        return
+    try:
+        _validate_safe_path_components(db_location, "BROKER_DEFAULT_DB_LOCATION")
+    except ValueError as exc:
+        raise ValueError(
+            f"BROKER_DEFAULT_DB_LOCATION validation failed: {exc}"
+        ) from exc
+    if not os.path.isabs(db_location):
+        warnings.warn(
+            f"BROKER_DEFAULT_DB_LOCATION must be an absolute path. "
+            f"Ignoring relative path: {db_location}",
+            UserWarning,
+            stacklevel=3,
+        )
+        config["BROKER_DEFAULT_DB_LOCATION"] = ""
+
+
+def _validate_default_database_name(config: dict[str, Any]) -> None:
+    db_name = config["BROKER_DEFAULT_DB_NAME"]
+    if not isinstance(db_name, str) or not db_name:
+        return
+    try:
+        _validate_safe_path_components(db_name, "BROKER_DEFAULT_DB_NAME")
+    except ValueError as exc:
+        raise ValueError(f"BROKER_DEFAULT_DB_NAME validation failed: {exc}") from exc
+    if os.path.isabs(db_name):
+        raise ValueError(
+            f"BROKER_DEFAULT_DB_NAME must be a relative path, not absolute: {db_name}. "
+            f"Use BROKER_DEFAULT_DB_LOCATION to specify the directory instead."
+        )
+    if len(PurePath(db_name).parts) > 2:
+        raise ValueError(
+            f"Database name must not contain nested directories: {db_name}. "
+            f"Only single directory level is supported (e.g., 'dir/name.db')"
+        )
+
+
+def _validate_project_config_location(config: dict[str, Any]) -> None:
+    project_config_path = config["BROKER_PROJECT_CONFIG_PATH"]
+    if not isinstance(project_config_path, str) or not project_config_path:
+        return
+    try:
+        _validate_safe_path_components(
+            project_config_path,
+            "BROKER_PROJECT_CONFIG_PATH",
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"BROKER_PROJECT_CONFIG_PATH validation failed: {exc}"
+        ) from exc
+    if not os.path.isabs(project_config_path):
+        parts = PurePath(project_config_path.replace("\\", "/")).parts
+        if len(parts) > 1:
+            raise ValueError(
+                "BROKER_PROJECT_CONFIG_PATH must be an absolute path or a "
+                f"single relative directory: {project_config_path}"
+            )
+
+
+def _validate_project_config_name(config: dict[str, Any]) -> None:
+    project_config_name = config["BROKER_PROJECT_CONFIG_NAME"]
+    if not isinstance(project_config_name, str) or not project_config_name:
+        return
+    try:
+        _validate_safe_path_components(
+            project_config_name,
+            "BROKER_PROJECT_CONFIG_NAME",
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"BROKER_PROJECT_CONFIG_NAME validation failed: {exc}"
+        ) from exc
+    if os.path.isabs(project_config_name):
+        raise ValueError(
+            "BROKER_PROJECT_CONFIG_NAME must be a relative path, not "
+            f"absolute: {project_config_name}. Use BROKER_PROJECT_CONFIG_PATH "
+            "to specify the directory instead."
+        )
+    name_parts = PurePath(project_config_name.replace("\\", "/")).parts
+    if len(name_parts) > 2:
+        raise ValueError(
+            f"Project config name must not contain nested directories: "
+            f"{project_config_name}. Only single directory level is supported "
+            "(e.g., 'dir/broker.toml')"
+        )
+    project_config_path = config["BROKER_PROJECT_CONFIG_PATH"]
+    if (
+        isinstance(project_config_path, str)
+        and project_config_path
+        and not os.path.isabs(project_config_path)
+    ):
+        path_parts = PurePath(project_config_path.replace("\\", "/")).parts
+        if len(path_parts) + len(name_parts) > 2:
+            raise ValueError(
+                "BROKER_PROJECT_CONFIG_PATH and BROKER_PROJECT_CONFIG_NAME "
+                "must not combine into nested directories. Only single "
+                "directory level is supported (e.g., 'dir/broker.toml')"
+            )
 
 
 def load_config() -> dict[str, Any]:
@@ -685,193 +800,18 @@ def load_config() -> dict[str, Any]:
 
     """
     config = {
-        # SQLite performance settings
-        "BROKER_BUSY_TIMEOUT": int(os.environ.get("BROKER_BUSY_TIMEOUT", "5000")),
-        "BROKER_CACHE_MB": int(os.environ.get("BROKER_CACHE_MB", "10")),
-        "BROKER_SYNC_MODE": os.environ.get("BROKER_SYNC_MODE", "FULL").upper(),
-        "BROKER_WAL_AUTOCHECKPOINT": int(
-            os.environ.get("BROKER_WAL_AUTOCHECKPOINT", "1000"),
-        ),
-        # Message processing
-        "BROKER_MAX_MESSAGE_SIZE": int(
-            os.environ.get("BROKER_MAX_MESSAGE_SIZE", str(MAX_MESSAGE_SIZE)),
-        ),
-        "BROKER_READ_COMMIT_INTERVAL": int(
-            os.environ.get("BROKER_READ_COMMIT_INTERVAL", "1"),
-        ),
-        "BROKER_GENERATOR_BATCH_SIZE": int(
-            os.environ.get("BROKER_GENERATOR_BATCH_SIZE", "100"),
-        ),
-        # Vacuum settings
-        "BROKER_AUTO_VACUUM": int(os.environ.get("BROKER_AUTO_VACUUM", "1")),
-        "BROKER_AUTO_VACUUM_INTERVAL": int(
-            os.environ.get("BROKER_AUTO_VACUUM_INTERVAL", "100"),
-        ),
-        "BROKER_VACUUM_THRESHOLD": float(
-            os.environ.get("BROKER_VACUUM_THRESHOLD", "10"),
-        )
-        / 100,
-        "BROKER_VACUUM_BATCH_SIZE": int(
-            os.environ.get("BROKER_VACUUM_BATCH_SIZE", "1000"),
-        ),
-        # Watcher settings
-        "BROKER_SKIP_IDLE_CHECK": os.environ.get("BROKER_SKIP_IDLE_CHECK", "0") == "1",
-        "BROKER_JITTER_FACTOR": float(os.environ.get("BROKER_JITTER_FACTOR", "0.15")),
-        "BROKER_INITIAL_CHECKS": int(
-            os.environ.get("BROKER_INITIAL_CHECKS", "100"),
-        ),
-        "BROKER_MAX_INTERVAL": float(
-            os.environ.get("BROKER_MAX_INTERVAL", "0.1"),
-        ),
-        "BROKER_BURST_SLEEP": float(
-            os.environ.get("BROKER_BURST_SLEEP", "0.00001"),
-        ),
-        # Debug
-        "BROKER_DEBUG": bool(os.environ.get("BROKER_DEBUG")),
-        # Logging
-        "BROKER_LOGGING_ENABLED": os.environ.get("BROKER_LOGGING_ENABLED", "0") == "1",
-        # Project scoping configuration
-        "BROKER_DEFAULT_DB_LOCATION": os.environ.get("BROKER_DEFAULT_DB_LOCATION", ""),
-        "BROKER_DEFAULT_DB_NAME": os.environ.get(
-            "BROKER_DEFAULT_DB_NAME", DEFAULT_DB_NAME
-        ),
-        "BROKER_PROJECT_CONFIG_PATH": os.environ.get("BROKER_PROJECT_CONFIG_PATH", ""),
-        "BROKER_PROJECT_CONFIG_NAME": os.environ.get(
-            "BROKER_PROJECT_CONFIG_NAME", DEFAULT_PROJECT_CONFIG_NAME
-        ),
-        "BROKER_PROJECT_SCOPE": _parse_bool(
-            os.environ.get("BROKER_PROJECT_SCOPE", "0")
-        ),
-        # Backend selection
-        "BROKER_BACKEND": os.environ.get("BROKER_BACKEND", "sqlite"),
-        "BROKER_BACKEND_HOST": os.environ.get("BROKER_BACKEND_HOST", "localhost"),
-        "BROKER_BACKEND_PORT": int(os.environ.get("BROKER_BACKEND_PORT", "5432")),
-        "BROKER_BACKEND_USER": os.environ.get("BROKER_BACKEND_USER", "postgres"),
-        "BROKER_BACKEND_PASSWORD": os.environ.get("BROKER_BACKEND_PASSWORD", ""),
-        "BROKER_BACKEND_DATABASE": os.environ.get(
-            "BROKER_BACKEND_DATABASE", "simplebroker"
-        ),
-        "BROKER_BACKEND_SCHEMA": os.environ.get(
-            "BROKER_BACKEND_SCHEMA", "simplebroker_pg_v1"
-        ),
-        "BROKER_BACKEND_TARGET": os.environ.get("BROKER_BACKEND_TARGET", ""),
+        key: field.normalize(os.environ.get(key, field.default))
+        for key, field in _CONFIG_FIELDS.items()
     }
 
     # Validate SYNC_MODE
     if config["BROKER_SYNC_MODE"] not in ("FULL", "NORMAL", "OFF"):
         config["BROKER_SYNC_MODE"] = "FULL"
 
-    # Validate project scoping configuration
-    db_location = config["BROKER_DEFAULT_DB_LOCATION"]
-    if isinstance(db_location, str) and db_location:
-        # First validate for security (dangerous characters)
-        try:
-            _validate_safe_path_components(db_location, "BROKER_DEFAULT_DB_LOCATION")
-        except ValueError as e:
-            raise ValueError(
-                f"BROKER_DEFAULT_DB_LOCATION validation failed: {e}"
-            ) from e
-
-        # Then check that it's an absolute path
-        if not os.path.isabs(db_location):
-            # Issue warning and ignore non-absolute paths
-            warnings.warn(
-                f"BROKER_DEFAULT_DB_LOCATION must be an absolute path. "
-                f"Ignoring relative path: {db_location}",
-                UserWarning,
-                stacklevel=2,
-            )
-            config["BROKER_DEFAULT_DB_LOCATION"] = ""
-
-    # Validate BROKER_DEFAULT_DB_NAME format (but don't create directories)
-    db_name = config["BROKER_DEFAULT_DB_NAME"]
-    if isinstance(db_name, str) and db_name:
-        from pathlib import PurePath
-
-        # First validate for security (dangerous characters)
-        try:
-            _validate_safe_path_components(db_name, "BROKER_DEFAULT_DB_NAME")
-        except ValueError as e:
-            raise ValueError(f"BROKER_DEFAULT_DB_NAME validation failed: {e}") from e
-
-        # Check if it's an absolute path (must come first)
-        if os.path.isabs(db_name):
-            raise ValueError(
-                f"BROKER_DEFAULT_DB_NAME must be a relative path, not absolute: {db_name}. "
-                f"Use BROKER_DEFAULT_DB_LOCATION to specify the directory instead."
-            )
-
-        # Then check for nested directories
-        parts = list(PurePath(db_name).parts)
-        if len(parts) > 2:
-            raise ValueError(
-                f"Database name must not contain nested directories: {db_name}. "
-                f"Only single directory level is supported (e.g., 'dir/name.db')"
-            )
-
-    # Validate project config path/name format. This mirrors default DB naming:
-    # a relative name may include one directory level, and an optional path prefix
-    # may namespace discovery under each candidate project directory.
-    project_config_path = config["BROKER_PROJECT_CONFIG_PATH"]
-    if isinstance(project_config_path, str) and project_config_path:
-        try:
-            _validate_safe_path_components(
-                project_config_path, "BROKER_PROJECT_CONFIG_PATH"
-            )
-        except ValueError as e:
-            raise ValueError(
-                f"BROKER_PROJECT_CONFIG_PATH validation failed: {e}"
-            ) from e
-
-        from pathlib import PurePath
-
-        if not os.path.isabs(project_config_path):
-            parts = list(PurePath(project_config_path.replace("\\", "/")).parts)
-            if len(parts) > 1:
-                raise ValueError(
-                    "BROKER_PROJECT_CONFIG_PATH must be an absolute path or a "
-                    f"single relative directory: {project_config_path}"
-                )
-
-    project_config_name = config["BROKER_PROJECT_CONFIG_NAME"]
-    if isinstance(project_config_name, str) and project_config_name:
-        from pathlib import PurePath
-
-        try:
-            _validate_safe_path_components(
-                project_config_name, "BROKER_PROJECT_CONFIG_NAME"
-            )
-        except ValueError as e:
-            raise ValueError(
-                f"BROKER_PROJECT_CONFIG_NAME validation failed: {e}"
-            ) from e
-
-        if os.path.isabs(project_config_name):
-            raise ValueError(
-                "BROKER_PROJECT_CONFIG_NAME must be a relative path, not "
-                f"absolute: {project_config_name}. Use BROKER_PROJECT_CONFIG_PATH "
-                "to specify the directory instead."
-            )
-
-        parts = list(PurePath(project_config_name.replace("\\", "/")).parts)
-        if len(parts) > 2:
-            raise ValueError(
-                f"Project config name must not contain nested directories: {project_config_name}. "
-                "Only single directory level is supported (e.g., 'dir/broker.toml')"
-            )
-
-        if (
-            isinstance(project_config_path, str)
-            and project_config_path
-            and not os.path.isabs(project_config_path)
-        ):
-            path_parts = list(PurePath(project_config_path.replace("\\", "/")).parts)
-            if len(path_parts) + len(parts) > 2:
-                raise ValueError(
-                    "BROKER_PROJECT_CONFIG_PATH and BROKER_PROJECT_CONFIG_NAME "
-                    "must not combine into nested directories. Only single "
-                    "directory level is supported (e.g., 'dir/broker.toml')"
-                )
+    _validate_default_database_location(config)
+    _validate_default_database_name(config)
+    _validate_project_config_location(config)
+    _validate_project_config_name(config)
 
     return config
 

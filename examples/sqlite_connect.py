@@ -311,7 +311,7 @@ def execute_with_retry(
     raise AssertionError("Unreachable code")
 
 
-def validate_safe_path_components(path: str, context: str = "path") -> None:
+def validate_safe_path_components(path: str, context: str = "path") -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Validate path components don't contain dangerous characters or reserved names.
 
     Args:
@@ -415,7 +415,7 @@ def validate_safe_path_components(path: str, context: str = "path") -> None:
         )
 
 
-def validate_database_path(
+def validate_database_path(  # noqa: C901 approved [DOM-10.1.1] exception
     file_path: Path, check_magic: bool = False, magic_string: str | None = None
 ) -> None:
     """Validate that a file is a valid SQLite database.
@@ -444,23 +444,31 @@ def validate_database_path(
     if not os.access(file_path, os.R_OK | os.W_OK):
         raise DatabaseError(f"Database file is not readable/writable: {file_path}")
 
-    # Check SQLite header
+    # Do not raw-open the database file here. On POSIX, closing any descriptor
+    # for the file can drop SQLite's advisory locks held by this process. Let
+    # SQLite own every descriptor used to validate the database.
     try:
-        with open(file_path, "rb") as f:
-            header = f.read(16)
-            if header != b"SQLite format 3\x00":
-                raise DatabaseError(
-                    f"File is not a valid SQLite database (invalid header): {file_path}"
-                )
-    except OSError as e:
-        raise DatabaseError(f"Cannot read database file: {file_path} ({e})") from e
+        if file_path.stat().st_size == 0:
+            raise DatabaseError(
+                f"File is not a valid SQLite database (invalid header): {file_path}"
+            )
+    except OSError as exc:
+        raise DatabaseError(f"Cannot read database file: {file_path} ({exc})") from exc
 
     # Check database integrity
-    conn = None
+    conn: sqlite3.Connection | None = None
+    cursor: sqlite3.Cursor | None = None
     try:
         conn = sqlite3.connect(f"file:{file_path}?mode=ro", uri=True)
         cursor = conn.cursor()
-        cursor.execute("PRAGMA schema_version")
+        try:
+            cursor.execute("PRAGMA schema_version")
+        except sqlite3.DatabaseError as exc:
+            if "not a database" in str(exc).lower():
+                raise DatabaseError(
+                    f"File is not a valid SQLite database (invalid header): {file_path}"
+                ) from exc
+            raise
         cursor.fetchone()
 
         if check_magic and magic_string:
@@ -471,6 +479,8 @@ def validate_database_path(
             if magic_row[0] != magic_string:
                 raise DatabaseError(f"Database has incorrect magic string: {file_path}")
 
+    except DatabaseError:
+        raise
     except sqlite3.DatabaseError as e:
         raise DatabaseError(
             f"Database corruption or invalid format: {file_path} ({e})"
@@ -484,7 +494,10 @@ def validate_database_path(
             f"OS error while accessing database: {file_path} ({e})"
         ) from e
     finally:
-        if conn:
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
+        if conn is not None:
             with contextlib.suppress(Exception):
                 conn.close()
 

@@ -1176,7 +1176,7 @@ class PollingStrategy:
         self._next_native_idle_poll_at = time.monotonic()
         self._schedule_next_native_idle_poll(initial=True)
 
-    def wait_for_activity(self) -> None:
+    def wait_for_activity(self) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
         """Wait for activity with optimized polling."""
         while not self._stop_event.is_set():
             if self._local_activity_pending:

@@ -279,20 +279,20 @@ def test_patternless_broadcast_does_not_resurrect_deleted_queue(
     deleting = RedisBrokerCore(redis_runner)
     try:
         broadcaster.write("jobs", "seed")
-        original_generate = broadcaster.generate_timestamp
+        original_reserve = broadcaster._timestamp_gen._reserve_candidates
         deleted = False
 
-        def delete_before_first_timestamp() -> int:
+        def delete_before_reservation(count: int) -> list[int]:
             nonlocal deleted
             if not deleted:
                 deleted = True
                 assert deleting.delete("jobs") == 1
-            return original_generate()
+            return original_reserve(count)
 
         monkeypatch.setattr(
-            broadcaster,
-            "generate_timestamp",
-            delete_before_first_timestamp,
+            broadcaster._timestamp_gen,
+            "_reserve_candidates",
+            delete_before_reservation,
         )
 
         assert broadcaster.broadcast("announcement") == 0
@@ -382,20 +382,20 @@ def test_patternless_broadcast_includes_queue_created_during_setup(
     writer = RedisBrokerCore(redis_runner)
     try:
         broadcaster.write("existing", "seed")
-        original_generate = broadcaster.generate_timestamp
+        original_reserve = broadcaster._timestamp_gen._reserve_candidates
         created = False
 
-        def create_before_first_timestamp() -> int:
+        def create_before_reservation(count: int) -> list[int]:
             nonlocal created
             if not created:
                 created = True
                 writer.write("new", "new-seed")
-            return original_generate()
+            return original_reserve(count)
 
         monkeypatch.setattr(
-            broadcaster,
-            "generate_timestamp",
-            create_before_first_timestamp,
+            broadcaster._timestamp_gen,
+            "_reserve_candidates",
+            create_before_reservation,
         )
 
         assert broadcaster.broadcast("announcement") == 2
@@ -629,7 +629,7 @@ def test_broadcast_script_selects_queues_at_atomic_insertion_point(
         core.write("alpha", "seed-alpha")
         core.write("deleted", "seed-deleted")
         assert core.delete("deleted") == 1
-        timestamps = [core.generate_timestamp(), core.generate_timestamp()]
+        timestamps = core._timestamp_gen._reserve_candidates(2)
 
         result = core._client.eval(
             scripts.BROADCAST_MESSAGE,
@@ -999,21 +999,21 @@ def test_patternless_broadcast_retries_when_queue_set_outgrows_timestamp_batch(
     writer = RedisBrokerCore(redis_runner)
     try:
         broadcaster.write("existing", "seed")
-        original_generate = broadcaster.generate_timestamp
+        original_reserve = broadcaster._timestamp_gen._reserve_candidates
         grew = False
 
-        def grow_before_first_timestamp() -> int:
+        def grow_before_reservation(count: int) -> list[int]:
             nonlocal grew
             if not grew:
                 grew = True
                 for index in range(10):
                     writer.write(f"new-{index}", "seed")
-            return original_generate()
+            return original_reserve(count)
 
         monkeypatch.setattr(
-            broadcaster,
-            "generate_timestamp",
-            grow_before_first_timestamp,
+            broadcaster._timestamp_gen,
+            "_reserve_candidates",
+            grow_before_reservation,
         )
 
         assert broadcaster.broadcast("announcement") == 11

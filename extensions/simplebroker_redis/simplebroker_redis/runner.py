@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 from collections.abc import Iterable
@@ -55,8 +56,13 @@ class RedisRunner:
         if self._client is None:
             with self._client_lock:
                 if self._client is None:
-                    self._pool = self._create_pool()
-                    self._client = redis.Redis(connection_pool=self._pool)
+                    pool = self._create_pool()
+                    with contextlib.ExitStack() as cleanup:
+                        cleanup.callback(pool.disconnect)
+                        client = redis.Redis(connection_pool=pool)
+                        cleanup.pop_all()
+                    self._pool = pool
+                    self._client = client
         return self._client
 
     def _create_pool(self) -> redis.BlockingConnectionPool:

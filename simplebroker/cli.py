@@ -902,60 +902,50 @@ def _resolve_target(
     )
 
 
-def main(*, config: dict[str, Any] = _config) -> int:
-    """Main CLI entry point.
+def _parse_cli_args(
+    parser: argparse.ArgumentParser,
+) -> tuple[argparse.Namespace, bool] | None:
+    """Parse the process arguments and return status-output mode."""
+    if len(sys.argv) == 1:
+        parser.print_help()
+        return None
 
-    Returns:
-        Exit code (0 for success, 1 for error)
-    """
-    # Use cached parser for better startup performance
-    global _PARSER_CACHE
-    if _PARSER_CACHE is None:
-        _PARSER_CACHE = create_parser()
-    parser = _PARSER_CACHE
-
-    # Parse arguments after normalizing global placement and free-form operands.
     status_json_output = False
+    raw_args = list(sys.argv[1:])
+    status_probe = ArgumentProcessor()
+    status_probe.process(raw_args)
+    if "--status" in status_probe.global_args:
+        processed_args: list[str] = []
+        options_ended = False
+        for arg in raw_args:
+            if arg == "--":
+                options_ended = True
+            if not options_ended and arg == "--json":
+                status_json_output = True
+                continue
+            processed_args.append(arg)
+        raw_args = processed_args
 
-    try:
-        if len(sys.argv) == 1:
-            parser.print_help()
-            return EXIT_SUCCESS
+    args = parser.parse_args(rearrange_args(raw_args))
+    return args, status_json_output
 
-        raw_args = list(sys.argv[1:])
-        status_probe = ArgumentProcessor()
-        status_probe.process(raw_args)
-        if "--status" in status_probe.global_args:
-            processed_args: list[str] = []
-            options_ended = False
-            for arg in raw_args:
-                if arg == "--":
-                    options_ended = True
-                if not options_ended and arg == "--json":
-                    status_json_output = True
-                    continue
-                processed_args.append(arg)
-            raw_args = processed_args
 
-        rearranged_args = rearrange_args(raw_args)
-
-        # Use regular parse_args with rearranged arguments
-        args = parser.parse_args(rearranged_args)
-    except ArgumentParserError as e:
-        print(f"{PROG_NAME}: error: {e}", file=sys.stderr)
+def _system_exit_code(error: SystemExit) -> int:
+    """Translate argparse's SystemExit payload into a CLI exit code."""
+    if error.code is None:
         return EXIT_ERROR
-    except SystemExit as e:  # e.code: Union[int, str, None]
-        # Handle argparse's default exit behavior
-        # Help exits with 0, errors exit with 2
-        if e.code is None:
-            return EXIT_ERROR
-        try:
-            return int(e.code)
-        except (ValueError, TypeError):
-            # If code can't be converted to int, return error code 1
-            return EXIT_ERROR
+    try:
+        return int(error.code)
+    except (ValueError, TypeError):
+        return EXIT_ERROR
 
-    # --status is mutually exclusive with subcommands
+
+def _validate_global_flags(
+    args: argparse.Namespace,
+    *,
+    status_json_output: bool,
+) -> int | None:
+    """Reject invalid combinations of global actions and commands."""
     if getattr(args, "status", False) and args.command:
         commands._emit_error(
             "--status cannot be used with commands",
@@ -964,7 +954,6 @@ def main(*, config: dict[str, Any] = _config) -> int:
         )
         return EXIT_ERROR
 
-    # --compact requires --vacuum
     if getattr(args, "compact", False) and not getattr(args, "vacuum", False):
         print(
             f"{PROG_NAME}: error: --compact can only be used with --vacuum",
@@ -972,202 +961,65 @@ def main(*, config: dict[str, Any] = _config) -> int:
         )
         return EXIT_ERROR
 
-    # --vacuum is mutually exclusive with subcommands
-    if getattr(args, "vacuum", False) and args.command:
-        print(
-            f"{PROG_NAME}: error: --vacuum cannot be used with commands",
-            file=sys.stderr,
-        )
-        return EXIT_ERROR
+    for flag in ("vacuum", "cleanup"):
+        if getattr(args, flag, False) and args.command:
+            print(
+                f"{PROG_NAME}: error: --{flag} cannot be used with commands",
+                file=sys.stderr,
+            )
+            return EXIT_ERROR
 
-    # --cleanup is mutually exclusive with subcommands
-    if getattr(args, "cleanup", False) and args.command:
-        print(
-            f"{PROG_NAME}: error: --cleanup cannot be used with commands",
-            file=sys.stderr,
-        )
-        return EXIT_ERROR
+    return None
 
-    # Handle --version flag
-    if args.version:
-        print(f"{PROG_NAME} {VERSION}")
-        return EXIT_SUCCESS
 
-    # Resolve backend target using precedence system / project config
-    try:
-        resolved_target = _resolve_target(args, config=config)
-    except ValueError as e:
-        commands._emit_error(
-            e,
-            code="INVALID_ARGUMENT",
-            json_output=_json_output_requested(
-                args,
-                status_json_output=status_json_output,
-            ),
-        )
-        return EXIT_ERROR
+def _run_cleanup(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    *,
+    status_json_output: bool,
+    config: dict[str, Any],
+) -> int:
+    """Clean the resolved target under the CLI diagnostic policy."""
     db_path = resolved_target.target_path
-    used_project_scope = resolved_target.used_project_scope
-
-    # Set flag for modified path validation - track if USER provided absolute path
-    user_provided_absolute_path = Path(args.file).is_absolute()
-    absolute_path_provided = user_provided_absolute_path or used_project_scope
-
-    # Handle init command
-    if args.command == "init":
-        return commands.cmd_init(resolved_target, args.quiet)
-
-    # Handle cleanup flag
-    if args.cleanup:
-        try:
-            if resolved_target.legacy_sqlite_path_mode:
-                assert db_path is not None
-
-                try:
-                    file_existed = resolved_target.plugin.cleanup_target(
-                        str(db_path),
-                        backend_options=resolved_target.backend_options,
-                        config=config,
-                    )
-
-                    if file_existed and not args.quiet:
-                        commands._status(f"Database cleaned up: {db_path}")
-                    elif not file_existed and not args.quiet:
-                        commands._status(
-                            f"Database not found, nothing to clean up: {db_path}"
-                        )
-                except PermissionError:
-                    print(
-                        f"{PROG_NAME}: error: Permission denied: {db_path}",
-                        file=sys.stderr,
-                    )
-                    return EXIT_ERROR
-            else:
-                display_target = resolved_target.display_target
-                existed = resolved_target.plugin.cleanup_target(
-                    resolved_target.target,
-                    backend_options=resolved_target.backend_options,
-                    config=config,
-                )
-                if not args.quiet:
-                    if existed:
-                        commands._status(f"Database cleaned up: {display_target}")
-                    else:
-                        commands._status(
-                            f"Database not found, nothing to clean up: {display_target}"
-                        )
-            return EXIT_SUCCESS
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
-            commands._emit_error(
-                e,
-                code="ERROR",
-                json_output=_json_output_requested(
-                    args,
-                    status_json_output=status_json_output,
-                ),
-            )
-            return EXIT_ERROR
-
-    # Handle vacuum flag
-    if args.vacuum:
-        try:
-            if (
-                resolved_target.legacy_sqlite_path_mode
-                and db_path is not None
-                and not db_path.exists()
-            ):
-                if not args.quiet:
-                    commands._status(f"Database not found: {db_path}")
-                return EXIT_SUCCESS
-
-            return commands.cmd_vacuum(
-                resolved_target,
-                compact=args.compact,
-                quiet=args.quiet,
-            )
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
-            commands._emit_error(
-                e,
-                code="ERROR",
-                json_output=_json_output_requested(
-                    args,
-                    status_json_output=status_json_output,
-                ),
-            )
-            return EXIT_ERROR
-
-    # Handle status flag
-    if args.status:
-        return commands.cmd_status(resolved_target, json_output=status_json_output)
-
-    # Show help if no command given
-    if not args.command:
-        parser.print_help()
-        return EXIT_SUCCESS
-
-    early_error = _validate_early_command_args(args)
-    if early_error is not None:
-        return early_error
-
-    # Validate and construct database path
     try:
         if resolved_target.legacy_sqlite_path_mode:
             assert db_path is not None
-            working_dir = args.dir
-
-            _validate_safe_path_components(
-                str(working_dir), "Directory argument (-d/--dir)"
-            )
-
-            _validate_working_directory(working_dir)
-
-            if not absolute_path_provided and not used_project_scope:
-                db_path = working_dir / args.file
-
-            if not used_project_scope:
-                _validate_path_traversal_prevention(args.file)
 
             try:
-                resolved_db_path = _resolve_symlinks_safely(db_path)
-                resolved_working_dir = _resolve_symlinks_safely(working_dir)
-
-                if not absolute_path_provided:
-                    _validate_path_containment(
-                        resolved_db_path, resolved_working_dir, used_project_scope
-                    )
-
-                db_path = resolved_db_path
-
-            except (RuntimeError, OSError):
-                if not absolute_path_provided:
-                    try:
-                        resolved_working_dir = working_dir.resolve()
-                        if not used_project_scope:
-                            db_path = resolved_working_dir / args.file
-                    except (RuntimeError, OSError):
-                        pass
-
-            if args.file == DEFAULT_DB_NAME and config["BROKER_DEFAULT_DB_NAME"]:
-                db_path = ensure_compound_db_path(
-                    working_dir, config["BROKER_DEFAULT_DB_NAME"]
+                file_existed = resolved_target.plugin.cleanup_target(
+                    str(db_path),
+                    backend_options=resolved_target.backend_options,
+                    config=config,
                 )
+            except PermissionError:
+                print(
+                    f"{PROG_NAME}: error: Permission denied: {db_path}",
+                    file=sys.stderr,
+                )
+                return EXIT_ERROR
 
-            _validate_database_parent_directory(db_path.parent)
-
-            if db_path.exists() and args.command in (
-                "read",
-                "peek",
-                "exists",
-                "move",
-                "list",
-                "stats",
-                "vacuum",
-            ):
-                _validate_sqlite_database(db_path, verify_magic=False)
-
-    except (ValueError, DatabaseError) as e:
+            if file_existed and not args.quiet:
+                commands._status(f"Database cleaned up: {db_path}")
+            elif not file_existed and not args.quiet:
+                commands._status(f"Database not found, nothing to clean up: {db_path}")
+        else:
+            display_target = resolved_target.display_target
+            existed = resolved_target.plugin.cleanup_target(
+                resolved_target.target,
+                backend_options=resolved_target.backend_options,
+                config=config,
+            )
+            if not args.quiet:
+                if existed:
+                    commands._status(f"Database cleaned up: {display_target}")
+                else:
+                    commands._status(
+                        f"Database not found, nothing to clean up: {display_target}"
+                    )
+        return EXIT_SUCCESS
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
         commands._emit_error(
-            e,
+            error,
             code="ERROR",
             json_output=_json_output_requested(
                 args,
@@ -1176,171 +1028,528 @@ def main(*, config: dict[str, Any] = _config) -> int:
         )
         return EXIT_ERROR
 
-    # Execute command
+
+def _run_vacuum(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    *,
+    status_json_output: bool,
+) -> int:
+    """Vacuum the resolved target under the CLI diagnostic policy."""
+    db_path = resolved_target.target_path
     try:
         if (
-            not resolved_target.legacy_sqlite_path_mode
-            and not args.cleanup
-            and args.command not in {"init", "write", "broadcast", "load"}
+            resolved_target.legacy_sqlite_path_mode
+            and db_path is not None
+            and not db_path.exists()
         ):
-            resolved_target.plugin.validate_target(
-                resolved_target.target,
-                backend_options=resolved_target.backend_options,
-                verify_initialized=True,
-                config=config,
-            )
+            if not args.quiet:
+                commands._status(f"Database not found: {db_path}")
+            return EXIT_SUCCESS
 
-        # Dispatch to appropriate command handler
-        if args.command == "write":
-            return commands.cmd_write(
-                resolved_target,
-                args.queue,
-                args.message,
-                json_output=args.json,
-                show_timestamps=args.timestamps,
-            )
-        elif args.command == "read":
-            after_str, before_str, message_id_str = _read_peek_filters(args, parser)
+        return commands.cmd_vacuum(
+            resolved_target,
+            compact=args.compact,
+            quiet=args.quiet,
+        )
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        commands._emit_error(
+            error,
+            code="ERROR",
+            json_output=_json_output_requested(
+                args,
+                status_json_output=status_json_output,
+            ),
+        )
+        return EXIT_ERROR
 
-            return commands.cmd_read(
-                resolved_target,
-                args.queue,
-                all_messages=args.all,
-                json_output=args.json,
-                show_timestamps=args.timestamps,
-                after_str=after_str,
-                message_id_str=message_id_str,
-                before_str=before_str,
-                config=config,
-            )
-        elif args.command == "peek":
-            after_str, before_str, message_id_str = _read_peek_filters(args, parser)
 
-            return commands.cmd_peek(
-                resolved_target,
-                args.queue,
-                all_messages=args.all,
-                json_output=args.json,
-                show_timestamps=args.timestamps,
-                after_str=after_str,
-                message_id_str=message_id_str,
-                before_str=before_str,
-                include_claimed=args.include_claimed,
-            )
-        elif args.command == "list":
-            show_stats = getattr(args, "stats", False)
-            pattern = getattr(args, "pattern", None)
-            prefix = getattr(args, "prefix", None)
-            return commands.cmd_list(
-                resolved_target,
-                show_stats,
-                pattern=pattern,
-                prefix=prefix,
-                json_output=getattr(args, "json", False),
-            )
-        elif args.command == "exists":
-            return commands.cmd_exists(
-                resolved_target,
-                args.queue,
-                json_output=getattr(args, "json", False),
-            )
-        elif args.command == "stats":
-            return commands.cmd_stats(
-                resolved_target,
-                args.queue,
-                json_output=getattr(args, "json", False),
-            )
-        elif args.command == "delete":
-            # argparse mutual exclusion ensures exactly one of queue or --all is provided
-            queue = None if args.all else args.queue
-            message_id_str = getattr(args, "message_id", None)
-
-            if message_id_str is not None and queue is None:
-                parser.error("--message requires a queue name")
-
-            return commands.cmd_delete(resolved_target, queue, message_id_str)
-        elif args.command == "move":
-            # Get arguments
-            all_messages = getattr(args, "all", False)
-            json_output = getattr(args, "json", False)
-            show_timestamps = getattr(args, "timestamps", False)
-            message_id_str = getattr(args, "message_id", None)
-            after_str = getattr(args, "after", None)
-            before_str = getattr(args, "before", None)
-
-            if message_id_str is not None and (after_str or before_str):
-                parser.error("--message cannot be used with --after or --before")
-
-            return commands.cmd_move(
-                resolved_target,
-                args.source_queue,
-                args.dest_queue,
-                all_messages=all_messages,
-                json_output=json_output,
-                show_timestamps=show_timestamps,
-                message_id_str=message_id_str,
-                after_str=after_str,
-                before_str=before_str,
-            )
-        elif args.command == "rename":
-            return commands.cmd_rename(
-                resolved_target,
-                args.old_queue,
-                args.new_queue,
-                json_output=getattr(args, "json", False),
-                retarget_aliases=not getattr(args, "no_retarget_aliases", False),
-            )
-        elif args.command == "broadcast":
-            return commands.cmd_broadcast(
-                resolved_target,
-                args.message,
-                pattern=getattr(args, "pattern", None),
-                queue_names=getattr(args, "queue_names", None),
-            )
-        elif args.command == "dump":
-            return commands.cmd_dump(
-                resolved_target,
-                include=args.include,
-                exclude=args.exclude,
-            )
-        elif args.command == "load":
-            return commands.cmd_load(resolved_target)
-        elif args.command == "alias":
-            subcommand = getattr(args, "alias_command", None)
-            if subcommand is None:
-                parser.error("alias subcommand is required")
-
-            if subcommand == "add":
-                return commands.cmd_alias_add(
-                    resolved_target,
-                    args.alias,
-                    args.target,
-                    quiet=getattr(args, "quiet", False),
-                )
-            if subcommand == "remove":
-                return commands.cmd_alias_remove(resolved_target, args.alias)
-            if subcommand == "list":
-                return commands.cmd_alias_list(
-                    resolved_target, target=getattr(args, "target", None)
-                )
-
-            parser.error("unknown alias subcommand")
-        elif args.command == "watch":
-            after_str = getattr(args, "after", None)
-            move_to = getattr(args, "move", None)
-            return commands.cmd_watch(
-                resolved_target,
-                args.queue,
-                args.peek,
-                args.json,
-                args.timestamps,
-                after_str,
-                args.quiet,
-                move_to,
-            )
-
+def _run_target_action(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    parser: argparse.ArgumentParser,
+    *,
+    status_json_output: bool,
+    config: dict[str, Any],
+) -> int | None:
+    """Run a target-wide action, returning None for command dispatch."""
+    if args.command == "init":
+        return commands.cmd_init(resolved_target, args.quiet)
+    if args.cleanup:
+        return _run_cleanup(
+            args,
+            resolved_target,
+            status_json_output=status_json_output,
+            config=config,
+        )
+    if args.vacuum:
+        return _run_vacuum(
+            args,
+            resolved_target,
+            status_json_output=status_json_output,
+        )
+    if args.status:
+        return commands.cmd_status(
+            resolved_target,
+            json_output=status_json_output,
+        )
+    if not args.command:
+        parser.print_help()
         return EXIT_SUCCESS
+    return None
 
+
+def _validate_legacy_sqlite_target(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    *,
+    config: dict[str, Any],
+) -> None:
+    """Validate the legacy SQLite path without changing target precedence."""
+    if not resolved_target.legacy_sqlite_path_mode:
+        return
+
+    db_path = resolved_target.target_path
+    assert db_path is not None
+    working_dir = args.dir
+    used_project_scope = resolved_target.used_project_scope
+    absolute_path_provided = Path(args.file).is_absolute() or used_project_scope
+
+    _validate_safe_path_components(str(working_dir), "Directory argument (-d/--dir)")
+    _validate_working_directory(working_dir)
+
+    if not absolute_path_provided and not used_project_scope:
+        db_path = working_dir / args.file
+    if not used_project_scope:
+        _validate_path_traversal_prevention(args.file)
+
+    db_path = _resolve_legacy_sqlite_path(
+        db_path,
+        working_dir=working_dir,
+        file_name=args.file,
+        absolute_path_provided=absolute_path_provided,
+        used_project_scope=used_project_scope,
+    )
+
+    if args.file == DEFAULT_DB_NAME and config["BROKER_DEFAULT_DB_NAME"]:
+        db_path = ensure_compound_db_path(
+            working_dir,
+            config["BROKER_DEFAULT_DB_NAME"],
+        )
+
+    _validate_database_parent_directory(db_path.parent)
+    if db_path.exists() and args.command in {
+        "read",
+        "peek",
+        "exists",
+        "move",
+        "list",
+        "stats",
+        "vacuum",
+    }:
+        _validate_sqlite_database(db_path, verify_magic=False)
+
+
+def _resolve_legacy_sqlite_path(
+    db_path: Path,
+    *,
+    working_dir: Path,
+    file_name: str,
+    absolute_path_provided: bool,
+    used_project_scope: bool,
+) -> Path:
+    """Resolve symlinks for legacy validation, retaining its fallback path."""
+    try:
+        resolved_db_path = _resolve_symlinks_safely(db_path)
+        resolved_working_dir = _resolve_symlinks_safely(working_dir)
+        if not absolute_path_provided:
+            _validate_path_containment(
+                resolved_db_path,
+                resolved_working_dir,
+                used_project_scope,
+            )
+        db_path = resolved_db_path
+    except (RuntimeError, OSError):
+        if not absolute_path_provided:
+            try:
+                resolved_working_dir = working_dir.resolve()
+                if not used_project_scope:
+                    db_path = resolved_working_dir / file_name
+            except (RuntimeError, OSError):
+                pass
+
+    return db_path
+
+
+def _validate_command_target(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    *,
+    config: dict[str, Any],
+) -> None:
+    """Validate an initialized non-SQLite target before read-like commands."""
+    if (
+        not resolved_target.legacy_sqlite_path_mode
+        and not args.cleanup
+        and args.command not in {"init", "write", "broadcast", "load"}
+    ):
+        resolved_target.plugin.validate_target(
+            resolved_target.target,
+            backend_options=resolved_target.backend_options,
+            verify_initialized=True,
+            config=config,
+        )
+
+
+def _dispatch_message_command(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    parser: argparse.ArgumentParser,
+    *,
+    config: dict[str, Any],
+) -> int:
+    """Dispatch write, read, or peek."""
+    if args.command == "write":
+        return commands.cmd_write(
+            resolved_target,
+            args.queue,
+            args.message,
+            json_output=args.json,
+            show_timestamps=args.timestamps,
+        )
+
+    after_str, before_str, message_id_str = _read_peek_filters(args, parser)
+    if args.command == "read":
+        return commands.cmd_read(
+            resolved_target,
+            args.queue,
+            all_messages=args.all,
+            json_output=args.json,
+            show_timestamps=args.timestamps,
+            after_str=after_str,
+            message_id_str=message_id_str,
+            before_str=before_str,
+            config=config,
+        )
+    return commands.cmd_peek(
+        resolved_target,
+        args.queue,
+        all_messages=args.all,
+        json_output=args.json,
+        show_timestamps=args.timestamps,
+        after_str=after_str,
+        message_id_str=message_id_str,
+        before_str=before_str,
+        include_claimed=args.include_claimed,
+    )
+
+
+def _dispatch_queue_command(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    parser: argparse.ArgumentParser,
+) -> int:
+    """Dispatch queue inspection and mutation commands."""
+    if args.command == "list":
+        return commands.cmd_list(
+            resolved_target,
+            getattr(args, "stats", False),
+            pattern=getattr(args, "pattern", None),
+            prefix=getattr(args, "prefix", None),
+            json_output=getattr(args, "json", False),
+        )
+    if args.command == "exists":
+        return commands.cmd_exists(
+            resolved_target,
+            args.queue,
+            json_output=getattr(args, "json", False),
+        )
+    if args.command == "stats":
+        return commands.cmd_stats(
+            resolved_target,
+            args.queue,
+            json_output=getattr(args, "json", False),
+        )
+    if args.command == "delete":
+        queue = None if args.all else args.queue
+        message_id_str = getattr(args, "message_id", None)
+        if message_id_str is not None and queue is None:
+            parser.error("--message requires a queue name")
+        return commands.cmd_delete(resolved_target, queue, message_id_str)
+
+    all_messages = getattr(args, "all", False)
+    json_output = getattr(args, "json", False)
+    show_timestamps = getattr(args, "timestamps", False)
+    message_id_str = getattr(args, "message_id", None)
+    after_str = getattr(args, "after", None)
+    before_str = getattr(args, "before", None)
+    if message_id_str is not None and (after_str or before_str):
+        parser.error("--message cannot be used with --after or --before")
+    return commands.cmd_move(
+        resolved_target,
+        args.source_queue,
+        args.dest_queue,
+        all_messages=all_messages,
+        json_output=json_output,
+        show_timestamps=show_timestamps,
+        message_id_str=message_id_str,
+        after_str=after_str,
+        before_str=before_str,
+    )
+
+
+def _dispatch_alias_command(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    parser: argparse.ArgumentParser,
+) -> int:
+    """Dispatch one alias subcommand."""
+    subcommand = getattr(args, "alias_command", None)
+    if subcommand is None:
+        parser.error("alias subcommand is required")
+    if subcommand == "add":
+        return commands.cmd_alias_add(
+            resolved_target,
+            args.alias,
+            args.target,
+            quiet=getattr(args, "quiet", False),
+        )
+    if subcommand == "remove":
+        return commands.cmd_alias_remove(resolved_target, args.alias)
+    if subcommand == "list":
+        return commands.cmd_alias_list(
+            resolved_target,
+            target=getattr(args, "target", None),
+        )
+    parser.error("unknown alias subcommand")
+
+
+def _dispatch_admin_command(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    parser: argparse.ArgumentParser,
+) -> int:
+    """Dispatch rename, broadcast, dump/load, alias, or watch."""
+    if args.command == "rename":
+        return commands.cmd_rename(
+            resolved_target,
+            args.old_queue,
+            args.new_queue,
+            json_output=getattr(args, "json", False),
+            retarget_aliases=not getattr(args, "no_retarget_aliases", False),
+        )
+    if args.command == "broadcast":
+        return commands.cmd_broadcast(
+            resolved_target,
+            args.message,
+            pattern=getattr(args, "pattern", None),
+            queue_names=getattr(args, "queue_names", None),
+        )
+    if args.command == "dump":
+        return commands.cmd_dump(
+            resolved_target,
+            include=args.include,
+            exclude=args.exclude,
+        )
+    if args.command == "load":
+        return commands.cmd_load(resolved_target)
+    if args.command == "alias":
+        return _dispatch_alias_command(args, resolved_target, parser)
+    return commands.cmd_watch(
+        resolved_target,
+        args.queue,
+        args.peek,
+        args.json,
+        args.timestamps,
+        getattr(args, "after", None),
+        args.quiet,
+        getattr(args, "move", None),
+    )
+
+
+def _dispatch_command(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    parser: argparse.ArgumentParser,
+    *,
+    config: dict[str, Any],
+) -> int:
+    """Dispatch the parsed command through its command family."""
+    if args.command in {"write", "read", "peek"}:
+        return _dispatch_message_command(
+            args,
+            resolved_target,
+            parser,
+            config=config,
+        )
+    if args.command in {"list", "exists", "stats", "delete", "move"}:
+        return _dispatch_queue_command(args, resolved_target, parser)
+    if args.command in {
+        "rename",
+        "broadcast",
+        "dump",
+        "load",
+        "alias",
+        "watch",
+    }:
+        return _dispatch_admin_command(args, resolved_target, parser)
+    return EXIT_SUCCESS
+
+
+def _read_invocation(
+    parser: argparse.ArgumentParser,
+) -> tuple[argparse.Namespace, bool] | int:
+    """Read one CLI invocation or return its parse-error exit code."""
+    try:
+        parsed = _parse_cli_args(parser)
+    except ArgumentParserError as error:
+        print(f"{PROG_NAME}: error: {error}", file=sys.stderr)
+        return EXIT_ERROR
+    except SystemExit as error:
+        return _system_exit_code(error)
+
+    if parsed is None:
+        return EXIT_SUCCESS
+    return parsed
+
+
+def _resolve_cli_target(
+    args: argparse.Namespace,
+    *,
+    status_json_output: bool,
+    config: dict[str, Any],
+) -> BrokerTarget | int:
+    """Resolve the invocation target or emit its user-facing error."""
+    try:
+        return _resolve_target(args, config=config)
+    except ValueError as error:
+        commands._emit_error(
+            error,
+            code="INVALID_ARGUMENT",
+            json_output=_json_output_requested(
+                args,
+                status_json_output=status_json_output,
+            ),
+        )
+        return EXIT_ERROR
+
+
+def _prepare_command_target(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    *,
+    status_json_output: bool,
+    config: dict[str, Any],
+) -> int | None:
+    """Validate a command's legacy path or return its error code."""
+    try:
+        _validate_legacy_sqlite_target(args, resolved_target, config=config)
+    except (ValueError, DatabaseError) as error:
+        commands._emit_error(
+            error,
+            code="ERROR",
+            json_output=_json_output_requested(
+                args,
+                status_json_output=status_json_output,
+            ),
+        )
+        return EXIT_ERROR
+    return None
+
+
+def _get_cli_parser() -> argparse.ArgumentParser:
+    """Return the process-cached CLI parser."""
+    global _PARSER_CACHE
+
+    if _PARSER_CACHE is None:
+        _PARSER_CACHE = create_parser()
+    return _PARSER_CACHE
+
+
+def _run_pre_target_action(
+    args: argparse.Namespace,
+    *,
+    status_json_output: bool,
+) -> int | None:
+    """Validate global flags and run actions that need no target."""
+    global_error = _validate_global_flags(
+        args,
+        status_json_output=status_json_output,
+    )
+    if global_error is not None:
+        return global_error
+    if args.version:
+        print(f"{PROG_NAME} {VERSION}")
+        return EXIT_SUCCESS
+    return None
+
+
+def _prepare_dispatch(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    *,
+    status_json_output: bool,
+    config: dict[str, Any],
+) -> int | None:
+    """Run command-local validation before entering the dispatch boundary."""
+    early_error = _validate_early_command_args(args)
+    if early_error is not None:
+        return early_error
+    return _prepare_command_target(
+        args,
+        resolved_target,
+        status_json_output=status_json_output,
+        config=config,
+    )
+
+
+def main(*, config: dict[str, Any] = _config) -> int:
+    """Run one CLI invocation and return its exit code."""
+    parser = _get_cli_parser()
+
+    invocation = _read_invocation(parser)
+    if isinstance(invocation, int):
+        return invocation
+    args, status_json_output = invocation
+
+    pre_target_result = _run_pre_target_action(
+        args,
+        status_json_output=status_json_output,
+    )
+    if pre_target_result is not None:
+        return pre_target_result
+
+    target_result = _resolve_cli_target(
+        args,
+        status_json_output=status_json_output,
+        config=config,
+    )
+    if isinstance(target_result, int):
+        return target_result
+    resolved_target = target_result
+
+    action_result = _run_target_action(
+        args,
+        resolved_target,
+        parser,
+        status_json_output=status_json_output,
+        config=config,
+    )
+    if action_result is not None:
+        return action_result
+
+    preparation_error = _prepare_dispatch(
+        args,
+        resolved_target,
+        status_json_output=status_json_output,
+        config=config,
+    )
+    if preparation_error is not None:
+        return preparation_error
+
+    try:
+        _validate_command_target(args, resolved_target, config=config)
+        return _dispatch_command(args, resolved_target, parser, config=config)
     except (ValueError, DatabaseError) as e:
         commands._emit_error(
             e,

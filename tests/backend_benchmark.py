@@ -75,7 +75,7 @@ class BenchmarkSettings:
     redis_url: str | None = None
     redis_docker: bool = False
 
-    def validate(self) -> None:
+    def validate(self) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
         """Validate CLI-supplied settings up front."""
         if self.iterations < 1:
             raise ValueError("iterations must be at least 1")

@@ -149,7 +149,7 @@ local function pad19(value)
 end
 local current = pad19(redis.call('HGET', meta, 'last_ts') or '0')
 local first_id = ARGV[8 + requested_count]
-if selector_mode ~= 'all' and current >= first_id then
+if current >= first_id then
   return {-6}
 end
 if current < required_last_ts then

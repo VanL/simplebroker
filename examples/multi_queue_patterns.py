@@ -83,7 +83,7 @@ def pattern_1_basic_setup() -> None:
         print("✅ Pattern 1 complete: Different handlers for different queue types")
 
 
-def pattern_2_priority_simulation() -> None:
+def pattern_2_priority_simulation() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Pattern 2: Simulating priority queues with weighted processing."""
     print("\n" + "=" * 60)
     print("PATTERN 2: Priority Queue Simulation")
@@ -306,7 +306,7 @@ def pattern_4_load_balancing() -> None:
         print("✅ Pattern 4 complete: Load balancing across worker queues")
 
 
-def pattern_5_monitoring() -> None:
+def pattern_5_monitoring() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     """Pattern 5: Adding monitoring and metrics to MultiQueueWatcher."""
     print("\n" + "=" * 60)
     print("PATTERN 5: Monitoring and Metrics")
@@ -334,17 +334,21 @@ def pattern_5_monitoring() -> None:
                 timestamp: int,
                 *,
                 config: Mapping[str, Any] | None = None,
-            ) -> None:
+            ) -> bool | None:
                 """Override to collect metrics."""
                 start_time = time.time()
 
                 try:
-                    super()._dispatch(message, timestamp, config=config)
-                    self.metrics["total_processed"] += 1
-                    if self.current_queue:
+                    handled = super()._dispatch(message, timestamp, config=config)
+                    if handled is True:
+                        self.metrics["total_processed"] += 1
+                    if self.current_queue and handled is True:
                         self.metrics["queue_stats"][self.current_queue][
                             "processed"
                         ] += 1
+                    elif self.current_queue:
+                        self.metrics["queue_stats"][self.current_queue]["errors"] += 1
+                    return handled
                 except Exception:
                     if self.current_queue:
                         self.metrics["queue_stats"][self.current_queue]["errors"] += 1

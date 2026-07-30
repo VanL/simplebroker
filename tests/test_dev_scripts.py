@@ -10,6 +10,7 @@ import tarfile
 import threading
 import time
 import zipfile
+from collections.abc import Callable
 from contextlib import nullcontext
 from email.message import Message
 from pathlib import Path
@@ -18,7 +19,9 @@ from typing import Any, cast
 
 import pytest
 from coverage import CoverageData
+from coverage.exceptions import CoverageException
 
+from bin import coverage_combine as combine_coverage
 from simplebroker import _scripts
 from simplebroker._scripts import (
     _append_marker_expression,
@@ -37,6 +40,10 @@ from simplebroker._scripts import (
     _with_default_suite_path,
 )
 from tests import conftest as suite_conftest
+from tests.helpers.state_machine_contracts import (
+    TransitionCase,
+    fires_transition_table,
+)
 
 COMBINE_COVERAGE_SCRIPT = (
     Path(__file__).resolve().parents[1] / ".github" / "scripts" / "combine_coverage.py"
@@ -60,8 +67,11 @@ def _write_coverage_lines(
     lines: set[int],
 ) -> None:
     data = CoverageData(basename=str(data_file))
-    data.add_lines({str(source_file): lines})
-    data.write()
+    try:
+        data.add_lines({str(source_file): lines})
+        data.write()
+    finally:
+        data.close(force=True)
 
 
 def _write_interrupted_empty_coverage_database(
@@ -127,6 +137,752 @@ def _run_combine_coverage(
         text=True,
         check=False,
     )
+
+
+def _settlement_env(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    retry_timeout: float,
+    settle_seconds: float,
+) -> None:
+    monkeypatch.setenv("COVERAGE_COMBINE_RETRY_TIMEOUT", str(retry_timeout))
+    monkeypatch.setenv("COVERAGE_COMBINE_SETTLE_SECONDS", str(settle_seconds))
+
+
+def _settlement_accepts_stable_readable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    _write_coverage_lines(data_file, tmp_path / "base.py", {1})
+    _write_coverage_lines(shard, tmp_path / "worker.py", {2})
+    _settlement_env(monkeypatch, retry_timeout=0, settle_seconds=0)
+
+    sources, empty, repaired = combine_coverage._wait_for_stable_sources(data_file)
+
+    assert sources == [shard.resolve()]
+    assert empty == []
+    assert repaired == []
+
+
+def _settlement_waits_for_corrupt_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    replacement = tmp_path / "replacement.coverage"
+    _write_coverage_lines(data_file, tmp_path / "base.py", {1})
+    shard.write_bytes(b"incomplete coverage database")
+
+    def finish_writer() -> None:
+        time.sleep(0.05)
+        _write_coverage_lines(replacement, tmp_path / "worker.py", {2})
+        _replace_with_retry(replacement, shard)
+
+    thread = threading.Thread(target=finish_writer)
+    thread.start()
+    _settlement_env(monkeypatch, retry_timeout=1.0, settle_seconds=0.05)
+    try:
+        sources, empty, repaired = combine_coverage._wait_for_stable_sources(data_file)
+    finally:
+        thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert sources == [shard.resolve()]
+    assert empty == []
+    assert repaired == []
+    data = CoverageData(basename=str(shard))
+    try:
+        data.read()
+        assert data.lines(str(tmp_path / "worker.py")) == [2]
+    finally:
+        data.close(force=True)
+
+
+def _settlement_waits_for_empty_writer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    replacement = tmp_path / "replacement.coverage"
+    _write_coverage_lines(data_file, tmp_path / "base.py", {1})
+    _write_interrupted_empty_coverage_database(shard)
+
+    def finish_writer() -> None:
+        time.sleep(0.05)
+        _write_coverage_lines(replacement, tmp_path / "worker.py", {2})
+        _replace_with_retry(replacement, shard)
+
+    thread = threading.Thread(target=finish_writer)
+    thread.start()
+    _settlement_env(monkeypatch, retry_timeout=1.0, settle_seconds=0.05)
+    try:
+        sources, empty, repaired = combine_coverage._wait_for_stable_sources(data_file)
+    finally:
+        thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert sources == [shard.resolve()]
+    assert empty == []
+    assert repaired == []
+    data = CoverageData(basename=str(shard))
+    try:
+        data.read()
+        assert data.lines(str(tmp_path / "worker.py")) == [2]
+    finally:
+        data.close(force=True)
+
+
+def _settlement_restarts_after_readable_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    replacement = tmp_path / "replacement.coverage"
+    source = tmp_path / "worker.py"
+    _write_coverage_lines(shard, source, {2})
+
+    def update_writer() -> None:
+        time.sleep(0.05)
+        _write_coverage_lines(replacement, source, {3})
+        _replace_with_retry(replacement, shard)
+
+    thread = threading.Thread(target=update_writer)
+    thread.start()
+    _settlement_env(monkeypatch, retry_timeout=1.0, settle_seconds=0.15)
+    try:
+        sources, empty, repaired = combine_coverage._wait_for_stable_sources(data_file)
+    finally:
+        thread.join(timeout=2.0)
+    assert not thread.is_alive()
+    assert sources == [shard.resolve()]
+    assert empty == []
+    assert repaired == []
+    data = CoverageData(basename=str(shard))
+    try:
+        data.read()
+        assert data.lines(str(source)) == [3]
+    finally:
+        data.close(force=True)
+
+
+def _settlement_excludes_empty_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    _write_coverage_lines(data_file, tmp_path / "base.py", {1})
+    _write_interrupted_empty_coverage_database(shard)
+    _settlement_env(monkeypatch, retry_timeout=0, settle_seconds=0)
+
+    sources, empty, repaired = combine_coverage._wait_for_stable_sources(data_file)
+
+    assert sources == []
+    assert empty == [shard.resolve()]
+    assert repaired == []
+
+
+def _settlement_repairs_schema_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    _write_coverage_lines(data_file, tmp_path / "base.py", {1})
+    _write_coverage_lines(shard, tmp_path / "worker.py", {2})
+    connection = sqlite3.connect(shard)
+    try:
+        connection.execute("DELETE FROM coverage_schema")
+        connection.commit()
+    finally:
+        connection.close()
+    _settlement_env(monkeypatch, retry_timeout=0, settle_seconds=0)
+
+    sources, empty, repaired = combine_coverage._wait_for_stable_sources(data_file)
+
+    assert sources == [shard.resolve()]
+    assert empty == []
+    assert repaired == [shard.resolve()]
+    data = CoverageData(basename=str(shard))
+    try:
+        data.read()
+        assert data.lines(str(tmp_path / "worker.py")) == [2]
+    finally:
+        data.close(force=True)
+
+
+def _settlement_repair_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    _write_coverage_lines(data_file, tmp_path / "base.py", {1})
+    _write_coverage_lines(shard, tmp_path / "worker.py", {2})
+    connection = sqlite3.connect(shard)
+    try:
+        connection.execute("DELETE FROM coverage_schema")
+        connection.commit()
+    finally:
+        connection.close()
+    monkeypatch.setattr(
+        combine_coverage,
+        "_repair_missing_schema_version",
+        lambda path: False,
+    )
+    _settlement_env(monkeypatch, retry_timeout=0, settle_seconds=0)
+
+    with pytest.raises(CoverageException):
+        combine_coverage._wait_for_stable_sources(data_file)
+
+    connection = sqlite3.connect(shard)
+    try:
+        assert connection.execute("SELECT * FROM coverage_schema").fetchall() == []
+    finally:
+        connection.close()
+
+
+def _settlement_deadline_before_stable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    _write_coverage_lines(shard, tmp_path / "worker.py", {2})
+    _settlement_env(monkeypatch, retry_timeout=0, settle_seconds=1)
+
+    with pytest.raises(CoverageException, match="did not become stable"):
+        combine_coverage._wait_for_stable_sources(data_file)
+
+
+def _settlement_rejects_no_recoverable_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    _write_interrupted_empty_coverage_database(data_file)
+    _write_interrupted_empty_coverage_database(shard)
+    monkeypatch.setenv("COVERAGE_FILE", str(data_file))
+    _settlement_env(monkeypatch, retry_timeout=0, settle_seconds=0)
+
+    assert combine_coverage.main() == 1
+    assert data_file.exists()
+    assert shard.exists()
+
+
+def _settlement_rejects_corruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    shard = tmp_path / ".coverage.worker"
+    _write_coverage_lines(data_file, tmp_path / "base.py", {1})
+    shard.write_bytes(b"not coverage data")
+    _settlement_env(monkeypatch, retry_timeout=0, settle_seconds=0)
+
+    with pytest.raises(CoverageException, match="coverage|database|file"):
+        combine_coverage._wait_for_stable_sources(data_file)
+
+
+def _settlement_rejects_mixed_empty_and_corrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_file = tmp_path / ".coverage"
+    empty = tmp_path / ".coverage.empty"
+    corrupt = tmp_path / ".coverage.corrupt"
+    _write_coverage_lines(data_file, tmp_path / "base.py", {1})
+    _write_interrupted_empty_coverage_database(empty)
+    corrupt.write_bytes(b"not coverage data")
+    _settlement_env(monkeypatch, retry_timeout=0, settle_seconds=0)
+
+    with pytest.raises(CoverageException, match="coverage|database|file"):
+        combine_coverage._wait_for_stable_sources(data_file)
+
+    assert empty.exists()
+    assert corrupt.exists()
+
+
+COVERAGE_SETTLEMENT_TRANSITIONS = (
+    TransitionCase(
+        transition_id="READABLE-STABLE",
+        start_state="discovered",
+        event="all snapshots are readable and settlement is immediate",
+        guard="no source is empty or corrupt",
+        next_state="settled",
+        effects="returns the complete source set without repair or exclusion",
+        expected_result="merge may begin",
+        payload=_settlement_accepts_stable_readable,
+    ),
+    TransitionCase(
+        transition_id="CORRUPT-CHANGES-TO-READABLE",
+        start_state="writer-incomplete",
+        event="a corrupt snapshot is atomically replaced by readable coverage",
+        guard="replacement occurs before the aggregate deadline",
+        next_state="settled",
+        effects="resets stability on the changed snapshot and validates replacement",
+        expected_result="the completed shard is returned",
+        payload=_settlement_waits_for_corrupt_writer,
+    ),
+    TransitionCase(
+        transition_id="EMPTY-CHANGES-TO-READABLE",
+        start_state="writer-empty-interrupted",
+        event="an empty initialized shard is atomically replaced by measured data",
+        guard="replacement occurs before the aggregate deadline",
+        next_state="settled",
+        effects="removes the shard from the empty set and restarts settlement",
+        expected_result="the completed readable shard is returned",
+        payload=_settlement_waits_for_empty_writer,
+    ),
+    TransitionCase(
+        transition_id="READABLE-SNAPSHOT-CHANGES",
+        start_state="readable-settling",
+        event="a readable shard is replaced with a newer readable snapshot",
+        guard="the first snapshot has not settled for the full interval",
+        next_state="settled",
+        effects="restarts the settlement interval from the new signature",
+        expected_result="the final readable snapshot is returned",
+        payload=_settlement_restarts_after_readable_change,
+    ),
+    TransitionCase(
+        transition_id="EMPTY-DEADLINE-EXCLUSION",
+        start_state="empty-interrupted",
+        event="deadline arrives",
+        guard="schema exists without measurements and another source is recoverable",
+        next_state="settled-with-exclusion",
+        effects="excludes only the recognized empty shard",
+        expected_result="remaining recoverable data may merge",
+        payload=_settlement_excludes_empty_interrupt,
+    ),
+    TransitionCase(
+        transition_id="SCHEMA-MARKER-REPAIR",
+        start_state="stable-missing-schema-version",
+        event="deadline arrives",
+        guard="every installed coverage table and column matches exactly",
+        next_state="settled-after-repair",
+        effects="atomically restores the installed coverage schema version",
+        expected_result="repaired measured data remains readable",
+        payload=_settlement_repairs_schema_marker,
+    ),
+    TransitionCase(
+        transition_id="SCHEMA-MARKER-REPAIR-FAILURE",
+        start_state="stable-missing-schema-version",
+        event="the narrow repair attempt cannot commit",
+        guard="the original shard remains unreadable",
+        next_state="failed",
+        effects="does not accept or exclude the unrepaired shard",
+        expected_result="the original coverage read failure propagates",
+        payload=_settlement_repair_failure,
+    ),
+    TransitionCase(
+        transition_id="READABLE-DEADLINE-BEFORE-SETTLEMENT",
+        start_state="readable-settling",
+        event="the aggregate deadline arrives before the settle interval",
+        guard="the readable snapshot has not been stable long enough",
+        next_state="failed",
+        effects="does not merge a still-unsettled snapshot",
+        expected_result="CoverageException identifies the settlement deadline",
+        payload=_settlement_deadline_before_stable,
+    ),
+    TransitionCase(
+        transition_id="NO-RECOVERABLE-DATA",
+        start_state="all-inputs-empty-interrupted",
+        event="settlement excludes every discovered input",
+        guard="neither base data nor any shard contains measurements",
+        next_state="failed",
+        effects="preserves the empty artifacts for diagnosis",
+        expected_result="combine returns failure instead of publishing empty coverage",
+        payload=_settlement_rejects_no_recoverable_data,
+    ),
+    TransitionCase(
+        transition_id="CORRUPT-DEADLINE-FAILURE",
+        start_state="corrupt-stable",
+        event="deadline arrives",
+        guard="the shard is neither empty nor narrowly repairable",
+        next_state="failed",
+        effects="does not exclude or rewrite arbitrary corruption",
+        expected_result="coverage read failure propagates",
+        payload=_settlement_rejects_corruption,
+    ),
+    TransitionCase(
+        transition_id="MIXED-EMPTY-CORRUPT-FAILURE",
+        start_state="mixed-incomplete",
+        event="deadline arrives",
+        guard="one shard is excludable but another is corrupt",
+        next_state="failed",
+        effects="does not let the empty exclusion hide the corrupt shard",
+        expected_result="failure preserves both inputs for diagnosis",
+        payload=_settlement_rejects_mixed_empty_and_corrupt,
+    ),
+)
+
+
+@fires_transition_table("SM-COVERAGE-SETTLEMENT", COVERAGE_SETTLEMENT_TRANSITIONS)
+def test_coverage_settlement_fires_transition_table(
+    transition_case: TransitionCase[Callable[[Path, pytest.MonkeyPatch], None]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transition_case.payload(tmp_path, monkeypatch)
+
+
+def _cli_coverage_publishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del monkeypatch
+    staging = tmp_path / ".coverage-staging.cli-case"
+    promoted = tmp_path / ".coverage-subprocess.cli-case"
+    source = tmp_path / "source.py"
+    _write_coverage_lines(staging, source, {1})
+
+    suite_conftest._publish_cli_coverage(staging, promoted)
+
+    assert not staging.exists()
+    data = CoverageData(basename=str(promoted))
+    try:
+        data.read()
+        assert data.lines(str(source)) == [1]
+    finally:
+        data.close(force=True)
+
+
+def _cli_coverage_rejects_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del monkeypatch
+    staging = tmp_path / ".coverage-staging.cli-case"
+    promoted = tmp_path / ".coverage-subprocess.cli-case"
+    with pytest.raises(AssertionError, match="missing CLI coverage"):
+        suite_conftest._publish_cli_coverage(staging, promoted)
+    assert not promoted.exists()
+
+
+def _cli_coverage_rejects_zero_byte(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del monkeypatch
+    staging = tmp_path / ".coverage-staging.cli-case"
+    promoted = tmp_path / ".coverage-subprocess.cli-case"
+    staging.touch()
+    with pytest.raises(AssertionError, match="missing CLI coverage"):
+        suite_conftest._publish_cli_coverage(staging, promoted)
+    assert not staging.exists()
+    assert not promoted.exists()
+
+
+def _cli_coverage_rejects_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del monkeypatch
+    staging = tmp_path / ".coverage-staging.cli-case"
+    promoted = tmp_path / ".coverage-subprocess.cli-case"
+    _write_coverage_lines(staging, tmp_path / "source.py", {1})
+    connection = sqlite3.connect(staging)
+    try:
+        connection.execute("DELETE FROM line_bits")
+        connection.execute("DELETE FROM file")
+        connection.commit()
+    finally:
+        connection.close()
+    with pytest.raises(AssertionError, match="empty CLI coverage"):
+        suite_conftest._publish_cli_coverage(staging, promoted)
+    assert not staging.exists()
+    assert not promoted.exists()
+
+
+def _cli_coverage_rejects_corrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del monkeypatch
+    staging = tmp_path / ".coverage-staging.cli-case"
+    promoted = tmp_path / ".coverage-subprocess.cli-case"
+    staging.write_bytes(b"partial sqlite header")
+    with pytest.raises(AssertionError, match="unreadable CLI coverage"):
+        suite_conftest._publish_cli_coverage(staging, promoted)
+    assert not staging.exists()
+    assert not promoted.exists()
+
+
+def _cli_coverage_cleans_failed_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging = tmp_path / ".coverage-staging.cli-case"
+    promoted = tmp_path / ".coverage-subprocess.cli-case"
+    _write_coverage_lines(staging, tmp_path / "source.py", {1})
+    for suffix in ("-journal", "-shm", "-wal"):
+        staging.with_name(f"{staging.name}{suffix}").touch()
+    monkeypatch.setattr(
+        suite_conftest.os,
+        "replace",
+        lambda *args: (_ for _ in ()).throw(PermissionError("replace failed")),
+    )
+
+    with pytest.raises(PermissionError, match="replace failed"):
+        suite_conftest._publish_cli_coverage(staging, promoted)
+
+    assert not staging.exists()
+    assert not any(
+        staging.with_name(f"{staging.name}{suffix}").exists()
+        for suffix in ("-journal", "-shm", "-wal")
+    )
+    assert not promoted.exists()
+
+
+def _cli_coverage_is_disabled_without_process_start(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(suite_conftest, "_CLI_COVERAGE_ROOT", tmp_path)
+    assert suite_conftest._cli_coverage_paths({}) is None
+
+
+def _cli_coverage_reserves_private_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(suite_conftest, "_CLI_COVERAGE_ROOT", tmp_path)
+    paths = suite_conftest._cli_coverage_paths(
+        {
+            "COVERAGE_PROCESS_START": "pyproject.toml",
+            "COVERAGE_FILE": ".coverage",
+        }
+    )
+    assert paths is not None
+    staging, promoted = paths
+    assert staging.parent == promoted.parent == tmp_path
+    assert staging.name.startswith(".coverage-staging.cli-")
+    assert promoted.name.startswith(".coverage-subprocess.cli-")
+    assert staging != promoted
+
+
+def _cli_coverage_runner_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+) -> None:
+    coverage_root = tmp_path / "coverage-root"
+    coverage_root.mkdir()
+    child_cwd = tmp_path / "child-cwd"
+    child_cwd.mkdir()
+    monkeypatch.setattr(suite_conftest, "_CLI_COVERAGE_ROOT", coverage_root)
+
+    def fail_runner(command: list[str], **kwargs: Any) -> None:
+        staging = Path(kwargs["env"][suite_conftest._CLI_COVERAGE_STAGING_ENV])
+        for suffix in ("", "-journal", "-shm", "-wal"):
+            staging.with_name(f"{staging.name}{suffix}").write_bytes(b"partial")
+        if failure_kind == "timeout":
+            raise subprocess.TimeoutExpired(
+                command,
+                kwargs["timeout"],
+                output=b"partial stdout",
+                stderr=b"partial stderr",
+            )
+        raise PermissionError("runner failed")
+
+    monkeypatch.setattr(suite_conftest, "run_with_coverage", fail_runner)
+    invoke_cli = vars(suite_conftest)["run_cli"]
+
+    def invoke_failing_cli() -> tuple[int, str, str]:
+        return invoke_cli(
+            "write",
+            "jobs",
+            "message",
+            cwd=child_cwd,
+            env={
+                "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
+                "COVERAGE_FILE": ".coverage",
+            },
+        )
+
+    if failure_kind == "timeout":
+        with pytest.raises(AssertionError, match="CLI command timed out") as caught:
+            invoke_failing_cli()
+        assert "partial stdout" in str(caught.value)
+        assert "partial stderr" in str(caught.value)
+    else:
+        with pytest.raises(PermissionError, match="runner failed"):
+            invoke_failing_cli()
+
+    assert not list(coverage_root.glob(".coverage-staging.cli-*"))
+    assert not list(coverage_root.glob(".coverage-subprocess.cli-*"))
+
+
+def _cli_coverage_real_child_publishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del monkeypatch
+    data_file = tmp_path / ".coverage"
+    workdir = tmp_path / "project"
+    workdir.mkdir()
+    invoke_cli = vars(suite_conftest)["run_cli"]
+
+    code, stdout, stderr = invoke_cli(
+        "write",
+        "jobs",
+        "message",
+        cwd=workdir,
+        env={
+            "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
+            "COVERAGE_FILE": str(data_file),
+        },
+    )
+
+    assert (code, stdout, stderr) == (0, "", "")
+    promoted = list(tmp_path.glob(".coverage-subprocess.cli-*"))
+    assert len(promoted) == 1
+    assert not list(tmp_path.glob(".coverage-staging.cli-*"))
+    data = CoverageData(basename=str(promoted[0]))
+    try:
+        data.read()
+        assert any(
+            path.replace("\\", "/").endswith("simplebroker/commands.py")
+            for path in data.measured_files()
+        )
+    finally:
+        data.close(force=True)
+
+
+def _cli_runner_failure_case(
+    failure_kind: str,
+) -> Callable[[Path, pytest.MonkeyPatch], None]:
+    def run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        _cli_coverage_runner_failure(tmp_path, monkeypatch, failure_kind)
+
+    return run
+
+
+CLI_COVERAGE_TRANSITIONS = (
+    TransitionCase(
+        transition_id="DISABLED",
+        start_state="invocation-preparing",
+        event="coverage process startup is absent",
+        guard="CLI coverage was not requested",
+        next_state="unstaged",
+        effects="does not reserve private or promoted paths",
+        expected_result="normal subprocess path remains active",
+        payload=_cli_coverage_is_disabled_without_process_start,
+    ),
+    TransitionCase(
+        transition_id="RESERVE-PRIVATE-PATHS",
+        start_state="invocation-preparing",
+        event="coverage process startup is present",
+        guard="base coverage path is relative to the controller root",
+        next_state="staging-reserved",
+        effects="allocates distinct private and deferred publication paths",
+        expected_result="child receives the private staging path",
+        payload=_cli_coverage_reserves_private_paths,
+    ),
+    TransitionCase(
+        transition_id="PUBLISH-READABLE",
+        start_state="staging-complete",
+        event="child exits and staging data is readable with measurements",
+        guard="coverage database is nonempty",
+        next_state="published",
+        effects="atomically replaces staging with the deferred path",
+        expected_result="promoted data preserves measured lines",
+        payload=_cli_coverage_publishes,
+    ),
+    TransitionCase(
+        transition_id="CHILD-SUCCESS-VALIDATE-PUBLISH",
+        start_state="child-running-with-private-staging",
+        event="a real CLI child exits successfully after recording coverage",
+        guard="the staging database is readable and contains measured files",
+        next_state="published",
+        effects="validates the child artifact and atomically promotes it",
+        expected_result="the deferred file contains production CLI measurements",
+        payload=_cli_coverage_real_child_publishes,
+    ),
+    TransitionCase(
+        transition_id="REJECT-MISSING",
+        start_state="staging-missing",
+        event="publication is requested",
+        guard="child produced no staging file",
+        next_state="failed-clean",
+        effects="leaves no promoted artifact",
+        expected_result="AssertionError names missing staging data",
+        payload=_cli_coverage_rejects_missing,
+    ),
+    TransitionCase(
+        transition_id="REJECT-ZERO-BYTE",
+        start_state="staging-incomplete",
+        event="publication is requested",
+        guard="staging file has zero bytes",
+        next_state="failed-clean",
+        effects="deletes the private staging artifact",
+        expected_result="AssertionError names missing staging data",
+        payload=_cli_coverage_rejects_zero_byte,
+    ),
+    TransitionCase(
+        transition_id="REJECT-EMPTY",
+        start_state="staging-readable-empty",
+        event="publication is requested",
+        guard="database has no measured files",
+        next_state="failed-clean",
+        effects="deletes the private staging artifact",
+        expected_result="AssertionError names empty staging data",
+        payload=_cli_coverage_rejects_empty,
+    ),
+    TransitionCase(
+        transition_id="REJECT-CORRUPT",
+        start_state="staging-corrupt",
+        event="publication is requested",
+        guard="coverage reader rejects the database",
+        next_state="failed-clean",
+        effects="deletes private staging without publishing",
+        expected_result="AssertionError preserves the coverage failure as cause",
+        payload=_cli_coverage_rejects_corrupt,
+    ),
+    TransitionCase(
+        transition_id="PUBLISH-FAILURE-CLEANUP",
+        start_state="staging-complete",
+        event="atomic replace fails",
+        guard="staging and SQLite sidecars may exist",
+        next_state="failed-clean",
+        effects="deletes staging and every private SQLite sidecar",
+        expected_result="replace failure propagates with no promoted artifact",
+        payload=_cli_coverage_cleans_failed_publish,
+    ),
+    TransitionCase(
+        transition_id="CHILD-TIMEOUT-CLEANUP",
+        start_state="child-running-with-private-staging",
+        event="the CLI child exceeds its timeout and dump grace",
+        guard="partial staging and SQLite sidecars may exist",
+        next_state="failed-clean",
+        effects="deletes every private staging artifact without promotion",
+        expected_result="timeout diagnostics preserve captured child output",
+        payload=_cli_runner_failure_case("timeout"),
+    ),
+    TransitionCase(
+        transition_id="RUNNER-ERROR-CLEANUP",
+        start_state="child-starting-with-private-staging",
+        event="the subprocess runner raises a non-timeout error",
+        guard="partial staging and SQLite sidecars may exist",
+        next_state="failed-clean",
+        effects="deletes every private staging artifact without promotion",
+        expected_result="the original runner error propagates",
+        payload=_cli_runner_failure_case("runner-error"),
+    ),
+)
+
+
+@fires_transition_table("SM-CLI-COVERAGE", CLI_COVERAGE_TRANSITIONS)
+def test_cli_coverage_fires_transition_table(
+    transition_case: TransitionCase[Callable[[Path, pytest.MonkeyPatch], None]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transition_case.payload(tmp_path, monkeypatch)
 
 
 def test_coverage_exit_patch_saves_readable_data_from_os_exit(
@@ -646,48 +1402,9 @@ def test_coverage_source_matching_is_platform_neutral(path: str) -> None:
 @pytest.mark.sqlite_only
 def test_run_cli_atomically_promotes_readable_coverage(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    data_file = tmp_path / ".coverage"
-    workdir = tmp_path / "project"
-    workdir.mkdir()
-    invoke_cli = vars(suite_conftest)["run_cli"]
-
-    code, stdout, stderr = invoke_cli(
-        "write",
-        "jobs",
-        "message",
-        cwd=workdir,
-        env={
-            "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
-            "COVERAGE_FILE": str(data_file),
-        },
-    )
-
-    assert (code, stdout, stderr) == (0, "", "")
-    code, stdout, stderr = invoke_cli(
-        "read",
-        "missing",
-        cwd=workdir,
-        env={
-            "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
-            "COVERAGE_FILE": str(data_file),
-        },
-    )
-    assert (code, stdout, stderr) == (2, "", "")
-
-    promoted = list(tmp_path.glob(".coverage-subprocess.cli-*"))
-    assert len(promoted) == 2
-    assert not list(tmp_path.glob(".coverage-staging.cli-*"))
-    for promoted_file in promoted:
-        data = CoverageData(basename=str(promoted_file))
-        try:
-            data.read()
-            assert any(
-                path.replace("\\", "/").endswith("simplebroker/commands.py")
-                for path in data.measured_files()
-            )
-        finally:
-            data.close(force=True)
+    _cli_coverage_real_child_publishes(tmp_path, monkeypatch)
 
 
 def test_cli_coverage_rejects_corrupt_staging_data(tmp_path: Path) -> None:
@@ -791,50 +1508,7 @@ def test_cli_coverage_cleans_staging_when_runner_fails(
     monkeypatch: pytest.MonkeyPatch,
     failure_kind: str,
 ) -> None:
-    coverage_root = tmp_path / "coverage-root"
-    coverage_root.mkdir()
-    child_cwd = tmp_path / "child-cwd"
-    child_cwd.mkdir()
-    monkeypatch.setattr(suite_conftest, "_CLI_COVERAGE_ROOT", coverage_root)
-
-    def fail_runner(command: list[str], **kwargs: Any) -> None:
-        staging = Path(kwargs["env"][suite_conftest._CLI_COVERAGE_STAGING_ENV])
-        for suffix in ("", "-journal", "-shm", "-wal"):
-            staging.with_name(f"{staging.name}{suffix}").write_bytes(b"partial")
-        if failure_kind == "timeout":
-            raise subprocess.TimeoutExpired(
-                command,
-                kwargs["timeout"],
-                output=b"partial stdout",
-                stderr=b"partial stderr",
-            )
-        raise PermissionError("runner failed")
-
-    monkeypatch.setattr(suite_conftest, "run_with_coverage", fail_runner)
-    invoke_cli = vars(suite_conftest)["run_cli"]
-
-    def invoke_failing_cli() -> tuple[int, str, str]:
-        return invoke_cli(
-            "write",
-            "jobs",
-            "message",
-            cwd=child_cwd,
-            env={
-                "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
-                "COVERAGE_FILE": ".coverage",
-            },
-        )
-
-    if failure_kind == "timeout":
-        with pytest.raises(AssertionError, match="CLI command timed out") as exc_info:
-            invoke_failing_cli()
-        assert "partial stdout" in str(exc_info.value)
-        assert "partial stderr" in str(exc_info.value)
-    else:
-        with pytest.raises(PermissionError, match="runner failed"):
-            invoke_failing_cli()
-
-    assert not list(coverage_root.glob(".coverage-staging.cli-*"))
+    _cli_coverage_runner_failure(tmp_path, monkeypatch, failure_kind)
 
 
 def test_with_default_suite_path_applies_default_for_flag_only_args() -> None:

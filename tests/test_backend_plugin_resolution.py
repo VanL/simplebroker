@@ -341,7 +341,7 @@ def test_legacy_runner_without_backend_plugin_still_looks_like_sqlite() -> None:
     assert not isinstance(runner, BackendAwareRunner)
 
 
-def test_non_aware_runner_with_resolved_target_uses_target_plugin(
+def test_non_aware_runner_with_resolved_target_uses_target_plugin(  # noqa: C901 approved [DOM-10.1.1] exception
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """BrokerTarget context should identify wrapped runners that are not backend-aware."""

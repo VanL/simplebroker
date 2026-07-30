@@ -113,7 +113,11 @@ def test_broadcast_is_atomic_when_generated_ids_collide(
         core.write("alpha", "seed-alpha")
         core.write("beta", "seed-beta")
         colliding_ts = core.generate_timestamp()
-        monkeypatch.setattr(core, "generate_timestamp", lambda: colliding_ts)
+        monkeypatch.setattr(
+            core._timestamp_gen,
+            "_reserve_candidates",
+            lambda count: [colliding_ts] * count,
+        )
 
         with pytest.raises(RuntimeError, match="timestamp conflicts"):
             core.broadcast("announcement")
