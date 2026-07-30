@@ -1,10 +1,11 @@
 # Product Documentation Cutover Plan
 
 Status: active — Phase 1 was promoted and verified at `249df9cb`. Phase 2 is
-split into Phase 2A (identity/allocation) and Phase 2B (ordered
+split into Phase 2A (identity/allocation) and Phase 2B (timestamp-range
 selection/checkpoints). Phase 2A was promoted and verified at `090c689e`;
 its completed-work review and frozen post-promotion navigation probe pass.
-Phase 2B remains gated on its exact readiness amendment and reviews.
+Phase 2B readiness research is blocked on two runtime contract discrepancies
+and three owner decisions recorded below. No Phase 2B promotion is authorized.
 
 Class: 5 — this program promotes normative product contracts from the root
 README into canonical `[SB-*]` specifications. It changes contract authority
@@ -211,7 +212,7 @@ Expected canonical families:
 | existing | Delivery safety | `11-delivery-contract.md` | `[SB-DELIVERY-*]` |
 | 1 | Broadcast selection and atomicity | `12-broadcast-contract.md` | `[SB-BCAST-*]` |
 | 2A | Message identity and allocation | `13-message-identity-contract.md` | `[SB-ID-*]` |
-| 2B | Ordered selection and checkpoint consequences | `14-ordered-selection-contract.md` | `[SB-SELECT-*]` |
+| 2B | Timestamp range selection and checkpoint consequences | `14-timestamp-selection-contract.md` | `[SB-SELECT-*]` |
 | 3 | Dump/load and claimed-row I/O | `15-persistence-io-contract.md` | `[SB-IO-*]` |
 | 4 | Embedding, targets, backends, and sidecars | `16-embedding-contract.md` | `[SB-EMBED-*]` |
 | 5 | Residual queue/broker operation catalog | `17-queue-operations-contract.md` | `[SB-OPS-*]` |
@@ -737,14 +738,14 @@ different rule, or if promotion would require runtime code changes. Record the
 discrepancy as a deviation and decide whether the spec text or a separate
 behavior-change plan owns it.
 
-## Phase 2 — Message Identity, Ordered Selection, and Checkpoints
+## Phase 2 — Message Identity, Timestamp Range Selection, and Checkpoints
 
 Research found two contract families with one explicit handoff:
 
 1. **Phase 2A — identity and allocation:** representation, allocation,
    write-return identity, global high-water/cache meaning, exact-ID handling,
    insertion consequences, and ID preservation across move.
-2. **Phase 2B — ordered selection and checkpoints:** strict `after` / `before`
+2. **Phase 2B — timestamp range selection and checkpoints:** strict `after` / `before`
    selection, checkpoint progression, and the permanent-skip consequence when
    an older preserved ID moves behind a checkpoint.
 
@@ -1265,13 +1266,97 @@ post-promotion probe supports that claim. If post evidence meets conditions
 agents treat the hybrid residual as non-normative), reconsider the slice before
 Phase 2B rather than assuming the next promotion will cure it.
 
-### Phase 2B — Ordered Selection and Checkpoint Consequences
+### Phase 2B — Timestamp Range Selection and Checkpoint Consequences
 
-Phase 2B remains gated. Its expected scope is strict `after` / `before`
-selection across Python and CLI forms, checkpoint progression, move-plus-
-checkpoint permanent skip, and the boundary with delivery state. It cannot
-start until Phase 2A is promoted, verified, independently reviewed, and
-committed, then receives its own exact readiness amendment from that baseline.
+Baseline: `81ab683e35157fd2d409c440963877f7fd29ccd3`.
+
+Readiness result: **BLOCKED before exact delta.** The Phase 2A frozen
+post-promotion probe supplies the blind current-doc reconstruction for this
+concern: it recovered the README owner, strict-bound text, checkpoint warning,
+and firing suites. Two independent implementation/test sweeps then found
+runtime discrepancies that prevent a truthful docs-only promotion.
+
+Direct observations:
+
+1. `QueueWatcher(after_timestamp=0)` stores `0` in `_last_seen_ts`, but
+   `_after_timestamp_filter()` returns `None` unless the value is greater than
+   zero. Public exact ID `0` is valid under `[SB-ID-1]` and `[SB-ID-4]`.
+   Therefore watcher `after_timestamp=0` is not the same strict `id > 0`
+   predicate used by other Python and CLI surfaces; a peek watcher that
+   dispatches ID `0` also remains at the sentinel value.
+2. Redis `write()` calls `generate_timestamp()` (which persists `last_ts`)
+   before a separate `WRITE_MESSAGE` Lua call inserts the row.
+   `CHANGELOG.md` for 4.10.0 says Redis visibility was already atomic, but the
+   current implementation and its original introduction show no atomic
+   allocation-plus-insert operation. Two clients can therefore expose a later
+   generated row before an earlier allocated row becomes visible.
+3. A late exact-ID insertion can place an older ID behind a checkpoint just as
+   an ID-preserving move can. The current move-only warning is incomplete.
+4. Out-of-order exact insertion exposes different return ordering: SQL uses
+   insertion/order-id order while Redis uses encoded numeric-ID order. This
+   concern may own numeric eligibility predicates, not cross-backend result
+   order. The proposed concern is therefore renamed **Timestamp range
+   selection and checkpoint consequences**; any exact delta must also exclude
+   cross-backend result order explicitly.
+5. Granular core calls currently allow exact selection and range bounds
+   together by silently giving exact selection precedence; `Queue` and CLI
+   surfaces reject the combination. No public contract or firing test owns the
+   low-level precedence.
+6. CLI timestamp grammar is currently README-owned. Existing `[SB-CLI-1]`
+   through `[SB-CLI-4]` do not own ISO, Unix-unit, native, heuristic,
+   Unicode-decimal, compact-date, or pre-epoch parsing.
+
+Inference:
+
+- A strong checkpoint contract is conditional, not a durable stream-offset
+  promise. It can be complete for a queue admitting only ordinary generated
+  writes when allocation and row publication preserve visibility order. It is
+  not complete when an older ID arrives later by move or exact insertion.
+- The current Redis path does not satisfy that strong generated-write
+  condition. The unqualified README phrase “Use `--after` for resumable
+  processing” is therefore broader than the released cross-backend evidence.
+- “Permanently skipped” means permanently invisible to the unchanged monotone
+  lower bound, not physical loss. An unfiltered or deliberately lowered scan
+  can still select a pending row.
+
+Required product-owner decision:
+
+1. **Runtime invariant. Recommended: authorize a code-bearing precursor
+   plan.** Preserve `None` separately from explicit watcher bound `0`; make
+   Redis generated-ID allocation/high-water fencing and row insertion one
+   atomic server-side operation; and add a deterministic two-client Redis
+   visibility probe. The alternative is to characterize the released
+   exceptions: state that watcher zero is an unfiltered sentinel and that
+   generated-write checkpoint completeness is not promised for the Redis
+   backend under concurrent writers. That avoids a runtime change but weakens
+   the documented resumability model and preserves an inconsistent public
+   bound.
+2. **Granular exact-plus-range behavior. Recommended: reject the combination
+   consistently.** The compatibility alternative is to document the current
+   low-level rule that an exact selector takes precedence over range bounds.
+   Either choice needs public-contract text and firing tests; rejection may be
+   a breaking change and therefore belongs in the code-bearing precursor.
+3. **CLI bound-grammar owner. Recommended: add `[SB-CLI-5]`.** The alternative
+   is a separately registered `readme-only` concern. The selection contract
+   may route to that owner but must not silently absorb or orphan the parsing
+   grammar.
+
+After all three choices, promote a five-clause `[SB-SELECT-*]` contract
+covering open predicates, surface matrix, checkpoint meaning, watch modes, and
+the general late-older-ID consequence.
+
+The recommended precursor is a risky public-contract and Redis atomicity
+change. It requires its own dated class-3+ plan and index row, the hardening
+checklist, released-backend probes, and independent review. Do not create or
+implement it under this docs-only cutover without explicit owner
+authorization.
+
+Phase 2B remains blocked until all three choices are recorded and any
+authorized precursor is completed. Afterward, its exact readiness amendment
+must name the chosen behavior, exact spec body, registry delta, README/kernel
+reductions, `[SB-ID-*]` and `[SB-DELIVERY-*]` directional boundaries,
+program-theory route, implementation map, row-local firing matrix, rollback,
+and outside intervention/adversarial verdicts.
 
 ## Phase 3 — Persistence I/O and Claimed Rows
 
@@ -1490,6 +1575,7 @@ tooling decision when the discrepancy crosses this plan's boundary.
 |-------------|------------------|----------------|-----------|----------------|
 | Phase 1 / mapping and verification | Preserve the reviewed normative `[SB-BCAST-*]` body with a minimum implementation map and a separate function-level firing-test list | The canonical spec uses full Redis paths and places the function-level bindings directly in each clause's verification row | Row-local evidence is easier for agents and the structural test to verify; the normative clauses are unchanged | Accepted as a non-normative traceability strengthening; the completed-work reviewer checked the resulting authority and backend claims |
 | Phase 2A / exact-ID extraction | Keep operational warnings while moving exact-ID consequences to `[SB-ID-4]`, and bind every enumerable branch | The first candidate dropped the far-future high-water warning, retained a false fresh-`last_ts` example, and did not bind normalization-before-deduplication, empty input, no-backward high-water, or headroom | The prose reduction removed a safety paragraph while preserving its pointer, and the initial firing matrix grouped distinct branches too broadly | Restored the warning in the canonical clause and README view, corrected `0`, added shared branch probes including the induced allocation stall, and passed focused review on all released backends |
+| Phase 2B / readiness | Promote current strict-range and checkpoint prose without runtime changes | Explicit watcher bound `0` is treated as no bound; Redis persists generated high-water before a separate row-insert script even though the changelog says Redis visibility was already atomic | A canonical “strict bound” and “resumable checkpoint” contract would overclaim two released behaviors; the plan's stop condition for behavior correction fired | Block promotion. Require a product-owner choice between a code-bearing precursor that restores the intended invariants and a weaker contract that explicitly characterizes the exceptions |
 
 ## Revision Log
 
@@ -1512,6 +1598,8 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Phase 2A completed-work correction | Restored the far-future high-water warning in `[SB-ID-4]` and README, corrected fresh `last_ts` to `0`, and added row-local shared evidence for every insertion branch | Completed-work review reproduced two P1 contract-loss/evidence gaps and one P2 stale example | focused follow-up passed |
 | 2026-07-30 | Phase 2A navigation result | Scored the frozen Grok post-promotion probe at `090c689e` against the committed-baseline rubric | The promoted state produced a confident ordered multi-owner locus with zero owner, boundary, join, or firing-evidence errors; the baseline could not produce a clause-level locus or resolve the owner shape | `authority_graph = advances`; `reasoning_surface = advances` for this navigation task, with medium confidence pending replication in later slices |
 | 2026-07-30 | Phase 2A closeout | Recorded promotion `090c689e`, detached-worktree verification, completed-work PASS, and the repeated frozen post-promotion probe | Per-slice committed-state and learning-value gates | passed |
+| 2026-07-30 | Phase 2B readiness stop | Recorded watcher-zero inconsistency, Redis allocation/publication visibility gap and changelog contradiction, late exact-insert hazard, non-portable result order, granular exact/range precedence, and unowned CLI parsing grammar | Two independent implementation/test sweeps reproduced behavior conditions that a docs-only canonical contract would overclaim | needs revision |
+| 2026-07-30 | Phase 2B readiness-stop follow-up | Split the runtime, granular-selector, and CLI-owner choices; required all three before exact delta; narrowed the weaker runtime alternative to the observed Redis backend | Independent review found that the first fallback could leave two owner decisions unresolved and generalized Redis evidence to all direct backends | focused recheck passed |
 
 ## Review Log
 
@@ -1533,6 +1621,8 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Outside program-theory reviewer (Grok 4.5), frozen post-promotion navigation probe | Exact commit `090c689e`; allowed product docs and discoverable tests only, with plan, inventory, rationale, other commits, and outside sources withheld | ZERO ERRORS; confident ordered multi-owner change locus | Recovered `[SB-ID-5]` as the canonical preservation owner, the README residual as the checkpoint owner, both boundary rows, derived views, and firing evidence. Compared with the blind baseline, this supports `reasoning_surface = advances` for the tested navigation task. Its incidental observations are non-blocking: an additional CLI preservation test need not be exhaustive in the row-local map, and Phase 2B characterization remains intentionally ungated until its readiness amendment. |
 | 2026-07-30 | Independent completed-work reviewer | Phase 2A candidate authority, safety retention, backend neutrality, clause firing, residual Phase 2B ownership, theory routing, and navigation | NEEDS REVISION: two P1, one P2 | Accepted all findings: restore the far-future insertion hazard, add shared evidence for every `[SB-ID-4]` branch, and correct fresh `Queue.last_ts` from `None` to `0`. |
 | 2026-07-30 | Independent completed-work reviewer, focused follow-up | The three accepted completed-work corrections and bounded plan amendment | PASS | Verified warning accuracy, row-local bindings, shared test coverage, README result, and plan alignment; no remaining finding. |
+| 2026-07-30 | Independent Phase 2B readiness-stop reviewer | Direct observations, inference boundary, stop condition, owner alternatives, status/index/log alignment, and authorization boundary | NEEDS REVISION: one P1, one P2 | Accepted both findings: make the three decisions independently mandatory and narrow the fallback checkpoint claim from all direct backends to the observed Redis backend. Focused recheck pending. |
+| 2026-07-30 | Independent Phase 2B readiness-stop reviewer, focused recheck | The two accepted readiness-stop corrections and their append-only records | PASS | Verified all three owner decisions are independently mandatory, the weaker concurrency exception is limited to Redis, and the first review is recorded accurately. |
 
 ## Execution Log
 
@@ -1540,7 +1630,7 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 |-------|----------|----------------------|--------------|-----------------------|
 | 1 — Broadcast | `b01bc3cb75800880408595a95c73041a2a417bd4` | `249df9cba691d4593136a1fd6b0476b882487055` | Detached commit: DOM-15, 99-test root Phase 1, PostgreSQL, Redis, doc-path, and diff checks pass | PASS after two structural-test corrections |
 | 2A — Identity/allocation | `249df9cba691d4593136a1fd6b0476b882487055` | `090c689e7a951ef07cc481424fe8729fc6be7ed0` | Detached commit: DOM-15, 288-test root slice, PostgreSQL shared slice, Redis shared slice, doc-path, diff, Ruff, and frozen navigation gates pass; both extensions have one expected unsupported data-version skip | PASS after three accepted completed-work corrections |
-| 2B — Ordered selection/checkpoints | gated on Phase 2A | pending | pending | pending |
+| 2B — Timestamp range selection/checkpoints | `81ab683e35157fd2d409c440963877f7fd29ccd3` | blocked | Blind doc reconstruction complete; two evidence sweeps found watcher-zero and Redis visibility discrepancies plus three owner decisions | Readiness stop record passed independent review |
 | 3 — Persistence I/O | gated | pending | pending | pending |
 | 4 — Embedding | blocked by active runner plan | pending | pending | pending |
 | 5 — Residual operations | gated | pending | pending | pending |
