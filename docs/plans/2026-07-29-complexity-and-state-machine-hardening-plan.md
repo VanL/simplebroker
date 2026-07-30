@@ -117,6 +117,10 @@ coupled helpers, 9 simplify locally, and 14 redesign an internal seam.
   implementation checkpoint contains both the promoted policy and its
   realization, so it is not misrepresented as a promotion-only baseline. See
   the deviation log for the process failure and closure disposition.
+- Implementation and promoted-policy realization:
+  `86f73f5e8d4e05bb768b780af4f4183458fe56eb`. This is the first immutable
+  checkpoint containing the completed implementation; it does not retroactively
+  satisfy the missing promotion-only baseline.
 
 ## Proposed Spec Delta
 

@@ -616,7 +616,7 @@ Local adoption record (soft-retired; not a live path claim):
 - retired: 2026-07-17-propagate-guidance-delta-wave-plan — source f133ce7; see docs/plans/README.md
 - retired: 2026-07-27-agent-docs-coalescing-and-status-hygiene-plan — source f133ce7; see docs/plans/README.md
 
-Active local plan:
+Local plans:
 
 - `docs/plans/2026-07-29-ruff-lint-expansion-plan.md`
 - `docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md`
