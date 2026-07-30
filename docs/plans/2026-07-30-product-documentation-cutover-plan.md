@@ -1,9 +1,9 @@
 # Product Documentation Cutover Plan
 
-Status: active — Phase 1 is implemented and independently reviewed in the
-worktree; its promotion commit is pending. Later phases remain gated until
-their exact deltas are added, independently reviewed, and started from the
-new committed baseline.
+Status: active — Phase 1 was promoted and verified at `249df9cb`. Phase 2
+research and its committed-baseline navigation probe may proceed; Phase 2
+implementation remains gated until its exact delta and independent reviews
+are recorded.
 
 Class: 5 — this program promotes normative product contracts from the root
 README into canonical `[SB-*]` specifications. It changes contract authority
@@ -1036,6 +1036,7 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Phase 1 implementation | Made clause evidence row-local, required theory to name the specialized registry concern, and recorded the traceability-only deviation | Completed-work review found two weak structural assertions and one unrecorded mapping expansion | focused follow-up passed |
 | 2026-07-30 | Program / Phase 2 readiness | Added a three-pass outside program-theory evaluation gate and a preliminary identity stress-test brief | Phase 1 external review found that broadcast proves the authority machinery but not the harder performance or entanglement theory | needs revision |
 | 2026-07-30 | Program / Phase 2 readiness | Split authority and reasoning verdicts; separated probe design, baseline, and post results; tightened blind inputs, identity failure framing, falsifier, locus probe, evidence authority, and proportionality | Outside amendment trial showed that the first gate could still reward authority success as reasoning success | focused follow-up passed |
+| 2026-07-30 | Phase 1 closeout | Recorded promotion `249df9cb` and detached-worktree verification; established the same commit as the Phase 2 baseline | Per-phase closeout and committed-baseline gate | passed |
 
 ## Review Log
 
@@ -1053,8 +1054,8 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 
 | Phase | Baseline | Promotion identifier | Verification | Completed-work review |
 |-------|----------|----------------------|--------------|-----------------------|
-| 1 — Broadcast | `b01bc3cb75800880408595a95c73041a2a417bd4` | uncommitted worktree; commit identifier pending | DOM-15, root Phase 1, PostgreSQL, Redis, doc-path, Ruff, and diff checks pass | PASS after two structural-test corrections |
-| 2 — Identity | gated | pending | pending | pending |
+| 1 — Broadcast | `b01bc3cb75800880408595a95c73041a2a417bd4` | `249df9cba691d4593136a1fd6b0476b882487055` | Detached commit: DOM-15, 99-test root Phase 1, PostgreSQL, Redis, doc-path, and diff checks pass | PASS after two structural-test corrections |
+| 2 — Identity | `249df9cba691d4593136a1fd6b0476b882487055` | pending | baseline navigation probe pending | pending |
 | 3 — Persistence I/O | gated | pending | pending | pending |
 | 4 — Embedding | blocked by active runner plan | pending | pending | pending |
 | 5 — Residual operations | gated | pending | pending | pending |

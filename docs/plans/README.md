@@ -94,7 +94,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-29-process-session-core-factory-plan.md | retired-pending — soft-retired 2026-07-29; source 36e2f356 |
 | 2026-07-29-program-theory-and-negative-knowledge-plan.md | active — class 5+P; program theory, negative-knowledge lifecycle, agent read path, and later upstream export |
 | 2026-07-29-ruff-lint-expansion-plan.md | active — class 3+P; Ruff 0.16 stable-default expansion and repository-wide cleanup in progress |
-| 2026-07-30-product-documentation-cutover-plan.md | active — class 5; Phase 1 broadcast promotion implemented and independently reviewed in the worktree; promotion commit pending before Phase 2 |
+| 2026-07-30-product-documentation-cutover-plan.md | active — class 5; Phase 1 broadcast promoted and verified at 249df9cb; Phase 2 identity exact delta and reviews pending |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | active — class 4; shared-runner transaction ownership and reactor sidecar-boundary correction |
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
