@@ -141,3 +141,9 @@ Dated moment-tier entries (foldable after age floor and distillation).
   refresh if another process advanced first. Otherwise zero-target calls mutate
   metadata, or a race can insert IDs below the global high-water mark.
   (Exact-target Redis broadcast.)
+- 2026-07-30: A canonical-doc extraction must audit every removed README
+  paragraph for operational hazards, not only normative rules. A pointer can
+  stay correct while a safety warning disappears. Bind each enumerable branch
+  in the promoted clause separately; grouped labels such as “duplicate
+  handling” can hide normalization-order, empty-input, and high-water cases.
+  (Phase 2A message-identity cutover completed-work review.)

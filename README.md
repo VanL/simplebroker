@@ -288,8 +288,10 @@ $ broker alias remove task1.outbox
 - `--after <timestamp>` - Process messages newer than timestamp
 - `--before <timestamp>` - Process messages older than timestamp (`read`, `peek`, and `move`; not `watch`)
 
-> **Moved messages and checkpoints.** `move` preserves the message's
-> original timestamp (stable IDs). Any timestamp-checkpoint consumer —
+> **Moved messages and checkpoints.** `move` preserves the message's public
+> ID (`[SB-ID-5]`). The checkpoint consequence below remains normative in this
+> README until the ordered-selection/checkpoint concern is promoted in Phase
+> 2B. Any timestamp-checkpoint consumer —
 > `peek --after`, `read --after`, a peek-mode watcher, a consume-mode
 > watcher started with `after_timestamp`, or any hand-rolled
 > `ts > last_seen` filter — will **permanently skip** messages moved into
@@ -409,42 +411,28 @@ done
 ## Core Concepts
 
 ### Timestamps as Message IDs
-Every message receives a unique 64-bit number that serves dual purposes as a timestamp and unique message ID. Timestamps are always included in JSON output. 
-Timestamps can be included in regular output by passing the -t/--timestamps flag. 
 
-Timestamps are:
-- **Unique** - No collisions even with concurrent writers (enforced by database constraint)
-- **Time-ordered** - Natural chronological sorting
-- **Efficient** - 64-bit integers, not UUIDs
-- **Meaningful** - Can extract creation time from the ID
+Every stored message has a public integer message ID, exposed as `timestamp`
+in JSON. Message bodies are payload and may duplicate. Producers should retain
+the ID returned by `Queue.write()` or printed by `broker write -t` / `--json`;
+`queue.last_ts` is a broker-global high-water cache, not the identity of that
+write.
 
-Message bodies are payload only and may duplicate byte-for-byte. Message IDs are
-the sole durable identity for targeted broker operations and application-level
-deduplication. Because vacuum physically removes claimed rows, SimpleBroker does
-not retain a permanent tombstone for every historical ID; consumers that require
-idempotency should persist and deduplicate by message ID.
+ID representation and range, allocation, write returns, high-water/cache
+semantics, exact-ID normalization and insertion consequences, and
+ID-preserving move are normative in the
+[message identity contract](docs/specs/13-message-identity-contract.md)
+`[SB-ID-1]` through `[SB-ID-5]`.
 
-Producers get the ID at write time: `Queue.write()` returns the committed
-message's ID, and `broker write -t` (or `--json`) prints it. This is the
-value to record for later exact-ID operations (`-m`, `delete(message_id=...)`)
-— do not reconstruct it from `queue.last_ts`, which is a broker-global
-high-water mark and may already reflect another writer's later message.
+SimpleBroker retains no permanent tombstone or application deduplication
+ledger after physical removal. Applications needing durable idempotency
+persist the message ID themselves.
 
-The format:
-- High 52 bits: microseconds after Unix epoch
-- Low 12 bits: logical counter for sub-microsecond ordering
-- Similar to Twitter's Snowflake IDs or UUID7
-- The format is compatible with time.time_ns(), but the precision is closer to microseconds (~4 μs) due to limits on the precision of the host clock
-
-Python APIs that target one exact message ID, such as
-`Queue.read(message_id=...)`, `Queue.peek(message_id=...)`,
-`Queue.move(message_id=...)`, `Queue.delete(message_id=...)`,
-`Queue.delete_many(...)`, and exact-ID granular methods, accept either an
-integer ID or an exact 19-digit string ID. Malformed string IDs raise
-`ValueError`; unsupported types, including `bool`, raise `TypeError`.
-
-Python `after_timestamp` and `before_timestamp` arguments are integer bounds.
-The CLI's date and unit-suffix timestamp parsing is only for CLI flags.
+Exact-ID Python operations accept an integer ID or an exact 19-digit string ID.
+Their normalization and failure rules are normative in `[SB-ID-4]`. Python
+`after_timestamp` and `before_timestamp` arguments remain integer bounds owned
+by the ordered-selection/checkpoint concern; the CLI's date and unit-suffix
+parsing applies only to CLI range flags.
 
 
 ### JSON for Safe Processing
@@ -493,8 +481,10 @@ $ broker peek tasks --all --include-claimed
 Claimed rows are deletion-pending — vacuum may remove them at any time;
 `--include-claimed` is an inspection tool, not delivery state.
 
-> **Moved messages and checkpoints.** `move` preserves the message's
-> original timestamp (stable IDs). Any timestamp-checkpoint consumer —
+> **Moved messages and checkpoints.** `move` preserves the message's public
+> ID (`[SB-ID-5]`). The checkpoint consequence below remains normative in this
+> README until the ordered-selection/checkpoint concern is promoted in Phase
+> 2B. Any timestamp-checkpoint consumer —
 > `peek --after`, `read --after`, a peek-mode watcher, a consume-mode
 > watcher started with `after_timestamp`, or any hand-rolled
 > `ts > last_seen` filter — will **permanently skip** messages moved into
@@ -973,11 +963,9 @@ ts = queue.generate_timestamp()  # alias: queue.get_ts()
 print(ts)  # Monotonic within a database
 ```
 
-Notes:
-- Timestamps are monotonic per database and come from the same generator as
-  `Queue.write()`, which returns the ID it committed.
-- Generating a timestamp advances the broker high-water mark. Normal `write()`
-  calls will not reuse that ID, but no message row exists until you write one.
+`generate_timestamp()` and `get_ts()` allocate a broker-compatible ID and
+advance broker-global high-water state without writing a message row. Exact
+allocation behavior is normative in `[SB-ID-2]` and `[SB-ID-3]`.
 
 ### Inserting messages with exact IDs
 
@@ -1008,18 +996,16 @@ with open_broker("/path/to/.broker.db") as broker:
     broker.insert_messages(records)
 ```
 
-`insert_messages(...)` accepts integer IDs or exact 19-digit string IDs,
-validates the full batch, rejects duplicate IDs after normalization, advances
-`last_ts` above the largest supplied ID inside the same transaction, and
-inserts pending messages with their exact IDs. Normal producers should still
-use `write(...)`, which allocates IDs through the broker timestamp generator.
+`insert_messages(...)` stores caller-supplied IDs unchanged. Exact-ID
+normalization, batch preflight, duplicate handling, and high-water
+consequences are normative in `[SB-ID-4]`. Dump/load line format,
+fresh-target policy, and cross-backend restore behavior remain with the
+persistence-I/O concern.
 
-> **Supply IDs that came from a SimpleBroker timestamp generator** (your own
-> reserved ID, or the source broker's dump). Because `insert_messages(...)` moves
-> `last_ts` to just above the largest ID in the batch, an arbitrarily large ID
-> pushes the high-water mark far into the future and stalls later `write()` calls
-> until the wall clock catches up. IDs must be non-negative and below `2**63`;
-> inserted IDs must also leave room for `last_ts` to advance above them.
+> **Supply IDs allocated by a compatible SimpleBroker timestamp generator.**
+> An arbitrarily far-future ID advances broker high-water into that interval
+> and can make later `write()` calls fail after the logical counter is
+> exhausted, until the wall clock catches up. See `[SB-ID-4]`.
 
 For a single queue handle, pass `(message, message_id)` pairs:
 
@@ -1029,15 +1015,18 @@ queue.insert_messages([("restore one", 1837025672140161024)])
 
 There is no CLI surface for exact-ID inserts.
 
-### Tracking the last generated timestamp
+### Tracking broker-global timestamp high-water
 
-Each `Queue` instance caches the most recent `meta.last_ts` value it has seen via the `queue.last_ts` attribute. The cache updates automatically after calls to `queue.write()` and `queue.generate_timestamp()`.
+`Queue.last_ts` is a per-handle cache of broker-global allocation high-water
+state. It is not queue-local and need not identify a current message row.
+`Queue.refresh_last_ts()` explicitly refreshes it. Exact cache and high-water
+semantics are normative in `[SB-ID-3]`.
 
 For long-lived watchers or background processes, force a refresh without creating a new message by calling `queue.refresh_last_ts()`, which performs a lightweight, non-blocking read of the meta table:
 
 ```python
 queue = Queue("tasks")
-print(queue.last_ts)  # None until we generate or refresh
+print(queue.last_ts)  # 0 on a fresh broker target
 
 queue.write("build artifacts ready")
 print(queue.last_ts)  # Updated immediately after the write

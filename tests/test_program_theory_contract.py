@@ -75,10 +75,10 @@ CONCEPT_OWNERS = {
         "README Command Reference / Python API",
     ),
     "Message identity": (
-        "Message identity (hybrid ts, last_ts, move+checkpoint)",
-        "readme-only",
-        "../README.md#core-concepts",
-        "README Core Concepts / agent-kernel Message IDs",
+        "Message identity, allocation, exact-ID handling, and preservation",
+        "canonical-spec",
+        "specs/13-message-identity-contract.md",
+        "13-message-identity-contract.md",
     ),
     "Claim": (
         "Delivery guarantees, claim/peek/watch safety",
@@ -130,6 +130,22 @@ SPECIALIZED_CONTRACTS = {
         "specs/12-broadcast-contract.md",
         "[SB-BCAST-*]",
     ),
+    "Message identity": (
+        "Message identity, allocation, exact-ID handling, and preservation",
+        "canonical-spec",
+        "specs/13-message-identity-contract.md",
+        "[SB-ID-*]",
+    ),
+    "Move": (
+        "Message identity, allocation, exact-ID handling, and preservation",
+        "canonical-spec",
+        "specs/13-message-identity-contract.md",
+        "[SB-ID-5]",
+    ),
+}
+ORDERED_SELECTION_ROUTES = {
+    "Message identity": "../README.md#checkpoint-based-processing",
+    "Move": "../README.md#checkpoint-based-processing",
 }
 RECORD_HEADING = re.compile(
     r"^### \[(?P<kind>ALT|REV)-(?P<scope>[A-Z][A-Z0-9]*)-"
@@ -706,9 +722,7 @@ def test_core_concepts_route_specialized_contracts(theory_text: str) -> None:
     theory_three = _section(theory_text, "[THEORY-3]")
     registry_rows = _registry_rows(registry)
     concept_rows = _concept_rows(theory_three)
-    for concept, (concern, state, target, code_family) in (
-        SPECIALIZED_CONTRACTS.items()
-    ):
+    for concept, (concern, state, target, code_family) in SPECIALIZED_CONTRACTS.items():
         owner = concept_rows[concept]
         assert f"Registry `{concern}`" in owner
         assert f"]({target})" in owner
@@ -716,6 +730,25 @@ def test_core_concepts_route_specialized_contracts(theory_text: str) -> None:
         registry_state, registry_spec, _ = registry_rows[concern]
         assert registry_state == state
         assert target.removeprefix("specs/") in registry_spec
+
+
+def test_identity_concepts_keep_ordered_selection_residual_explicit(
+    theory_text: str,
+) -> None:
+    registry = PRODUCT_REGISTRY.read_text(encoding="utf-8")
+    theory_three = _section(theory_text, "[THEORY-3]")
+    registry_rows = _registry_rows(registry)
+    concept_rows = _concept_rows(theory_three)
+    concern = "Ordered timestamp selection and checkpoint consequences"
+    state, spec, locus = registry_rows[concern]
+    assert state == "readme-only"
+    assert spec == "—"
+    assert "Checkpoint-based Processing" in locus
+
+    for concept, target in ORDERED_SELECTION_ROUTES.items():
+        owner = concept_rows[concept]
+        assert f"Registry `{concern}`" in owner
+        assert f"]({target})" in owner
 
 
 def test_theory_links_and_stable_references_resolve(theory_text: str) -> None:

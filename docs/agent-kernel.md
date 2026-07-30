@@ -122,14 +122,22 @@ Safe alternatives:
 
 ## Message IDs
 
-- Public id = **64-bit hybrid timestamp** (JSON field `timestamp`).
-- `Queue.write` **returns** that id. On the CLI, request it with `--json` or
-  `-t` / `--timestamps` (plain write is quiet on success).
-- **`queue.last_ts` is a broker-global high-water mark**, not “my last message.”
-- **`move` preserves ids.** Consumers using `after <checkpoint>` / peek-after
-  will **permanently skip** messages moved in with older timestamps. If a
-  queue receives `move` traffic, do not filter it with a timestamp checkpoint
-  (or periodically rescan from 0).
+Normative identity, allocation, exact-ID, and preservation contract:
+`docs/specs/13-message-identity-contract.md`
+[SB-ID-1]–[SB-ID-5].
+
+- Public id = signed-range hybrid timestamp integer (JSON field `timestamp`).
+- `Queue.write` returns the committed row's id. On the CLI, request it with
+  `--json` or `-t` / `--timestamps`; plain write is quiet on success.
+- `queue.last_ts` is a per-handle cache of a broker-global high-water mark, not
+  “my last message.”
+- `move` preserves ids.
+
+Strict `after` / `before` selection and the permanent-skip consequence for a
+moved older id remain normative in the README until the registered
+ordered-selection/checkpoint concern is promoted in Phase 2B. Until then, do
+not checkpoint-filter a queue that receives moves unless periodic rescanning
+is intentional.
 
 Queue names: tight grammar (alphanumeric + `_` `-` `.`). `@alias` is a
 separate **CLI** naming layer; broadcast matches **queue names**, not aliases.

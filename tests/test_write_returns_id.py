@@ -109,6 +109,25 @@ def test_queue_write_returns_committed_id(queue_factory):
     assert q.peek_one(exact_timestamp=ts) == "payload"
 
 
+def test_write_return_id_remains_row_identity_after_global_last_ts_advances(
+    queue_factory,
+):
+    writer = queue_factory("writer")
+    allocator = queue_factory("allocator")
+
+    written_id = writer.write("owned-row")
+    generated_id = allocator.generate_timestamp()
+
+    assert generated_id > written_id
+    assert writer.refresh_last_ts() == generated_id
+    assert writer.peek_one(
+        exact_timestamp=written_id,
+        with_timestamps=True,
+    ) == ("owned-row", written_id)
+    assert writer.peek_one(exact_timestamp=generated_id) is None
+    assert allocator.peek_one(exact_timestamp=generated_id) is None
+
+
 def test_concurrent_writers_get_their_own_ids(queue_factory):
     """Each concurrent writer's returned ID identifies its own row.
 

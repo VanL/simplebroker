@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import pytest
 
 from simplebroker import Queue
 from simplebroker import _message_insert as message_insert_module
-from simplebroker._constants import SQLITE_MAX_INT64
+from simplebroker import _timestamp as timestamp_module
+from simplebroker._constants import (
+    LOGICAL_COUNTER_MASK,
+    MAX_LOGICAL_COUNTER,
+    SQLITE_MAX_INT64,
+)
+from simplebroker._exceptions import TimestampError
 from simplebroker._message_insert import normalize_insert_records
 from simplebroker.ext import IntegrityError
 
@@ -97,20 +104,87 @@ def test_broker_insert_messages_rolls_back_on_existing_duplicate(
     assert broker.peek_one("other", exact_timestamp=1001) is None
 
 
-def test_broker_insert_messages_rejects_duplicate_ids_before_writes(
+def test_broker_insert_messages_rejects_mixed_form_duplicate_ids_before_writes(
     broker: Any,
 ) -> None:
     with pytest.raises(IntegrityError, match="duplicate message ID in insert batch"):
         broker.insert_messages(
             [
                 ("jobs", "one", 1000),
-                ("other", "two", 1000),
+                ("other", "two", "0000000000000001000"),
             ]
         )
 
     assert broker.refresh_last_timestamp() == 0
     assert broker.peek_one("jobs") is None
     assert broker.peek_one("other") is None
+
+
+def test_broker_insert_messages_empty_input_is_noop(broker: Any) -> None:
+    high_water = broker.generate_timestamp()
+
+    broker.insert_messages([])
+
+    assert broker.refresh_last_timestamp() == high_water
+    assert broker.peek_one("jobs") is None
+
+
+def test_broker_insert_messages_does_not_move_high_water_backward(
+    broker: Any,
+) -> None:
+    high_water = broker.generate_timestamp()
+
+    broker.insert_messages([("jobs", "older exact ID", 1000)])
+
+    assert broker.refresh_last_timestamp() == high_water
+    assert broker.peek_one("jobs", exact_timestamp=1000, with_timestamps=True) == (
+        "older exact ID",
+        1000,
+    )
+
+
+def test_exact_insert_preflights_mixed_valid_invalid_batch_without_mutation(
+    broker: Any,
+) -> None:
+    before_last_ts = broker.refresh_last_timestamp()
+
+    with pytest.raises(ValueError):
+        broker.insert_messages(
+            [
+                ("jobs", "would-have-been-valid", 1000),
+                ("other", "invalid-id", "1000"),
+            ]
+        )
+
+    assert broker.refresh_last_timestamp() == before_last_ts
+    assert broker.peek_one("jobs", exact_timestamp=1000) is None
+    assert broker.peek_one("jobs") is None
+    assert broker.peek_one("other") is None
+
+
+def test_far_future_exact_insert_can_stall_later_writes_until_clock_catches_up(
+    broker: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    future_base = (time.time_ns() + 1_000_000_000) & ~LOGICAL_COUNTER_MASK
+    message_id = future_base | (MAX_LOGICAL_COUNTER - 2)
+    broker.insert_messages([("jobs", "future exact ID", message_id)])
+    assert broker.refresh_last_timestamp() == message_id + 1
+
+    monkeypatch.setattr(timestamp_module, "MAX_ITERATIONS", 0)
+    monkeypatch.setattr(timestamp_module.time, "time_ns", lambda: future_base - 1)
+
+    with pytest.raises(TimestampError, match="Logical counter exhausted"):
+        broker.write("jobs", "later allocation")
+
+    assert broker.refresh_last_timestamp() == message_id + 1
+    assert broker.peek_one("jobs", exact_timestamp=message_id) == (
+        "future exact ID",
+        message_id,
+    )
+    assert broker.peek_many("jobs", limit=10, with_timestamps=False) == [
+        "future exact ID"
+    ]
 
 
 def test_broker_insert_messages_rejects_unadvanceable_high_water(

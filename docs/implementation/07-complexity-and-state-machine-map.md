@@ -29,6 +29,8 @@ after C901 activation.
 - The same spec's [DOM-10.2] owns the transition-table requirement.
 - `docs/specs/10-cli-contract.md` and `docs/specs/11-delivery-contract.md`
   continue to own affected product behavior.
+- `docs/specs/13-message-identity-contract.md` `[SB-ID-1]` through
+  `[SB-ID-5]` owns message identity and allocation behavior.
 
 ## Change Rules
 
@@ -214,7 +216,7 @@ remain observable.
 |---------------|------------------------|---------------------------------|----------------------------|-------------------------|
 | `SM-SQLITE-SCHEMA` (confirmed) | `simplebroker/_backends/sqlite/schema.py` | `tests/test_sqlite_schema.py` | `tests/test_sqlite_schema.py`; runner setup/error suites | Durable schema version and objects decide which migration, repair, commit, or rollback event is legal on later setup calls. |
 | `SM-DUMP-LOAD` (confirmed) | `simplebroker/_dump.py::load_lines` plus destination broker state | `tests/test_dump_load.py` | `tests/test_dump_load.py`; `tests/test_property_dump_load.py`; cross-backend dump/load suites | Header, batch, and already-applied durable records change the legal next input and retry outcome across iterator callbacks and broker writes. |
-| `SM-TIMESTAMP-GENERATOR` (confirmed) | `simplebroker/_timestamp.py::TimestampGenerator` plus backend high-water state | timestamp edge/resilience table beside `tests/test_timestamp_resilience.py` | timestamp edge, property, resilience, and released-backend latest-pending suites | Local counter, backend high-water mark, CAS result, physical clock, and fork identity govern the next allocation action across calls and processes. |
+| `SM-TIMESTAMP-GENERATOR` (confirmed) | `simplebroker/_timestamp.py::TimestampGenerator` plus backend high-water state; realizes `[SB-ID-1]` through `[SB-ID-3]` | timestamp edge/resilience table beside `tests/test_timestamp_resilience.py` | `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`; timestamp edge, property, resilience, and released-backend latest-pending suites | Local counter, backend high-water mark, CAS result, physical clock, and fork identity govern the next allocation action across calls and processes. |
 | `SM-DARWIN-XATTR` (confirmed) | `simplebroker/_phaselock.py` Darwin-provider cache | `tests/test_phaselock.py` | `tests/test_phaselock.py` | Process-cached discovery success or failure controls later xattr reads; ERANGE changes the probe/read transition. |
 | `SM-PHASE-LOCK` (confirmed) | `simplebroker/_phaselock.py::PhaseLockService` | `tests/test_phaselock.py` | `tests/test_phaselock.py` | Advisory ownership and durable markers determine whether later processes wait, run, skip, cancel, or fail. |
 | `SM-CONNECTION` (confirmed) | `simplebroker/db.py::DBConnection` | `tests/test_db_connection_lifecycle.py` | connection lifecycle, fork, and process-session suites | Registry, thread-local handle, runner/core ownership, and closed state govern reuse and cleanup across threads and calls. |

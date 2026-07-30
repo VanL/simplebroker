@@ -127,6 +127,64 @@ def test_move_by_id_preserves_timestamp(broker):
     assert dest_messages[0][1] == original_ts
 
 
+def test_move_many_preserves_original_message_ids(broker):
+    first_id = broker.write("source", "first")
+    second_id = broker.write("source", "second")
+    third_id = broker.write("source", "third")
+
+    moved = broker.move_many(
+        "source",
+        "destination",
+        2,
+        with_timestamps=True,
+    )
+
+    assert moved == [("first", first_id), ("second", second_id)]
+    assert broker.peek_many("destination", limit=10, with_timestamps=True) == moved
+    assert broker.peek_many("source", limit=10, with_timestamps=True) == [
+        ("third", third_id)
+    ]
+    assert broker.peek_one(
+        "destination", exact_timestamp=first_id, with_timestamps=True
+    ) == ("first", first_id)
+    assert broker.peek_one(
+        "destination", exact_timestamp=second_id, with_timestamps=True
+    ) == ("second", second_id)
+
+
+@pytest.mark.parametrize(
+    "delivery_guarantee",
+    ["exactly_once", "at_least_once"],
+)
+def test_move_generator_preserves_original_message_ids_in_each_delivery_mode(
+    broker,
+    delivery_guarantee,
+):
+    first_id = broker.write("source", "first")
+    second_id = broker.write("source", "second")
+    expected = [("first", first_id), ("second", second_id)]
+
+    moved = list(
+        broker.move_generator(
+            "source",
+            "destination",
+            with_timestamps=True,
+            delivery_guarantee=delivery_guarantee,
+            batch_size=2,
+        )
+    )
+
+    assert moved == expected
+    assert broker.peek_many("source", limit=10, with_timestamps=True) == []
+    assert broker.peek_many("destination", limit=10, with_timestamps=True) == expected
+    assert broker.peek_one(
+        "destination", exact_timestamp=first_id, with_timestamps=True
+    ) == ("first", first_id)
+    assert broker.peek_one(
+        "destination", exact_timestamp=second_id, with_timestamps=True
+    ) == ("second", second_id)
+
+
 def test_move_mixed_mode(broker):
     """Test mixing timestamp-based and bulk move modes."""
     for i in range(5):

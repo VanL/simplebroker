@@ -11,6 +11,7 @@
 - [CLI contract spec](docs/specs/10-cli-contract.md): Canonical CLI exit codes and stdout/stderr roles `[SB-CLI-*]`
 - [Delivery contract spec](docs/specs/11-delivery-contract.md): Canonical claim, watch, move-reservation, peek-safety, and transactional-generator rules `[SB-DELIVERY-*]`
 - [Broadcast contract spec](docs/specs/12-broadcast-contract.md): Canonical target selection, creation, atomicity, CLI selector, and backend compatibility rules `[SB-BCAST-1]` through `[SB-BCAST-6]`
+- [Message identity contract](docs/specs/13-message-identity-contract.md): Canonical hybrid-ID representation, allocation, write-return, high-water/cache, exact-ID, and move-preservation rules `[SB-ID-1]` through `[SB-ID-5]`
 - [Specs index](docs/specs/00-specs-index.md): Process and product spec read order
 - [README](README.md): Human product entry and full command/env/API catalogs; normative for the registry concerns still marked `readme-only`
 - [CHANGELOG](CHANGELOG.md): Behavior deltas for published releases

@@ -23,6 +23,9 @@ Product section authority: `product-section-registry.md`.
 3. `12-broadcast-contract.md` — `[SB-BCAST-*]` (target selection, optional
    exact-target creation, atomicity, CLI selector behavior, and backend
    compatibility when the registry marks canonical)
+4. `13-message-identity-contract.md` — `[SB-ID-*]` (message-ID representation,
+   allocation, write-return identity, high-water/cache meaning, exact-ID
+   handling, and move preservation when the registry marks canonical)
 
 ## Rules
 
