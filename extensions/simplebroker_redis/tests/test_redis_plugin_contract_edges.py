@@ -3,17 +3,70 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import threading
-from typing import Any
+from pathlib import Path
+from typing import Any, get_type_hints
 
 import pytest
 import simplebroker_redis.plugin as redis_plugin_module
+from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.plugin import RedisBackendPlugin
 from simplebroker_redis.validation import NamespaceInspection, NamespaceState
 
 from simplebroker._exceptions import DatabaseError, OperationalError
 
 pytestmark = [pytest.mark.redis_only]
+ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_public_context_manager_annotations_remain_override_compatible(
+    tmp_path: Path,
+) -> None:
+    """Keep the Redis export compatible with downstream context subclasses."""
+    probe = tmp_path / "redis_context_manager_compatibility.py"
+    probe.write_text(
+        """\
+from typing import Any, Literal
+
+from simplebroker_redis.core import RedisBrokerCore
+
+
+class CustomRedisCore(RedisBrokerCore):
+    def __enter__(self) -> RedisBrokerCore:
+        return super().__enter__()
+
+    def __exit__(
+        self, exc_type: Any, exc_val: Any, exc_tb: str
+    ) -> Literal[False]:
+        return super().__exit__(exc_type, exc_val, exc_tb)
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "mypy",
+            "--config-file",
+            str(ROOT / "pyproject.toml"),
+            "--no-incremental",
+            str(probe),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_public_exit_annotations_keep_any_typed_parameters() -> None:
+    """Pin the permissive Redis annotations exported consumers may inspect."""
+    hints = get_type_hints(RedisBrokerCore.__exit__)
+
+    assert hints["exc_type"] is Any
+    assert hints["exc_val"] is Any
+    assert hints["exc_tb"] is Any
 
 
 def _listener() -> Any:

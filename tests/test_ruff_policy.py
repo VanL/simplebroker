@@ -193,7 +193,6 @@ def test_public_context_manager_annotations_remain_override_compatible(
         """\
 from typing import Any, Literal
 
-from simplebroker_redis.core import RedisBrokerCore
 from simplebroker import Queue
 from simplebroker._backend_plugins import BrokerConnection
 from simplebroker._phaselock import AdvisoryFileLock
@@ -244,16 +243,6 @@ class CustomSQLiteRunner(SQLiteRunner):
         return super().__exit__(exc_type, exc_val, exc_tb)
 
 
-class CustomRedisCore(RedisBrokerCore):
-    def __enter__(self) -> RedisBrokerCore:
-        return super().__enter__()
-
-    def __exit__(
-        self, exc_type: Any, exc_val: Any, exc_tb: str
-    ) -> Literal[False]:
-        return super().__exit__(exc_type, exc_val, exc_tb)
-
-
 class CustomBrokerConnection(BrokerConnection):
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: str) -> Any:
         return None
@@ -280,8 +269,6 @@ def test_public_exit_annotations_keep_any_typed_parameters() -> None:
     """Pin the permissive annotations that exported consumers may inspect."""
     from typing import Any, get_type_hints
 
-    from simplebroker_redis.core import RedisBrokerCore
-
     from simplebroker import Queue
     from simplebroker._backend_plugins import BrokerConnection
     from simplebroker._runner import SQLiteRunner
@@ -295,7 +282,6 @@ def test_public_exit_annotations_keep_any_typed_parameters() -> None:
         BrokerCore.__exit__,
         Queue.__exit__,
         BaseWatcher.__exit__,
-        RedisBrokerCore.__exit__,
     )
     for method in methods:
         hints = get_type_hints(method)
