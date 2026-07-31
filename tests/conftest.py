@@ -19,7 +19,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from hypothesis import settings as hypothesis_settings
@@ -200,7 +200,7 @@ def _postgres_target_without_password(dsn: str) -> tuple[str, str | None]:
     """Split a test DSN so generated project files never store its password."""
     from psycopg import conninfo
 
-    parts = conninfo.conninfo_to_dict(dsn)
+    parts = cast(dict[str, str], conninfo.conninfo_to_dict(dsn))
     password = parts.pop("password", None)
     return conninfo.make_conninfo(**parts), password
 
@@ -476,7 +476,7 @@ def pg_worker_runner(
         yield None
         return
 
-    from simplebroker_pg import PostgresRunner  # type: ignore[import-untyped]
+    from simplebroker_pg import PostgresRunner
 
     runner = PostgresRunner(pg_worker_dsn, schema=pg_worker_schema)
     _ensure_pg_schema_initialized(runner, pg_worker_plugin)
@@ -622,7 +622,7 @@ def redis_worker_runner(
         yield None
         return
 
-    from simplebroker_redis import RedisRunner  # type: ignore[import-untyped]
+    from simplebroker_redis import RedisRunner
 
     runner = RedisRunner(redis_worker_url, namespace=redis_worker_namespace)
     redis_worker_plugin.initialize_target(
