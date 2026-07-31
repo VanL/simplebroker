@@ -1,18 +1,26 @@
 # Product Documentation Cutover Plan
 
-Status: active — Phase 1 was promoted and verified at `249df9cb`. Phase 2 is
-split into Phase 2A (identity/allocation) and Phase 2B (timestamp-range
-selection/checkpoints). Phase 2A was promoted and verified at `090c689e`;
-its mechanical completed-work review and frozen post-promotion navigation
-probe pass, but its promise equivalence is now under retrospective audit.
-Further promotion is paused for a source-contract equivalence audit and the
-reserved-zero/Redis-write precursor. Phase 2B implementation findings are
-inconsistencies for product-owner disposition, not authorization to change a
-promise inside this cutover. No Phase 2B promotion is authorized.
+Status: **active** — as of 2026-07-31.
+
+**Landed:** Phase 1 (broadcast) and Phase 2A (identity/allocation) promoted;
+CLI and delivery already canonical. Owner disposition of the promise-equivalence
+audit closed; product specs `10`–`13` rewritten in place to README-true promises
+(commits `2aa6057` … `0baf090` and follow-ups). Reserved-zero / Redis-write
+precursor completed separately. Temporary retrospective decision record removed
+after use.
+
+**Next hard gate:** Phase 2B (timestamp-range selection / filters) remains
+**blocked** until an exact delta matches real filter semantics (including
+owner-stated: `--after` is a pure filter) without overclaiming. No Phase 2B
+promotion is authorized yet.
+
+**Parallel / sibling:** Python library / `simplebroker.ext` API contract is
+owned by `docs/plans/2026-07-31-python-library-api-contract-plan.md` (feeds
+Phase 4 / embedding residual).
 
 Class: 5+P — this program relocates normative product contracts from the root
-README into canonical `[SB-*]` specifications without changing promises. The
-2026-07-30 process correction adds a durable equivalence gate for future
+README into canonical `[SB-*]` specifications without redesigning behavior.
+The 2026-07-30 process correction adds a durable equivalence gate for future
 authority migrations.
 
 Hardening: required — each promotion crosses the public documentation contract
@@ -57,14 +65,19 @@ owner disposition and separately scoped authority.
 
 - [x] One multi-phase execution plan replaces the retired historical roadmap.
 - [x] Broadcast is promoted first as its own canonical family.
-- [ ] Message identity, persistence I/O, embedding, and residual operations
-      follow as serial atomic slices.
+- [x] Message identity / allocation (Phase 2A) is canonical with firing gates.
+- [x] CLI and delivery remain canonical; post-audit wording rebased to owner
+      dispositions (existing promises, not a redesign).
+- [ ] Phase 2B: ordered timestamp selection / filter consequences (blocked on
+      exact true delta).
+- [ ] Persistence I/O (dump/load / claimed-row I/O).
+- [ ] Embedding / library API (see sibling library-api plan) and residual
+      operations catalog.
 - [ ] Program-theory links stay synchronized with registry ownership without
       copying exact behavioral clauses into theory.
-- [ ] README progressive disclosure happens during each slice, not as one late
-      rewrite.
-- [ ] The final cutover proves that every normative README concern has one
-      registered winning owner.
+- [ ] README progressive disclosure continues per remaining slices.
+- [ ] Final cutover: every normative README concern has one registered winning
+      owner.
 
 ## Source Documents
 
@@ -90,6 +103,8 @@ Current canonical product contracts:
 - `docs/specs/10-cli-contract.md` `[SB-CLI-1]` through `[SB-CLI-4]`
 - `docs/specs/11-delivery-contract.md` `[SB-DELIVERY-1]` through
   `[SB-DELIVERY-7]`
+- `docs/specs/12-broadcast-contract.md` `[SB-BCAST-1]` through `[SB-BCAST-6]`
+- `docs/specs/13-message-identity-contract.md` `[SB-ID-1]` through `[SB-ID-5]`
 
 Current inventory and views:
 
@@ -152,21 +167,22 @@ blocks this cutover.
 
 ## Current State
 
-The authority mechanism is proven:
+Registry (`docs/specs/product-section-registry.md`) as of 2026-07-31:
 
 | Concern | Current state |
 |---------|---------------|
-| CLI exit codes and CLI I/O | `canonical-spec` |
-| Delivery and claim/watch/peek safety | `canonical-spec` |
-| Broadcast | Six README clauses `[BCAST-1]`…`[BCAST-6]`, but no registry row |
-| Message identity and checkpoint interaction | `readme-only` |
-| Dump/load and claimed-row I/O | `readme-only` |
-| Embedding, targets, backends, and sidecars | `readme-only` |
-| Base queue/broker operation catalog residual | `readme-only` |
+| CLI exit codes and CLI I/O | `canonical-spec` (`10`) — post-disposition rewrite landed |
+| Delivery and claim/watch/peek safety | `canonical-spec` (`11`) — post-disposition rewrite landed |
+| Broadcast selection, creation, atomicity | `canonical-spec` (`12`) — promoted Phase 1; rewrite landed |
+| Message identity, allocation, exact-ID, move ID | `canonical-spec` (`13`) — Phase 2A; rewrite landed |
+| Ordered timestamp selection and checkpoint consequences | `readme-only` — **Phase 2B next; blocked** on true filter contract |
+| Dump/load and claimed-row I/O | `readme-only` — Phase 3 |
+| Embedding, targets, backends, sidecar | `readme-only` — Phase 4; library API sibling plan |
+| Base queue/broker operation catalog residual | `readme-only` — Phase 5 (shrinks as library/ops verticals take ownership) |
 
-The first two promotions landed as atomic verticals. The remaining work
-stalled because the predecessor plans were retired without an active cutover
-plan. This plan restores one owned execution queue.
+**Winning SoT for promoted families is the live spec tree**, not the frozen
+Phase 1 / 2A plan appendices below. Those appendices are historical promotion
+proposals and pre-rewrite wording.
 
 ## Program-Theory Integration
 
@@ -217,22 +233,22 @@ must not be copied into program theory.
 
 Expected canonical families:
 
-| Order | Concern | Expected spec | Codes |
-|------:|---------|---------------|-------|
-| existing | CLI exit codes and I/O | `10-cli-contract.md` | `[SB-CLI-*]` |
-| existing | Delivery safety | `11-delivery-contract.md` | `[SB-DELIVERY-*]` |
-| 1 | Broadcast selection and atomicity | `12-broadcast-contract.md` | `[SB-BCAST-*]` |
-| 2A | Message identity and allocation | `13-message-identity-contract.md` | `[SB-ID-*]` |
-| 2B | Timestamp range selection and checkpoint consequences | `14-timestamp-selection-contract.md` | `[SB-SELECT-*]` |
-| 3 | Dump/load and claimed-row I/O | `15-persistence-io-contract.md` | `[SB-IO-*]` |
-| 4 | Embedding, targets, backends, and sidecars | `16-embedding-contract.md` | `[SB-EMBED-*]` |
-| 5 | Residual queue/broker operation catalog | `17-queue-operations-contract.md` | `[SB-OPS-*]` |
+| Order | Concern | Expected spec | Codes | Status |
+|------:|---------|---------------|-------|--------|
+| done | CLI exit codes and I/O | `10-cli-contract.md` | `[SB-CLI-*]` | canonical |
+| done | Delivery safety | `11-delivery-contract.md` | `[SB-DELIVERY-*]` | canonical |
+| 1 done | Broadcast selection and atomicity | `12-broadcast-contract.md` | `[SB-BCAST-*]` | canonical |
+| 2A done | Message identity and allocation | `13-message-identity-contract.md` | `[SB-ID-*]` | canonical |
+| 2B | Timestamp range selection / filters | proposed `14-…` | proposed `[SB-SELECT-*]` | blocked — exact delta TBD |
+| 3 | Dump/load and claimed-row I/O | proposed `15-…` | proposed `[SB-IO-*]` | not started |
+| 4 | Embedding / Python library API | proposed `14` or `16-…` | proposed `[SB-API-*]` / `[SB-EMBED-*]` | sibling plan active |
+| 5 | Residual queue/broker operation catalog | proposed `17-…` | proposed `[SB-OPS-*]` | not started |
 
-The filenames and code families after Phase 1 are proposed allocations, not
-permission to create placeholder specs. A later phase may split a concern
-before promotion when its exact inventory proves that one row would combine
-unrelated owners. Any split is added as an exact registry delta and reviewed
-before editing.
+Filenames after the landed families are **proposals only** until a phase adds an
+exact delta. A later phase may split a concern before promotion when inventory
+proves one row would combine unrelated owners. Library API work is detailed in
+`docs/plans/2026-07-31-python-library-api-contract-plan.md` and should not wait
+on inventing a full embedding SDK.
 
 At final cutover:
 
@@ -406,6 +422,9 @@ mapping, and firing gates together. Phase 2 and later must add their own exact
 subsections here through the phase-readiness amendment and re-review gate.
 
 ### Phase 1 — Broadcast Canonical Promotion
+
+> **Historical.** Exact proposal text below is the first promotion package.
+> Live contract: `docs/specs/12-broadcast-contract.md` (post-disposition rewrite).
 
 #### Why first
 
@@ -862,6 +881,10 @@ its own exact delta.
   the README without changing the practical change locus.
 
 ### Phase 2A — Message Identity and Allocation
+
+> **Historical.** Exact proposal text below is the first promotion package
+> (later corrected and then disposition-rewritten). Live contract:
+> `docs/specs/13-message-identity-contract.md`.
 
 Promotion strategy: B — atomic. Baseline:
 `249df9cba691d4593136a1fd6b0476b882487055`.
@@ -1406,14 +1429,15 @@ and Redis atomicity change. It has its own dated class-5 plan and index row;
 that plan, not this docs-only cutover, owns its hardening, released-backend
 probes, spec revision, and independent reviews.
 
-The final `[SB-SELECT-*]` promotion remains blocked on the retrospective audit,
-the shared-file rebaseline, and a reviewed README-only exact delta.
-Drafting `[SB-CLI-5]` begins only after execution-order item 1 is complete.
-The selection readiness amendment
-must include its exact spec body, registry delta, README/kernel reductions,
-directional ownership boundaries, program-theory route, implementation map,
-row-local firing matrix, rollback, outside verdicts, and two-way
-promise-equivalence matrix. It must not choose exact-plus-range behavior.
+The final `[SB-SELECT-*]` promotion remains blocked on a **reviewed exact delta**
+that matches real filter behavior. Owner framing to carry into that delta:
+`--after` / similar bounds are **pure filters** (no guarantee that nothing was
+inserted or moved “behind” the bound); `watch --peek` delivers as messages
+come with a consistent internal progress cursor. Reserved-zero / Redis-write
+precursor is **done**. Do not promote old “resumable checkpoint” marketing that
+overclaims released behavior. Drafting any CLI string-bound parsing slice
+(`[SB-CLI-5]` or equivalent) remains a separate readiness item with its own
+exact delta.
 
 ## Phase 3 — Persistence I/O and Claimed Rows
 
@@ -1435,24 +1459,29 @@ cannot share one coherent boundary.
 
 ## Phase 4 — Embedding, Targets, Backends, and Sidecars
 
-This phase is blocked until
-`2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md`
-lands or is explicitly superseded. Rebaseline after that work because it
-clarifies the winning README transaction contract.
+**Primary vehicle for the public Python / embed surface:** sibling plan
+`docs/plans/2026-07-31-python-library-api-contract-plan.md` (package root +
+`simplebroker.ext`, Weft- and Taut-driven inventory, CLI cross-links). That
+work may land as `[SB-API-*]` / embedding codes without waiting for every
+backend-author private-import concern.
 
-Expected scope:
+Runner / transaction boundaries still track
+`2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md`
+where they affect handle lifecycle and sidecars; rebaseline after that work
+if it changes the winning contract.
+
+Expected scope (may split across library-API and residual embed rows):
 
 - resolved broker targets and configuration snapshots;
 - process-session and handle lifecycle;
 - backend-selection and extension compatibility boundaries;
 - sidecar ownership and transaction constraints;
 - cross-process recreation and fork safety; and
-- public versus private embedding surfaces.
+- public versus private embedding surfaces (`__all__` / `ext.__all__`).
 
 Before drafting the exact delta:
 
-1. inspect Weft's current SimpleBroker use because it is the primary
-   downstream;
+1. inventory Weft and Taut SimpleBroker call sites (primary consumers);
 2. reconcile the runner plan, process-session implementation rationale, public
    extension exports, and released backend suites;
 3. decide whether target/config resolution and advanced extension/sidecar
@@ -1677,10 +1706,9 @@ committed `Queue.write()` identity, generator-without-row behavior,
 broker-global `last_ts`, move identity preservation, materialized
 `at_least_once` behavior, and closed-pipe delivery effects.
 
-Required action: the product owner approves or rejects each ID, or explicitly
-approves a named family bundle. Rejected changes follow the restoration or
-separate-contract-correction path above. No pending row is inferred approved
-from tests, implementation truth, prior review, or silence.
+**Required action (closed):** owner dispositions applied via in-place rewrites
+of specs `10`–`13` and residual kernel/README alignment. No open disposition
+rows remain from this table.
 
 ## Revision Log
 
@@ -1711,6 +1739,7 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Program / promise-preservation correction | Reclassified the cutover as authority relocation; made the phase-baseline winning contract both floor and ceiling; required two-way promise equivalence; prohibited implementation-derived promises; withdrew the docs-led exact-plus-range change and broad parser canonization; started a retrospective audit of all promoted families | Product owner identified that the prior process let implementation evidence and review findings expand migration scope; contract changes require explicit owner disposition and separate authority | process delta implemented; independent review and owner contract dispositions pending |
 | 2026-07-30 | Program / promise-preservation review follow-up | Required separate landing and rebaseline for approved contract changes; added a completion gate, rejected-change remediation, decision-hierarchy stop rule, auditable owner authorization, current execution state, and durable lesson | Independent process review found eight paths that could still mix or complete relocation without proven equivalence; focused recheck found one overbroad exclusion of normative source examples | final focused recheck passed; contract dispositions pending |
 | 2026-07-30 | Program / retrospective decision record | Temporary disposition record for 23 promotion findings; applied as specs 10–13 rewrites; record removed 2026-07-31 after work complete | Needed owner disposition without self-executing approval | rewrites landed; record deleted |
+| 2026-07-31 | Program / status refresh | Status, current state, outcomes, source list, end-state table, and historical labels for Phase 1/2A deltas updated to match registry and trunk specs; library API sibling plan linked | Agents re-opening closed audit/pause from stale front matter | plan hygiene |
 
 ## Review Log
 
@@ -1745,13 +1774,14 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 
 | Phase | Baseline | Promotion identifier | Verification | Completed-work review |
 |-------|----------|----------------------|--------------|-----------------------|
-| 1 — Broadcast | `b01bc3cb75800880408595a95c73041a2a417bd4` | `249df9cba691d4593136a1fd6b0476b882487055` | Detached commit: DOM-15, 99-test root Phase 1, PostgreSQL, Redis, doc-path, and diff checks pass | PASS after two structural-test corrections |
-| 2A — Identity/allocation | `249df9cba691d4593136a1fd6b0476b882487055` | `090c689e7a951ef07cc481424fe8729fc6be7ed0` | Mechanical gates passed at the detached commit; retrospective equivalence audit found contract changes awaiting owner disposition | Mechanical completed-work review passed; promise-equivalence validity pending |
-| 2B — Timestamp range selection/checkpoints | `81ab683e35157fd2d409c440963877f7fd29ccd3` | blocked | Reserved-zero/Redis work is separately authorized; granular exact-plus-range is an unresolved inconsistency; CLI ownership is decided only as a README-equivalent split | Prior reviews are historical evidence, not authorization for contract changes |
+| 1 — Broadcast | `b01bc3cb…` | `249df9cb…` | Detached Phase 1 gates passed | PASS after structural-test corrections |
+| 2A — Identity/allocation | `249df9cb…` | `090c689e…` | Mechanical gates passed; later promise audit found drift | Mechanical PASS; audit closed 2026-07-31 via owner dispositions + rewrite |
+| Post-audit rewrite (CLI/Delivery/Broadcast/Identity wording) | trunk after 2A | `2aa6057`…`0baf090` (+ follow-up) | Structural product-contract suites green; `check-doc-paths` OK | Owner-directed rebaseline of live specs to README-true promises |
+| 2B — Timestamp range selection/filters | after reserved-zero land | **blocked** | Precursor reserved-zero/Redis-write **completed**; still need exact filter contract that does not overclaim | Not authorized |
 | 3 — Persistence I/O | gated | pending | pending | pending |
-| 4 — Embedding | blocked by active runner plan | pending | pending | pending |
-| 5 — Residual operations | gated | pending | pending | pending |
-| 6 — Final cutover | gated | pending | pending | pending |
+| 4 — Embedding / library API | gated | sibling plan | `2026-07-31-python-library-api-contract-plan.md` active; runner plan still relevant for some embed boundaries | pending |
+| 5 — Residual operations | gated | pending | Shrinks as library/API and other rows take ownership | pending |
+| 6 — Final cutover | gated | pending | All residual registry rows canonical | pending |
 
 Phase 1 pre-change proof: `uv run pytest -q -n0
 tests/test_broadcast_contract_sb_bcast.py` failed two tests because the
