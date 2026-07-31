@@ -32,6 +32,8 @@ Product section authority: `product-section-registry.md`.
 7. `16-python-library-api.md` — `[SB-API-*]` (public package root, `ext`,
    command layer, targets, library packaging when the registry marks
    canonical)
+8. `17-ops.md` — `[SB-OPS-*]` (implicit queues, metadata, delete, rename,
+   aliases, vacuum when the registry marks canonical)
 
 ## Rules
 

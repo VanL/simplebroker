@@ -206,6 +206,11 @@ $ broker --cleanup
 
 ## Command Reference
 
+Residual queue/broker operations (existence, metadata, delete, rename, aliases,
+vacuum): `docs/specs/17-ops.md` (`[SB-OPS-1]`–`[SB-OPS-6]`). Delivery, identity,
+selection, broadcast, dump/load, CLI packaging, and library surfaces have their
+own specs (see `docs/specs/product-section-registry.md`).
+
 ### Global Options
 
 Global options must appear before the command, for example `broker -f queue.db read jobs`.
@@ -247,6 +252,8 @@ Global options must appear before the command, for example `broker -f queue.db r
 consumer closing its pipe as a clean shutdown. See [Pipe behavior](#pipe-behavior).
 
 #### Queue Aliases
+
+Normative: `docs/specs/17-ops.md` `[SB-OPS-5]`.
 
 Use aliases when two agents refer to the same underlying queue with different names. Aliases are stored in the database, persist across processes, and update atomically.
 
@@ -319,6 +326,9 @@ flag with a message that starts with `-`.
 - `list --pattern <glob>` uses fnmatch-style matching.
 - `--json` on `exists`, `stats`, or `list` emits JSON suitable for scripts.
 
+Normative metadata and existence: `docs/specs/17-ops.md` `[SB-OPS-1]`–
+`[SB-OPS-2]`.
+
 Queues are implicit: a queue exists when at least one message row exists for
 that name, including claimed rows. After vacuum removes claimed rows, a
 claimed-only queue no longer exists.
@@ -342,7 +352,9 @@ Normative detail: `docs/specs/10-cli.md` ([SB-CLI-1]–[SB-CLI-5]).
 `watch` exits `0` when stopped by SIGINT/SIGTERM or when its stdout consumer
 closes the pipe (see [Pipe behavior](#pipe-behavior)).
 
-**Note:** `delete <queue>`, `delete --all`, and `delete <queue> -m <id>` remove matching rows immediately. Reads still use claimed-row semantics and are reclaimed by `--vacuum`.
+**Note:** `delete <queue>`, `delete --all`, and `delete <queue> -m <id>` remove
+matching rows immediately (`[SB-OPS-3]`). Reads still use claimed-row semantics
+and are reclaimed by `--vacuum` (`[SB-OPS-6]`).
 
 ## Critical Safety Notes
 
@@ -901,6 +913,8 @@ with open_broker("src.db") as src, open_broker("dst.db") as dst:
 ```
 
 ### Queue metadata
+
+Normative: `docs/specs/17-ops.md` `[SB-OPS-1]`–`[SB-OPS-2]`.
 
 Use targeted metadata APIs when you need queue existence or counts:
 

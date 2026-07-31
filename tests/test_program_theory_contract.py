@@ -69,10 +69,10 @@ CONCEPT_OWNERS = {
         "16-python-library-api.md",
     ),
     "Queue": (
-        "Base queue/broker operation catalog residual",
-        "readme-only",
-        "../README.md#python-api",
-        "README Command Reference / Python API",
+        "Queue and broker residual operations",
+        "canonical-spec",
+        "specs/17-ops.md",
+        "17-ops.md",
     ),
     "Message identity": (
         "Message identity, allocation, exact-ID handling, and preservation",
@@ -87,10 +87,10 @@ CONCEPT_OWNERS = {
         "11-delivery.md",
     ),
     "Move": (
-        "Base queue/broker operation catalog residual",
-        "readme-only",
-        "../README.md#command-reference",
-        "README Command Reference / Python API",
+        "Delivery guarantees, claim/peek/watch safety",
+        "canonical-spec",
+        "specs/11-delivery.md",
+        "11-delivery.md",
     ),
     "Watcher/waiter": (
         "Delivery guarantees, claim/peek/watch safety",
@@ -105,10 +105,10 @@ CONCEPT_OWNERS = {
         "16-python-library-api.md",
     ),
     "Broker core": (
-        "Base queue/broker operation catalog residual",
-        "readme-only",
-        "../README.md#python-api",
-        "README Command Reference / Python API",
+        "Queue and broker residual operations",
+        "canonical-spec",
+        "specs/17-ops.md",
+        "17-ops.md",
     ),
     "Backend adapter/runner": (
         "Python library / embedding API surfaces",

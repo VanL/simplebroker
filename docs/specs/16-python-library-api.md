@@ -250,7 +250,7 @@ this table does not redefine claim, id, or filter rules.
 | `Queue.read*` | `read` / `cmd_read` | `[SB-DELIVERY-*]`, `[SB-SELECT-*]` |
 | `Queue.peek*` | `peek` / `cmd_peek` | `[SB-DELIVERY-4]`, `[SB-SELECT-*]` |
 | `Queue.move*` | `move` / `cmd_move` | `[SB-DELIVERY-3]`, `[SB-ID-*]` |
-| `Queue.delete*` | `delete` / `cmd_delete` | residual catalog; claimed lifecycle `[SB-DELIVERY-*]` |
+| `Queue.delete*` | `delete` / `cmd_delete` | `[SB-OPS-3]`; claim lifecycle `[SB-DELIVERY-*]` |
 | Broadcast APIs | `broadcast` / `cmd_broadcast` | `[SB-BCAST-*]` |
 | `QueueWatcher` / move watcher / ext bases | `watch` / `cmd_watch` | `[SB-DELIVERY-2]` |
 | `dump_lines` / `load_lines` | `dump` / `load` | `[SB-IO-*]` |

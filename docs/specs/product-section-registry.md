@@ -13,15 +13,13 @@ The ownership rules live in `docs/README.md` and this registry.
 | Ordered timestamp selection and filter consequences | `canonical-spec` | `14-timestamp-selection.md` `[SB-SELECT-1]`…`[SB-SELECT-4]` | README Command Options / Checkpoint-based Processing (reduced); agent-kernel filter note | `tests/test_timestamp_selection_contract_sb_select.py`; `tests/test_after_flag.py`; watcher peek progress tests under delivery/selection binds |
 | Dump/load and claimed-row I/O | `canonical-spec` | `15-persistence-io.md` `[SB-IO-1]`…`[SB-IO-5]` | README dump/load + include-claimed (reduced); agent-kernel Dump/load | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`; `tests/test_cli_dump_load.py`; `tests/test_cross_backend_dump_load.py` |
 | Python library / embedding API surfaces | `canonical-spec` | `16-python-library-api.md` `[SB-API-1]`…`[SB-API-12]` | README Python API / Embedding / Command layer / Sidecar; agent-kernel surfaces | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_public_surface.py`; delivery/IO/project-config suites reused for linked meaning |
-| Base queue/broker operation catalog residual | `readme-only` | — | README Command Reference / Python API | (future) |
+| Queue and broker residual operations | `canonical-spec` | `17-ops.md` `[SB-OPS-1]`…`[SB-OPS-6]` | README Command Reference (metadata, delete, rename, aliases, vacuum); Python API metadata | `tests/test_operations_contract_sb_ops.py`; `tests/test_queue_metadata.py`; `tests/test_cli_queue_metadata.py`; `tests/test_queue_rename.py`; `tests/test_cli_rename.py`; `tests/test_aliases_db.py`; `tests/test_alias_cli.py`; `tests/test_batch_delete.py`; `tests/test_vacuum_compact.py` |
 
-The base operation row owns only the remaining command/API catalog and base
-operation meanings. It excludes CLI I/O and exits; delivery,
-claim/peek/watch safety; broadcast selection, creation, and atomicity; message
-identity, allocation, exact-ID handling, and preservation; ordered timestamp
-selection and filter consequences; dump/load; and public Python library /
-embedding surfaces (root, `ext`, command layer, targets, sidecar packaging).
-Those concerns remain with their existing rows.
+Every current product concern family is `canonical-spec`. README may still
+carry catalogs, examples, project-scoping field lists, and concise restatements
+with links; those are not competing SoT rows. CLI I/O and exits; delivery;
+broadcast; message identity; timestamp selection; dump/load; library surfaces;
+and residual ops each have a registered owner above.
 
 ## Transition rule
 

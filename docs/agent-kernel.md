@@ -68,10 +68,14 @@ Normative library surfaces: `docs/specs/16-python-library-api.md`
 | `broker read Q` | `q.read()` / `q.read_one()` (claims) |
 | `broker peek Q` | `q.peek()` / `q.peek_one()` (no claim) |
 | `broker move SRC DST` | `q.move(...)` / `move_one` / `move_many` |
-| `broker delete Q -m ID` | `q.delete(message_id=...)` |
-| `broker list` / `exists` / `stats` | `exists`, `stats`, metadata helpers |
+| `broker delete` / `-m ID` | `q.delete` / `delete_many` — physical delete (`[SB-OPS-3]`) |
+| `broker list` / `exists` / `stats` | `exists`, `stats`, metadata helpers (`[SB-OPS-1]`–`[SB-OPS-2]`) |
+| `broker rename` / `alias` | rename + aliases (`[SB-OPS-4]`–`[SB-OPS-5]`) |
 | `broker watch Q` | `QueueWatcher` / `QueueMoveWatcher` |
 | `broker dump` / `load` | `dump_lines` / `load_lines` (+ `open_broker`) |
+| `--vacuum` | reclaim claimed rows (`[SB-OPS-6]`) |
+
+Normative residual ops: `docs/specs/17-ops.md` `[SB-OPS-1]`–`[SB-OPS-6]`.
 
 ## Exit codes and I/O (CLI)
 

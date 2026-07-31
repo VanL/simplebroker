@@ -77,7 +77,8 @@ owner disposition and separately scoped authority.
       `[SB-SELECT-*]` + `[SB-CLI-5]`).
 - [x] Persistence I/O (dump/load / claimed-row I/O) — `[SB-IO-*]`.
 - [x] Embedding / library API (`16-python-library-api.md` `[SB-API-*]` canonical)
-- [ ] Residual
+- [x] Residual ops (`17-ops.md` `[SB-OPS-*]` canonical)
+- [ ] Phase 6 final cutover
       operations catalog.
 - [ ] Program-theory links stay synchronized with registry ownership without
       copying exact behavioral clauses into theory.
@@ -184,7 +185,7 @@ Registry (`docs/specs/product-section-registry.md`) as of 2026-07-31:
 | Ordered timestamp selection and filter consequences | `canonical-spec` (`14`) — Phase 2B |
 | Dump/load and claimed-row I/O | `canonical-spec` (`15`) — Phase 3 |
 | Python library / embedding API surfaces | `canonical-spec` `16-python-library-api.md` `[SB-API-*]` |
-| Base queue/broker operation catalog residual | `readme-only` — Phase 5 (shrinks as library/ops verticals take ownership) |
+| Queue and broker residual operations | `canonical-spec` `17-ops.md` `[SB-OPS-*]` |
 
 **Winning SoT for promoted families is the live spec tree**, not the frozen
 Phase 1 / 2A plan appendices below. Those appendices are historical promotion
@@ -248,7 +249,7 @@ Expected canonical families:
 | 2B done | Timestamp range selection / filters | `14-timestamp-selection.md` | `[SB-SELECT-*]` (+ `[SB-CLI-5]`) | canonical |
 | 3 done | Dump/load and claimed-row I/O | `15-persistence-io.md` | `[SB-IO-*]` | canonical |
 | 4 done | Embedding / Python library API | `16-python-library-api.md` | `[SB-API-1]`…`[SB-API-12]` | canonical (sibling plan completed) |
-| 5 | Residual queue/broker operation catalog | proposed `17-…` | proposed `[SB-OPS-*]` | not started |
+| 5 done | Residual queue/broker operation catalog | `17-ops.md` | `[SB-OPS-1]`…`[SB-OPS-6]` | canonical |
 
 Filenames after the landed families are **proposals only** until a phase adds an
 exact delta. A later phase may split a concern before promotion when inventory
@@ -1788,7 +1789,7 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2B — Timestamp range selection/filters | after post-audit rewrite | Phase 2B land (this change) | Spec `14` + CLI-5 + registry/README/kernel/theory + structural tests | Docs-only promotion of filter contract |
 | 3 — Persistence I/O | after 2B | Phase 3 land | Spec `15` + registry/README/kernel + structural tests | Docs-only promotion |
 | 4 — Embedding / library API | done | sibling plan completed | `16-python-library-api.md` `[SB-API-1]`…`12` canonical; Weft/Taut consumer migration still post-publish | landed |
-| 5 — Residual operations | gated | pending | Shrinks as library/API and other rows take ownership | pending |
+| 5 — Residual operations | done | `17-ops.md` | `[SB-OPS-1]`…`[SB-OPS-6]` canonical; no registry `readme-only` rows remain | landed |
 | 6 — Final cutover | gated | pending | All residual registry rows canonical | pending |
 
 Phase 1 pre-change proof: `uv run pytest -q -n0

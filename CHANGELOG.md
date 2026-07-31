@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/specs/16-python-library-api.md` (`[SB-API-1]`…`[SB-API-12]`): package
   root, `simplebroker.ext`, command layer, targets, library packaging, and
   cross-links to the CLI and vertical specs.
+- Promoted residual queue/broker operations to
+  `docs/specs/17-ops.md` (`[SB-OPS-1]`…`[SB-OPS-6]`): implicit queues,
+  metadata, physical delete, rename, aliases, and vacuum.
 
 ## [5.6.3] - 2026-07-30
 
