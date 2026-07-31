@@ -22,7 +22,7 @@ import statistics
 import sys
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -38,7 +38,7 @@ if __package__ in {None, ""}:
     REPO_ROOT = Path(__file__).resolve().parents[1]
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
-    from tests.conftest import (  # type: ignore[no-redef]
+    from tests.conftest import (
         POSTGRES_TEST_BACKEND,
         REDIS_TEST_BACKEND,
         _cleanup_postgres_projects,
@@ -377,7 +377,7 @@ def _backend_env(
     backend: str,
     pg_dsn: str | None,
     redis_url: str | None,
-) -> dict[str, str]:
+) -> Iterator[dict[str, str]]:
     """Provide both process env and run_cli env for one backend."""
     keys = (
         "BROKER_TEST_BACKEND",
