@@ -3,6 +3,9 @@
 Class: 4 — the work spans multiple OS execution contexts and ends in the
 one-way publication of immutable Git tags and PyPI artifacts.
 
+Status: completed 2026-07-31. All three releases were published from exact
+green SHA `926ae54f9afd373fc6acf63e8402afa98d07fa6c`.
+
 ## Goal
 
 Repair every independent failure in the current `main` CI run without weakening
@@ -342,6 +345,45 @@ failure, release workflow failure, or publication mismatch. Best-effort only:
 dependency-graph workflows and local reporting artifacts that the release
 driver does not classify as required.
 
+## Completion Evidence
+
+The independent root-cause commits were:
+
+- `8b6c5b7` keeps the Redis annotation policy proof in its owning extension
+  suite.
+- `0a35639` constructs the CRLF fixture without platform newline translation.
+- `df4d12e` reaches Markdown-unsafe path validation with a Windows-legal path.
+- `85e7d6e` pre-skips both fork-only transitions before Windows runner setup.
+- `05bceb5` serializes same-target, same-namespace Redis writes in process.
+- `ee64bae` preserves the 100-message Windows watcher proof with bounded CI
+  headroom and diagnostics.
+- `2532de3` runs the exact-SHA workflow gate with the locked project Python.
+- `c5ee378` preserves outer timeout headroom for both 1,000-message streaming
+  coverage proofs.
+- `926ae54` disables xdist worker replacement after thread-mode hard exits so
+  a failed worker cannot block the controller while launching a replacement.
+
+Exact-SHA required CI completed successfully at `926ae54f`:
+
+- root Test run `30661769861`
+- PostgreSQL run `30661769763`
+- Redis run `30661769775`
+
+`bin/release.py all` then passed the root suite (2,406 passed, 17 skipped),
+benchmarks (14 passed), PostgreSQL shared and extension suites (1,074 and 174
+passed), Redis shared and extension suites (1,066 and 241 passed), examples
+(116 passed), all Ruff, format, mypy, lock, and packaging gates, and the
+managed exact-SHA workflow check. It created all three tags at `926ae54f`.
+
+The tag-triggered workflows completed successfully:
+
+- simplebroker 6.0.0: run `30663525203`
+- simplebroker-pg 3.5.0: run `30663519299`
+- simplebroker-redis 3.5.0: run `30663521269`
+
+GitHub reports all three releases published and non-draft. PyPI metadata
+reports each selected version with both wheel and source distribution.
+
 ## Independent Review Loop
 
 Before implementation, a separate agent reviews this plan, run `30651950369`
@@ -365,6 +407,8 @@ not begin with an unresolved blocker.
 | 2026-07-31 | Independent Windows watcher review | BLOCKED | Accepted the diagnostic finding: the first draft called `BrokerDB.get_queue_stat()` after the test deadline, which could wait through the normal SQLite retry budget or replace the timeout assertion. Accepted the evidence finding: one contiguous tail is consistent with lag but does not rule out missed activity. Replaced the diagnostic with a read-only 100 ms SQLite snapshot that renders errors, added firing tests, and softened the causal claim. |
 | 2026-07-31 | Independent Windows watcher review, round 2 | PASS | Verified that the bounded best-effort diagnostic cannot replace the timeout assertion, the plan labels its snapshot as racy evidence, and the larger bulk deadline preserves the exact 100-message and no-duplicate assertions. No remaining blocker. |
 | 2026-07-31 | Independent release-interpreter review | PASS | Reproduced the boundary exactly: Apple Python 3.9.6 fails to parse the workflow poller while the locked project Python 3.14.4 succeeds. Verified the `uv run --project <root> --locked python` command preserves exact-SHA ordering and token redaction, and independently confirmed all target tags, GitHub releases, and PyPI versions remain absent. |
+| 2026-07-31 | Independent streaming-timeout review | PASS | Verified the 360-second markers apply only to the two slow streaming proofs, override the blanket timeout, preserve the 1,000-message workloads and all existing assertions, and retain the 120-second CLI subprocess bounds. Corrected the plan to describe the actual line-count and endpoint-order assertions rather than overstate them. |
+| 2026-07-31 | Independent hard-timeout restart review | PASS | Confirmed the 179.437-second worker exit, synchronous xdist replacement path, and 29-minute controller silence. Verified all eight thread-timeout coverage invocations disable replacement, policy tests cover the sites, and the plan records the reduced multi-failure collection tradeoff and residual whole-runner uncertainty. |
 
 ## Out of Scope
 
