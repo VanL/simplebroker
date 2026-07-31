@@ -70,9 +70,7 @@ def test_dump_omits_claimed_messages(tmp_path: Path) -> None:
     with open_broker(str(db)) as broker:
         bodies = [
             rec["body"]
-            for rec in (
-                __import__("json").loads(line) for line in dump_lines(broker)
-            )
+            for rec in (__import__("json").loads(line) for line in dump_lines(broker))
             if rec.get("type") == "message"
         ]
     assert bodies == ["keep"]
