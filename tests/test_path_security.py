@@ -1,6 +1,7 @@
 """Tests for path security validation functions."""
 
 import platform
+from typing import cast
 
 import pytest
 
@@ -292,7 +293,8 @@ class TestValidateSafePathComponents:
             _validate_safe_path_components("", "Test path")
 
         with pytest.raises(ValueError, match="must be a non-empty string"):
-            _validate_safe_path_components(None, "Test path")
+            # Exercise the runtime input-validation boundary with a non-string.
+            _validate_safe_path_components(cast(str, None), "Test path")
 
     def test_custom_context_in_error_messages(self) -> None:
         """Test that custom context appears in error messages."""
