@@ -20,6 +20,20 @@ class RecordingRunner:
     def close(self) -> None:
         self.calls.append("close")
 
+    def release_thread_connection(self) -> None:
+        self.calls.append("release")
+
+    def lease_thread_connection(self) -> None:
+        self.calls.append("lease")
+
+
+class RunnerWithoutThreadConnectionHooks:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def close(self) -> None:
+        self.calls.append("close")
+
 
 def test_close_owned_runner_prefers_shutdown_when_available() -> None:
     runner = RecordingRunner()
@@ -52,8 +66,6 @@ def test_close_owned_runner_ignores_noncallable_shutdown_attribute() -> None:
 
 def test_release_runner_thread_connection_uses_supported_hook() -> None:
     runner = RecordingRunner()
-    runner.release_thread_connection = lambda: runner.calls.append("release")
-
     release_runner_thread_connection(runner)  # type: ignore[arg-type]
 
     assert runner.calls == ["release"]
@@ -61,8 +73,7 @@ def test_release_runner_thread_connection_uses_supported_hook() -> None:
 
 def test_lease_runner_thread_connection_reports_hook_support() -> None:
     supported = RecordingRunner()
-    supported.lease_thread_connection = lambda: supported.calls.append("lease")
-    unsupported = RecordingRunner()
+    unsupported = RunnerWithoutThreadConnectionHooks()
 
     assert lease_runner_thread_connection(supported) is True  # type: ignore[arg-type]
     assert lease_runner_thread_connection(unsupported) is False  # type: ignore[arg-type]
@@ -71,7 +82,7 @@ def test_lease_runner_thread_connection_reports_hook_support() -> None:
 
 
 def test_release_runner_thread_connection_without_hook_is_a_noop() -> None:
-    runner = RecordingRunner()
+    runner = RunnerWithoutThreadConnectionHooks()
 
     release_runner_thread_connection(runner)  # type: ignore[arg-type]
 
