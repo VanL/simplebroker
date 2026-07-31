@@ -692,8 +692,21 @@ def _assert_timestamp_fork_reset(core: BrokerDB, first: int) -> None:
 
 
 def _skip_unavailable_fork_transition(payload: str) -> None:
-    if payload == "FORK_RESET" and not hasattr(os, "fork"):
+    if payload in {"FORK_RESET", "FORK_ACTIVE_RESET"} and not hasattr(os, "fork"):
         pytest.skip("real fork transition is unavailable on this platform")
+
+
+@pytest.mark.parametrize("payload", ["FORK_RESET", "FORK_ACTIVE_RESET"])
+def test_sqlite_fork_transitions_skip_before_runner_construction_without_fork(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: str,
+) -> None:
+    monkeypatch.delattr(os, "fork", raising=False)
+
+    with pytest.raises(pytest.skip.Exception):
+        _skip_unavailable_fork_transition(payload)
+
+    _skip_unavailable_fork_transition("CREATE_REUSE")
 
 
 def _fire_timestamp_coordination_transition(
