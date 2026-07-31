@@ -999,20 +999,20 @@ def _fire_sqlite_foreign_transaction_transition(
         assert runner._transaction_owner is threading.current_thread()
         runner.rollback()
     elif payload == "FOREIGN_ADMISSION_TIMEOUT":
-        errors: list[OperationalError] = []
+        admission_errors: list[OperationalError] = []
 
         def run_from_foreign_thread() -> None:
             try:
                 runner.run("SELECT 1", fetch=True)
             except OperationalError as exc:
-                errors.append(exc)
+                admission_errors.append(exc)
 
         thread = threading.Thread(target=run_from_foreign_thread)
         thread.start()
         thread.join(2)
         assert not thread.is_alive()
-        assert len(errors) == 1
-        assert errors[0].retryable is True
+        assert len(admission_errors) == 1
+        assert admission_errors[0].retryable is True
         assert runner._transaction_owner is threading.current_thread()
         runner.rollback()
     else:
@@ -1045,9 +1045,7 @@ def _fire_sqlite_transaction_transition(
         assert not first.in_transaction
     elif payload == "BEGIN_FAILURE":
         failed_connection = Mock()
-        failed_connection.execute.side_effect = sqlite3.OperationalError(
-            "begin failed"
-        )
+        failed_connection.execute.side_effect = sqlite3.OperationalError("begin failed")
         with monkeypatch.context() as scoped:
             scoped.setattr(runner, "get_connection", lambda: failed_connection)
             with pytest.raises(OperationalError, match="begin failed"):
@@ -1057,9 +1055,7 @@ def _fire_sqlite_transaction_transition(
     elif payload == "COMMIT_FAILURE_ROLLBACK":
         runner.begin_immediate()
         failed_connection = Mock()
-        failed_connection.commit.side_effect = sqlite3.OperationalError(
-            "commit failed"
-        )
+        failed_connection.commit.side_effect = sqlite3.OperationalError("commit failed")
         with monkeypatch.context() as scoped:
             scoped.setattr(runner, "get_connection", lambda: failed_connection)
             with pytest.raises(OperationalError, match="commit failed"):
