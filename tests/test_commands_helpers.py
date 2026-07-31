@@ -1,4 +1,5 @@
 """Unit tests for helper functions in simplebroker.commands."""
+# mypy: disable-error-code=no-untyped-def
 
 from __future__ import annotations
 
@@ -6,6 +7,7 @@ import errno
 import json
 import types
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -386,7 +388,7 @@ class TestProcessQueueFetch:
 
         closed_stdout = self._ClosedPipeStdout(BrokenPipeError(), fd=-1)
         monkeypatch.setattr(commands.sys, "stdout", closed_stdout)
-        replacement = closed_stdout
+        replacement: Any = closed_stdout
 
         try:
             rc = _process_queue_fetch(
