@@ -18,6 +18,7 @@ import redis
 if TYPE_CHECKING:
     from typing import overload
 
+from simplebroker._aliases import resolve_queue_operand
 from simplebroker._constants import (
     ALIAS_PREFIX,
     PEEK_BATCH_SIZE,
@@ -1755,7 +1756,8 @@ class RedisBrokerCore:
         return str(value) if value is not None else None
 
     def canonicalize_queue(self, queue: str) -> str:
-        return self.resolve_alias(queue) or queue
+        """Resolve a queue operand; aliases resolve only behind the ``@`` sigil."""
+        return resolve_queue_operand(queue, self.resolve_alias)[0]
 
     def has_alias(self, alias: str) -> bool:
         return bool(self._client.hexists(self._key("aliases"), alias))

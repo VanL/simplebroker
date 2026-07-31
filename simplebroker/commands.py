@@ -21,6 +21,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
+from ._aliases import resolve_queue_operand
 from ._constants import (
     ALIAS_PREFIX,
     EXIT_ERROR,
@@ -149,18 +150,12 @@ def _target_string(db_target: DBTarget) -> str:
 def _resolve_alias_name(db_path: DBTarget, name: str) -> tuple[str, str | None]:
     """Resolve a queue name or alias, returning canonical queue and alias used."""
     if not name.startswith(ALIAS_PREFIX):
+        # Avoid opening a connection for the common literal-name case.
         return name, None
-
-    alias_key = name[len(ALIAS_PREFIX) :]
-    if not alias_key:
-        raise ValueError("Alias name cannot be empty")
 
     with DBConnection(db_path) as conn:
         db = cast(BrokerDB, conn.get_connection())
-        target = db.resolve_alias(alias_key)
-        if target is None:
-            raise ValueError(f"Alias '{alias_key}' is not defined")
-    return target, alias_key
+        return resolve_queue_operand(name, db.resolve_alias)
 
 
 def cmd_alias_list(db_path: DBTarget, target: str | None = None) -> int:

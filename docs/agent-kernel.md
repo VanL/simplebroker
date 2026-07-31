@@ -46,7 +46,7 @@ Shared semantics does **not** mean identical packaging:
 | `Queue` | Returns values / raises exceptions — not CLI exit codes |
 | Plain `broker write Q "msg"` | Does **not** print the message id unless `-t` / `--timestamps` or `--json` |
 | `Queue.write(...)` | **Returns** the committed message id |
-| Queue aliases (`@name`) | **CLI-only** convenience; not a `Queue` feature |
+| Queue aliases (`@name`) | Resolved by the CLI **and** `simplebroker.commands`; managed via `BrokerConnection` alias methods; **not** a `Queue` feature — `Queue` takes literal names |
 | Programmatic CLI-equivalent ops | `simplebroker.commands` (`cmd_write`, `cmd_read`, …) when you need shell parity from Python |
 
 Public package surface is intentionally small: see `simplebroker.__all__`
@@ -130,9 +130,11 @@ Normative identity, allocation, exact-ID, and preservation contract:
 - `Queue.write` returns the committed row's id. On the CLI, request it with
   `--json` or `-t` / `--timestamps`; plain write is quiet on success.
 - `queue.last_ts` is a per-handle cache of database-global high-water, not
-  “my last message” (`None` until generate/refresh on a fresh handle).
+  “my last message” (first read lazily fetches; `0` on an empty target,
+  `None` only if that fetch fails).
 - `move` preserves ids (same message, queue binding changes).
-- Exact ids: integer or exact 19 ASCII digits.
+- Exact ids: integer or exactly 19 decimal digits (surrounding whitespace
+  stripped; `str.isdecimal()`, so non-ASCII decimal digits are accepted).
 
 `--after` / `--before` are **filters** on message id (strict open bounds after
 parse). They are not complete stream offsets. Moves and exact inserts can

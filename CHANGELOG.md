@@ -17,11 +17,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   listed in `project.__all__`).
 
 ### Fixed
+- Exact message-ID validation now gates on `str.isdecimal()` instead of
+  `str.isdigit()`. Digit-like characters that `int()` cannot parse (for
+  example superscript `²`) previously passed the digit check and surfaced as
+  a raw `int()` `ValueError`; they now raise the canonical
+  `invalid message ID: expected exactly 19 digits within range`. Accepted
+  input is unchanged: integers, and strings of exactly 19 decimal digits
+  (including non-ASCII decimal digits) after surrounding whitespace is
+  stripped. The same swap was applied to the unit-suffix and ISO-8601
+  heuristics so each gate accepts exactly what its conversion accepts.
+- Timestamp parsing now folds non-ASCII decimal digits to ASCII before any
+  parsing, so a value's script no longer changes how it is interpreted.
+  `int()`/`float()` accept Unicode decimal digits but
+  `datetime.fromisoformat()` does not, so an 8-digit value previously took the
+  compact-`YYYYMMDD` path in ASCII and fell through to the unix-seconds path in
+  any other script — `20240115` and `٢٠٢٤٠١١٥` named instants ~54 years apart.
+  They now select the same instant.
 - Made ordinary Redis `write()` advance generated-ID high-water and insert the
   row in one fenced Lua operation. Stale candidates now retry without mutation,
   and timestamp resynchronization can no longer overwrite high-water backward.
 
 ### Changed
+- Fixed `BrokerConnection.canonicalize_queue` to apply the alias sigil rule.
+  It previously resolved *plain* names as aliases, so `canonicalize_queue("x")`
+  returned the alias target when an alias named `x` existed — contradicting the
+  documented rule that a plain name always means the literal queue, and able to
+  redirect work intended for a literal queue that shares a name with an alias.
+  Now a plain name passes through unchanged, `@name` resolves to its target,
+  and an empty or undefined alias raises `ValueError`. The CLI was already
+  correct and is unaffected. Backend authors implementing this method must
+  match the sigil rule; the shared implementation is
+  `simplebroker._aliases.resolve_queue_operand`, which the CLI command layer
+  and every first-party backend now share.
 - Reserved message ID `0` as the lower-bound/checkpoint origin for new exact
   insertion. Exact selectors still accept legacy zero rows for recovery, but a
   dump containing ID `0` must be intentionally re-IDed before restore.
@@ -31,6 +58,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension versions.
 
 ### Documented
+- Added `[SB-DELIVERY-8]` (message and queue-name constraints): queue-name
+  grammar and length, UTF-8 body requirement, the 10 MB default size limit and
+  `BROKER_MAX_MESSAGE_SIZE`, and the per-backend NUL divergence (PostgreSQL
+  rejects raw NUL; SQLite and Redis round-trip it). These were README-only.
+- Corrected the alias surface in `[SB-API-12]`, `[SB-OPS-5]`, and the agent
+  kernel. Aliases resolve in the CLI **and** in `simplebroker.commands`, and
+  are managed through the public `BrokerConnection` alias methods; only
+  `Queue` is literal-only. The kernel previously said "CLI-only".
+- Stated in `[SB-CLI-2]` that a data-bearing read writes the body to stdout,
+  never stderr; recorded in `[SB-BCAST-4]` the limits of broadcast atomicity
+  (unexpected script-runtime errors, pattern target resolution) and that a
+  no-op broadcast leaves the id high-water unchanged; noted in `[SB-ID-4]`
+  that an id with no room above it cannot be inserted; added patterned
+  broadcast to `[SB-SELECT-3]` as a source of ids arriving behind a bound.
+- Corrected `[SB-ID-4]` (and the README/kernel restatements), which described
+  exact-ID strings as "19 ASCII digits". Non-ASCII decimal digits are accepted
+  and whitespace is stripped; both are now stated.
+- Corrected `[SB-ID-3]` (and the kernel restatement), which said
+  `Queue.last_ts` is `None` on a fresh handle. The first read lazily fetches
+  backend high-water (`0` on an empty target); `None` means the fetch failed.
 - Promoted the Python library / embedding API surface to
   `docs/specs/16-python-library-api.md` (`[SB-API-1]`…`[SB-API-12]`): package
   root, `simplebroker.ext`, command layer, targets, library packaging, and
@@ -50,6 +97,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### simplebroker-redis 3.4.0
 - Synchronized minor release for SimpleBroker 5.7.0. Ordinary generated
   `write()` now advances high-water and inserts in one fenced Lua operation.
+- `canonicalize_queue` now shares the core sigil-rule implementation, so a
+  plain name is literal and only `@name` resolves (matching SQLite and the
+  CLI). It previously resolved plain names as aliases.
 
 ## [5.6.2] - 2026-07-30
 

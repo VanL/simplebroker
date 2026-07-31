@@ -256,9 +256,25 @@ this table does not redefine claim, id, or filter rules.
 | `dump_lines` / `load_lines` | `dump` / `load` | `[SB-IO-*]` |
 | Targets / project-config helpers | `-f` / `-d` / project scope | [SB-API-2]; README project-scoping residual |
 | `cmd_*` only | same CLI verb | `[SB-CLI-*]` presentation + vertical for the op |
+| `BrokerConnection` alias methods | `alias add` / `list` / `remove` | `[SB-OPS-5]`; `Queue` is literal-only |
 
-Queue aliases (`@name`) remain a **CLI** convenience unless a library API
-explicitly documents alias support.
+Queue aliases (`@name`) are **CLI operand syntax**, resolved at the command
+boundary rather than in the storage layer:
+
+- **CLI and `simplebroker.commands`** resolve `@name`; [SB-API-10] makes the
+  command layer the programmatic equivalent of the CLI. Resolution happens per
+  call, so there is no stale-binding question.
+- **`BrokerConnection`** (public via `simplebroker.ext`) owns alias
+  management: `add_alias`, `remove_alias`, `list_aliases`, `resolve_alias`,
+  `has_alias`, `aliases_for_target`, `get_alias_version`. Reachable from
+  `open_broker(...)`. `canonicalize_queue(name)` applies the sigil rule —
+  plain names pass through, `@name` resolves — so library callers get the
+  same operand semantics as the CLI (`[SB-OPS-5]`).
+- **`Queue` takes literal queue names only.** `Queue("@ali")` raises
+  `QueueNameError` because `@` is not a legal queue-name character
+  (`[SB-DELIVERY-8]`), and `Queue("ali")` means the literal queue `ali`, not
+  an alias target. Resolve explicitly when binding:
+  `Queue(conn.resolve_alias("ali"), ...)`.
 
 ## Implementation mapping (summary)
 

@@ -67,8 +67,11 @@ not identify a current message row.
 
 `Queue.last_ts` is a per-`Queue` cache of that global value and may be stale
 relative to other writers. The cache updates after `queue.write()` and
-`queue.generate_timestamp()`. On a fresh handle it is `None` until a generate
-or refresh. `Queue.refresh_last_ts()` refreshes from backend high-water.
+`queue.generate_timestamp()`. On a fresh handle the first read lazily fetches
+backend high-water — `0` on an empty target — so a caller need not generate or
+refresh first. The property yields `None` only when that lazy fetch fails; a
+`None` result therefore means "unknown", not "zero".
+`Queue.refresh_last_ts()` refreshes from backend high-water.
 `Queue.latest_pending_timestamp()` is a different queue-local query.
 
 Callers that need one write’s identity use the value returned by `write()`,
@@ -79,7 +82,14 @@ not high-water or cache surfaces.
 Public exact-id operations accept either:
 
 - an integer in range; or
-- an exact **19 ASCII digit** string form of that integer.
+- a string of exactly **19 decimal digits** denoting that integer.
+
+Surrounding whitespace is stripped before that length check, so a padded
+string of 19 digits is accepted. "Decimal digit" means Python's
+`str.isdecimal()`: non-ASCII decimal digits (for example Arabic-Indic
+`٠١٢`) are accepted and normalize to the same integer. Digit-like
+characters that are not decimal digits (for example superscript `²`) are
+rejected.
 
 Malformed strings raise `ValueError`. Unsupported types, including `bool`,
 raise `TypeError`.
@@ -94,6 +104,10 @@ normalization, advances `last_ts` above the largest supplied id when the
 operation succeeds, and inserts pending messages with their exact ids. Invalid
 input or an id already present aborts with no partial insert and no high-water
 change. An empty input is a no-op.
+
+An id at the very top of the range cannot be inserted: high-water must be able
+to advance above every supplied id, so an id with no room above it is
+rejected.
 
 A caller-supplied id far ahead of the wall clock advances high-water into that
 future interval. Later allocations consume remaining logical-counter values at

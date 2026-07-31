@@ -58,7 +58,11 @@ def test_agent_kernel_does_not_claim_identical_cli_python_packaging() -> None:
     text = KERNEL.read_text(encoding="utf-8")
     assert "not CLI exit codes" in text or "not mean identical packaging" in text
     assert "Does **not** print the message id" in text or "does **not** print" in text
-    assert "CLI-only" in text or "aliases" in text.lower()
+    # Aliases resolve in the CLI *and* in simplebroker.commands; only Queue is
+    # literal-only. Pin both halves: a bare "aliases" substring passed even
+    # while the kernel wrongly claimed alias support was CLI-only.
+    assert "not** a `Queue` feature" in text
+    assert "simplebroker.commands" in text
 
 
 def test_agent_kernel_public_surface_symbols_exist() -> None:

@@ -83,8 +83,7 @@ _Implementation mapping_:
 - Destination that **already exists** (including claimed-only) is rejected
   without mutation.
 - Missing source is a no-op success at the library layer; CLI missing source
-  uses the empty / no-match exit family (`[SB-CLI-1]`, exit `2` where
-  implemented).
+  uses the empty / no-match exit family: exit `2` (`[SB-CLI-1]`).
 - By default, aliases targeting the source are retargeted to the new name;
   an explicit no-retarget mode may leave aliases behind when documented on
   the API/CLI.
@@ -102,19 +101,26 @@ _Implementation mapping_:
 Aliases map an alternate **name** to a **canonical queue name**.
 
 - Stored in the broker, durable across processes, updated atomically.
-- **CLI use** of an alias requires the `@` prefix on the operand. A plain name
-  always means the literal queue. Undefined `@alias` fails.
+- An alias requires the `@` prefix on the operand, in the CLI and in the
+  library alike. A plain name always means the literal queue, so a queue and
+  an alias may share a name without colliding. `canonicalize_queue(name)`
+  applies this rule: it returns a plain name unchanged, resolves `@name` to
+  its target, and raises `ValueError` for an empty or undefined alias.
 - Alias **names** are stored without `@`. Targets must be real queue names,
   not aliases (no alias-to-alias / cycles).
 - Removing an alias does not delete messages; rows stay under the canonical
   name.
 - Exact broadcast selectors do not resolve aliases (`[SB-BCAST-*]`).
-- Library alias management is via the public connection/DB alias APIs where
-  exported; default `Queue` construction uses literal names.
+- Library alias management is the `BrokerConnection` alias methods
+  (`add_alias`, `remove_alias`, `list_aliases`, `resolve_alias`, `has_alias`,
+  `aliases_for_target`, `get_alias_version`), public via `simplebroker.ext`
+  and reachable from `open_broker(...)`. `simplebroker.commands` resolves
+  `@name` like the CLI; `Queue` construction uses literal names only
+  (`[SB-API-12]`).
 
 _Implementation mapping_:
 - `simplebroker/db.py` alias store
-- `simplebroker/commands.py` (`cmd_alias_*`, `_resolve_alias_name`)
+- `simplebroker/commands.py` (`cmd_alias_*`)
 - `tests/test_aliases_db.py`, `tests/test_alias_cli.py`
 
 ## Vacuum claimed rows [SB-OPS-6]

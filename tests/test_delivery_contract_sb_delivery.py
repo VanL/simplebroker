@@ -58,10 +58,10 @@ def test_delivery_contract_clause_inventory_and_bindings() -> None:
         int(code)
         for code in re.findall(r"^## .+ \[SB-DELIVERY-(\d+)\]$", text, re.MULTILINE)
     }
-    assert heading_codes == set(range(1, 8))
+    assert heading_codes == set(range(1, 9))
 
     verification = text.split("## Verification", 1)[1].split("## Related Plans", 1)[0]
-    for code in range(1, 8):
+    for code in range(1, 9):
         assert f"| [SB-DELIVERY-{code}] |" in verification
         assert "tests/test_delivery_contract_sb_delivery.py" in _verification_row(
             f"SB-DELIVERY-{code}"
@@ -82,7 +82,7 @@ def test_delivery_contract_clause_inventory_and_bindings() -> None:
     assert "`canonical-spec`" in registry_row
     assert "`11-delivery.md`" in registry_row
     assert "[SB-DELIVERY-1]" in registry_row
-    assert "[SB-DELIVERY-7]" in registry_row
+    assert "[SB-DELIVERY-8]" in registry_row
     assert "tests/test_delivery_contract_sb_delivery.py" in registry_row
     assert "tests/test_cross_thread_finalization_poisoning.py" in registry_row
     assert "tests/test_cli_broken_pipe.py" in registry_row

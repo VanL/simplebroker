@@ -6,10 +6,15 @@ import re
 from pathlib import Path
 
 import simplebroker
-import simplebroker.commands as commands
-import simplebroker.ext as ext
-import simplebroker.project as project
-from simplebroker import Queue, dump_lines, load_lines, open_broker
+from simplebroker import (
+    Queue,
+    commands,
+    dump_lines,
+    ext,
+    load_lines,
+    open_broker,
+    project,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "docs" / "specs" / "16-python-library-api.md"

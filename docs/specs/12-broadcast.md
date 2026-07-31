@@ -66,11 +66,24 @@ one copy or none do.
 - **SQL:** failures roll back the transaction for that operation.
 - **Redis (patternless and exact paths):** anticipated failures are rejected
   before mutation; registry and message writes complete in one non-interleaved
-  Lua phase. Pattern selection may use a different path; selection is still
-  “what matches at selection,” not a separate create API.
+  phase.
+
+Atomicity covers failures anticipated and rejected before mutation. It does
+not extend to unexpected runtime errors inside a backend's atomic script;
+Redis does not promise rollback in that case.
+
+Pattern selection resolves its target set before the atomic insertion point.
+A queue created after that resolution may miss the broadcast, and a queue
+deleted after it may be recreated by it. Selection is still “what matches at
+selection,” not a separate create API.
 
 No matching targets (including empty exact lists and existing-only lists that
-hit nothing) is a **no-op**: return `0`.
+hit nothing) is a **no-op**: return `0`, create no queues, and leave the id
+high-water unchanged.
+
+With `create_missing=True` the selected set is the complete unique requested
+set, so a queue deleted before the atomic point is recreated by its new
+pending message.
 
 ## CLI exact selector [SB-BCAST-5]
 

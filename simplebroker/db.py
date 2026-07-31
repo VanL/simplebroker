@@ -22,6 +22,7 @@ from typing import (
     cast,
 )
 
+from ._aliases import resolve_queue_operand
 from ._backend_plugins import (
     BackendPlugin,
     BrokerConnection,
@@ -3362,10 +3363,8 @@ class BrokerCore:
             return self._alias_cache.get(alias)
 
     def canonicalize_queue(self, queue: str) -> str:
-        with self._lock:
-            self._refresh_alias_cache_if_needed_locked()
-            target = self._alias_cache.get(queue)
-            return target if target is not None else queue
+        """Resolve a queue operand; aliases resolve only behind the ``@`` sigil."""
+        return resolve_queue_operand(queue, self.resolve_alias)[0]
 
     def has_alias(self, alias: str) -> bool:
         with self._lock:

@@ -36,6 +36,10 @@ The CLI follows ordinary Unix stream roles:
 - **stderr** carries errors, diagnostics, and human commentary (warnings,
   progress, watch banners).
 
+On a successful data-bearing read, the message body — plain or JSON — is
+written to **stdout**, never to stderr. Redirecting stdout captures the
+payload in full.
+
 Quiet mode may suppress commentary on stderr; it does not move payload to
 stderr.
 
@@ -84,6 +88,10 @@ ids for the predicates in `docs/specs/14-timestamp-selection.md`
 
 Heuristics may distinguish bare numeric values for interactive use; explicit
 suffixes (`s` / `ms` / `ns`) are recommended when a particular unit is intended.
+
+Digits in these forms may be any Unicode decimal digits (`str.isdecimal()`).
+They are folded to ASCII before parsing, so a value's script never changes how
+it is interpreted: `20240115` and `٢٠٢٤٠١١٥` select the same instant.
 
 Exact single-message targeting (`-m` / `--message`) is not this clause: it
 accepts only an exact 19-digit broker message id and is owned by `[SB-ID-4]`.

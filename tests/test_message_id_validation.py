@@ -44,6 +44,10 @@ def test_normalize_message_id_accepts_ints_and_exact_19_digit_strings(
         "1705329000000ms",
         "2024-01-15T14:30:00Z",
         "9223372036854775808",
+        # Digit-like but not decimal: str.isdigit() accepts superscripts while
+        # int() rejects them. Validation gates on str.isdecimal() so this
+        # surfaces as the canonical diagnostic rather than a raw int() error.
+        "²" * 19,
     ],
 )
 def test_normalize_message_id_rejects_malformed_strings(value: str) -> None:

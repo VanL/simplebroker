@@ -9,6 +9,7 @@ import random
 import re
 import threading
 import time
+import unicodedata
 from datetime import UTC, date, datetime
 from datetime import time as datetime_time
 from typing import TYPE_CHECKING
@@ -314,8 +315,9 @@ class TimestampGenerator:
                 calendar date (e.g. "10550401") is read as compact YYYYMMDD,
                 not as unix seconds — use an explicit suffix ("10550401s")
                 for second counts of that size. Pre-epoch dates clamp to 0
-                (the Unix epoch). Digits may be any Unicode decimal digits
-                accepted by int().
+                (the Unix epoch). Digits may be any Unicode decimal digits;
+                they are folded to ASCII before parsing, so a value's script
+                never changes how it is interpreted.
             exact: If True, only accept exact 19-digit message IDs (for strict validation)
 
         Returns:
@@ -328,6 +330,18 @@ class TimestampGenerator:
         timestamp_str = timestamp_str.strip()
         if not timestamp_str:
             raise TimestampError("Invalid timestamp: empty string")
+
+        # Fold non-ASCII decimal digits to ASCII once, before any parsing.
+        # int()/float() already accept Unicode decimal digits but
+        # datetime.fromisoformat() does not, so without this the *meaning* of a
+        # value would depend on its script: "20240115" read as a compact
+        # YYYYMMDD date, "٢٠٢٤٠١١٥" as unix seconds. Folding first makes the
+        # digits' script irrelevant to interpretation.
+        if not timestamp_str.isascii():
+            timestamp_str = "".join(
+                str(unicodedata.decimal(char)) if char.isdecimal() else char
+                for char in timestamp_str
+            )
 
         # If exact mode, enforce strict 19-digit validation
         if exact:
@@ -372,10 +386,17 @@ class TimestampGenerator:
 
     @staticmethod
     def _validate_exact_timestamp(timestamp_str: str) -> int:
-        """Validate timestamp in exact mode (strict 19-digit validation)."""
+        """Validate timestamp in exact mode (strict 19-digit validation).
+
+        Uses ``str.isdecimal()`` rather than ``str.isdigit()``: both accept
+        non-ASCII decimal digits, but ``isdigit()`` also accepts characters
+        such as superscripts that ``int()`` cannot parse, which would escape
+        this validator as a raw ``ValueError`` instead of ``TimestampError``.
+        Surrounding whitespace has already been stripped by ``validate()``.
+        """
         if (
             len(timestamp_str) != TIMESTAMP_EXACT_NUM_DIGITS
-            or not timestamp_str.isdigit()
+            or not timestamp_str.isdecimal()
         ):
             raise TimestampError(
                 "Invalid timestamp: exact mode requires exactly 19 digits"
@@ -423,7 +444,10 @@ class TimestampGenerator:
         if (
             timestamp_str.endswith("s")
             and not timestamp_str.endswith("Z")
-            and timestamp_str[-2:-1].isdigit()
+            # isdecimal(), not isdigit(): this value goes to int()/float(),
+            # which accept Unicode decimal digits but reject digit-like
+            # characters such as superscripts.
+            and timestamp_str[-2:-1].isdecimal()
         ):
             return timestamp_str[:-1], 1_000_000_000
         return None
@@ -469,7 +493,7 @@ class TimestampGenerator:
             "-" in timestamp_str
             or "T" in timestamp_str.upper()
             or "Z" in timestamp_str.upper()
-            or (len(timestamp_str) == 8 and timestamp_str.isdigit())
+            or (len(timestamp_str) == 8 and timestamp_str.isdecimal())
         ):
             return None
 

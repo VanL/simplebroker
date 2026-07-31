@@ -149,6 +149,34 @@ _Implementation mapping_:
 - `simplebroker/sbqueue.py`
 - `simplebroker/watcher.py`
 
+## Message and queue-name constraints [SB-DELIVERY-8]
+
+Constraints a caller must satisfy for a write to be accepted, and the one
+place they differ by backend.
+
+**Queue names.** Non-empty, at most 512 characters
+(`MAX_QUEUE_NAME_LENGTH`), containing only ASCII letters, digits,
+underscore, period, and hyphen, and beginning with an ASCII letter, digit,
+or underscore. Non-ASCII letters are not accepted. Violations raise
+`QueueNameError`.
+
+**Message bodies** are UTF-8 text. Bodies that are not UTF-8 encodable
+(including lone surrogates) raise `MessageError`.
+
+**Message size** is limited to 10 MB by default; override with
+`BROKER_MAX_MESSAGE_SIZE`. Oversized bodies raise `MessageError`.
+
+**NUL bytes diverge by backend.** SQLite and Redis round-trip a raw NUL
+(`\x00`) in a body. The PostgreSQL backend rejects it at write time with
+`OperationalError` and stores nothing; the queue remains usable. Code that
+must be portable across backends should not put raw NUL in bodies.
+
+_Implementation mapping_:
+- `simplebroker/db.py` (queue-name validation, message-size validation)
+- `simplebroker/_exceptions.py`
+- `extensions/simplebroker_pg/`
+- `extensions/simplebroker_redis/simplebroker_redis/core.py`
+
 ## Verification
 
 | Clause | Firing gates |
@@ -160,6 +188,7 @@ _Implementation mapping_:
 | [SB-DELIVERY-5] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_generator_methods.py`; `extensions/simplebroker_redis/tests/test_redis_batches.py` |
 | [SB-DELIVERY-6] | `tests/test_delivery_contract_sb_delivery.py` (structural binding); `tests/test_cross_thread_finalization_poisoning.py`; `tests/test_cross_thread_generator_probe.py`; `extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`; `extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py` |
 | [SB-DELIVERY-7] | `tests/test_cli_broken_pipe.py`; `tests/test_delivery_contract_sb_delivery.py` |
+| [SB-DELIVERY-8] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_property_queue_names.py`; `tests/test_message_size_contract.py`; `tests/test_property_message_roundtrip.py::test_lone_surrogate_bodies_raise_message_error`, `::test_nul_byte_bodies_pinned_per_backend` (shared, per-backend NUL stance) |
 
 ## Related Plans
 

@@ -159,6 +159,30 @@ def test_known_quirk_non_ascii_digits_accepted() -> None:
     )
 
 
+def test_non_ascii_digits_are_script_invariant() -> None:
+    """A value's script must not change how it is interpreted.
+
+    int()/float() accept Unicode decimal digits but datetime.fromisoformat()
+    does not, so before digits were folded to ASCII an 8-digit value took the
+    YYYYMMDD path in ASCII and silently fell through to the unix-seconds path
+    in any other script -- the same glyph sequence meaning two instants ~54
+    years apart.
+    """
+    ascii_form = "20240115"
+    for other_script in ("٢٠٢٤٠١١٥", "߂߀߂߄߀߁߁߅"):
+        assert TimestampGenerator.validate(other_script) == (
+            TimestampGenerator.validate(ascii_form)
+        )
+
+    # Folding applies to suffixed and dashed forms too, not just bare digits.
+    assert TimestampGenerator.validate("١٧٠٥٣٢٩٠٠٠s") == (
+        TimestampGenerator.validate("1705329000s")
+    )
+    assert TimestampGenerator.validate("٢٠٢٤-٠١-١٥") == (
+        TimestampGenerator.validate("2024-01-15")
+    )
+
+
 def test_known_quirk_8_digit_bare_numbers_can_parse_as_yyyymmdd() -> None:
     """FINDING F7 (pinned, not endorsed; discovered by the equivalence
     property at the Task 6 gate): an 8-digit all-digit string that forms a

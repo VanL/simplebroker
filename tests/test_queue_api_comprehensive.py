@@ -359,7 +359,9 @@ class TestQueueLastTimestampCaching:
     def test_last_ts_updates_after_generate_and_write(self, queue_factory):
         queue = queue_factory("ts_queue")
 
-        assert queue.last_ts in (None, 0)
+        # Fresh handle: the first read lazily fetches high-water, which is 0 on
+        # an empty target. None would mean the fetch failed, not "empty".
+        assert queue.last_ts == 0
 
         generated = queue.generate_timestamp()
         assert queue.last_ts == generated
@@ -377,10 +379,12 @@ class TestQueueLastTimestampCaching:
         watcher_queue = queue_factory("watcher")
         writer_queue = queue_factory("writer")
 
-        assert watcher_queue.last_ts in (None, 0)
+        assert watcher_queue.last_ts == 0
 
         writer_queue.write("ping")
-        assert watcher_queue.last_ts in (None, 0)
+        # Cache stays stale until an explicit refresh; it does not observe the
+        # other handle's write.
+        assert watcher_queue.last_ts == 0
 
         refreshed = watcher_queue.refresh_last_ts()
         assert refreshed == watcher_queue.last_ts

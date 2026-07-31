@@ -313,7 +313,9 @@ def test_redis_alias_api_validates_and_updates_alias_metadata(
 
         assert core.has_alias("existing") is True
         assert core.resolve_alias("existing") == "target"
-        assert core.canonicalize_queue("existing") == "target"
+        # Aliases resolve only behind the "@" sigil; a plain name is literal.
+        assert core.canonicalize_queue("existing") == "existing"
+        assert core.canonicalize_queue("@existing") == "target"
         assert core.canonicalize_queue("plain") == "plain"
         assert core.list_aliases() == [("existing", "target")]
         assert core.aliases_for_target("target") == ["existing"]

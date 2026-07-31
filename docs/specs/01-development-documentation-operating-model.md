@@ -398,27 +398,27 @@ regeneration.
 <!-- BEGIN GENERATED RUFF SUPPRESSION INDEX -->
 | Group | Locations | Directives | Raw diagnostics |
 |-------|-----------|-----------:|-----------------|
-| `[RUFF-SUP-001]` | `extensions/simplebroker_redis/simplebroker_redis/core.py:1840,1843`; `simplebroker/_backend_plugins.py:257`; `simplebroker/_phaselock.py:523`; `simplebroker/_runner.py:972`; `simplebroker/db.py:894,898,3493,3497,3604`; `simplebroker/sbqueue.py:1089,1093`; `simplebroker/watcher.py:1045` | 13 | `PYI034=6`, `PYI036=19` |
-| `[RUFF-SUP-002]` | `simplebroker/commands.py:69` | 1 | `SIM115=1` |
-| `[RUFF-SUP-003]` | `bin/check-dom15-fixtures:215`; `bin/pytest-redis:211`; `simplebroker/_scripts.py:596,888`; `simplebroker/cli.py:1020,1055,1567`; `simplebroker/commands.py:804,942,1392,1463,1485` | 12 | `BLE001=12` |
+| `[RUFF-SUP-001]` | `extensions/simplebroker_redis/simplebroker_redis/core.py:1842,1845`; `simplebroker/_backend_plugins.py:257`; `simplebroker/_phaselock.py:523`; `simplebroker/_runner.py:972`; `simplebroker/db.py:895,899,3492,3496,3603`; `simplebroker/sbqueue.py:1089,1093`; `simplebroker/watcher.py:1045` | 13 | `PYI034=6`, `PYI036=19` |
+| `[RUFF-SUP-002]` | `simplebroker/commands.py:70` | 1 | `SIM115=1` |
+| `[RUFF-SUP-003]` | `bin/check-dom15-fixtures:215`; `bin/pytest-redis:211`; `simplebroker/_scripts.py:596,888`; `simplebroker/cli.py:1020,1055,1567`; `simplebroker/commands.py:799,937,1387,1458,1480` | 12 | `BLE001=12` |
 | `[RUFF-SUP-004]` | `examples/async_simple_example.py:74`; `examples/reference_reactor.py:801`; `extensions/simplebroker_pg/simplebroker_pg/runner.py:170`; `extensions/simplebroker_redis/simplebroker_redis/plugin.py:176`; `simplebroker/watcher.py:877,1428` | 6 | `BLE001=6` |
-| `[RUFF-SUP-005]` | `simplebroker/db.py:246,801,852`; `simplebroker/sbqueue.py:1442`; `simplebroker/watcher.py:1053` | 5 | `BLE001=5` |
-| `[RUFF-SUP-006]` | `simplebroker/db.py:1410,1438,1914` | 3 | `BLE001=3` |
+| `[RUFF-SUP-005]` | `simplebroker/db.py:247,802,853`; `simplebroker/sbqueue.py:1442`; `simplebroker/watcher.py:1053` | 5 | `BLE001=5` |
+| `[RUFF-SUP-006]` | `simplebroker/db.py:1411,1439,1915` | 3 | `BLE001=3` |
 | `[RUFF-SUP-007]` | `extensions/simplebroker_pg/tests/test_pg_broadcast_semantics.py:101,159`; `extensions/simplebroker_pg/tests/test_pg_notify.py:448`; `extensions/simplebroker_pg/tests/test_pg_queue_rename.py:143,194`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py:344`; `tests/helper_scripts/cross_thread_generator_probe.py:134,156,161,168,188,205,237,247,281,325,340,364,376,402,572,579,588`; `tests/test_connection_transition_tables.py:474`; `tests/test_cross_thread_finalization_poisoning.py:102,190,201,472,649,875,908,975`; `tests/test_edge_cases.py:135`; `tests/test_fork_safety.py:44,87,188,226,275,374,441`; `tests/test_generator_methods.py:309`; `tests/test_phaselock.py:1299,1351,1405,1515,1523,1627,1752`; `tests/test_process_broker_session.py:701,707,983,1068,1153`; `tests/test_queue_move_watcher.py:352`; `tests/test_runner_error_handling.py:1060`; `tests/test_watcher_concurrency.py:598`; `tests/test_watcher_multiprocess.py:137,192,274`; `tests/test_watcher_race_conditions.py:797` | 60 | `BLE001=60` |
 | `[RUFF-SUP-008]` | `tests/backend_benchmark.py:839`; `tests/helper_scripts/cleanup.py:52`; `tests/helper_scripts/managed_subprocess.py:56`; `tests/helper_scripts/timing.py:151`; `tests/helper_scripts/watcher_sigint_script_improved.py:53,86,111,120`; `tests/helper_scripts/watcher_sigint_script_instrumented.py:35,57,73,92` | 12 | `BLE001=12` |
 | `[RUFF-SUP-009]` | `simplebroker/_backends/sqlite/schema.py:179`; `simplebroker/_backends/sqlite/validation.py:14`; `simplebroker/_dump.py:156` | 3 | `C901=3` |
 | `[RUFF-SUP-010]` | `simplebroker/_phaselock.py:162,631` | 2 | `C901=2` |
 | `[RUFF-SUP-011]` | `simplebroker/_retry.py:258` | 1 | `C901=1` |
 | `[RUFF-SUP-012]` | `simplebroker/_scripts.py:412` | 1 | `C901=1` |
-| `[RUFF-SUP-013]` | `simplebroker/_timestamp.py:298,520` | 2 | `C901=2` |
-| `[RUFF-SUP-014]` | `simplebroker/commands.py:414` | 1 | `C901=1` |
-| `[RUFF-SUP-015]` | `simplebroker/db.py:1339,1795` | 2 | `C901=2` |
+| `[RUFF-SUP-013]` | `simplebroker/_timestamp.py:299,544` | 2 | `C901=2` |
+| `[RUFF-SUP-014]` | `simplebroker/commands.py:409` | 1 | `C901=1` |
+| `[RUFF-SUP-015]` | `simplebroker/db.py:1340,1796` | 2 | `C901=2` |
 | `[RUFF-SUP-016]` | `simplebroker/sbqueue.py:771` | 1 | `C901=1` |
 | `[RUFF-SUP-017]` | `simplebroker/watcher.py:1179` | 1 | `C901=1` |
 | `[RUFF-SUP-018]` | `extensions/simplebroker_pg/simplebroker_pg/plugin.py:741` | 1 | `C901=1` |
 | `[RUFF-SUP-019]` | `extensions/simplebroker_pg/simplebroker_pg/runner.py:142` | 1 | `C901=1` |
-| `[RUFF-SUP-020]` | `extensions/simplebroker_redis/simplebroker_redis/core.py:1349`; `extensions/simplebroker_redis/simplebroker_redis/plugin.py:447` | 2 | `C901=2` |
-| `[RUFF-SUP-021]` | `extensions/simplebroker_redis/simplebroker_redis/core.py:1425` | 1 | `C901=1` |
+| `[RUFF-SUP-020]` | `extensions/simplebroker_redis/simplebroker_redis/core.py:1350`; `extensions/simplebroker_redis/simplebroker_redis/plugin.py:447` | 2 | `C901=2` |
+| `[RUFF-SUP-021]` | `extensions/simplebroker_redis/simplebroker_redis/core.py:1426` | 1 | `C901=1` |
 | `[RUFF-SUP-022]` | `extensions/simplebroker_pg/tests/test_pg_plugin_contract_edges.py:189` | 1 | `C901=1` |
 | `[RUFF-SUP-023]` | `bin/release.py:1403,2182,2308` | 3 | `C901=3` |
 | `[RUFF-SUP-024]` | `examples/multi_queue_patterns.py:86,309` | 2 | `C901=2` |

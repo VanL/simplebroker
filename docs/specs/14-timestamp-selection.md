@@ -51,8 +51,10 @@ selected** by that filter. That is invisibility under the filter, not
 physical deletion.
 
 `move` preserves public id (`[SB-ID-5]`). Exact-id insertion may supply an
-earlier valid id (`[SB-ID-4]`). Either can place a still-pending message into
-a queue with an id that is **behind** a bound the consumer already uses. An
+earlier valid id (`[SB-ID-4]`). Patterned broadcast may deliver a copy into a
+queue selected after a consumer chose its bound. Any of these can place a
+still-pending message into a queue with an id that is **behind** a bound the
+consumer already uses. An
 unfiltered scan, or a deliberately lower bound (including from the origin),
 can still select such a pending row if it remains pending.
 

@@ -5,9 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
-from simplebroker import Queue
 from simplebroker._constants import EXIT_SUCCESS
 
 from .conftest import run_cli

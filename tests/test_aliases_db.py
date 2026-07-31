@@ -124,6 +124,26 @@ def test_alias_add_revalidates_against_live_state(
         db2.shutdown()
 
 
+def test_canonicalize_queue_resolves_only_behind_the_sigil(broker) -> None:
+    """A plain name is always the literal queue; only "@name" resolves.
+
+    Guards the collision case: a queue and an alias may share a name, and
+    without the sigil rule `canonicalize_queue("ali")` would silently redirect
+    writes intended for the literal queue `ali`.
+    """
+    broker.add_alias("ali", "real")
+
+    assert broker.canonicalize_queue("ali") == "ali"
+    assert broker.canonicalize_queue("@ali") == "real"
+    assert broker.canonicalize_queue("plain") == "plain"
+
+    with pytest.raises(ValueError, match="not defined"):
+        broker.canonicalize_queue("@nope")
+
+    with pytest.raises(ValueError, match="cannot be empty"):
+        broker.canonicalize_queue("@")
+
+
 def test_alias_add_warns_on_existing_queue(broker) -> None:
     broker.write("existing", "message")
     with pytest.warns(RuntimeWarning, match=r"Queue 'existing' already exists"):

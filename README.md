@@ -443,8 +443,10 @@ exact-ID forms, and ID-preserving move are normative in the
 Uniqueness is the ordinary coexistence rule for stored rows. Applications
 needing durable idempotency persist the message ID themselves.
 
-Exact-ID Python operations accept an integer ID or an exact 19-digit ASCII
-string ID (`[SB-ID-4]`). Python `after_timestamp` / `before_timestamp` remain
+Exact-ID Python operations accept an integer ID or a string of exactly
+19 decimal digits (`[SB-ID-4]`). Surrounding whitespace is stripped, and
+"decimal digit" is Python's `str.isdecimal()`, so non-ASCII decimal digits
+are accepted. Python `after_timestamp` / `before_timestamp` remain
 integer bounds; CLI date and unit-suffix parsing apply only to CLI range
 flags.
 
