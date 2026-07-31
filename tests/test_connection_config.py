@@ -1,8 +1,10 @@
 """Regression tests for partial config handling in connection setup."""
+# mypy: disable-error-code=no-untyped-def
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -102,7 +104,7 @@ def test_target_for_directory_normalizes_partial_backend_config(
     seen: dict[str, object] = {}
 
     class DummyPlugin:
-        def init_backend(self, config):  # type: ignore[no-untyped-def]
+        def init_backend(self, config):
             seen.update(config)
             return {
                 "target": str(config["BROKER_BACKEND_TARGET"]),
@@ -162,7 +164,7 @@ def test_claim_generator_uses_instance_batch_size(broker_target) -> None:
             "BROKER_AUTO_VACUUM": 0,
         },
     )
-    generator = None
+    generator: Any = None
     try:
         for index in range(3):
             broker.write("jobs", f"message-{index}")
@@ -196,7 +198,7 @@ def test_move_generator_uses_instance_batch_size(broker_target) -> None:
             "BROKER_AUTO_VACUUM": 0,
         },
     )
-    generator = None
+    generator: Any = None
     try:
         for index in range(3):
             broker.write("source", f"message-{index}")
@@ -237,7 +239,7 @@ def test_generator_explicit_config_overrides_instance_batch_size(
             "BROKER_AUTO_VACUUM": 0,
         },
     )
-    generator = None
+    generator: Any = None
     try:
         for index in range(4):
             broker.write("source", f"message-{index}")
