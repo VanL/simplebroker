@@ -693,15 +693,18 @@ def _cli_coverage_runner_failure(
     invoke_cli = vars(suite_conftest)["run_cli"]
 
     def invoke_failing_cli() -> tuple[int, str, str]:
-        return invoke_cli(
-            "write",
-            "jobs",
-            "message",
-            cwd=child_cwd,
-            env={
-                "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
-                "COVERAGE_FILE": ".coverage",
-            },
+        return cast(
+            tuple[int, str, str],
+            invoke_cli(
+                "write",
+                "jobs",
+                "message",
+                cwd=child_cwd,
+                env={
+                    "COVERAGE_PROCESS_START": str(REPO_ROOT / "pyproject.toml"),
+                    "COVERAGE_FILE": ".coverage",
+                },
+            ),
         )
 
     if failure_kind == "timeout":
@@ -2072,7 +2075,7 @@ def test_redis_test_uv_command_uses_the_locked_root_project() -> None:
 def test_verify_postgres_test_dsn_runs_select_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = []
+    calls: list[tuple[Any, ...]] = []
 
     def fake_run(cmd, *, cwd=_scripts.ROOT, env=None, capture_output=False):
         calls.append((cmd, env, capture_output))
@@ -2187,7 +2190,7 @@ def test_pytest_pg_main_preflights_dsn_before_pytest(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    calls = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(_scripts.sys, "argv", ["pytest-pg", "tests/test_smoke.py"])
@@ -2253,7 +2256,7 @@ def test_pytest_pg_main_redacts_dsn_password(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    calls = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(_scripts.sys, "argv", ["pytest-pg", "tests/test_smoke.py"])
@@ -2281,7 +2284,7 @@ def test_pytest_pg_main_redacts_dsn_password(
 def test_pytest_pg_fast_coverage_runs_pg_only_extension_phase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = []
+    calls: list[tuple[Any, ...]] = []
     coverage_args = [
         "--cov=simplebroker",
         "--cov=extensions/simplebroker_pg/simplebroker_pg",
@@ -2326,7 +2329,7 @@ def test_pytest_redis_fast_coverage_runs_redis_only_extension_phase(
     redis_script = runpy.run_path(str(REPO_ROOT / "bin" / "pytest-redis"))
     redis_main = redis_script["main"]
     redis_globals = redis_main.__globals__
-    calls = []
+    calls: list[tuple[Any, ...]] = []
     cleanup_calls = []
     coverage_args = [
         "--cov=simplebroker",
@@ -2379,7 +2382,7 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    calls = []
+    calls: list[tuple[Any, ...]] = []
     root_wheel = tmp_path / "simplebroker-3.4.2-py3-none-any.whl"
     pg_extension_wheel = tmp_path / "simplebroker_pg-1.3.0-py3-none-any.whl"
     redis_extension_wheel = tmp_path / "simplebroker_redis-1.0.0-py3-none-any.whl"
@@ -2497,7 +2500,7 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
 def test_build_distribution_uses_locked_nonisolated_frontend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = []
+    calls: list[tuple[Any, ...]] = []
     project_dir = REPO_ROOT / "extensions" / "simplebroker_pg"
 
     def fake_run(cmd, *, cwd=_scripts.ROOT, env=None, capture_output=False):
