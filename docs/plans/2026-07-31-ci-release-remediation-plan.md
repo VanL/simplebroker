@@ -81,10 +81,14 @@ test-lifecycle fixes plus an explicitly requested release retry.
   too little headroom for these documented slow-by-construction proofs.
 - The same job then had a distinct 29-minute silent tail around
   `test_checkpoint_reader_sees_every_message`. It had completed in 11.83 and
-  15.88 seconds in the prior two runs, its own 180-second Python timer did not
-  fire, and it reported `PASSED` exactly when GitHub's 45-minute step watchdog
-  interrupted the run. Treat this separately as runner or native-process
-  suspension unless a red-capable probe establishes a repository defect.
+  15.88 seconds in the prior two runs. Its own 180-second Python timer did not
+  fire, and its `PASSED` report appeared exactly when GitHub's 45-minute step
+  watchdog interrupted the run. Immediately before the silence, xdist printed
+  `replacing crashed worker gw1` but never reported a replacement worker.
+  Xdist starts that replacement synchronously on its controller event loop, so
+  a blocked Windows process launch also blocks consumption of another worker's
+  already-queued report. A whole-runner suspension remains possible, but this
+  sequence is the narrower explanation that fits every observed timestamp.
 - `tests/test_ruff_policy.py` owns root Ruff and annotation-policy contracts.
   Redis-specific annotation proof must stay in the Redis extension suite or
   use an explicit isolated source-path setup; it must not make Redis a root
@@ -141,6 +145,11 @@ Comprehension gates before editing:
   Their 120-second CLI subprocess bounds remain unchanged. Only their outer
   pytest timeout may exceed the blanket coverage-suite timeout so setup and
   teardown retain CI headroom.
+- A worker terminated by the thread-mode hard timeout has already made its
+  pytest invocation fail. Coverage CI must not synchronously launch a
+  replacement that cannot repair that verdict and can block the controller.
+  All original tests and assertions remain selected; the invocation may stop
+  collecting later failures after a worker crash.
 - Each independent root cause gets one commit after targeted pytest, mypy when
   typing is touched, `ruff check`, and `ruff format --check` pass for the
   affected files.
@@ -281,7 +290,16 @@ reports the selected core and extension versions.
      timeout, then run the full affected module, mypy, Ruff check, and Ruff
      format check before the independent commit.
 
-9. Close the plan.
+9. Fail promptly after a hard-timeout worker exit.
+   - Disable xdist worker replacement on every coverage or diagnostic
+     invocation that combines xdist with the thread-mode hard timeout. Keep
+     the timeout and active-test reporting unchanged.
+   - Extend the workflow-policy tests so every such invocation requires
+     `--max-worker-restart=0`. Prove the policy test fails before editing the
+     workflows, then run the full affected module, mypy, Ruff check, and Ruff
+     format check before the independent commit.
+
+10. Close the plan.
    - Record commit SHAs and current-state verification evidence.
    - Update the Status Index row to `completed` only after release monitoring
      reaches a terminal successful state.

@@ -75,15 +75,15 @@ jobs:
         uv run --frozen --no-sync coverage erase
         case "${COVERAGE_SUITE}" in
           linux)
-            PYTEST_ADDOPTS="-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread" \
+            PYTEST_ADDOPTS="-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" \
               uv run --frozen --no-sync pytest --cov=simplebroker --cov-append --cov-report= --cov-fail-under=0 -m "not benchmark"
             ;;
           postgres)
-            PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast -vv --timeout=180 --timeout-method=thread \
+            PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast -vv --timeout=180 --timeout-method=thread --max-worker-restart=0 \
               --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov-append --cov-report= --cov-fail-under=0
             ;;
           redis)
-            PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast -vv --timeout=180 --timeout-method=thread \
+            PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast -vv --timeout=180 --timeout-method=thread --max-worker-restart=0 \
               --cov=simplebroker --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0
             ;;
         esac

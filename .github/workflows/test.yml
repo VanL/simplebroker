@@ -100,7 +100,7 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        uv run --frozen --no-sync pytest --tb=short -m "not benchmark" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
+        uv run --frozen --no-sync pytest --tb=short -m "not benchmark" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
 
     - name: Run phaselock fallback-path gate
       if: matrix.os != 'windows-latest' || matrix.python-version != '3.14'
@@ -117,7 +117,7 @@ jobs:
         COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
-        uv run --frozen --no-sync pytest --tb=short -m "not benchmark" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0 tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
+        uv run --frozen --no-sync pytest --tb=short -m "not benchmark" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0 tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
 
     - name: Test CLI installation
       run: |
@@ -265,7 +265,7 @@ jobs:
 
     - name: Run tests with coverage
       env:
-        PYTEST_ADDOPTS: -ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread
+        PYTEST_ADDOPTS: -ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0
         COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
@@ -317,7 +317,7 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast -vv --timeout=180 --timeout-method=thread --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov-append --cov-report= --cov-fail-under=0
+        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-pg --fast -vv --timeout=180 --timeout-method=thread --max-worker-restart=0 --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov-append --cov-report= --cov-fail-under=0
         uv run --frozen --no-sync python .github/scripts/combine_coverage.py
         uv run --frozen --no-sync python -c "from pathlib import Path; Path('.coverage').replace('.coverage.postgres')"
 
@@ -364,7 +364,7 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast -vv --timeout=180 --timeout-method=thread --cov=simplebroker --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0
+        PYTEST_ADDOPTS= uv run --frozen --no-sync ./bin/pytest-redis --fast -vv --timeout=180 --timeout-method=thread --max-worker-restart=0 --cov=simplebroker --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0
         uv run --frozen --no-sync python .github/scripts/combine_coverage.py
         uv run --frozen --no-sync python -c "from pathlib import Path; Path('.coverage').replace('.coverage.redis')"
 

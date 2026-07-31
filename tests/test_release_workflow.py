@@ -608,6 +608,7 @@ def test_coverage_jobs_bound_hangs_and_report_the_active_test() -> None:
         assert "-vv" in job
         assert "--timeout=180" in job
         assert "--timeout-method=thread" in job
+        assert "--max-worker-restart=0" in job
 
     assert "    timeout-minutes: 45" in report_job
 
@@ -622,6 +623,7 @@ def test_coverage_jobs_bound_hangs_and_report_the_active_test() -> None:
         assert "-vv" in step
         assert "--timeout=180" in step
         assert "--timeout-method=thread" in step
+        assert "--max-worker-restart=0" in step
 
 
 def test_coverage_diagnostics_can_run_one_suite_from_gh() -> None:
@@ -653,6 +655,9 @@ def test_coverage_diagnostics_can_run_one_suite_from_gh() -> None:
     assert "    timeout-minutes: 45" in workflow_text
     assert "--timeout=180" in workflow_text
     assert "--timeout-method=thread" in workflow_text
+    assert workflow_text.count("--max-worker-restart=0") == workflow_text.count(
+        "--timeout-method=thread"
+    )
     assert "-vv" in workflow_text
     assert "COVERAGE_ITERATIONS" not in workflow_text
     assert "python .github/scripts/combine_coverage.py" in workflow_text
