@@ -54,7 +54,7 @@ def test_broadcast_with_after_filtering(workdir):
     # Check each queue for messages after checkpoint
     for q in queues:
         assert wait_for_condition(
-            lambda q=q: _queue_has_broadcast(workdir, q, checkpoint),
+            lambda q=q: _queue_has_broadcast(workdir, q, int(checkpoint)),  # type: ignore[misc]
             timeout=3.0,
             interval=0.05,
         )
@@ -112,7 +112,7 @@ def test_broadcast_ordering_with_timestamps(workdir):
     # Check ordering in each queue
     for q in queues:
         assert wait_for_condition(
-            lambda q=q: _has_expected_messages(workdir, q, 3),
+            lambda q=q: _has_expected_messages(workdir, q, 3),  # type: ignore[misc]
             timeout=3.0,
             interval=0.05,
         )
