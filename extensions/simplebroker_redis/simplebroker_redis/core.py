@@ -8,9 +8,11 @@ import threading
 import time
 import uuid
 import warnings
+import weakref
 from collections.abc import Generator, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from fnmatch import fnmatchcase
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal
 
 import redis
@@ -67,6 +69,67 @@ from .validation import is_namespace_key
 logger = logging.getLogger(__name__)
 
 
+class _SharedWriteLock:
+    """Weak-referenceable process-local lock for one Redis namespace."""
+
+    __slots__ = ("__weakref__", "_lock")
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __enter__(self) -> None:
+        self._lock.acquire()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> Literal[False]:
+        self._lock.release()
+        return False
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self) -> None:
+        self._lock.release()
+
+
+class _ProcessWriteLockRegistry:
+    """Share write ordering within a process without retaining dead targets."""
+
+    def __init__(self) -> None:
+        self._pid = os.getpid()
+        self._guard = threading.Lock()
+        self._locks: weakref.WeakValueDictionary[tuple[str, str], _SharedWriteLock] = (
+            weakref.WeakValueDictionary()
+        )
+
+    def get(self, target: str, namespace: str) -> _SharedWriteLock:
+        self._reset_after_fork_if_needed()
+        key = (target, namespace)
+        with self._guard:
+            lock = self._locks.get(key)
+            if lock is None:
+                lock = _SharedWriteLock()
+                self._locks[key] = lock
+            return lock
+
+    def _reset_after_fork_if_needed(self) -> None:
+        current_pid = os.getpid()
+        if current_pid == self._pid:
+            return
+        # A forked child must not acquire a registry guard or write lock that
+        # may have been held by a vanished parent thread.
+        self._pid = current_pid
+        self._guard = threading.Lock()
+        self._locks = weakref.WeakValueDictionary()
+
+
+_write_lock_registry = _ProcessWriteLockRegistry()
+
+
 def _translate_redis_error(exc: redis.RedisError) -> OperationalError:
     return OperationalError(str(exc))
 
@@ -85,7 +148,7 @@ class RedisBrokerCore:
         self._config = resolve_config(config)
         self._stop_event = stop_event or threading.Event()
         self._lock = threading.RLock()
-        self._write_lock = threading.Lock()
+        self._write_lock = _write_lock_registry.get(runner.target, runner.namespace)
         self._pid = os.getpid()
         self._keys = RedisKeys(runner.namespace)
         self._prefix = self._keys.prefix
@@ -146,7 +209,10 @@ class RedisBrokerCore:
         current_pid = os.getpid()
         if current_pid != self._pid:
             self._pid = current_pid
-            self._write_lock = threading.Lock()
+            self._write_lock = _write_lock_registry.get(
+                self._runner.target,
+                self._runner.namespace,
+            )
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         self._stop_event = stop_event or threading.Event()

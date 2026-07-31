@@ -70,6 +70,7 @@ FIRING_TESTS = {
             "test_write_script_rejects_stale_candidate_without_any_mutation",
             "test_ordinary_write_retries_stale_local_candidate_above_reader_checkpoint",
             "test_resync_cannot_overwrite_concurrent_high_water_backward",
+            "test_same_target_cores_serialize_candidate_reservation",
             "test_steady_state_ordinary_write_uses_one_data_eval",
             "test_single_core_concurrent_writes_preserve_cross_writer_retry_budget",
         },

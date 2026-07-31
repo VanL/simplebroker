@@ -137,7 +137,8 @@ def test_ordinary_write_retries_stale_local_candidate_above_reader_checkpoint(
                 persisted = writer_b.generate_timestamp()
                 while persisted <= first_candidate[0]:
                     persisted = writer_b.generate_timestamp()
-                checkpoint = writer_b.write("jobs", "writer-b")
+                writer_b.insert_messages([("jobs", "writer-b", persisted)])
+                checkpoint = persisted
                 assert checkpoint > first_candidate[0]
                 assert reader.peek_many(
                     "jobs",
@@ -277,6 +278,67 @@ def test_single_core_concurrent_writes_preserve_cross_writer_retry_budget(
     finally:
         release_first.set()
         core.close()
+
+
+def test_same_target_cores_serialize_candidate_reservation(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner_a = RedisRunner(redis_runner.target, namespace=redis_runner.namespace)
+    runner_b = RedisRunner(redis_runner.target, namespace=redis_runner.namespace)
+    core_a = RedisBrokerCore(runner_a)
+    core_b = RedisBrokerCore(runner_b)
+    first_reserved = threading.Event()
+    release_first = threading.Event()
+    second_started = threading.Event()
+    second_reserved = threading.Event()
+    original_reserve_a = core_a._reserve_write_candidate
+    original_reserve_b = core_b._reserve_write_candidate
+
+    def pause_first_reservation() -> int:
+        candidate = original_reserve_a()
+        first_reserved.set()
+        if not release_first.wait(timeout=5):
+            raise AssertionError("first write was not released")
+        return candidate
+
+    def record_second_reservation() -> int:
+        second_reserved.set()
+        return original_reserve_b()
+
+    def second_write() -> int:
+        second_started.set()
+        return core_b.write("jobs", "second")
+
+    monkeypatch.setattr(core_a, "_reserve_write_candidate", pause_first_reservation)
+    monkeypatch.setattr(core_b, "_reserve_write_candidate", record_second_reservation)
+
+    try:
+        assert core_a._write_lock is core_b._write_lock
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            try:
+                first = executor.submit(core_a.write, "jobs", "first")
+                assert first_reserved.wait(timeout=5)
+                second = executor.submit(second_write)
+                assert second_started.wait(timeout=5)
+                assert not second_reserved.wait(timeout=0.25)
+
+                release_first.set()
+                first_id = first.result(timeout=5)
+                second_id = second.result(timeout=5)
+            finally:
+                release_first.set()
+
+        assert second_reserved.is_set()
+        assert second_id > first_id
+        assert core_a.get_conflict_metrics()["ts_conflict_count"] == 0
+        assert core_b.get_conflict_metrics()["ts_conflict_count"] == 0
+    finally:
+        release_first.set()
+        core_b.close()
+        core_a.close()
+        runner_b.shutdown()
+        runner_a.shutdown()
 
 
 def test_claim_skips_thousands_of_reserved_head_ids(

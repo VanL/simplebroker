@@ -285,12 +285,14 @@ def test_redis_core_internal_state_edges_are_safe(
 
 def test_fork_safety_replaces_inherited_write_lock(
     redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     core = RedisBrokerCore(redis_runner)
     inherited_lock = core._write_lock
     inherited_lock.acquire()
     try:
-        core._pid = -1
+        parent_pid = core._pid
+        monkeypatch.setattr("simplebroker_redis.core.os.getpid", lambda: parent_pid + 1)
         core._check_fork_safety()
 
         assert core._write_lock is not inherited_lock

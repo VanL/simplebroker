@@ -73,13 +73,14 @@ persisted state before reserving again. A third conflict is terminal. Redis
 transport failure after `EVAL` remains outcome-ambiguous and is translated
 without retry.
 
-One `RedisBrokerCore` serializes candidate reservation through the data `EVAL`.
-Without that local boundary, concurrent callers on the same core can reserve
-in increasing order but reach Redis out of order, spending the three-conflict
-budget on local scheduling rather than cross-core contention. The lock is
-reset after a fork so a child cannot inherit a locked parent boundary.
-Different cores and processes remain concurrent and are reconciled by the Lua
-fence and bounded retry protocol.
+All `RedisBrokerCore` instances for the same target and namespace serialize
+candidate reservation through the data `EVAL` within one process. Without that
+boundary, concurrent cores can repeatedly reserve below a competing commit and
+spend the three-conflict budget on local scheduling. The weak process registry
+does not retain dead targets, and it resets both its guard and target locks
+after a fork so a child cannot inherit a lock held by a vanished parent thread.
+Different processes remain concurrent and are reconciled by the Lua fence and
+bounded retry protocol.
 
 Conflict repair reads current high-water and the maximum stored ID, calls the
 backend's compare-and-advance operation, then refreshes the local generator.

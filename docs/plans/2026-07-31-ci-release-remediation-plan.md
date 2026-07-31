@@ -5,21 +5,23 @@ one-way publication of immutable Git tags and PyPI artifacts.
 
 ## Goal
 
-Repair every independent failure in the current `main` CI run without changing
-SimpleBroker behavior or weakening the contracts the tests protect. Land each
-root-cause fix in its own commit, restore green required workflows, then run
-`bin/release.py all` and monitor the exact release workflows through terminal
-success or a precisely reported blocker.
+Repair every independent failure in the current `main` CI run without weakening
+the contracts the tests protect. Land each root-cause fix in its own commit,
+restore green required workflows, then run `bin/release.py all` and monitor the
+exact release workflows through terminal success or a precisely reported
+blocker.
 
 ## Source Documents
 
-Source spec: None — CI portability and test-lifecycle bug fixes plus an
-explicitly requested release retry. Product behavior is not intended to
-change.
+Source spec: `[SB-ID-2]` applies to the Redis contention defect discovered by
+the first exact-SHA retry. The initial failures remain CI portability and
+test-lifecycle fixes plus an explicitly requested release retry.
 
 - `AGENTS.md` Definition of Done and release/public-package constraints
 - `docs/agent-context/runbooks/testing-patterns.md`
 - `docs/agent-context/runbooks/hardening-plans.md`
+- `docs/specs/13-message-identity.md` `[SB-ID-2]`
+- `docs/implementation/08-message-identity-and-write-visibility.md`
 - `docs/plans/2026-07-31-core-test-mypy-gate-plan.md`
 - `docs/plans/2026-07-30-ruff-suppression-index-generator-plan.md`
 - `docs/plans/2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md`
@@ -40,6 +42,19 @@ change.
      transaction, then `_assert_runner_fork_reset()` skips because `os.fork`
      is absent; pytest unwinds before rollback and `runner.close()`, so fixture
      GC reports the unclosed SQLite connection.
+- Exact-SHA Redis extension run `30654900324` exposed an independent fifth
+  cause after the four test fixes: four same-process `Queue` instances use
+  separate `RedisBrokerCore` objects, whose per-core write locks allow local
+  candidate reservations to race through the three-conflict Lua fence budget.
+  `test_concurrent_writers_get_their_own_ids` observed the legitimate third
+  stale-fence conflict and failed instead of returning each writer's committed
+  row ID.
+- The superseded run's Redis coverage job stopped after starting
+  `test_pre_check_correctness` and ignored its 180-second hard test timeout.
+  The exact predecessor/suspect pair passed 20/20 locally, and the replacement
+  run is the deciding system probe. Treat that evidence as runner suspension
+  unless the replacement reproduces it; do not invent a code fix without a
+  red-capable reproduction.
 - `tests/test_ruff_policy.py` owns root Ruff and annotation-policy contracts.
   Redis-specific annotation proof must stay in the Redis extension suite or
   use an explicit isolated source-path setup; it must not make Redis a root
@@ -64,6 +79,9 @@ Comprehension gates before editing:
    or merely skip the assertion that CI exposed?
 3. Does the platform gate run before any runner connection is constructed for
    both transitions whose proof requires a real `os.fork`?
+4. Do same-process Redis cores for one exact target and namespace serialize
+   candidate reservation through commit, while different processes retain the
+   existing Lua fence and three-conflict budget?
 
 ## Invariants and Constraints
 
@@ -80,6 +98,11 @@ Comprehension gates before editing:
 - No fork-only transition may construct a runner on a platform without
   `os.fork`. On POSIX, preserve the deliberate rule that child recovery
   abandons inherited parent connections and never closes them.
+- Same-process Redis ordinary writes for one exact target and namespace share
+  one process-local ordering lock. A forked child must replace both the
+  registry guard and target locks before use. Cross-process concurrency,
+  one-EVAL visibility, monotone resync, and the three-conflict budget remain
+  unchanged.
 - Each independent root cause gets one commit after targeted pytest, mypy when
   typing is touched, `ruff check`, and `ruff format --check` pass for the
   affected files.
@@ -112,6 +135,7 @@ reports the selected core and extension versions.
 
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
+| `[SB-ID-2]` | Initial scope expected test-only CI repairs. | The exact-SHA retry exposed a production Redis local-contention defect. Same-target cores now share process-local write ordering. | The public concurrent-writer test requires every returned ID to identify its own committed row; ordinary four-way local contention exhausted the old per-core retry boundary. | No spec change. Align implementation ownership and firing tests with the existing identity contract. |
 
 ## Tasks
 
@@ -166,6 +190,13 @@ reports the selected core and extension versions.
    - Run the full non-benchmark root suite and release preflight checks, plus
      the PostgreSQL and Redis suites required by the release driver.
    - Obtain an independent completed-work review and disposition every finding.
+   - Repair the exact-SHA Redis contention failure without widening the
+     three-conflict protocol: replace per-core write ordering with a weak
+     process registry keyed by exact target and namespace; reset the registry
+     safely after fork; add deterministic two-core serialization and fork
+     regressions; align `[SB-ID-2]` firing-test and implementation ownership
+     docs. Commit this fifth root cause independently after affected Redis and
+     shared tests, mypy, Ruff check, and Ruff format pass.
 
 6. Release and monitor.
    - Confirm clean `main == origin/main`, selected versions/tags remain free,
@@ -237,6 +268,8 @@ not begin with an unresolved blocker.
 |------|----------|---------|--------------------------|
 | 2026-07-31 | Independent agent plan review | BLOCKED | Accepted the safety finding: Task 4 must not close an inherited connection or change production fork recovery. Corrected the factual attribution with completed Windows job `91227066890`: `FORK_ACTIVE_RESET` is not recognized by the outer pre-skip, opens a transaction, and then skips inside `_assert_runner_fork_reset`, bypassing cleanup. Narrowed the fix to the test's pre-construction platform gate. Accepted the precision findings by naming the Redis owner file/commands and the Windows-legal backtick fixture. Scoped round-2 review required before implementation. |
 | 2026-07-31 | Independent agent plan review, round 2 | PASS | Verified the accepted corrections against the exact transition control flow and Windows job evidence. The pre-construction skip preserves production fork abandonment, the Redis proof has an owning extension target, and backtick reaches the cross-platform Markdown rejection path. No new defect found. |
+| 2026-07-31 | Independent completed-work review | PASS | Reviewed commits `8b6c5b7`, `0a35639`, `df4d12e`, and `85e7d6e`; all are narrow test-only changes that preserve the Redis annotation, byte-preservation, Markdown rejection, and fork-abandonment invariants. Focused tests, Ruff, targeted Redis mypy, and diff checks passed. |
+| 2026-07-31 | Independent Redis contention review | PASS | Diagnosed run `30654900324`: per-core locks do not coordinate the four same-process Redis cores, so ordinary local scheduling can consume the explicit third-conflict terminal path. Accepted the narrow shared `(target, namespace)` process-lock registry, weak retention, pre-lock fork reset, deterministic two-core proof, and unchanged cross-process Lua fence/budget. Rejected an unbounded or enlarged retry budget as broader than the active contract. |
 
 ## Out of Scope
 
