@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -33,8 +34,11 @@ from simplebroker.db import QUEUE_NAME_PATTERN
 _queue_names = st.from_regex(QUEUE_NAME_PATTERN).filter(
     lambda s: 0 < len(s) <= 32 and not s.endswith("\n")
 )
+_SURROGATE_CATEGORY: Literal["Cs"] = "Cs"
 _bodies = st.text(
-    alphabet=st.characters(exclude_characters="\x00", exclude_categories=("Cs",)),
+    alphabet=st.characters(
+        exclude_characters="\x00", exclude_categories=(_SURROGATE_CATEGORY,)
+    ),
     max_size=200,
 )
 _globs = st.text(
