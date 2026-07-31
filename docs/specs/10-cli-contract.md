@@ -1,22 +1,26 @@
 # CLI Contract
 
-Normative CLI process exit codes and byte-stream roles for the `broker` /
+Normative CLI process exit codes and stream roles for the `broker` /
 `simplebroker` entry points. Library `Queue` APIs use return values and
 exceptions instead of these exit codes (see `docs/agent-kernel.md`).
 
 ## Exit code set [SB-CLI-1]
 
-The CLI uses exactly three process exit codes:
+The CLI uses three process exit codes with the meanings below.
 
 | Code | Constant | Meaning |
 |------|----------|---------|
 | `0` | `EXIT_SUCCESS` | Success |
-| `1` | `EXIT_ERROR` | Error |
-| `2` | `EXIT_QUEUE_EMPTY` | Queue empty / nothing to do (not a crash) |
+| `1` | `EXIT_ERROR` | General error (for example database access error, invalid arguments) |
+| `2` | `EXIT_QUEUE_EMPTY` | Queue empty or no matching messages |
 
-No additional exit codes may be introduced without updating this section,
-the root README Exit Codes list, `simplebroker/_constants.py`, and the
-exit-code gates.
+Command-local uses of these codes (for example `exists` exits `0` when the
+queue has any row and `2` when it has none; a well-formed `-m` id with no
+match is silent and exits `2`; `watch` exits `0` when stopped by
+SIGINT/SIGTERM or when its stdout consumer closes the pipe) follow the same
+meanings.
+
+Invalid global-option placement is an error and exits `1`.
 
 _Implementation mapping_:
 - `simplebroker/_constants.py`
@@ -25,10 +29,15 @@ _Implementation mapping_:
 
 ## Stdout and stderr [SB-CLI-2]
 
-- **stdout** carries command data (messages, JSON records, dumps).
-- **stderr** carries diagnostics, warnings, and human progress noise.
-- On a successful data-bearing read that prints a message body (plain or
-  JSON), the message payload appears on **stdout**, not only on stderr.
+The CLI follows ordinary Unix stream roles:
+
+- **stdout** carries command output (messages, JSON records, dumps, list/stats
+  payloads, and write id output when requested).
+- **stderr** carries errors, diagnostics, and human commentary (warnings,
+  progress, watch banners).
+
+Quiet mode may suppress commentary on stderr; it does not move payload to
+stderr.
 
 _Implementation mapping_:
 - `simplebroker/commands.py`
@@ -37,34 +46,35 @@ _Implementation mapping_:
 ## Global options position [SB-CLI-3]
 
 Global options (for example `-f` / `--file`, `-d` / `--dir`) must appear
-**before** the subcommand. Placing them after the subcommand is not
-supported as an alternate grammar: the process exits `1` (`EXIT_ERROR`)
-with an argument-parse failure (for example unrecognized arguments).
+**before** the subcommand.
 
 _Implementation mapping_:
 - `simplebroker/cli.py`
 
-## Message-line JSON fields [SB-CLI-4]
+## JSON and related output shapes [SB-CLI-4]
 
-**Scope:** JSON (or NDJSON) **message lines** emitted by queue data commands
-that print message bodies with ids — specifically **`read`**, **`peek`**,
-**`move`**, and **`dump`** when those commands use `--json` (or dump's
-JSON line format). This clause does **not** apply to other `--json`
-shapes (for example `list --json` emits `{"queue": ...}` objects without
-`message`/`timestamp`).
+Public CLI `--json` (and dump NDJSON) shapes by command family:
 
-Each message-line object includes at least:
+| Commands | Shape |
+|----------|--------|
+| `read`, `peek`, `move` with `--json` | Line-delimited objects with at least `message` and `timestamp` (message id) |
+| `watch` with `--json` | Same message-line objects as they are emitted |
+| `dump` | NDJSON queue/message dump records |
+| `write` with `--json` | `{"timestamp": <id>}` for the new message (body is not echoed) |
+| `write` with `-t` / `--timestamps` | The 19-digit id on stdout |
+| `list`, `exists`, `stats`, `rename`, and similar metadata commands with `--json` | Command-specific objects (for example `list` uses `queue`; not message-line objects) |
 
-- `message` — message body string
-- `timestamp` — message id (hybrid timestamp integer)
+Timestamps are included on message-line JSON (`message` + `timestamp`). Other
+JSON shapes follow the command-specific objects above.
 
 _Implementation mapping_:
-- `simplebroker/commands.py` (message JSON emission helpers)
+- `simplebroker/commands.py`
 
 ## Related Plans
 
 - retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
   `36e2f356`; see the ledger in `docs/plans/README.md`
+- `docs/product-contract-promotion-retrospective.md` (owner dispositions)
 
 ## Verification
 

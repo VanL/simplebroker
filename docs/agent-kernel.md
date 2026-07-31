@@ -74,12 +74,13 @@ dump/load). Prefer that over private `_` modules.
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `1` | Error |
-| `2` | Empty / nothing to do (not a crash) |
+| `1` | General error (for example invalid arguments, database access) |
+| `2` | Queue empty or no matching messages |
 
 Normative: `docs/specs/10-cli-contract.md` [SB-CLI-1]–[SB-CLI-4].
 
-- **stdout = data**, stderr = diagnostics.
+- **stdout = command output**, stderr = errors, diagnostics, and commentary
+  (ordinary Unix stream roles).
 - Prefer **`--json`** for any automation (bodies may contain newlines and
   shell metacharacters).
 - **Global options before the command:**  
