@@ -1,7 +1,9 @@
 # Ruff Suppression Index Generator Plan
 
 Date: 2026-07-30
-Status: completed 2026-07-31
+Status: active — reopened 2026-07-31 for Revision R1 (symbol-keyed location
+index). The original scope completed 2026-07-31; R1 revises the derived index
+key and the one [DOM-10.1.1] sentence that grants its scope.
 Class: 5+P. The base class is 5 because the implementation revises normative
 [DOM-10.1] and [DOM-10.1.1] verification policy. The `+P` modifier applies
 because the change materially alters how future suppressions are registered,
@@ -52,6 +54,111 @@ never create a group, reason, proof, rejected alternative, or approval.
   rollback path.
 - [x] Change no lint selection, complexity threshold, product behavior, public
   package API, or approved suppression rationale.
+
+## Revision R1 — Symbol-Keyed Location Index (2026-07-31)
+
+Same class (5+P) and same hardening posture as the original scope: this
+revises normative [DOM-10.1.1] text and changes what the verification gate can
+detect.
+
+### Trigger
+
+The completed implementation keys the derived index on `path:line`. Two
+failure modes surfaced in use on the same day, during the 5.7.0 release work.
+
+**Churn.** Any edit above a directive moves its line, so the index goes stale
+and `--check` fails on changes that alter no suppression. Observed six times in
+one session, never once from a real lint failure — `ruff check .` passed every
+time. The round-1 review accepted "deterministic generated churn" as the price
+of offline auditability. In practice the churn is frequent enough that a
+reviewer learns to skim the index diff, which erodes the auditability it was
+bought for.
+
+**Blindness — the decisive one.** Line keying does not detect the failure it
+appears to guard. Simplify function A so it no longer trips a rule (one
+directive removed), then add function B with a `noqa` copied from the
+surrounding convention (one directive added). Per-group cardinality is
+unchanged, so that tripwire does not fire. The index diff shows only line
+movement, indistinguishable from the unrelated churn above. A suppression has
+migrated from a reviewed site to an unreviewed one, silently. This is the
+expected failure mode in an agent-populated codebase, where copying an
+adjacent `noqa` is the path of least resistance.
+
+Symbol keying fixes both: stable under edits that move code without changing
+suppressions, and it renders a *set of sites*, so A disappearing and B
+appearing is a visible `-`/`+` pair in review.
+
+### Rejected alternatives
+
+- **`(path, rule, count)`.** Kills churn but is strictly blinder than lines: it
+  cannot see the A→B migration at all, because the count is what stays constant.
+- **Auto-regenerating the index on every pytest run.** Considered on the ground
+  that the substantive gates — unclean `ruff check`, malformed directive,
+  unknown group, group does not approve rule, cardinality mismatch — are all
+  upstream of the index, so auto-writing would not weaken them. That reasoning
+  is correct, but it addresses only churn and leaves blindness untouched. With
+  symbol keying the remaining regeneration events are precisely the ones worth
+  seeing in review, so silent regeneration is no longer desirable.
+- **Bare function names.** Insufficient: `simplebroker/db.py` has 12 duplicate
+  bare names (`__init__` ×6, `close` ×4, `__enter__` ×4) and
+  `simplebroker/watcher.py` has 6 (`_drain_queue` ×3). Unqualified names would
+  merge distinct sites into one entry and reintroduce the blindness inside it.
+
+### Requested outcomes
+
+- [x] Key the derived location index on `path::qualified_symbol` instead of
+  `path:line`, rendering one entry per distinct site.
+- [x] Attribute a directive to its outermost enclosing `def`, qualified by
+  enclosing class names; module-level directives render `<module>`. Decorator
+  lines count as inside the function they decorate.
+- [x] Retain `line` as internal identity for raw-diagnostic reconciliation,
+  duplicate detection, and error messages. Only the rendered index changes.
+- [x] Revise the single [DOM-10.1.1] sentence granting the generated index its
+  scope.
+- [x] Preserve every existing gate: unclean-ruff, malformed directive, unknown
+  group, rule-not-approved, per-group cardinality, and the global raw
+  inventory are all unchanged.
+
+### R1 execution evidence
+
+Both halves of the claim were measured against the live repository rather than
+argued:
+
+| Scenario | `--check` exit | Meaning |
+|----------|---------------:|---------|
+| Comment inserted mid-file, `ruff check` still clean (shifts every directive below it) | 0 | Stable under line movement — the churn R1 removes |
+| A suppressed function renamed, cardinality unchanged | 1 | A suppression at a new symbol is detected — the blindness R1 closes |
+
+An earlier attempt inserted blank lines into the import block and failed;
+diagnosis showed the failure was the unclean-`ruff` gate, not index staleness,
+which is itself evidence the upstream gates still fire independently.
+
+`tests/test_ruff_suppression_index.py` fixture expectations moved from
+`probe.py:4` to `probe.py::contain_failure`, and the `PYI036` case now asserts
+`probe.py::Context.__exit__`, which pins class qualification. One assertion in
+`test_syntactically_invalid_source_is_an_unverifiable_exit_two` was changed
+from CPython's `invalid syntax` phrasing to the tool's own
+`could not read Python source`: the parse path moved from `tokenize` to `ast`,
+which raises the same `SyntaxError` type with different wording. Exit code,
+named path, no-traceback, and no-partial-write behavior are unchanged.
+
+### Proposed spec delta
+
+Exactly one sentence in [DOM-10.1.1]:
+
+- Before: "The generated location index owns only derived paths, **lines**, and
+  actual cardinalities."
+- After: "The generated location index owns only derived paths, **symbols**,
+  and actual cardinalities."
+
+### Known residual
+
+Two directives for the same rule inside the *same* qualified symbol, one
+removed and one added, remain invisible: the site set and the cardinality both
+hold constant. This is strictly narrower than the A→B case R1 closes, and it
+does not match the copied-convention failure mode. Accepted rather than paying
+for a per-symbol count, which would make the rendered table a count list again
+rather than a readable set of sites.
 
 ## Source Documents
 
@@ -574,6 +681,28 @@ Add this plan under the spec's `## Related Plans`.
 - Evaluate whether the writing-plans, testing, or adversarial-probe runbooks
   missed a reusable rule. Add a lesson only if implementation reveals a new
   durable correction.
+
+### T8. Revision R1 — symbol resolution and rendering
+
+Add an AST symbol index resolving a directive line to its outermost enclosing
+`def`, class-qualified, with `<module>` for module-level directives and
+decorator lines attributed to the function they decorate. Carry the result on
+`SourceDirective` alongside `line`. Change `_render_locations` to emit
+`path::symbol` entries, deduplicated and sorted. Leave reconciliation,
+cardinality, and the global inventory untouched.
+
+### T9. Revision R1 — promote the delta and regenerate
+
+Apply the one-sentence [DOM-10.1.1] change, regenerate the index with
+`--write`, and confirm the derived block now carries symbols. Verify the gate
+still fails for an unclean `ruff check`, an unknown group, a rule a group does
+not approve, and a cardinality change.
+
+### T10. Revision R1 — verification and closeout
+
+Full suite, `ruff check .`, `bin/check-dom15-fixtures`, and the generator's own
+`--check`. Confirm the index is stable across an edit that moves lines without
+changing suppressions — the churn case R1 exists to remove.
 
 ## Testing Plan
 

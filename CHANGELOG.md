@@ -58,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension versions.
 
 ### Documented
+- Keyed the generated Ruff suppression index on `path::qualified_symbol`
+  instead of `path:line`, and revised the `[DOM-10.1.1]` sentence granting the
+  derived index its scope. Line keying churned on any edit above a directive
+  while staying blind to a suppression migrating between functions at a
+  constant group cardinality; symbol keying inverts both. Developer tooling
+  only — no product behavior, API, or CLI change.
 - Added `[SB-DELIVERY-8]` (message and queue-name constraints): queue-name
   grammar and length, UTF-8 body requirement, the 10 MB default size limit and
   `BROKER_MAX_MESSAGE_SIZE`, and the per-backend NUL divergence (PostgreSQL

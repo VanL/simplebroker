@@ -9,6 +9,8 @@ Repository commands:
 from __future__ import annotations
 
 import argparse
+import ast
+import io
 import json
 import os
 import re
@@ -66,10 +68,18 @@ class HumanGroup:
 
 @dataclass(frozen=True)
 class SourceDirective:
-    """One approved local Ruff directive."""
+    """One approved local Ruff directive.
+
+    ``line`` stays the internal identity used to match raw diagnostics and to
+    report errors. ``symbol`` is what the derived index renders: a line number
+    moves whenever anything above it changes, so a line-keyed index churns on
+    edits that alter no suppression and stays silent when a suppression
+    migrates between functions at a constant count.
+    """
 
     path: str
     line: int
+    symbol: str
     codes: frozenset[str]
     group_id: str
 
@@ -366,6 +376,50 @@ def discover_python_files(repo_root: Path) -> tuple[Path, ...]:
     return tuple(sorted(set(files)))
 
 
+MODULE_SYMBOL = "<module>"
+
+
+def _symbol_spans(tree: ast.Module) -> list[tuple[int, int, str]]:
+    """Return (start, end, qualified_name) for every outermost function.
+
+    Nested functions are deliberately not recorded: their lines fall inside the
+    enclosing function's span, so a directive inside a closure is attributed to
+    the function a reviewer would actually look at rather than to
+    ``outer.<locals>.inner``. Names are class-qualified because bare names
+    collide -- ``db.py`` alone has six ``__init__`` and four ``close``.
+    """
+
+    spans: list[tuple[int, int, str]] = []
+
+    def walk(node: ast.AST, classes: tuple[str, ...], in_function: bool) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                walk(child, (*classes, child.name), in_function)
+            elif isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                if not in_function:
+                    # Decorators sit above `def`; a directive on one belongs to
+                    # the function it decorates.
+                    start = min(
+                        [child.lineno, *(d.lineno for d in child.decorator_list)]
+                    )
+                    end = child.end_lineno or child.lineno
+                    spans.append((start, end, ".".join((*classes, child.name))))
+                walk(child, classes, True)
+            else:
+                walk(child, classes, in_function)
+
+    walk(tree, (), False)
+    return spans
+
+
+def _resolve_symbol(spans: Sequence[tuple[int, int, str]], line: int) -> str:
+    """Attribute a line to its enclosing outermost function, else the module."""
+    for start, end, name in spans:
+        if start <= line <= end:
+            return name
+    return MODULE_SYMBOL
+
+
 def scan_source_directives(
     repo_root: Path,
     paths: Sequence[Path],
@@ -376,9 +430,11 @@ def scan_source_directives(
     for path in paths:
         try:
             with tokenize.open(path) as source:
+                text = source.read()
+                spans = _symbol_spans(ast.parse(text))
                 comments = (
                     token
-                    for token in tokenize.generate_tokens(source.readline)
+                    for token in tokenize.generate_tokens(io.StringIO(text).readline)
                     if token.type == tokenize.COMMENT
                 )
                 for comment in comments:
@@ -406,6 +462,7 @@ def scan_source_directives(
                         SourceDirective(
                             path=relative,
                             line=comment.start[0],
+                            symbol=_resolve_symbol(spans, comment.start[0]),
                             codes=frozenset(codes),
                             group_id=match.group("group"),
                         )
@@ -507,13 +564,14 @@ def _raw_text(counts: Counter[str]) -> str:
 
 
 def _render_locations(directives: Sequence[SourceDirective]) -> str:
-    by_path: dict[str, list[int]] = defaultdict(list)
-    for directive in directives:
-        by_path[directive.path].append(directive.line)
-    return "; ".join(
-        f"`{path}:{','.join(str(line) for line in sorted(lines))}`"
-        for path, lines in sorted(by_path.items())
-    )
+    """Render one entry per distinct site, keyed by qualified symbol.
+
+    Deduplicated: several directives inside one symbol render once. Counts
+    stay in the human-owned per-group cardinality column, so this reads as a
+    set of sites and a suppression moving between symbols shows as a -/+ pair.
+    """
+    sites = {(directive.path, directive.symbol) for directive in directives}
+    return "; ".join(f"`{path}::{symbol}`" for path, symbol in sorted(sites))
 
 
 def _index_directives(

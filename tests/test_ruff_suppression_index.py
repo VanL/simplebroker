@@ -71,7 +71,7 @@ Global raw-`noqa` inventory: `BLE001=1`
 <!-- BEGIN GENERATED RUFF SUPPRESSION INDEX -->
 | Group | Locations | Directives | Raw diagnostics |
 |-------|-----------|-----------:|-----------------|
-| `[RUFF-SUP-001]` | `probe.py:999` | 1 | `BLE001=1` |
+| `[RUFF-SUP-001]` | `probe.py::stale_symbol` | 1 | `BLE001=1` |
 <!-- END GENERATED RUFF SUPPRESSION INDEX -->
 
 ## Next section
@@ -114,8 +114,8 @@ def test_write_repairs_a_stale_index_and_check_then_passes(tmp_path: Path) -> No
 
     assert written.returncode == 0, written.stderr
     updated = spec.read_text(encoding="utf-8")
-    assert "`probe.py:4`" in updated
-    assert "`probe.py:999`" not in updated
+    assert "`probe.py::contain_failure`" in updated
+    assert "`probe.py::stale_symbol`" not in updated
     assert (
         updated.split("<!-- BEGIN GENERATED RUFF SUPPRESSION INDEX -->", 1)[0]
         == (original.split("<!-- BEGIN GENERATED RUFF SUPPRESSION INDEX -->", 1)[0])
@@ -314,7 +314,7 @@ Global raw-`noqa` inventory: `PYI036=3`
 <!-- BEGIN GENERATED RUFF SUPPRESSION INDEX -->
 | Group | Locations | Directives | Raw diagnostics |
 |-------|-----------|-----------:|-----------------|
-| `[RUFF-SUP-001]` | `probe.py:999` | 1 | `PYI036=1` |
+| `[RUFF-SUP-001]` | `probe.py::stale_symbol` | 1 | `PYI036=1` |
 <!-- END GENERATED RUFF SUPPRESSION INDEX -->
 """,
         encoding="utf-8",
@@ -324,7 +324,8 @@ Global raw-`noqa` inventory: `PYI036=3`
 
     assert result.returncode == 0, result.stderr
     generated = spec.read_text(encoding="utf-8")
-    assert "`probe.py:5`" in generated
+    # Class-qualified: a bare "__exit__" would collide across classes.
+    assert "`probe.py::Context.__exit__`" in generated
     assert "`PYI036=3`" in generated
 
 
@@ -400,7 +401,9 @@ def test_syntactically_invalid_source_is_an_unverifiable_exit_two(
 
     assert result.returncode == 2
     assert "probe.py" in result.stderr
-    assert "invalid syntax" in result.stderr.lower()
+    # The tool's own diagnostic, not CPython's phrasing: the SyntaxError text
+    # differs between the tokenize and ast parse paths and across versions.
+    assert "could not read python source" in result.stderr.lower()
     assert "Traceback" not in result.stderr
     assert spec.read_bytes() == original
 
@@ -419,7 +422,7 @@ def test_registry_terms_in_an_ordinary_prose_comment_are_inert(
     result = _run_tool(tmp_path, "--write")
 
     assert result.returncode == 0, result.stderr
-    assert "`probe.py:4`" in spec.read_text(encoding="utf-8")
+    assert "`probe.py::contain_failure`" in spec.read_text(encoding="utf-8")
 
 
 def test_human_group_without_a_live_directive_fails(tmp_path: Path) -> None:
