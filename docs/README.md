@@ -30,6 +30,14 @@ the concrete realization.
 **Migration states** (see registry and ownership decision): `readme-only` →
 `draft-spec` → `canonical-spec` for extracting concerns from the README.
 Promotion to `canonical-spec` requires a gate for **every** numbered clause.
+An authority migration preserves the winning source contract exactly: the
+source is both the promise floor and ceiling. Every source promise must survive
+with the same meaning, and every target promise must be entailed by source
+text. Code, tests, implementation docs, and reviews may reveal an inconsistency
+or provide firing evidence, but they may not supply new normative behavior to
+the migration. Stop and bring inconsistencies to the product owner. Contract
+changes require an exact proposed delta and explicit owner authorization.
+Approved changes land separately; then the migration rebaselines and restarts.
 Once canonical, **update the product spec in place** ([DOM-6] /
 `writing-specs.md`); do not retire or de-promote product sections the way
 plans are coalesced. Unreleased promotion mistakes: git revert. Migration

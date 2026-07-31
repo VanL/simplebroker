@@ -74,7 +74,6 @@ _Implementation mapping_:
 
 - retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
   `36e2f356`; see the ledger in `docs/plans/README.md`
-- `docs/product-contract-promotion-retrospective.md` (owner dispositions)
 
 ## Verification
 

@@ -163,6 +163,5 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- `docs/product-contract-promotion-retrospective.md` (owner dispositions)
 - retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
   `36e2f356`; see the ledger in `docs/plans/README.md`

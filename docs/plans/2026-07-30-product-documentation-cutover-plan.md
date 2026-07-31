@@ -3,19 +3,23 @@
 Status: active — Phase 1 was promoted and verified at `249df9cb`. Phase 2 is
 split into Phase 2A (identity/allocation) and Phase 2B (timestamp-range
 selection/checkpoints). Phase 2A was promoted and verified at `090c689e`;
-its completed-work review and frozen post-promotion navigation probe pass.
-Phase 2B readiness research is blocked on two runtime contract discrepancies
-and three owner decisions recorded below. No Phase 2B promotion is authorized.
+its mechanical completed-work review and frozen post-promotion navigation
+probe pass, but its promise equivalence is now under retrospective audit.
+Further promotion is paused for a source-contract equivalence audit and the
+reserved-zero/Redis-write precursor. Phase 2B implementation findings are
+inconsistencies for product-owner disposition, not authorization to change a
+promise inside this cutover. No Phase 2B promotion is authorized.
 
-Class: 5 — this program promotes normative product contracts from the root
-README into canonical `[SB-*]` specifications. It changes contract authority
-and normative spec text without changing intended runtime behavior.
+Class: 5+P — this program relocates normative product contracts from the root
+README into canonical `[SB-*]` specifications without changing promises. The
+2026-07-30 process correction adds a durable equivalence gate for future
+authority migrations.
 
 Hardening: required — each promotion crosses the public documentation contract
 and depends on atomic rollout ordering. There is no storage migration,
 runtime-data change, or irreversible product action.
 
-Plan type: multi-phase spec-authoring cutover. One active plan owns the
+Plan type: multi-phase authority-relocation cutover. One active plan owns the
 program. Each phase is an independently reviewable, independently revertible
 spec-promotion slice. Phase 2 and later are not implementation-ready until
 their exact proposed deltas have been added to this plan and reviewed.
@@ -41,6 +45,13 @@ layered source-of-truth doctrine:
 
 This plan changes documentation ownership and form. It does not redesign
 SimpleBroker behavior.
+
+The winning product contract at each phase baseline is both the floor and the
+ceiling. Code, tests, implementation docs, and reviews may reveal a
+contradiction or suggest a future promise, but they cannot supply normative
+text to this migration. Any inconsistency stops the affected slice and is
+brought to the product owner. Any proposed contract change requires explicit
+owner disposition and separately scoped authority.
 
 ## Requested Outcomes
 
@@ -237,7 +248,8 @@ At final cutover:
 
 ## Invariants and Constraints
 
-1. Runtime behavior does not change during authority migration.
+1. Runtime behavior and public promises do not change during authority
+   migration.
 2. Each phase is atomic: spec, registry state, README pointer/reduction,
    kernel, `llms.txt`, indexes, inventory, implementation mapping, and gates
    land together.
@@ -250,14 +262,22 @@ At final cutover:
 7. Historical plans remain immutable and source-pinned.
 8. No runtime dependency, docs dependency, CI service, hosted-docs stack, or
    semantic analysis lane is added.
-9. No new product behavior, public flag, API, backend handshake, or error
-   semantics is invented while extracting prose.
-10. Existing backend differences are stated narrowly and proved per released
-    backend; they are not normalized by documentation.
-11. Shared contract files remain real in tests. Do not mock the broker,
+9. The phase-baseline winning contract is the promise floor and ceiling. Every
+   source promise survives with the same meaning, and every target promise is
+   entailed by source text.
+10. Code and tests may block a migration or bind existing promises to firing
+    evidence. Implementation-only behavior is never promoted as a new promise.
+11. No product behavior, public flag, API, accepted input, backend handshake,
+    error semantic, compatibility rule, deprecation, or implementation detail
+    is added, removed, broadened, narrowed, or corrected while extracting
+    prose.
+12. Existing backend differences are neither normalized nor newly promised by
+    documentation. A source-contract/backend inconsistency is reported to the
+    product owner.
+13. Shared contract files remain real in tests. Do not mock the broker,
     storage transaction, backend selector, or parser when those boundaries are
     the subject of a clause.
-12. Writes to shared surfaces are serialized. Research and independent review
+14. Writes to shared surfaces are serialized. Research and independent review
     may run in parallel; edits to README, registry, kernel, indexes, and this
     plan use a WIP limit of one phase.
 
@@ -270,6 +290,8 @@ This plan is intentionally active across several landings.
 Before Phase 2 or later begins, amend this plan with:
 
 - the phase baseline SHA;
+- a two-way promise-equivalence matrix mapping every source promise to target
+  text and every target normative statement back to entailing source text;
 - exact proposed spec text;
 - the exact registry row delta;
 - the exact README replacement or reduction;
@@ -341,8 +363,11 @@ separate reviewed delta.
 
 Evaluation output is evidence for owner judgment, not product authority. It
 must not become exact contract text or a program-theory revision by
-incorporation. Exact behavior discovered during evaluation belongs in the
-reviewed phase delta or a separate behavior plan.
+incorporation. Behavior discovered during evaluation but absent from the
+winning source contract is an observation only. If it contradicts the source
+contract or seems worth promising, stop the affected migration slice and bring
+the exact issue to the product owner. It may enter a separately authorized
+contract-change plan only after explicit disposition.
 
 The full three-pass evaluation is mandatory for Phase 2 and for later phases
 with hybrid authority, plausible owner splits, or high restatement risk. A
@@ -735,8 +760,9 @@ paths satisfy the existing behavior, and the authority graph has one owner.
 
 Stop if the exact spec text overclaims any backend, if a current test encodes a
 different rule, or if promotion would require runtime code changes. Record the
-discrepancy as a deviation and decide whether the spec text or a separate
-behavior-change plan owns it.
+discrepancy and bring it to the product owner. Do not revise the source promise,
+canonize the implementation behavior, or open a behavior-change path inside
+this authority-relocation cutover.
 
 ## Phase 2 — Message Identity, Timestamp Range Selection, and Checkpoints
 
@@ -1319,44 +1345,75 @@ Inference:
   lower bound, not physical loss. An unfiltered or deliberately lowered scan
   can still select a pending row.
 
-Required product-owner decision:
+Disposition under the authority-relocation rule:
 
-1. **Runtime invariant. Recommended: authorize a code-bearing precursor
-   plan.** Preserve `None` separately from explicit watcher bound `0`; make
-   Redis generated-ID allocation/high-water fencing and row insertion one
-   atomic server-side operation; and add a deterministic two-client Redis
-   visibility probe. The alternative is to characterize the released
-   exceptions: state that watcher zero is an unfiltered sentinel and that
-   generated-write checkpoint completeness is not promised for the Redis
-   backend under concurrent writers. That avoids a runtime change but weakens
-   the documented resumability model and preserves an inconsistent public
-   bound.
-2. **Granular exact-plus-range behavior. Recommended: reject the combination
-   consistently.** The compatibility alternative is to document the current
-   low-level rule that an exact selector takes precedence over range bounds.
-   Either choice needs public-contract text and firing tests; rejection may be
-   a breaking change and therefore belongs in the code-bearing precursor.
-3. **CLI bound-grammar owner. Recommended: add `[SB-CLI-5]`.** The alternative
-   is a separately registered `readme-only` concern. The selection contract
-   may route to that owner but must not silently absorb or orphan the parsing
-   grammar.
+1. **Runtime invariant: decided.** The product owner chose a code-bearing
+   precursor with a different zero boundary than the initial recommendation:
+   reserve ID `0` at exact-insert admission while retaining zero decoding for
+   legacy recovery; keep `after_timestamp=0` as the conforming-data origin;
+   and make ordinary Redis `write()` allocate/publish through one fenced Lua
+   operation. The exact plan, including the legacy-zero dump incompatibility,
+   monotone-resync repair, deterministic two-client probe, and patterned-
+   broadcast exclusion, is
+   `docs/plans/2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md`.
+2. **Granular exact-plus-range behavior: unresolved inconsistency, not migration
+   scope.** High-level and CLI surfaces reject the combination; granular
+   generator surfaces currently give exact selection precedence over the
+   supplied range. The README does not choose the granular behavior. This
+   cutover must neither reject the combination nor canonize the implementation
+   precedence. If Phase 2B cannot be relocated without choosing, stop and bring
+   the exact issue to the product owner. No exact-plus-range code precursor is
+   authorized by this plan.
+3. **CLI bound-grammar owner: decided only as an authority split.** Add
+   `[SB-CLI-5]` to the existing canonical CLI spec and expand the registry
+   concern to cover the non-exact `--after` / `--before` forms already promised
+   by the README. Exact `-m` normalization remains owned by `[SB-ID-4]`.
+   `[SB-SELECT-*]` may own only the integer predicates already promised after
+   parsing.
 
-After all three choices, promote a five-clause `[SB-SELECT-*]` contract
-covering open predicates, surface matrix, checkpoint meaning, watch modes, and
-the general late-older-ID consequence.
+   The README's current documented forms are the complete migration source:
+   its ISO examples, date-only midnight-UTC meaning, Unix seconds, Unix
+   milliseconds, Unix nanoseconds/native hybrid examples, bare-value
+   heuristics statement, and explicit-suffix recommendation. Parser
+   thresholds, compact dates, Unicode digits, fractional extensions,
+   whitespace handling, pre-epoch clamping, bit clearing, and other
+   implementation-only behavior are not migration content. Discovering them
+   does not authorize promising, deprecating, or rejecting them.
 
-The recommended precursor is a risky public-contract and Redis atomicity
-change. It requires its own dated class-3+ plan and index row, the hardening
-checklist, released-backend probes, and independent review. Do not create or
-implement it under this docs-only cutover without explicit owner
-authorization.
+Required execution order:
 
-Phase 2B remains blocked until all three choices are recorded and any
-authorized precursor is completed. Afterward, its exact readiness amendment
-must name the chosen behavior, exact spec body, registry delta, README/kernel
-reductions, `[SB-ID-*]` and `[SB-DELIVERY-*]` directional boundaries,
-program-theory route, implementation map, row-local firing matrix, rollback,
-and outside intervention/adversarial verdicts.
+1. complete the retrospective promise-equivalence audit of every already
+   promoted family and obtain product-owner disposition for each contract
+   change;
+2. draft and independently review the narrow `[SB-CLI-5]` README-only
+   authority relocation, including the two-way equivalence matrix;
+3. rebaseline shared files after the separately authorized
+   reserved-zero/Redis-write work is stable; and
+4. draft `[SB-SELECT-*]` only from promises already normative in the README.
+   Stop and report any issue that cannot be relocated without choosing or
+   changing behavior.
+
+For each retrospective finding, record the exact contract delta and explicit
+owner disposition. Approval keeps the separately identified contract change.
+Rejection requires either restoring the pre-promotion promise or executing a
+later separately authorized contract correction; it may not be resolved by
+editing the relocation rationale. Land any approved correction separately,
+then rebaseline. No further authority relocation begins until the winning
+contract is coherent and every audit finding is dispositioned.
+
+The authorized reserved-zero/Redis-write precursor is a risky public-contract
+and Redis atomicity change. It has its own dated class-5 plan and index row;
+that plan, not this docs-only cutover, owns its hardening, released-backend
+probes, spec revision, and independent reviews.
+
+The final `[SB-SELECT-*]` promotion remains blocked on the retrospective audit,
+the shared-file rebaseline, and a reviewed README-only exact delta.
+Drafting `[SB-CLI-5]` begins only after execution-order item 1 is complete.
+The selection readiness amendment
+must include its exact spec body, registry delta, README/kernel reductions,
+directional ownership boundaries, program-theory route, implementation map,
+row-local firing matrix, rollback, outside verdicts, and two-way
+promise-equivalence matrix. It must not choose exact-plus-range behavior.
 
 ## Phase 3 — Persistence I/O and Claimed Rows
 
@@ -1577,6 +1634,54 @@ tooling decision when the discrepancy crosses this plan's boundary.
 | Phase 2A / exact-ID extraction | Keep operational warnings while moving exact-ID consequences to `[SB-ID-4]`, and bind every enumerable branch | The first candidate dropped the far-future high-water warning, retained a false fresh-`last_ts` example, and did not bind normalization-before-deduplication, empty input, no-backward high-water, or headroom | The prose reduction removed a safety paragraph while preserving its pointer, and the initial firing matrix grouped distinct branches too broadly | Restored the warning in the canonical clause and README view, corrected `0`, added shared branch probes including the induced allocation stall, and passed focused review on all released backends |
 | Phase 2B / readiness | Promote current strict-range and checkpoint prose without runtime changes | Explicit watcher bound `0` is treated as no bound; Redis persists generated high-water before a separate row-insert script even though the changelog says Redis visibility was already atomic | A canonical “strict bound” and “resumable checkpoint” contract would overclaim two released behaviors; the plan's stop condition for behavior correction fired | Block promotion. Require a product-owner choice between a code-bearing precursor that restores the intended invariants and a weaker contract that explicitly characterizes the exceptions |
 
+## Retrospective Promise-Equivalence Audit
+
+Status: **closed 2026-07-31.** Owner dispositions for the 23 findings were
+applied as in-place rewrites of `docs/specs/10`–`13` (commits starting
+`2aa6057` … `0baf090`), with residual kernel/README alignment. Guiding
+principles: document existing public promises; avoid non-effect laundry lists
+and unnecessary precision; prefer natural README meaning unless an explicit
+correction was authorized. The temporary decision-record file was removed
+after it did its work. Historical finding IDs remain below as audit trail;
+they are not pending disposition.
+
+| ID | Baseline → target | Added, removed, narrowed, broadened, or corrected promise | Disposition |
+|----|-------------------|-----------------------------------------------------------|-------------|
+| CLI-C1 | `README.md@8b2a20af` → `[SB-CLI-1]@fdd9fafa` | The listed exit codes became an exactly-three frozen set, and code `2` broadened from queue-empty/no-match to “nothing to do.” | closed — applied in specs 10–13 rewrite |
+| CLI-C2 | `README.md@8b2a20af` → `[SB-CLI-2]@fdd9fafa` | Command-specific examples became universal stdout-data and stderr-diagnostic roles. | closed — applied in specs 10–13 rewrite |
+| CLI-C3 | `README.md@8b2a20af` → `[SB-CLI-3]@fdd9fafa` | The global-options placement rule gained a specific exit-`1` argument-parse failure. | closed — applied in specs 10–13 rewrite |
+| CLI-C4 | `README.md@8b2a20af` → CLI scope / `[SB-CLI-4]@fdd9fafa` | A blanket Queue-return/exception distinction and a new exhaustive-looking JSON scope/schema were added; `dump` and `list` gained specifics while existing write/watch JSON promises became ambiguous or orphaned. | closed — applied in specs 10–13 rewrite |
+| BCAST-C1 | `README.md@b01bc3c` → `[SB-BCAST-4]@249df9c` | Unconditional cross-backend atomicity and general SQL rollback were weakened to named SQL failures and no Redis rollback promise after unexpected Lua runtime error. | closed — applied in specs 10–13 rewrite |
+| BCAST-C2 | `README.md@b01bc3c` → `[SB-BCAST-4]@249df9c` | Redis pattern-snapshot race outcomes and patternless/exact atomic selection timing became canonical guarantees. | closed — applied in specs 10–13 rewrite |
+| BCAST-C3 | `README.md@b01bc3c` → `[SB-BCAST-4]@249df9c` | Empty and all-missing exact requests gained no-change guarantees for timestamp, registry, wakeup, and maintenance state. | closed — applied in specs 10–13 rewrite |
+| BCAST-C4 | `README.md@b01bc3c` → `[SB-BCAST-2]@249df9c` | String-like and selector-conflict rejection gained exact exception types/messages; all validation failures gained a before-mutation guarantee. | closed — applied in specs 10–13 rewrite |
+| BCAST-C5 | `README.md@b01bc3c` → README / spec at `249df9c` | Ordinary-pending semantics were generalized to every broadcast mode, and new caller guidance and zero-target outcome specificity were added; deletion/recreation wording also became less exact. | closed — applied in specs 10–13 rewrite |
+| ID-C1 | `README.md@249df9c` → `[SB-ID-1]@090c689e` | The documented 52-bit microsecond encoding was replaced by nanosecond magnitude with 4,096-nanosecond granularity and an explicit “not microseconds” correction. | closed — applied in specs 10–13 rewrite |
+| ID-C2 | `README.md@249df9c` → `[SB-ID-1]@090c689e` | Broad chronological sorting, creation-time meaning, and collision-free uniqueness were narrowed for exact insertion, iteration, and coexistence. | closed — applied in specs 10–13 rewrite |
+| ID-C3 | `README.md@249df9c` → `[SB-ID-4]@090c689e` | Exact strings gained whitespace trimming and Unicode decimal digits; integer range and `ValueError` behavior were generalized to every exact-ID operation, including explicit integer `0`. | closed — applied in specs 10–13 rewrite |
+| ID-C4 | `README.md@249df9c` → `[SB-ID-2]` / `[SB-ID-3]@090c689e` | Broker-handle `write()`, cached-high-water, and refresh methods gained public return and state semantics absent from the source contract. | closed — applied in specs 10–13 rewrite |
+| ID-C5 | `README.md@249df9c` → README / `[SB-ID-3]@090c689e` | Fresh `Queue.last_ts` changed from `None` to `0`; the explicit automatic cache update after `generate_timestamp()` was dropped. | closed — applied in specs 10–13 rewrite |
+| ID-C6 | `README.md@249df9c` → `[SB-ID-4]@090c689e` | Empty insertion became a no-op; snapshot, rollback, high-water, and Redis single-operation guarantees were strengthened; the promise that inserted rows start pending was dropped. | closed — applied in specs 10–13 rewrite |
+| ID-C7 | `README.md@249df9c` → `[SB-ID-4]@090c689e` | Far-future insertion changed from immediately stalling later writes to consuming remaining counter values before failure. | closed — applied in specs 10–13 rewrite |
+| ID-C8 | `README.md@249df9c` → identity boundary / `[SB-ID-1]`, `[SB-ID-2]`, `[SB-ID-5]@090c689e` | Per-database monotonicity was generalized to resolved targets; a cross-backend visibility disclaimer and move-result surface specifics were added. | closed — applied in specs 10–13 rewrite |
+| DELIVERY-C1 | `README.md@ddb18f31` → README / `[SB-DELIVERY-4]@30e14897` | Peek-then-delete changed from a generally safe critical-data pattern to single-consumer/idempotent-only guidance; a live offset-pagination mutation prohibition was added. | closed — applied in specs 10–13 rewrite |
+| DELIVERY-C2 | `README.md@ddb18f31` → `[SB-DELIVERY-1]@30e14897` | Watch-specific pre-handler loss semantics expanded to all default read/claim APIs and output failure; “exactly once” was narrowed to committed claim rather than application processing. | closed — applied in specs 10–13 rewrite |
+| DELIVERY-C3 | `README.md@ddb18f31` → `[SB-DELIVERY-2]` / `[SB-DELIVERY-3]@30e14897` | Same-target enforcement, cross-target rejection, worker-private inflight policy, and move-handler failure/no-restore semantics became promises. | closed — applied in specs 10–13 rewrite |
+| DELIVERY-C4 | `README.md@ddb18f31` → `[SB-DELIVERY-5]@30e14897` | SQL teardown, Redis stale-batch recovery, transaction/reservation mechanisms, delayed retry, and already-yielded redelivery specifics were added. | closed — applied in specs 10–13 rewrite |
+| DELIVERY-C5 | `README.md@ddb18f31` → `[SB-DELIVERY-6]@30e14897` | Universal foreign-finalization warning/poisoning was narrowed to SQL and best effort; Redis was exempted, while source sidecar and Queue-close details were not preserved. | closed — applied in specs 10–13 rewrite |
+| DELIVERY-C6 | `README.md@ddb18f31` → delivery scope at `30e14897` | The risk table added duplicate-side-effect claims; the README retained conflicting peek safety language; the spec excludes checkpoint semantics while specifying them, and `stream_messages()` delivery ownership became ambiguous. | closed — applied in specs 10–13 rewrite |
+
+The audit found faithful relocation as well: the core selector models in
+`[SB-BCAST-1]`, alias exclusion, CLI exact broadcast, backend API v5,
+committed `Queue.write()` identity, generator-without-row behavior,
+broker-global `last_ts`, move identity preservation, materialized
+`at_least_once` behavior, and closed-pipe delivery effects.
+
+Required action: the product owner approves or rejects each ID, or explicitly
+approves a named family bundle. Rejected changes follow the restoration or
+separate-contract-correction path above. No pending row is inferred approved
+from tests, implementation truth, prior review, or silence.
+
 ## Revision Log
 
 Append-only after initial review. Approval attaches to the reviewed diff.
@@ -1600,6 +1705,12 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Phase 2A closeout | Recorded promotion `090c689e`, detached-worktree verification, completed-work PASS, and the repeated frozen post-promotion probe | Per-slice committed-state and learning-value gates | passed |
 | 2026-07-30 | Phase 2B readiness stop | Recorded watcher-zero inconsistency, Redis allocation/publication visibility gap and changelog contradiction, late exact-insert hazard, non-portable result order, granular exact/range precedence, and unowned CLI parsing grammar | Two independent implementation/test sweeps reproduced behavior conditions that a docs-only canonical contract would overclaim | needs revision |
 | 2026-07-30 | Phase 2B readiness-stop follow-up | Split the runtime, granular-selector, and CLI-owner choices; required all three before exact delta; narrowed the weaker runtime alternative to the observed Redis backend | Independent review found that the first fallback could leave two owner decisions unresolved and generalized Redis evidence to all direct backends | focused recheck passed |
+| 2026-07-30 | Phase 2B runtime-precursor decision | Linked the reserved-zero/Redis-write class-5 plan; recorded zero admission instead of watcher-state expansion, ordinary-write-only Redis atomicity, legacy recovery/load boundary, and patterned-broadcast exclusion | Product-owner discussion resolved the runtime-invariant choice while preserving the two separate selector/CLI owner decisions | precursor plan review pending |
+| 2026-07-30 | Phase 2B runtime-precursor review | Recorded that the class-5 precursor's outside review and focused rechecks passed, including deterministic old/new concurrency seams, 64-bit-safe Lua comparison, cross-backend visibility evidence, and manifest wiring | The precursor now meets the review gate; Phase 2B remains blocked on its implementation plus the granular-selector and CLI-owner choices | passed |
+| 2026-07-30 | Phase 2B remaining-decision amendment | Made the exact-plus-range evidence and compatibility alternative concrete; proposed a separate class-4 rejection precursor; assigned only non-exact string-bound parsing to `[SB-CLI-5]`; enumerated missing parser branches; required the `[SB-ID-*]` boundary edit; and made the CLI docs vertical independent of both runtime precursors | Outside program-theory review endorsed the causal parse → select → conditional-checkpoint split and found six bounded boundary, gating, classification, and compatibility-wording corrections | passed with all findings dispositioned |
+| 2026-07-30 | Program / promise-preservation correction | Reclassified the cutover as authority relocation; made the phase-baseline winning contract both floor and ceiling; required two-way promise equivalence; prohibited implementation-derived promises; withdrew the docs-led exact-plus-range change and broad parser canonization; started a retrospective audit of all promoted families | Product owner identified that the prior process let implementation evidence and review findings expand migration scope; contract changes require explicit owner disposition and separate authority | process delta implemented; independent review and owner contract dispositions pending |
+| 2026-07-30 | Program / promise-preservation review follow-up | Required separate landing and rebaseline for approved contract changes; added a completion gate, rejected-change remediation, decision-hierarchy stop rule, auditable owner authorization, current execution state, and durable lesson | Independent process review found eight paths that could still mix or complete relocation without proven equivalence; focused recheck found one overbroad exclusion of normative source examples | final focused recheck passed; contract dispositions pending |
+| 2026-07-30 | Program / retrospective decision record | Temporary disposition record for 23 promotion findings; applied as specs 10–13 rewrites; record removed 2026-07-31 after work complete | Needed owner disposition without self-executing approval | rewrites landed; record deleted |
 
 ## Review Log
 
@@ -1623,14 +1734,20 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Independent completed-work reviewer, focused follow-up | The three accepted completed-work corrections and bounded plan amendment | PASS | Verified warning accuracy, row-local bindings, shared test coverage, README result, and plan alignment; no remaining finding. |
 | 2026-07-30 | Independent Phase 2B readiness-stop reviewer | Direct observations, inference boundary, stop condition, owner alternatives, status/index/log alignment, and authorization boundary | NEEDS REVISION: one P1, one P2 | Accepted both findings: make the three decisions independently mandatory and narrow the fallback checkpoint claim from all direct backends to the observed Redis backend. Focused recheck pending. |
 | 2026-07-30 | Independent Phase 2B readiness-stop reviewer, focused recheck | The two accepted readiness-stop corrections and their append-only records | PASS | Verified all three owner decisions are independently mandatory, the weaker concurrency exception is limited to Redis, and the first review is recorded accurately. |
+| 2026-07-30 | Outside program-theory reviewer (Grok), Phase 2B remaining decisions | Granular exact-plus-range policy, CLI grammar ownership, parser coverage, independent slice boundary, and causal parse/selection/checkpoint model | no blocker; two P2, three P3/nit, one owner choice | Accepted `F1`: bounded `[SB-CLI-5]` to non-exact string parsing and retained exact mode under `[SB-ID-4]`. Accepted `F2`: required the identity-boundary reroute in the CLI vertical. Accepted `F3`: separated the CLI vertical from both runtime gates and named both selection precursors. Accepted `F4`: dropped the “closed” overclaim and enumerated threshold, bit-clearing, date-only, and mode branches for exact drafting. Accepted `F5`: classified the behavior-only rejection precursor as class 4; the later normative selection promotion remains class 5. For `F6`, chose truthful but non-endorsing compatibility language that preserves a later separately planned restriction path. |
+| 2026-07-30 | Independent promise-equivalence auditors | CLI, Delivery, Broadcast, and Message Identity promotions compared only with their immediately preceding winning README contracts | FAIL: all four families changed promises | Recorded every material change under stable audit IDs; no contract edit or approval inferred. Owner disposition is required before further relocation. |
+| 2026-07-30 | Independent process reviewer | Promise-preservation changes in ownership docs, runbooks, decision hierarchy, cutover plan, index, and lesson | NEEDS REVISION: eight initial findings; one focused-recheck regression | Accepted every finding: separate landing/rebaseline, ordering, completion proof, rejection path, status correction, higher-order stop rule, authorization evidence, durable lesson, and normative-source-example boundary. |
+| 2026-07-30 | Independent process reviewer, final focused recheck | Sole remaining normative-source-example boundary | PASS | Verified winning-source examples remain valid contract evidence while non-authoritative implementation examples cannot supply promises; no regression found. |
+| 2026-07-30 | Independent retrospective source auditors, focused rechecks | Every CLI, Delivery, Broadcast, and Message Identity finding against its cited historical README, promoted spec, and same-commit README residual | PASS | Corrected overstatements, separated mechanism from outcome, restored omitted residual contradictions, and made the partial ID-C3 zero disposition exact. No source-fidelity blocker remains. |
+| 2026-07-30 | Independent fresh reader | Retrospective record as a standalone owner-decision instrument, with no prior audit context | PASS | Verified that recommendations cannot authorize changes, authority remains with the historical README until separate landing, the disposition table carries exact authorization and landing evidence, and each of the 23 findings is decision-usable. |
 
 ## Execution Log
 
 | Phase | Baseline | Promotion identifier | Verification | Completed-work review |
 |-------|----------|----------------------|--------------|-----------------------|
 | 1 — Broadcast | `b01bc3cb75800880408595a95c73041a2a417bd4` | `249df9cba691d4593136a1fd6b0476b882487055` | Detached commit: DOM-15, 99-test root Phase 1, PostgreSQL, Redis, doc-path, and diff checks pass | PASS after two structural-test corrections |
-| 2A — Identity/allocation | `249df9cba691d4593136a1fd6b0476b882487055` | `090c689e7a951ef07cc481424fe8729fc6be7ed0` | Detached commit: DOM-15, 288-test root slice, PostgreSQL shared slice, Redis shared slice, doc-path, diff, Ruff, and frozen navigation gates pass; both extensions have one expected unsupported data-version skip | PASS after three accepted completed-work corrections |
-| 2B — Timestamp range selection/checkpoints | `81ab683e35157fd2d409c440963877f7fd29ccd3` | blocked | Blind doc reconstruction complete; two evidence sweeps found watcher-zero and Redis visibility discrepancies plus three owner decisions | Readiness stop record passed independent review |
+| 2A — Identity/allocation | `249df9cba691d4593136a1fd6b0476b882487055` | `090c689e7a951ef07cc481424fe8729fc6be7ed0` | Mechanical gates passed at the detached commit; retrospective equivalence audit found contract changes awaiting owner disposition | Mechanical completed-work review passed; promise-equivalence validity pending |
+| 2B — Timestamp range selection/checkpoints | `81ab683e35157fd2d409c440963877f7fd29ccd3` | blocked | Reserved-zero/Redis work is separately authorized; granular exact-plus-range is an unresolved inconsistency; CLI ownership is decided only as a README-equivalent split | Prior reviews are historical evidence, not authorization for contract changes |
 | 3 — Persistence I/O | gated | pending | pending | pending |
 | 4 — Embedding | blocked by active runner plan | pending | pending | pending |
 | 5 — Residual operations | gated | pending | pending | pending |

@@ -133,4 +133,3 @@ message id. It is the same message identity with the queue binding updated.
 
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
 - `docs/plans/2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md`
-- `docs/product-contract-promotion-retrospective.md` (owner dispositions)

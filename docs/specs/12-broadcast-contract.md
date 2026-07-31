@@ -122,7 +122,6 @@ agent-kernel, specs-index, and `llms.txt` pointers.
 ## Related Plans
 
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
-- `docs/product-contract-promotion-retrospective.md` (owner dispositions)
 - retired: 2026-07-28-explicit-broadcast-targets-plan — source `36e2f356`;
   see `docs/plans/README.md`
 - retired: 2026-07-28-broadcast-create-missing-plan — source `36e2f356`;
