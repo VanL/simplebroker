@@ -1226,6 +1226,14 @@ def test_workflow_wait_passes_token_only_through_redacted_environment(
 
     assert len(calls) == 1
     command, kwargs = calls[0]
+    assert command[:6] == (
+        "uv",
+        "run",
+        "--project",
+        str(release.PROJECT_ROOT),
+        "--locked",
+        "python",
+    )
     assert ".github/scripts/require_green_workflows.py" in command
     assert command.count("--workflow") == 2
     assert "Test" in command

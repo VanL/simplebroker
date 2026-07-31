@@ -2014,7 +2014,12 @@ def wait_for_release_workflows(
                 "Authenticated GitHub access is required to wait for release CI"
             )
     command: list[str] = [
-        sys.executable,
+        "uv",
+        "run",
+        "--project",
+        str(PROJECT_ROOT),
+        "--locked",
+        "python",
         ".github/scripts/require_green_workflows.py",
         "--repo",
         _github_repo_slug(),

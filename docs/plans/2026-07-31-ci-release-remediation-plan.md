@@ -58,6 +58,13 @@ test-lifecycle fixes plus an explicitly requested release retry.
   does not rule out missed watcher activity. Retain the exact-message proof
   while giving this bulk phase a larger bounded budget and reporting a
   best-effort, post-deadline broker queue snapshot on any future timeout.
+- The first `bin/release.py all` attempt passed every local gate, then stopped
+  before tag creation because direct shebang execution used Apple's system
+  Python and `wait_for_release_workflows()` reused `sys.executable` for the
+  exact-SHA poller. That interpreter cannot parse the poller's `match`
+  statement. The package requires Python 3.11+, so release subprocesses that
+  execute repository Python must use the locked project interpreter rather
+  than inherit an unsupported launcher interpreter.
 - The superseded run's Redis coverage job stopped after starting
   `test_pre_check_correctness` and ignored its 180-second hard test timeout.
   The exact predecessor/suspect pair passed 20/20 locally, and the replacement
@@ -122,6 +129,9 @@ Comprehension gates before editing:
   exactly match that fix.
 - Never move, delete, or reuse a remote release tag. Stop if any selected tag
   exists at a different SHA or any selected version is already published.
+- The exact-SHA workflow poller runs through `uv` with the root lock and
+  project Python constraint. It must not inherit an unsupported system Python,
+  and its GitHub token remains environment-only and redacted from logs.
 - No new dependency, no broad ignore, no platform-wide skip, and no unrelated
   cleanup.
 
@@ -148,6 +158,7 @@ reports the selected core and extension versions.
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
 | `[SB-ID-2]` | Initial scope expected test-only CI repairs. | The exact-SHA retry exposed a production Redis local-contention defect. Same-target cores now share process-local write ordering. | The public concurrent-writer test requires every returned ID to identify its own committed row; ordinary four-way local contention exhausted the old per-core retry boundary. | No spec change. Align implementation ownership and firing tests with the existing identity contract. |
+| Release workflow gate | The release helper would reuse its own interpreter for the exact-SHA poller. | Direct execution inherited Apple system Python 3.9.6, below the project floor, so the poller failed to parse before tag creation. The poller now runs with the locked project interpreter. | Repository Python subprocesses must honor `requires-python >=3.11`; launcher inheritance was an undocumented and unsafe coupling. | No product-spec change. Keep the release runbook and helper tests aligned with the managed interpreter boundary. |
 
 ## Tasks
 
@@ -229,8 +240,14 @@ reports the selected core and extension versions.
    - Confirm clean `main == origin/main`, selected versions/tags remain free,
      and exact-SHA required CI is green.
    - Run `bin/release.py all` once. Do not retry blindly after a nonzero result;
-     first inspect local commits, remote tags, PyPI, GitHub releases, and exact
-     workflow state.
+   first inspect local commits, remote tags, PyPI, GitHub releases, and exact
+   workflow state.
+   - The first attempt stopped before tags because the workflow poller inherited
+     Apple system Python. Verify all three tags, GitHub releases, and PyPI
+     versions remain absent; then make the poller use
+     `uv run --project <root> --locked python` in a separate root-cause commit.
+     Run the affected release-script module, workflow-poller module, mypy,
+     Ruff check, and Ruff format before pushing and retrying.
    - Poll release workflows with `gh` at a bounded interval until all selected
      packages succeed or a concrete failure requires a new remediation cycle.
 
@@ -299,6 +316,7 @@ not begin with an unresolved blocker.
 | 2026-07-31 | Independent Redis contention review | PASS | Diagnosed run `30654900324`: per-core locks do not coordinate the four same-process Redis cores, so ordinary local scheduling can consume the explicit third-conflict terminal path. Accepted the narrow shared `(target, namespace)` process-lock registry, weak retention, pre-lock fork reset, deterministic two-core proof, and unchanged cross-process Lua fence/budget. Rejected an unbounded or enlarged retry budget as broader than the active contract. |
 | 2026-07-31 | Independent Windows watcher review | BLOCKED | Accepted the diagnostic finding: the first draft called `BrokerDB.get_queue_stat()` after the test deadline, which could wait through the normal SQLite retry budget or replace the timeout assertion. Accepted the evidence finding: one contiguous tail is consistent with lag but does not rule out missed activity. Replaced the diagnostic with a read-only 100 ms SQLite snapshot that renders errors, added firing tests, and softened the causal claim. |
 | 2026-07-31 | Independent Windows watcher review, round 2 | PASS | Verified that the bounded best-effort diagnostic cannot replace the timeout assertion, the plan labels its snapshot as racy evidence, and the larger bulk deadline preserves the exact 100-message and no-duplicate assertions. No remaining blocker. |
+| 2026-07-31 | Independent release-interpreter review | PASS | Reproduced the boundary exactly: Apple Python 3.9.6 fails to parse the workflow poller while the locked project Python 3.14.4 succeeds. Verified the `uv run --project <root> --locked python` command preserves exact-SHA ordering and token redaction, and independently confirmed all target tags, GitHub releases, and PyPI versions remain absent. |
 
 ## Out of Scope
 
