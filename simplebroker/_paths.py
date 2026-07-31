@@ -19,7 +19,6 @@ _config = load_config()
 db_backend = get_configured_backend(_config)
 
 
-
 def _is_filesystem_root(path: Path) -> bool:
     """Check if path represents a filesystem root.
 

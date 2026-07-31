@@ -466,9 +466,7 @@ class SQLiteRunner:
             if remaining <= 0:
                 owner = self._transaction_owner
                 owner_description = (
-                    "unknown"
-                    if owner is None
-                    else f"{owner.name} ({owner.ident})"
+                    "unknown" if owner is None else f"{owner.name} ({owner.ident})"
                 )
                 error = OperationalError(
                     "database is locked: "

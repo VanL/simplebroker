@@ -629,7 +629,6 @@ def test_execute_setup_with_retry_reports_immediate_setup_failures(
     assert "made no progress" not in message
 
 
-
 def test_execute_with_retry_uses_bounded_jitter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

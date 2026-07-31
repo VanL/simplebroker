@@ -43,7 +43,6 @@ _LOCKED_ERROR_MARKERS = (
 )
 
 
-
 def _build_retry_stop(
     *,
     max_retries: int | None,
