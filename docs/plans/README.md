@@ -97,6 +97,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-30-product-documentation-cutover-plan.md | completed — class 5+P; product-doc authority cutover Phases 1–6; specs 10–17 all `canonical-spec` |
 | 2026-07-31-python-library-api-contract-plan.md | active — class 5 (raised by R1); original scope completed 2026-07-31, reopened same day for Revision R1 correcting command-layer signatures to keyword-only before `[SB-API-10]` freezes them; ships 6.0.0 |
 | 2026-07-31-core-test-mypy-gate-plan.md | completed — class 5+P; core tests are explicitly type-checked in CI and root-release prechecks, with behavior-preserving test typing cleanup |
+| 2026-07-31-ci-release-remediation-plan.md | active — class 4; repair current cross-platform CI root causes in isolated commits, retry the 6.0.0 release, and monitor publication |
 | 2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md | completed — class 5; zero reserved at exact-insert admission and ordinary Redis generated writes made allocation/publication atomic |
 | 2026-07-30-ruff-suppression-index-generator-plan.md | active — class 5+P; original scope completed 2026-07-31, reopened same day for Revision R1 keying the derived index on qualified symbols rather than lines |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | active — class 4; shared-runner transaction ownership and reactor sidecar-boundary correction |
