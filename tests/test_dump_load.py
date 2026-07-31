@@ -71,7 +71,8 @@ def test_dump_format_header_aliases_messages_in_order(tmp_path: Path) -> None:
     ]
     ids = [m["id"] for m in msgs]
     assert all(isinstance(i, int) for i in ids)
-    assert ids[0] < ids[1] and ids[2] < ids[3]
+    numeric_ids = [i for i in ids if isinstance(i, int)]
+    assert numeric_ids[0] < numeric_ids[1] and numeric_ids[2] < numeric_ids[3]
     # deterministic serialization: keys sorted in every line
     for line in lines:
         assert line == json.dumps(json.loads(line), ensure_ascii=False, sort_keys=True)
@@ -99,12 +100,20 @@ def test_round_trip_fixed_point(tmp_path: Path) -> None:
     # the watermark contract end-to-end: a write AFTER a restore always gets
     # an ID above every restored ID (insert_messages advanced last_ts; the
     # HLC's monotonicity does the rest, even under clock skew)
-    restored_ids = [r["id"] for r in _records(redump)[1:] if r["type"] == "message"]
+    restored_ids = [
+        message_id
+        for record in _records(redump)[1:]
+        if record["type"] == "message"
+        if isinstance(message_id := record["id"], int)
+    ]
     q.write("post-restore")
     with open_broker(dst) as broker:
         rows = _records(list(dump_lines(broker)))[1:]
     new_ids = [
-        r["id"] for r in rows if r["type"] == "message" and r["body"] == "post-restore"
+        message_id
+        for record in rows
+        if record["type"] == "message" and record["body"] == "post-restore"
+        if isinstance(message_id := record["id"], int)
     ]
     assert new_ids and min(new_ids) > max(restored_ids)
 
