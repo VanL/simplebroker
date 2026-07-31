@@ -9,10 +9,10 @@ Postgres and Redis coverage lives in the extension test directories.
 from __future__ import annotations
 
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -115,8 +115,8 @@ def test_transaction_rolls_back_when_commit_fails(
         with conn.sidecar() as session:
             session.run("CREATE TABLE app_kv (k TEXT PRIMARY KEY, v TEXT)")
 
-        runner = cast(object, getattr(conn, "_runner"))
-        original_commit = getattr(runner, "commit")
+        runner = cast(Any, conn)._runner
+        original_commit = runner.commit
 
         def fail_commit() -> None:
             raise sqlite3.OperationalError("injected sidecar commit failure")
