@@ -10,7 +10,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -48,7 +48,7 @@ def _run_schema_setup_probe(args: tuple[str, str, int]) -> None:
 
     original_initialize_database = SQLiteBackendPlugin.initialize_database
 
-    def tracked_initialize_database(self, runner, *, run_with_retry):  # type: ignore[no-untyped-def]
+    def tracked_initialize_database(self, runner, *, run_with_retry):
         with Path(log_path).open("a", encoding="utf-8") as log:
             log.write(f"enter {child_id} {time.time():.9f}\n")
             log.flush()
@@ -64,24 +64,25 @@ def _run_schema_setup_probe(args: tuple[str, str, int]) -> None:
                 log.write(f"exit {child_id} {time.time():.9f}\n")
                 log.flush()
 
-    SQLiteBackendPlugin.initialize_database = tracked_initialize_database
+    # Process-local test instrumentation replaces the plugin hook for the probe.
+    SQLiteBackendPlugin.initialize_database = tracked_initialize_database  # type: ignore[method-assign]
 
     with BrokerDB(db_path) as db:
         db.write("schema_probe", str(child_id))
 
 
 class _SetupRunner:
-    def run_exclusive_setup(self, phase, operation):  # type: ignore[no-untyped-def]
+    def run_exclusive_setup(self, phase, operation):
         assert phase == SetupPhase.SCHEMA
         operation()
         return True
 
 
 class _SetupBackendPlugin:
-    def __init__(self, *operations):  # type: ignore[no-untyped-def]
+    def __init__(self, *operations):
         self._operations = operations
 
-    def initialize_database(self, runner, *, run_with_retry):  # type: ignore[no-untyped-def]
+    def initialize_database(self, runner, *, run_with_retry):
         del runner
         for operation in self._operations:
             run_with_retry(operation)
@@ -110,7 +111,7 @@ def _setup_budget_core(*operations: Any) -> Any:
 class TestSQLiteRunnerErrorHandling:
     """Test SQLite error handling paths in SQLiteRunner."""
 
-    def test_run_operational_error_real(self):
+    def test_run_operational_error_real(self) -> None:
         """Test that real sqlite3.OperationalError is converted to OperationalError."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -122,12 +123,12 @@ class TestSQLiteRunnerErrorHandling:
                     pytest.raises(OperationalError, match="database is locked"),
                 ):
                     # Try to write from another connection - will get real lock error
-                    runner._timeout = 0.01
+                    runner._timeout = 0.01  # type: ignore[attr-defined]
                     list(runner.run("CREATE TABLE test (id INTEGER)", fetch=False))
             finally:
                 runner.close()
 
-    def test_run_integrity_error_real(self):
+    def test_run_integrity_error_real(self) -> None:
         """Test that real sqlite3.IntegrityError is converted to IntegrityError."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -148,7 +149,7 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 runner.close()
 
-    def test_run_data_error_real(self):
+    def test_run_data_error_real(self) -> None:
         """Test that real sqlite3.DataError is converted to DataError."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -179,7 +180,7 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 runner.close()
 
-    def test_run_database_error_real(self):
+    def test_run_database_error_real(self) -> None:
         """Test that real sqlite3.DatabaseError is converted to DatabaseError."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
@@ -202,7 +203,7 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 runner.close()
 
-    def test_runner_closes_execute_cursors(self):
+    def test_runner_closes_execute_cursors(self) -> None:
         """Runner-owned cursors should be finalized before connection shutdown."""
 
         class FakeCursor:
@@ -237,10 +238,10 @@ class TestSQLiteRunnerErrorHandling:
         runner.begin_immediate()
         assert fake_conn.cursors[-1].closed
 
-        runner._apply_busy_timeout(fake_conn, 1)
+        runner._apply_busy_timeout(cast(sqlite3.Connection, fake_conn), 1)
         assert fake_conn.cursors[-1].closed
 
-    def test_close_prepares_connection_to_avoid_busy_waits(self):
+    def test_close_prepares_connection_to_avoid_busy_waits(self) -> None:
         """Connection close should not inherit the normal SQLite busy timeout."""
 
         class FakeCursor:
@@ -274,20 +275,23 @@ class TestSQLiteRunnerErrorHandling:
         runner = SQLiteRunner("unused.db")
         fake_conn = FakeConnection()
 
-        assert runner._close_tracked_connection(fake_conn) is True
+        assert (
+            runner._close_tracked_connection(cast(sqlite3.Connection, fake_conn))
+            is True
+        )
         assert fake_conn.interrupted
         assert fake_conn.statements == ["PRAGMA busy_timeout=0"]
         assert fake_conn.cursor.closed
         assert fake_conn.rolled_back
         assert fake_conn.closed
 
-    def test_begin_immediate_errors_real(self):
+    def test_begin_immediate_errors_real(self) -> None:
         """Test real error handling in begin_immediate."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
             runner = SQLiteRunner(db_path)
             try:
-                runner._timeout = 0.01  # Short timeout
+                runner._timeout = 0.01  # type: ignore[attr-defined]  # Short timeout
 
                 # Test real OperationalError with database lock
                 with (
@@ -327,9 +331,7 @@ class TestSQLiteRunnerErrorHandling:
                     # this seam while holding _operation_lock. Releasing this
                     # wait sends the real connection into SQLite's busy wait.
                     contender_at_connection.set()
-                    if not release_contender.wait(
-                        timeout=scale_timeout_for_ci(3.0)
-                    ):
+                    if not release_contender.wait(timeout=scale_timeout_for_ci(3.0)):
                         raise TimeoutError("contender coordination timed out")
                 return connection
 
@@ -341,7 +343,11 @@ class TestSQLiteRunnerErrorHandling:
         def capture_error(call: Callable[[], None]) -> None:
             try:
                 call()
-            except (OperationalError, TimeoutError, threading.BrokenBarrierError) as exc:
+            except (
+                OperationalError,
+                TimeoutError,
+                threading.BrokenBarrierError,
+            ) as exc:
                 errors.append(exc)
 
         def owner_work() -> None:
@@ -470,7 +476,7 @@ class TestSQLiteRunnerErrorHandling:
         assert errors == []
         assert results == [[(1,)], [(1,)], [(1,)]]
 
-    def test_commit_errors_real(self):
+    def test_commit_errors_real(self) -> None:
         """Test real error handling in commit."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -568,7 +574,9 @@ class TestSQLiteRunnerErrorHandling:
             runner.rollback()
 
         assert runner._transaction_owner is None
-        with pytest.raises(OperationalError, match="transaction state is unusable") as exc:
+        with pytest.raises(
+            OperationalError, match="transaction state is unusable"
+        ) as exc:
             runner.run("SELECT 1", fetch=True)
         assert exc.value.retryable is False
 
@@ -610,7 +618,7 @@ class TestSQLiteRunnerErrorHandling:
         finally:
             runner.close()
 
-    def test_rollback_releases_locks(self):
+    def test_rollback_releases_locks(self) -> None:
         """Test that rollback properly releases database locks."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -645,7 +653,7 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 runner.close()
 
-    def test_close_error_handling(self, caplog):
+    def test_close_error_handling(self, caplog: pytest.LogCaptureFixture) -> None:
         """Test that close ignores errors during cleanup."""
         with tempfile.TemporaryDirectory() as tmpdir:
             runner = SQLiteRunner(
@@ -688,7 +696,7 @@ class TestSQLiteRunnerErrorHandling:
             with contextlib.suppress(Exception):
                 real_conn.close()
 
-    def test_wal_mode_failure(self):
+    def test_wal_mode_failure(self) -> None:
         """Test handling of WAL mode setup failure."""
         with tempfile.TemporaryDirectory() as tmpdir:
             runner = SQLiteRunner(str(Path(tmpdir) / "test.db"))
@@ -887,6 +895,9 @@ class TestSQLiteRunnerErrorHandling:
     ):
         """Waiting to enter the schema phase should not consume setup budget."""
 
+        monotonic_time = 0.0
+        first_ran = False
+
         class FakeRunner:
             def run_exclusive_setup(self, phase, operation):
                 nonlocal monotonic_time
@@ -910,20 +921,17 @@ class TestSQLiteRunnerErrorHandling:
             def _migrate_schema(self):
                 pass
 
-        monotonic_time = 0.0
-        first_ran = False
-
-        def fake_monotonic():
+        def fake_monotonic() -> float:
             return monotonic_time
 
-        def first_operation():
+        def first_operation() -> None:
             nonlocal first_ran
             first_ran = True
 
         core = MinimalBrokerCore()
-        core._runner = FakeRunner()
-        core._backend_plugin = FakeBackendPlugin()
-        core._lock = threading.RLock()
+        core._runner = FakeRunner()  # type: ignore[assignment]
+        core._backend_plugin = FakeBackendPlugin()  # type: ignore[assignment]
+        core._lock = threading.RLock()  # type: ignore[assignment]
         core._stop_event = threading.Event()
 
         monkeypatch.setattr(helpers_module.time, "monotonic", fake_monotonic)
@@ -954,7 +962,7 @@ class TestSQLiteRunnerErrorHandling:
                 busy_timeout_ms=250,
             )
 
-    def test_readonly_database_error(self):
+    def test_readonly_database_error(self) -> None:
         """Test error handling with read-only database."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -1130,7 +1138,7 @@ class TestSQLiteRunnerErrorHandling:
         assert enter_count == 1
         assert max_active == 1
 
-    def test_corrupted_database_detection(self):
+    def test_corrupted_database_detection(self) -> None:
         """Test handling of corrupted database."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -1156,7 +1164,7 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 runner.close()
 
-    def test_database_lock_timeout(self):
+    def test_database_lock_timeout(self) -> None:
         """Test that SQLiteRunner respects timeout under lock contention."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -1165,7 +1173,7 @@ class TestSQLiteRunnerErrorHandling:
             with DatabaseErrorInjector.database_locked(db_path):
                 runner = SQLiteRunner(db_path)
                 try:
-                    runner._timeout = 0.001  # 1ms timeout - will definitely fail
+                    runner._timeout = 0.001  # type: ignore[attr-defined]  # 1ms timeout - will definitely fail
 
                     # This MUST timeout because exclusive lock is held
                     with pytest.raises(OperationalError, match="database is locked"):
@@ -1182,7 +1190,7 @@ class TestSQLiteRunnerForkSafety:
     """Test fork safety in SQLiteRunner."""
 
     @pytest.mark.skipif(not hasattr(os, "fork"), reason="fork not available")
-    def test_fork_detection(self):
+    def test_fork_detection(self) -> None:
         """Test that runner detects fork and reinitializes."""
         import os
 
