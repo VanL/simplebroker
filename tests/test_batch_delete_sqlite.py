@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -36,7 +37,9 @@ def test_delete_message_ids_physically_removes_sqlite_rows(workdir: Path) -> Non
     with BrokerDB(str(db_path)) as broker:
         for index in range(1, 5):
             broker.write("jobs", f"message{index}")
-        timestamps = dict(broker.peek_many("jobs", limit=10))
+        timestamps = dict(
+            cast(list[tuple[str, int]], broker.peek_many("jobs", limit=10))
+        )
         assert (
             broker.claim_one(
                 "jobs",
@@ -66,7 +69,9 @@ def test_delete_from_queues_physically_removes_sqlite_rows(workdir: Path) -> Non
         broker.write("alpha", "alpha2")
         broker.write("beta", "beta1")
         broker.write("gamma", "gamma1")
-        timestamps = dict(broker.peek_many("alpha", limit=10))
+        timestamps = dict(
+            cast(list[tuple[str, int]], broker.peek_many("alpha", limit=10))
+        )
         assert (
             broker.claim_one(
                 "alpha",
