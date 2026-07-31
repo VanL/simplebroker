@@ -567,13 +567,13 @@ def test_persistent_sqlite_queues_keep_thread_local_connection_isolation(
 
         for queue in queues:
             with queue.get_connection() as connection:
-                runner = cast(SQLiteRunner, getattr(connection, "_runner"))
+                runner = cast(SQLiteRunner, cast(Any, connection)._runner)
                 main_thread_ids.append(runner.instance_id)
 
         def touch_queues() -> None:
             for queue in queues:
                 with queue.get_connection() as connection:
-                    runner = cast(SQLiteRunner, getattr(connection, "_runner"))
+                    runner = cast(SQLiteRunner, cast(Any, connection)._runner)
                     worker_thread_ids.append(runner.instance_id)
 
         thread = threading.Thread(target=touch_queues)
