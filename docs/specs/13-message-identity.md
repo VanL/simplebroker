@@ -34,10 +34,11 @@ effective time steps on the order of **~4 µs (4096 ns)**. The physical
 component is **not** a microsecond counter.
 
 Within one **database** (each broker target, including Redis, is a database
-for this purpose), broker-generated ids are allocated monotonically. Uniqueness
-is the ordinary coexistence rule for stored rows: no two coexisting messages
-share an id; reuse after delete is allowed. Message bodies are payload and may
-duplicate. There is no permanent tombstone ledger of every historical id.
+for this purpose), broker-generated ids are allocated monotonically and stored
+messages have unique ids. Caller-supplied exact ids are bounded only by range
+and uniqueness (`[SB-ID-4]`), so a message written later may carry a smaller
+id, and stored ids are not ordered by write time in general. Message bodies are
+payload and may duplicate.
 
 A generated id’s physical component is generation-time (`now()`) within the
 encoding grain. Callers may insert exact ids; those need not equal wall-clock

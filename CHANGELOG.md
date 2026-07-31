@@ -72,6 +72,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no-op broadcast leaves the id high-water unchanged; noted in `[SB-ID-4]`
   that an id with no room above it cannot be inserted; added patterned
   broadcast to `[SB-SELECT-3]` as a source of ids arriving behind a bound.
+- Reworded the `[SB-ID-1]` uniqueness paragraph. It had restated a uniqueness
+  constraint through invented framing ("coexistence rule", "tombstone ledger")
+  and left global monotonicity implied. It now scopes monotonic allocation to
+  broker-generated ids and states that caller-supplied exact ids are bounded
+  only by range and uniqueness, so stored ids are not ordered by write time —
+  the premise `[SB-SELECT-3]` and `[SB-ID-5]` both rely on.
+- Bound `[SB-BCAST-1]`'s empty-string-body promise to a firing shared test
+  across the selector-free, exact, and `create_missing` paths; it was
+  previously an unbound obligation.
 - Corrected `[SB-ID-4]` (and the README/kernel restatements), which described
   exact-ID strings as "19 ASCII digits". Non-ASCII decimal digits are accepted
   and whitespace is stripped; both are now stated.

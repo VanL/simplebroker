@@ -96,6 +96,25 @@ def test_broadcast_exact_all_missing_is_persisted_timestamp_noop(broker: Any) ->
     assert broker.get_queue_stat("missing").total == 0
 
 
+def test_broadcast_empty_string_body_is_a_valid_message(broker: Any) -> None:
+    """[SB-BCAST-1] "" is a body, not a missing argument.
+
+    An empty payload is a legitimate signal, so it must be delivered like any
+    other body rather than treated as absent. Pinned for the selector-free,
+    exact, and create_missing paths.
+    """
+    broker.write("existing", "seed")
+
+    assert broker.broadcast("") == 1
+    assert _messages(broker, "existing") == ["seed", ""]
+
+    assert broker.broadcast("", queue_names=["existing"]) == 1
+    assert _messages(broker, "existing") == ["seed", "", ""]
+
+    assert broker.broadcast("", queue_names=["fresh"], create_missing=True) == 1
+    assert _messages(broker, "fresh") == [""]
+
+
 def test_broadcast_exact_empty_sequence_is_noop_not_broadcast_all(broker: Any) -> None:
     broker.write("existing", "seed")
     before = broker.refresh_last_timestamp()
