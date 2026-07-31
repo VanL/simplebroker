@@ -576,7 +576,7 @@ select = ["BLE001", "F841"]
 
 def test_markdown_unsafe_source_path_fails_before_rendering(tmp_path: Path) -> None:
     spec = _write_fixture(tmp_path)
-    (tmp_path / "probe.py").rename(tmp_path / "probe|unsafe.py")
+    (tmp_path / "probe.py").rename(tmp_path / "probe`unsafe.py")
     original = spec.read_bytes()
 
     result = _run_tool(tmp_path, "--write")
