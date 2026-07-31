@@ -126,9 +126,11 @@ Normative identity, allocation, exact-ID, and preservation contract:
 - `move` preserves ids (same message, queue binding changes).
 - Exact ids: integer or exact 19 ASCII digits.
 
-`--after` / `--before` are **filters** on selection, not a guarantee that
-nothing appears “behind” the bound. Details remain in the README until the
-ordered-selection concern is promoted.
+`--after` / `--before` are **filters** on message id (strict open bounds after
+parse). They are not complete stream offsets. Moves and exact inserts can
+place older ids behind a bound you already use. Normative:
+`docs/specs/14-timestamp-selection-contract.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`;
+CLI string forms `[SB-CLI-5]`.
 
 Queue names: tight grammar (alphanumeric + `_` `-` `.`). `@alias` is a
 separate **CLI** naming layer; broadcast matches **queue names**, not aliases.

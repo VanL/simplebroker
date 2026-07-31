@@ -203,13 +203,11 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     selection_rows = [
         line
         for line in registry.splitlines()
-        if line.startswith(
-            "| Ordered timestamp selection and checkpoint consequences |"
-        )
+        if "timestamp selection" in line.lower() and line.startswith("|")
     ]
-    assert len(selection_rows) == 1
-    assert "`readme-only`" in selection_rows[0]
-    assert "Phase 2B exact delta required" in selection_rows[0]
+    assert len(selection_rows) >= 1
+    assert "`canonical-spec`" in selection_rows[0]
+    assert "14-timestamp-selection-contract.md" in selection_rows[0]
 
     residual = registry.split("The base operation row owns only", 1)[1].split(
         "## Transition rule", 1
@@ -219,9 +217,7 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
         "identity, allocation, exact-id handling, and preservation"
         in normalized_residual
     )
-    assert (
-        "ordered timestamp selection and checkpoint consequences" in normalized_residual
-    )
+    assert "timestamp selection" in normalized_residual
 
     readme = README.read_text(encoding="utf-8")
     normalized_spec = " ".join(text.split())
@@ -241,8 +237,7 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert "move` preserves IDs" in normalized_readme or "move preserves IDs" in normalized_readme
     assert "19-digit ASCII" in normalized_readme
     assert "High 52 bits: microseconds" not in readme
-    assert "remains normative in this" in readme
-    assert re.search(r"Phase\s*(?:>\s*)?2B", readme)
+    assert "14-timestamp-selection-contract.md" in readme
 
     for path in (KERNEL, LLMS):
         surface = path.read_text(encoding="utf-8")
@@ -261,7 +256,6 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert "Message identity, allocation, exact-ID handling, and preservation" in (
         invariant_text
     )
-    assert "Ordered timestamp selection and checkpoint consequences" in invariant_text
     assert "`canonical-spec`" in invariant_text
 
     state_machines = STATE_MACHINES.read_text(encoding="utf-8")
@@ -276,10 +270,10 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
 
     theory = THEORY.read_text(encoding="utf-8")
     assert "Message identity, allocation, exact-ID handling, and preservation" in theory
-    assert "Ordered timestamp selection and checkpoint consequences" in theory
     assert "specs/13-message-identity-contract.md" in theory
     assert "[SB-ID-*]" in theory
     assert "[SB-ID-5]" in theory
+    assert "14-timestamp-selection-contract.md" in theory or "SB-SELECT" in theory
 
 
 def test_message_identity_contract_names_existing_firing_tests() -> None:

@@ -57,7 +57,7 @@ dependencies and stores its state in one SQLite database.
   - [Core Concepts](#core-concepts)
     - [Timestamps as Message IDs](#timestamps-as-message-ids)
     - [JSON for Safe Processing](#json-for-safe-processing)
-    - [Checkpoint-based Processing](#checkpoint-based-processing)
+    - [Filtering by message id (`--after` / `--before`)](#filtering-by-message-id---after----before)
   - [Common Patterns](#common-patterns)
   - [Real-time Queue Watching](#real-time-queue-watching)
     - [Move Mode (`--move`)](#move-mode---move)
@@ -285,19 +285,15 @@ $ broker alias remove task1.outbox
 - `--json` - Output as line-delimited JSON (includes timestamps)
 - `-t, --timestamps` - Include timestamps in output
 - `-m <id>` - Target a specific message by its exact 19-digit message ID
-- `--after <timestamp>` - Process messages newer than timestamp
-- `--before <timestamp>` - Process messages older than timestamp (`read`, `peek`, and `move`; not `watch`)
+- `--after <timestamp>` - Process messages with id **strictly greater** than
+  the bound (a filter, not a complete stream offset)
+- `--before <timestamp>` - Process messages with id **strictly less** than the
+  bound (`read`, `peek`, and `move`; not `watch`)
 
-> **Moved messages and checkpoints.** `move` preserves the message's public
-> ID (`[SB-ID-5]`). The checkpoint consequence below remains normative in this
-> README until the ordered-selection/checkpoint concern is promoted in Phase
-> 2B. Any timestamp-checkpoint consumer —
-> `peek --after`, `read --after`, a peek-mode watcher, a consume-mode
-> watcher started with `after_timestamp`, or any hand-rolled
-> `ts > last_seen` filter — will **permanently skip** messages moved into
-> its queue behind its checkpoint. If a queue receives `move` traffic,
-> consume it without a timestamp filter, or periodically rescan from
-> `--after 0`.
+Normative filter predicates, late older ids (including after `move` or exact
+insert), and watch progress: `docs/specs/14-timestamp-selection-contract.md`
+`[SB-SELECT-1]`–`[SB-SELECT-4]`. CLI string forms for non-exact bounds:
+`[SB-CLI-5]` in `docs/specs/10-cli-contract.md`.
 
 **Write options:**
 - `-t, --timestamps` - Print the new message's 19-digit timestamp ID on stdout
@@ -327,29 +323,21 @@ Queues are implicit: a queue exists when at least one message row exists for
 that name, including claimed rows. After vacuum removes claimed rows, a
 claimed-only queue no longer exists.
 
-**Timestamp formats for `--after` and `--before`:**
-- ISO 8601: `2024-01-15T14:30:00Z` or `2024-01-15` (midnight UTC)
-- Unix seconds: `1705329000` or `1705329000s`
-- Unix milliseconds: `1705329000000ms`
-- Unix nanoseconds/Native hybrid: `1837025672140161024` or `1837025672140161024ns`
+**Timestamp formats for `--after` and `--before`:** see `[SB-CLI-5]`
+(ISO, date-only UTC midnight, Unix s/ms/ns, native hybrid; suffixes
+recommended). Bounds are strict open intervals after parse
+(`[SB-SELECT-1]`).
 
-**Best practice:** Heuristics are used to distinguish between different values for interactive use, but explicit suffixes (s/ms/ns) are recommended for clarity if referring to particular times. 
-
-`--after` and `--before` use strict open bounds. Combined together, they select
-messages where `after_timestamp < message_timestamp < before_timestamp`.
-
-`-m` / `--message` is stricter than `--after` and `--before`: it accepts only
-the exact 19-digit broker message ID. A malformed `-m` value prints
-`invalid message ID: expected exactly 19 digits within range` on stderr and
-exits `1`. A well-formed ID that does not match a message is silent and exits
-`2`.
+`-m` / `--message` targets one exact 19-digit message id (`[SB-ID-4]`). A
+malformed value errors and exits `1`; a well-formed id with no match is silent
+and exits `2`.
 
 ### Exit Codes
 - `0` - Success
 - `1` - General error (e.g., database access error, invalid arguments)
 - `2` - Queue empty or no matching messages
 
-Normative detail: `docs/specs/10-cli-contract.md` ([SB-CLI-1]–[SB-CLI-4]).
+Normative detail: `docs/specs/10-cli-contract.md` ([SB-CLI-1]–[SB-CLI-5]).
 
 `watch` exits `0` when stopped by SIGINT/SIGTERM or when its stdout consumer
 closes the pipe (see [Pipe behavior](#pipe-behavior)).
@@ -460,41 +448,32 @@ ERROR: Database connection failed
 Retrying in 5 seconds...
 ```
 
-### Checkpoint-based Processing
+### Filtering by message id (`--after` / `--before`)
 
-Use `--after` for resumable processing:
+`--after` / `--before` are **filters** on message id after parse
+(`[SB-SELECT-2]`). You may resume from a last-seen id with `--after`, but
+that does not guarantee a complete history under moves or exact-id inserts
+(`[SB-SELECT-3]`). Full rules:
+`docs/specs/14-timestamp-selection-contract.md`.
 
 ```bash
-# Save checkpoint after processing
+# Continue after a previously seen id
 $ result=$(broker read tasks --json)
-$ checkpoint=$(echo "$result" | jq '.timestamp')
+$ last=$(echo "$result" | jq '.timestamp')
+$ broker read tasks --all --after "$last"
 
-# Resume from checkpoint
-$ broker read tasks --all --after "$checkpoint"
-
-# Or use human-readable timestamps
+# Human-readable bound (CLI string forms: [SB-CLI-5])
 $ broker read tasks --all --after "2024-01-15T14:30:00Z"
 
-# Process a bounded open interval
+# Open interval
 $ broker peek tasks --all --after "$start" --before "$end"
 
-# Also show consumed rows not yet vacuumed (inspection only)
+# Inspection only: include claimed rows not yet vacuumed
 $ broker peek tasks --all --include-claimed
 ```
 
 Claimed rows are deletion-pending — vacuum may remove them at any time;
 `--include-claimed` is an inspection tool, not delivery state.
-
-> **Moved messages and checkpoints.** `move` preserves the message's public
-> ID (`[SB-ID-5]`). The checkpoint consequence below remains normative in this
-> README until the ordered-selection/checkpoint concern is promoted in Phase
-> 2B. Any timestamp-checkpoint consumer —
-> `peek --after`, `read --after`, a peek-mode watcher, a consume-mode
-> watcher started with `after_timestamp`, or any hand-rolled
-> `ts > last_seen` filter — will **permanently skip** messages moved into
-> its queue behind its checkpoint. If a queue receives `move` traffic,
-> consume it without a timestamp filter, or periodically rescan from
-> `--after 0`.
 
 ```bash
 # Back up, restore, or migrate between backends — dumps are plain ndjson.

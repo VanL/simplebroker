@@ -70,13 +70,41 @@ JSON shapes follow the command-specific objects above.
 _Implementation mapping_:
 - `simplebroker/commands.py`
 
+## Non-exact bound string forms [SB-CLI-5]
+
+CLI `--after` and `--before` accept string forms that parse to integer message
+ids for the predicates in `docs/specs/14-timestamp-selection-contract.md`
+`[SB-SELECT-1]`. Documented forms:
+
+- ISO 8601: `2024-01-15T14:30:00Z` or `2024-01-15` (date-only means midnight UTC)
+- Unix seconds: `1705329000` or `1705329000s`
+- Unix milliseconds: `1705329000000ms`
+- Unix nanoseconds / native hybrid: `1837025672140161024` or
+  `1837025672140161024ns`
+
+Heuristics may distinguish bare numeric values for interactive use; explicit
+suffixes (`s` / `ms` / `ns`) are recommended when a particular unit is intended.
+
+Exact single-message targeting (`-m` / `--message`) is not this clause: it
+accepts only an exact 19-digit broker message id and is owned by `[SB-ID-4]`.
+A malformed `-m` value errors on stderr and exits `1`; a well-formed id with
+no match is silent and exits `2` (`[SB-CLI-1]`).
+
+Integer predicates and filter meaning after parsing are `[SB-SELECT-*]`.
+
+_Implementation mapping_:
+- `simplebroker/commands.py` (timestamp string validation)
+
 ## Related Plans
 
 - retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
   `36e2f356`; see the ledger in `docs/plans/README.md`
+- `docs/plans/2026-07-30-product-documentation-cutover-plan.md` (Phase 2B)
 
 ## Verification
 
 - `tests/test_documented_exit_codes.py` — [SB-CLI-1] + README link
 - `tests/test_agent_kernel_contract.py` — [SB-CLI-1] + kernel link
 - `tests/test_cli_contract_sb_cli.py` — [SB-CLI-2], [SB-CLI-3], [SB-CLI-4]
+- `tests/test_timestamp_selection_contract_sb_select.py` — [SB-CLI-5] structural
+  bind with `[SB-SELECT-*]`

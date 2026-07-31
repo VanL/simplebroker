@@ -144,8 +144,8 @@ SPECIALIZED_CONTRACTS = {
     ),
 }
 ORDERED_SELECTION_ROUTES = {
-    "Message identity": "../README.md#checkpoint-based-processing",
-    "Move": "../README.md#checkpoint-based-processing",
+    "Message identity": "specs/14-timestamp-selection-contract.md",
+    "Move": "specs/14-timestamp-selection-contract.md",
 }
 RECORD_HEADING = re.compile(
     r"^### \[(?P<kind>ALT|REV)-(?P<scope>[A-Z][A-Z0-9]*)-"
@@ -732,23 +732,23 @@ def test_core_concepts_route_specialized_contracts(theory_text: str) -> None:
         assert target.removeprefix("specs/") in registry_spec
 
 
-def test_identity_concepts_keep_ordered_selection_residual_explicit(
+def test_identity_concepts_route_ordered_selection_contract(
     theory_text: str,
 ) -> None:
     registry = PRODUCT_REGISTRY.read_text(encoding="utf-8")
     theory_three = _section(theory_text, "[THEORY-3]")
     registry_rows = _registry_rows(registry)
     concept_rows = _concept_rows(theory_three)
-    concern = "Ordered timestamp selection and checkpoint consequences"
-    state, spec, locus = registry_rows[concern]
-    assert state == "readme-only"
-    assert spec == "—"
-    assert "Checkpoint-based Processing" in locus
+    concern = "Ordered timestamp selection and filter consequences"
+    state, spec, _locus = registry_rows[concern]
+    assert state == "canonical-spec"
+    assert "14-timestamp-selection-contract.md" in spec
 
     for concept, target in ORDERED_SELECTION_ROUTES.items():
         owner = concept_rows[concept]
         assert f"Registry `{concern}`" in owner
         assert f"]({target})" in owner
+        assert "[SB-SELECT-*]" in owner
 
 
 def test_theory_links_and_stable_references_resolve(theory_text: str) -> None:

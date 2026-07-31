@@ -24,6 +24,9 @@ Product section authority: `product-section-registry.md`.
 4. `13-message-identity-contract.md` — `[SB-ID-*]` (IDs, allocation, exact
    forms, high-water/cache, move preservation when the registry marks
    canonical)
+5. `14-timestamp-selection-contract.md` — `[SB-SELECT-*]` (strict open bounds
+   as filters; late older ids; watch progress when the registry marks
+   canonical)
 
 ## Rules
 
