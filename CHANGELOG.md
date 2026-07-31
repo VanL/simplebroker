@@ -6,13 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [Unreleased] - 2026-07-31
+## [Unreleased]
+
+## [5.6.3] - 2026-07-31
 
 ### Added
 - Re-exported project-config discovery helpers on `simplebroker.ext`:
   `find_project_config`, `project_config_path_for_directory`, and
   `resolve_project_target` (same objects as `simplebroker.project`, now also
   listed in `project.__all__`).
+
+### Fixed
+- Made ordinary Redis `write()` advance generated-ID high-water and insert the
+  row in one fenced Lua operation. Stale candidates now retry without mutation,
+  and timestamp resynchronization can no longer overwrite high-water backward.
+
+### Changed
+- Reserved message ID `0` as the lower-bound/checkpoint origin for new exact
+  insertion. Exact selectors still accept legacy zero rows for recovery, but a
+  dump containing ID `0` must be intentionally re-IDed before restore.
+- Bumped the synchronized first-party `simplebroker-pg` and
+  `simplebroker-redis` packages to 3.3.3, raised both extension core floors to
+  `simplebroker>=5.6.3`, and raised the root optional backend floors to those
+  extension versions.
 
 ### Documented
 - Promoted the Python library / embedding API surface to
@@ -27,18 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `17-ops.md`). Root README is human entry/catalog with links; ownership
   rules live in `docs/README.md` and `docs/specs/product-section-registry.md`.
 
-## [5.6.3] - 2026-07-30
+### simplebroker-pg 3.3.3
+- Synchronized patch release for SimpleBroker 5.6.3. Runtime backend behavior
+  is unchanged beyond shared core exact-ID reserved-zero admission.
 
-### Fixed
-- Made ordinary Redis `write()` advance generated-ID high-water and insert the
-  row in one fenced Lua operation. Stale candidates now retry without mutation,
-  and timestamp resynchronization can no longer overwrite high-water backward.
-
-### Changed
-- Reserved message ID `0` as the lower-bound/checkpoint origin for new exact
-  insertion. Exact selectors still accept legacy zero rows for recovery, but a
-  dump containing ID `0` must be intentionally re-IDed before restore.
-
+### simplebroker-redis 3.3.3
+- Synchronized patch release for SimpleBroker 5.6.3. Ordinary generated
+  `write()` now advances high-water and inserts in one fenced Lua operation.
 
 ## [5.6.2] - 2026-07-30
 
