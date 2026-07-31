@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from simplebroker import Queue
 
 
-def ensure_windows_cleanup():
+def ensure_windows_cleanup() -> None:
     """Ensure proper cleanup on Windows to avoid permission errors."""
     gc.collect()
     if sys.platform == "win32":
@@ -18,7 +18,7 @@ def ensure_windows_cleanup():
         gc.collect()
 
 
-def test_ensure_core_lazy_initialization():
+def test_ensure_core_lazy_initialization() -> None:
     """Test that DBConnection lazily initializes the core."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -31,6 +31,7 @@ def test_ensure_core_lazy_initialization():
             assert queue.conn is not None
 
             # Get core to ensure initialization
+            assert queue.conn is not None
             core = queue.conn.get_core()
             assert core is not None
 
@@ -45,7 +46,7 @@ def test_ensure_core_lazy_initialization():
             ensure_windows_cleanup()
 
 
-def test_cleanup_finalizer_function():
+def test_cleanup_finalizer_function() -> None:
     """Test the finalizer releases the queue connection."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -58,24 +59,27 @@ def test_cleanup_finalizer_function():
             assert hasattr(queue, "_finalizer")
 
             # Initialize the connection
+            assert queue.conn is not None
             core = queue.conn.get_core()
             assert core is not None
 
             # Mock the close method on the connection
             original_close = queue.conn.close
-            queue.conn.close = Mock(side_effect=original_close)
+            # Test-only method replacement verifies the weakref finalizer calls close.
+            queue.conn.close = Mock(side_effect=original_close)  # type: ignore[method-assign]
 
             # Call the finalizer function directly (simulating object destruction)
             queue._finalizer()
 
             # Verify release was called
+            assert isinstance(queue.conn.close, Mock)
             queue.conn.close.assert_called_once()
         finally:
             # Force garbage collection for Windows
             ensure_windows_cleanup()
 
 
-def test_cleanup_finalizer_with_exception():
+def test_cleanup_finalizer_with_exception() -> None:
     """Test that finalizer release handles exceptions gracefully."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -89,7 +93,9 @@ def test_cleanup_finalizer_with_exception():
         )
 
         # Mock the connection close to raise an exception
-        queue.conn.close = Mock(side_effect=Exception("Test exception"))
+        assert queue.conn is not None
+        # Test-only method replacement drives the finalizer's error path.
+        queue.conn.close = Mock(side_effect=Exception("Test exception"))  # type: ignore[method-assign]
 
         # Patch the logger to verify warning is logged
         with patch("simplebroker.sbqueue.logger") as mock_logger:
@@ -106,7 +112,7 @@ def test_cleanup_finalizer_with_exception():
         ensure_windows_cleanup()
 
 
-def test_queue_persistent_with_custom_runner_no_finalizer():
+def test_queue_persistent_with_custom_runner_no_finalizer() -> None:
     """Test that custom runner still installs finalizer."""
     from simplebroker._runner import SQLiteRunner
 
