@@ -1,4 +1,5 @@
 """Public-path bindings for the canonical ``[SB-DELIVERY-*]`` contract."""
+# mypy: disable-error-code=no-untyped-def
 
 from __future__ import annotations
 
@@ -210,7 +211,7 @@ def test_invalid_generator_selector_fails_on_iteration_without_mutation(
 
     generator = source.move_generator(
         destination,
-        delivery_guarantee="typo",  # type: ignore[arg-type]
+        delivery_guarantee="typo",
     )
     try:
         with pytest.raises(ValueError, match="typo"):
