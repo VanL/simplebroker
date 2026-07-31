@@ -57,7 +57,7 @@ def test_before_exact_boundary_is_exclusive(workdir):
     assert out == ""
 
     rc, out, err = run_cli(
-        "peek", "boundary_queue", "--before", str(int(ts) + 1), cwd=workdir
+        "peek", "boundary_queue", "--before", str(int(str(ts)) + 1), cwd=workdir
     )
     assert rc == 0, err
     assert out == "message"
