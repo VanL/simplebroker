@@ -12,7 +12,8 @@ import textwrap
 import time
 import traceback
 from pathlib import Path
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, cast
 
 import pytest
 
@@ -122,7 +123,9 @@ def test_concurrent_first_writes_serialize_setup(tmp_path: Path) -> None:
 
     queue = Queue("setup_contention", persistent=True, db_path=str(db_path))
     try:
-        stored = list(queue.read(all_messages=True))
+        stored = list(
+            cast(Iterator[str | tuple[str, int]], queue.read(all_messages=True))
+        )
     finally:
         queue.close()
 
@@ -237,7 +240,9 @@ def test_first_write_retries_during_temporary_setup_lock(tmp_path: Path) -> None
 
     queue = Queue("setup_contention", persistent=True, db_path=str(db_path))
     try:
-        assert list(queue.read(all_messages=True)) == ["locked-setup-message"]
+        assert list(
+            cast(Iterator[str | tuple[str, int]], queue.read(all_messages=True))
+        ) == ["locked-setup-message"]
     finally:
         queue.close()
 
