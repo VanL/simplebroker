@@ -296,7 +296,7 @@ def _concurrent_reader_worker(args: tuple[int, str, str]) -> list[str]:
             else:
                 break  # Queue empty
 
-    return messages
+    return [str(message) for message in messages]
 
 
 @pytest.mark.sqlite_only
