@@ -4,6 +4,7 @@ import signal
 import sys
 import time
 from pathlib import Path
+from typing import cast
 
 # Add repository root to path so subprocesses import this checkout even when
 # PYTHONPATH contains another SimpleBroker install.
@@ -44,7 +45,7 @@ def main() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-031] exception
                 # Write to unique database
                 with BrokerDB(str(unique_db_path)) as unique_db:
                     for msg in messages:
-                        unique_db.write("sigint_test_queue", msg)
+                        unique_db.write("sigint_test_queue", cast(str, msg))
 
             # Create database connection with unique file
             db = BrokerDB(str(unique_db_path))
