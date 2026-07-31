@@ -331,6 +331,20 @@ def test_python_examples_run_in_the_frozen_lint_environment() -> None:
     assert lint_section.index(pytest_command) < lint_section.index(mypy_command)
 
 
+def test_lint_workflow_type_checks_every_core_test_file() -> None:
+    workflow_text = _workflow_text("test.yml")
+    lint_section = workflow_text.split("  lint:", 1)[1].split("  packaging:", 1)[0]
+
+    assert "mapfile -t core_test_files" in lint_section
+    assert "find tests -type f -name '*.py'" in lint_section
+    assert '"${core_test_files[@]}"' in lint_section
+    assert "MYPYPATH=. uv run --frozen --no-sync mypy" in lint_section
+    assert (
+        "--namespace-packages --explicit-package-bases --allow-untyped-defs "
+        "--allow-incomplete-defs" in lint_section
+    )
+
+
 def test_dependabot_merges_only_after_required_workflows_are_green() -> None:
     workflow_text = _workflow_text("dependabot.yml")
 
