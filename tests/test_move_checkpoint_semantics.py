@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import Any
 
 import pytest
 
@@ -60,10 +61,10 @@ class _Collector:
         return False
 
 
-def _first_ts(core, queue: str) -> int:
+def _first_ts(core: Any, queue: str) -> int:
     """Return the timestamp of the first pending message in ``queue``."""
     for _body, ts in core.peek_generator(queue):
-        return ts
+        return int(ts)
     raise AssertionError(f"queue {queue!r} is empty")
 
 
