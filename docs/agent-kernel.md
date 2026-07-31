@@ -96,30 +96,18 @@ Normative: `docs/specs/11-delivery-contract.md`
 
 | Path | What happens |
 |------|----------------|
-| Default `read` / consume `watch` | Claim is committed **before** your handler finishes. Crash after claim ⇒ **message gone**. This is exactly-once *delivery*, not crash-safe *processing*. |
-| **Preferred job reservation** | **Atomic `move`** to an inflight (or per-worker) queue, then process, then `delete` by id. Reserves work under concurrent workers. |
-| Peek-then-delete | Does **not** reserve work: concurrent workers can process the same pending message before either deletes it. Safe only for a **single consumer** (or fully **idempotent** handlers). Never delete while iterating `peek --all` / `peek_generator` (offset pagination skips rows — see below). |
-| Generators (`read_generator` / `move_generator`) | Optional `delivery_guarantee="at_least_once"` (batch commit after full yield). **Thread-affine:** create, iterate, exhaust, close on the **same thread**. |
+| Default `read` / consume `watch` | Claim commits **before** handoff to your code. Claim is atomic (once). If the process does not die between claim and handoff, delivery to the caller/handler is once. Crash in that window can leave the message claimed and not handed off. Not exactly-once application processing. |
+| **Move reservation** | **Atomic move** relocates the message; it still exists at the destination after success (including after a crash). Common pattern: move to inflight/private queue, process, delete by id. |
+| Peek | Observes without claiming. Mutating actions (delete/move/claim) are atomic (one winner). App concurrency model is the app’s responsibility. |
+| Generators | Default `exactly_once`: one-by-one, commit before yield. `at_least_once`: strongest public **batch** promise (commit after full batch yield; early stop may redeliver). Same thread only; cross-thread is undefined behavior (implementations may fail loud). |
 
-`include_claimed` / claimed rows: **inspection only**; vacuum may remove them
-anytime.
+`include_claimed` / claimed rows: inspection only; vacuum may remove them.
 
-**Rule:** do not use bare consume-mode `watch` as your durability strategy.
+### Peek streams and deletes
 
-### Do not delete while draining a peek stream
-
-`peek --all` and `Queue.peek_generator()` paginate with a mutable offset.
-**Deleting (or otherwise removing) rows during that iteration shifts the
-window and skips messages.** Reproduced shape: thousands of pending rows,
-delete-as-you-go, roughly half left unprocessed.
-
-Safe alternatives:
-
-1. **Move each job** to `inflight` (or a worker-private queue), then process
-   and delete from there (preferred under concurrency).
-2. **Single consumer only:** loop `peek` / `peek_one` (one message per call),
-   process, delete by id, repeat — never a long-lived peek stream with
-   interleaved deletes.
+`peek --all` and `Queue.peek_generator()` are live offset-paged streams.
+Removing rows during that iteration can shift offsets and skip messages.
+Prefer one-message peek + delete-by-id, or move-then-process.
 
 ## Message IDs
 
@@ -127,23 +115,20 @@ Normative identity, allocation, exact-ID, and preservation contract:
 `docs/specs/13-message-identity-contract.md`
 [SB-ID-1]–[SB-ID-5].
 
-- Public id = signed-range hybrid timestamp integer (JSON field `timestamp`).
-- Generated and newly inserted ids are positive. ID `0` is the checkpoint
-  origin; exact selectors retain zero only for legacy-row recovery.
+- Public id = hybrid timestamp integer (JSON field `timestamp`).
+- Generated ids are positive and equal generation time within ~4 µs encoding
+  grain. ID `0` is reserved origin; exact selectors retain zero for legacy
+  recovery only.
 - `Queue.write` returns the committed row's id. On the CLI, request it with
   `--json` or `-t` / `--timestamps`; plain write is quiet on success.
-- An ordinary Redis `write()` advances generated-id high-water and inserts the
-  row at one server-side visibility point. Moves, exact insertion, and
-  patterned broadcast can still introduce an older id behind a checkpoint.
-- `queue.last_ts` is a per-handle cache of a broker-global high-water mark, not
-  “my last message.”
-- `move` preserves ids.
+- `queue.last_ts` is a per-handle cache of database-global high-water, not
+  “my last message” (`None` until generate/refresh on a fresh handle).
+- `move` preserves ids (same message, queue binding changes).
+- Exact ids: integer or exact 19 ASCII digits.
 
-Strict `after` / `before` selection and the permanent-skip consequence for a
-moved older id remain normative in the README until the registered
-ordered-selection/checkpoint concern is promoted in Phase 2B. Until then, do
-not checkpoint-filter a queue that receives moves unless periodic rescanning
-is intentional.
+`--after` / `--before` are **filters** on selection, not a guarantee that
+nothing appears “behind” the bound. Details remain in the README until the
+ordered-selection concern is promoted.
 
 Queue names: tight grammar (alphanumeric + `_` `-` `.`). `@alias` is a
 separate **CLI** naming layer; broadcast matches **queue names**, not aliases.

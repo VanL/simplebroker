@@ -236,11 +236,10 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert "New exact-id insertion rejects reserved zero" in normalized_spec
     assert "consume remaining logical-counter values" in normalized_spec
     assert "same message identity with the queue binding updated" in normalized_spec
-    assert "generated and newly inserted message IDs are positive" in normalized_readme
+    assert "Broker-generated message IDs are positive" in normalized_readme
     assert "Exact selectors still accept zero" in normalized_readme
-    assert "ordinary Redis `write()`" in normalized_readme
-    assert "one server-side visibility point" in normalized_readme
-    assert "Moves, exact insertion, and patterned broadcast" in normalized_readme
+    assert "move` preserves IDs" in normalized_readme or "move preserves IDs" in normalized_readme
+    assert "19-digit ASCII" in normalized_readme
     assert "High 52 bits: microseconds" not in readme
     assert "remains normative in this" in readme
     assert re.search(r"Phase\s*(?:>\s*)?2B", readme)
@@ -252,14 +251,10 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
         assert "[SB-ID-5]" in surface
     kernel = KERNEL.read_text(encoding="utf-8")
     normalized_kernel = " ".join(kernel.split())
-    assert "Generated and newly inserted ids are positive" in normalized_kernel
-    assert "ID `0` is the checkpoint origin" in normalized_kernel
-    assert (
-        "exact selectors retain zero only for legacy-row recovery" in normalized_kernel
-    )
-    assert "ordinary Redis `write()`" in normalized_kernel
-    assert "one server-side visibility point" in normalized_kernel
-    assert "Moves, exact insertion, and patterned broadcast" in normalized_kernel
+    assert "Generated ids are positive" in normalized_kernel
+    assert "ID `0` is reserved origin" in normalized_kernel
+    assert "exact 19 ASCII digits" in normalized_kernel
+    assert "preserves ids" in normalized_kernel
 
     assert "13-message-identity-contract.md" in SPEC_INDEX.read_text(encoding="utf-8")
     invariant_text = INVARIANTS.read_text(encoding="utf-8")

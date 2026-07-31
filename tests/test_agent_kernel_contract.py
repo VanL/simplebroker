@@ -47,10 +47,11 @@ def test_agent_kernel_cites_delivery_contract() -> None:
 
 def test_agent_kernel_forbids_delete_while_peek_stream() -> None:
     text = KERNEL.read_text(encoding="utf-8")
-    assert "Do not delete while draining a peek stream" in text
+    assert "Peek streams and deletes" in text
     assert "peek_generator" in text
-    # Preferred reservation path named
-    assert "move" in text.lower() and "inflight" in text
+    assert "offset" in text.lower() or "skip" in text.lower()
+    # Move reservation still named
+    assert "move" in text.lower()
 
 
 def test_agent_kernel_does_not_claim_identical_cli_python_packaging() -> None:

@@ -15,17 +15,15 @@ registry below remain the owners of exact intended behavior.
 
 Product section authority: `product-section-registry.md`.
 
-1. `10-cli-contract.md` — `[SB-CLI-*]` (exit codes and CLI I/O when
-   registry marks canonical)
-2. `11-delivery-contract.md` — `[SB-DELIVERY-*]` (claim, watch, move
-   reservation, peek safety, and transactional generators when the registry
-   marks canonical)
-3. `12-broadcast-contract.md` — `[SB-BCAST-*]` (target selection, optional
-   exact-target creation, atomicity, CLI selector behavior, and backend
-   compatibility when the registry marks canonical)
-4. `13-message-identity-contract.md` — `[SB-ID-*]` (message-ID representation,
-   allocation, write-return identity, high-water/cache meaning, exact-ID
-   handling, and move preservation when the registry marks canonical)
+1. `10-cli-contract.md` — `[SB-CLI-*]` (exit codes, Unix stream roles, JSON
+   shapes when the registry marks canonical)
+2. `11-delivery-contract.md` — `[SB-DELIVERY-*]` (claim, watch, move, peek,
+   generators when the registry marks canonical)
+3. `12-broadcast-contract.md` — `[SB-BCAST-*]` (selection, create_missing,
+   atomicity, CLI selectors when the registry marks canonical)
+4. `13-message-identity-contract.md` — `[SB-ID-*]` (IDs, allocation, exact
+   forms, high-water/cache, move preservation when the registry marks
+   canonical)
 
 ## Rules
 

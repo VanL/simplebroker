@@ -418,28 +418,25 @@ the ID returned by `Queue.write()` or printed by `broker write -t` / `--json`;
 `queue.last_ts` is a broker-global high-water cache, not the identity of that
 write.
 
-Broker-generated and newly inserted message IDs are positive. ID `0` is
-reserved as the lower-bound/checkpoint origin. Exact selectors still accept
-zero so legacy rows can be inspected and cleaned up. For an ordinary Redis
-`write()`, generated-ID high-water advancement and row insertion have one
-server-side visibility point. Moves, exact insertion, and patterned broadcast
-can still place an older ID behind an advanced checkpoint.
+Broker-generated message IDs are positive and equal generation time within
+the encoding grain (~4 µs). ID `0` is reserved as the lower-bound origin.
+Exact selectors still accept zero so legacy rows can be inspected and cleaned
+up. `move` preserves IDs. Exact insertion may supply caller-chosen IDs.
+`--after` / `--before` are selection filters, not a guarantee that nothing
+appears “behind” a bound.
 
-ID representation and range, allocation, write returns, high-water/cache
-semantics, exact-ID normalization and insertion consequences, and
-ID-preserving move are normative in the
+ID representation, allocation, write returns, high-water/cache meaning,
+exact-ID forms, and ID-preserving move are normative in the
 [message identity contract](docs/specs/13-message-identity-contract.md)
 `[SB-ID-1]` through `[SB-ID-5]`.
 
-SimpleBroker retains no permanent tombstone or application deduplication
-ledger after physical removal. Applications needing durable idempotency
-persist the message ID themselves.
+Uniqueness is the ordinary coexistence rule for stored rows. Applications
+needing durable idempotency persist the message ID themselves.
 
-Exact-ID Python operations accept an integer ID or an exact 19-digit string ID.
-Their normalization and failure rules are normative in `[SB-ID-4]`. Python
-`after_timestamp` and `before_timestamp` arguments remain integer bounds owned
-by the ordered-selection/checkpoint concern; the CLI's date and unit-suffix
-parsing applies only to CLI range flags.
+Exact-ID Python operations accept an integer ID or an exact 19-digit ASCII
+string ID (`[SB-ID-4]`). Python `after_timestamp` / `before_timestamp` remain
+integer bounds; CLI date and unit-suffix parsing apply only to CLI range
+flags.
 
 
 ### JSON for Safe Processing
@@ -786,7 +783,7 @@ with Queue("tasks") as q:
     message = q.read()  # Returns: "process order 123"
 
 
-# Safe peek-and-acknowledge pattern (recommended for critical data)
+# Peek-and-acknowledge pattern (message stays until delete by id)
 def process_message(message: str, timestamp: int):
     """Process message and acknowledge only on success."""
     logging.info(f"Processing: {message}")
@@ -813,7 +810,7 @@ def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
     return True  # Continue watching
 
 
-# Use peek=True for safe mode - messages aren't removed until explicitly acknowledged
+# peek=True observes without claiming; delete by id to acknowledge
 ```
 
 For cleanup paths that already know many exact message IDs, use
@@ -1053,7 +1050,7 @@ watcher = QueueWatcher(
     queue=Queue("tasks"),
     handler=process_message,
     error_handler=handle_error,
-    peek=True,  # True = safe mode - just observe, don't consume
+    peek=True,  # observe without claiming
 )
 
 # Start watching (blocks until stopped)
