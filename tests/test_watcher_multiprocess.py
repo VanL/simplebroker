@@ -7,6 +7,7 @@ isolation and coordination.
 import contextlib
 import multiprocessing.queues
 import queue
+import sqlite3
 import tempfile
 import threading
 import time
@@ -19,6 +20,35 @@ from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
 from .helper_scripts.timing import scale_timeout_for_ci
+
+_SHARED_QUEUE_BULK_TIMEOUT = 20.0
+
+
+def _queue_state_for_diagnostics(db_path: str, queue_name: str) -> str:
+    """Read queue state without extending a timeout failure materially."""
+
+    database_uri = f"{Path(db_path).resolve().as_uri()}?mode=ro"
+    try:
+        with contextlib.closing(
+            sqlite3.connect(database_uri, uri=True, timeout=0.1)
+        ) as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    COALESCE(SUM(CASE WHEN claimed = 0 THEN 1 ELSE 0 END), 0),
+                    COUNT(*)
+                FROM messages
+                WHERE queue = ?
+                """,
+                (queue_name,),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        return f"unavailable ({type(exc).__name__}: {exc})"
+
+    if row is None:
+        return "unavailable (query returned no row)"
+    pending, total = (int(value) for value in row)
+    return f"pending={pending}, claimed={total - pending}, total={total}"
 
 
 def _process_diagnostics(
@@ -311,6 +341,22 @@ def test_lock_test_process_waits_for_parent_start(tmp_path: Path) -> None:
     assert not worker.is_alive()
 
 
+def test_queue_state_diagnostics_are_best_effort(tmp_path: Path) -> None:
+    db_path = tmp_path / "diagnostics.db"
+    with BrokerDB(str(db_path)) as broker:
+        broker.write("shared_queue", "one")
+        broker.write("shared_queue", "two")
+        assert _queue_state_for_diagnostics(str(db_path), "shared_queue") == (
+            "pending=2, claimed=0, total=2"
+        )
+
+    unavailable = _queue_state_for_diagnostics(
+        str(tmp_path / "missing.db"),
+        "shared_queue",
+    )
+    assert unavailable.startswith("unavailable (OperationalError:")
+
+
 def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
     """Test multiple processes watching the same queue."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -358,11 +404,13 @@ def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1
                         break
 
                 missing = sorted(expected_messages - seen_messages)
+                queue_state = _queue_state_for_diagnostics(db_path, "shared_queue")
                 raise AssertionError(
                     "Timed out waiting for shared-queue watcher messages: "
                     f"received={len(processed_messages)}, "
                     f"missing_count={len(missing)}, missing_sample={missing[:10]}, "
-                    f"errors={errors}, processes={process_diagnostics()}"
+                    f"queue_state={queue_state}, errors={errors}, "
+                    f"processes={process_diagnostics()}"
                 )
 
             # Start multiple watcher processes
@@ -421,7 +469,10 @@ def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1
                 broker.write("shared_queue", f"message_{i}")
 
             # Collect processed messages
-            collect_until_seen(expected_messages, timeout=10.0)
+            collect_until_seen(
+                expected_messages,
+                timeout=_SHARED_QUEUE_BULK_TIMEOUT,
+            )
 
             # Verify all messages were processed
             message_bodies = [msg for _, msg in processed_messages]

@@ -49,6 +49,15 @@ test-lifecycle fixes plus an explicitly requested release retry.
   `test_concurrent_writers_get_their_own_ids` observed the legitimate third
   stale-fence conflict and failed instead of returning each writer's committed
   row ID.
+- Exact-SHA root run `30654898014` exposed an independent sixth cause on
+  Windows 3.12: the shared-queue multiprocess test consumed the first 95 of
+  100 ordered writes, with all four children alive and no child errors, before
+  its 20-second CI-scaled aggregate deadline. Every other Windows version and
+  matrix job passed. The contiguous unwatched tail is consistent with
+  throughput lag under Windows SQLite/xdist contention, but one observation
+  does not rule out missed watcher activity. Retain the exact-message proof
+  while giving this bulk phase a larger bounded budget and reporting a
+  best-effort, post-deadline broker queue snapshot on any future timeout.
 - The superseded run's Redis coverage job stopped after starting
   `test_pre_check_correctness` and ignored its 180-second hard test timeout.
   The exact predecessor/suspect pair passed 20/20 locally, and the replacement
@@ -103,6 +112,9 @@ Comprehension gates before editing:
   registry guard and target locks before use. Cross-process concurrency,
   one-EVAL visibility, monotone resync, and the three-conflict budget remain
   unchanged.
+- The multiprocess watcher proof must still deliver all 100 exact message
+  bodies with no duplicates. Only the bulk-phase deadline may grow; startup,
+  delivery mode, watcher behavior, and cleanup bounds remain unchanged.
 - Each independent root cause gets one commit after targeted pytest, mypy when
   typing is touched, `ruff check`, and `ruff format --check` pass for the
   affected files.
@@ -196,9 +208,24 @@ reports the selected core and extension versions.
      safely after fork; add deterministic two-core serialization and fork
      regressions; align `[SB-ID-2]` firing-test and implementation ownership
      docs. Commit this fifth root cause independently after affected Redis and
-     shared tests, mypy, Ruff check, and Ruff format pass.
+   shared tests, mypy, Ruff check, and Ruff format pass.
 
-6. Release and monitor.
+6. Bound the Windows shared-queue throughput proof independently.
+   - File: `tests/test_watcher_multiprocess.py` plus this active plan.
+   - Keep the successful startup/drain probe, four competing watcher
+     processes, 100 exact bodies, and duplicate/missing assertions unchanged.
+   - Increase only the post-write bulk collection budget from 10 to 20 base
+     seconds (40 seconds under `CI`) and add a read-only broker
+     pending/claimed snapshot with a 100 ms SQLite busy timeout to failure
+     diagnostics. The snapshot races live workers and is evidence, not a
+     definitive classification; read failure must never replace the original
+     timeout assertion.
+   - Done: the targeted test passes repeatedly, the full affected module,
+     mypy, Ruff check, and Ruff format check pass, and one root-cause commit
+     exists. The unchanged failed GitHub job is rerun once as a flake probe;
+     final acceptance still requires the new exact SHA's full Windows matrix.
+
+7. Release and monitor.
    - Confirm clean `main == origin/main`, selected versions/tags remain free,
      and exact-SHA required CI is green.
    - Run `bin/release.py all` once. Do not retry blindly after a nonzero result;
@@ -207,7 +234,7 @@ reports the selected core and extension versions.
    - Poll release workflows with `gh` at a bounded interval until all selected
      packages succeed or a concrete failure requires a new remediation cycle.
 
-7. Close the plan.
+8. Close the plan.
    - Record commit SHAs and current-state verification evidence.
    - Update the Status Index row to `completed` only after release monitoring
      reaches a terminal successful state.
@@ -270,6 +297,8 @@ not begin with an unresolved blocker.
 | 2026-07-31 | Independent agent plan review, round 2 | PASS | Verified the accepted corrections against the exact transition control flow and Windows job evidence. The pre-construction skip preserves production fork abandonment, the Redis proof has an owning extension target, and backtick reaches the cross-platform Markdown rejection path. No new defect found. |
 | 2026-07-31 | Independent completed-work review | PASS | Reviewed commits `8b6c5b7`, `0a35639`, `df4d12e`, and `85e7d6e`; all are narrow test-only changes that preserve the Redis annotation, byte-preservation, Markdown rejection, and fork-abandonment invariants. Focused tests, Ruff, targeted Redis mypy, and diff checks passed. |
 | 2026-07-31 | Independent Redis contention review | PASS | Diagnosed run `30654900324`: per-core locks do not coordinate the four same-process Redis cores, so ordinary local scheduling can consume the explicit third-conflict terminal path. Accepted the narrow shared `(target, namespace)` process-lock registry, weak retention, pre-lock fork reset, deterministic two-core proof, and unchanged cross-process Lua fence/budget. Rejected an unbounded or enlarged retry budget as broader than the active contract. |
+| 2026-07-31 | Independent Windows watcher review | BLOCKED | Accepted the diagnostic finding: the first draft called `BrokerDB.get_queue_stat()` after the test deadline, which could wait through the normal SQLite retry budget or replace the timeout assertion. Accepted the evidence finding: one contiguous tail is consistent with lag but does not rule out missed activity. Replaced the diagnostic with a read-only 100 ms SQLite snapshot that renders errors, added firing tests, and softened the causal claim. |
+| 2026-07-31 | Independent Windows watcher review, round 2 | PASS | Verified that the bounded best-effort diagnostic cannot replace the timeout assertion, the plan labels its snapshot as racy evidence, and the larger bulk deadline preserves the exact 100-message and no-duplicate assertions. No remaining blocker. |
 
 ## Out of Scope
 
