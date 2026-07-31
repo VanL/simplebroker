@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from examples.async_pooled_broker import (  # type: ignore[import-untyped]
+from examples.async_pooled_broker import (
     AsyncQueue,
     async_broker,
 )
@@ -192,7 +193,7 @@ async def _interrupt_batch(
     *,
     consumer_error: bool,
 ) -> tuple[list[str], BaseException | None]:
-    stream = queue.stream(commit_interval=2)
+    stream = cast(AsyncGenerator[str, None], queue.stream(commit_interval=2))
     yielded = [await anext(stream)]
     if not consumer_error:
         await stream.aclose()
@@ -241,8 +242,8 @@ def _trace_transactions(
         events.append("rollback")
         await real_rollback()
 
-    runner.commit = traced_commit
-    runner.rollback = traced_rollback
+    runner.commit = traced_commit  # type: ignore[method-assign]
+    runner.rollback = traced_rollback  # type: ignore[method-assign]
     return events, real_commit, real_rollback
 
 
@@ -302,8 +303,8 @@ async def _fire_async_stream_transition(
         else:
             yielded, caught = await _fail_batch_commit(queue)
         events_at_boundary = tuple(events)
-        runner.commit = real_commit
-        runner.rollback = real_rollback
+        runner.commit = real_commit  # type: ignore[method-assign]
+        runner.rollback = real_rollback  # type: ignore[method-assign]
 
     persisted = Queue("jobs", db_path=str(db_path))
     try:
