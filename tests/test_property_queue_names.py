@@ -16,6 +16,7 @@ where backend escaping differences would surface.
 from __future__ import annotations
 
 import itertools
+from typing import Literal
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -44,8 +45,11 @@ VALID_NAMES = st.from_regex(QUEUE_NAME_PATTERN).filter(
 # Queue.write raises UnicodeEncodeError for them — FINDING F8, pinned in
 # test_property_message_roundtrip.py. NB: explicit st.characters() includes
 # surrogates unless told otherwise (unlike st.text()'s default alphabet).
+_SURROGATE_CATEGORY: Literal["Cs"] = "Cs"
 BODIES = st.text(
-    alphabet=st.characters(exclude_characters="\x00", exclude_categories=("Cs",)),
+    alphabet=st.characters(
+        exclude_characters="\x00", exclude_categories=(_SURROGATE_CATEGORY,)
+    ),
     max_size=50,
 )
 
