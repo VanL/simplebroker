@@ -111,7 +111,7 @@ class TestQueueConnectionManager:
                         assert isinstance(conn, BrokerDB), (
                             "Ephemeral mode should return BrokerDB instances"
                         )
-                        runner = cast(SQLiteRunner, getattr(conn, "_runner"))
+                        runner = cast(SQLiteRunner, cast(Any, conn)._runner)
                         connection_ids.append(runner.instance_id)
 
                 # All connections should be different instances
@@ -189,7 +189,7 @@ class TestQueueConnectionManager:
 
                 def get_connection() -> None:
                     with queue.get_connection() as conn, lock:
-                        runner = cast(SQLiteRunner, getattr(conn, "_runner"))
+                        runner = cast(SQLiteRunner, cast(Any, conn)._runner)
                         connection_ids.append(runner.instance_id)
 
                 # Create multiple threads
@@ -248,10 +248,10 @@ class TestQueueConnectionManager:
                                 (conn1, conn2),
                                 (
                                     cast(
-                                        SQLiteRunner, getattr(conn1, "_runner")
+                                        SQLiteRunner, cast(Any, conn1)._runner
                                     ).instance_id,
                                     cast(
-                                        SQLiteRunner, getattr(conn2, "_runner")
+                                        SQLiteRunner, cast(Any, conn2)._runner
                                     ).instance_id,
                                 ),
                             )
