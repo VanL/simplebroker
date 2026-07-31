@@ -7,6 +7,7 @@ import sqlite3
 import uuid
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -177,7 +178,7 @@ def test_same_filesystem_compares_device_ids() -> None:
         def __init__(self, device: int) -> None:
             self._device = device
 
-        def stat(self):
+        def stat(self) -> Any:
             return type("Stat", (), {"st_dev": self._device})()
 
     assert _same_filesystem(FakePath(1), FakePath(1)) is True  # type: ignore[arg-type]
@@ -837,7 +838,7 @@ def test_resolve_project_target_prefers_project_values_over_env_target(
     seen: dict[str, object] = {}
 
     class DummyPlugin:
-        def init_backend(  # type: ignore[no-untyped-def]
+        def init_backend(
             self,
             config,
             *,
