@@ -209,15 +209,11 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert "`canonical-spec`" in selection_rows[0]
     assert "14-timestamp-selection.md" in selection_rows[0]
 
-    residual = registry.split("The base operation row owns only", 1)[1].split(
-        "## Transition rule", 1
-    )[0]
-    normalized_residual = " ".join(residual.lower().split())
-    assert (
-        "identity, allocation, exact-id handling, and preservation"
-        in normalized_residual
-    )
-    assert "timestamp selection" in normalized_residual
+    # Identity and selection are first-class registry rows, not residual prose.
+    assert "Base queue/broker operation catalog residual" not in registry
+    overview = " ".join(registry.lower().split())
+    assert "message identity" in overview
+    assert "timestamp selection" in overview
 
     readme = README.read_text(encoding="utf-8")
     normalized_spec = " ".join(text.split())

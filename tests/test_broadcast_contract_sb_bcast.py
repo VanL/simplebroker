@@ -150,11 +150,9 @@ def test_broadcast_contract_clause_inventory_and_authority() -> None:
     assert "tests/test_broadcast_contract_sb_bcast.py" in registry_row
 
     registry = REGISTRY.read_text(encoding="utf-8")
-    residual = registry.split(
-        "The base operation row owns only", 1
-    )[1].split("## Transition rule", 1)[0]
-    assert "broadcast" in residual.lower()
-    assert "excludes" in residual.lower()
+    # Broadcast is a first-class registry row, not residual base-operation prose.
+    assert "Base queue/broker operation catalog residual" not in registry
+    assert "broadcast" in registry.lower()
 
     assert "docs/specs/12-broadcast.md" in README.read_text(
         encoding="utf-8"
