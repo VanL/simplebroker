@@ -468,7 +468,7 @@ class TestMixedMode(WatcherTestBase):
         # Peek messages should be subset of original messages
         assert set(peek_messages).issubset({f"msg_{i}" for i in range(10)})
 
-    def test_multiple_peek_watchers(self, broker_target):  # noqa: C901 approved [DOM-10.1.1] exception
+    def test_multiple_peek_watchers(self, broker_target):  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-033] exception
         """Test multiple peek watchers see same messages."""
         num_peekers = 3
         expected_messages = [f"broadcast_{i}" for i in range(5)]
@@ -551,7 +551,7 @@ class TestMixedMode(WatcherTestBase):
         finally:
             db.shutdown()
 
-    def test_concurrent_writes_during_watch(self, broker_target):  # noqa: C901 approved [DOM-10.1.1] exception
+    def test_concurrent_writes_during_watch(self, broker_target):  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-033] exception
         """Test handling concurrent writes while watching."""
         # Filter out the timestamp conflict warning which is expected in this test
         warnings.filterwarnings(
@@ -595,7 +595,7 @@ class TestMixedMode(WatcherTestBase):
                             time.sleep(0.01)
                     finally:
                         db.shutdown()
-                except Exception:  # noqa: BLE001 approved [DOM-10.1.1] exception
+                except Exception:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
                     with writer_errors_lock:
                         writer_errors.append((writer_id, traceback.format_exc()))
 

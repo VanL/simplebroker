@@ -75,7 +75,7 @@ class BenchmarkSettings:
     redis_url: str | None = None
     redis_docker: bool = False
 
-    def validate(self) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+    def validate(self) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-027] exception
         """Validate CLI-supplied settings up front."""
         if self.iterations < 1:
             raise ValueError("iterations must be at least 1")
@@ -836,7 +836,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         results = run_benchmarks(settings)
-    except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
         parser.exit(1, f"{exc}\n")
 
     summaries = summarize_results(results)

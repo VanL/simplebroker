@@ -445,7 +445,7 @@ def test_multi_queue_activity_waiter_listener_close_wakes_waiters(
         def wait_in_thread() -> None:
             try:
                 result.append(pg_waiter.wait(5.0))
-            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
                 error.append(exc)
 
         thread = threading.Thread(target=wait_in_thread, daemon=True)

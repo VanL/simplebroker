@@ -469,7 +469,7 @@ def test_pre_check_drain_race(broker_target) -> None:
         broker.shutdown()
 
 
-def test_multiple_queues_concurrent_activity(broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def test_multiple_queues_concurrent_activity(broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-033] exception
     """Test multiple queues with concurrent activity."""
     broker = make_broker(broker_target)
     watchers = []
@@ -742,7 +742,7 @@ def test_concurrent_pre_check_timing(broker_target) -> None:
     assert p99_time < p99_threshold
 
 
-def test_pre_check_database_contention(broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def test_pre_check_database_contention(broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-033] exception
     """Test pre-check performance under database contention."""
     broker = make_broker(broker_target)
     watchers = []
@@ -794,7 +794,7 @@ def test_pre_check_database_contention(broker_target) -> None:  # noqa: C901 app
                     for queue in queue_names:
                         broker.write(queue, f"contention_message_{round_idx}_{queue}")
                     time.sleep(0)
-            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
                 writer_errors.append(exc)
 
         contention_thread = threading.Thread(target=create_contention)

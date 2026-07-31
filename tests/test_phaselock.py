@@ -1296,7 +1296,7 @@ def test_no_xattr_existing_status_marker_does_not_bypass_held_lock(
             result_holder["result"] = service.run_phases(
                 (Phase("connection-v1", lambda: calls.append("ran")),)
             )
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
         finally:
             done.set()
@@ -1348,7 +1348,7 @@ def test_strict_lock_wait_can_be_cancelled(tmp_path: Path) -> None:
                 (Phase("connection-v1", lambda: calls.append("ran")),),
                 should_cancel=stop_waiting.is_set,
             )
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
         finally:
             done.set()
@@ -1402,7 +1402,7 @@ def test_no_xattr_waiter_does_not_skip_when_phase_marked_while_lock_is_held(
             result_holder["result"] = service.run_phases(
                 (Phase("connection-v1", lambda: calls.append("ran")),)
             )
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
         finally:
             done.set()
@@ -1512,7 +1512,7 @@ def test_process_local_lock_serializes_threads(
     def run_first() -> None:
         try:
             first_service.run_phases((Phase("connection-v1", first_action),))
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
     def run_second() -> None:
@@ -1520,7 +1520,7 @@ def test_process_local_lock_serializes_threads(
             results["second"] = second_service.run_phases(
                 (Phase("connection-v1", lambda: calls.append("second")),)
             )
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
         finally:
             second_done.set()
@@ -1624,7 +1624,7 @@ def test_advisory_file_lock_rejects_same_instance_reentrant_context(
             if second_lock.acquire():
                 result.append(True)
                 second_lock.release()
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
     thread = threading.Thread(target=acquire_from_other_thread)
@@ -1749,7 +1749,7 @@ def test_process_local_lock_timeout_includes_diagnostics(tmp_path: Path) -> None
         )
         try:
             contender.acquire(diagnostics=lambda: "process_lock=busy")
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
     try:

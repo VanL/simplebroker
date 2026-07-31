@@ -243,7 +243,7 @@ class _ProcessSessionCoreFactory:
             if leased:
                 try:
                     release_runner_thread_connection(runner)
-                except Exception as release_error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+                except Exception as release_error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
                     exc.add_note(
                         f"Runner checkout release also failed: {release_error!r}"
                     )
@@ -798,7 +798,7 @@ class DBConnection:
         """Close one detached resource without replacing the caller's failure."""
         try:
             getattr(resource, operation)()
-        except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
             if logging_enabled:
                 logger.warning(f"Error closing {label}: {exc}")
 
@@ -849,7 +849,7 @@ class DBConnection:
         if owned_runner is not None:
             try:
                 close_owned_runner(owned_runner)
-            except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+            except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
                 if logging_enabled:
                     logger.warning(f"Error closing runner: {exc}")
 
@@ -891,11 +891,11 @@ class DBConnection:
 
         self.cleanup()
 
-    def __enter__(self) -> "DBConnection":  # noqa: PYI034 approved [DOM-10.1.1] exception
+    def __enter__(self) -> "DBConnection":  # noqa: PYI034 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:  # noqa: PYI036 approved [DOM-10.1.1] exception
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:  # noqa: PYI036 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Exit context manager and release resources."""
         self.close()
 
@@ -1336,7 +1336,7 @@ class BrokerCore:
             return self._timestamp_gen.refresh_last_ts()
 
     @contextmanager
-    def sidecar(self, *, transaction: bool = False) -> Iterator[SidecarSession]:  # noqa: C901 approved [DOM-10.1.1] exception
+    def sidecar(self, *, transaction: bool = False) -> Iterator[SidecarSession]:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-015] exception
         """Open a session for caller-owned sidecar tables in this database.
 
         Sidecar sessions are thread-affine: create, use, and exit them on the
@@ -1407,7 +1407,7 @@ class BrokerCore:
                 if transaction_open:
                     try:
                         self._runner.rollback()
-                    except BaseException as cleanup_error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+                    except BaseException as cleanup_error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-006] exception
                         cleanup_failure = cleanup_error
                     transaction_open = False
 
@@ -1435,7 +1435,7 @@ class BrokerCore:
                 if transaction_open:
                     try:
                         self._runner.rollback()
-                    except BaseException as cleanup_error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+                    except BaseException as cleanup_error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-006] exception
                         cleanup_failure = cleanup_error
                     transaction_open = False
                 self._add_cleanup_failure_note(diagnostic, cleanup_failure)
@@ -1792,7 +1792,7 @@ class BrokerCore:
                 if should_commit:
                     self._runner.commit()
 
-    def _yield_transactional_batches(  # noqa: C901 approved [DOM-10.1.1] exception
+    def _yield_transactional_batches(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-015] exception
         self,
         queue: str,
         *,
@@ -1911,7 +1911,7 @@ class BrokerCore:
                 if transaction_open:
                     try:
                         self._runner.rollback()
-                    except BaseException as cleanup_error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+                    except BaseException as cleanup_error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-006] exception
                         cleanup_failure = cleanup_error
                     transaction_open = False
 
@@ -3490,11 +3490,11 @@ class BrokerCore:
                 self._runner.cleanup_marker_files()
             close_owned_runner(self._runner)
 
-    def __enter__(self) -> "BrokerCore":  # noqa: PYI034 approved [DOM-10.1.1] exception
+    def __enter__(self) -> "BrokerCore":  # noqa: PYI034 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:  # noqa: PYI036 approved [DOM-10.1.1] exception
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:  # noqa: PYI036 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Exit context manager and close connection."""
         self.close()
         return False
@@ -3601,7 +3601,7 @@ class BrokerDB(BrokerCore):
                     stacklevel=2,
                 )
 
-    def __enter__(self) -> "BrokerDB":  # noqa: PYI034 approved [DOM-10.1.1] exception
+    def __enter__(self) -> "BrokerDB":  # noqa: PYI034 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Enter context manager."""
         return self
 

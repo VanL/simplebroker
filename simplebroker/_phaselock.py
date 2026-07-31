@@ -159,7 +159,7 @@ def _darwin_xattr_provider() -> _XattrProvider | None:
         return _discover_darwin_xattr_provider()
 
 
-def _discover_darwin_xattr_provider() -> _XattrProvider | None:  # noqa: C901 approved [DOM-10.1.1] exception
+def _discover_darwin_xattr_provider() -> _XattrProvider | None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-010] exception
     """Discover and cache libc xattr functions while holding the cache lock."""
     global _DARWIN_XATTR_PROVIDER
 
@@ -520,7 +520,7 @@ class AdvisoryFileLock(_AdvisoryLock):
 
         return self._locked
 
-    def __enter__(self) -> AdvisoryFileLock:  # noqa: PYI034 approved [DOM-10.1.1] exception
+    def __enter__(self) -> AdvisoryFileLock:  # noqa: PYI034 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         self.acquire()
         return self
 
@@ -628,7 +628,7 @@ class PhaseLockService:
         finally:
             lock.release()
 
-    def run_phases(  # noqa: C901 approved [DOM-10.1.1] exception
+    def run_phases(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-010] exception
         self,
         phases: Iterable[Phase],
         *,

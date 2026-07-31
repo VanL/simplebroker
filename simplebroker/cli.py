@@ -1017,7 +1017,7 @@ def _run_cleanup(
                         f"Database not found, nothing to clean up: {display_target}"
                     )
         return EXIT_SUCCESS
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         commands._emit_error(
             error,
             code="ERROR",
@@ -1052,7 +1052,7 @@ def _run_vacuum(
             compact=args.compact,
             quiet=args.quiet,
         )
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         commands._emit_error(
             error,
             code="ERROR",
@@ -1564,7 +1564,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
         # Handle Ctrl-C gracefully
         print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
         return EXIT_SUCCESS
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         if not args.quiet:
             code = "INVALID_ARGUMENT" if isinstance(e, ArgumentParserError) else "ERROR"
             commands._emit_error(

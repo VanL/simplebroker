@@ -311,7 +311,7 @@ def execute_with_retry(
     raise AssertionError("Unreachable code")
 
 
-def validate_safe_path_components(path: str, context: str = "path") -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def validate_safe_path_components(path: str, context: str = "path") -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-026] exception
     """Validate path components don't contain dangerous characters or reserved names.
 
     Args:
@@ -415,7 +415,7 @@ def validate_safe_path_components(path: str, context: str = "path") -> None:  # 
         )
 
 
-def validate_database_path(  # noqa: C901 approved [DOM-10.1.1] exception
+def validate_database_path(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-026] exception
     file_path: Path, check_magic: bool = False, magic_string: str | None = None
 ) -> None:
     """Validate that a file is a valid SQLite database.

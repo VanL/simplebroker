@@ -11,7 +11,7 @@ from ..._constants import SIMPLEBROKER_MAGIC
 from ..._exceptions import DatabaseError
 
 
-def validate_database(file_path: Path, verify_magic: bool = True) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def validate_database(file_path: Path, verify_magic: bool = True) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
     """Validate that a file is a valid SQLite database and raise detailed errors."""
     if not isinstance(file_path, Path):
         file_path = Path(file_path)

@@ -83,7 +83,7 @@ def pattern_1_basic_setup() -> None:
         print("✅ Pattern 1 complete: Different handlers for different queue types")
 
 
-def pattern_2_priority_simulation() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def pattern_2_priority_simulation() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-024] exception
     """Pattern 2: Simulating priority queues with weighted processing."""
     print("\n" + "=" * 60)
     print("PATTERN 2: Priority Queue Simulation")
@@ -306,7 +306,7 @@ def pattern_4_load_balancing() -> None:
         print("✅ Pattern 4 complete: Load balancing across worker queues")
 
 
-def pattern_5_monitoring() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def pattern_5_monitoring() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-024] exception
     """Pattern 5: Adding monitoring and metrics to MultiQueueWatcher."""
     print("\n" + "=" * 60)
     print("PATTERN 5: Monitoring and Metrics")

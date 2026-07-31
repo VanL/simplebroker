@@ -53,7 +53,7 @@ class OutputReader(threading.Thread):
         except OSError as e:
             # Handle OS-level errors gracefully
             logger.debug(f"OS error in output reader: {e}")
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
             logger.debug(f"Unexpected output reader error: {e}")
         finally:
             try:

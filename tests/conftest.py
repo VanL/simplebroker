@@ -877,7 +877,7 @@ def _publish_cli_coverage(staging: Path, promoted: Path) -> None:
         raise
 
 
-def run_cli(  # noqa: C901 approved [DOM-10.1.1] exception
+def run_cli(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-028] exception
     *args: object,
     cwd: Path,
     stdin: str | None = None,

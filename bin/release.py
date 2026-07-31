@@ -1400,7 +1400,7 @@ def _setting_payload(
         return None
 
 
-def repository_settings_issues(repo_slug: str, token: str) -> tuple[str, ...]:  # noqa: C901 approved [DOM-10.1.1] exception
+def repository_settings_issues(repo_slug: str, token: str) -> tuple[str, ...]:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-023] exception
     """Return targeted issues for every required release repository setting."""
 
     issues: list[str] = []
@@ -2179,7 +2179,7 @@ def _print_publish_note() -> None:
     )
 
 
-def _run_batch_release(args: argparse.Namespace) -> int:  # noqa: C901 approved [DOM-10.1.1] exception
+def _run_batch_release(args: argparse.Namespace) -> int:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-023] exception
     """Run one release pass for every current unpublished package version."""
 
     if args.version is not None:
@@ -2305,7 +2305,7 @@ def _run_batch_release(args: argparse.Namespace) -> int:  # noqa: C901 approved 
     return 0
 
 
-def _run_single_release(  # noqa: C901 approved [DOM-10.1.1] exception
+def _run_single_release(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-023] exception
     args: argparse.Namespace,
     target: ReleaseTarget,
 ) -> int:

@@ -99,7 +99,7 @@ def _call_in_thread(
             warnings.simplefilter("always")
             try:
                 result["value"] = call()
-            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
                 result["error"] = exc
             caught_warnings = list(recorded)
 
@@ -187,7 +187,7 @@ def _queue_close_mode_child(
         try:
             queue.close()
             queue_close_error = None
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             queue_close_error = f"{type(exc).__name__}: {exc}"
         result = {
             "foreign_error": (
@@ -198,7 +198,7 @@ def _queue_close_mode_child(
             "warning_count": len(caught),
             "queue_close_error": queue_close_error,
         }
-    except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
         result = {"probe_error": f"{type(exc).__name__}: {exc}"}
     try:
         send_connection.send(result)
@@ -469,7 +469,7 @@ def test_preblocked_waiter_observes_poison_without_hanging(tmp_path: Path) -> No
         waiter_started.set()
         try:
             core.peek_one("jobs", with_timestamps=False)
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             waiter_error.append(exc)
         finally:
             waiter_finished.set()
@@ -646,7 +646,7 @@ def test_poison_published_during_query_blocks_first_yield(
             warnings.simplefilter("always")
             try:
                 result["exit"] = sidecar_manager.__exit__(None, None, None)
-            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
                 result["error"] = exc
             result["warnings"] = list(caught)
         allow_query_return.set()
@@ -872,7 +872,7 @@ def test_poison_aware_lock_preserves_explicit_rlock_compatibility(
         try:
             with lock:
                 entered.set()
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
         finally:
             finished.set()
@@ -905,7 +905,7 @@ def test_healthy_lock_contention_stress_never_publishes_poison(
             for _ in range(100):
                 with core._lock:
                     counter += 1
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
     threads = [
@@ -972,7 +972,7 @@ def test_concurrent_publication_preserves_exactly_one_first_cause(
                 operation=operation,
                 owner_thread=owner_thread,
             )
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
     publishers = [

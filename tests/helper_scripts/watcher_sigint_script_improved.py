@@ -13,7 +13,7 @@ from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
 
-def main() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def main() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-031] exception
     if len(sys.argv) != 3:
         print("Usage: watcher_sigint_script_improved.py <db_path> <ready_file>")
         sys.exit(1)
@@ -50,7 +50,7 @@ def main() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
             db = BrokerDB(str(unique_db_path))
             break
 
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
             if attempt < max_retries - 1:
                 # Exponential backoff with jitter
                 wait_time = (2**attempt) * 0.1 + (
@@ -83,7 +83,7 @@ def main() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
             handler,
             db=db,
         )
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
         print(f"Watcher creation failed: {e}", flush=True)
         db.close()
         sys.exit(1)
@@ -108,7 +108,7 @@ def main() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
     except KeyboardInterrupt:
         # Treat external KeyboardInterrupt as graceful shutdown
         exit_code = 0
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
         print(f"Watcher error: {e}", flush=True)
         exit_code = 1
     finally:
@@ -117,7 +117,7 @@ def main() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
             db.close()
             if unique_db_path.exists():
                 unique_db_path.unlink()
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
             print(f"Cleanup error: {e}", flush=True)
         finally:
             signal.signal(signal.SIGINT, previous_sigint_handler)

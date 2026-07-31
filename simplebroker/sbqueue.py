@@ -768,7 +768,7 @@ class Queue:
                 include_claimed=include_claimed,
             )
 
-    def move(  # noqa: C901 approved [DOM-10.1.1] exception
+    def move(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-016] exception
         self,
         destination: Union[str, "Queue"],
         *,
@@ -1086,11 +1086,11 @@ class Queue:
                 include_claimed=include_claimed,
             )
 
-    def __enter__(self) -> "Queue":  # noqa: PYI034 approved [DOM-10.1.1] exception
+    def __enter__(self) -> "Queue":  # noqa: PYI034 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Enter the context manager."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:  # noqa: PYI036 approved [DOM-10.1.1] exception
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:  # noqa: PYI036 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Exit the context manager and close the runner."""
         self.close()
 
@@ -1439,7 +1439,7 @@ class Queue:
                 if conn:
                     conn.close()
                 # Note: watcher_conn cleanup happens in cleanup_connections
-            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+            except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
                 if config.get("BROKER_LOGGING_ENABLED", True):
                     logger.warning(f"Error during Queue finalizer cleanup: {e}")
 

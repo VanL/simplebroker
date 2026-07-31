@@ -139,7 +139,7 @@ class _SharedActivityListener:
                 raise _translate_error(self._error) from self._error
             raise OperationalError(str(self._error)) from self._error
 
-    def _run(self) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+    def _run(self) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-019] exception
         try:
             conn = psycopg.connect(self._dsn, autocommit=True)
             self._conn = conn
@@ -167,7 +167,7 @@ class _SharedActivityListener:
                             for entry in self._fan_in_entries.values():
                                 if notify.payload in entry.queue_set:
                                     entry.condition.notify_all()
-        except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-004] exception
             if not self._stop_event.is_set():
                 self._error = exc
                 self._ready.set()

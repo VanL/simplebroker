@@ -32,7 +32,7 @@ def main() -> None:
         db = BrokerDB(str(db_path))
         db_init_end = time.time()
         print(f"STEP_2_DB_INIT_COMPLETE:{db_init_end - db_init_start:.3f}s", flush=True)
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
         print(f"STEP_2_DB_INIT_FAILED:{e}", flush=True)
         sys.exit(1)
 
@@ -54,7 +54,7 @@ def main() -> None:
             f"STEP_3_WATCHER_INIT_COMPLETE:{watcher_init_end - watcher_init_start:.3f}s",
             flush=True,
         )
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
         print(f"STEP_3_WATCHER_INIT_FAILED:{e}", flush=True)
         db.close()
         sys.exit(1)
@@ -70,7 +70,7 @@ def main() -> None:
             f"STEP_4_READY_FILE_COMPLETE:{ready_file_end - ready_file_start:.3f}s",
             flush=True,
         )
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
         print(f"STEP_4_READY_FILE_FAILED:{e}", flush=True)
         db.close()
         sys.exit(1)
@@ -89,7 +89,7 @@ def main() -> None:
         # This shouldn't happen - watcher should handle it internally
         print("STEP_6_KEYBOARD_INTERRUPT", flush=True)
         exit_code = 1
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
         print(f"STEP_6_EXCEPTION:{e}", flush=True)
         exit_code = 1
     finally:

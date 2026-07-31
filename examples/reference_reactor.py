@@ -798,7 +798,7 @@ class Reactor(BaseReactor):
                         timestamp=item.timestamp,
                         value=value,
                     )
-                except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+                except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-004] exception
                     result = WorkerResult(
                         source_queue=item.source_queue,
                         timestamp=item.timestamp,
@@ -912,7 +912,7 @@ class Reactor(BaseReactor):
             )
         self._check_counter += 1
 
-    def _drain_queue(self) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+    def _drain_queue(self) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-025] exception
         self._update_active_queues()
         if not self._active_queues:
             return

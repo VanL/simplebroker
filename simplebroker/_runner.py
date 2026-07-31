@@ -969,7 +969,7 @@ class SQLiteRunner:
         """Enter context manager."""
         return self
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:  # noqa: PYI036 approved [DOM-10.1.1] exception
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Literal[False]:  # noqa: PYI036 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Exit context manager - cleanup marker files."""
         self.cleanup_marker_files()
         self.close()

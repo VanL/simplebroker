@@ -212,6 +212,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as exc:  # the no-traceback floor: fail loud, fail clean  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as exc:  # the no-traceback floor: fail loud, fail clean  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         print(f"check-dom15-fixtures: internal error: {exc}")
         sys.exit(2)

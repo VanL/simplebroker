@@ -71,7 +71,7 @@ async def worker(
             if shutdown_event.is_set():
                 break
             continue
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-004] exception
             print(f"Worker {worker_id}: Error processing message: {e}")
 
     print(f"Worker {worker_id}: Shutting down, processed {processed} items")

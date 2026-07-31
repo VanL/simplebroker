@@ -874,7 +874,7 @@ class BaseWatcher(ABC):
         try:
             self._handler(message, timestamp)
             return True
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-004] exception
             self._handle_handler_error(
                 e, message, timestamp, error_handler, config=effective_config
             )
@@ -1042,7 +1042,7 @@ class BaseWatcher(ABC):
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb: Any,  # noqa: PYI036 approved [DOM-10.1.1] exception
+        exc_tb: Any,  # noqa: PYI036 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         *,
         config: Mapping[str, Any] | None = None,
     ) -> None:
@@ -1050,7 +1050,7 @@ class BaseWatcher(ABC):
         effective_config = self._config if config is None else resolve_config(config)
         try:
             self.stop()
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
             if effective_config["BROKER_LOGGING_ENABLED"]:
                 logger.warning(f"Error during stop in __exit__: {e}")
 
@@ -1176,7 +1176,7 @@ class PollingStrategy:
         self._next_native_idle_poll_at = time.monotonic()
         self._schedule_next_native_idle_poll(initial=True)
 
-    def wait_for_activity(self) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+    def wait_for_activity(self) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-017] exception
         """Wait for activity with optimized polling."""
         while not self._stop_event.is_set():
             if self._local_activity_pending:
@@ -1425,7 +1425,7 @@ class PollingStrategy:
                 return True  # Change detected!
 
             return False
-        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-004] exception
             # Track PRAGMA failures
             self._pragma_failures += 1
             if self._pragma_failures >= 10:

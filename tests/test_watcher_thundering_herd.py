@@ -243,7 +243,7 @@ def test_thundering_herd_mitigation(broker_target) -> None:
         broker.shutdown()
 
 
-def test_thundering_herd_with_multiple_active_queues(broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def test_thundering_herd_with_multiple_active_queues(broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-033] exception
     """Test behavior when multiple queues are active."""
     broker = make_broker(broker_target)
     watchers = []

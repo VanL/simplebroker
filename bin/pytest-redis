@@ -208,7 +208,7 @@ def main() -> int:
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         return 130
-    except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         print(str(exc), file=sys.stderr)
         return 1
     finally:

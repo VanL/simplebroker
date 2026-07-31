@@ -295,7 +295,7 @@ class TimestampGenerator:
         return self._backend_plugin.read_last_ts(self._runner)
 
     @staticmethod
-    def validate(timestamp_str: str, exact: bool = False) -> int:  # noqa: C901 approved [DOM-10.1.1] exception
+    def validate(timestamp_str: str, exact: bool = False) -> int:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-013] exception
         """Validate and parse timestamp string into a 64-bit hybrid timestamp.
 
         This is the canonical validation logic used by the -m flag and other
@@ -517,7 +517,7 @@ class TimestampGenerator:
         return hybrid_ts
 
     @staticmethod
-    def _parse_numeric_timestamp(timestamp_str: str) -> int | None:  # noqa: C901 approved [DOM-10.1.1] exception
+    def _parse_numeric_timestamp(timestamp_str: str) -> int | None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-013] exception
         """Parse numeric timestamp with unit heuristic."""
         try:
             # Handle decimal numbers

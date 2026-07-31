@@ -409,7 +409,7 @@ def _with_default_suite_path(args: list[str], default_path: str) -> list[str]:
     return [*args, default_path]
 
 
-def _extract_pytest_runner_overrides(  # noqa: C901 approved [DOM-10.1.1] exception
+def _extract_pytest_runner_overrides(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-012] exception
     pytest_args: list[str],
 ) -> tuple[list[str], str | None, str | None, str | None]:
     """Extract pytest args that need to be merged with runner defaults."""
@@ -593,7 +593,7 @@ def pytest_pg_main() -> int:
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         return 130
-    except Exception as exc:  # pragma: no cover - defensive CLI wrapper  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as exc:  # pragma: no cover - defensive CLI wrapper  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         print(str(exc), file=sys.stderr)
         return 1
     finally:
@@ -885,7 +885,7 @@ def packaging_smoke_main() -> int:
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         return 130
-    except Exception as exc:  # pragma: no cover - defensive CLI wrapper  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as exc:  # pragma: no cover - defensive CLI wrapper  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         print(str(exc), file=sys.stderr)
         return 1
 

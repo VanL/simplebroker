@@ -186,7 +186,7 @@ def test_prepare_queue_operation_locks_unknown_operation_by_queue() -> None:
     assert isinstance(runner.calls[0][1][0], int)
 
 
-def test_vacuum_compacts_after_deleting_claimed_batches() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def test_vacuum_compacts_after_deleting_claimed_batches() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-022] exception
     class VacuumRunner(RecordingRunner):
         def __init__(self) -> None:
             super().__init__()

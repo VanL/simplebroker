@@ -66,7 +66,7 @@ def _is_closed_pipe_error(error: OSError) -> bool:
 def _replace_stdout_with_devnull() -> None:
     """Replace a broken stdout wrapper when descriptor redirection is unavailable."""
     try:
-        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 approved [DOM-10.1.1] exception
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115 approved [DOM-10.1.1] [RUFF-SUP-002] exception
     except OSError:
         # Pipe shutdown is already in progress. There is no safer output sink
         # if even the platform null device cannot be opened.
@@ -411,7 +411,7 @@ FetchOneFn = Callable[..., str | tuple[str, int] | None]
 FetchGeneratorFn = Callable[..., Iterator[str | tuple[str, int]]]
 
 
-def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] exception
+def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exception
     *,
     fetch_one: FetchOneFn,
     fetch_generator: FetchGeneratorFn,
@@ -801,7 +801,7 @@ def cmd_status(db_path: DBTarget, *, json_output: bool = False) -> int:
         with DBConnection(db_path) as conn:
             db = cast(BrokerDB, conn.get_connection())
             stats = db.status()
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         _emit_error(e, code="ERROR", json_output=json_output)
         return EXIT_ERROR
 
@@ -939,7 +939,7 @@ def _move_all_messages(
                 file=sys.stderr,
             )
         return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         _emit_error(error, code="ERROR", json_output=json_output)
         return EXIT_ERROR
 
@@ -1389,7 +1389,7 @@ def cmd_watch(
         watcher.run_forever()
     except KeyboardInterrupt:
         return EXIT_SUCCESS
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         _emit_error(error, code="ERROR", json_output=json_output)
         return EXIT_ERROR
     finally:
@@ -1460,7 +1460,7 @@ def _init_broker_target(db_target: BrokerTarget, *, quiet: bool) -> int:
             quiet=quiet,
         )
         return EXIT_SUCCESS
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         print(f"Error initializing database: {error}", file=sys.stderr)
         return EXIT_ERROR
 
@@ -1482,7 +1482,7 @@ def _init_sqlite_path(db_path: str, *, quiet: bool) -> int:
             connection.get_connection()
         _status(f"Initialized SimpleBroker database: {db_path}", quiet=quiet)
         return EXIT_SUCCESS
-    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         print(f"Error initializing database: {error}", file=sys.stderr)
         return EXIT_ERROR
 

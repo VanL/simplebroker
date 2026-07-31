@@ -1057,7 +1057,7 @@ class TestSQLiteRunnerErrorHandling:
                     SetupPhase.SCHEMA,
                     operation,
                 )
-            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
                 errors.append(exc)
             finally:
                 contender_done.set()

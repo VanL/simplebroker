@@ -471,7 +471,7 @@ def _foreign_call(
             warnings.simplefilter("always")
             try:
                 call()
-            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+            except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
                 error.append(exc)
             caught = list(recorded)
 

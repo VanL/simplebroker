@@ -16,9 +16,10 @@ uv run --frozen --no-sync ruff check --select C901 --output-format json .
 
 The audit produced exactly 76 findings: 16 P1, 35 P2, and 25 P3. Line numbers
 below identify that historical baseline. The final reconciliation later in
-this document records current owners and scores. Ruff's reported `noqa_row`,
-the local directives, and [DOM-10.1.1] are the line-sensitive source of truth
-after C901 activation.
+this document records current owners and scores. Stable suppression-group IDs
+join local directives to [DOM-10.1.1]'s human-owned reasons and approved
+cardinalities. `bin/ruff_suppression_index.py` derives the line-sensitive
+location index from Ruff's reported `noqa_row` after C901 activation.
 
 ## Governing Contracts
 

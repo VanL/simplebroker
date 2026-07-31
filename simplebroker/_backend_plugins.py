@@ -254,7 +254,7 @@ class BrokerConnection(Protocol):
 
     def __enter__(self) -> Any: ...
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any: ...  # noqa: PYI036 approved [DOM-10.1.1] exception
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> Any: ...  # noqa: PYI036 approved [DOM-10.1.1] [RUFF-SUP-001] exception
 
     def set_stop_event(self, stop_event: Any) -> None: ...
 

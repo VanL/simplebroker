@@ -140,7 +140,7 @@ def test_postgres_prepare_rename_waits_for_meta_before_messages_lock(
             prepare_returned.set()
             release_prepare.wait(timeout=3.0)
             rename_runner.rollback()
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
             with contextlib.suppress(Exception):
                 rename_runner.rollback()
@@ -191,7 +191,7 @@ def test_postgres_rename_waits_for_write_like_table_lock(
     def run_rename() -> None:
         try:
             results.append(rename_core.rename_queue("old", "new"))
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
         finally:
             finished.set()

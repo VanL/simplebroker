@@ -255,7 +255,7 @@ def _check_hot_loop() -> None:
             _hot_loop_data["count"] = 0
 
 
-def execute_retry(  # noqa: C901 approved [DOM-10.1.1] exception
+def execute_retry(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-011] exception
     operation: Callable[[], T],
     *,
     retry_on: Callable[[Exception], bool],

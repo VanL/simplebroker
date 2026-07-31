@@ -61,7 +61,7 @@ def _cleanup_process(process: multiprocessing.Process) -> None:
         raise AssertionError(f"multiprocess watcher child {process.pid} leaked")
 
 
-def watcher_process(  # noqa: C901 approved [DOM-10.1.1] exception
+def watcher_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
     db_path: str,
     queue_name: str,
     result_queue: multiprocessing.Queue,
@@ -134,7 +134,7 @@ def watcher_process(  # noqa: C901 approved [DOM-10.1.1] exception
             ("stats", process_id, {"processed": len(processed), "messages": processed}),
         )
 
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
         result_queue.put(("error", process_id, str(e)))
 
 
@@ -189,11 +189,11 @@ def shutdown_test_process(
             ),
         )
 
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
         result_queue.put(("error", process_id, str(e)))
 
 
-def lock_test_process(  # noqa: C901 approved [DOM-10.1.1] exception
+def lock_test_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
     db_path, queue_name, result_queue, control_queue, process_id
 ) -> None:
     """Process function for testing database locking behavior."""
@@ -271,7 +271,7 @@ def lock_test_process(  # noqa: C901 approved [DOM-10.1.1] exception
             ),
         )
 
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
         result_queue.put(("error", process_id, str(e)))
 
 
@@ -310,7 +310,7 @@ def test_lock_test_process_waits_for_parent_start(tmp_path: Path) -> None:
     assert not worker.is_alive()
 
 
-def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
     """Test multiple processes watching the same queue."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -449,7 +449,7 @@ def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1
             broker.close()
 
 
-def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
     """Test multiple processes each watching their own queue."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -578,7 +578,7 @@ def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.
             broker.close()
 
 
-def test_multiprocess_thundering_herd() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def test_multiprocess_thundering_herd() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
     """Test thundering herd mitigation across processes."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -709,7 +709,7 @@ def test_multiprocess_thundering_herd() -> None:  # noqa: C901 approved [DOM-10.
                     _cleanup_process(p)
 
 
-def test_multiprocess_graceful_shutdown() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def test_multiprocess_graceful_shutdown() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
     """Test graceful shutdown of watchers across processes."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
@@ -818,7 +818,7 @@ def test_multiprocess_graceful_shutdown() -> None:  # noqa: C901 approved [DOM-1
                 _cleanup_process(p)
 
 
-def test_multiprocess_database_locking() -> None:  # noqa: C901 approved [DOM-10.1.1] exception
+def test_multiprocess_database_locking() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
     """Test database locking behavior with multiple processes."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")

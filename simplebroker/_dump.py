@@ -153,7 +153,7 @@ def _error(line_number: int, problem: str) -> ValueError:
     return ValueError(f"invalid dump input at line {line_number}: {problem}")
 
 
-def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:  # noqa: C901 approved [DOM-10.1.1] exception
+def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
     """Apply simplebroker-dump v1 lines to a broker.
 
     Streams the input: alias records are applied immediately; message

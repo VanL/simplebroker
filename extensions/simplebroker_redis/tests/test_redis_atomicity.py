@@ -341,7 +341,7 @@ def test_delete_write_race_never_orphans_redis_storage(
             start.wait()
             for index in range(3000):
                 writer.write("jobs", f"message-{index}")
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             failures.append(exc)
 
     thread = threading.Thread(target=write_messages)

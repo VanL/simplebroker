@@ -738,7 +738,7 @@ class PostgresBackendPlugin:
             (stable_lock_key("aliases", schema_name),),
         )
 
-    def vacuum(  # noqa: C901 approved [DOM-10.1.1] exception
+    def vacuum(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-018] exception
         self,
         runner: SQLRunner,
         *,

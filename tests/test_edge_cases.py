@@ -132,7 +132,7 @@ def _schema_migration_worker(db_path: str, worker_id: int, results: list) -> Non
         messages = db.peek_many(f"queue_{worker_id}", limit=100)
         db.close()
         results.append((worker_id, "success", len(messages)))
-    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+    except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
         results.append((worker_id, "error", str(e)))
 
 

@@ -698,13 +698,13 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
     def write_message() -> None:
         try:
             queue.write("payload")
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             operation_errors.append(exc)
 
     def close_queue() -> None:
         try:
             queue.close()
-        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # pragma: no cover - asserted in parent thread  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             close_errors.append(exc)
         finally:
             close_returned.set()
@@ -806,7 +806,7 @@ def test_closed_session_rejects_connections_and_extra_releases(tmp_path: Path) -
         ("sql", True, True),
     ],
 )
-def test_failed_core_creation_releases_any_runner_lease(  # noqa: C901 approved [DOM-10.1.1] exception
+def test_failed_core_creation_releases_any_runner_lease(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-030] exception
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     branch: str,
@@ -980,7 +980,7 @@ def test_session_close_wins_race_with_core_creation(
     def get_connection() -> None:
         try:
             session.get_connection(None, lease_operation=False)
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
     monkeypatch.setattr(CountingSQLiteRunner, "setup_with_stop_event", delayed_setup)
@@ -1011,7 +1011,7 @@ def test_session_close_wins_race_with_core_creation(
     assert counting_backend.runner_close_calls == 1
 
 
-def test_non_sqlite_core_creation_after_close_does_not_retain_runner(  # noqa: C901 approved [DOM-10.1.1] exception
+def test_non_sqlite_core_creation_after_close_does_not_retain_runner(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-030] exception
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     creation_admitted = threading.Event()
@@ -1065,7 +1065,7 @@ def test_non_sqlite_core_creation_after_close_does_not_retain_runner(  # noqa: C
     def get_connection() -> None:
         try:
             session.get_connection(None, lease_operation=False)
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
     workers = [threading.Thread(target=get_connection) for _ in range(3)]
@@ -1150,7 +1150,7 @@ def test_factory_close_does_not_cancel_checkout_rollback(
     def get_connection() -> None:
         try:
             session.get_connection(None, lease_operation=False)
-        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] exception
+        except BaseException as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
             errors.append(exc)
 
     worker = threading.Thread(target=get_connection)

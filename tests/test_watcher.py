@@ -451,7 +451,7 @@ class TestQueueWatcher(WatcherTestBase):
             assert stop_time < 4.0, f"Stop took {stop_time:.2f}s"
 
     @pytest.mark.sqlite_only
-    def test_graceful_shutdown_sigint(self, tmp_path):  # noqa: C901 approved [DOM-10.1.1] exception
+    def test_graceful_shutdown_sigint(self, tmp_path):  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-031] exception
         """Test graceful shutdown via SIGINT using subprocess."""
         from simplebroker.db import BrokerDB
 

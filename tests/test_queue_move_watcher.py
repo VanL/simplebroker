@@ -349,7 +349,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
                             broker.write("source", f"concurrent_{i}")
                             successful_writes.append(i)
                             time.sleep(0.01)
-                        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] exception
+                        except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
                             write_errors.append((i, f"{type(e).__name__}: {e}"))
                 finally:
                     all_writes_done.set()
