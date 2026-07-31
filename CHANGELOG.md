@@ -8,7 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [5.7.0] - 2026-07-31
+## [6.0.0] - 2026-07-31
+
+### Breaking
+- `simplebroker.commands`: options on `cmd_read`, `cmd_peek`, `cmd_move`,
+  `cmd_watch`, and `cmd_list` are now keyword-only, matching `cmd_write`,
+  `cmd_broadcast`, and `cmd_rename`. `cmd_peek` and `cmd_move` previously took
+  nine positional parameters, three of them consecutive booleans, so
+  `cmd_peek(db, "q", True, False, True, None, None, None, None)` was legal and
+  unreadable. No parameter was renamed, removed, reordered, or given a new
+  default; only the binding changed, and callers already passing keywords are
+  unaffected.
+
+  This lands in the release that first makes the command layer normative
+  (`[SB-API-10]`), so the specified shape is the intended one rather than an
+  inherited accident. `[SB-API-10]` describes each `cmd_*` as the programmatic
+  equivalent of a CLI subcommand, and CLI flags are named rather than
+  positional.
 
 ### Added
 - Re-exported project-config discovery helpers on `simplebroker.ext`:
@@ -53,8 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   insertion. Exact selectors still accept legacy zero rows for recovery, but a
   dump containing ID `0` must be intentionally re-IDed before restore.
 - Bumped the synchronized first-party `simplebroker-pg` and
-  `simplebroker-redis` packages to 3.4.0, raised both extension core floors to
-  `simplebroker>=5.7.0`, and raised the root optional backend floors to those
+  `simplebroker-redis` packages to 3.5.0, raised both extension core floors to
+  `simplebroker>=6.0.0`, and raised the root optional backend floors to those
   extension versions.
 
 ### Documented
@@ -105,12 +121,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `17-ops.md`). Root README is human entry/catalog with links; ownership
   rules live in `docs/README.md` and `docs/specs/product-section-registry.md`.
 
-### simplebroker-pg 3.4.0
-- Synchronized minor release for SimpleBroker 5.7.0. Runtime backend behavior is
-  unchanged beyond shared core exact-ID reserved-zero admission.
+### simplebroker-pg 3.5.0
+- Synchronized release for SimpleBroker 6.0.0; the core floor rises to
+  `simplebroker>=6.0.0`. The extension's own API is unchanged, and runtime
+  backend behavior is unchanged beyond shared core exact-ID reserved-zero
+  admission.
 
-### simplebroker-redis 3.4.0
-- Synchronized minor release for SimpleBroker 5.7.0. Ordinary generated
+### simplebroker-redis 3.5.0
+- Synchronized release for SimpleBroker 6.0.0; the core floor rises to
+  `simplebroker>=6.0.0`. The extension's own API is unchanged. Ordinary
+  generated
   `write()` now advances high-water and inserts in one fenced Lua operation.
 - `canonicalize_queue` now shares the core sigil-rule implementation, so a
   plain name is literal and only `@name` resolves (matching SQLite and the

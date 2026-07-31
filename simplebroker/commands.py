@@ -540,13 +540,13 @@ def cmd_write(
 def cmd_read(
     db_path: DBTarget,
     queue_name: str,
+    *,
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
     after_str: str | None = None,
     message_id_str: str | None = None,
     before_str: str | None = None,
-    *,
     config: dict[str, Any] = _config,
 ) -> int:
     """Read and remove message(s) from queue using Queue API.
@@ -626,6 +626,7 @@ def cmd_read(
 def cmd_peek(
     db_path: DBTarget,
     queue_name: str,
+    *,
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
@@ -680,6 +681,7 @@ def cmd_peek(
 
 def cmd_list(
     db_path: DBTarget,
+    *,
     show_stats: bool = False,
     pattern: str | None = None,
     prefix: str | None = None,
@@ -980,6 +982,7 @@ def cmd_move(
     db_path: DBTarget,
     source_queue: str,
     dest_queue: str,
+    *,
     all_messages: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,
@@ -1326,6 +1329,7 @@ def _finish_watch(watcher: QueueWatcher | QueueMoveWatcher | None) -> None:
 def cmd_watch(
     db_path: DBTarget,
     queue_name: str,
+    *,
     peek: bool = False,
     json_output: bool = False,
     show_timestamps: bool = False,

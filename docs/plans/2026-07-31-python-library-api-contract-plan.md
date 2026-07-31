@@ -1,7 +1,7 @@
 # Python Library API Contract
 
-Status: completed — class 3+P (canonical `16-python-library-api.md`;
-Weft/Taut consumer migration remains out of scope)
+Status: active — reopened 2026-07-31 for Revision R1 (command-layer signature
+correction before the surface freezes). Original scope completed 2026-07-31.
 Date: 2026-07-31
 
 ## Goal
@@ -187,6 +187,102 @@ Queue/watch/dump/ext suites where a clause fires on real behavior.
    reuse of ext/public-surface/project-config/IO/delivery suites.
 7. [x] Update `docs/agent-kernel.md`, `llms.txt`, specs index, README
    pointers; program-theory and invariant inventory aligned.
+
+## Revision R1 — Command-layer signature correction (2026-07-31)
+
+Class rises to **5**: this changes a public callable's binding, and
+`[SB-API-10]` normatively declares `simplebroker.commands.__all__` stable under
+the package compatibility policy. Ships as **6.0.0**.
+
+### Why this reverses the original scope
+
+The original plan says "Document **existing** public promises—do not invent a
+better [API]," and deliberately excluded shape changes. That was right for a
+documentation cutover. It becomes wrong at the moment the documentation turns
+normative: promoting `[SB-API-10]` freezes whatever shape exists, so "document,
+don't change" silently converts an accident into a contract.
+
+The accident is real and follows the same age gradient as the module naming —
+the original core verbs are misshapen, the later additions are correct:
+
+| Function | positional | keyword-only |
+|----------|-----------:|-------------:|
+| `cmd_peek` | 9 | 0 |
+| `cmd_move` | 9 | 0 |
+| `cmd_read` | 8 | 1 |
+| `cmd_watch` | 8 | 0 |
+| `cmd_list` | 5 | 0 |
+| `cmd_write` | 3 | 3 |
+| `cmd_broadcast` | 3 | 2 |
+| `cmd_rename` | 3 | 2 |
+
+`cmd_peek(db, "q", True, False, True, None, None, None, None)` is legal today
+and unreadable. Three consecutive booleans is a boolean trap in a surface the
+same release declares stable.
+
+`[SB-API-10]` also states that each `cmd_*` is "the programmatic equivalent of
+a CLI subcommand." CLI flags are inherently *named* (`--json`,
+`--timestamps`); keyword-only parameters mirror that shape, positional booleans
+do not. So the correction moves the surface toward its own stated contract.
+
+### Delta
+
+Make every parameter after the target and queue operands keyword-only on
+`cmd_read`, `cmd_peek`, `cmd_move`, `cmd_watch`, and `cmd_list`, matching
+`cmd_write` / `cmd_broadcast` / `cmd_rename`. No parameter is renamed, removed,
+reordered, or given a new default; only the binding changes.
+
+### Why major, and why now
+
+Breaking: a positional caller stops working. `[SB-API-10]` promises stability
+for this surface, so the honest number is 6.0.0. Shipping a stability promise
+and breaking it in the same version would be worse than either alone.
+
+Now rather than later, because 6.0.0 is the release that first makes this
+surface normative. Freeze the intended shape rather than the accidental one.
+Practical breakage is near-zero: `cli.py` already passes keywords, and no
+plausible caller writes nine positional arguments.
+
+### Accompanying organization fixes
+
+Two module-organization corrections found in the same review ship with R1.
+They carry no spec impact and no version implication of their own.
+
+**`db.py` module docstring.** It read "handles all SQLite operations," which is
+false: `BrokerCore` is database-agnostic and PostgreSQL runs through it. The
+replacement states what the module contains and gives a layout map. The module
+*name* is correct and stays — `[SB-ID-1]` defines a database as any broker
+target, Redis included.
+
+**Split `helpers.py`.** It holds two domains with no shared state: retry and
+setup policy (12 functions) and path/filesystem security (15 functions).
+Nothing outside the package imports it — it appears in no `__all__` — so the
+split is free of compatibility obligations.
+
+- `_retry_policy.py` — pairs with `_retry.py` so the mechanism/policy division
+  is legible from the module list, which is the actual defect. Today a reader
+  asking "how does retry work here" must find two halves with nothing
+  connecting them.
+- `_paths.py` — path and filesystem security.
+
+A `helpers/` package with a re-exporting `__init__` was rejected: it organizes
+the interior while leaving `from .helpers import X` working, so no call site
+migrates and the discoverability problem survives behind a tidier facade.
+
+### Sequencing constraint
+
+The `helpers.py` split rewrites imports in roughly eight test modules. A
+concurrent change (`2026-07-31-core-test-mypy-gate-plan.md`) is rewriting most
+of `tests/` for the strict mypy gate. The split lands **after** that work
+settles; the signature correction and the docstring touch neither.
+
+### Open decision for the owner
+
+First-party extension versioning. Core goes 5.7.0 → 6.0.0 and extension floors
+must rise to `simplebroker>=6.0.0`. The extensions' own APIs are unchanged by
+R1, but `simplebroker_redis.core.canonicalize_queue` did change behavior
+earlier in this release. Either extensions stay 3.4.0 with a raised floor, or
+they take a bump of their own. Recorded here rather than decided.
 
 ## Out of scope
 

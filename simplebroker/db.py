@@ -1,4 +1,17 @@
-"""Database module for SimpleBroker - handles all SQLite operations."""
+"""Broker core, connection lifecycle, and the SQLite specialization.
+
+``BrokerCore`` implements broker operations against any database: each broker
+target, including Redis, is a database ([SB-ID-1]). PostgreSQL runs through
+``BrokerCore`` directly, and Redis mirrors its contract in
+``simplebroker_redis.core``.
+
+Layout:
+
+- connection lifecycle and target binding: ``DBConnection``, ``open_broker``
+- database-agnostic operations: ``BrokerCore`` — write, claim, peek, move,
+  broadcast, metadata, delete, rename, aliases, vacuum
+- SQLite specialization: ``BrokerDB``
+"""
 
 import contextlib
 import logging

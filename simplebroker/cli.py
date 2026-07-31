@@ -1253,7 +1253,7 @@ def _dispatch_queue_command(
     if args.command == "list":
         return commands.cmd_list(
             resolved_target,
-            getattr(args, "stats", False),
+            show_stats=getattr(args, "stats", False),
             pattern=getattr(args, "pattern", None),
             prefix=getattr(args, "prefix", None),
             json_output=getattr(args, "json", False),
@@ -1358,12 +1358,12 @@ def _dispatch_admin_command(
     return commands.cmd_watch(
         resolved_target,
         args.queue,
-        args.peek,
-        args.json,
-        args.timestamps,
-        getattr(args, "after", None),
-        args.quiet,
-        getattr(args, "move", None),
+        peek=args.peek,
+        json_output=args.json,
+        show_timestamps=args.timestamps,
+        after_str=getattr(args, "after", None),
+        quiet=args.quiet,
+        move_to=getattr(args, "move", None),
     )
 
 

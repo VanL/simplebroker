@@ -74,6 +74,7 @@ def test_queue_name_validation_caching():
 
     # Invalid queue name - should also be cached
     result4 = _validate_queue_name_cached("")
+    assert result4 is not None
     assert "empty" in result4
 
     # Same invalid input - should hit cache
