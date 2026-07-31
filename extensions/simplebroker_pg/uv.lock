@@ -193,7 +193,7 @@ release = [
 
 [[package]]
 name = "simplebroker-pg"
-version = "3.3.3"
+version = "3.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "psycopg", extra = ["binary"] },

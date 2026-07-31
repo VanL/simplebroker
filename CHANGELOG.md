@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   insertion. Exact selectors still accept legacy zero rows for recovery, but a
   dump containing ID `0` must be intentionally re-IDed before restore.
 - Bumped the synchronized first-party `simplebroker-pg` and
-  `simplebroker-redis` packages to 3.3.3, raised both extension core floors to
+  `simplebroker-redis` packages to 3.4.0, raised both extension core floors to
   `simplebroker>=5.7.0`, and raised the root optional backend floors to those
   extension versions.
 
@@ -43,13 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `17-ops.md`). Root README is human entry/catalog with links; ownership
   rules live in `docs/README.md` and `docs/specs/product-section-registry.md`.
 
-### simplebroker-pg 3.3.3
-- Synchronized release for SimpleBroker 5.7.0. Runtime backend behavior is
+### simplebroker-pg 3.4.0
+- Synchronized minor release for SimpleBroker 5.7.0. Runtime backend behavior is
   unchanged beyond shared core exact-ID reserved-zero admission.
 
-### simplebroker-redis 3.3.3
-- Synchronized release for SimpleBroker 5.7.0. Ordinary generated `write()` now
-  advances high-water and inserts in one fenced Lua operation.
+### simplebroker-redis 3.4.0
+- Synchronized minor release for SimpleBroker 5.7.0. Ordinary generated
+  `write()` now advances high-water and inserts in one fenced Lua operation.
 
 ## [5.6.2] - 2026-07-30
 
