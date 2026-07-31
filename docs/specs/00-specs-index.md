@@ -27,6 +27,8 @@ Product section authority: `product-section-registry.md`.
 5. `14-timestamp-selection-contract.md` — `[SB-SELECT-*]` (strict open bounds
    as filters; late older ids; watch progress when the registry marks
    canonical)
+6. `15-persistence-io-contract.md` — `[SB-IO-*]` (dump/load format, filters,
+   fresh load, claimed-row inspection when the registry marks canonical)
 
 ## Rules
 

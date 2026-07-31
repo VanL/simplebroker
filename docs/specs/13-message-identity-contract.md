@@ -13,7 +13,8 @@ forms and insertion outcomes; move preserves identity.
 Ordered timestamp filters (`--after` / `--before`) and filter consequences are
 `docs/specs/14-timestamp-selection-contract.md` `[SB-SELECT-*]`. CLI non-exact
 bound string forms are `[SB-CLI-5]`. Claim and delivery remain with
-`[SB-DELIVERY-*]`. Dump/load remains with persistence I/O.
+`[SB-DELIVERY-*]`. Dump/load format and claimed inspection are
+`docs/specs/15-persistence-io-contract.md` `[SB-IO-*]`.
 
 ## Representation and identity [SB-ID-1]
 

@@ -239,8 +239,8 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `broadcast [--pattern GLOB \| --queue QUEUE ...] <message\|->` | Send one message atomically to all existing queues, matching existing queues, or a repeatable exact set of existing literal queue names |
 | `watch <queue> [options]` | Watch queue for new messages |
 | `alias <add\|remove\|list>` | Manage queue aliases |
-| `dump [--include <glob>] [--exclude <glob>]` | Write all queues to stdout as ndjson (pending messages only, deterministic; globs match queue names, aliases match on their own name or their target, exclude wins, the flags compose) |
-| `load` | Restore a dump from stdin into a fresh broker (duplicate message IDs fail loudly); exit codes 0/1 |
+| `dump [--include <glob>] [--exclude <glob>]` | Write queues to stdout as `simplebroker-dump` v1 ndjson (pending only, deterministic; globs on queue names; aliases match name or target; exclude wins) — `[SB-IO-*]` |
+| `load` | Restore a dump from stdin into a **fresh** broker (duplicate ids fail loudly); exit codes 0/1 — `[SB-IO-4]` |
 | `init` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
 
 `read --all`, `peek --all`, `dump`, and `watch` treat a downstream stdout
@@ -476,12 +476,15 @@ Claimed rows are deletion-pending — vacuum may remove them at any time;
 `--include-claimed` is an inspection tool, not delivery state.
 
 ```bash
-# Back up, restore, or migrate between backends — dumps are plain ndjson.
-# Load targets a FRESH broker (duplicate message IDs fail loudly).
+# Back up, restore, or migrate between backends (normative: [SB-IO-*]).
+# Pending-only dump; load into a FRESH broker (duplicate ids fail loudly).
 $ broker dump > backup.ndjson
 $ broker dump --include 'tasks*' --exclude 'tasks_tmp' | (cd /fresh/dir && broker load)
 $ broker dump | BROKER_BACKEND=postgres BROKER_BACKEND_TARGET="$DSN" broker load
 ```
+
+Full dump/load and claimed-row inspection rules:
+`docs/specs/15-persistence-io-contract.md`.
 
 ## Common Patterns
 

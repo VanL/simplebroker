@@ -15,6 +15,10 @@ plus `[SB-CLI-5]` bound string forms. Contract frames bounds as **pure
 filters** (not complete stream offsets); late older ids under a bound
 (including after move/exact insert); watch peek progress as messages come.
 
+**Phase 3:** Promoted 2026-07-31 as
+`docs/specs/15-persistence-io-contract.md` `[SB-IO-1]`–`[SB-IO-5]` (dump/load
+v1, pending-only dump, include/exclude, fresh load, claimed-row inspection).
+
 **Parallel / sibling:** Python library / `simplebroker.ext` API contract is
 owned by `docs/plans/2026-07-31-python-library-api-contract-plan.md` (feeds
 Phase 4 / embedding residual).
@@ -71,7 +75,7 @@ owner disposition and separately scoped authority.
       dispositions (existing promises, not a redesign).
 - [x] Phase 2B: ordered timestamp selection / filter consequences (canonical
       `[SB-SELECT-*]` + `[SB-CLI-5]`).
-- [ ] Persistence I/O (dump/load / claimed-row I/O).
+- [x] Persistence I/O (dump/load / claimed-row I/O) — `[SB-IO-*]`.
 - [ ] Embedding / library API (see sibling library-api plan) and residual
       operations catalog.
 - [ ] Program-theory links stay synchronized with registry ownership without
@@ -177,7 +181,7 @@ Registry (`docs/specs/product-section-registry.md`) as of 2026-07-31:
 | Broadcast selection, creation, atomicity | `canonical-spec` (`12`) — promoted Phase 1; rewrite landed |
 | Message identity, allocation, exact-ID, move ID | `canonical-spec` (`13`) — Phase 2A; rewrite landed |
 | Ordered timestamp selection and filter consequences | `canonical-spec` (`14`) — Phase 2B |
-| Dump/load and claimed-row I/O | `readme-only` — Phase 3 |
+| Dump/load and claimed-row I/O | `canonical-spec` (`15`) — Phase 3 |
 | Embedding, targets, backends, sidecar | `readme-only` — Phase 4; library API sibling plan |
 | Base queue/broker operation catalog residual | `readme-only` — Phase 5 (shrinks as library/ops verticals take ownership) |
 
@@ -241,8 +245,8 @@ Expected canonical families:
 | 1 done | Broadcast selection and atomicity | `12-broadcast-contract.md` | `[SB-BCAST-*]` | canonical |
 | 2A done | Message identity and allocation | `13-message-identity-contract.md` | `[SB-ID-*]` | canonical |
 | 2B done | Timestamp range selection / filters | `14-timestamp-selection-contract.md` | `[SB-SELECT-*]` (+ `[SB-CLI-5]`) | canonical |
-| 3 | Dump/load and claimed-row I/O | proposed `15-…` | proposed `[SB-IO-*]` | not started |
-| 4 | Embedding / Python library API | proposed `15`/`16-…` | proposed `[SB-API-*]` / `[SB-EMBED-*]` | sibling plan active |
+| 3 done | Dump/load and claimed-row I/O | `15-persistence-io-contract.md` | `[SB-IO-*]` | canonical |
+| 4 | Embedding / Python library API | proposed `16-…` | proposed `[SB-API-*]` / `[SB-EMBED-*]` | sibling plan active |
 | 5 | Residual queue/broker operation catalog | proposed `17-…` | proposed `[SB-OPS-*]` | not started |
 
 Filenames after the landed families are **proposals only** until a phase adds an
@@ -1742,6 +1746,7 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Program / retrospective decision record | Temporary disposition record for 23 promotion findings; applied as specs 10–13 rewrites; record removed 2026-07-31 after work complete | Needed owner disposition without self-executing approval | rewrites landed; record deleted |
 | 2026-07-31 | Program / status refresh | Status, current state, outcomes, source list, end-state table, and historical labels for Phase 1/2A deltas updated to match registry and trunk specs; library API sibling plan linked | Agents re-opening closed audit/pause from stale front matter | plan hygiene |
 | 2026-07-31 | Phase 2B promotion | Added `14-timestamp-selection-contract.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`, `[SB-CLI-5]` bound string forms, registry canonical row, README/kernel/llms/theory/inventory reductions, structural + bound/move filter tests | Owner directed Phase 2B as pure filter contract without resumable-checkpoint overclaim | structural suites green |
+| 2026-07-31 | Phase 3 promotion | Added `15-persistence-io-contract.md` `[SB-IO-1]`–`[SB-IO-5]` for dump/load v1, pending-only dump, globs, fresh load, claimed inspection | Owner directed Phase 3 | structural + dump suite binds |
 
 ## Review Log
 
@@ -1780,7 +1785,7 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2A — Identity/allocation | `249df9cb…` | `090c689e…` | Mechanical gates passed; later promise audit found drift | Mechanical PASS; audit closed 2026-07-31 via owner dispositions + rewrite |
 | Post-audit rewrite (CLI/Delivery/Broadcast/Identity wording) | trunk after 2A | `2aa6057`…`0baf090` (+ follow-up) | Structural product-contract suites green; `check-doc-paths` OK | Owner-directed rebaseline of live specs to README-true promises |
 | 2B — Timestamp range selection/filters | after post-audit rewrite | Phase 2B land (this change) | Spec `14` + CLI-5 + registry/README/kernel/theory + structural tests | Docs-only promotion of filter contract |
-| 3 — Persistence I/O | gated | pending | pending | pending |
+| 3 — Persistence I/O | after 2B | Phase 3 land | Spec `15` + registry/README/kernel + structural tests | Docs-only promotion |
 | 4 — Embedding / library API | gated | sibling plan | `2026-07-31-python-library-api-contract-plan.md` active; runner plan still relevant for some embed boundaries | pending |
 | 5 — Residual operations | gated | pending | Shrinks as library/API and other rows take ownership | pending |
 | 6 — Final cutover | gated | pending | All residual registry rows canonical | pending |

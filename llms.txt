@@ -13,6 +13,7 @@
 - [Broadcast contract spec](docs/specs/12-broadcast-contract.md): Canonical target selection, creation, atomicity, CLI selector, and backend compatibility rules `[SB-BCAST-1]` through `[SB-BCAST-6]`
 - [Message identity contract](docs/specs/13-message-identity-contract.md): Canonical hybrid-ID representation, allocation, write-return, high-water/cache, exact-ID, and move-preservation rules `[SB-ID-1]` through `[SB-ID-5]`
 - [Timestamp selection contract](docs/specs/14-timestamp-selection-contract.md): Canonical id filters, late older ids, and watch progress `[SB-SELECT-1]`–`[SB-SELECT-4]`
+- [Persistence I/O contract](docs/specs/15-persistence-io-contract.md): Canonical dump/load format, selection filters, fresh load, and claimed-row inspection `[SB-IO-1]`–`[SB-IO-5]`
 - [Specs index](docs/specs/00-specs-index.md): Process and product spec read order
 - [README](README.md): Human product entry and full command/env/API catalogs; normative for the registry concerns still marked `readme-only`
 - [CHANGELOG](CHANGELOG.md): Behavior deltas for published releases

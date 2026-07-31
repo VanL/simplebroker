@@ -170,11 +170,13 @@ never create queues.
 
 ## Dump / load boundaries
 
-- **`dump` omits claimed (deletion-pending) rows** by default unless you use
-  an include-claimed style surface where documented — treat dump as pending
-  (and configured include) state, not a full physical image of claimed work.
+Normative: `docs/specs/15-persistence-io-contract.md` `[SB-IO-1]`–`[SB-IO-5]`.
+
+- **`dump` is pending-only** (claimed/deletion-pending rows omitted); not a
+  full physical image of claimed work.
 - **`load` targets a fresh broker**; duplicate message ids fail loudly.
 - Prefer dump/load over copying live SQLite files for backup/migration.
+- **`include_claimed` / `--include-claimed`** on peek is inspection only.
 
 ## Minimal use recipes
 
