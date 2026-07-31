@@ -16,7 +16,9 @@ Two tests pin the fix from opposite directions:
 """
 
 import multiprocessing
+from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -58,9 +60,13 @@ def test_checkpoint_reader_sees_every_message(tmp_path: Path) -> None:
 
     def drain() -> None:
         nonlocal checkpoint
-        for body, ts in reader.peek(
-            all_messages=True, with_timestamps=True, after_timestamp=checkpoint
-        ):
+        rows = cast(
+            Iterator[tuple[str, int]],
+            reader.peek(
+                all_messages=True, with_timestamps=True, after_timestamp=checkpoint
+            ),
+        )
+        for body, ts in rows:
             seen.add(body)
             checkpoint = max(checkpoint, ts)
 
