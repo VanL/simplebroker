@@ -352,7 +352,8 @@ def test_write_preserves_crlf_and_non_ascii_bytes_outside_markers(
     tmp_path: Path,
 ) -> None:
     spec = _write_fixture(tmp_path)
-    original = spec.read_bytes().replace(b"Human-owned suffix.", "café".encode())
+    original = spec.read_bytes().replace(b"\r\n", b"\n")
+    original = original.replace(b"Human-owned suffix.", "café".encode())
     original = original.replace(b"\n", b"\r\n")
     spec.write_bytes(original)
     begin = b"<!-- BEGIN GENERATED RUFF SUPPRESSION INDEX -->"
