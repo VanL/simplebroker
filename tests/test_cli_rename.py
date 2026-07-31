@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 from .conftest import run_cli
 
 
 def _json_object(output: str) -> dict[str, object]:
-    return json.loads(output)
+    return cast(dict[str, object], json.loads(output))
 
 
 def test_rename_plain_success_outputs_nothing(workdir: Path) -> None:
