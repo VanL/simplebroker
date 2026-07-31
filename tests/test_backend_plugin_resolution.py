@@ -61,8 +61,8 @@ def _install_entry_point(
 
 class ValidDummyPlugin:
     name = "dummy"
-    sql = sqlite_sql
-    backend_api_version = BACKEND_API_VERSION
+    sql: Any = sqlite_sql
+    backend_api_version: Any = BACKEND_API_VERSION
     schema_version = 1
 
 
@@ -106,7 +106,9 @@ def test_unknown_backend_plugin_raises_clear_error() -> None:
         get_backend_plugin("missing")
 
 
-def test_external_backend_plugin_resolves_via_entry_point(monkeypatch) -> None:
+def test_external_backend_plugin_resolves_via_entry_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Entry-point plugins should be loaded by name."""
 
     _install_entry_point(monkeypatch, "dummy", ValidDummyPlugin)
@@ -133,7 +135,7 @@ def test_entry_point_plugin_name_must_match_the_requested_backend(
 
 
 def test_external_backend_plugin_with_invalid_sql_namespace_is_rejected(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Entry-point plugins should fail fast when their SQL namespace is incomplete."""
 
@@ -143,7 +145,7 @@ def test_external_backend_plugin_with_invalid_sql_namespace_is_rejected(
         backend_api_version = BACKEND_API_VERSION
         schema_version = 1
 
-        def init_backend(self, config, **kwargs):
+        def init_backend(self, config: Any, **kwargs: Any) -> None:
             raise NotImplementedError
 
     _install_entry_point(monkeypatch, "dummy", DummyPlugin)
