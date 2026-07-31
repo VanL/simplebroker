@@ -756,11 +756,12 @@ def _write_script_protocol(
     monkeypatch.setattr(
         core, "_resync_timestamp_generator", lambda: resyncs.append(None)
     )
-    monkeypatch.setattr(
-        core._timestamp_gen,
-        "refresh_last_ts",
-        lambda: refreshes.append(None) or 0,
-    )
+
+    def refresh_last_ts() -> int:
+        refreshes.append(None)
+        return 0
+
+    monkeypatch.setattr(core._timestamp_gen, "refresh_last_ts", refresh_last_ts)
     monkeypatch.setattr(core, "_publish", publishes.append)
 
     expectation = (
