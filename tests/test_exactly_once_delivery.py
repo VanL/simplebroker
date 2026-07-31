@@ -5,6 +5,7 @@ The delivery guarantee depends on the commit_interval parameter:
 - commit_interval>1: At-least-once delivery - each batch is committed only after
   the entire batch has been yielded
 """
+# mypy: disable-error-code=no-untyped-def
 
 import multiprocessing
 from pathlib import Path
@@ -90,7 +91,7 @@ def test_automatic_vacuum_runs_only_after_generator_batch_commit(
             delivery_guarantee="at_least_once",
         )
         assert next(generator) == "message-0"
-        generator.close()
+        generator.close()  # type: ignore[attr-defined]
         generator = None
 
         assert broker.peek_many("test_queue", limit=10, with_timestamps=False) == [
@@ -114,7 +115,7 @@ def test_automatic_vacuum_runs_only_after_generator_batch_commit(
         assert broker.count_claimed_messages() == 0
     finally:
         if generator is not None:
-            generator.close()
+            generator.close()  # type: ignore[attr-defined]
         broker.shutdown()
 
 
@@ -183,7 +184,7 @@ def test_queue_read_many_rejects_invalid_delivery_before_mutation(
     queue.write("message-1")
 
     with pytest.raises(ValueError) as exc_info:
-        queue.read_many(2, delivery_guarantee="typo")  # type: ignore[arg-type]
+        queue.read_many(2, delivery_guarantee="typo")
 
     error = str(exc_info.value)
     assert "typo" in error
@@ -210,20 +211,18 @@ def test_queue_delivery_entry_points_reject_invalid_values_before_mutation(
     try:
         with pytest.raises(ValueError) as exc_info:
             if operation == "read_generator":
-                generator = source.read_generator(
-                    delivery_guarantee="typo"  # type: ignore[arg-type]
-                )
+                generator = source.read_generator(delivery_guarantee="typo")
                 next(generator)
             elif operation == "move_many":
                 source.move_many(
                     destination,
                     2,
-                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                    delivery_guarantee="typo",
                 )
             else:
                 generator = source.move_generator(
                     destination,
-                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                    delivery_guarantee="typo",
                 )
                 next(generator)
     finally:
@@ -264,7 +263,7 @@ def test_invalid_queue_delivery_does_not_create_sqlite_target(
                 )
     finally:
         if generator is not None:
-            generator.close()
+            generator.close()  # type: ignore[attr-defined]
         queue.close()
 
     assert not db_path.exists()
@@ -323,7 +322,7 @@ def test_direct_core_rejects_invalid_delivery_before_mutation(
         assert broker.peek_many("destination", limit=10, with_timestamps=False) == []
     finally:
         if generator is not None:
-            generator.close()
+            generator.close()  # type: ignore[attr-defined]
         broker.shutdown()
 
 
