@@ -570,7 +570,7 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert peeked is not None
         original_body, original_ts = peeked
 
-        preserved_data = {}
+        preserved_data: dict[str, str | int] = {}
 
         def capture_handler(body: str, ts: int):
             preserved_data["body"] = body
