@@ -10,6 +10,7 @@ import os
 import sys
 import threading
 import time
+from typing import Any, cast
 
 import pytest
 
@@ -155,7 +156,7 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
             processed_messages.append((msg, time.monotonic()))
 
         watcher = InstrumentedQueueWatcher("test_queue", handler, db=broker_target)
-        strategy = watcher._strategy
+        strategy = cast(Any, watcher._strategy)
 
         # Start watcher
         watcher.run_in_thread()
@@ -247,8 +248,8 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
 
         # Wait for both to back off
         def both_backed_off():
-            active_delays = active_watcher._strategy.delay_history
-            idle_delays = idle_watcher._strategy.delay_history
+            active_delays = cast(Any, active_watcher._strategy).delay_history
+            idle_delays = cast(Any, idle_watcher._strategy).delay_history
             if len(active_delays) < 20 or len(idle_delays) < 20:
                 return False
             # Check recent delays are non-zero
@@ -263,8 +264,8 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
         )
 
         # Record delay counts before message
-        active_delays_before = len(active_watcher._strategy.delay_history)
-        idle_delays_before = len(idle_watcher._strategy.delay_history)
+        active_delays_before = len(cast(Any, active_watcher._strategy).delay_history)
+        idle_delays_before = len(cast(Any, idle_watcher._strategy).delay_history)
 
         # Write to active queue only
         broker.write("active_queue", "message")
@@ -280,7 +281,7 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
         time.sleep(0.2)
 
         # Active watcher should show burst mode (zero delays)
-        active_new_delays = active_watcher._strategy.delay_history[
+        active_new_delays = cast(Any, active_watcher._strategy).delay_history[
             active_delays_before:
         ]
         active_zero_count = sum(1 for d in active_new_delays if d == 0)
@@ -289,7 +290,9 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
         )
 
         # Idle watcher should continue with non-zero delays
-        idle_new_delays = idle_watcher._strategy.delay_history[idle_delays_before:]
+        idle_new_delays = cast(Any, idle_watcher._strategy).delay_history[
+            idle_delays_before:
+        ]
         if len(idle_new_delays) > 0:
             idle_zero_count = sum(1 for d in idle_new_delays if d == 0)
             assert idle_zero_count == 0, "Idle watcher should not have zero delays"
@@ -311,7 +314,7 @@ def test_burst_mode_gradual_backoff(no_jitter, broker_target) -> None:
             pass
 
         watcher = InstrumentedQueueWatcher("test_queue", handler, db=broker_target)
-        strategy = watcher._strategy
+        strategy = cast(Any, watcher._strategy)
 
         # Manually test the delay calculation at different check counts
         # Test base delay to avoid jitter issues
@@ -524,7 +527,7 @@ def test_polling_jitter(broker_target) -> None:  # noqa: C901 approved [DOM-10.1
             all_backed_off_delays = []
 
             for w in watchers:
-                strategy = w._strategy
+                strategy = cast(Any, w._strategy)
                 if len(strategy.delay_history) > 0:
                     # Collect delays that indicate backed-off state (near max_interval)
                     # Using 0.7 threshold to ensure we're testing at full backoff
@@ -551,7 +554,7 @@ def test_polling_jitter(broker_target) -> None:  # noqa: C901 approved [DOM-10.1
         all_delays = []
         all_strategies = []
         for w in watchers:
-            strategy = w._strategy
+            strategy = cast(Any, w._strategy)
             all_strategies.append(strategy)
             # Collect delays that indicate backed-off state (same criteria as wait loop)
             backed_off_delays = [
@@ -642,7 +645,7 @@ def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
         watcher = InstrumentedQueueWatcher(
             "test_queue", handler, db=broker_target, peek=True
         )
-        strategy = watcher._strategy
+        strategy = cast(Any, watcher._strategy)
 
         watcher.run_in_thread()
 
@@ -716,7 +719,7 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:  # noqa
             processed_messages.append(msg)
 
         watcher = InstrumentedQueueWatcher("test_queue", handler, db=broker_target)
-        strategy = watcher._strategy
+        strategy = cast(Any, watcher._strategy)
 
         watcher.run_in_thread()
 
