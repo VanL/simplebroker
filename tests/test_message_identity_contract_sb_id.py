@@ -230,19 +230,12 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert "[SB-ID-1]" in readme
     assert "[SB-ID-5]" in readme
     assert "ID `0` is reserved" in normalized_spec
-    assert (
-        "Exact selectors and storage decoders continue to accept zero"
-        in normalized_spec
-    )
+    assert "Exact selectors still accept zero" in normalized_spec
     assert "allocation/high-water advancement and insertion" in normalized_spec
-    assert "one backend-atomic outcome" in normalized_spec
-    assert (
-        "does not make `after_timestamp` a universal durable cursor" in normalized_spec
-    )
-    assert (
-        "`insert_messages(...)` requires each normalized ID to be greater than zero"
-        in normalized_spec
-    )
+    assert "19 ASCII digit" in normalized_spec
+    assert "New exact-id insertion rejects reserved zero" in normalized_spec
+    assert "consume remaining logical-counter values" in normalized_spec
+    assert "same message identity with the queue binding updated" in normalized_spec
     assert "generated and newly inserted message IDs are positive" in normalized_readme
     assert "Exact selectors still accept zero" in normalized_readme
     assert "ordinary Redis `write()`" in normalized_readme

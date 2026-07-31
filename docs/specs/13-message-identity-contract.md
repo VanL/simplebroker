@@ -7,141 +7,102 @@ backend owns the storage realization of ID allocation, high-water advancement,
 exact-ID insertion, and ID-preserving move.
 
 Boundary: public message-ID representation and range; broker-generated ID
-allocation; write-return identity; broker-global high-water and public cache
-semantics; exact-ID normalization and insertion consequences; and preservation
-of identity across move.
+allocation; write-return identity; high-water and cache meaning; exact-ID
+forms and insertion outcomes; move preserves identity.
 
-Strict `after_timestamp` / `before_timestamp` selection, CLI timestamp-bound
-parsing, checkpoint progression, and the permanent-skip consequence of moving
-an older ID behind a checkpoint are excluded. They remain with the registered
-ordered-selection/checkpoint concern until Phase 2B. Claim state and delivery
-guarantees remain with `[SB-DELIVERY-*]`. Dump/load formats and restore policy
-remain with the persistence-I/O concern. Queue iteration and FIFO ordering are
-not defined by this contract.
-
-Required action: producers retain the ID returned by a successful write when
-they need that row's identity. Callers must not infer a write's ID from
-`last_ts`. Exact-ID callers use the accepted integer or exact-string forms.
-Consumers and backend implementers preserve an existing message ID when moving
-the row between queues.
+Ordered timestamp filters (`--after` / `--before`), CLI bound parsing, and
+related selection concerns remain with their registered owners. Claim and
+delivery remain with `[SB-DELIVERY-*]`. Dump/load remains with persistence I/O.
 
 ## Representation and identity [SB-ID-1]
 
 A stored message exposes one public message ID. JSON surfaces call this field
-`timestamp`. The ID is an integer in the signed storage range
-`0 <= message_id < 2**63`.
+`timestamp`. The id is an integer in `0 <= message_id < 2**63`.
 
-Broker-generated message IDs are strictly positive. ID `0` is reserved as
-the lower-bound and empty-high-water origin and is not valid for a newly
-inserted message. Exact selectors and storage decoders continue to accept
-zero so a broker target created by an older release can be inspected and
-cleaned up; this recovery compatibility does not permit new zero-ID
-insertion.
+Broker-**generated** message ids are strictly positive. ID `0` is reserved as
+the lower-bound / empty high-water origin and is not valid for a newly
+inserted message. Exact selectors still accept zero so a database created by
+an older release can be inspected and cleaned up.
 
-Broker-generated IDs use a hybrid timestamp encoding: the physical component
-retains the magnitude of `time.time_ns()` with the low 12 bits cleared, and the
-low 12 bits hold the logical counter. The physical component is
-nanosecond-scaled with 4,096-nanosecond granularity; it is not a count of
-microseconds.
+Broker-generated ids pack a physical component taken from `time.time_ns()`
+with the low 12 bits cleared, and a logical counter in those 12 bits. The id
+is format-compatible with nanosecond Unix time in that sense, but it does not
+offer 1 ns resolution: host clocks and the 12-bit counter reservation make
+effective time steps on the order of **~4 µs (4096 ns)**. The physical
+component is **not** a microsecond counter.
 
-Broker-generated IDs increase monotonically within one resolved broker target.
-The stored message relation enforces uniqueness for rows that coexist. Message
-bodies are payload, not identity, and may duplicate. SimpleBroker keeps no
-permanent tombstone or application deduplication ledger after physical removal.
+Within one **database** (each broker target, including Redis, is a database
+for this purpose), broker-generated ids are allocated monotonically. Uniqueness
+is the ordinary coexistence rule for stored rows: no two coexisting messages
+share an id; reuse after delete is allowed. Message bodies are payload and may
+duplicate. There is no permanent tombstone ledger of every historical id.
 
-This clause does not promise that queue iteration is ordered by numeric message
-ID or that every stored ID was generated from the current wall clock. Exact-ID
-insertion may supply an earlier valid ID.
+A generated id’s physical component is generation-time (`now()`) within the
+encoding grain. Callers may insert exact ids; those need not equal wall-clock
+now. Move preserves id (see [SB-ID-5]). Storage iteration order follows an
+internal sequence counter, not the public message id.
 
 ## Allocation and write result [SB-ID-2]
 
 `generate_timestamp()` and its `get_ts()` alias allocate and persist a new
-broker-compatible ID without inserting a message row.
+broker-compatible id without inserting a message row.
 
-Both `write()` on the broker handle returned by `open_broker()` and
-`Queue.write()` return the ID of the row that committed. If an attempted ID
-conflicts and the write retries, only the surviving committed row's ID is
-returned. If no row commits, no ID is returned. Concurrent writers may advance
-broker-global high-water after a write; that later advancement does not change
-the ID returned for the earlier row. CLI display of the returned ID remains
-governed by `[SB-CLI-*]`.
+`Queue.write()` returns the id of the row that committed. If an attempted id
+conflicts and the write retries, only the surviving committed row’s id is
+returned. If no row commits, no id is returned. Concurrent writers may advance
+global high-water after a write; that does not change the id returned for the
+earlier row. CLI display of the returned id remains with `[SB-CLI-*]`.
 
 For an ordinary generated `write()`, allocation/high-water advancement and
-insertion of the message row commit as one backend-atomic outcome. A stale
-candidate must not advance persisted high-water or insert a row. This
-visibility rule is limited to ordinary `write()`; standalone
-`generate_timestamp()` intentionally advances high-water without a row, and
-ID-preserving moves, exact-ID insertion, and backend operations explicitly
-excluded by their owning contracts may admit an older ID later. The rule
-therefore does not make `after_timestamp` a universal durable cursor.
+insertion commit together. A stale candidate must not advance persisted
+high-water or insert a row.
 
 ## Global high-water and caches [SB-ID-3]
 
-Persisted `last_ts` is a broker-target-global allocation high-water mark. It is
-not scoped to one queue, is not the ID of the caller's most recent write, and
-need not identify a current message row. It may reflect another queue, another
-writer, a generated ID with no row, or exact-ID insertion.
+Persisted `last_ts` is a database-global allocation high-water mark. It is not
+scoped to one queue, is not the id of the caller’s most recent write, and need
+not identify a current message row.
 
-`get_cached_last_timestamp()` exposes the broker handle's current generator
-view. `Queue.last_ts` is a per-`Queue` cache of the broker-global value and may
-be stale relative to other writers. `Queue.refresh_last_ts()` and
-`refresh_last_timestamp()` on the broker handle explicitly refresh from
-backend high-water state. `Queue.latest_pending_timestamp()` is a different
-queue-local query and is not an alias for `last_ts`.
+`Queue.last_ts` is a per-`Queue` cache of that global value and may be stale
+relative to other writers. The cache updates after `queue.write()` and
+`queue.generate_timestamp()`. On a fresh handle it is `None` until a generate
+or refresh. `Queue.refresh_last_ts()` refreshes from backend high-water.
+`Queue.latest_pending_timestamp()` is a different queue-local query.
 
-Callers needing one write's identity use the value returned by `write()`, not
-any high-water or cache surface.
+Callers that need one write’s identity use the value returned by `write()`,
+not high-water or cache surfaces.
 
 ## Exact-ID normalization and insertion [SB-ID-4]
 
-Public exact-ID operations accept either:
+Public exact-id operations accept either:
 
-- an integer satisfying `0 <= value < 2**63`; or
-- a string which, after surrounding whitespace is stripped, contains exactly
-  19 Unicode decimal digits and parses to an integer in that range.
+- an integer in range; or
+- an exact **19 ASCII digit** string form of that integer.
 
-The accepted forms above apply to exact selectors so legacy ID `0` remains
-addressable. New exact-ID insertion is narrower:
-`insert_messages(...)` requires each normalized ID to be greater than zero.
-Integer `0` and an exact 19-digit string that normalizes to zero raise
-`ValueError`. The complete input is still snapshotted and validated before
-mutation, so one reserved zero in a batch inserts no rows and does not change
-persisted high-water.
+Malformed strings raise `ValueError`. Unsupported types, including `bool`,
+raise `TypeError`.
 
-`bool` and other unsupported types raise `TypeError`. Negative or out-of-range
-integers and malformed string IDs raise `ValueError`. Range-bound parsing is a
-different contract and is not widened by these exact-ID forms.
+New exact-id insertion rejects reserved zero (`0` and the 19-digit zero
+string) with `ValueError`. Exact selectors still accept zero for legacy
+access. A batch is snapshotted and validated before mutation: one reserved
+zero in a batch inserts no rows and does not change high-water.
 
-`insert_messages(...)` snapshots and validates the complete input before
-mutation. IDs are normalized before duplicate detection. Duplicate normalized
-IDs within the batch raise `IntegrityError`. Invalid input or an ID already
-present in storage aborts the operation with no inserted rows and no
-high-water change. An empty input is a no-op.
+`insert_messages(...)` validates the full batch, rejects duplicate ids after
+normalization, advances `last_ts` above the largest supplied id when the
+operation succeeds, and inserts pending messages with their exact ids. Invalid
+input or an id already present aborts with no partial insert and no high-water
+change. An empty input is a no-op.
 
-A successful exact-ID insertion operation atomically stores the
-caller-supplied numeric IDs and advances persisted high-water when necessary
-to at least one greater than the largest inserted ID; high-water never moves
-backward. An inserted ID must therefore leave room below `2**63` for that
-advancement. SQL backends realize this outcome with a transaction; Redis uses
-one atomic server-side operation. Dump/load record format, fresh-target policy,
-and migration behavior remain outside this contract.
-
-Callers should supply IDs allocated by a compatible SimpleBroker timestamp
-generator. A caller-supplied ID whose physical component is far ahead of the
-wall clock advances high-water into that future interval. Later allocations
-then consume the remaining logical-counter values at that physical component
-and, once those values are exhausted, fail until the wall clock catches up.
+A caller-supplied id far ahead of the wall clock advances high-water into that
+future interval. Later allocations consume remaining logical-counter values at
+that physical component and, once those values are exhausted, fail until the
+wall clock catches up (natural clock advance recovers absent large adjustments
+such as admin time jumps).
 
 ## Move preserves identity [SB-ID-5]
 
-A successful move changes the message's queue without allocating a replacement
-message ID. Single-message, materialized-batch, and generator move surfaces
-preserve each moved row's original public ID. When a move result includes a
-timestamp, it reports that preserved ID.
-
-This clause does not define claim eligibility, commit-before-yield behavior,
-rollback, queue ordering, or checkpoint visibility. Those concerns remain with
-their registered delivery, base-operation, and ordered-selection owners.
+A successful move changes the message’s queue without allocating a replacement
+message id. It is the same message identity with the queue binding updated.
 
 ## Implementation Mapping
 
@@ -172,3 +133,4 @@ their registered delivery, base-operation, and ordered-selection owners.
 
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
 - `docs/plans/2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md`
+- `docs/product-contract-promotion-retrospective.md` (owner dispositions)
