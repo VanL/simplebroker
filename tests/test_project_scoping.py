@@ -15,6 +15,7 @@ are reclaimed to prevent test failures on Windows.
 import os
 import platform
 import tempfile
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
@@ -34,6 +35,8 @@ from simplebroker.helpers import (
     _is_filesystem_root,
     _is_valid_sqlite_db,
 )
+
+TempDBCleanup = tuple[Path, Callable[[], None]]
 
 
 class TestEnvironmentVariableParsing:
@@ -146,7 +149,7 @@ class TestFilesystemBoundaryDetection:
 class TestDatabaseValidation:
     """Test SimpleBroker database validation during search."""
 
-    def test_valid_simplebroker_db(self, temp_db_cleanup) -> None:
+    def test_valid_simplebroker_db(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test recognition of valid SimpleBroker database."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -160,7 +163,7 @@ class TestDatabaseValidation:
         finally:
             cleanup_func()
 
-    def test_invalid_database_file(self, temp_db_cleanup) -> None:
+    def test_invalid_database_file(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test rejection of invalid database files."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -173,7 +176,7 @@ class TestDatabaseValidation:
         finally:
             cleanup_func()
 
-    def test_nonexistent_file(self, temp_db_cleanup) -> None:
+    def test_nonexistent_file(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test handling of nonexistent files."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -183,7 +186,7 @@ class TestDatabaseValidation:
         finally:
             cleanup_func()
 
-    def test_wrong_magic_string(self, temp_db_cleanup) -> None:
+    def test_wrong_magic_string(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test rejection of SQLite databases with wrong magic string."""
         import sqlite3
 
@@ -206,7 +209,9 @@ class TestDatabaseValidation:
 class TestProjectDatabaseSearch:
     """Test upward directory traversal for project databases."""
 
-    def test_find_database_in_current_directory(self, temp_db_cleanup) -> None:
+    def test_find_database_in_current_directory(
+        self, temp_db_cleanup: TempDBCleanup
+    ) -> None:
         """Test finding database in current directory."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -221,7 +226,9 @@ class TestProjectDatabaseSearch:
         finally:
             cleanup_func()
 
-    def test_find_database_in_parent_directory(self, temp_db_cleanup) -> None:
+    def test_find_database_in_parent_directory(
+        self, temp_db_cleanup: TempDBCleanup
+    ) -> None:
         """Test finding database in parent directory."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -241,7 +248,9 @@ class TestProjectDatabaseSearch:
         finally:
             cleanup_func()
 
-    def test_find_database_multiple_levels_up(self, temp_db_cleanup) -> None:
+    def test_find_database_multiple_levels_up(
+        self, temp_db_cleanup: TempDBCleanup
+    ) -> None:
         """Test finding database multiple directory levels up."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -260,7 +269,7 @@ class TestProjectDatabaseSearch:
             cleanup_func()
 
     def test_find_database_stops_before_mount_boundary(
-        self, temp_db_cleanup, monkeypatch: pytest.MonkeyPatch
+        self, temp_db_cleanup: TempDBCleanup, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         tmp_path, cleanup_func = temp_db_cleanup
         parent_db = tmp_path / ".broker.db"
@@ -278,7 +287,7 @@ class TestProjectDatabaseSearch:
         finally:
             cleanup_func()
 
-    def test_no_database_found(self, temp_db_cleanup) -> None:
+    def test_no_database_found(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test behavior when no database is found in hierarchy."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -291,7 +300,7 @@ class TestProjectDatabaseSearch:
         finally:
             cleanup_func()
 
-    def test_max_depth_limit(self, temp_db_cleanup) -> None:
+    def test_max_depth_limit(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test that search respects maximum depth limit."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -317,7 +326,7 @@ class TestProjectDatabaseSearch:
         finally:
             cleanup_func()
 
-    def test_permission_denied_skipped(self, temp_db_cleanup) -> None:
+    def test_permission_denied_skipped(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test that directories with permission issues are skipped."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -341,7 +350,7 @@ class TestProjectDatabaseSearch:
 class TestDatabasePathResolution:
     """Test complete database path resolution with precedence rules."""
 
-    def test_absolute_cli_flag_precedence(self, temp_db_cleanup) -> None:
+    def test_absolute_cli_flag_precedence(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test that absolute -f flag takes highest precedence."""
         import argparse
 
@@ -363,7 +372,9 @@ class TestDatabasePathResolution:
         finally:
             cleanup_func()
 
-    def test_project_scope_precedence_over_env_defaults(self, temp_db_cleanup) -> None:
+    def test_project_scope_precedence_over_env_defaults(
+        self, temp_db_cleanup: TempDBCleanup
+    ) -> None:
         """Test that project scoping beats environment defaults."""
         import argparse
 
@@ -400,7 +411,7 @@ class TestDatabasePathResolution:
         finally:
             cleanup_func()
 
-    def test_env_defaults_fallback(self, temp_db_cleanup) -> None:
+    def test_env_defaults_fallback(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test environment defaults when project scoping disabled."""
         import argparse
 
@@ -422,7 +433,9 @@ class TestDatabasePathResolution:
         finally:
             cleanup_func()
 
-    def test_project_scope_not_found_error(self, temp_db_cleanup) -> None:
+    def test_project_scope_not_found_error(
+        self, temp_db_cleanup: TempDBCleanup
+    ) -> None:
         """Test error when project scoping enabled but no database found."""
         import argparse
 
@@ -445,7 +458,9 @@ class TestDatabasePathResolution:
         finally:
             cleanup_func()
 
-    def test_init_command_bypasses_project_scope(self, temp_db_cleanup) -> None:
+    def test_init_command_bypasses_project_scope(
+        self, temp_db_cleanup: TempDBCleanup
+    ) -> None:
         """Test that init command never uses project scoping."""
         import argparse
 
@@ -483,7 +498,7 @@ class TestDatabasePathResolution:
 class TestAncestorValidation:
     """Test ancestor validation for project scoped paths."""
 
-    def test_valid_ancestor_relationship(self, temp_db_cleanup) -> None:
+    def test_valid_ancestor_relationship(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test valid ancestor relationship validation."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -500,7 +515,7 @@ class TestAncestorValidation:
         finally:
             cleanup_func()
 
-    def test_invalid_sibling_relationship(self, temp_db_cleanup) -> None:
+    def test_invalid_sibling_relationship(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test that sibling directories are not considered ancestors."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -522,7 +537,7 @@ class TestAncestorValidation:
 class TestCLIIntegration:
     """Test CLI integration with project scoping."""
 
-    def test_init_command_dispatch(self, temp_db_cleanup) -> None:
+    def test_init_command_dispatch(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test that init command is properly dispatched."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -544,7 +559,8 @@ class TestCLIIntegration:
         parser = create_parser()
 
         # Check if init command exists in subparsers
-        subparsers_choices = list(parser._subparsers._group_actions[0].choices.keys())
+        # argparse intentionally exposes this private structure for parser inspection.
+        subparsers_choices = list(parser._subparsers._group_actions[0].choices.keys())  # type: ignore[union-attr]
         assert "init" in subparsers_choices
 
         # Test parsing of init command
@@ -553,7 +569,7 @@ class TestCLIIntegration:
 
 
 @pytest.fixture
-def temp_db_cleanup():
+def temp_db_cleanup() -> TempDBCleanup:
     """Fixture that provides temporary directory with proper database cleanup.
 
     This is crucial for Windows compatibility - databases must be properly
@@ -565,7 +581,7 @@ def temp_db_cleanup():
     tmpdir = tempfile.mkdtemp()
     tmp_path = Path(tmpdir)
 
-    def cleanup_func():
+    def cleanup_func() -> None:
         """Clean up all databases before temp directory removal."""
         # Force cleanup of any SQLite databases in the directory
         for db_file in tmp_path.rglob("*.db"):
@@ -624,7 +640,9 @@ class TestCrossPlatformCompatibility:
 class TestSecurityEdgeCases:
     """Test security edge cases and attack vectors."""
 
-    def test_database_validation_prevents_foreign_dbs(self, temp_db_cleanup) -> None:
+    def test_database_validation_prevents_foreign_dbs(
+        self, temp_db_cleanup: TempDBCleanup
+    ) -> None:
         """Test that only SimpleBroker databases are used."""
         tmp_path, cleanup_func = temp_db_cleanup
 
@@ -647,7 +665,7 @@ class TestSecurityEdgeCases:
 class TestPerformanceAndLimits:
     """Test performance characteristics and limits."""
 
-    def test_deep_directory_performance(self, temp_db_cleanup) -> None:
+    def test_deep_directory_performance(self, temp_db_cleanup: TempDBCleanup) -> None:
         """Test performance with deep directory structures."""
         tmp_path, cleanup_func = temp_db_cleanup
 
