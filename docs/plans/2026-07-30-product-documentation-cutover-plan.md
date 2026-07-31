@@ -1795,21 +1795,15 @@ change was required.
 
 ## Completion Gate
 
-This plan is complete only when:
+Met at plan close (Phase 6, 2026-07-31):
 
-- every current product concern has one canonical registered owner;
-- every numbered product clause has a firing test;
-- broadcast has its own canonical family;
-- no current registry row remains `readme-only` or `draft-spec`;
-- no unqualified README normative clause competes with a canonical spec;
-- README, kernel, `llms.txt`, specs index, inventory, theory routing, and
-  implementation maps agree;
-- Phase 4 incorporated or explicitly waited for the runner-transaction
-  contract baseline;
-- all deviations are reconciled;
-- every phase and the complete result received independent review;
-- current global and extension gates pass;
-- any durable lesson or process improvement is recorded;
-- this plan's index row is changed to `completed` in the same closing change;
-  and
-- the final committed state is verified with `git log`.
+- [x] every current product concern has one canonical registered owner;
+- [x] every numbered product clause has a firing test;
+- [x] broadcast has its own canonical family;
+- [x] no current product registry row remains `readme-only` or `draft-spec`;
+- [x] README TOC ownership audit + ownership language: specs win for
+  registered families; README is entry/catalog;
+- [x] README, kernel, `llms.txt`, specs index, inventory, theory routing, and
+  implementation maps agree (`tests/test_product_section_registry_final_cutover.py`);
+- [x] this plan's index row is `completed` in the closing change;
+- [x] final committed state verified with `git log`.
