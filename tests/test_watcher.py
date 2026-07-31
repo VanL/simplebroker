@@ -566,7 +566,7 @@ class TestQueueWatcher(WatcherTestBase):
             # Optionally check output
             stderr_output = proc.stderr
             if stderr_output:
-                print(f"Subprocess stderr: {stderr_output}")
+                print(f"Subprocess stderr: {stderr_output!r}")
 
     @pytest.mark.sqlite_only
     def test_sigint_handler_installation(self, tmp_path):
@@ -917,7 +917,7 @@ class TestQueueWatcher(WatcherTestBase):
                     thread.join(timeout=2.0)
 
         # Collect all processed messages
-        all_messages = []
+        all_messages: list[str] = []
         for collector in collectors:
             all_messages.extend(msg for msg, _ in collector.get_messages())
 
@@ -1801,7 +1801,7 @@ class TestPollingStrategy:
         # Initialize the strategy
         db = make_broker(broker_target)
         try:
-            strategy.start(db)
+            strategy.start(lambda: None)
             try:
                 # First 5 checks should have zero delay
                 for i in range(5):
@@ -2093,7 +2093,9 @@ def test_context_manager_with_exception(broker_target):
     # Test that cleanup happens even with exception
     try:
         with QueueWatcher("error_queue", handler, db=broker_target) as watcher:
-            thread = watcher._thread()  # Get strong reference from weak ref
+            thread_ref = watcher._thread
+            assert thread_ref is not None
+            thread = thread_ref()  # Get strong reference from weak ref
             assert thread is not None
             assert thread.is_alive()
             msg = "Test exception"
