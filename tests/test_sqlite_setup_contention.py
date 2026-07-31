@@ -11,8 +11,8 @@ import sys
 import textwrap
 import time
 import traceback
-from pathlib import Path
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
