@@ -192,7 +192,7 @@ class TestBasicFunctionality:
         assert out == "message"
 
         rc, out, err = run_cli(
-            "move", "source", "dest", "--before", str(ts + 1), cwd=workdir
+            "move", "source", "dest", "--before", str(int(str(ts)) + 1), cwd=workdir
         )
         assert rc == 0, err
         assert out == "message"
@@ -291,7 +291,7 @@ def test_filtered_single_move_closes_bounded_generator(
     )
 
     result = commands.cmd_move(
-        tmp_path / "move.db",
+        str(tmp_path / "move.db"),
         "source",
         "destination",
         after_str="0",
@@ -838,7 +838,7 @@ class TestConcurrentOperations:
         # Use barrier for synchronized start
         num_workers = 5
         barrier = threading.Barrier(num_workers)
-        results = [[] for _ in range(num_workers)]
+        results: list[list[str]] = [[] for _ in range(num_workers)]
 
         def move_worker(worker_id: int):
             """Worker that moves messages one by one."""
