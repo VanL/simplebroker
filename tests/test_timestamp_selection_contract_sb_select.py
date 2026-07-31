@@ -45,9 +45,7 @@ def test_select_clause_inventory_and_authority() -> None:
     assert "[SB-SELECT-4]" in registry
     assert "[SB-CLI-5]" in registry
 
-    assert "14-timestamp-selection.md" in SPEC_INDEX.read_text(
-        encoding="utf-8"
-    )
+    assert "14-timestamp-selection.md" in SPEC_INDEX.read_text(encoding="utf-8")
 
     for path in (README, KERNEL, LLMS):
         surface = path.read_text(encoding="utf-8")
@@ -118,9 +116,7 @@ def test_move_behind_lower_bound_is_invisible_to_filter(queue_factory) -> None:
     # Consumer bound sits at newer_id.
     assert dest.peek_many(limit=10, after_timestamp=newer_id) == []
 
-    moved = source.move_one(
-        dest.name, exact_timestamp=older_id, with_timestamps=True
-    )
+    moved = source.move_one(dest.name, exact_timestamp=older_id, with_timestamps=True)
     assert moved is not None
     assert moved[1] == older_id
 
@@ -136,9 +132,7 @@ def test_move_behind_lower_bound_is_invisible_to_filter(queue_factory) -> None:
 def test_cli_after_iso_string_parses(workdir: Path) -> None:
     """[SB-CLI-5] Documented ISO form is accepted on CLI."""
     db = workdir / "select.db"
-    assert (
-        run_cli("-f", str(db), "write", "q", "hello", cwd=workdir)[0] == EXIT_SUCCESS
-    )
+    assert run_cli("-f", str(db), "write", "q", "hello", cwd=workdir)[0] == EXIT_SUCCESS
     rc, out, err = run_cli(
         "-f",
         str(db),
