@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [5.6.3] - 2026-07-31
+## [5.7.0] - 2026-07-31
 
 ### Added
 - Re-exported project-config discovery helpers on `simplebroker.ext`:
@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dump containing ID `0` must be intentionally re-IDed before restore.
 - Bumped the synchronized first-party `simplebroker-pg` and
   `simplebroker-redis` packages to 3.3.3, raised both extension core floors to
-  `simplebroker>=5.6.3`, and raised the root optional backend floors to those
+  `simplebroker>=5.7.0`, and raised the root optional backend floors to those
   extension versions.
 
 ### Documented
@@ -44,12 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rules live in `docs/README.md` and `docs/specs/product-section-registry.md`.
 
 ### simplebroker-pg 3.3.3
-- Synchronized patch release for SimpleBroker 5.6.3. Runtime backend behavior
-  is unchanged beyond shared core exact-ID reserved-zero admission.
+- Synchronized release for SimpleBroker 5.7.0. Runtime backend behavior is
+  unchanged beyond shared core exact-ID reserved-zero admission.
 
 ### simplebroker-redis 3.3.3
-- Synchronized patch release for SimpleBroker 5.6.3. Ordinary generated
-  `write()` now advances high-water and inserts in one fenced Lua operation.
+- Synchronized release for SimpleBroker 5.7.0. Ordinary generated `write()` now
+  advances high-water and inserts in one fenced Lua operation.
 
 ## [5.6.2] - 2026-07-30
 
