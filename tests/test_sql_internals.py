@@ -153,8 +153,8 @@ class TestSQLBuilders:
     def test_build_retrieve_query_invalid_operation(self):
         """Test that invalid operations raise errors."""
         with pytest.raises(ValueError, match="Invalid operation"):
-            build_retrieve_query(  # type: ignore[arg-type]
-                "invalid",
+            build_retrieve_query(
+                "invalid",  # type: ignore[arg-type]
                 RetrieveQuerySpec(
                     queue="jobs",
                     limit=1,
@@ -192,7 +192,7 @@ class TestRetrieveMethod:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 # Add test messages
                 db.write("test_queue", "message1")
                 db.write("test_queue", "message2")
@@ -214,7 +214,7 @@ class TestRetrieveMethod:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 # Add test messages
                 db.write("test_queue", "message1")
                 db.write("test_queue", "message2")
@@ -239,7 +239,7 @@ class TestRetrieveMethod:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 # Add test messages
                 db.write("source", "message1")
                 db.write("source", "message2")
@@ -274,7 +274,7 @@ class TestRetrieveMethod:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 # Add test messages
                 db.write("test_queue", "message1")
                 db.write("test_queue", "message2")
@@ -298,7 +298,7 @@ class TestRetrieveMethod:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 # Add test messages
                 db.write("test_queue", "old1")
                 db.write("test_queue", "old2")
@@ -325,7 +325,7 @@ class TestRetrieveMethod:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 # Add test messages
                 db.write("test_queue", "message1")
                 db.write("test_queue", "message2")
@@ -369,7 +369,7 @@ class TestRetrieveMethod:
             db_path = Path(tmpdir) / "test.db"
 
             # Test exactly-once (commit_before_yield=True)
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 for i in range(5):
                     db.write("queue1", f"msg{i}")
 
@@ -388,7 +388,7 @@ class TestRetrieveMethod:
                 assert len(remaining) == 2
 
             # Test at-least-once (commit_before_yield=False)
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 for i in range(5):
                     db.write("queue2", f"msg{i}")
 
@@ -411,7 +411,7 @@ class TestRetrieveMethod:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 # Invalid queue name
                 with pytest.raises(ValueError, match="Invalid queue name"):
                     db._retrieve(".invalid", operation="peek", limit=1)
@@ -435,7 +435,7 @@ class TestBuildRetrieveSpec:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "test.db"
 
-            with BrokerDB(db_path) as db:
+            with BrokerDB(str(db_path)) as db:
                 spec = db._build_retrieve_spec("test_queue", 10)
                 assert spec == RetrieveQuerySpec(
                     queue="test_queue",
