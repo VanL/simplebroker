@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from simplebroker import Queue
 from simplebroker._targets import BrokerTarget
@@ -78,23 +78,26 @@ def make_broker(
     plugin = target.plugin
     create_core = getattr(plugin, "create_core", None)
     if getattr(plugin, "sql", None) is None and callable(create_core):
-        kwargs: dict[str, Any] = {}
+        core_kwargs: dict[str, Any] = {}
         if config is not None:
-            kwargs["config"] = config
-        return create_core(
-            target.target,
-            backend_options=target.backend_options,
-            **kwargs,
+            core_kwargs["config"] = config
+        return cast(
+            BrokerCore,
+            create_core(
+                target.target,
+                backend_options=target.backend_options,
+                **core_kwargs,
+            ),
         )
     runner = plugin.create_runner(
         target.target,
         backend_options=target.backend_options,
         config=config,
     )
-    kwargs: dict[str, Any] = {"backend_plugin": plugin}
+    runner_kwargs: dict[str, Any] = {"backend_plugin": plugin}
     if config is not None:
-        kwargs["config"] = config
-    return BrokerCore(runner, **kwargs)
+        runner_kwargs["config"] = config
+    return BrokerCore(runner, **runner_kwargs)
 
 
 def make_queue(
