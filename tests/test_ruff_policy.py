@@ -193,7 +193,7 @@ def test_public_context_manager_annotations_remain_override_compatible(
         """\
 from typing import Any, Literal
 
-from extensions.simplebroker_redis.simplebroker_redis.core import RedisBrokerCore
+from simplebroker_redis.core import RedisBrokerCore
 from simplebroker import Queue
 from simplebroker._backend_plugins import BrokerConnection
 from simplebroker._phaselock import AdvisoryFileLock
@@ -280,7 +280,8 @@ def test_public_exit_annotations_keep_any_typed_parameters() -> None:
     """Pin the permissive annotations that exported consumers may inspect."""
     from typing import Any, get_type_hints
 
-    from extensions.simplebroker_redis.simplebroker_redis.core import RedisBrokerCore
+    from simplebroker_redis.core import RedisBrokerCore
+
     from simplebroker import Queue
     from simplebroker._backend_plugins import BrokerConnection
     from simplebroker._runner import SQLiteRunner
@@ -332,6 +333,8 @@ def test_ci_uses_comprehensive_lint_and_explicit_formatter_paths() -> None:
     assert suppression_check in lint_job
     assert lint_job.index(ruff_check) < lint_job.index(suppression_check)
     assert "mypy simplebroker bin/release.py bin/ruff_suppression_index.py" in lint_job
+    assert "mapfile -t core_test_files" in lint_job
+    assert '"${core_test_files[@]}"' in lint_job
     assert "--preview" not in lint_job
     assert expected_formatter in " ".join(lint_job.split())
     assert "ruff format --check ." not in lint_job
