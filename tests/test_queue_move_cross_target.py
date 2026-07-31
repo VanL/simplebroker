@@ -1,3 +1,5 @@
+from typing import cast
+
 import pytest
 
 from simplebroker import Queue
@@ -5,7 +7,7 @@ from simplebroker._targets import BrokerTarget
 
 
 def _queue_messages(queue: Queue) -> list[str]:
-    return queue.peek_many(limit=10, with_timestamps=False)
+    return cast(list[str], queue.peek_many(limit=10, with_timestamps=False))
 
 
 def _secret_target(tmp_path, filename: str, secret: str) -> BrokerTarget:
