@@ -14,7 +14,7 @@ import time
 from collections.abc import Iterator
 from importlib.metadata import EntryPoint
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -567,12 +567,14 @@ def test_persistent_sqlite_queues_keep_thread_local_connection_isolation(
 
         for queue in queues:
             with queue.get_connection() as connection:
-                main_thread_ids.append(connection._runner.instance_id)
+                runner = cast(SQLiteRunner, getattr(connection, "_runner"))
+                main_thread_ids.append(runner.instance_id)
 
         def touch_queues() -> None:
             for queue in queues:
                 with queue.get_connection() as connection:
-                    worker_thread_ids.append(connection._runner.instance_id)
+                    runner = cast(SQLiteRunner, getattr(connection, "_runner"))
+                    worker_thread_ids.append(runner.instance_id)
 
         thread = threading.Thread(target=touch_queues)
         thread.start()
@@ -835,7 +837,7 @@ def test_failed_core_creation_releases_any_runner_lease(  # noqa: C901 approved 
 
     class FailingSQLRunner(CountingSQLiteRunner):
         def __init__(self, target: str, plugin: FailingPlugin) -> None:
-            super().__init__(target, plugin)
+            super().__init__(target, cast(CountingBackendPlugin, plugin))
             if not supports_lease:
                 self.lease_thread_connection = None  # type: ignore[assignment]
                 self.release_thread_connection = None  # type: ignore[assignment]
@@ -988,9 +990,11 @@ def test_session_close_wins_race_with_core_creation(
     worker.start()
     assert core_created.wait(timeout=5.0)
 
-    close_thread = threading.Thread(
-        target=lambda: (session.close_all(), close_returned.set())
-    )
+    def close_session() -> None:
+        session.close_all()
+        close_returned.set()
+
+    close_thread = threading.Thread(target=close_session)
     close_thread.start()
     try:
         assert not close_returned.wait(timeout=0.1)
