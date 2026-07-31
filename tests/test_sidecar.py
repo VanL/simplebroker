@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Generator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -113,18 +115,19 @@ def test_transaction_rolls_back_when_commit_fails(
         with conn.sidecar() as session:
             session.run("CREATE TABLE app_kv (k TEXT PRIMARY KEY, v TEXT)")
 
-        original_commit = conn._runner.commit
+        runner = cast(object, getattr(conn, "_runner"))
+        original_commit = getattr(runner, "commit")
 
         def fail_commit() -> None:
             raise sqlite3.OperationalError("injected sidecar commit failure")
 
-        monkeypatch.setattr(conn._runner, "commit", fail_commit)
+        monkeypatch.setattr(runner, "commit", fail_commit)
         with (
             pytest.raises(sqlite3.OperationalError, match="injected sidecar"),
             conn.sidecar(transaction=True) as session,
         ):
             session.run("INSERT INTO app_kv VALUES (?, ?)", ("poison", "1"))
-        monkeypatch.setattr(conn._runner, "commit", original_commit)
+        monkeypatch.setattr(runner, "commit", original_commit)
 
         with conn.sidecar() as session:
             rows = list(session.run("SELECT k FROM app_kv", fetch=True))
@@ -179,7 +182,8 @@ def test_sidecar_blocked_during_at_least_once_batch(tmp_path: Path) -> None:
                 conn.sidecar(transaction=True),
             ):
                 pass
-            gen.close()  # rolls the batch back; m1/m2 stay claimable
+            cast(Generator[str | tuple[str, int], None, None], gen).close()
+            # The close rolls the batch back; m1/m2 stay claimable.
 
 
 def test_session_unusable_after_block_exits(tmp_path: Path) -> None:
