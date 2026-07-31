@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import threading
+from typing import Any
 
 import pytest
 from simplebroker_redis import RedisRunner, scripts
@@ -177,9 +178,9 @@ def test_resync_cannot_overwrite_concurrent_high_water_backward(
             advance_started.set()
             if not release_stale_advance.wait(timeout=5):
                 raise AssertionError("stale resync advance was not released")
-            return original_plugin.advance_last_ts(runner, new_ts=new_ts)
+            return bool(original_plugin.advance_last_ts(runner, new_ts=new_ts))
 
-    resyncing._backend_plugin = PausingPlugin()  # type: ignore[assignment]
+    resyncing._backend_plugin = PausingPlugin()
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
@@ -208,9 +209,9 @@ def test_steady_state_ordinary_write_uses_one_data_eval(
     original_eval = core._client.eval
     scripts_seen: list[str] = []
 
-    def track_eval(script: str, *args: object) -> object:
+    def track_eval(script: str, numkeys: int, *args: Any) -> object:
         scripts_seen.append(script)
-        return original_eval(script, *args)
+        return original_eval(script, numkeys, *args)
 
     monkeypatch.setattr(core._client, "eval", track_eval)
     try:
