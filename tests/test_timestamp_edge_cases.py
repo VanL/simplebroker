@@ -80,7 +80,7 @@ class TestTimestampEdgeCases:
         """One generator instance should be safe for concurrent callers."""
 
         plugin = AtomicLastTimestampPlugin()
-        gen = TimestampGenerator(object(), backend_plugin=plugin)
+        gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
         thread_count = 16
         per_thread = 20
         start = threading.Barrier(thread_count)
@@ -106,7 +106,7 @@ class TestTimestampEdgeCases:
 
     def test_reserve_candidates_advances_only_process_local_cache(self) -> None:
         plugin = AtomicLastTimestampPlugin()
-        gen = TimestampGenerator(object(), backend_plugin=plugin)
+        gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
 
         with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
             candidates = gen._reserve_candidates(3)
@@ -136,14 +136,14 @@ class TestTimestampEdgeCases:
         error: type[Exception],
         message: str,
     ) -> None:
-        gen = TimestampGenerator(object(), backend_plugin=AtomicLastTimestampPlugin())
+        gen = TimestampGenerator(object(), backend_plugin=AtomicLastTimestampPlugin())  # type: ignore[arg-type]
 
         with pytest.raises(error, match=message):
             gen._reserve_candidates(count)
 
     def test_reserve_zero_candidates_is_backend_noop(self) -> None:
         plugin = AtomicLastTimestampPlugin()
-        gen = TimestampGenerator(object(), backend_plugin=plugin)
+        gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
 
         assert gen._reserve_candidates(0) == []
         assert plugin.last_ts == 0
@@ -169,7 +169,7 @@ class TestTimestampEdgeCases:
                 del runner, new_ts
                 return False
 
-        gen = TimestampGenerator(object(), backend_plugin=DisappearingTimestampPlugin())
+        gen = TimestampGenerator(object(), backend_plugin=DisappearingTimestampPlugin())  # type: ignore[arg-type]
 
         with pytest.raises(TimestampError, match="meta.last_ts missing"):
             gen.generate()
@@ -191,7 +191,7 @@ class TestTimestampEdgeCases:
                     return 123
                 return None  # type: ignore[return-value]
 
-        gen = TimestampGenerator(object(), backend_plugin=MissingTimestampPlugin())
+        gen = TimestampGenerator(object(), backend_plugin=MissingTimestampPlugin())  # type: ignore[arg-type]
 
         assert gen.get_cached_last_ts() == 123
         assert gen.refresh_last_ts() == 0
@@ -201,7 +201,7 @@ class TestTimestampEdgeCases:
         """A wall-clock rollback should advance only the logical counter."""
 
         plugin = AtomicLastTimestampPlugin()
-        gen = TimestampGenerator(object(), backend_plugin=plugin)
+        gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
 
         with patch("simplebroker._timestamp.time.time_ns", return_value=2_000_000_000):
             first = gen.generate()
@@ -223,7 +223,7 @@ class TestTimestampEdgeCases:
         """If logical slots run out during rollback, fail before storing a lower ts."""
 
         plugin = AtomicLastTimestampPlugin()
-        gen = TimestampGenerator(object(), backend_plugin=plugin)
+        gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
         last = gen._encode_hybrid_timestamp(2_000_000_000, 4095)
         plugin.last_ts = last
         gen._last_ts = last
@@ -244,7 +244,7 @@ class TestTimestampEdgeCases:
         with open_broker(target) as db:
             db.write("queue", "first")
             first = db.get_cached_last_timestamp()
-            first_physical, _ = db._timestamp_gen._decode_hybrid_timestamp(first)
+            first_physical, _ = db._timestamp_gen._decode_hybrid_timestamp(first)  # type: ignore[attr-defined]
 
             with patch(
                 "simplebroker._timestamp.time.time_ns",
