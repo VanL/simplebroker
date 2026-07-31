@@ -2,7 +2,9 @@
 
 import os
 import sqlite3
-from typing import cast
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -43,50 +45,59 @@ class TrackingConnection:
         self.closed = True
 
 
-def test_default_pragma_settings(tmp_path) -> None:
+def _rows(rows: Iterable[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
+    """Materialize runner fetch results before indexing them in assertions."""
+    return list(rows)
+
+
+def test_default_pragma_settings(tmp_path: Path) -> None:
     """Test that default PRAGMA settings are applied correctly."""
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path)) as db:
         # Check cache size - default should be 10MB = 10240KiB
-        result = db._runner.run("PRAGMA cache_size", fetch=True)
+        result = _rows(db._runner.run("PRAGMA cache_size", fetch=True))
         cache_size = result[0][0]
         assert cache_size == -10240  # Negative means KiB
 
         # Check synchronous mode - default should be FULL (2)
-        result = db._runner.run("PRAGMA synchronous", fetch=True)
+        result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
         sync_mode = result[0][0]
         assert sync_mode == 2  # FULL = 2
 
         # Check that composite index exists
-        result = db._runner.run(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'",
-            fetch=True,
+        result = _rows(
+            db._runner.run(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'",
+                fetch=True,
+            )
         )
         assert len(result) > 0
 
         # Check that old indexes don't exist
         for old_index in ["idx_messages_queue_ts", "idx_queue_id", "idx_queue_ts"]:
-            result = db._runner.run(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name=?",
-                (old_index,),
-                fetch=True,
+            result = _rows(
+                db._runner.run(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name=?",
+                    (old_index,),
+                    fetch=True,
+                )
             )
             assert len(result) == 0
 
 
-def test_brokercore_initializes_wal_mode(tmp_path) -> None:
+def test_brokercore_initializes_wal_mode(tmp_path: Path) -> None:
     """BrokerCore should run SQLite connection-phase setup, including WAL mode."""
     db_path = tmp_path / "test.db"
     runner = SQLiteRunner(str(db_path))
 
     with BrokerCore(runner) as db:
         db.write("test_queue", "message")
-        result = runner.run("PRAGMA journal_mode", fetch=True)
+        result = _rows(runner.run("PRAGMA journal_mode", fetch=True))
         assert result[0][0].lower() == "wal"
 
 
-def test_sqlite_runner_uses_constructor_config(tmp_path) -> None:
+def test_sqlite_runner_uses_constructor_config(tmp_path: Path) -> None:
     """SQLiteRunner should apply config passed through its constructor."""
     db_path = tmp_path / "test.db"
     runner = SQLiteRunner(
@@ -99,20 +110,20 @@ def test_sqlite_runner_uses_constructor_config(tmp_path) -> None:
     )
 
     with BrokerCore(runner):
-        assert runner.run("PRAGMA busy_timeout", fetch=True)[0][0] == 1234
-        assert runner.run("PRAGMA cache_size", fetch=True)[0][0] == -25600
-        assert runner.run("PRAGMA wal_autocheckpoint", fetch=True)[0][0] == 5000
+        assert _rows(runner.run("PRAGMA busy_timeout", fetch=True))[0][0] == 1234
+        assert _rows(runner.run("PRAGMA cache_size", fetch=True))[0][0] == -25600
+        assert _rows(runner.run("PRAGMA wal_autocheckpoint", fetch=True))[0][0] == 5000
 
 
 def test_sqlite_runner_restores_optimization_settings_after_fork_detection(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     """Inherited runners should recover optimization state before opening child conns."""
     db_path = tmp_path / "test.db"
     runner = SQLiteRunner(str(db_path), config={"BROKER_CACHE_MB": 25})
 
     with BrokerCore(runner):
-        assert runner.run("PRAGMA cache_size", fetch=True)[0][0] == -25600
+        assert _rows(runner.run("PRAGMA cache_size", fetch=True))[0][0] == -25600
 
         runner._pid = os.getpid() - 1
         conn = runner.get_connection()
@@ -137,7 +148,9 @@ def test_sqlite_runtime_closes_connection_setting_cursors() -> None:
     assert all(cursor.closed for cursor in tracker.cursors)
 
 
-def test_sqlite_connection_phase_closes_setup_cursors(monkeypatch, tmp_path) -> None:
+def test_sqlite_connection_phase_closes_setup_cursors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Connection-phase setup should finalize every cursor before closing."""
     config = load_config()
     conn = TrackingConnection()
@@ -152,42 +165,42 @@ def test_sqlite_connection_phase_closes_setup_cursors(monkeypatch, tmp_path) -> 
     assert all(cursor.closed for cursor in conn.cursors)
 
 
-def test_custom_cache_size(tmp_path) -> None:
+def test_custom_cache_size(tmp_path: Path) -> None:
     """Test that BROKER_CACHE_MB config works."""
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path), config={"BROKER_CACHE_MB": 25}) as db:
-        result = db._runner.run("PRAGMA cache_size", fetch=True)
+        result = _rows(db._runner.run("PRAGMA cache_size", fetch=True))
         cache_size = result[0][0]
         assert cache_size == -25600  # 25MB = 25600KiB
 
 
-def test_custom_sync_mode_normal(tmp_path) -> None:
+def test_custom_sync_mode_normal(tmp_path: Path) -> None:
     """Test that BROKER_SYNC_MODE=NORMAL works."""
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path), config={"BROKER_SYNC_MODE": "NORMAL"}) as db:
-        result = db._runner.run("PRAGMA synchronous", fetch=True)
+        result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
         sync_mode = result[0][0]
         assert sync_mode == 1  # NORMAL = 1
 
 
-def test_custom_sync_mode_off(tmp_path) -> None:
+def test_custom_sync_mode_off(tmp_path: Path) -> None:
     """Test that BROKER_SYNC_MODE=OFF works."""
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path), config={"BROKER_SYNC_MODE": "OFF"}) as db:
-        result = db._runner.run("PRAGMA synchronous", fetch=True)
+        result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
         sync_mode = result[0][0]
         assert sync_mode == 0  # OFF = 0
 
 
-def test_invalid_sync_mode_defaults_to_full(tmp_path) -> None:
+def test_invalid_sync_mode_defaults_to_full(tmp_path: Path) -> None:
     """Test that invalid BROKER_SYNC_MODE defaults to FULL."""
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path), config={"BROKER_SYNC_MODE": "INVALID"}) as db:
-        result = db._runner.run("PRAGMA synchronous", fetch=True)
+        result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
         sync_mode = result[0][0]
         assert sync_mode == 2  # FULL = 2
 
@@ -206,17 +219,17 @@ def test_optimization_settings_defensively_default_invalid_sync_mode() -> None:
         conn.close()
 
 
-def test_sync_mode_case_insensitive(tmp_path) -> None:
+def test_sync_mode_case_insensitive(tmp_path: Path) -> None:
     """Test that BROKER_SYNC_MODE is case-insensitive."""
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path), config={"BROKER_SYNC_MODE": "normal"}) as db:
-        result = db._runner.run("PRAGMA synchronous", fetch=True)
+        result = _rows(db._runner.run("PRAGMA synchronous", fetch=True))
         sync_mode = result[0][0]
         assert sync_mode == 1  # NORMAL = 1
 
 
-def test_write_with_normal_sync_works(tmp_path) -> None:
+def test_write_with_normal_sync_works(tmp_path: Path) -> None:
     """Test that writes work correctly with NORMAL sync mode."""
     db_path = tmp_path / "test.db"
 
@@ -233,17 +246,17 @@ def test_write_with_normal_sync_works(tmp_path) -> None:
             assert msg == f"message {i}"
 
 
-def test_custom_wal_autocheckpoint(tmp_path) -> None:
+def test_custom_wal_autocheckpoint(tmp_path: Path) -> None:
     """Test that BROKER_WAL_AUTOCHECKPOINT config works."""
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path), config={"BROKER_WAL_AUTOCHECKPOINT": 5000}) as db:
-        result = db._runner.run("PRAGMA wal_autocheckpoint", fetch=True)
+        result = _rows(db._runner.run("PRAGMA wal_autocheckpoint", fetch=True))
         autocheckpoint = result[0][0]
         assert autocheckpoint == 5000
 
 
-def test_invalid_wal_autocheckpoint_defaults(tmp_path) -> None:
+def test_invalid_wal_autocheckpoint_defaults(tmp_path: Path) -> None:
     """Test that invalid BROKER_WAL_AUTOCHECKPOINT defaults to 1000 with warning."""
     db_path = tmp_path / "test.db"
 
@@ -253,22 +266,22 @@ def test_invalid_wal_autocheckpoint_defaults(tmp_path) -> None:
     ):
         db = BrokerDB(str(db_path), config={"BROKER_WAL_AUTOCHECKPOINT": -100})
     with db:
-        result = db._runner.run("PRAGMA wal_autocheckpoint", fetch=True)
+        result = _rows(db._runner.run("PRAGMA wal_autocheckpoint", fetch=True))
         autocheckpoint = result[0][0]
         assert autocheckpoint == 1000  # Default value
 
 
-def test_wal_autocheckpoint_zero_disables(tmp_path) -> None:
+def test_wal_autocheckpoint_zero_disables(tmp_path: Path) -> None:
     """Test that BROKER_WAL_AUTOCHECKPOINT=0 disables automatic checkpoints."""
     db_path = tmp_path / "test.db"
 
     with BrokerDB(str(db_path), config={"BROKER_WAL_AUTOCHECKPOINT": 0}) as db:
-        result = db._runner.run("PRAGMA wal_autocheckpoint", fetch=True)
+        result = _rows(db._runner.run("PRAGMA wal_autocheckpoint", fetch=True))
         autocheckpoint = result[0][0]
         assert autocheckpoint == 0  # Disabled
 
 
-def test_index_migration_from_old_database(tmp_path) -> None:
+def test_index_migration_from_old_database(tmp_path: Path) -> None:
     """Test that old indexes are properly removed when opening existing database."""
     db_path = tmp_path / "test.db"
 
@@ -298,15 +311,19 @@ def test_index_migration_from_old_database(tmp_path) -> None:
     # Now open with BrokerDB - should remove old indexes and create new one
     with BrokerDB(str(db_path)) as db:
         # Check that old indexes are gone
-        result = db._runner.run(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_queue_ts', 'idx_queue_id')",
-            fetch=True,
+        result = _rows(
+            db._runner.run(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_queue_ts', 'idx_queue_id')",
+                fetch=True,
+            )
         )
         assert len(result) == 0
 
         # Check that new composite index exists
-        result = db._runner.run(
-            "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'",
-            fetch=True,
+        result = _rows(
+            db._runner.run(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_messages_queue_ts_id'",
+                fetch=True,
+            )
         )
         assert len(result) > 0
