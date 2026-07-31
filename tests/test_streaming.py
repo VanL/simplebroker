@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from simplebroker import Queue, target_for_directory
 
 from .conftest import run_cli
@@ -26,7 +28,8 @@ def _bulk_write(workdir: Path, queue_name: str, count: int) -> None:
         q.close()
 
 
-def test_streaming_read_all(workdir: Path):
+@pytest.mark.timeout(360)
+def test_streaming_read_all(workdir: Path) -> None:
     """Test that read --all uses streaming and doesn't blow memory."""
     count = 1000
     _bulk_write(workdir, "test_queue", count)
@@ -51,7 +54,8 @@ def test_streaming_read_all(workdir: Path):
     assert stdout.splitlines()[0] == (f"test_queue: 0 ({count} total, {count} claimed)")
 
 
-def test_streaming_peek_all(workdir: Path):
+@pytest.mark.timeout(360)
+def test_streaming_peek_all(workdir: Path) -> None:
     """Test that peek --all uses streaming and doesn't blow memory."""
     count = 1000
     _bulk_write(workdir, "test_queue", count)
@@ -71,7 +75,7 @@ def test_streaming_peek_all(workdir: Path):
     assert f"test_queue: {count}" in stdout
 
 
-def test_json_output_now_ndjson(workdir: Path):
+def test_json_output_now_ndjson(workdir: Path) -> None:
     """Test that JSON output now uses line-delimited JSON (ndjson) format."""
     for i in range(5):
         code, _, _stderr = run_cli("write", "test_queue", f"message_{i}", cwd=workdir)

@@ -71,6 +71,20 @@ test-lifecycle fixes plus an explicitly requested release retry.
   run is the deciding system probe. Treat that evidence as runner suspension
   unless the replacement reproduces it; do not invent a code fix without a
   red-capable reproduction.
+- Exact-SHA root run `30658218016` exposed an independent Windows 3.14
+  coverage timeout. `test_streaming_read_all` started at `19:27:40.523` and
+  its xdist worker exited at `19:30:39.960`, 179.437 seconds later. That is the
+  180-second blanket `pytest-timeout` boundary, not an unexplained worker
+  crash: thread-mode timeout exits the worker process, which xdist reports as
+  `node down: Not properly terminated`. The sibling streaming test completed
+  in 169.904 seconds, and an earlier green run took 168.00 seconds, leaving
+  too little headroom for these documented slow-by-construction proofs.
+- The same job then had a distinct 29-minute silent tail around
+  `test_checkpoint_reader_sees_every_message`. It had completed in 11.83 and
+  15.88 seconds in the prior two runs, its own 180-second Python timer did not
+  fire, and it reported `PASSED` exactly when GitHub's 45-minute step watchdog
+  interrupted the run. Treat this separately as runner or native-process
+  suspension unless a red-capable probe establishes a repository defect.
 - `tests/test_ruff_policy.py` owns root Ruff and annotation-policy contracts.
   Redis-specific annotation proof must stay in the Redis extension suite or
   use an explicit isolated source-path setup; it must not make Redis a root
@@ -122,6 +136,11 @@ Comprehension gates before editing:
 - The multiprocess watcher proof must still deliver all 100 exact message
   bodies with no duplicates. Only the bulk-phase deadline may grow; startup,
   delivery mode, watcher behavior, and cleanup bounds remain unchanged.
+- The streaming proofs must still write, read or peek 1,000 messages and
+  preserve the line-count, first/last ordering, and queue-state assertions.
+  Their 120-second CLI subprocess bounds remain unchanged. Only their outer
+  pytest timeout may exceed the blanket coverage-suite timeout so setup and
+  teardown retain CI headroom.
 - Each independent root cause gets one commit after targeted pytest, mypy when
   typing is touched, `ruff check`, and `ruff format --check` pass for the
   affected files.
@@ -251,7 +270,18 @@ reports the selected core and extension versions.
    - Poll release workflows with `gh` at a bounded interval until all selected
      packages succeed or a concrete failure requires a new remediation cycle.
 
-8. Close the plan.
+8. Preserve timeout headroom for the streaming coverage proofs.
+   - File: `tests/test_streaming.py` plus this active plan.
+   - Keep both 1,000-message workloads, line-count and first/last ordering
+     assertions, claimed/pending state assertions, and 120-second CLI
+     subprocess limits.
+   - Give only the two documented slow-by-construction tests a 360-second
+     outer pytest timeout. Retain the 180-second default for every other test.
+   - Prove the narrow override with a red-capable sub-millisecond global
+     timeout, then run the full affected module, mypy, Ruff check, and Ruff
+     format check before the independent commit.
+
+9. Close the plan.
    - Record commit SHAs and current-state verification evidence.
    - Update the Status Index row to `completed` only after release monitoring
      reaches a terminal successful state.
