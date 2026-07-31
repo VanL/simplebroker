@@ -7,51 +7,50 @@ substrate realization.
 
 Boundary: broadcast target selection, validation, queue-creation policy,
 atomic fan-out, CLI selector behavior, result count, and backend
-compatibility. Message identity format remains with the registry's
-`Message identity` concern until that concern is canonically promoted;
-general CLI I/O remains with `[SB-CLI-*]`; application notification meaning
-remains outside SimpleBroker.
+compatibility.
 
-Required action: callers choose no more than one selector model and use
-Python exact-name creation only when queue creation is intended. Backend
-implementers preserve the backend-specific atomicity and compatibility
-boundaries below.
+Broadcast inserts a **copy of the message** into each selected queue.
 
 ## Target selection [SB-BCAST-1]
 
-With no selector, broadcast targets every queue that exists at the backend's
-selection point. A non-empty `pattern` or CLI `--pattern GLOB` targets
-existing literal queue names with Python `fnmatchcase` semantics. The legacy
-empty pattern remains equivalent to no pattern when used alone.
+Selection describes **what exists at the selection point** (or the full
+requested name set when creation is enabled).
 
-Python `queue_names` and repeatable CLI `--queue QUEUE` target the unique
-requested literal names that exist at the selection point by default. Python
-may pass `create_missing=True` with `queue_names`; that mode targets every
-unique requested name, including names with no current row.
+- **No selector:** every queue that exists at the selection point.
+- **Pattern** (`pattern=...` / CLI `--pattern GLOB`): existing literal queue
+  names matching Python `fnmatchcase`. The legacy empty pattern remains
+  equivalent to no pattern when used alone. Patterns name a class of existing
+  queues; they never create queues.
+- **Exact list** (`queue_names` / CLI `--queue QUEUE` repeated): unique
+  requested literal names that exist at the selection point by default.
+  Missing names are ignored and not created.
+- **Exact list + `create_missing=True` (Python only):** every unique requested
+  literal name, including names with no current row (this is the only create
+  path).
 
-Non-`None` `pattern` and `queue_names` are mutually exclusive, including
-`pattern=""`. An empty Python exact-name sequence returns `0` and performs no
-write. Missing exact names are ignored unless Python explicitly enables
-creation. Selector-free, pattern, and CLI broadcasts never create queues.
+`pattern` and `queue_names` are mutually exclusive (including `pattern=""`).
+Selector-free, pattern, and CLI broadcasts never create queues. CLI exact
+broadcast has no creation switch.
+
+An empty Python exact-name sequence returns `0` and writes nothing. A missing
+message body is an error. An empty string body (`""`) is a valid message and
+is broadcast like any other body (including under `create_missing`).
 
 ## Python exact selector [SB-BCAST-2]
 
-`queue_names` accepts a non-string sequence. SimpleBroker snapshots, validates,
-and deduplicates that sequence before mutation. `create_missing` is a strict
-boolean and is valid only when `queue_names` is supplied. A string-like
-`queue_names` raises
-`TypeError("queue_names must be a sequence of queue names, not a string")`; a
-non-boolean creation value raises
-`TypeError("create_missing must be a boolean")`; creation without exact names
-raises `ValueError("create_missing requires queue_names")`; and combining the
-two selector forms raises
-`ValueError("pattern and queue_names cannot be used together")`. Every
-validation failure occurs before mutation.
+`queue_names` accepts a non-string sequence of names. SimpleBroker snapshots,
+validates, and deduplicates it before mutation. `create_missing` is a boolean
+and is valid only with `queue_names`.
+
+Callers key on **exception types** (for example `TypeError` for a string-like
+`queue_names` or a non-boolean `create_missing`; `ValueError` when creation is
+requested without exact names or when pattern and names are combined). Message
+text is diagnostic.
 
 With creation disabled, the return value is the number of unique existing
-queues reached. With creation enabled, one ordinary pending message is
-inserted for every unique requested literal name and the return value is that
-requested-name count. Exact selectors do not resolve aliases.
+queues reached. With creation enabled, one copy of the message is inserted for
+every unique requested name and the return value is that requested-name count.
+Exact selectors do not resolve aliases.
 
 ## Alias interaction [SB-BCAST-3]
 
@@ -61,37 +60,27 @@ is not resolved as an exact broadcast target.
 
 ## Atomicity and result [SB-BCAST-4]
 
-SQL broadcast is atomic for the selected queue set: every selected queue
-receives one copy or none do, and a timestamp or insertion failure rolls back
-the transaction. Redis rejects every anticipated validation, layout,
-namespace, capacity, candidate, and timestamp-conflict failure before its
-first mutation, then performs registry and message writes in one
-non-interleaved Lua phase. Redis does not promise rollback after an unexpected
-Lua runtime error.
+For the **selected set**, broadcast is atomic: every selected queue receives
+one copy or none do.
 
-With `create_missing=True`, the selected set is the complete unique requested
-set. A queue deleted before the atomic point may therefore be recreated by its
-new pending message. Queue creation and deletion may race with default
-selector evaluation. Redis pattern broadcast uses a client-side queue
-snapshot: a queue created after that snapshot may miss the broadcast, and a
-queue deleted after the snapshot may be recreated by the broadcast.
-Patternless and exact Redis selectors choose their target set at the atomic
-insertion point.
+- **SQL:** failures roll back the transaction for that operation.
+- **Redis (patternless and exact paths):** anticipated failures are rejected
+  before mutation; registry and message writes complete in one non-interleaved
+  Lua phase. Pattern selection may use a different path; selection is still
+  “what matches at selection,” not a separate create API.
 
-An empty exact sequence in either exact mode, and an all-missing existing-only
-exact request, return `0` and must not persist timestamp-allocation,
-queue-registry, message, wakeup, or maintenance state.
+No matching targets (including empty exact lists and existing-only lists that
+hit nothing) is a **no-op**: return `0`.
 
 ## CLI exact selector [SB-BCAST-5]
 
 CLI `--queue QUEUE` is repeatable and mutually exclusive with `--pattern`.
-Queue names are literal and comma-containing values are not split into
-multiple names. Long-option abbreviations are rejected. `--` introduces a
-literal option-looking message. CLI exact broadcast remains existing-only and
-exposes no queue-creation switch.
+Queue names are literal; commas are not split into multiple names. Long-option
+abbreviations are rejected. `--` introduces a literal option-looking message.
+CLI exact broadcast remains existing-only.
 
-CLI output and exit status continue to follow `[SB-CLI-*]`; a broadcast
-reaching no queues is the existing empty/nothing-to-do outcome.
+CLI output and exit status follow `[SB-CLI-*]`. A broadcast that reaches no
+queues is the empty / no-matching outcome under those codes.
 
 ## Backend compatibility [SB-BCAST-6]
 
@@ -111,7 +100,7 @@ during backend resolution with upgrade-or-pin guidance.
 - SQLite selection lock: `simplebroker/_backends/sqlite/plugin.py`
 - PostgreSQL selection lock:
   `extensions/simplebroker_pg/simplebroker_pg/plugin.py`
-- Redis atomic selection and insertion:
+- Redis selection and insertion:
   `extensions/simplebroker_redis/simplebroker_redis/core.py` and
   `extensions/simplebroker_redis/simplebroker_redis/scripts.py`
 
@@ -133,6 +122,7 @@ agent-kernel, specs-index, and `llms.txt` pointers.
 ## Related Plans
 
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
+- `docs/product-contract-promotion-retrospective.md` (owner dispositions)
 - retired: 2026-07-28-explicit-broadcast-targets-plan — source `36e2f356`;
   see `docs/plans/README.md`
 - retired: 2026-07-28-broadcast-create-missing-plan — source `36e2f356`;
