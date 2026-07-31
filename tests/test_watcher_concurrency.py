@@ -372,7 +372,7 @@ class TestMixedMode(WatcherTestBase):
     def test_mixed_peek_read_basic(self, broker_target):
         """Test basic mixed mode operation."""
         peek_messages = []
-        read_messages = []
+        read_messages: list[str] = []
         peek_lock = threading.Lock()
         read_lock = threading.Lock()
 
@@ -478,7 +478,7 @@ class TestMixedMode(WatcherTestBase):
         try:
             # Create multiple peek watchers
             for _i in range(num_peekers):
-                messages = []
+                messages: list[str] = []
                 lock = threading.Lock()
 
                 def make_handler(m, lck):
@@ -714,6 +714,7 @@ class TestEdgeCases(WatcherTestBase):
             watcher.stop(join=False)
             thread.join(timeout=scale_timeout_for_ci(2.0))
             if thread.is_alive():
+                assert thread.ident is not None
                 frame = sys._current_frames().get(thread.ident)
                 stack = (
                     "".join(traceback.format_stack(frame))
