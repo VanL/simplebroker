@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import threading
 import time
+from typing import cast
 
 import pytest
 
@@ -286,8 +287,12 @@ def test_thundering_herd_with_multiple_active_queues(broker_target) -> None:  # 
 
         # Wait for all active queues to process their messages
         for queue in active_queues:
+
+            def active_queue_processed(queue_name: str = queue) -> bool:
+                return call_counts[queue_name] == 10
+
             assert wait_for_condition(
-                lambda q=queue: call_counts[q] == 10,
+                active_queue_processed,
                 timeout=_watcher_processing_timeout(broker_target),
                 message=f"Waiting for {queue} to process 10 messages",
             )
@@ -350,11 +355,11 @@ def test_pre_check_with_timestamp_filtering(broker_target) -> None:
 
     try:
         # Add messages at different times
-        timestamps = []
+        timestamps: list[int] = []
         for i in range(5):
             broker.write("test_queue", f"message_{i}")
             rows = list(broker.peek_generator("test_queue", with_timestamps=True))
-            timestamps.append(rows[-1][1])
+            timestamps.append(cast(int, rows[-1][1]))
             time.sleep(0.01)  # Ensure different timestamps
 
         handler_calls = []
