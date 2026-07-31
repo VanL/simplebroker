@@ -1,6 +1,6 @@
 # Core-Test Mypy Gate Plan
 
-Status: active
+Status: completed
 Class: 5+P — materially changes the repository-wide verification process by
 making the core test tree a required strict-mypy gate; no product contract,
 CLI behavior, storage format, or runtime behavior changes.
@@ -174,5 +174,18 @@ with dispositions recorded below.
 
 ## Completion Evidence
 
-To be completed after final reruns: changed files, exact command results,
-review disposition, and residual risk.
+- CI and the root release helper enumerate every concrete `tests/**/*.py` file
+  for a dedicated mypy partition. The partition retains body checking while
+  allowing legacy untyped pytest signatures, and resolves local namespace
+  imports with the config loaded before its command-line overrides.
+- Every test file changed by this work was individually checked with the
+  partition's mypy flags, its focused pytest module (or an owning module for a
+  helper script), `ruff check`, and `ruff format --check`, then committed as a
+  single explicit-path commit.
+- Final gates passed: the 197-file core-test mypy partition, `ruff check .`,
+  `ruff format --check tests`, `tests/test_release_script.py`,
+  `tests/test_release_workflow.py`, `tests/test_ruff_policy.py`, and the full
+  `uv run --frozen --no-sync pytest -q` suite (exit code 0).
+- Residual repository gate: the broader formatter command also reports one
+  unrelated pre-existing format delta in `simplebroker/_runner.py`; that file
+  is outside this plan's test and CI-scope changes and was left untouched.
