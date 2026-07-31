@@ -15,8 +15,10 @@ import sqlite3
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from contextlib import closing
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -168,7 +170,7 @@ def get_timeout(baseline_key: str, platform_specific: bool = True) -> float:
 
 
 @pytest.mark.benchmark
-def test_timestamp_performance_basic(workdir):
+def test_timestamp_performance_basic(workdir: Path) -> None:
     """Basic performance check - not excessive writes."""
     db_path = workdir / "test.db"
     elapsed_samples: list[float] = []
@@ -204,7 +206,7 @@ def test_timestamp_performance_basic(workdir):
 
 
 @pytest.mark.benchmark
-def test_queue_validation_performance():
+def test_queue_validation_performance() -> None:
     """Test that cached validation is faster than uncached."""
     cached_samples: list[float] = []
     for _ in range(VALIDATION_SAMPLE_COUNT):
@@ -251,7 +253,7 @@ def test_queue_validation_performance():
 
 
 @pytest.mark.benchmark
-def test_bulk_move_performance_5k_messages(workdir):
+def test_bulk_move_performance_5k_messages(workdir: Path) -> None:
     """Test bulk move with BULK_MOVE_MESSAGE_COUNT messages maintains good performance."""
     # Write messages using CLI for consistency
     num_messages = BULK_MOVE_MESSAGE_COUNT
@@ -267,7 +269,7 @@ def test_bulk_move_performance_5k_messages(workdir):
     dest = Queue("perf_dest", db_path=str(db_path))
     start_move = time.monotonic()
     try:
-        list(source.move(dest, all_messages=True))
+        list(cast(Iterator[object], source.move(dest, all_messages=True)))
     finally:
         source.close()
         dest.close()
@@ -298,7 +300,7 @@ def test_bulk_move_performance_5k_messages(workdir):
 
 
 @pytest.mark.benchmark
-def test_large_batch_claim_rollback_performance(workdir: Path):
+def test_large_batch_claim_rollback_performance(workdir: Path) -> None:
     """Test that rollback is fast when a large batch claim is interrupted."""
     db_path = workdir / "test.db"
 
@@ -338,7 +340,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
     # Read remaining messages (should be message_count - LARGE_BATCH_READ_LIMIT)
     q2 = Queue("test_queue", db_path=str(db_path))
     try:
-        remaining = list(q2.read(all_messages=True))
+        remaining = list(cast(Iterator[object], q2.read(all_messages=True)))
         assert len(remaining) == message_count - LARGE_BATCH_READ_LIMIT
     finally:
         q2.close()
@@ -374,7 +376,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
     # the first two batches (200 messages) and rolls back the in-flight third batch.
     q2 = Queue("test_queue2", db_path=str(db_path))
     try:
-        remaining = list(q2.read(all_messages=True))
+        remaining = list(cast(Iterator[object], q2.read(all_messages=True)))
         assert len(remaining) == SMALL_BATCH_COUNT - 200
         assert remaining[:5] == [f"batch{i:03d}" for i in range(200, 205)]
     finally:
@@ -387,7 +389,7 @@ def test_large_batch_claim_rollback_performance(workdir: Path):
 
 
 @pytest.mark.benchmark
-def test_after_large_queue_performance(workdir):
+def test_after_large_queue_performance(workdir: Path) -> None:
     """Test --after performance on large message queue."""
     queue_name = "large_queue"
     message_count = 5000
@@ -402,7 +404,10 @@ def test_after_large_queue_performance(workdir):
     # timing so this measures the indexed query path, not one-shot setup cost or
     # xdist scheduling noise around connection creation.
     with Queue(queue_name, db_path=str(db_path), persistent=True) as q:
-        messages_with_ts = q.peek_many(limit=message_count, with_timestamps=True)
+        messages_with_ts = cast(
+            list[tuple[str, int]],
+            q.peek_many(limit=message_count, with_timestamps=True),
+        )
 
         # Test queries at different points using Queue API instead of CLI to
         # avoid timestamp validation issues. Since uses > comparison, so we get
@@ -410,15 +415,15 @@ def test_after_large_queue_performance(workdir):
         test_points = [
             (0, message_count),  # All messages
             (
-                messages_with_ts[message_count // 2][1],
+                int(messages_with_ts[message_count // 2][1]),
                 message_count - message_count // 2 - 1,
             ),  # Messages after midpoint
             (
-                messages_with_ts[message_count - 100][1],
+                int(messages_with_ts[message_count - 100][1]),
                 99,
             ),  # Last 99 messages (100th message's timestamp)
             (
-                messages_with_ts[message_count - 1][1],
+                int(messages_with_ts[message_count - 1][1]),
                 0,
             ),  # No messages (last message's timestamp)
         ]
@@ -464,7 +469,7 @@ def test_after_large_queue_performance(workdir):
 
 
 @pytest.mark.benchmark
-def test_timestamp_lookup_performance(workdir: Path):
+def test_timestamp_lookup_performance(workdir: Path) -> None:
     """Test that timestamp lookups are efficient even with many messages."""
     db_path = workdir / "test.db"
 
@@ -475,7 +480,10 @@ def test_timestamp_lookup_performance(workdir: Path):
             q.write(f"msg_{i}")
 
     with Queue("perf_queue", db_path=str(db_path), persistent=True) as q:
-        messages_with_ts = q.peek_many(limit=num_messages, with_timestamps=True)
+        messages_with_ts = cast(
+            list[tuple[str, int]],
+            q.peek_many(limit=num_messages, with_timestamps=True),
+        )
         sample_start = num_messages // 2
         sample_indices = range(
             sample_start,
@@ -525,7 +533,7 @@ def test_timestamp_lookup_performance(workdir: Path):
 
 
 @pytest.mark.benchmark
-def test_concurrent_mixed_operations_performance(workdir: Path):
+def test_concurrent_mixed_operations_performance(workdir: Path) -> None:
     """Test performance of mixed read/write/peek operations.
 
     Note: Some reads exit with EXIT_QUEUE_EMPTY as messages get consumed,
@@ -540,8 +548,10 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
 
     # Get some timestamps
     with Queue("test_queue", db_path=str(db_path)) as q:
-        messages_with_ts = q.peek_many(limit=10, with_timestamps=True)
-    timestamps = [str(ts) for msg, ts in messages_with_ts]
+        messages_with_ts = cast(
+            list[tuple[str, int]], q.peek_many(limit=10, with_timestamps=True)
+        )
+    timestamps = [str(ts) for _msg, ts in messages_with_ts]
 
     # Perform mixed operations concurrently
     operations = []
@@ -602,7 +612,7 @@ def test_concurrent_mixed_operations_performance(workdir: Path):
 
 
 @pytest.mark.benchmark
-def test_move_performance_with_large_batches(workdir: Path):
+def test_move_performance_with_large_batches(workdir: Path) -> None:
     """Test move performance with large number of messages."""
     db_path = workdir / "test.db"
 
@@ -638,7 +648,7 @@ def test_move_performance_with_large_batches(workdir: Path):
     # Verify all messages are in destination
     dest = Queue("perf_dest", db_path=str(db_path))
     try:
-        dest_messages = list(dest.read(all_messages=True))
+        dest_messages = list(cast(Iterator[object], dest.read(all_messages=True)))
         assert len(dest_messages) == message_count
     finally:
         dest.close()
@@ -650,7 +660,7 @@ def test_move_performance_with_large_batches(workdir: Path):
 
 
 @pytest.mark.benchmark
-def test_performance_improvement_with_claims(workdir: Path):
+def test_performance_improvement_with_claims(workdir: Path) -> None:
     """Test performance improvement when using claimed vs delete operations."""
     db_path = workdir / "test.db"
     config = {"BROKER_AUTO_VACUUM": 0}
@@ -671,7 +681,7 @@ def test_performance_improvement_with_claims(workdir: Path):
     start_time = time.monotonic()
     q = Queue("perf_queue", db_path=str(db_path), config=config)
     try:
-        messages = list(q.read(all_messages=True))
+        messages = list(cast(Iterator[object], q.read(all_messages=True)))
     finally:
         q.close()
     read_time = time.monotonic() - start_time
@@ -695,7 +705,7 @@ def test_performance_improvement_with_claims(workdir: Path):
 
 
 @pytest.mark.benchmark
-def test_batch_delete_many_performance(workdir: Path):
+def test_batch_delete_many_performance(workdir: Path) -> None:
     """Physical batch delete should avoid per-ID cleanup loops."""
     db_path = workdir / "test.db"
     message_count = 10000
@@ -705,7 +715,10 @@ def test_batch_delete_many_performance(workdir: Path):
         for i in range(message_count):
             q.write(f"msg{i:05d}")
         timestamps = [
-            timestamp for _body, timestamp in q.peek_generator(with_timestamps=True)
+            timestamp
+            for _body, timestamp in cast(
+                Iterator[tuple[str, int]], q.peek_generator(with_timestamps=True)
+            )
         ][:delete_count]
 
         start_time = time.monotonic()
@@ -722,7 +735,7 @@ def test_batch_delete_many_performance(workdir: Path):
 
 
 @pytest.mark.benchmark
-def test_vacuum_batch_size_limits(workdir: Path):
+def test_vacuum_batch_size_limits(workdir: Path) -> None:
     """Test that vacuum respects batch size limits for performance."""
     db_path = workdir / "test.db"
     config = {"BROKER_AUTO_VACUUM": 0}
@@ -744,7 +757,7 @@ def test_vacuum_batch_size_limits(workdir: Path):
     q = Queue("large_queue", db_path=str(db_path), config=config)
     try:
         count = 0
-        for _msg in q.read(all_messages=True):
+        for _msg in cast(Iterator[object], q.read(all_messages=True)):
             count += 1
         assert count == message_count
     finally:
@@ -773,7 +786,7 @@ def test_vacuum_batch_size_limits(workdir: Path):
 
 
 @pytest.mark.benchmark
-def test_write_performance_not_regressed(workdir: Path):
+def test_write_performance_not_regressed(workdir: Path) -> None:
     """Test that write performance is not affected by claim feature."""
     db_path = workdir / "test.db"
 
@@ -814,14 +827,14 @@ def test_write_performance_not_regressed(workdir: Path):
 
 
 @pytest.fixture
-def broker(tmp_path):
+def broker(tmp_path: Path) -> BrokerDB:
     """Create a broker instance for testing."""
     db_path = tmp_path / "test.db"
     return BrokerDB(str(db_path))
 
 
 @pytest.mark.benchmark
-def test_large_volume_move(broker, tmp_path):
+def test_large_volume_move(broker: BrokerDB, tmp_path: Path) -> None:
     """Test moving a large number of messages."""
     num_messages = 100
     db_path = tmp_path / "test.db"
@@ -833,7 +846,7 @@ def test_large_volume_move(broker, tmp_path):
 
     moved_count = 0
 
-    def count_handler(body: str, ts: int):
+    def count_handler(body: str, ts: int) -> None:
         nonlocal moved_count
         moved_count += 1
 
@@ -873,7 +886,7 @@ def test_large_volume_move(broker, tmp_path):
     dest = Queue("dest", db_path=str(db_path))
     try:
         dest_messages = list(
-            dest.peek(all_messages=True)
+            cast(Iterator[object], dest.peek(all_messages=True))
         )  # Use peek to verify without consuming
         assert len(dest_messages) == num_messages
     finally:
@@ -882,7 +895,7 @@ def test_large_volume_move(broker, tmp_path):
     # Source should be empty
     source = Queue("source", db_path=str(db_path))
     try:
-        source_messages = list(source.peek(all_messages=True))  # Use peek to verify
+        source_messages = list(cast(Iterator[object], source.peek(all_messages=True)))
         assert len(source_messages) == 0
     finally:
         source.close()
