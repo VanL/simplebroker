@@ -19,7 +19,7 @@ def _requires_sql_runner(broker) -> None:
 def test_claim_one_propagates_begin_errors(broker) -> None:
     _requires_sql_runner(broker)
     broker.write("queue", "message")
-    broker._runner.begin_immediate = _raise_begin_error  # type: ignore[method-assign]
+    broker._runner.begin_immediate = _raise_begin_error
 
     with pytest.raises(OperationalError, match="simulated begin failure"):
         broker.claim_one("queue")
@@ -28,7 +28,7 @@ def test_claim_one_propagates_begin_errors(broker) -> None:
 def test_move_one_propagates_begin_errors(broker) -> None:
     _requires_sql_runner(broker)
     broker.write("source", "message")
-    broker._runner.begin_immediate = _raise_begin_error  # type: ignore[method-assign]
+    broker._runner.begin_immediate = _raise_begin_error
 
     with pytest.raises(OperationalError, match="simulated begin failure"):
         broker.move_one("source", "dest")
