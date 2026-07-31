@@ -861,6 +861,28 @@ def _examples_mypy_command(*, frozen: bool = False) -> tuple[str, ...]:
     return (*command[:2], "--frozen", "--no-sync", *command[2:])
 
 
+def _core_test_mypy_paths() -> tuple[str, ...]:
+    """Return concrete Python files under the root test suite for mypy."""
+
+    return _required_python_file_paths(PROJECT_ROOT / "tests", label="tests")
+
+
+def _core_test_mypy_command() -> tuple[str, ...]:
+    """Type-check root tests with local namespace-package imports resolved."""
+
+    return (
+        "env",
+        "MYPYPATH=.",
+        *MYPY_PREFIX,
+        *MYPY_SUFFIX,
+        "--namespace-packages",
+        "--explicit-package-bases",
+        "--allow-untyped-defs",
+        "--allow-incomplete-defs",
+        *_core_test_mypy_paths(),
+    )
+
+
 def _example_shell_paths() -> tuple[str, ...]:
     return tuple(
         _display_path(path)
@@ -1028,6 +1050,11 @@ def build_precheck_commands_for_targets(
         _ruff_check_command(tool_paths),
         _ruff_format_command(tool_paths),
         _mypy_command(mypy_paths),
+        *(
+            (_core_test_mypy_command(),)
+            if ROOT_RELEASE_TARGET.key in target_keys
+            else ()
+        ),
         *_extension_test_mypy_commands(include_pg=run_pg, include_redis=run_redis),
         _examples_mypy_command(),
     )

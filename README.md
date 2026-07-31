@@ -2392,6 +2392,9 @@ uv run ruff format simplebroker tests bin .github/scripts \
   extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_pg/tests \
   extensions/simplebroker_redis/simplebroker_redis extensions/simplebroker_redis/tests
 uv run mypy simplebroker bin/release.py
+MYPYPATH=. uv run mypy --config-file pyproject.toml --namespace-packages --explicit-package-bases \
+  --allow-untyped-defs --allow-incomplete-defs \
+  $(find tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
 ```
 
 The Ruff lint gate extends the locked release's stable defaults with the
@@ -2473,8 +2476,9 @@ identity match the artifact attestation build-config URI.
 The local release helper also ruff-checks `examples/`, runs all
 pytest-discovered example tests under `examples/`, mypy-checks every Python
 example file, and mypy-checks the selected extension test tree. Core and batch
-releases check both first-party extension test trees. Those extra local checks
-are not part of the CI release workflows.
+releases also mypy-check every root-test Python file; extension releases retain
+their selected extension-test scope. Those extra local checks are not part of
+the CI release workflows.
 Core releases wait for `Test`, `Test Postgres Extension`, and
 `Test Redis Extension`; extension releases wait for `Test` plus their matching
 backend workflow.
