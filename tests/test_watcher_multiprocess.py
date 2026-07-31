@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -317,9 +318,9 @@ def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1
         broker = BrokerDB(db_path)
 
         # Create multiprocessing queues for communication
-        result_queue = multiprocessing.Queue()
+        result_queue: multiprocessing.queues.Queue[Any] = multiprocessing.Queue()
         control_queues = []
-        processes = []
+        processes: list[multiprocessing.Process] = []
 
         try:
 
@@ -368,7 +369,9 @@ def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1
             num_processes = 4
 
             for i in range(num_processes):
-                control_queue = multiprocessing.Queue()
+                control_queue: multiprocessing.queues.Queue[Any] = (
+                    multiprocessing.Queue()
+                )
                 control_queues.append(control_queue)
 
                 p = multiprocessing.Process(
@@ -379,7 +382,7 @@ def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1
                 processes.append(p)
 
             # Wait for all processes to be ready
-            ready_processes = set()
+            ready_processes: set[int] = set()
             ready_deadline = _deadline_after(10.0)
             while (
                 len(ready_processes) < num_processes
@@ -427,7 +430,7 @@ def test_multiprocess_single_queue() -> None:  # noqa: C901 approved [DOM-10.1.1
             assert set(message_bodies) == expected_messages
 
             # Check distribution across processes
-            process_counts = {}
+            process_counts: dict[int, int] = {}
             for proc_id, _ in processed_messages:
                 process_counts[proc_id] = process_counts.get(proc_id, 0) + 1
 
@@ -459,9 +462,9 @@ def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.
         messages_per_queue = 20
 
         # Create communication queues
-        result_queue = multiprocessing.Queue()
+        result_queue: multiprocessing.queues.Queue[Any] = multiprocessing.Queue()
         control_queues = []
-        processes = []
+        processes: list[multiprocessing.Process] = []
 
         try:
 
@@ -507,7 +510,9 @@ def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.
 
             # Start processes, each watching its own queue
             for i in range(num_processes):
-                control_queue = multiprocessing.Queue()
+                control_queue: multiprocessing.queues.Queue[Any] = (
+                    multiprocessing.Queue()
+                )
                 control_queues.append(control_queue)
 
                 p = multiprocessing.Process(
@@ -518,7 +523,7 @@ def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.
                 processes.append(p)
 
             # Wait for ready
-            ready_processes = set()
+            ready_processes: set[int] = set()
             ready_deadline = _deadline_after(10.0)
             while (
                 len(ready_processes) < num_processes
@@ -593,14 +598,16 @@ def test_multiprocess_thundering_herd() -> None:  # noqa: C901 approved [DOM-10.
                 broker.write("queue_0", "test_message")
 
             num_processes = 10
-            result_queue = multiprocessing.Queue()
+            result_queue: multiprocessing.queues.Queue[Any] = multiprocessing.Queue()
             control_queues = []
-            processes = []
+            processes: list[multiprocessing.Process] = []
 
             try:
                 # Start processes watching different queues
                 for i in range(num_processes):
-                    control_queue = multiprocessing.Queue()
+                    control_queue: multiprocessing.queues.Queue[Any] = (
+                        multiprocessing.Queue()
+                    )
                     control_queues.append(control_queue)
 
                     p = multiprocessing.Process(
@@ -620,7 +627,7 @@ def test_multiprocess_thundering_herd() -> None:  # noqa: C901 approved [DOM-10.
                 # Windows spawn plus coverage instrumentation can take longer than
                 # one fixed queue timeout. Use one bounded startup deadline and
                 # retain child errors and process state for a useful failure.
-                ready_processes = set()
+                ready_processes: set[int] = set()
                 errors: list[tuple[int, str]] = []
                 ready_deadline = _deadline_after(10.0)
                 while (
@@ -656,7 +663,7 @@ def test_multiprocess_thundering_herd() -> None:  # noqa: C901 approved [DOM-10.
                     control_queue.put("stop")
 
                 # Collect stats with robust error handling
-                stats = {}
+                stats: dict[int, Any] = {}
                 errors = []
                 stats_deadline = _deadline_after(10.0)
 
@@ -722,13 +729,15 @@ def test_multiprocess_graceful_shutdown() -> None:  # noqa: C901 approved [DOM-1
 
         # Start processes
         num_processes = 3
-        result_queue = multiprocessing.Queue()
+        result_queue: multiprocessing.queues.Queue[Any] = multiprocessing.Queue()
         control_queues = []
-        processes = []
+        processes: list[multiprocessing.Process] = []
 
         try:
             for i in range(num_processes):
-                control_queue = multiprocessing.Queue()
+                control_queue: multiprocessing.queues.Queue[Any] = (
+                    multiprocessing.Queue()
+                )
                 control_queues.append(control_queue)
 
                 p = multiprocessing.Process(
@@ -739,8 +748,8 @@ def test_multiprocess_graceful_shutdown() -> None:  # noqa: C901 approved [DOM-1
                 processes.append(p)
 
             # Wait until each child has both started and processed real work.
-            ready_processes = set()
-            processed_processes = set()
+            ready_processes: set[int] = set()
+            processed_processes: set[int] = set()
             errors = []
             deadline = _deadline_after(10.0)
 
@@ -780,7 +789,7 @@ def test_multiprocess_graceful_shutdown() -> None:  # noqa: C901 approved [DOM-1
                 control_queue.put("stop")
 
             # Collect shutdown stats with robust error handling
-            shutdown_stats = {}
+            shutdown_stats: dict[int, Any] = {}
             shutdown_deadline = _deadline_after(10.0)
 
             while (
@@ -826,13 +835,15 @@ def test_multiprocess_database_locking() -> None:  # noqa: C901 approved [DOM-10
 
         # Start multiple processes on same queue to create contention
         num_processes = 5
-        result_queue = multiprocessing.Queue()
+        result_queue: multiprocessing.queues.Queue[Any] = multiprocessing.Queue()
         control_queues = []
-        processes = []
+        processes: list[multiprocessing.Process] = []
 
         try:
             for i in range(num_processes):
-                control_queue = multiprocessing.Queue()
+                control_queue: multiprocessing.queues.Queue[Any] = (
+                    multiprocessing.Queue()
+                )
                 control_queues.append(control_queue)
 
                 p = multiprocessing.Process(
