@@ -73,12 +73,12 @@ class TestInitCommand:
         with DBConnection(str(db_path)) as conn:
             db = conn.get_connection()
             # Add some test data to verify preservation
-            with db._lock:
-                db._conn.execute(
+            with db._lock:  # type: ignore[attr-defined]
+                db._conn.execute(  # type: ignore[attr-defined]
                     "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
                     ("test_queue", "test message", 1234567890123456789),
                 )
-                db._conn.commit()
+                db._conn.commit()  # type: ignore[attr-defined]
 
         # Verify database exists and is valid
         assert db_path.exists()
