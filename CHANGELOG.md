@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Promoted residual queue/broker operations to
   `docs/specs/17-ops.md` (`[SB-OPS-1]`…`[SB-OPS-6]`): implicit queues,
   metadata, physical delete, rename, aliases, and vacuum.
+- Completed product-documentation authority cutover: every registered product
+  concern family is `canonical-spec` (`docs/specs/10-cli.md` …
+  `17-ops.md`). Root README is human entry/catalog with links; ownership
+  rules live in `docs/README.md` and `docs/specs/product-section-registry.md`.
 
 ## [5.6.3] - 2026-07-30
 

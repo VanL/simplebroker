@@ -21,6 +21,31 @@ with links; those are not competing SoT rows. CLI I/O and exits; delivery;
 broadcast; message identity; timestamp selection; dump/load; library surfaces;
 and residual ops each have a registered owner above.
 
+## README TOC ownership (final cutover audit)
+
+Major root-`README.md` product sections and their registered owners. Orientation,
+install, patterns, performance catalogs, architecture narrative, and
+contributing are **human entry** (not separate SoT rows). Project-scoping
+**field lists** are catalog residual; discovery **callables** are `[SB-API-2]`.
+
+| README locus | Owner |
+|--------------|-------|
+| Command Reference / Global Options / Commands table | Catalog + `[SB-CLI-3]` (global option position); per-command meaning via rows below |
+| Queue Aliases | `[SB-OPS-5]` |
+| Command Options (filters, write flags, watch flags, metadata options) | `[SB-SELECT-*]` / `[SB-CLI-5]` for bounds; `[SB-OPS-1]`–`[SB-OPS-2]` for metadata; delivery for watch modes |
+| Exit Codes | `[SB-CLI-1]`–`[SB-CLI-4]` |
+| Critical Safety / Safe Message Handling / watch | `[SB-DELIVERY-*]` |
+| Timestamps as Message IDs | `[SB-ID-*]` |
+| Filtering by message id | `[SB-SELECT-*]` (+ `[SB-CLI-5]`) |
+| Dump/load mentions | `[SB-IO-*]` |
+| Real-time Queue Watching / Pipe / Move Mode | `[SB-DELIVERY-2]`, `[SB-DELIVERY-3]`, `[SB-DELIVERY-7]` |
+| Python API / Delivery guarantees | `[SB-API-*]` packaging + `[SB-DELIVERY-*]` |
+| Queue metadata | `[SB-OPS-1]`–`[SB-OPS-2]` |
+| Exact IDs / high-water / generate timestamp | `[SB-ID-*]` |
+| Sidecar / Command layer / Embedding | `[SB-API-7]`, `[SB-API-10]`, `[SB-API-1]`–`[SB-API-12]` |
+| Fan-out / broadcast examples | `[SB-BCAST-*]` |
+| Environment Variables / Project Scoping catalogs | Human catalog; targets/discovery callables `[SB-API-2]` |
+
 ## Transition rule
 
 A **migration** state change requires one PR that updates this table, the

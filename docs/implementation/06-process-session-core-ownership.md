@@ -4,11 +4,11 @@ Status: current
 
 ## Contract
 
-The public behavior remains the process-session paragraph under
-`README.md` “Embedding SimpleBroker in Your Project”: persistent queue handles
-for one resolved target share process-local backend state, while transient
-handles do not. The product section remains `readme-only` in
-`docs/specs/product-section-registry.md`.
+The public packaging surface for targets, handles, and embedding is
+`docs/specs/16-python-library-api.md` `[SB-API-*]` (see also README
+“Embedding SimpleBroker in Your Project” for orientation). Persistent queue
+handles for one resolved target share process-local backend state, while
+transient handles do not.
 
 This document explains the internal ownership boundary that preserves that
 behavior. It does not define a public extension interface.

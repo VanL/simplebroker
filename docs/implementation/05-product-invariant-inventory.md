@@ -1,19 +1,12 @@
 # Product Invariant Inventory
 
-Find/map inventory of product concern families after the first CLI and
-delivery vertical promotions. **Not normative.** Remaining promotions are
-phase-gated Class 5 deltas in
-`docs/plans/2026-07-30-product-documentation-cutover-plan.md`.
+Find/map inventory of product concern families. **Not normative.**
 
-Authority machine: `docs/specs/product-section-registry.md`.
+Authority machine: `docs/specs/product-section-registry.md` (all current
+product families are `canonical-spec` after the
+`2026-07-30-product-documentation-cutover-plan` Phases 1–6).
 Conceptual account: `docs/program-theory.md` (non-normative for exact
-behavior).
-First vertical: `docs/specs/10-cli.md` (`canonical-spec`).
-Second vertical: `docs/specs/11-delivery.md` (`canonical-spec`).
-Third vertical: `docs/specs/12-broadcast.md` (`canonical-spec`).
-Fourth vertical: `docs/specs/13-message-identity.md`
-(`canonical-spec`).
-The retired promotion history is source-pinned under Related Plans below.
+behavior). Specs: `docs/specs/10-cli.md` … `17-ops.md`.
 
 | Family | Claim summary | Locus | Proposed codes | Known tests / notes | State |
 |--------|---------------|-------|----------------|---------------------|-------|

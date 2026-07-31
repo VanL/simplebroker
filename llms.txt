@@ -17,7 +17,7 @@
 - [Python library API spec](docs/specs/16-python-library-api.md): Canonical public package root, `ext`, command layer, targets, and library packaging `[SB-API-1]`–`[SB-API-12]`
 - [Operations spec](docs/specs/17-ops.md): Canonical implicit queues, metadata, physical delete, rename, aliases, and vacuum `[SB-OPS-1]`–`[SB-OPS-6]`
 - [Specs index](docs/specs/00-specs-index.md): Process and product spec read order
-- [README](README.md): Human product entry and full command/env/API catalogs; normative for the registry concerns still marked `readme-only`
+- [README](README.md): Human product entry; command/env/API catalogs, examples, and restatements that link canonical `[SB-*]` specs
 - [CHANGELOG](CHANGELOG.md): Behavior deltas for published releases
 - [AGENTS.md](AGENTS.md): Entry point for agents working *in this repository* (process, plans, reviews)
 - [SECURITY.md](SECURITY.md): Vulnerability reporting

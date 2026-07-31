@@ -1,13 +1,11 @@
 # Product Documentation Cutover Plan
 
-Status: **active** — as of 2026-07-31.
+Status: **completed** — 2026-07-31 (Phase 6 final cutover).
 
-**Landed:** Phase 1 (broadcast) and Phase 2A (identity/allocation) promoted;
-CLI and delivery already canonical. Owner disposition of the promise-equivalence
-audit closed; product specs `10`–`13` rewritten in place to README-true promises
-(commits `2aa6057` … `0baf090` and follow-ups). Reserved-zero / Redis-write
-precursor completed separately. Temporary retrospective decision record removed
-after use.
+**Landed:** Phases 1–6 complete. Product specs `10`–`17` are
+`canonical-spec` (`[SB-CLI-*]` … `[SB-OPS-*]`). Root README is human entry /
+catalogs / examples; exact behavior is owned by the registry. Final cutover
+gates: `tests/test_product_section_registry_final_cutover.py`.
 
 **Phase 2B:** Promoted 2026-07-31 as
 `docs/specs/14-timestamp-selection.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`
@@ -78,13 +76,8 @@ owner disposition and separately scoped authority.
 - [x] Persistence I/O (dump/load / claimed-row I/O) — `[SB-IO-*]`.
 - [x] Embedding / library API (`16-python-library-api.md` `[SB-API-*]` canonical)
 - [x] Residual ops (`17-ops.md` `[SB-OPS-*]` canonical)
-- [ ] Phase 6 final cutover
-      operations catalog.
-- [ ] Program-theory links stay synchronized with registry ownership without
-      copying exact behavioral clauses into theory.
-- [ ] README progressive disclosure continues per remaining slices.
-- [ ] Final cutover: every normative README concern has one registered winning
-      owner.
+- [x] Phase 6 final cutover: docs ownership language, TOC audit, kernel/llms
+      discoverability, final-cutover gates; plan closed.
 
 ## Source Documents
 
@@ -1790,7 +1783,7 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 3 — Persistence I/O | after 2B | Phase 3 land | Spec `15` + registry/README/kernel + structural tests | Docs-only promotion |
 | 4 — Embedding / library API | done | sibling plan completed | `16-python-library-api.md` `[SB-API-1]`…`12` canonical; Weft/Taut consumer migration still post-publish | landed |
 | 5 — Residual operations | done | `17-ops.md` | `[SB-OPS-1]`…`[SB-OPS-6]` canonical; no registry `readme-only` rows remain | landed |
-| 6 — Final cutover | gated | pending | All residual registry rows canonical | pending |
+| 6 — Final cutover | done | registry + docs ownership | No product `readme-only` rows; TOC audit; final-cutover tests; plan closed | landed |
 
 Phase 1 pre-change proof: `uv run pytest -q -n0
 tests/test_broadcast_contract_sb_bcast.py` failed two tests because the

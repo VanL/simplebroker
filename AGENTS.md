@@ -6,9 +6,9 @@
 you need SimpleBroker as a queue tool. This file is the entry for
 **working in this repository** (process, plans, reviews). Product behavior
 uses the layered SoT in `docs/README.md` and
-`docs/specs/product-section-registry.md` (`readme-only` residual in root
-`README.md`; `canonical-spec` sections under `docs/specs/` with `[SB-*]`
-codes). `CHANGELOG.md` records published deltas.
+`docs/specs/product-section-registry.md` (current product families are
+`canonical-spec` under `docs/specs/` with `[SB-*]` codes; root `README.md`
+is the human entry and catalog). `CHANGELOG.md` records published deltas.
 
 ## Agent Permissions and Attribution — Read First
 
@@ -118,12 +118,12 @@ authoritative.
 
 - **Product behavior uses layered ownership** (declared in `docs/README.md`;
   registry in `docs/specs/product-section-registry.md`). Process specs are
-  `[DOM-*]`; product sections use `[SB-*]` when `canonical-spec`. Root
-  `README.md` remains normative for every `readme-only` concern and may
-  restate canonical sections with a link. Changes to CLI behavior, flags,
-  exit codes, or safety semantics update the **winning** SoT (registry
-  state), keep README restatements/links aligned, and record user-visible
-  deltas in `CHANGELOG.md`.
+  `[DOM-*]`; product sections use `[SB-*]` when `canonical-spec` (all
+  current product families). Root `README.md` is the human entry and
+  catalog; it may restate canonical sections with a link. Changes to CLI
+  behavior, flags, exit codes, or safety semantics update the **winning**
+  SoT (registry state), keep README restatements/links aligned, and record
+  user-visible deltas in `CHANGELOG.md`.
 - **This is a published package with external users** (PyPI; see
   `SECURITY.md`). CLI and library surface changes are public-contract
   changes: risky by default, plan-worthy, and never quietly breaking.

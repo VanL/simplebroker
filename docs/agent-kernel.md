@@ -1,10 +1,10 @@
 # SimpleBroker — agent kernel
 
 Hand-written **use/embedding kernel** for agents. Prefer this over skimming
-the full README when you need a durable local queue. Product behavior is
-defined by the winning root-README or canonical-spec section in
-`docs/specs/product-section-registry.md`; `CHANGELOG.md` records published
-deltas. This file does not replace those owners.
+the full README when you need a durable local queue. Product behavior is defined by the `canonical-spec` sections in
+`docs/specs/product-section-registry.md` (`docs/specs/10-cli.md` …
+`17-ops.md`); `CHANGELOG.md` records published deltas. The root README is the
+human entry and catalog. This file does not replace those owners.
 
 Discoverable index of project docs for link-following agents: root
 [`llms.txt`](../llms.txt) (llmstxt.org shape). **This file is the prose
@@ -95,7 +95,7 @@ Normative: `docs/specs/10-cli.md` [SB-CLI-1]–[SB-CLI-4].
   `broker -f /path/to.db read tasks`  
   not `broker read tasks -f ...`.
 - Closed downstream pipes on streaming commands: clean shutdown (do not keep
-  claiming forever).
+  claiming forever) — `[SB-DELIVERY-7]`.
 
 ## Delivery (use-level)
 
@@ -141,7 +141,8 @@ place older ids behind a bound you already use. Normative:
 CLI string forms `[SB-CLI-5]`.
 
 Queue names: tight grammar (alphanumeric + `_` `-` `.`). `@alias` is a
-separate **CLI** naming layer; broadcast matches **queue names**, not aliases.
+separate **CLI** naming layer (`[SB-OPS-5]`); broadcast matches **queue
+names**, not aliases.
 
 Broadcast selectors:
 
@@ -164,6 +165,9 @@ Python-only and must be explicit; selector-free, pattern, and CLI broadcasts
 never create queues.
 
 ## Target (use-level)
+
+Public targets and discovery packaging: `docs/specs/16-python-library-api.md`
+`[SB-API-2]`.
 
 - Default: directory-local SQLite **database** (plus live WAL/SHM/lock
   companions while open).

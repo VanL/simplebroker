@@ -54,7 +54,8 @@ Product section authority: `product-section-registry.md`.
 
 ## Related Surfaces
 
-- Root `README.md` — human entry and `readme-only` / `draft-spec` residual
+- Root `README.md` — human entry, catalogs, and examples (exact behavior is
+  owned by `canonical-spec` product sections in the registry)
 - `docs/agent-kernel.md` — agent use orientation
 - `docs/plans/` — execution
 - `docs/implementation/` — rationale and repository maps

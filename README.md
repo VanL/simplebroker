@@ -21,6 +21,13 @@ project-local coordination that need durable queue semantics without operating
 Redis, RabbitMQ, or a cloud service. The default install has no runtime
 dependencies and stores its state in one SQLite database.
 
+**Exact product behavior** is owned by the canonical specs in
+`docs/specs/` (`10-cli.md` … `17-ops.md`, codes `[SB-CLI-*]` …
+`[SB-OPS-*]`), registered in
+`docs/specs/product-section-registry.md`. This README is the human entry:
+catalogs, examples, and short restatements with links. Agents should prefer
+`docs/agent-kernel.md` for use orientation.
+
 ## Recommended For
 
 - **Python projects that need a queue without infrastructure.** Most queue
@@ -357,6 +364,9 @@ matching rows immediately (`[SB-OPS-3]`). Reads still use claimed-row semantics
 and are reclaimed by `--vacuum` (`[SB-OPS-6]`).
 
 ## Critical Safety Notes
+
+Delivery claim, peek, watch, and move rules:
+`docs/specs/11-delivery.md` (`[SB-DELIVERY-1]`–`[SB-DELIVERY-7]`).
 
 ### Safe Message Handling
 
@@ -1648,6 +1658,9 @@ export BROKER_DEFAULT_DB_NAME=project-queue.db
 </details>
 
 ## Project Scoping
+
+Public discovery callables: `docs/specs/16-python-library-api.md` `[SB-API-2]`.
+Environment and TOML field lists below are a human catalog.
 
 SimpleBroker provides flexible database scoping modes to handle different use cases:
 

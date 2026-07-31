@@ -5,43 +5,39 @@ Design, planning, and specification record for SimpleBroker.
 ## Product documentation ownership
 
 Product behavior is governed by the **layered source-of-truth system**
-registered in `docs/specs/product-section-registry.md`:
+registered in `docs/specs/product-section-registry.md`.
+
+**As of the product-documentation cutover (Phases 1–6), every current product
+concern family is `canonical-spec`.** Exact intended behavior lives under
+`docs/specs/10-cli.md` … `17-ops.md` with stable `[SB-*]` codes. The root
+`README.md` is the human product entry: orientation, catalogs, examples, and
+short restatements that **link** the winning spec. It is not a competing SoT
+for registered families.
 
 | Surface | Role |
 |---------|------|
 | `docs/program-theory.md` | Current conceptual account: purpose, mental model, concept ownership, durable principles/non-goals, tensions, and revisions; **not** exact behavior authority |
-| Root `README.md` | Human entry, command/env catalogs, and **normative text for every product concern still in state `readme-only`** |
-| `docs/specs/` product sections (`[SB-*]`) | **Normative** when the product section registry marks the section `canonical-spec` |
+| Root `README.md` | Human entry, command/env/API **catalogs**, examples, and concise restatements with links to canonical specs |
+| `docs/specs/` product sections (`[SB-*]`) | **Normative** for every registered product concern (`canonical-spec` in the registry) |
 | `CHANGELOG.md` | Behavior deltas for published releases |
 | `docs/agent-kernel.md` | Agent-oriented **view** of use-level rules; must not invent obligations beyond the winning SoT |
 | `llms.txt` | Machine-readable link index (not normative) |
 
-**Conflict rule:** If a product section is `canonical-spec` in
-`docs/specs/product-section-registry.md`, that spec section wins over
-README prose. README may restate short tables and must link the section
-code. If the section is `readme-only` or `draft-spec`, root `README.md`
-wins.
+**Conflict rule:** For a registered product concern, the `canonical-spec`
+section in `docs/specs/product-section-registry.md` wins over README prose.
+README may restate short tables and must link the section code. The state
+vocabulary `readme-only` | `draft-spec` | `canonical-spec` remains for
+**future** concerns; a new family may start as `readme-only` until promoted.
 
 Program theory precedes and informs those contracts but does not override
-them. It owns conceptual identity and design judgment. The registry's winning
-README/spec owner controls exact current behavior; implementation docs explain
-the concrete realization.
+them. It owns conceptual identity and design judgment. Implementation docs
+explain concrete realization.
 
-**Migration states** (see registry and ownership decision): `readme-only` →
-`draft-spec` → `canonical-spec` for extracting concerns from the README.
-Promotion to `canonical-spec` requires a gate for **every** numbered clause.
-An authority migration preserves the winning source contract exactly: the
-source is both the promise floor and ceiling. Every source promise must survive
-with the same meaning, and every target promise must be entailed by source
-text. Code, tests, implementation docs, and reviews may reveal an inconsistency
-or provide firing evidence, but they may not supply new normative behavior to
-the migration. Stop and bring inconsistencies to the product owner. Contract
-changes require an exact proposed delta and explicit owner authorization.
-Approved changes land separately; then the migration rebaselines and restarts.
-Once canonical, **update the product spec in place** ([DOM-6] /
-`writing-specs.md`); do not retire or de-promote product sections the way
-plans are coalesced. Unreleased promotion mistakes: git revert. Migration
-transitions are atomic (registry + spec + README pointer + gates).
+**Promotion** to `canonical-spec` still requires a gate for every numbered
+clause and atomic registry + spec + README pointer + gates updates
+([DOM-6] / `writing-specs.md`). Once canonical, **edit the product spec in
+place**; do not de-promote product sections the way plans are coalesced.
+Unreleased promotion mistakes: git revert.
 
 ## Process and agent guidance
 
