@@ -99,9 +99,7 @@ def _functions(relative_path: str) -> set[str]:
 
 
 def _verification_rows(text: str) -> dict[str, str]:
-    verification = text.split("## Verification", 1)[1].split(
-        "## Related Plans", 1
-    )[0]
+    verification = text.split("## Verification", 1)[1].split("## Related Plans", 1)[0]
     return {
         match.group("code"): line
         for line in verification.splitlines()
@@ -154,9 +152,7 @@ def test_broadcast_contract_clause_inventory_and_authority() -> None:
     assert "Base queue/broker operation catalog residual" not in registry
     assert "broadcast" in registry.lower()
 
-    assert "docs/specs/12-broadcast.md" in README.read_text(
-        encoding="utf-8"
-    )
+    assert "docs/specs/12-broadcast.md" in README.read_text(encoding="utf-8")
     assert "[BCAST-" not in README.read_text(encoding="utf-8")
     for path in (KERNEL, LLMS):
         surface = path.read_text(encoding="utf-8")
