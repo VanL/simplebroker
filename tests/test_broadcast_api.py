@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -13,7 +13,7 @@ pytestmark = [pytest.mark.shared]
 
 
 def _messages(broker: Any, queue: str) -> list[str]:
-    return broker.peek_many(queue, limit=20, with_timestamps=False)
+    return cast(list[str], broker.peek_many(queue, limit=20, with_timestamps=False))
 
 
 def test_broadcast_exact_targets_existing_subset_and_excludes_actor(
