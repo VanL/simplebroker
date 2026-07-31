@@ -280,7 +280,10 @@ __all__ = [
     "BrokerTarget",
     "broker_root",
     "deserialize_broker_target",
+    "find_project_config",
+    "project_config_path_for_directory",
     "resolve_broker_target",
+    "resolve_project_target",
     "serialize_broker_target",
     "target_for_directory",
 ]

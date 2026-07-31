@@ -12,15 +12,16 @@ The ownership rules live in `docs/README.md` and this registry.
 | Message identity, allocation, exact-ID handling, and preservation | `canonical-spec` | `13-message-identity.md` `[SB-ID-1]`…`[SB-ID-5]` | README “Timestamps as Message IDs,” timestamp generation/insertion/cache sections, and move-preservation summaries; agent-kernel Message IDs | `tests/test_message_identity_contract_sb_id.py` (SB-ID-1…5 structural, authority, and row-local firing binds); shared reserved-zero admission and SQL write-transaction suites across SQLite/PostgreSQL/Redis; real-Valkey generated-write atomicity, stale-fence, monotone-resync, and `SM-REDIS-WRITE` suites; shared timestamp, write-return, insertion, cache, and move-preservation suites |
 | Ordered timestamp selection and filter consequences | `canonical-spec` | `14-timestamp-selection.md` `[SB-SELECT-1]`…`[SB-SELECT-4]` | README Command Options / Checkpoint-based Processing (reduced); agent-kernel filter note | `tests/test_timestamp_selection_contract_sb_select.py`; `tests/test_after_flag.py`; watcher peek progress tests under delivery/selection binds |
 | Dump/load and claimed-row I/O | `canonical-spec` | `15-persistence-io.md` `[SB-IO-1]`…`[SB-IO-5]` | README dump/load + include-claimed (reduced); agent-kernel Dump/load | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`; `tests/test_cli_dump_load.py`; `tests/test_cross_backend_dump_load.py` |
-| Embedding targets, backends, sidecar | `readme-only` | — | README Embedding / Advanced | (future) |
+| Python library / embedding API surfaces | `canonical-spec` | `16-python-library-api.md` `[SB-API-1]`…`[SB-API-12]` | README Python API / Embedding / Command layer / Sidecar; agent-kernel surfaces | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_public_surface.py`; delivery/IO/project-config suites reused for linked meaning |
 | Base queue/broker operation catalog residual | `readme-only` | — | README Command Reference / Python API | (future) |
 
 The base operation row owns only the remaining command/API catalog and base
 operation meanings. It excludes CLI I/O and exits; delivery,
 claim/peek/watch safety; broadcast selection, creation, and atomicity; message
 identity, allocation, exact-ID handling, and preservation; ordered timestamp
-selection and filter consequences; dump/load; and embedding, backends, and
-sidecar. Those concerns remain with their existing rows.
+selection and filter consequences; dump/load; and public Python library /
+embedding surfaces (root, `ext`, command layer, targets, sidecar packaging).
+Those concerns remain with their existing rows.
 
 ## Transition rule
 

@@ -8,7 +8,8 @@ Scope note: embedders vs. backend authors
 -----------------------------------------
 
 This module is the stable surface for *embedding* SimpleBroker (custom
-runners over the SQLite backend, sidecar tables, timestamp utilities).
+runners over the SQLite backend, sidecar tables, timestamp utilities,
+and project-config discovery helpers used when wiring targets).
 
 Authoring a full alternative *backend* (like the first-party
 simplebroker-pg and simplebroker-redis packages) needs more than this
@@ -64,6 +65,11 @@ from ._exceptions import (
     TimestampError,
 )
 from ._maintenance import MaintenanceSchedule, vacuum_is_eligible
+from ._project_config import (
+    find_project_config,
+    project_config_path_for_directory,
+    resolve_project_target,
+)
 from ._runner import SetupPhase, SQLiteRunner, SQLRunner
 from ._sidecar import RESERVED_TABLE_NAMES, SidecarSession
 from ._timestamp import TimestampGenerator
@@ -102,7 +108,10 @@ __all__ = [
     "TimestampError",
     "TimestampGenerator",
     "default_error_handler",
+    "find_project_config",
     "get_backend_plugin",
+    "project_config_path_for_directory",
+    "resolve_project_target",
     "vacuum_is_eligible",
     "validate_delivery_guarantee",
 ]

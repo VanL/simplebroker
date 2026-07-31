@@ -14,6 +14,7 @@
 - [Message identity spec](docs/specs/13-message-identity.md): Canonical hybrid-ID representation, allocation, write-return, high-water/cache, exact-ID, and move-preservation rules `[SB-ID-1]` through `[SB-ID-5]`
 - [Timestamp selection spec](docs/specs/14-timestamp-selection.md): Canonical id filters, late older ids, and watch progress `[SB-SELECT-1]`–`[SB-SELECT-4]`
 - [Persistence I/O spec](docs/specs/15-persistence-io.md): Canonical dump/load format, selection filters, fresh load, and claimed-row inspection `[SB-IO-1]`–`[SB-IO-5]`
+- [Python library API spec](docs/specs/16-python-library-api.md): Canonical public package root, `ext`, command layer, targets, and library packaging `[SB-API-1]`–`[SB-API-12]`
 - [Specs index](docs/specs/00-specs-index.md): Process and product spec read order
 - [README](README.md): Human product entry and full command/env/API catalogs; normative for the registry concerns still marked `readme-only`
 - [CHANGELOG](CHANGELOG.md): Behavior deltas for published releases

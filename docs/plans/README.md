@@ -95,7 +95,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-29-program-theory-and-negative-knowledge-plan.md | active — class 5+P; program theory, negative-knowledge lifecycle, agent read path, and later upstream export |
 | 2026-07-29-ruff-lint-expansion-plan.md | active — class 3+P; Ruff 0.16 stable-default expansion and repository-wide cleanup in progress |
 | 2026-07-30-product-documentation-cutover-plan.md | active — class 5+P; specs 10–15 canonical (through Phase 3 dump/load); next: library API (sibling plan), residual ops, final cutover |
-| 2026-07-31-python-library-api-contract-plan.md | active — class 3+P; canonical Python library / `ext` API contract driven by Weft and Taut usage |
+| 2026-07-31-python-library-api-contract-plan.md | completed — class 3+P; `16-python-library-api.md` `[SB-API-1]`…`12` canonical; Weft/Taut consumer migration out of scope |
 | 2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md | completed — class 5; zero reserved at exact-insert admission and ordinary Redis generated writes made allocation/publication atomic |
 | 2026-07-30-ruff-suppression-index-generator-plan.md | completed — stable-group registry and generated Ruff suppression index implemented and verified 2026-07-31 |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | active — class 4; shared-runner transaction ownership and reactor sidecar-boundary correction |

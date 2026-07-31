@@ -1,6 +1,7 @@
 # Python Library API Contract
 
-Status: active — class 3+P
+Status: completed — class 3+P (canonical `16-python-library-api.md`;
+Weft/Taut consumer migration remains out of scope)
 Date: 2026-07-31
 
 ## Goal
@@ -50,9 +51,25 @@ From `__all__` today: `Queue`, `QueueWatcher`, `QueueMoveWatcher`,
 
 Stable embedder facade per module docstring: exceptions, `TimestampGenerator`,
 `SidecarSession`, runners/setup hooks, delivery-guarantee types, maintenance
-helpers, watcher bases/strategies, backend plugin **types** and
-`get_backend_plugin` — with the existing note that full alternate backends also
-use private modules under pin + `backend_api_version`.
+helpers, watcher bases/strategies, backend plugin **types**,
+`get_backend_plugin`, and **project-config discovery helpers**
+(`find_project_config`, `project_config_path_for_directory`,
+`resolve_project_target`) — with the existing note that full alternate
+backends also use private modules under pin + `backend_api_version`.
+
+The three project-config helpers are the same objects as on
+`simplebroker.project` (also listed in `project.__all__`). Prefer
+`simplebroker.ext` for new embedder code; existing `simplebroker.project`
+imports remain valid until consumers migrate on their own schedule.
+
+### Second public surface: `simplebroker.commands`
+
+CLI-equivalent `cmd_*` functions (stdout/stderr + exit codes), not the
+primary Queue embedder path. Document as a named public submodule with
+behavior owned by `[SB-CLI-*]` and the verticals for the underlying
+operation. Weft proxies through this layer for CLI parity / implementation
+reuse; that proxy pattern is valid for CLI wrappers, not the default
+embedder guidance.
 
 ### Explicit non-goals for this spec
 
@@ -61,41 +78,125 @@ use private modules under pin + `backend_api_version`.
 - Redesigning APIs “for better embedding.”
 - Replacing CLI contract; only **cross-links** where the same operation exists
   in both forms.
+- Promoting every Weft import path into package root `__all__` (commands stay
+  a submodule; project-config helpers live on `ext` + `project`).
 
 ## Spec shape (proposed)
 
-- New file e.g. `docs/specs/16-python-library-api.md` with stable
-  `[SB-API-*]` (or similar) codes.
-- Registry row: concern “Python library / embedding API” → `canonical-spec`
-  after inventory + firing gates.
-- Sections by concern: targets & config; `Queue` / `open_broker`; write/read/
-  peek/move/delete; generators & delivery_guarantee (link `[SB-DELIVERY-*]`);
-  watchers; dump/load; errors; ext embedder surface; what is **not** public.
-- Cross-ref matrix: library operation ↔ CLI command ↔ owning vertical spec
-  (CLI / delivery / broadcast / identity).
+- New file: `docs/specs/16-python-library-api.md`, H1 **Python Library API**,
+  stable codes **`[SB-API-*]`**.
+- Registry: replace the current
+  `Embedding targets, backends, sidecar` `readme-only` row (and only the
+  **surface / embedding** part of residual README) with a `canonical-spec`
+  row after inventory + firing gates. **Base queue/broker operation catalog**
+  may stay `readme-only` for command/API catalog residual not claimed by
+  verticals or this surface spec.
 - Style bar from the product-contract rewrite: positive promises, no non-effect
   laundry lists, no frozen incidental exception **messages**, no mechanism as
   law unless callers must depend on it.
 
+### Proposed file outline and provisional codes (review before full prose)
+
+Preamble (no code): purpose; three public surfaces; document existing
+behavior; embedder vs backend-author; non-goals; “verticals own semantics.”
+
+| Code | Section title | Normative promise (one line) | Defers to |
+|------|---------------|------------------------------|-----------|
+| **SB-API-1** | Public surfaces | Package root `__all__`, `simplebroker.ext.__all__`, and `simplebroker.commands.__all__` are the supported import surfaces; private `_` modules are not public | — |
+| **SB-API-2** | Targets and discovery | `BrokerTarget`, `open_broker`, `resolve_broker_target`, `target_for_directory`, serialize/deserialize, and project-config helpers (`find_project_config`, `project_config_path_for_directory`, `resolve_project_target` on **ext** and `project`) are the public ways to bind a broker | README project-scoping residual for env/TOML field catalog where needed |
+| **SB-API-3** | Queue lifecycle | `Queue` is the primary programmatic queue handle; construction from path/target; close / context-manager cleanup | — |
+| **SB-API-4** | Queue operations (library shape) | Write/read/peek/move/delete (and related public methods) return values or raise; they do not use CLI exit codes or stdout as the primary contract | `[SB-DELIVERY-*]`, `[SB-ID-*]`, `[SB-SELECT-*]`, `[SB-BCAST-*]` for operation meaning |
+| **SB-API-5** | Generators and materialization | Generator and `*_many` forms follow delivery claim/handoff rules of the corresponding consume/peek/move mode; materializing APIs commit selected claims before returning lists where delivery requires it | `[SB-DELIVERY-*]` |
+| **SB-API-6** | Watchers and activity waiters | Root `QueueWatcher` / `QueueMoveWatcher` / activity-waiter helpers and ext `BaseWatcher` / `PollingStrategy` / `StopWatching` / `default_error_handler` are the public watch embedding surface | `[SB-DELIVERY-2]` watch modes |
+| **SB-API-7** | Sidecar | `sidecar` session entry (`SidecarSession`, `SidecarUnavailableError`, `RESERVED_TABLE_NAMES`) is the public embedder table surface co-located with the broker | — |
+| **SB-API-8** | Dump and load (library) | `dump_lines` / `load_lines` / `LoadResult` are the public library I/O entry points; format and selection rules are not redefined here | `[SB-IO-*]` |
+| **SB-API-9** | Errors | Public exception types are importable from `simplebroker.ext`; library failure is signaled by exceptions, not process exit codes; message text is not a frozen contract | `[SB-CLI-1]` for CLI exit codes |
+| **SB-API-10** | Command layer (second surface) | `simplebroker.commands` exposes CLI-equivalent `cmd_*` (and listed helpers) with print-to-stdout / exit-code semantics matching the CLI; for process/CLI reuse, not the default embedder path | `[SB-CLI-*]` + verticals for the underlying op |
+| **SB-API-11** | Ext advanced / backend-facing exports | Named advanced exports on `ext` (e.g. delivery-guarantee helpers, runners, plugin types, `BACKEND_API_VERSION`, maintenance helpers) remain importable; they do not constitute a complete third-party backend SDK; alternate backends pin + handshake | ext module scope note |
+| **SB-API-12** | Cross-surface matrix | Library entry ↔ CLI command ↔ owning vertical is normative for orientation (see matrix below); conflicts on **operation meaning** are resolved by the vertical, not this row’s table alone | 10–15 |
+
+**Not separate codes (fold into preamble / SB-API-1 / 11):** full symbol laundry lists (pin via structural tests on `__all__`); every Queue method name (catalog residual may stay README until a later ops cutover); Weft/Taut integration recipes.
+
+### Cross-ref matrix (body of SB-API-12)
+
+| Library | CLI / `commands` | Owning vertical |
+|---------|------------------|-----------------|
+| `Queue.write` / exact insert helpers | `write` / `cmd_write` | `[SB-ID-*]` (+ residual write catalog) |
+| `Queue.read*` | `read` / `cmd_read` | `[SB-DELIVERY-*]`, `[SB-SELECT-*]` |
+| `Queue.peek*` | `peek` / `cmd_peek` | `[SB-DELIVERY-4]`, `[SB-SELECT-*]` |
+| `Queue.move*` | `move` / `cmd_move` | `[SB-DELIVERY-3]`, `[SB-ID-*]` |
+| `Queue.delete*` | `delete` / `cmd_delete` | residual / delivery claimed lifecycle |
+| Broadcast on connection/Queue | `broadcast` / `cmd_broadcast` | `[SB-BCAST-*]` |
+| Watchers | `watch` / `cmd_watch` | `[SB-DELIVERY-2]` |
+| `dump_lines` / `load_lines` | `dump` / `load` | `[SB-IO-*]` |
+| Targets / project-config helpers | `-f`/`-d` / project scope CLI | residual project-scoping + SB-API-2 |
+| `cmd_*` only | same CLI | `[SB-CLI-*]` presentation |
+
+### Registry delta (at promotion, not at outline review)
+
+| Concern | From | To |
+|---------|------|----|
+| Embedding targets, backends, sidecar | `readme-only` | **`canonical-spec`** `16-python-library-api.md` `[SB-API-1]`…`[SB-API-12]` (or split: sidecar/targets under API; backend-author remains “advanced” within SB-API-11) |
+| Base queue/broker operation catalog residual | `readme-only` | **unchanged** for now (Command Reference / method catalog) |
+
+Gate column (provisional): new
+`tests/test_python_library_api_contract_sb_api.py` structural binds for
+SB-API-1…12 + registry/README/kernel pointers; behavioral reuse of existing
+Queue/watch/dump/ext suites where a clause fires on real behavior.
+
+### README residual after promotion (pointers only at outline stage)
+
+| README locus | After promotion |
+|--------------|-----------------|
+| `## Python API` | Restate + link `16-…`; keep examples |
+| `## Embedding…` / project scoping | Link SB-API-2; env/TOML catalog may remain residual |
+| `### Command layer` | Link SB-API-10 + `[SB-CLI-*]` |
+| `### Sidecar tables` | Link SB-API-7 |
+| Advanced extensions / backend note | Link SB-API-11 |
+| Command Reference method laundry | Stays residual until ops catalog cutover |
+
+### Kernel / llms (at promotion)
+
+- `docs/agent-kernel.md`: short “Library surfaces” bullet → `16-…`
+- `llms.txt` / specs index: add `16-python-library-api.md`
+
+## Dispositions (from inventory)
+
+| Item | Disposition |
+|------|-------------|
+| `simplebroker.commands` | Second public surface (CLI function layer); not package root |
+| `find_project_config`, `project_config_path_for_directory`, `resolve_project_target` | Promote into `simplebroker.ext` (done) and `project.__all__`; same objects |
+| Package root target helpers (`open_broker`, `BrokerTarget`, …) | Remain primary root embedder path |
+| Unused root/ext exports (e.g. `QueueMoveWatcher`, many backend-author types) | Catalog in spec as exported; do not invent embedder doctrine |
+
 ## Tasks
 
-1. Inventory real public call sites in Weft and Taut (and examples); mark
+1. [x] Inventory real public call sites in Weft and Taut (and examples); mark
    frequency and critical paths.
-2. Diff inventory against `simplebroker.__all__` and `simplebroker.ext.__all__`;
+2. [x] Diff inventory against `simplebroker.__all__` and `simplebroker.ext.__all__`;
    note undocumented-but-used vs exported-but-unused.
-3. Draft exact proposed spec sections + registry delta + README residual
-   pointers (class 5 if behavior authority moves).
-4. Independent review (+P) before promotion.
-5. Firing tests: structural clause inventory + behavioral binds for high-risk
-   APIs already covered by existing suites where possible.
-6. Update `docs/agent-kernel.md` and `llms.txt` pointers; keep CLI contract
-   cross-links bidirectional where useful.
+3. [x] Promote project-config discovery helpers into `simplebroker.ext` (+
+   `project.__all__`); pin identity in `tests/test_ext_imports.py`.
+4. [x] Draft exact proposed spec sections + provisional `[SB-API-1]`…`12` +
+   registry/README residual pointers (this plan section; full prose next after
+   owner review of codes).
+5. [x] Owner approved outline; full prose landed as
+   `docs/specs/16-python-library-api.md` with registry `canonical-spec`
+   (independent +P review remains available as follow-up hardening).
+6. [x] Firing tests: `tests/test_python_library_api_contract_sb_api.py` +
+   reuse of ext/public-surface/project-config/IO/delivery suites.
+7. [x] Update `docs/agent-kernel.md`, `llms.txt`, specs index, README
+   pointers; program-theory and invariant inventory aligned.
 
 ## Out of scope
 
-- CHANGELOG user-facing release notes until a published behavior/API change
-  ships (this plan is documentation authority).
-- Changing Weft/Taut call sites.
+- **Weft/Taut consumer updates** (switching imports to `ext`, dropping
+  non-public tests, bumping the pin). Those are separate post-publish work
+  after a SimpleBroker release that includes this plan’s surface changes.
+  Inventory evidence from Weft/Taut drives the **SimpleBroker** API design
+  only; it does not obligate same-plan consumer PRs.
+- CHANGELOG for pure documentation authority moves; **do** note additive public
+  re-exports when they ship (project-config on `ext` is such a ship).
 - Pattern-broadcast race code changes (owner: acceptable under exists-at-
   selection).
 

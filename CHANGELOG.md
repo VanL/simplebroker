@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [Unreleased]
+
+### Added
+- Re-exported project-config discovery helpers on `simplebroker.ext`:
+  `find_project_config`, `project_config_path_for_directory`, and
+  `resolve_project_target` (same objects as `simplebroker.project`, now also
+  listed in `project.__all__`).
+
+### Documented
+- Promoted the Python library / embedding API surface to
+  `docs/specs/16-python-library-api.md` (`[SB-API-1]`…`[SB-API-12]`): package
+  root, `simplebroker.ext`, command layer, targets, library packaging, and
+  cross-links to the CLI and vertical specs.
+
 ## [5.6.3] - 2026-07-30
 
 ### Fixed

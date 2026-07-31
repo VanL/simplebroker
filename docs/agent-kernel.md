@@ -51,7 +51,11 @@ Shared semantics does **not** mean identical packaging:
 
 Public package surface is intentionally small: see `simplebroker.__all__`
 (`Queue`, watchers, `BrokerTarget` helpers, `open_broker`, `resolve_config`,
-dump/load). Prefer that over private `_` modules.
+dump/load), plus `simplebroker.ext` and the command layer. Prefer those over
+private `_` modules.
+
+Normative library surfaces: `docs/specs/16-python-library-api.md`
+`[SB-API-1]`–`[SB-API-12]`.
 
 **Examples (use):** `examples/python_api.py`. For shell job workers, prefer the
 **move-to-inflight** recipe in this file.
@@ -245,6 +249,9 @@ Use this section only when **building a runtime or product on** SimpleBroker
 (Weft-style orchestrators, Taut-style apps, long-lived services). Embedding
 uses the same use primitives; it adds **policy and context**, not a second
 queue product.
+
+Normative public surfaces and packaging:
+`docs/specs/16-python-library-api.md` `[SB-API-1]`–`[SB-API-12]`.
 
 ## Resolve once, stamp every handle
 

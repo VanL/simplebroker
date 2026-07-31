@@ -63,10 +63,10 @@ EXPECTED_READ_ORDER = [
 ]
 CONCEPT_OWNERS = {
     "Broker target": (
-        "Embedding targets, backends, sidecar",
-        "readme-only",
-        "../README.md#embedding-simplebroker-in-your-project",
-        "README Embedding / Advanced",
+        "Python library / embedding API surfaces",
+        "canonical-spec",
+        "specs/16-python-library-api.md",
+        "16-python-library-api.md",
     ),
     "Queue": (
         "Base queue/broker operation catalog residual",
@@ -99,10 +99,10 @@ CONCEPT_OWNERS = {
         "11-delivery.md",
     ),
     "Process session": (
-        "Embedding targets, backends, sidecar",
-        "readme-only",
-        "../README.md#embedding-simplebroker-in-your-project",
-        "README Embedding / Advanced",
+        "Python library / embedding API surfaces",
+        "canonical-spec",
+        "specs/16-python-library-api.md",
+        "16-python-library-api.md",
     ),
     "Broker core": (
         "Base queue/broker operation catalog residual",
@@ -111,10 +111,10 @@ CONCEPT_OWNERS = {
         "README Command Reference / Python API",
     ),
     "Backend adapter/runner": (
-        "Embedding targets, backends, sidecar",
-        "readme-only",
-        "../README.md#advanced-custom-extensions",
-        "README Embedding / Advanced",
+        "Python library / embedding API surfaces",
+        "canonical-spec",
+        "specs/16-python-library-api.md",
+        "16-python-library-api.md",
     ),
 }
 SPECIALIZED_CONTRACTS = {

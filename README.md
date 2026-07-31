@@ -751,6 +751,9 @@ Key characteristics:
 
 ## Python API
 
+Normative public surfaces (package root, `simplebroker.ext`, command layer):
+`docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-12]`).
+
 SimpleBroker also provides a Python API for more advanced use cases:
 
 ```python
@@ -1288,6 +1291,8 @@ See [`examples/`](examples/) for application-level patterns.
 
 ### Sidecar tables (advanced)
 
+Normative packaging: `docs/specs/16-python-library-api.md` `[SB-API-7]`.
+
 Embedding applications sometimes need a few of their own tables living in the
 broker's database — operational state that should share the broker's durability
 and backups without a second storage system. The sidecar API supports exactly
@@ -1381,6 +1386,9 @@ uv run pytest -n0 examples/tests
 
 ## Embedding SimpleBroker in Your Project
 
+Normative public surfaces: `docs/specs/16-python-library-api.md`
+(`[SB-API-1]`–`[SB-API-12]`).
+
 For embedded use, the current best practice is to put a small project-level
 client or context object in front of SimpleBroker. Let that object resolve the
 broker target once, translate your application's settings into `BROKER_*`
@@ -1464,6 +1472,9 @@ lossless process-transport payload, may contain credentials, and must not be
 logged or exposed.
 
 ### Command layer
+
+Normative: `docs/specs/16-python-library-api.md` `[SB-API-10]` (and CLI
+presentation in `docs/specs/10-cli.md`).
 
 `simplebroker.commands` is supported public embedding surface: the programmatic
 equivalent of the CLI. Each `cmd_*` function mirrors one CLI subcommand — it

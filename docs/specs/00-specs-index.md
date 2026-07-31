@@ -29,6 +29,9 @@ Product section authority: `product-section-registry.md`.
    canonical)
 6. `15-persistence-io.md` — `[SB-IO-*]` (dump/load format, filters,
    fresh load, claimed-row inspection when the registry marks canonical)
+7. `16-python-library-api.md` — `[SB-API-*]` (public package root, `ext`,
+   command layer, targets, library packaging when the registry marks
+   canonical)
 
 ## Rules
 

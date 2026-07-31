@@ -38,7 +38,10 @@ def test_ext_imports():
         TimestampError,
         TimestampGenerator,
         default_error_handler,
+        find_project_config,
         get_backend_plugin,
+        project_config_path_for_directory,
+        resolve_project_target,
         vacuum_is_eligible,
         validate_delivery_guarantee,
     )
@@ -71,6 +74,9 @@ def test_ext_imports():
     assert TimestampError is not None
     assert TimestampGenerator is not None
     assert get_backend_plugin is not None
+    assert callable(find_project_config)
+    assert callable(project_config_path_for_directory)
+    assert callable(resolve_project_target)
     assert callable(validate_delivery_guarantee)
     assert callable(vacuum_is_eligible)
 
@@ -89,7 +95,10 @@ def test_ext_all_exports():
         "ActivityWaiter",
         "BackendAwareRunner",
         "MultiQueueActivityWaiterHook",
+        "find_project_config",
         "get_backend_plugin",
+        "project_config_path_for_directory",
+        "resolve_project_target",
         "TimestampGenerator",
         "DeliveryGuarantee",
         "validate_delivery_guarantee",
@@ -113,6 +122,25 @@ def test_ext_all_exports():
     ]
 
     assert set(ext.__all__) == set(expected)
+
+
+def test_project_config_helpers_are_stable_across_public_modules() -> None:
+    """Project-config discovery is public on both ``ext`` and ``project``."""
+    from simplebroker import ext, project
+
+    assert ext.find_project_config is project.find_project_config
+    assert (
+        ext.project_config_path_for_directory
+        is project.project_config_path_for_directory
+    )
+    assert ext.resolve_project_target is project.resolve_project_target
+    for name in (
+        "find_project_config",
+        "project_config_path_for_directory",
+        "resolve_project_target",
+    ):
+        assert name in project.__all__
+        assert name in ext.__all__
 
 
 def test_watcher_contract_exports():
