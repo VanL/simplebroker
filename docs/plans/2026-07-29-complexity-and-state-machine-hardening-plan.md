@@ -87,8 +87,8 @@ Source specs and process rules:
 
 Product and implementation contracts:
 
-- `docs/specs/10-cli-contract.md` [SB-CLI-*]
-- `docs/specs/11-delivery-contract.md` [SB-DELIVERY-1..7]
+- `docs/specs/10-cli.md` [SB-CLI-*]
+- `docs/specs/11-delivery.md` [SB-DELIVERY-1..7]
 - `docs/implementation/04-cross-thread-finalization-poisoning.md`
 - `docs/implementation/06-process-session-core-ownership.md`
 - `docs/plans/2026-07-29-code-quality-cleanup-plan.md`
@@ -108,8 +108,8 @@ coupled helpers, 9 simplify locally, and 14 redesign an internal seam.
 
 - `1324a1f647b7c8fc9b14a6aed6bae696aefe62ea` —
   `docs/specs/01-development-documentation-operating-model.md`,
-  `docs/specs/10-cli-contract.md`, and
-  `docs/specs/11-delivery-contract.md` at plan authoring time.
+  `docs/specs/10-cli.md`, and
+  `docs/specs/11-delivery.md` at plan authoring time.
 - This plan revises the verification policy in
   `docs/specs/01-development-documentation-operating-model.md`; product
   behavior remains governed by the two product specs above.

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "docs" / "specs" / "12-broadcast-contract.md"
+SPEC = ROOT / "docs" / "specs" / "12-broadcast.md"
 REGISTRY = ROOT / "docs" / "specs" / "product-section-registry.md"
 SPEC_INDEX = ROOT / "docs" / "specs" / "00-specs-index.md"
 README = ROOT / "README.md"
@@ -144,7 +144,7 @@ def test_broadcast_contract_clause_inventory_and_authority() -> None:
     assert len(registry_rows) == 1
     registry_row = registry_rows[0]
     assert "`canonical-spec`" in registry_row
-    assert "`12-broadcast-contract.md`" in registry_row
+    assert "`12-broadcast.md`" in registry_row
     assert "[SB-BCAST-1]" in registry_row
     assert "[SB-BCAST-6]" in registry_row
     assert "tests/test_broadcast_contract_sb_bcast.py" in registry_row
@@ -156,16 +156,16 @@ def test_broadcast_contract_clause_inventory_and_authority() -> None:
     assert "broadcast" in residual.lower()
     assert "excludes" in residual.lower()
 
-    assert "docs/specs/12-broadcast-contract.md" in README.read_text(
+    assert "docs/specs/12-broadcast.md" in README.read_text(
         encoding="utf-8"
     )
     assert "[BCAST-" not in README.read_text(encoding="utf-8")
     for path in (KERNEL, LLMS):
         surface = path.read_text(encoding="utf-8")
-        assert "docs/specs/12-broadcast-contract.md" in surface
+        assert "docs/specs/12-broadcast.md" in surface
         assert "[SB-BCAST-1]" in surface
         assert "[SB-BCAST-6]" in surface
-    assert "12-broadcast-contract.md" in SPEC_INDEX.read_text(encoding="utf-8")
+    assert "12-broadcast.md" in SPEC_INDEX.read_text(encoding="utf-8")
 
 
 def test_broadcast_contract_names_existing_firing_tests() -> None:

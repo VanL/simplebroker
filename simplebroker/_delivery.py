@@ -1,6 +1,6 @@
 """Closed delivery-guarantee input contract.
 
-See ``docs/specs/11-delivery-contract.md`` [SB-DELIVERY-5].
+See ``docs/specs/11-delivery.md`` [SB-DELIVERY-5].
 """
 
 from typing import Final, Literal

@@ -10,13 +10,13 @@ precursor completed separately. Temporary retrospective decision record removed
 after use.
 
 **Phase 2B:** Promoted 2026-07-31 as
-`docs/specs/14-timestamp-selection-contract.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`
+`docs/specs/14-timestamp-selection.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`
 plus `[SB-CLI-5]` bound string forms. Contract frames bounds as **pure
 filters** (not complete stream offsets); late older ids under a bound
 (including after move/exact insert); watch peek progress as messages come.
 
 **Phase 3:** Promoted 2026-07-31 as
-`docs/specs/15-persistence-io-contract.md` `[SB-IO-1]`–`[SB-IO-5]` (dump/load
+`docs/specs/15-persistence-io.md` `[SB-IO-1]`–`[SB-IO-5]` (dump/load
 v1, pending-only dump, include/exclude, fresh load, claimed-row inspection).
 
 **Parallel / sibling:** Python library / `simplebroker.ext` API contract is
@@ -105,11 +105,11 @@ Governing documentation contracts:
 
 Current canonical product contracts:
 
-- `docs/specs/10-cli-contract.md` `[SB-CLI-1]` through `[SB-CLI-4]`
-- `docs/specs/11-delivery-contract.md` `[SB-DELIVERY-1]` through
+- `docs/specs/10-cli.md` `[SB-CLI-1]` through `[SB-CLI-4]`
+- `docs/specs/11-delivery.md` `[SB-DELIVERY-1]` through
   `[SB-DELIVERY-7]`
-- `docs/specs/12-broadcast-contract.md` `[SB-BCAST-1]` through `[SB-BCAST-6]`
-- `docs/specs/13-message-identity-contract.md` `[SB-ID-1]` through `[SB-ID-5]`
+- `docs/specs/12-broadcast.md` `[SB-BCAST-1]` through `[SB-BCAST-6]`
+- `docs/specs/13-message-identity.md` `[SB-ID-1]` through `[SB-ID-5]`
 
 Current inventory and views:
 
@@ -240,12 +240,12 @@ Expected canonical families:
 
 | Order | Concern | Expected spec | Codes | Status |
 |------:|---------|---------------|-------|--------|
-| done | CLI exit codes and I/O | `10-cli-contract.md` | `[SB-CLI-*]` | canonical |
-| done | Delivery safety | `11-delivery-contract.md` | `[SB-DELIVERY-*]` | canonical |
-| 1 done | Broadcast selection and atomicity | `12-broadcast-contract.md` | `[SB-BCAST-*]` | canonical |
-| 2A done | Message identity and allocation | `13-message-identity-contract.md` | `[SB-ID-*]` | canonical |
-| 2B done | Timestamp range selection / filters | `14-timestamp-selection-contract.md` | `[SB-SELECT-*]` (+ `[SB-CLI-5]`) | canonical |
-| 3 done | Dump/load and claimed-row I/O | `15-persistence-io-contract.md` | `[SB-IO-*]` | canonical |
+| done | CLI exit codes and I/O | `10-cli.md` | `[SB-CLI-*]` | canonical |
+| done | Delivery safety | `11-delivery.md` | `[SB-DELIVERY-*]` | canonical |
+| 1 done | Broadcast selection and atomicity | `12-broadcast.md` | `[SB-BCAST-*]` | canonical |
+| 2A done | Message identity and allocation | `13-message-identity.md` | `[SB-ID-*]` | canonical |
+| 2B done | Timestamp range selection / filters | `14-timestamp-selection.md` | `[SB-SELECT-*]` (+ `[SB-CLI-5]`) | canonical |
+| 3 done | Dump/load and claimed-row I/O | `15-persistence-io.md` | `[SB-IO-*]` | canonical |
 | 4 | Embedding / Python library API | proposed `16-…` | proposed `[SB-API-*]` / `[SB-EMBED-*]` | sibling plan active |
 | 5 | Residual queue/broker operation catalog | proposed `17-…` | proposed `[SB-OPS-*]` | not started |
 
@@ -429,7 +429,7 @@ subsections here through the phase-readiness amendment and re-review gate.
 ### Phase 1 — Broadcast Canonical Promotion
 
 > **Historical.** Exact proposal text below is the first promotion package.
-> Live contract: `docs/specs/12-broadcast-contract.md` (post-disposition rewrite).
+> Live contract: `docs/specs/12-broadcast.md` (post-disposition rewrite).
 
 #### Why first
 
@@ -442,7 +442,7 @@ promotion and exposes a real registry omission.
 
 Add:
 
-- `docs/specs/12-broadcast-contract.md`
+- `docs/specs/12-broadcast.md`
 - `tests/test_broadcast_contract_sb_bcast.py`
 
 Modify:
@@ -472,7 +472,7 @@ Inspect, but do not edit unless a routing link becomes false:
 Insert after delivery:
 
 > | Broadcast selection, creation, and atomicity | `canonical-spec` |
-> `12-broadcast-contract.md` `[SB-BCAST-1]`…`[SB-BCAST-6]` | README
+> `12-broadcast.md` `[SB-BCAST-1]`…`[SB-BCAST-6]` | README
 > “Fan-out with Broadcast”; agent-kernel broadcast table |
 > `tests/test_broadcast_contract_sb_bcast.py` (SB-BCAST-1…6 structural,
 > registry, README, kernel, and mapping binds);
@@ -485,7 +485,7 @@ broadcast.
 
 #### Exact broadcast spec text
 
-Add `docs/specs/12-broadcast-contract.md` with this exact normative body:
+Add `docs/specs/12-broadcast.md` with this exact normative body:
 
 > # Broadcast Contract
 >
@@ -681,7 +681,7 @@ Keep the broadcast examples. Replace the six long `[BCAST-*]` paragraphs with:
 > exact set of literal queue names. Python callers may explicitly create
 > missing exact targets. Selection, validation, result counts, queue-creation
 > policy, atomicity, CLI behavior, and backend compatibility are normative in
-> the [broadcast contract](docs/specs/12-broadcast-contract.md)
+> the [broadcast contract](docs/specs/12-broadcast.md)
 > `[SB-BCAST-1]` through `[SB-BCAST-6]`.
 >
 > Broadcast is queue fan-out, not pub/sub: it inserts ordinary pending
@@ -691,7 +691,7 @@ Keep the broadcast examples. Replace the six long `[BCAST-*]` paragraphs with:
 #### Kernel, derived-view, and theory-routing delta
 
 - Add a normative line immediately before the kernel broadcast table:
-  `Normative: docs/specs/12-broadcast-contract.md [SB-BCAST-1]–[SB-BCAST-6].`
+  `Normative: docs/specs/12-broadcast.md [SB-BCAST-1]–[SB-BCAST-6].`
 - Add the broadcast spec to `llms.txt` and the product-spec index. Replace the
   current `llms.txt` README description with:
   `Human product entry and full command/env/API catalogs; normative for the
@@ -705,7 +705,7 @@ Keep the broadcast examples. Replace the six long `[BCAST-*]` paragraphs with:
 - In `[THEORY-3]`, append the specialized broadcast owner to both exact-current
   contract cells:
   - `Queue`: `broadcast selection and atomicity → [SB-BCAST-*]` with a link to
-    `specs/12-broadcast-contract.md`;
+    `specs/12-broadcast.md`;
   - `Broker core`: the same specialized owner and link.
 - Do not add a new top-level theory concept. The conceptual meanings and
   owners remain unchanged, so this is a routing correction rather than a
@@ -889,7 +889,7 @@ its own exact delta.
 
 > **Historical.** Exact proposal text below is the first promotion package
 > (later corrected and then disposition-rewritten). Live contract:
-> `docs/specs/13-message-identity-contract.md`.
+> `docs/specs/13-message-identity.md`.
 
 Promotion strategy: B — atomic. Baseline:
 `249df9cba691d4593136a1fd6b0476b882487055`.
@@ -898,7 +898,7 @@ Promotion strategy: B — atomic. Baseline:
 
 Add:
 
-- `docs/specs/13-message-identity-contract.md`
+- `docs/specs/13-message-identity.md`
 - `tests/test_message_identity_contract_sb_id.py`
 
 Update:
@@ -923,7 +923,7 @@ runtime code.
 
 #### Exact canonical spec
 
-Create `docs/specs/13-message-identity-contract.md` with this normative body:
+Create `docs/specs/13-message-identity.md` with this normative body:
 
 ```markdown
 # Message Identity Contract
@@ -1079,7 +1079,7 @@ not rewrite the historical complexity inventory.
 Replace the current joined message-identity row with:
 
 ```markdown
-| Message identity, allocation, exact-ID handling, and preservation | `canonical-spec` | `13-message-identity-contract.md` `[SB-ID-1]`…`[SB-ID-5]` | README “Timestamps as Message IDs,” timestamp generation/insertion/cache sections, and move-preservation summaries; agent-kernel Message IDs | `tests/test_message_identity_contract_sb_id.py` (SB-ID-1…5 structural, authority, and row-local firing binds); shared timestamp, write-return, exact-ID, insertion, cache, and move-preservation suites across SQLite/PostgreSQL/Redis |
+| Message identity, allocation, exact-ID handling, and preservation | `canonical-spec` | `13-message-identity.md` `[SB-ID-1]`…`[SB-ID-5]` | README “Timestamps as Message IDs,” timestamp generation/insertion/cache sections, and move-preservation summaries; agent-kernel Message IDs | `tests/test_message_identity_contract_sb_id.py` (SB-ID-1…5 structural, authority, and row-local firing binds); shared timestamp, write-return, exact-ID, insertion, cache, and move-preservation suites across SQLite/PostgreSQL/Redis |
 | Ordered timestamp selection and checkpoint consequences | `readme-only` | — | README Command Options and Checkpoint-based Processing; agent-kernel move/checkpoint warning | Phase 2B exact delta required |
 ```
 
@@ -1104,7 +1104,7 @@ Keep examples and operational warnings. Make these replacements:
    ID representation and range, allocation, write returns, high-water/cache
    semantics, exact-ID normalization and insertion consequences, and
    ID-preserving move are normative in the
-   [message identity contract](docs/specs/13-message-identity-contract.md)
+   [message identity contract](docs/specs/13-message-identity.md)
    `[SB-ID-1]` through `[SB-ID-5]`.
 
    SimpleBroker retains no permanent tombstone or application deduplication
@@ -1170,7 +1170,7 @@ Replace the kernel `## Message IDs` section with:
 ## Message IDs
 
 Normative identity, allocation, exact-ID, and preservation contract:
-`docs/specs/13-message-identity-contract.md`
+`docs/specs/13-message-identity.md`
 [SB-ID-1]–[SB-ID-5].
 
 - Public id = signed-range hybrid timestamp integer (JSON field `timestamp`).
@@ -1745,8 +1745,8 @@ Append-only after initial review. Approval attaches to the reviewed diff.
 | 2026-07-30 | Program / promise-preservation review follow-up | Required separate landing and rebaseline for approved contract changes; added a completion gate, rejected-change remediation, decision-hierarchy stop rule, auditable owner authorization, current execution state, and durable lesson | Independent process review found eight paths that could still mix or complete relocation without proven equivalence; focused recheck found one overbroad exclusion of normative source examples | final focused recheck passed; contract dispositions pending |
 | 2026-07-30 | Program / retrospective decision record | Temporary disposition record for 23 promotion findings; applied as specs 10–13 rewrites; record removed 2026-07-31 after work complete | Needed owner disposition without self-executing approval | rewrites landed; record deleted |
 | 2026-07-31 | Program / status refresh | Status, current state, outcomes, source list, end-state table, and historical labels for Phase 1/2A deltas updated to match registry and trunk specs; library API sibling plan linked | Agents re-opening closed audit/pause from stale front matter | plan hygiene |
-| 2026-07-31 | Phase 2B promotion | Added `14-timestamp-selection-contract.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`, `[SB-CLI-5]` bound string forms, registry canonical row, README/kernel/llms/theory/inventory reductions, structural + bound/move filter tests | Owner directed Phase 2B as pure filter contract without resumable-checkpoint overclaim | structural suites green |
-| 2026-07-31 | Phase 3 promotion | Added `15-persistence-io-contract.md` `[SB-IO-1]`–`[SB-IO-5]` for dump/load v1, pending-only dump, globs, fresh load, claimed inspection | Owner directed Phase 3 | structural + dump suite binds |
+| 2026-07-31 | Phase 2B promotion | Added `14-timestamp-selection.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`, `[SB-CLI-5]` bound string forms, registry canonical row, README/kernel/llms/theory/inventory reductions, structural + bound/move filter tests | Owner directed Phase 2B as pure filter contract without resumable-checkpoint overclaim | structural suites green |
+| 2026-07-31 | Phase 3 promotion | Added `15-persistence-io.md` `[SB-IO-1]`–`[SB-IO-5]` for dump/load v1, pending-only dump, globs, fresh load, claimed inspection | Owner directed Phase 3 | structural + dump suite binds |
 
 ## Review Log
 

@@ -64,7 +64,7 @@ use private modules under pin + `backend_api_version`.
 
 ## Spec shape (proposed)
 
-- New file e.g. `docs/specs/14-python-library-api-contract.md` with stable
+- New file e.g. `docs/specs/16-python-library-api.md` with stable
   `[SB-API-*]` (or similar) codes.
 - Registry row: concern “Python library / embedding API” → `canonical-spec`
   after inventory + firing gates.
@@ -108,6 +108,6 @@ use private modules under pin + `backend_api_version`.
 
 ## Related
 
-- `docs/specs/10-cli-contract.md` … `13-message-identity-contract.md`
+- `docs/specs/10-cli.md` … `13-message-identity.md`
 - `simplebroker/ext.py` scope note
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md`

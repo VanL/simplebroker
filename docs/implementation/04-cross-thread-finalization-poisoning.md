@@ -31,7 +31,7 @@ the mechanism.
 
 ## Governing Contract and Plan
 
-- `docs/specs/11-delivery-contract.md` [SB-DELIVERY-5] and
+- `docs/specs/11-delivery.md` [SB-DELIVERY-5] and
   [SB-DELIVERY-6] own the public same-thread contract, diagnostic behavior,
   and restart instruction. `README.md`, **Delivery guarantees**, is the
   user-facing restatement.
@@ -42,7 +42,7 @@ the mechanism.
 
 Product ownership is layered (`docs/specs/product-section-registry.md`);
 delivery/generator concerns are `canonical-spec` in
-`docs/specs/11-delivery-contract.md`.
+`docs/specs/11-delivery.md`.
 This document explains why the
 implementation has its current boundaries; it does not create a second
 behavior contract.
@@ -188,7 +188,7 @@ process does not claim to recover them itself.
 
 Before changing this mechanism:
 
-1. Read `docs/specs/11-delivery-contract.md` [SB-DELIVERY-5] and
+1. Read `docs/specs/11-delivery.md` [SB-DELIVERY-5] and
    [SB-DELIVERY-6], then the README Delivery guarantees restatement and the
    related plan.
 2. Preserve the one-way lifecycle. Do not add rollback, lock release, latch

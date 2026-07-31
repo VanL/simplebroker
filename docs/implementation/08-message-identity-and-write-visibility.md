@@ -6,7 +6,7 @@ publication in `extensions/simplebroker_redis/simplebroker_redis/core.py` and
 `extensions/simplebroker_redis/simplebroker_redis/scripts.py`.
 
 Boundary: realizes `[SB-ID-1]`, `[SB-ID-2]`, and `[SB-ID-4]` from
-`docs/specs/13-message-identity-contract.md`. It does not own strict timestamp
+`docs/specs/13-message-identity.md`. It does not own strict timestamp
 selection, watcher lifecycle, move identity, patterned-broadcast atomicity, or
 dump format.
 

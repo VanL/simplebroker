@@ -3106,7 +3106,7 @@ class BrokerCore:
     ) -> int:
         """Broadcast a message to selected queues atomically.
 
-        Contract: ``docs/specs/12-broadcast-contract.md``,
+        Contract: ``docs/specs/12-broadcast.md``,
         ``[SB-BCAST-1]`` through ``[SB-BCAST-4]``.
 
         Args:

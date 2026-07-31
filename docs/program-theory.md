@@ -93,13 +93,13 @@ owner define exact current behavior.
 | Concept | Conceptual meaning | Owner | Exact current contract owner |
 |---------|--------------------|-------|------------------------------|
 | Broker target | One resolved queue namespace and backend configuration | SimpleBroker for resolution; backend for substrate | Registry `Embedding targets, backends, sidecar` → [README Embedding](../README.md#embedding-simplebroker-in-your-project) |
-| Queue | Named durable message collection and operation surface | SimpleBroker | Registry `Base queue/broker operation catalog residual` → [README Python API](../README.md#python-api) and [Command Reference](../README.md#command-reference); Registry `Broadcast selection, creation, and atomicity` → [`[SB-BCAST-*]`](specs/12-broadcast-contract.md) |
-| Message identity | Identity used to preserve and select queue messages | SimpleBroker | Registry `Message identity, allocation, exact-ID handling, and preservation` → [`[SB-ID-*]`](specs/13-message-identity-contract.md); Registry `Ordered timestamp selection and filter consequences` → [`[SB-SELECT-*]`](specs/14-timestamp-selection-contract.md) |
-| Claim | Delivery-state transition distinct from proof of application completion | SimpleBroker | Registry `Delivery guarantees, claim/peek/watch safety` → [`[SB-DELIVERY-*]`](specs/11-delivery-contract.md) |
-| Move | Queue-level reservation or routing primitive | SimpleBroker | Registry `Base queue/broker operation catalog residual` → [README Command Reference](../README.md#command-reference); Registry `Message identity, allocation, exact-ID handling, and preservation` → [`[SB-ID-5]`](specs/13-message-identity-contract.md); Registry `Ordered timestamp selection and filter consequences` → [`[SB-SELECT-*]`](specs/14-timestamp-selection-contract.md) |
-| Watcher/waiter | Adapter from queue activity to bounded waiting or consumption | SimpleBroker | Registry `Delivery guarantees, claim/peek/watch safety` → [`[SB-DELIVERY-*]`](specs/11-delivery-contract.md); modes remain in [README Real-time Queue Watching](../README.md#real-time-queue-watching) |
+| Queue | Named durable message collection and operation surface | SimpleBroker | Registry `Base queue/broker operation catalog residual` → [README Python API](../README.md#python-api) and [Command Reference](../README.md#command-reference); Registry `Broadcast selection, creation, and atomicity` → [`[SB-BCAST-*]`](specs/12-broadcast.md) |
+| Message identity | Identity used to preserve and select queue messages | SimpleBroker | Registry `Message identity, allocation, exact-ID handling, and preservation` → [`[SB-ID-*]`](specs/13-message-identity.md); Registry `Ordered timestamp selection and filter consequences` → [`[SB-SELECT-*]`](specs/14-timestamp-selection.md) |
+| Claim | Delivery-state transition distinct from proof of application completion | SimpleBroker | Registry `Delivery guarantees, claim/peek/watch safety` → [`[SB-DELIVERY-*]`](specs/11-delivery.md) |
+| Move | Queue-level reservation or routing primitive | SimpleBroker | Registry `Base queue/broker operation catalog residual` → [README Command Reference](../README.md#command-reference); Registry `Message identity, allocation, exact-ID handling, and preservation` → [`[SB-ID-5]`](specs/13-message-identity.md); Registry `Ordered timestamp selection and filter consequences` → [`[SB-SELECT-*]`](specs/14-timestamp-selection.md) |
+| Watcher/waiter | Adapter from queue activity to bounded waiting or consumption | SimpleBroker | Registry `Delivery guarantees, claim/peek/watch safety` → [`[SB-DELIVERY-*]`](specs/11-delivery.md); modes remain in [README Real-time Queue Watching](../README.md#real-time-queue-watching) |
 | Process session | Process-local owner of reusable backend resources | SimpleBroker | Registry `Embedding targets, backends, sidecar` → [README Embedding](../README.md#embedding-simplebroker-in-your-project); rationale in [process-session ownership](implementation/06-process-session-core-ownership.md) |
-| Broker core | Queue-operation protocol and shared semantics over one resolved target | SimpleBroker | Registry `Base queue/broker operation catalog residual` → [README Python API](../README.md#python-api); Registry `Broadcast selection, creation, and atomicity` → [`[SB-BCAST-*]`](specs/12-broadcast-contract.md); specialized identity and delivery contracts remain with their registered rows |
+| Broker core | Queue-operation protocol and shared semantics over one resolved target | SimpleBroker | Registry `Base queue/broker operation catalog residual` → [README Python API](../README.md#python-api); Registry `Broadcast selection, creation, and atomicity` → [`[SB-BCAST-*]`](specs/12-broadcast.md); specialized identity and delivery contracts remain with their registered rows |
 | Backend adapter/runner | Storage-specific atomic realization and substrate-resource ownership | Backend implementation | Registry `Embedding targets, backends, sidecar` → [README Advanced Extensions](../README.md#advanced-custom-extensions) |
 
 ## Design principles [THEORY-4]
@@ -107,10 +107,10 @@ owner define exact current behavior.
 | Principle | Design consequence | Current contract |
 |-----------|--------------------|------------------|
 | Local-first, infrastructure-optional | The default remains operationally small; optional substrates may widen topology without redefining the core product. | Registry `Embedding targets, backends, sidecar` → [README Embedding](../README.md#embedding-simplebroker-in-your-project) |
-| Unix composability | CLI decisions protect composition and truthful machine use. | Registry `CLI exit codes and CLI I/O contract` → [`[SB-CLI-*]`](specs/10-cli-contract.md) |
+| Unix composability | CLI decisions protect composition and truthful machine use. | Registry `CLI exit codes and CLI I/O contract` → [`[SB-CLI-*]`](specs/10-cli.md) |
 | Matching queue semantics across surfaces | CLI and Python express one queue model even when packaging differs. | Registry `Base queue/broker operation catalog residual` → [README Command Reference](../README.md#command-reference) and [Python API](../README.md#python-api) |
 | Queue semantics, not application execution | Reusable queue primitives belong here; business workflows and task interpretation belong to consumers such as Weft. | Registry `Base queue/broker operation catalog residual` → [README Python API](../README.md#python-api); the consumer boundary remains conceptual theory |
-| Explicit safety over magical recovery | Guarantees are named narrowly enough that convenience cannot imply stronger recovery than exists. | Registry `Delivery guarantees, claim/peek/watch safety` → [`[SB-DELIVERY-*]`](specs/11-delivery-contract.md) |
+| Explicit safety over magical recovery | Guarantees are named narrowly enough that convenience cannot imply stronger recovery than exists. | Registry `Delivery guarantees, claim/peek/watch safety` → [`[SB-DELIVERY-*]`](specs/11-delivery.md) |
 | Small concept count over small source count | Cohesive code may be large when splitting would obscure ownership or failure order. New frameworks and parallel paths need stronger cause. | [Implementation index](implementation/00-implementation-index.md) and the owning implementation document |
 | Concrete pressure justifies growth | A use case, bug, or invariant supports new concepts; speculative platform growth does not. | `[DOM-16]`, active-plan evidence, and `[REV-*]` records |
 
@@ -206,13 +206,13 @@ Evidence:
 
 ### [REV-THEORY-003] Delivery state is not application completion
 
-Current account: Queue delivery state and successful application processing are different concepts. SimpleBroker owns queue-level transitions; the application owns the meaning of successful work and its business retry policy. The exact claim, reservation, generator, and failure-window behavior belongs to the live [`[SB-DELIVERY-*]` contract](specs/11-delivery-contract.md).
+Current account: Queue delivery state and successful application processing are different concepts. SimpleBroker owns queue-level transitions; the application owns the meaning of successful work and its business retry policy. The exact claim, reservation, generator, and failure-window behavior belongs to the live [`[SB-DELIVERY-*]` contract](specs/11-delivery.md).
 Supersedes: The founding account said messages were “delivered exactly once using atomic DELETE operations” without distinguishing broker delivery from successful application work.
 Pressure: Claim-based deletion, watchers, concurrent consumers, move reservation, and retry-on-stop generators exposed distinct loss and duplicate windows. The unqualified wording could be read as crash-safe exactly-once processing.
 Evidence:
 - contemporaneous: [THEORY-7] source-pinned founding README and its delivery wording
 - contemporaneous: source-pinned `36e2f3568a8e97943b9fe7b06e35d2b2bc688406:docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`
-- contemporaneous: `docs/specs/11-delivery-contract.md` `[SB-DELIVERY-1]` through `[SB-DELIVERY-5]` at `2daa2fb48dd478fee5c01bec86add53793d55940`
+- contemporaneous: `docs/specs/11-delivery.md` `[SB-DELIVERY-1]` through `[SB-DELIVERY-5]` at `2daa2fb48dd478fee5c01bec86add53793d55940`
 - contemporaneous: `CHANGELOG.md` `5.6.1` Documented entry
 
 ### [REV-THEORY-004] Queue handles do not each own a backend stack
@@ -234,7 +234,7 @@ Pressure: A concrete cross-thread generator-finalization bug exposed ownership t
 Evidence:
 - contemporaneous: source-pinned `36e2f3568a8e97943b9fe7b06e35d2b2bc688406:docs/plans/2026-07-27-cross-thread-generator-orphan-healing-plan.md`
 - contemporaneous: `docs/implementation/04-cross-thread-finalization-poisoning.md` at `2daa2fb48dd478fee5c01bec86add53793d55940`
-- contemporaneous: `docs/specs/11-delivery-contract.md` `[SB-DELIVERY-6]`
+- contemporaneous: `docs/specs/11-delivery.md` `[SB-DELIVERY-6]`
 - contemporaneous: `CHANGELOG.md` section `5.5.0` and implementation commit `9d03e77d258127acfff4352435251e892daa8493`
 
 ## Related plan

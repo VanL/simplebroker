@@ -8,7 +8,7 @@ from pathlib import Path
 from simplebroker import Queue, dump_lines, load_lines, open_broker
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "docs" / "specs" / "15-persistence-io-contract.md"
+SPEC = ROOT / "docs" / "specs" / "15-persistence-io.md"
 REGISTRY = ROOT / "docs" / "specs" / "product-section-registry.md"
 SPEC_INDEX = ROOT / "docs" / "specs" / "00-specs-index.md"
 README = ROOT / "README.md"
@@ -35,7 +35,7 @@ def test_io_clause_inventory_and_authority() -> None:
         assert f"| [SB-IO-{number}] |" in text
 
     registry = REGISTRY.read_text(encoding="utf-8")
-    assert "15-persistence-io-contract.md" in registry
+    assert "15-persistence-io.md" in registry
     assert "[SB-IO-1]" in registry
     assert "`canonical-spec`" in registry
     row = next(
@@ -45,10 +45,10 @@ def test_io_clause_inventory_and_authority() -> None:
     )
     assert "`canonical-spec`" in row
 
-    assert "15-persistence-io-contract.md" in SPEC_INDEX.read_text(encoding="utf-8")
+    assert "15-persistence-io.md" in SPEC_INDEX.read_text(encoding="utf-8")
     for path in (README, KERNEL, LLMS):
         surface = path.read_text(encoding="utf-8")
-        assert "docs/specs/15-persistence-io-contract.md" in surface
+        assert "docs/specs/15-persistence-io.md" in surface
 
 
 def test_io_pending_only_and_fresh_load_language() -> None:

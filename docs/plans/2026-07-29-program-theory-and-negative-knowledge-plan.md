@@ -131,8 +131,8 @@ Product-theory evidence:
   `f1bd821640d2f51006eec321b21d5341b0175cdc`
 - `docs/agent-kernel.md` and `llms.txt`
 - `docs/specs/product-section-registry.md`
-- `docs/specs/10-cli-contract.md` [SB-CLI-*]
-- `docs/specs/11-delivery-contract.md` [SB-DELIVERY-*]
+- `docs/specs/10-cli.md` [SB-CLI-*]
+- `docs/specs/11-delivery.md` [SB-DELIVERY-*]
 - `docs/implementation/04-cross-thread-finalization-poisoning.md`
 - `docs/implementation/05-product-invariant-inventory.md`
 - `docs/implementation/06-process-session-core-ownership.md`
@@ -580,9 +580,9 @@ the destination file.
 | Broker target | One resolved queue namespace and backend configuration | SimpleBroker for resolution; backend for substrate | Registry `Embedding targets, backends, sidecar` → README Embedding (`../README.md#embedding-simplebroker-in-your-project`) |
 | Queue | Named durable message collection and operation surface | SimpleBroker | Registry `Base queue/broker operation catalog residual` → README Python API (`../README.md#python-api`) and Command Reference (`../README.md#command-reference`) |
 | Message identity | Identity used to preserve and select queue messages | SimpleBroker | Registry `Message identity (hybrid ts, last_ts, move+checkpoint)` → README Core Concepts (`../README.md#core-concepts`) |
-| Claim | Delivery-state transition distinct from proof of application completion | SimpleBroker | Registry `Delivery guarantees, claim/peek/watch safety` → `[SB-DELIVERY-*]` (`specs/11-delivery-contract.md`) |
+| Claim | Delivery-state transition distinct from proof of application completion | SimpleBroker | Registry `Delivery guarantees, claim/peek/watch safety` → `[SB-DELIVERY-*]` (`specs/11-delivery.md`) |
 | Move | Queue-level reservation or routing primitive | SimpleBroker | Registry `Base queue/broker operation catalog residual` → README Command Reference (`../README.md#command-reference`); identity consequences remain with the registered identity row |
-| Watcher/waiter | Adapter from queue activity to bounded waiting or consumption | SimpleBroker | Registry `Delivery guarantees, claim/peek/watch safety` → `[SB-DELIVERY-*]` (`specs/11-delivery-contract.md`); modes remain README Real-time Queue Watching (`../README.md#real-time-queue-watching`) |
+| Watcher/waiter | Adapter from queue activity to bounded waiting or consumption | SimpleBroker | Registry `Delivery guarantees, claim/peek/watch safety` → `[SB-DELIVERY-*]` (`specs/11-delivery.md`); modes remain README Real-time Queue Watching (`../README.md#real-time-queue-watching`) |
 | Process session | Process-local owner of reusable backend resources | SimpleBroker | Registry `Embedding targets, backends, sidecar` → README Embedding (`../README.md#embedding-simplebroker-in-your-project`); rationale in `implementation/06-process-session-core-ownership.md` |
 | Broker core | Queue-operation protocol and shared semantics over one resolved target | SimpleBroker | Registry `Base queue/broker operation catalog residual` → README Python API (`../README.md#python-api`); specialized identity and delivery contracts remain with their registered rows |
 | Backend adapter/runner | Storage-specific atomic realization and substrate-resource ownership | Backend implementation | Registry `Embedding targets, backends, sidecar` → README Advanced Extensions (`../README.md#advanced-custom-extensions`) |
@@ -595,10 +595,10 @@ their winning contract:
 | Principle | Design consequence | Current contract |
 |-----------|--------------------|------------------|
 | Local-first, infrastructure-optional | The default remains operationally small; optional substrates may widen topology without redefining the core product. | Registry `Embedding targets, backends, sidecar` → README Embedding (`../README.md#embedding-simplebroker-in-your-project`) |
-| Unix composability | CLI decisions protect composition and truthful machine use. | Registry `CLI exit codes and CLI I/O contract` → `[SB-CLI-*]` (`specs/10-cli-contract.md`) |
+| Unix composability | CLI decisions protect composition and truthful machine use. | Registry `CLI exit codes and CLI I/O contract` → `[SB-CLI-*]` (`specs/10-cli.md`) |
 | Matching queue semantics across surfaces | CLI and Python express one queue model even when packaging differs. | Registry `Base queue/broker operation catalog residual` → README Command Reference (`../README.md#command-reference`) and Python API (`../README.md#python-api`) |
 | Queue semantics, not application execution | Reusable queue primitives belong here; business workflows and task interpretation belong to consumers such as Weft. | Registry `Base queue/broker operation catalog residual` → README Python API (`../README.md#python-api`); consumer boundary remains conceptual theory |
-| Explicit safety over magical recovery | Guarantees are named narrowly enough that convenience cannot imply stronger recovery than exists. | Registry `Delivery guarantees, claim/peek/watch safety` → `[SB-DELIVERY-*]` (`specs/11-delivery-contract.md`) |
+| Explicit safety over magical recovery | Guarantees are named narrowly enough that convenience cannot imply stronger recovery than exists. | Registry `Delivery guarantees, claim/peek/watch safety` → `[SB-DELIVERY-*]` (`specs/11-delivery.md`) |
 | Small concept count over small source count | Cohesive code may be large when splitting would obscure ownership or failure order. New frameworks and parallel paths need stronger cause. | `implementation/00-implementation-index.md` and the owning implementation document |
 | Concrete pressure justifies growth | A use case, bug, or invariant supports new concepts; speculative platform growth does not. | Proposed [DOM-16], active plan evidence, and `[REV-*]` records |
 
@@ -755,7 +755,7 @@ Evidence:
 - contemporaneous: source-pinned
   `36e2f3568a8e97943b9fe7b06e35d2b2bc688406:docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`,
   §§1, 3.2, and 6
-- contemporaneous: `docs/specs/11-delivery-contract.md`, “Delivery risk
+- contemporaneous: `docs/specs/11-delivery.md`, “Delivery risk
   model” and `[SB-DELIVERY-1]` through `[SB-DELIVERY-5]`, at
   `2daa2fb48dd478fee5c01bec86add53793d55940`
 - contemporaneous: `CHANGELOG.md` `5.6.1` “Documented” entry at
@@ -810,7 +810,7 @@ Evidence:
   `docs/implementation/04-cross-thread-finalization-poisoning.md`, “A permanent
   latch, not in-process recovery,” at
   `2daa2fb48dd478fee5c01bec86add53793d55940`
-- contemporaneous: `docs/specs/11-delivery-contract.md` `[SB-DELIVERY-6]` at
+- contemporaneous: `docs/specs/11-delivery.md` `[SB-DELIVERY-6]` at
   `2daa2fb48dd478fee5c01bec86add53793d55940`
 - contemporaneous: `CHANGELOG.md` section `5.5.0` at
   `2daa2fb48dd478fee5c01bec86add53793d55940`; implementation commit
@@ -1573,7 +1573,7 @@ client-side drain loop cannot provide the same race-free behavior.
 Primary ownership belongs to the base queue/broker operation catalog in the
 root README. The Python return value and command availability belong there.
 Exact CLI count encoding, stdout/stderr use, and exit statuses belong to
-docs/specs/10-cli-contract.md. Backend-specific atomic mechanics belong in
+docs/specs/10-cli.md. Backend-specific atomic mechanics belong in
 implementation rationale, not theory.
 
 The smallest coherent version is queue-local and backend-neutral: atomically
@@ -1623,7 +1623,7 @@ queue activity into waiting without claiming that application work completed.
 
 The Redis decision belongs to the owner of “Embedding targets, backends,
 sidecar” in the root README. The waiter’s exact timeout, wakeup, error, and
-delivery-safety behavior belongs to docs/specs/11-delivery-contract.md.
+delivery-safety behavior belongs to docs/specs/11-delivery.md.
 Backend mechanics belong in implementation rationale.
 
 The smallest coherent version is one resolved Redis-backed queue namespace
@@ -1658,7 +1658,7 @@ Mixed dead-letter proposal: exactly three concerns
 
 2. Observable behavior claim: after the third rejection, move the message to
    a dead-letter queue. Primary owner: the delivery-contract owner.
-   Documentary surface: docs/specs/11-delivery-contract.md. If proposed as
+   Documentary surface: docs/specs/11-delivery.md. If proposed as
    SimpleBroker behavior, the contract would need to define “rejection,”
    attempt identity and scope, atomicity of the move, crash windows, duplicate
    effects, and what happens under concurrent consumers. But the conceptual

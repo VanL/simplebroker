@@ -1,4 +1,4 @@
-# Persistence I/O Contract
+# Persistence I/O
 
 Status: Active
 

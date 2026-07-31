@@ -77,7 +77,7 @@ dump/load). Prefer that over private `_` modules.
 | `1` | General error (for example invalid arguments, database access) |
 | `2` | Queue empty or no matching messages |
 
-Normative: `docs/specs/10-cli-contract.md` [SB-CLI-1]–[SB-CLI-4].
+Normative: `docs/specs/10-cli.md` [SB-CLI-1]–[SB-CLI-4].
 
 - **stdout = command output**, stderr = errors, diagnostics, and commentary
   (ordinary Unix stream roles).
@@ -91,7 +91,7 @@ Normative: `docs/specs/10-cli-contract.md` [SB-CLI-1]–[SB-CLI-4].
 
 ## Delivery (use-level)
 
-Normative: `docs/specs/11-delivery-contract.md`
+Normative: `docs/specs/11-delivery.md`
 [SB-DELIVERY-1]–[SB-DELIVERY-7].
 
 | Path | What happens |
@@ -112,7 +112,7 @@ Prefer one-message peek + delete-by-id, or move-then-process.
 ## Message IDs
 
 Normative identity, allocation, exact-ID, and preservation contract:
-`docs/specs/13-message-identity-contract.md`
+`docs/specs/13-message-identity.md`
 [SB-ID-1]–[SB-ID-5].
 
 - Public id = hybrid timestamp integer (JSON field `timestamp`).
@@ -129,7 +129,7 @@ Normative identity, allocation, exact-ID, and preservation contract:
 `--after` / `--before` are **filters** on message id (strict open bounds after
 parse). They are not complete stream offsets. Moves and exact inserts can
 place older ids behind a bound you already use. Normative:
-`docs/specs/14-timestamp-selection-contract.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`;
+`docs/specs/14-timestamp-selection.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`;
 CLI string forms `[SB-CLI-5]`.
 
 Queue names: tight grammar (alphanumeric + `_` `-` `.`). `@alias` is a
@@ -137,7 +137,7 @@ separate **CLI** naming layer; broadcast matches **queue names**, not aliases.
 
 Broadcast selectors:
 
-Normative: `docs/specs/12-broadcast-contract.md`
+Normative: `docs/specs/12-broadcast.md`
 [SB-BCAST-1]–[SB-BCAST-6].
 
 | CLI | Python | Targets |
@@ -170,7 +170,7 @@ never create queues.
 
 ## Dump / load boundaries
 
-Normative: `docs/specs/15-persistence-io-contract.md` `[SB-IO-1]`–`[SB-IO-5]`.
+Normative: `docs/specs/15-persistence-io.md` `[SB-IO-1]`–`[SB-IO-5]`.
 
 - **`dump` is pending-only** (claimed/deletion-pending rows omitted); not a
   full physical image of claimed work.

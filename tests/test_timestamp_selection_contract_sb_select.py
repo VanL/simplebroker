@@ -13,8 +13,8 @@ from simplebroker._constants import EXIT_SUCCESS
 from .conftest import run_cli
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "docs" / "specs" / "14-timestamp-selection-contract.md"
-CLI_SPEC = ROOT / "docs" / "specs" / "10-cli-contract.md"
+SPEC = ROOT / "docs" / "specs" / "14-timestamp-selection.md"
+CLI_SPEC = ROOT / "docs" / "specs" / "10-cli.md"
 REGISTRY = ROOT / "docs" / "specs" / "product-section-registry.md"
 SPEC_INDEX = ROOT / "docs" / "specs" / "00-specs-index.md"
 README = ROOT / "README.md"
@@ -42,19 +42,19 @@ def test_select_clause_inventory_and_authority() -> None:
         assert f"| [SB-SELECT-{number}] |" in text
 
     registry = REGISTRY.read_text(encoding="utf-8")
-    assert "14-timestamp-selection-contract.md" in registry
+    assert "14-timestamp-selection.md" in registry
     assert "`canonical-spec`" in registry
     assert "[SB-SELECT-1]" in registry
     assert "[SB-SELECT-4]" in registry
     assert "[SB-CLI-5]" in registry
 
-    assert "14-timestamp-selection-contract.md" in SPEC_INDEX.read_text(
+    assert "14-timestamp-selection.md" in SPEC_INDEX.read_text(
         encoding="utf-8"
     )
 
     for path in (README, KERNEL, LLMS):
         surface = path.read_text(encoding="utf-8")
-        assert "docs/specs/14-timestamp-selection-contract.md" in surface
+        assert "docs/specs/14-timestamp-selection.md" in surface
         assert "[SB-SELECT-1]" in surface or "SB-SELECT" in surface
 
     cli = CLI_SPEC.read_text(encoding="utf-8")

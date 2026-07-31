@@ -1,4 +1,4 @@
-# Delivery Contract
+# Delivery
 
 Normative use-level delivery for the `broker` / `simplebroker` CLI and public
 `Queue` / `QueueWatcher` APIs: claim, peek, watch, move reservation, and
@@ -142,7 +142,7 @@ further messages are claimed. Exit `0` means the producer shut down cleanly.
 An `"at_least_once"` `read --all` stream closes its active uncommitted batch
 and makes that batch eligible for retry under [SB-DELIVERY-5].
 
-Exit codes remain governed by `docs/specs/10-cli-contract.md` [SB-CLI-1].
+Exit codes remain governed by `docs/specs/10-cli.md` [SB-CLI-1].
 
 _Implementation mapping_:
 - `simplebroker/commands.py`

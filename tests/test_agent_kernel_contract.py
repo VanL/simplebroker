@@ -34,13 +34,13 @@ def test_agent_kernel_exit_codes_match_cli_constants() -> None:
 def test_agent_kernel_cites_cli_contract() -> None:
     text = KERNEL.read_text(encoding="utf-8")
     section = text.split("## Exit codes and I/O (CLI)", 1)[1].split("## ", 1)[0]
-    assert "docs/specs/10-cli-contract.md" in section or "[SB-CLI-1]" in section
+    assert "docs/specs/10-cli.md" in section or "[SB-CLI-1]" in section
 
 
 def test_agent_kernel_cites_delivery_contract() -> None:
     text = KERNEL.read_text(encoding="utf-8")
     section = text.split("## Delivery (use-level)", 1)[1].split("## ", 1)[0]
-    assert "docs/specs/11-delivery-contract.md" in section
+    assert "docs/specs/11-delivery.md" in section
     assert "[SB-DELIVERY-1]" in section
     assert "[SB-DELIVERY-7]" in section
 

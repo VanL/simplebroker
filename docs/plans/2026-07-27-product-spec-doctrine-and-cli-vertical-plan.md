@@ -170,7 +170,7 @@ pointer; this file is the read order.
 
 Product section authority: `product-section-registry.md`.
 
-1. `10-cli-contract.md` — `[SB-CLI-*]` (exit codes and CLI I/O when
+1. `10-cli.md` — `[SB-CLI-*]` (exit codes and CLI I/O when
    registry marks canonical)
 
 ## Rules
@@ -213,7 +213,7 @@ concern family.** States: `readme-only` | `draft-spec` | `canonical-spec`
 
 | Concern | State | Spec section | README anchor / locus | Gate (obligation → impl → test) |
 |---------|-------|--------------|----------------------|----------------------------------|
-| CLI exit codes and CLI I/O contract | `canonical-spec` | `10-cli-contract.md` `[SB-CLI-1]`…`[SB-CLI-4]` | `### Exit Codes` (+ kernel Exit codes) | `tests/test_documented_exit_codes.py` (SB-CLI-1 + README link); `tests/test_agent_kernel_contract.py` (SB-CLI-1 + kernel link); `tests/test_cli_contract_sb_cli.py` (SB-CLI-2, SB-CLI-3, SB-CLI-4 behavioral binds) |
+| CLI exit codes and CLI I/O contract | `canonical-spec` | `10-cli.md` `[SB-CLI-1]`…`[SB-CLI-4]` | `### Exit Codes` (+ kernel Exit codes) | `tests/test_documented_exit_codes.py` (SB-CLI-1 + README link); `tests/test_agent_kernel_contract.py` (SB-CLI-1 + kernel link); `tests/test_cli_contract_sb_cli.py` (SB-CLI-2, SB-CLI-3, SB-CLI-4 behavioral binds) |
 | Delivery guarantees, claim/peek/watch safety | `readme-only` | — | README Critical Safety / Delivery; agent-kernel Delivery | (future) |
 | Message identity (hybrid ts, last_ts, move+checkpoint) | `readme-only` | — | README Core Concepts / agent-kernel Message IDs | (future) |
 | Dump/load and claimed-row I/O | `readme-only` | — | README dump/load | (future) |
@@ -241,7 +241,7 @@ forbidden. Abandoning an **unshipped** `draft-spec` may return to
 together with §4.5 in the same PR. Do not land registry with CLI as
 `draft-spec` then flip in a second un-reviewed step inside this unit.)*
 
-### 4.5 New file `docs/specs/10-cli-contract.md`
+### 4.5 New file `docs/specs/10-cli.md`
 
 **Full file content** (all four clauses are **fully bound** — each has
 implementation mapping + firing test in §4.9; no half-bound pilot):
@@ -331,7 +331,7 @@ as the human restatement), insert exactly:
 
 ```markdown
 
-Normative detail: `docs/specs/10-cli-contract.md` ([SB-CLI-1]–[SB-CLI-4]).
+Normative detail: `docs/specs/10-cli.md` ([SB-CLI-1]–[SB-CLI-4]).
 ```
 
 If that subsection’s bullet list is reordered later, the sentence must remain
@@ -344,7 +344,7 @@ After the exit-code table in `## Exit codes and I/O (CLI)`, insert exactly:
 
 ```markdown
 
-Normative: `docs/specs/10-cli-contract.md` [SB-CLI-1]–[SB-CLI-4].
+Normative: `docs/specs/10-cli.md` [SB-CLI-1]–[SB-CLI-4].
 ```
 
 ### 4.8 `llms.txt`
@@ -353,7 +353,7 @@ Under `## Docs`, **after** the Agent kernel bullet, insert exactly:
 
 ```markdown
 - [Product section registry](docs/specs/product-section-registry.md): Mechanical ownership state for product doc sections (`readme-only` / `draft-spec` / `canonical-spec`)
-- [CLI contract spec](docs/specs/10-cli-contract.md): Canonical CLI exit codes and stdout/stderr roles `[SB-CLI-*]`
+- [CLI contract spec](docs/specs/10-cli.md): Canonical CLI exit codes and stdout/stderr roles `[SB-CLI-*]`
 - [Specs index](docs/specs/00-specs-index.md): Process and product spec read order
 ```
 
@@ -367,16 +367,16 @@ half-bound one.
 
 #### `tests/test_documented_exit_codes.py` (extend)
 
-1. Parse `docs/specs/10-cli-contract.md` `[SB-CLI-1]` table codes `{0,1,2}`
+1. Parse `docs/specs/10-cli.md` `[SB-CLI-1]` table codes `{0,1,2}`
    and assert equality with
    `{EXIT_SUCCESS, EXIT_ERROR, EXIT_QUEUE_EMPTY}`.
 2. Assert root README Exit Codes subsection contains
-   `docs/specs/10-cli-contract.md`.
+   `docs/specs/10-cli.md`.
 3. Keep existing README bullet enumeration test.
 
 #### `tests/test_agent_kernel_contract.py` (extend)
 
-1. Assert kernel contains `docs/specs/10-cli-contract.md` or `[SB-CLI-1]`.
+1. Assert kernel contains `docs/specs/10-cli.md` or `[SB-CLI-1]`.
 
 #### New `tests/test_cli_contract_sb_cli.py` (behavioral binds)
 
@@ -478,7 +478,7 @@ Acceptance:
       canonical clauses)
 - [x] SB-CLI-4 tests cover message-line JSON only; `list --json` is not
       required to carry `message`/`timestamp`
-- [x] README Exit Codes links to `10-cli-contract.md`
+- [x] README Exit Codes links to `10-cli.md`
 - [x] Kernel cites SB-CLI
 - [x] llms.txt lists registry + CLI contract + specs index
 - [x] Inventory file exists with ≥4 future families still `readme-only`

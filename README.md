@@ -291,9 +291,9 @@ $ broker alias remove task1.outbox
   bound (`read`, `peek`, and `move`; not `watch`)
 
 Normative filter predicates, late older ids (including after `move` or exact
-insert), and watch progress: `docs/specs/14-timestamp-selection-contract.md`
+insert), and watch progress: `docs/specs/14-timestamp-selection.md`
 `[SB-SELECT-1]`–`[SB-SELECT-4]`. CLI string forms for non-exact bounds:
-`[SB-CLI-5]` in `docs/specs/10-cli-contract.md`.
+`[SB-CLI-5]` in `docs/specs/10-cli.md`.
 
 **Write options:**
 - `-t, --timestamps` - Print the new message's 19-digit timestamp ID on stdout
@@ -337,7 +337,7 @@ and exits `2`.
 - `1` - General error (e.g., database access error, invalid arguments)
 - `2` - Queue empty or no matching messages
 
-Normative detail: `docs/specs/10-cli-contract.md` ([SB-CLI-1]–[SB-CLI-5]).
+Normative detail: `docs/specs/10-cli.md` ([SB-CLI-1]–[SB-CLI-5]).
 
 `watch` exits `0` when stopped by SIGINT/SIGTERM or when its stdout consumer
 closes the pipe (see [Pipe behavior](#pipe-behavior)).
@@ -370,7 +370,7 @@ or `Queue.peek_generator()`, because their live offset pagination can skip
 messages.
 
 Normative delivery contract:
-`docs/specs/11-delivery-contract.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
+`docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
 
 Single-consumer example:
 
@@ -415,7 +415,7 @@ appears “behind” a bound.
 
 ID representation, allocation, write returns, high-water/cache meaning,
 exact-ID forms, and ID-preserving move are normative in the
-[message identity contract](docs/specs/13-message-identity-contract.md)
+[message identity contract](docs/specs/13-message-identity.md)
 `[SB-ID-1]` through `[SB-ID-5]`.
 
 Uniqueness is the ordinary coexistence rule for stored rows. Applications
@@ -454,7 +454,7 @@ Retrying in 5 seconds...
 (`[SB-SELECT-2]`). You may resume from a last-seen id with `--after`, but
 that does not guarantee a complete history under moves or exact-id inserts
 (`[SB-SELECT-3]`). Full rules:
-`docs/specs/14-timestamp-selection-contract.md`.
+`docs/specs/14-timestamp-selection.md`.
 
 ```bash
 # Continue after a previously seen id
@@ -484,7 +484,7 @@ $ broker dump | BROKER_BACKEND=postgres BROKER_BACKEND_TARGET="$DSN" broker load
 ```
 
 Full dump/load and claimed-row inspection rules:
-`docs/specs/15-persistence-io-contract.md`.
+`docs/specs/15-persistence-io.md`.
 
 ## Common Patterns
 
@@ -541,7 +541,7 @@ Broadcast can target all existing queues, names matching a pattern, or an
 exact set of literal queue names. Python callers may explicitly create missing
 exact targets. Selection, validation, result counts, queue-creation policy,
 atomicity, CLI behavior, and backend compatibility are normative in the
-[broadcast contract](docs/specs/12-broadcast-contract.md) `[SB-BCAST-1]`
+[broadcast contract](docs/specs/12-broadcast.md) `[SB-BCAST-1]`
 through `[SB-BCAST-6]`.
 
 Broadcast is queue fan-out, not pub/sub: it inserts ordinary pending messages
@@ -824,7 +824,7 @@ paths and prefer exact message IDs when possible.
 ### Delivery guarantees
 
 Normative detail:
-`docs/specs/11-delivery-contract.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
+`docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
 
 Materialized batch APIs such as `Queue.read_many()` and `Queue.move_many()`
 commit before returning their result lists. Passing

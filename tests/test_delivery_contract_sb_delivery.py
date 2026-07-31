@@ -17,7 +17,7 @@ from simplebroker._delivery import ACCEPTED_DELIVERY_GUARANTEES
 pytestmark = [pytest.mark.shared]
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "docs" / "specs" / "11-delivery-contract.md"
+SPEC = ROOT / "docs" / "specs" / "11-delivery.md"
 REGISTRY = ROOT / "docs" / "specs" / "product-section-registry.md"
 README = ROOT / "README.md"
 KERNEL = ROOT / "docs" / "agent-kernel.md"
@@ -80,7 +80,7 @@ def test_delivery_contract_clause_inventory_and_bindings() -> None:
         if line.startswith("| Delivery guarantees,")
     )
     assert "`canonical-spec`" in registry_row
-    assert "`11-delivery-contract.md`" in registry_row
+    assert "`11-delivery.md`" in registry_row
     assert "[SB-DELIVERY-1]" in registry_row
     assert "[SB-DELIVERY-7]" in registry_row
     assert "tests/test_delivery_contract_sb_delivery.py" in registry_row
@@ -88,7 +88,7 @@ def test_delivery_contract_clause_inventory_and_bindings() -> None:
     assert "tests/test_cli_broken_pipe.py" in registry_row
 
     for path in (README, KERNEL, LLMS):
-        assert "docs/specs/11-delivery-contract.md" in path.read_text(encoding="utf-8")
+        assert "docs/specs/11-delivery.md" in path.read_text(encoding="utf-8")
 
 
 def test_watch_mode_clause_binds_all_modes_and_runtime_gates() -> None:

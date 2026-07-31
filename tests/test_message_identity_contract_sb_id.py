@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = ROOT / "docs" / "specs" / "13-message-identity-contract.md"
+SPEC = ROOT / "docs" / "specs" / "13-message-identity.md"
 REGISTRY = ROOT / "docs" / "specs" / "product-section-registry.md"
 SPEC_INDEX = ROOT / "docs" / "specs" / "00-specs-index.md"
 README = ROOT / "README.md"
@@ -195,7 +195,7 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert len(identity_rows) == 1
     identity_row = identity_rows[0]
     assert "`canonical-spec`" in identity_row
-    assert "`13-message-identity-contract.md`" in identity_row
+    assert "`13-message-identity.md`" in identity_row
     assert "[SB-ID-1]" in identity_row
     assert "[SB-ID-5]" in identity_row
     assert "tests/test_message_identity_contract_sb_id.py" in identity_row
@@ -207,7 +207,7 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     ]
     assert len(selection_rows) >= 1
     assert "`canonical-spec`" in selection_rows[0]
-    assert "14-timestamp-selection-contract.md" in selection_rows[0]
+    assert "14-timestamp-selection.md" in selection_rows[0]
 
     residual = registry.split("The base operation row owns only", 1)[1].split(
         "## Transition rule", 1
@@ -222,7 +222,7 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     readme = README.read_text(encoding="utf-8")
     normalized_spec = " ".join(text.split())
     normalized_readme = " ".join(readme.split())
-    assert "docs/specs/13-message-identity-contract.md" in readme
+    assert "docs/specs/13-message-identity.md" in readme
     assert "[SB-ID-1]" in readme
     assert "[SB-ID-5]" in readme
     assert "ID `0` is reserved" in normalized_spec
@@ -237,11 +237,11 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert "move` preserves IDs" in normalized_readme or "move preserves IDs" in normalized_readme
     assert "19-digit ASCII" in normalized_readme
     assert "High 52 bits: microseconds" not in readme
-    assert "14-timestamp-selection-contract.md" in readme
+    assert "14-timestamp-selection.md" in readme
 
     for path in (KERNEL, LLMS):
         surface = path.read_text(encoding="utf-8")
-        assert "docs/specs/13-message-identity-contract.md" in surface
+        assert "docs/specs/13-message-identity.md" in surface
         assert "[SB-ID-1]" in surface
         assert "[SB-ID-5]" in surface
     kernel = KERNEL.read_text(encoding="utf-8")
@@ -251,7 +251,7 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert "exact 19 ASCII digits" in normalized_kernel
     assert "preserves ids" in normalized_kernel
 
-    assert "13-message-identity-contract.md" in SPEC_INDEX.read_text(encoding="utf-8")
+    assert "13-message-identity.md" in SPEC_INDEX.read_text(encoding="utf-8")
     invariant_text = INVARIANTS.read_text(encoding="utf-8")
     assert "Message identity, allocation, exact-ID handling, and preservation" in (
         invariant_text
@@ -270,10 +270,10 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
 
     theory = THEORY.read_text(encoding="utf-8")
     assert "Message identity, allocation, exact-ID handling, and preservation" in theory
-    assert "specs/13-message-identity-contract.md" in theory
+    assert "specs/13-message-identity.md" in theory
     assert "[SB-ID-*]" in theory
     assert "[SB-ID-5]" in theory
-    assert "14-timestamp-selection-contract.md" in theory or "SB-SELECT" in theory
+    assert "14-timestamp-selection.md" in theory or "SB-SELECT" in theory
 
 
 def test_message_identity_contract_names_existing_firing_tests() -> None:

@@ -1,4 +1,4 @@
-# Timestamp Selection Contract
+# Timestamp Selection
 
 Status: Active
 

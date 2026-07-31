@@ -1,4 +1,4 @@
-# Message Identity Contract
+# Message Identity
 
 Status: Active
 
@@ -11,10 +11,10 @@ allocation; write-return identity; high-water and cache meaning; exact-ID
 forms and insertion outcomes; move preserves identity.
 
 Ordered timestamp filters (`--after` / `--before`) and filter consequences are
-`docs/specs/14-timestamp-selection-contract.md` `[SB-SELECT-*]`. CLI non-exact
+`docs/specs/14-timestamp-selection.md` `[SB-SELECT-*]`. CLI non-exact
 bound string forms are `[SB-CLI-5]`. Claim and delivery remain with
 `[SB-DELIVERY-*]`. Dump/load format and claimed inspection are
-`docs/specs/15-persistence-io-contract.md` `[SB-IO-*]`.
+`docs/specs/15-persistence-io.md` `[SB-IO-*]`.
 
 ## Representation and identity [SB-ID-1]
 

@@ -1,4 +1,4 @@
-# CLI Contract
+# CLI
 
 Normative CLI process exit codes and stream roles for the `broker` /
 `simplebroker` entry points. Library `Queue` APIs use return values and
@@ -73,7 +73,7 @@ _Implementation mapping_:
 ## Non-exact bound string forms [SB-CLI-5]
 
 CLI `--after` and `--before` accept string forms that parse to integer message
-ids for the predicates in `docs/specs/14-timestamp-selection-contract.md`
+ids for the predicates in `docs/specs/14-timestamp-selection.md`
 `[SB-SELECT-1]`. Documented forms:
 
 - ISO 8601: `2024-01-15T14:30:00Z` or `2024-01-15` (date-only means midnight UTC)

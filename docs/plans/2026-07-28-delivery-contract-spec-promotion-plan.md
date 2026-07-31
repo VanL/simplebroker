@@ -22,7 +22,7 @@ change, revise the exact delta and repeat review before editing product code.
 
 Promote the existing delivery, claim, peek, move-reservation, watch, and
 transactional-generator safety contract into one canonical product spec,
-`docs/specs/11-delivery-contract.md` (`[SB-DELIVERY-1]` through
+`docs/specs/11-delivery.md` (`[SB-DELIVERY-1]` through
 `[SB-DELIVERY-7]`).
 
 This is an authority migration and contract characterization, not a behavior
@@ -176,7 +176,7 @@ of this unit.
   `docs/plans/README.md`,
   `docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`,
   `docs/specs/00-specs-index.md`,
-  `docs/specs/11-delivery-contract.md`,
+  `docs/specs/11-delivery.md`,
   `docs/specs/product-section-registry.md`, `llms.txt`,
   `simplebroker/_delivery.py`, `simplebroker/db.py`,
   `simplebroker/sbqueue.py`, `simplebroker/watcher.py`,
@@ -227,7 +227,7 @@ before writing normative text.
 
 ## 7. Proposed Spec Delta
 
-### 7.1 New `docs/specs/11-delivery-contract.md`
+### 7.1 New `docs/specs/11-delivery.md`
 
 Create the file with this exact initial content:
 
@@ -430,7 +430,7 @@ uncommitted batch and makes that batch eligible for retry under
 [SB-DELIVERY-5].
 
 The numeric exit-code set remains governed by
-`docs/specs/10-cli-contract.md` [SB-CLI-1].
+`docs/specs/10-cli.md` [SB-CLI-1].
 
 _Implementation mapping_:
 - `simplebroker/commands.py`
@@ -459,7 +459,7 @@ _Implementation mapping_:
 Replace the delivery row with:
 
 ```markdown
-| Delivery guarantees, claim/peek/watch safety | `canonical-spec` | `11-delivery-contract.md` `[SB-DELIVERY-1]`…`[SB-DELIVERY-7]` | README Critical Safety / Delivery; agent-kernel Delivery | `tests/test_delivery_contract_sb_delivery.py` (SB-DELIVERY-1…7 + registry/README/kernel binds); `tests/test_cross_thread_finalization_poisoning.py` + backend probe suites (SB-DELIVERY-6); `tests/test_cli_broken_pipe.py` (SB-DELIVERY-7) |
+| Delivery guarantees, claim/peek/watch safety | `canonical-spec` | `11-delivery.md` `[SB-DELIVERY-1]`…`[SB-DELIVERY-7]` | README Critical Safety / Delivery; agent-kernel Delivery | `tests/test_delivery_contract_sb_delivery.py` (SB-DELIVERY-1…7 + registry/README/kernel binds); `tests/test_cross_thread_finalization_poisoning.py` + backend probe suites (SB-DELIVERY-6); `tests/test_cli_broken_pipe.py` (SB-DELIVERY-7) |
 ```
 
 Do not alter the `readme-only` state of message identity, dump/load and
@@ -470,7 +470,7 @@ claimed-row I/O, or embedding.
 In `docs/specs/00-specs-index.md`, add after the CLI entry:
 
 ```markdown
-2. `11-delivery-contract.md` — `[SB-DELIVERY-*]` (claim, watch, move
+2. `11-delivery.md` — `[SB-DELIVERY-*]` (claim, watch, move
    reservation, peek safety, and transactional generators when the registry
    marks canonical)
 ```
@@ -497,7 +497,7 @@ or `Queue.peek_generator()`, because their live offset pagination can skip
 messages.
 
 Normative delivery contract:
-`docs/specs/11-delivery-contract.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
+`docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
 
 Single-consumer example:
 ```
@@ -524,7 +524,7 @@ At the start of `### Delivery guarantees`, add:
 
 ```markdown
 Normative detail:
-`docs/specs/11-delivery-contract.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
+`docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
 ```
 
 Do not restructure any other README section in this unit.
@@ -534,7 +534,7 @@ Do not restructure any other README section in this unit.
 Immediately after `## Delivery (use-level)`, add:
 
 ```markdown
-Normative: `docs/specs/11-delivery-contract.md`
+Normative: `docs/specs/11-delivery.md`
 [SB-DELIVERY-1]–[SB-DELIVERY-7].
 ```
 
@@ -547,7 +547,7 @@ new spec.
 Under `## Docs`, after the CLI contract spec entry, add:
 
 ```markdown
-- [Delivery contract spec](docs/specs/11-delivery-contract.md): Canonical claim, watch, move-reservation, peek-safety, and transactional-generator rules `[SB-DELIVERY-*]`
+- [Delivery contract spec](docs/specs/11-delivery.md): Canonical claim, watch, move-reservation, peek-safety, and transactional-generator rules `[SB-DELIVERY-*]`
 ```
 
 ### 7.7 Implementation docs
@@ -555,7 +555,7 @@ Under `## Docs`, after the CLI contract spec entry, add:
 Update `docs/implementation/04-cross-thread-finalization-poisoning.md`:
 
 - replace the statement that README Delivery guarantees owns the public
-  contract with `docs/specs/11-delivery-contract.md`
+  contract with `docs/specs/11-delivery.md`
   `[SB-DELIVERY-5]` and `[SB-DELIVERY-6]`;
 - retain README as a user-facing restatement;
 - keep Redis outside the SQL poison mechanism.
@@ -563,7 +563,7 @@ Update `docs/implementation/04-cross-thread-finalization-poisoning.md`:
 Update `docs/implementation/05-product-invariant-inventory.md`:
 
 - change the delivery family to `canonical-spec`;
-- point it to `docs/specs/11-delivery-contract.md`;
+- point it to `docs/specs/11-delivery.md`;
 - leave `SB-ID-*`, `SB-IO-*`, and `SB-EMBED-*` as `readme-only`;
 - change “next vertical candidate” to a historical note that the vertical was
   promoted by this plan.
@@ -593,7 +593,7 @@ Update documentation inside runtime source without changing executable logic:
   primary concurrent-worker guidance; qualify peek-then-delete as
   single-consumer/idempotent only.
 - `simplebroker/_delivery.py`: add a module-level backlink to
-  `docs/specs/11-delivery-contract.md` [SB-DELIVERY-5] without changing the
+  `docs/specs/11-delivery.md` [SB-DELIVERY-5] without changing the
   validator or exported vocabulary.
 - `simplebroker/sbqueue.py`: in the public `read_generator()`,
   `move_generator()`, and transactional `stream_messages()` docstrings, keep
@@ -882,7 +882,7 @@ SIMPLEBROKER_RUN_FINALIZATION_PROBE=1 uv run ./bin/pytest-redis -q \
 ```bash
 python3 bin/check-dom15-fixtures
 git diff --check
-rg -n "11-delivery-contract|SB-DELIVERY" \
+rg -n "11-delivery|SB-DELIVERY" \
   README.md llms.txt docs tests
 python3 - <<'PY'
 import ast
@@ -974,7 +974,7 @@ become observations, not blockers, unless this change makes the concern worse.
 
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
-| Process only (Task 2) | Run the new structural test before adding authority artifacts and observe the expected red. | The exact spec was added before the new structural test file; the first recorded run was green. Baseline inspection still proves `docs/specs/11-delivery-contract.md` was absent at `22422ecc`, and no runtime failure was manufactured. | Implementation followed the exact-delta slice before the test-authoring slice. Record the sequencing miss honestly; all behavioral characterizations and final structural gates ran on SQLite, PostgreSQL, and Redis/Valkey. | None. Product behavior and the final contract are unchanged. |
+| Process only (Task 2) | Run the new structural test before adding authority artifacts and observe the expected red. | The exact spec was added before the new structural test file; the first recorded run was green. Baseline inspection still proves `docs/specs/11-delivery.md` was absent at `22422ecc`, and no runtime failure was manufactured. | Implementation followed the exact-delta slice before the test-authoring slice. Record the sequencing miss honestly; all behavioral characterizations and final structural gates ran on SQLite, PostgreSQL, and Redis/Valkey. | None. Product behavior and the final contract are unchanged. |
 
 No row may remain with `pending` in the final column at completion.
 

@@ -414,7 +414,7 @@ class BrokerConnection(Protocol):
     ) -> int:
         """Implement ``[SB-BCAST-1]`` through ``[SB-BCAST-6]``.
 
-        See ``docs/specs/12-broadcast-contract.md``.
+        See ``docs/specs/12-broadcast.md``.
         """
         ...
 

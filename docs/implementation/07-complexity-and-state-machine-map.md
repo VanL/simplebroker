@@ -27,9 +27,9 @@ after C901 activation.
 - The same spec's [DOM-10.1.1] owns every adopted suppression and its durable
   reason.
 - The same spec's [DOM-10.2] owns the transition-table requirement.
-- `docs/specs/10-cli-contract.md` and `docs/specs/11-delivery-contract.md`
+- `docs/specs/10-cli.md` and `docs/specs/11-delivery.md`
   continue to own affected product behavior.
-- `docs/specs/13-message-identity-contract.md` `[SB-ID-1]` through
+- `docs/specs/13-message-identity.md` `[SB-ID-1]` through
   `[SB-ID-5]` owns message identity and allocation behavior.
 
 ## Change Rules

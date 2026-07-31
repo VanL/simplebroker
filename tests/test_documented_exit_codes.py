@@ -6,7 +6,7 @@ from pathlib import Path
 from simplebroker._constants import EXIT_ERROR, EXIT_QUEUE_EMPTY, EXIT_SUCCESS
 
 ROOT = Path(__file__).resolve().parents[1]
-CLI_CONTRACT = ROOT / "docs" / "specs" / "10-cli-contract.md"
+CLI_CONTRACT = ROOT / "docs" / "specs" / "10-cli.md"
 
 
 def test_readme_exit_code_section_is_complete() -> None:
@@ -31,7 +31,7 @@ def test_cli_contract_sb_cli_1_codes_match_constants() -> None:
 def test_readme_exit_codes_link_cli_contract() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     section = readme.split("### Exit Codes", 1)[1].split("\n## ", 1)[0]
-    assert "docs/specs/10-cli-contract.md" in section
+    assert "docs/specs/10-cli.md" in section
 
 
 def test_command_layer_does_not_advertise_an_extra_exit_code() -> None:

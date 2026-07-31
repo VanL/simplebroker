@@ -77,14 +77,14 @@ CONCEPT_OWNERS = {
     "Message identity": (
         "Message identity, allocation, exact-ID handling, and preservation",
         "canonical-spec",
-        "specs/13-message-identity-contract.md",
-        "13-message-identity-contract.md",
+        "specs/13-message-identity.md",
+        "13-message-identity.md",
     ),
     "Claim": (
         "Delivery guarantees, claim/peek/watch safety",
         "canonical-spec",
-        "specs/11-delivery-contract.md",
-        "11-delivery-contract.md",
+        "specs/11-delivery.md",
+        "11-delivery.md",
     ),
     "Move": (
         "Base queue/broker operation catalog residual",
@@ -95,8 +95,8 @@ CONCEPT_OWNERS = {
     "Watcher/waiter": (
         "Delivery guarantees, claim/peek/watch safety",
         "canonical-spec",
-        "specs/11-delivery-contract.md",
-        "11-delivery-contract.md",
+        "specs/11-delivery.md",
+        "11-delivery.md",
     ),
     "Process session": (
         "Embedding targets, backends, sidecar",
@@ -121,31 +121,31 @@ SPECIALIZED_CONTRACTS = {
     "Queue": (
         "Broadcast selection, creation, and atomicity",
         "canonical-spec",
-        "specs/12-broadcast-contract.md",
+        "specs/12-broadcast.md",
         "[SB-BCAST-*]",
     ),
     "Broker core": (
         "Broadcast selection, creation, and atomicity",
         "canonical-spec",
-        "specs/12-broadcast-contract.md",
+        "specs/12-broadcast.md",
         "[SB-BCAST-*]",
     ),
     "Message identity": (
         "Message identity, allocation, exact-ID handling, and preservation",
         "canonical-spec",
-        "specs/13-message-identity-contract.md",
+        "specs/13-message-identity.md",
         "[SB-ID-*]",
     ),
     "Move": (
         "Message identity, allocation, exact-ID handling, and preservation",
         "canonical-spec",
-        "specs/13-message-identity-contract.md",
+        "specs/13-message-identity.md",
         "[SB-ID-5]",
     ),
 }
 ORDERED_SELECTION_ROUTES = {
-    "Message identity": "specs/14-timestamp-selection-contract.md",
-    "Move": "specs/14-timestamp-selection-contract.md",
+    "Message identity": "specs/14-timestamp-selection.md",
+    "Move": "specs/14-timestamp-selection.md",
 }
 RECORD_HEADING = re.compile(
     r"^### \[(?P<kind>ALT|REV)-(?P<scope>[A-Z][A-Z0-9]*)-"
@@ -742,7 +742,7 @@ def test_identity_concepts_route_ordered_selection_contract(
     concern = "Ordered timestamp selection and filter consequences"
     state, spec, _locus = registry_rows[concern]
     assert state == "canonical-spec"
-    assert "14-timestamp-selection-contract.md" in spec
+    assert "14-timestamp-selection.md" in spec
 
     for concept, target in ORDERED_SELECTION_ROUTES.items():
         owner = concept_rows[concept]

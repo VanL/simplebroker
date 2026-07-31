@@ -42,10 +42,10 @@ Phase 2B selection contract must retain that distinction.
 Source specs and conceptual owners:
 
 - `docs/program-theory.md` `[THEORY-2]`, `[THEORY-3]`, `[THEORY-4]`
-- `docs/specs/13-message-identity-contract.md` `[SB-ID-1]`,
+- `docs/specs/13-message-identity.md` `[SB-ID-1]`,
   `[SB-ID-2]`, `[SB-ID-3]`, `[SB-ID-4]`
 - `docs/specs/product-section-registry.md`, message-identity row
-- `docs/specs/12-broadcast-contract.md` `[SB-BCAST-3]`, `[SB-BCAST-4]`
+- `docs/specs/12-broadcast.md` `[SB-BCAST-3]`, `[SB-BCAST-4]`
   for the patterned-broadcast exclusion
 
 Related active plan:
@@ -65,12 +65,12 @@ Process requirements:
 ## Spec Baseline
 
 - `84fcc5706834fd85115ab404c1beae47ab9f4e08` —
-  `docs/specs/13-message-identity-contract.md`,
-  `docs/specs/12-broadcast-contract.md`, and
+  `docs/specs/13-message-identity.md`,
+  `docs/specs/12-broadcast.md`, and
   `docs/specs/product-section-registry.md` at plan authoring time.
 - Promotion baseline: `84fcc5706834fd85115ab404c1beae47ab9f4e08` plus the
   uncommitted spec-promotion worktree diff in
-  `docs/specs/13-message-identity-contract.md`,
+  `docs/specs/13-message-identity.md`,
   `docs/specs/product-section-registry.md`, `README.md`,
   `docs/agent-kernel.md`, and
   `tests/test_message_identity_contract_sb_id.py`.
@@ -285,7 +285,7 @@ materially. A noisy microbenchmark alone is not a rollback trigger.
 ## Proposed Spec Delta
 
 Promotion strategy: A — apply these edits to
-`docs/specs/13-message-identity-contract.md` before implementation. Do not add
+`docs/specs/13-message-identity.md` before implementation. Do not add
 new implementation-link claims until their code and firing tests land.
 
 ### `[SB-ID-1]` — add after the signed-range sentence
@@ -357,7 +357,7 @@ behavior before code cites it.
 
 Files:
 
-- `docs/specs/13-message-identity-contract.md`
+- `docs/specs/13-message-identity.md`
 - `docs/specs/product-section-registry.md`
 - `README.md`
 - `docs/agent-kernel.md`
@@ -547,7 +547,7 @@ Files:
 - `docs/implementation/07-complexity-and-state-machine-map.md`
 - `CHANGELOG.md`
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
-- `docs/specs/13-message-identity-contract.md`
+- `docs/specs/13-message-identity.md`
 - `docs/specs/product-section-registry.md`
 - this plan
 

@@ -1074,7 +1074,7 @@ def cmd_broadcast(
 ) -> int:
     """Send a message to selected queues.
 
-    Contract: ``docs/specs/12-broadcast-contract.md``,
+    Contract: ``docs/specs/12-broadcast.md``,
     ``[SB-BCAST-1]`` and ``[SB-BCAST-5]``.
 
     Args:

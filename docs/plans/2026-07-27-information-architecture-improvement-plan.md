@@ -94,7 +94,7 @@ Stable prefix: **`SB-`**. Files (names adjustable at Phase B):
 | File (proposed) | Codes (examples) | Source of first draft |
 |-----------------|------------------|------------------------|
 | `docs/specs/10-product-core.md` | SB-CORE-* | README Features / Not for / Architecture pitch |
-| `docs/specs/11-cli-contract.md` | SB-CLI-* | Exit codes, stdout/stderr, global-before-command, json fields |
+| `docs/specs/10-cli.md` | SB-CLI-* | Exit codes, stdout/stderr, global-before-command, json fields |
 | `docs/specs/12-delivery.md` | SB-DELIVERY-* | Claim-before-process, generators, watch safety |
 | `docs/specs/13-message-identity.md` | SB-ID-* | Hybrid timestamps, last_ts, move+checkpoint skip |
 | `docs/specs/14-persistence-io.md` | SB-IO-* | Dump/load, claimed rows, vacuum, SQLite companions |

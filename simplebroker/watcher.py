@@ -1474,7 +1474,7 @@ class QueueWatcher(BaseWatcher):
     Peek-then-delete does not reserve work and is safe only for one consumer or
     idempotent handlers.
 
-    See ``docs/specs/11-delivery-contract.md`` [SB-DELIVERY-1] through
+    See ``docs/specs/11-delivery.md`` [SB-DELIVERY-1] through
     [SB-DELIVERY-4] for the normative delivery and reservation contract.
 
     ⚠️ Moved messages and checkpoints: ``move`` preserves a message's original

@@ -147,7 +147,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `canonical-spec` in `docs/specs/product-section-registry.md` win on conflict
   and are updated in place. Process specs stay under `[DOM-*]`; product
   sections use `[SB-*]`.
-- Promoted the first product vertical, `docs/specs/10-cli-contract.md`
+- Promoted the first product vertical, `docs/specs/10-cli.md`
   (`[SB-CLI-1]`…`[SB-CLI-4]`): CLI exit codes `{0,1,2}`, stdout vs stderr,
   global options before the subcommand, and message-line JSON fields for
   `read` / `peek` / `move` / `dump --json` (not other `--json` shapes such as
