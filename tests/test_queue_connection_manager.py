@@ -7,14 +7,15 @@ import threading
 import time
 import warnings
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 import pytest
 
 from simplebroker import Queue, helpers
 from simplebroker._exceptions import StopException
-from simplebroker._runner import SQLiteRunner
-from simplebroker.db import BrokerCore, BrokerDB, DBConnection
+from simplebroker._runner import SetupPhase, SQLiteRunner
+from simplebroker.db import BrokerConnection, BrokerCore, BrokerDB, DBConnection
 from simplebroker.helpers import _execute_connection_retry
 
 
@@ -23,7 +24,7 @@ def test_connection_retry_sleep_count(
 ) -> None:
     sleeps: list[float] = []
 
-    def capture(wait: float, stop_event=None) -> bool:
+    def capture(wait: float, stop_event: threading.Event | None = None) -> bool:
         sleeps.append(wait)
         return True
 
@@ -58,7 +59,7 @@ def test_connection_stop_during_sleep_raises_stop_exception(
 class TestQueueConnectionManager:
     """Test the get_connection context manager behavior."""
 
-    def test_persistent_mode_uses_cached_connection(self):
+    def test_persistent_mode_uses_cached_connection(self) -> None:
         """Test that persistent mode reuses thread-local connections."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -93,7 +94,7 @@ class TestQueueConnectionManager:
                 if queue:
                     queue.close()
 
-    def test_ephemeral_mode_creates_new_connections(self):
+    def test_ephemeral_mode_creates_new_connections(self) -> None:
         """Test that ephemeral mode creates new connections each time."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -110,7 +111,8 @@ class TestQueueConnectionManager:
                         assert isinstance(conn, BrokerDB), (
                             "Ephemeral mode should return BrokerDB instances"
                         )
-                        connection_ids.append(conn._runner.instance_id)
+                        runner = cast(SQLiteRunner, getattr(conn, "_runner"))
+                        connection_ids.append(runner.instance_id)
 
                 # All connections should be different instances
                 assert len(set(connection_ids)) == 3, (
@@ -120,7 +122,7 @@ class TestQueueConnectionManager:
                 # Queue should not have a persistent connection
                 assert queue.conn is None, "Ephemeral mode should not have a conn"
 
-    def test_ephemeral_connection_lifetime(self):
+    def test_ephemeral_connection_lifetime(self) -> None:
         """Test that ephemeral connections are properly closed after use."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -149,7 +151,7 @@ class TestQueueConnectionManager:
                 if hasattr(queue, "close"):
                     queue.close()
 
-    def test_persistent_connection_lifetime(self):
+    def test_persistent_connection_lifetime(self) -> None:
         """Test that persistent connections stay alive across multiple uses."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -176,7 +178,7 @@ class TestQueueConnectionManager:
             # Only when we close the queue should it be cleaned up
             queue.close()
 
-    def test_thread_safety_ephemeral_mode(self):
+    def test_thread_safety_ephemeral_mode(self) -> None:
         """Test that ephemeral mode is thread-safe (each thread gets its own connection)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -185,9 +187,10 @@ class TestQueueConnectionManager:
                 connection_ids = []
                 lock = threading.Lock()
 
-                def get_connection():
+                def get_connection() -> None:
                     with queue.get_connection() as conn, lock:
-                        connection_ids.append(conn._runner.instance_id)
+                        runner = cast(SQLiteRunner, getattr(conn, "_runner"))
+                        connection_ids.append(runner.instance_id)
 
                 # Create multiple threads
                 threads = [threading.Thread(target=get_connection) for _ in range(5)]
@@ -212,7 +215,7 @@ class TestQueueConnectionManager:
                     "Each thread should get a different connection in ephemeral mode"
                 )
 
-    def test_thread_safety_persistent_mode(self):
+    def test_thread_safety_persistent_mode(self) -> None:
         """Test that persistent mode uses thread-local connections for safety."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -230,7 +233,9 @@ class TestQueueConnectionManager:
 
                     barrier = threading.Barrier(5)  # Synchronize thread starts
 
-                    def get_connection():
+                    def get_connection() -> tuple[
+                        tuple[BrokerConnection, BrokerConnection], tuple[int, int]
+                    ]:
                         barrier.wait()  # Wait for all threads to be ready
                         with (
                             queue.get_connection() as conn1,
@@ -241,7 +246,14 @@ class TestQueueConnectionManager:
                             )
                             return (
                                 (conn1, conn2),
-                                (conn1._runner.instance_id, conn2._runner.instance_id),
+                                (
+                                    cast(
+                                        SQLiteRunner, getattr(conn1, "_runner")
+                                    ).instance_id,
+                                    cast(
+                                        SQLiteRunner, getattr(conn2, "_runner")
+                                    ).instance_id,
+                                ),
                             )
 
                     with concurrent.futures.ThreadPoolExecutor(
@@ -264,7 +276,7 @@ class TestQueueConnectionManager:
 
                     # But all should share the same underlying DBConnection object
                     assert queue.conn is not None, "Should have persistent DBConnection"
-                connections = None  # Clear to release references
+                connections.clear()  # Clear to release references
             finally:
                 # Force garbage collection to clean up any remaining references
                 gc.collect()
@@ -272,13 +284,15 @@ class TestQueueConnectionManager:
                 # Short sleep for Windows file handle finalization
                 time.sleep(0.2)
 
-    def test_persistent_queue_cross_thread_close_does_not_warn(self, tmp_path):
+    def test_persistent_queue_cross_thread_close_does_not_warn(
+        self, tmp_path: Path
+    ) -> None:
         """Persistent queues should close cleanly from a different thread."""
         queue = Queue("test", db_path=str(tmp_path / "test.db"), persistent=True)
         queue.write("hello")
         assert list(queue.peek_generator()) == ["hello"]
 
-        def close_queue():
+        def close_queue() -> list[warnings.WarningMessage]:
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter("always", ResourceWarning)
                 queue.close()
@@ -294,11 +308,13 @@ class TestQueueConnectionManager:
         ]
         assert resource_warnings == []
 
-    def test_persistent_queue_close_cleans_worker_thread_connections(self, tmp_path):
+    def test_persistent_queue_close_cleans_worker_thread_connections(
+        self, tmp_path: Path
+    ) -> None:
         """Closing a persistent queue cleans connections created by workers."""
         queue = Queue("test", db_path=str(tmp_path / "test.db"), persistent=True)
 
-        def use_queue(index):
+        def use_queue(index: int) -> None:
             queue.write(f"message-{index}")
             assert list(queue.peek_generator())
 
@@ -319,7 +335,7 @@ class TestQueueConnectionManager:
         ]
         assert resource_warnings == []
 
-    def test_connection_type_consistency(self):
+    def test_connection_type_consistency(self) -> None:
         """Test that both modes return BrokerDB for consistency."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -353,7 +369,7 @@ class TestQueueConnectionManager:
                 if ephemeral_queue:
                     ephemeral_queue.close()
 
-    def test_connection_error_handling(self):
+    def test_connection_error_handling(self) -> None:
         """Test that connection errors are properly handled."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -375,7 +391,7 @@ class TestQueueConnectionManager:
                     messages = list(conn.peek_generator("test", with_timestamps=False))
                     assert messages == ["message"]
 
-    def test_mixed_mode_operations(self):
+    def test_mixed_mode_operations(self) -> None:
         """Test that persistent and ephemeral queues can coexist."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -410,7 +426,7 @@ class TestQueueConnectionManager:
                 if ephemeral_q:
                     ephemeral_q.close()
 
-    def test_persistent_avoids_reconnection_overhead(self):
+    def test_persistent_avoids_reconnection_overhead(self) -> None:
         """Test that persistent mode avoids reconnecting and re-running PRAGMAs."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -419,9 +435,11 @@ class TestQueueConnectionManager:
             setup_calls = []
             original_setup = SQLiteRunner.setup_with_stop_event
 
-            def tracked_setup(self, phase, stop_event):
+            def tracked_setup(
+                self: SQLiteRunner, phase: object, stop_event: threading.Event | None
+            ) -> None:
                 setup_calls.append((self.instance_id, phase))
-                return original_setup(self, phase, stop_event)
+                return original_setup(self, cast(SetupPhase, phase), stop_event)
 
             # Test persistent mode first
             queue1 = None
@@ -499,7 +517,7 @@ class TestQueueConnectionManager:
                 if queue2:
                     queue2.close()
 
-    def test_persistent_connection_reuse(self):
+    def test_persistent_connection_reuse(self) -> None:
         """Test that persistent mode reuses the same database connection."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
@@ -508,7 +526,7 @@ class TestQueueConnectionManager:
             init_calls = []
             original_init = SQLiteRunner.__init__
 
-            def tracked_init(self, *args, **kwargs):
+            def tracked_init(self: SQLiteRunner, *args: Any, **kwargs: Any) -> None:
                 result = original_init(self, *args, **kwargs)
                 init_calls.append(self.instance_id)
                 return result
