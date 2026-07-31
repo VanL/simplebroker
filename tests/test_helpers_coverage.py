@@ -1,4 +1,5 @@
 """Focused coverage for helper edge cases."""
+# mypy: disable-error-code=no-untyped-def
 
 from __future__ import annotations
 
@@ -209,7 +210,7 @@ def test_interruptible_sleep_handles_zero_and_interrupts() -> None:
             return True
 
     stop_event = StopEvent()
-    assert interruptible_sleep(1.0, stop_event, chunk_size=0.01) is False
+    assert interruptible_sleep(1.0, stop_event) is False  # type: ignore[arg-type]
     assert stop_event.waits == 1
 
 
