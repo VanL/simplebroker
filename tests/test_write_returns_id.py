@@ -63,7 +63,7 @@ def test_retry_path_returns_surviving_row_id(broker):
         seam = "_reserve_candidates"
         original = broker._timestamp_gen._reserve_candidates
 
-        def collide_twice(count):
+        def collide_twice(count=None):
             nonlocal calls
             calls += 1
             if calls <= 2:
@@ -74,7 +74,7 @@ def test_retry_path_returns_surviving_row_id(broker):
         seam = "generate"
         original = broker._timestamp_gen.generate
 
-        def collide_twice():
+        def collide_twice(count=None):
             nonlocal calls
             calls += 1
             if calls <= 2:
@@ -106,14 +106,14 @@ def test_retry_exhaustion_raises_without_returning(broker):
         seam = "_reserve_candidates"
         original = broker._timestamp_gen._reserve_candidates
 
-        def conflict(count):
+        def conflict(count=None):
             return [occupant_ts]
 
     else:
         seam = "generate"
         original = broker._timestamp_gen.generate
 
-        def conflict():
+        def conflict(count=None):
             return occupant_ts
 
     setattr(broker._timestamp_gen, seam, conflict)
