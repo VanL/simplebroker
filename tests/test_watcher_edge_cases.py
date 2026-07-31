@@ -5,8 +5,9 @@ import logging
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn, cast
 from unittest.mock import Mock, patch
 
 import pytest
@@ -37,12 +38,18 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
     def test_invalid_database_owner_type_is_rejected(self) -> None:
         with pytest.raises(TypeError, match="Watcher db= must be a path"):
-            QueueWatcher("queue", lambda message, timestamp: None, db=object())
+            QueueWatcher(
+                "queue", lambda message, timestamp: None, db=cast(Any, object())
+            )
 
     def test_invalid_handler_type(self, broker_target) -> None:
         """Test that non-callable handler raises TypeError."""
         with pytest.raises(TypeError, match="handler must be callable"):
-            QueueWatcher("queue", "not_callable", db=broker_target)
+            QueueWatcher(
+                "queue",
+                cast(Callable[[str, int], None], "not_callable"),
+                db=broker_target,
+            )
 
     def test_invalid_error_handler_type(self, broker_target) -> None:
         """Test that non-callable error_handler raises TypeError."""
@@ -55,7 +62,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 "queue",
                 handler,
                 db=broker_target,
-                error_handler="not_callable",
+                error_handler=cast(
+                    Callable[[Exception, str, int], bool | None], "not_callable"
+                ),
             )
 
     def test_environment_variable_parsing(self, broker_target) -> None:
@@ -334,6 +343,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
         def handler(_message: str, _timestamp: int) -> None:
             raise ValueError("instance-config-handler-error")
 
+        watcher: QueueWatcher | QueueMoveWatcher
         if watcher_kind == "queue":
             watcher = QueueWatcher(
                 "queue",
@@ -457,7 +467,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 watcher.stop()
                 original_drain()
 
-            watcher._drain_queue = failing_drain
+            watcher._drain_queue = failing_drain  # type: ignore[method-assign]  # intentional private retry seam
 
             # Run with timeout
             self.run_watcher_with_timeout(watcher, timeout=10.0)
@@ -495,7 +505,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 drain_count += 1
                 raise WatcherTestError("retry sleep should be interrupted")
 
-            watcher._drain_queue = failing_drain
+            watcher._drain_queue = failing_drain  # type: ignore[method-assign]  # intentional private retry seam
 
             watcher.run_forever()
 
@@ -537,8 +547,8 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 retry_results.append(result)
                 return result
 
-            watcher._drain_queue = failing_drain
-            watcher._handle_retry = recording_handle_retry
+            watcher._drain_queue = failing_drain  # type: ignore[method-assign]  # intentional private retry seam
+            watcher._handle_retry = recording_handle_retry  # type: ignore[method-assign, assignment]  # intentional private retry seam
             monkeypatch.setattr(watcher_module, "interruptible_sleep", lambda *_: True)
 
             with (
@@ -634,7 +644,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 # Subsequent calls - just call original
                 original_stop(*args, **kwargs)
 
-            watcher.stop = failing_stop
+            watcher.stop = failing_stop  # type: ignore[method-assign]  # intentional private cleanup seam
 
             with patch("simplebroker.watcher.logger") as mock_logger:
                 watcher.__exit__(None, None, None)
@@ -723,7 +733,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 msg = "Persistent failure"
                 raise WatcherTestError(msg)
 
-            watcher._drain_queue = failing_drain
+            watcher._drain_queue = failing_drain  # type: ignore[method-assign]  # intentional private retry seam
 
             # Patch time.monotonic to make timeout trigger quickly
             with patch("simplebroker.watcher.time.monotonic", mock_time):
@@ -753,7 +763,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 # Call original to maintain normal behavior
                 original_check_stop()
 
-            watcher._check_stop = mock_check_stop
+            watcher._check_stop = mock_check_stop  # type: ignore[method-assign]  # intentional private stop seam
 
             # Should exit after a few checks
             watcher.run_forever()
