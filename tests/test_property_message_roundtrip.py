@@ -20,6 +20,7 @@ not UTF-8 encodable, so write raises UnicodeEncodeError before any storage.
 from __future__ import annotations
 
 import itertools
+from typing import Literal
 
 import pytest
 from hypothesis import HealthCheck, example, given, settings
@@ -36,7 +37,10 @@ _uniq = itertools.count()
 # exclude_categories=("Cs",): see finding F8 — explicit st.characters()
 # includes surrogates unless told otherwise, and surrogates cannot be
 # UTF-8 encoded.
-_BODY_CHARS = st.characters(exclude_characters="\x00", exclude_categories=("Cs",))
+_SURROGATE_CATEGORY: Literal["Cs"] = "Cs"
+_BODY_CHARS = st.characters(
+    exclude_characters="\x00", exclude_categories=(_SURROGATE_CATEGORY,)
+)
 
 BODIES = st.text(alphabet=_BODY_CHARS, max_size=300)
 
