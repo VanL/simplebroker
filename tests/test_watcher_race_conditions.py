@@ -36,9 +36,9 @@ class ConcurrencyTestWatcher(QueueWatcher):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._pre_check_enabled = True
-        self._pre_check_delay = 0
-        self._drain_delay = 0
-        self._dispatch_delay = 0
+        self._pre_check_delay = 0.0
+        self._drain_delay = 0.0
+        self._dispatch_delay = 0.0
         self.pre_check_count = 0
         self.pre_check_operational_errors = 0
         self.drain_count = 0
