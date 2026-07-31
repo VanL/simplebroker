@@ -4,7 +4,7 @@ import importlib.util
 import os
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -69,7 +69,7 @@ def test_release_targets_format_expected_tags() -> None:
 def test_bare_dry_run_previews_next_patch_when_current_version_is_published(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def inspect(version: str, *, target: release.ReleaseTarget) -> release.ReleaseState:
+    def inspect(version: str, *, target: Any) -> Any:
         return release.ReleaseState(
             target=target,
             version=version,
@@ -397,6 +397,26 @@ def test_extension_test_mypy_paths_discover_python_tests(
     )
 
 
+def test_core_test_mypy_paths_discover_python_tests(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "simplebroker"
+    tests = project_root / "tests"
+    (tests / "nested").mkdir(parents=True)
+    (tests / "__pycache__").mkdir()
+    (tests / "alpha.py").write_text("", encoding="utf-8")
+    (tests / "nested" / "beta.py").write_text("", encoding="utf-8")
+    (tests / "__pycache__" / "ignored.py").write_text("", encoding="utf-8")
+    (tests / "notes.md").write_text("", encoding="utf-8")
+    monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
+
+    assert release._core_test_mypy_paths() == (
+        "tests/alpha.py",
+        "tests/nested/beta.py",
+    )
+
+
 def test_redis_prechecks_are_target_scoped() -> None:
     commands = release.build_precheck_commands(release.REDIS_RELEASE_TARGET)
     command_lines = _command_lines(commands)
@@ -421,6 +441,7 @@ def test_redis_prechecks_are_target_scoped() -> None:
     )
     assert "./bin/pytest-pg" not in text
     assert "extensions/simplebroker_pg" not in text
+    assert not any(" tests/" in command for command in mypy_commands)
 
 
 def test_pg_prechecks_are_target_scoped() -> None:
@@ -447,6 +468,7 @@ def test_pg_prechecks_are_target_scoped() -> None:
     )
     assert "./bin/pytest-redis" not in text
     assert "extensions/simplebroker_redis" not in text
+    assert not any(" tests/" in command for command in mypy_commands)
 
 
 def test_core_prechecks_cover_both_extensions() -> None:
@@ -475,6 +497,7 @@ def test_core_prechecks_cover_both_extensions() -> None:
     assert any(
         "extensions/simplebroker_redis/tests/" in command for command in mypy_commands
     )
+    assert any(" tests/" in command for command in mypy_commands)
 
 
 def test_batch_prechecks_deduplicate_shared_checks() -> None:
@@ -851,7 +874,7 @@ def test_backend_api_release_invariants_run_for_release_paths(
 ) -> None:
     calls: list[tuple[str, ...]] = []
 
-    def record(targets):
+    def record(targets: Iterable[Any]) -> None:
         calls.append(tuple(target.key for target in targets))
         raise RuntimeError("backend invariant")
 
@@ -868,7 +891,7 @@ def test_backend_api_release_invariants_do_not_depend_on_skip_checks(
 ) -> None:
     calls: list[tuple[str, ...]] = []
 
-    def record(targets):
+    def record(targets: Iterable[Any]) -> None:
         calls.append(tuple(target.key for target in targets))
         raise RuntimeError("backend invariant")
 
@@ -899,7 +922,7 @@ def test_backend_api_release_invariants_run_for_batch_release(
         ),
     )
 
-    def record(targets):
+    def record(targets: Iterable[Any]) -> None:
         calls.append(tuple(target.key for target in targets))
         raise RuntimeError("backend invariant")
 
@@ -913,7 +936,9 @@ def test_backend_api_release_invariants_run_for_batch_release(
     assert calls == [("pg", "redis")]
 
 
-def test_require_published_pg_baseline_accepts_published_version(monkeypatch) -> None:
+def test_require_published_pg_baseline_accepts_published_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     calls: list[tuple[str, str]] = []
 
     def version_exists(package_name: str, version: str) -> bool:
@@ -928,7 +953,7 @@ def test_require_published_pg_baseline_accepts_published_version(monkeypatch) ->
 
 
 def test_require_published_redis_baseline_accepts_published_version(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, str]] = []
 
@@ -943,7 +968,9 @@ def test_require_published_redis_baseline_accepts_published_version(
     assert calls == [("simplebroker-redis", "0.9.0")]
 
 
-def test_require_published_pg_baseline_rejects_unpublished_version(monkeypatch) -> None:
+def test_require_published_pg_baseline_rejects_unpublished_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         release,
         "pypi_version_exists",
@@ -955,7 +982,7 @@ def test_require_published_pg_baseline_rejects_unpublished_version(monkeypatch) 
 
 
 def test_require_published_redis_baseline_rejects_unpublished_version(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         release,
@@ -1007,10 +1034,10 @@ def test_discover_unpublished_releases_skips_published_targets(
         release.ROOT_RELEASE_TARGET.key: "3.7.0",
     }
 
-    def read_version(target) -> str:
+    def read_version(target: Any) -> str:
         return versions[target.key]
 
-    def inspect_state(version: str, *, target):
+    def inspect_state(version: str, *, target: Any) -> Any:
         return release.ReleaseState(
             target=target,
             version=version,
@@ -1456,7 +1483,7 @@ def test_repository_settings_reject_blanket_verified_actions(
 ) -> None:
     payloads = _repository_settings_payloads()
     selected_path = "/repos/VanL/simplebroker/actions/permissions/selected-actions"
-    selected = dict(payloads[selected_path])
+    selected = dict(payloads[selected_path])  # type: ignore[call-overload]
     selected["verified_allowed"] = True
     payloads[selected_path] = selected
     monkeypatch.setattr(
@@ -1475,7 +1502,7 @@ def test_repository_settings_require_github_owned_actions(
 ) -> None:
     payloads = _repository_settings_payloads()
     selected_path = "/repos/VanL/simplebroker/actions/permissions/selected-actions"
-    selected = dict(payloads[selected_path])
+    selected = dict(payloads[selected_path])  # type: ignore[call-overload]
     selected["github_owned_allowed"] = False
     payloads[selected_path] = selected
     monkeypatch.setattr(
@@ -1494,7 +1521,7 @@ def test_repository_settings_require_exact_third_party_action_patterns(
 ) -> None:
     payloads = _repository_settings_payloads()
     selected_path = "/repos/VanL/simplebroker/actions/permissions/selected-actions"
-    selected = dict(payloads[selected_path])
+    selected = dict(payloads[selected_path])  # type: ignore[call-overload]
     selected["patterns_allowed"] = [
         "astral-sh/setup-uv@*",
         "codecov/codecov-action@*",
@@ -1648,7 +1675,7 @@ def test_interrupted_release_rerun_reuses_existing_release_commit(
 ) -> None:
     sha = "a" * 40
     commands: list[tuple[str, ...]] = []
-    publications: list[tuple[tuple[release.ReleaseCandidate, ...], str]] = []
+    publications: list[tuple[tuple[Any, ...], str]] = []
     monkeypatch.setattr(
         release,
         "require_backend_api_release_invariants",
@@ -2226,7 +2253,7 @@ def _release_batch_dry_run_plans_one_commit(
     commands: list[tuple[tuple[str, ...], dict[str, Any]]] = []
     publications: list[
         tuple[
-            tuple[release.ReleaseCandidate, ...],
+            tuple[Any, ...],
             str,
             dict[str, Any],
         ]
