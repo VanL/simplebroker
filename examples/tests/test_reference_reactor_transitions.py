@@ -6,7 +6,7 @@ import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pytest
 
@@ -729,7 +729,7 @@ def test_pending_output_id_is_allocated_outside_sidecar_transaction(
         core = reactor._metadata_queue.conn.get_core()
         connection = core._runner.get_connection()
         transaction_states.append(bool(connection.in_transaction))
-        return original_generate_timestamp()
+        return cast(int, original_generate_timestamp())
 
     monkeypatch.setattr(
         reactor._output_queue,
