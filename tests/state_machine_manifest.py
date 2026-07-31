@@ -142,9 +142,9 @@ STATE_MACHINE_MANIFEST = (
     ),
     StateMachineEntry(
         machine_id="SM-SETUP-BUDGET",
-        owner_module="simplebroker.helpers",
+        owner_module="simplebroker._retry_policy",
         owner_name="SetupProgressBudget",
-        test_module="tests.test_helpers_coverage",
+        test_module="tests.test_retry_policy_coverage",
         table_name="SETUP_PROGRESS_BUDGET_TRANSITIONS",
         firing_test_name="test_setup_progress_budget_fires_transition_table",
     ),

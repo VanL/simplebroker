@@ -15,9 +15,9 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
+from simplebroker import _retry_policy
 from simplebroker import _runner as runner_module
 from simplebroker import db as db_module
-from simplebroker import helpers as helpers_module
 from simplebroker._backends.sqlite import runtime as sqlite_runtime
 from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import DatabaseError, IntegrityError, OperationalError
@@ -842,10 +842,10 @@ class TestSQLiteRunnerErrorHandling:
 
         core = _setup_budget_core(first_operation, second_operation)
 
-        monkeypatch.setattr(helpers_module.time, "monotonic", fake_monotonic)
-        monkeypatch.setattr(helpers_module.time, "time", lambda: 0.0)
-        monkeypatch.setattr(helpers_module, "interruptible_sleep", fake_sleep)
-        monkeypatch.setattr(helpers_module, "SETUP_RETRY_MAX_ELAPSED", 0.15)
+        monkeypatch.setattr(_retry_policy.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(_retry_policy.time, "time", lambda: 0.0)
+        monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
+        monkeypatch.setattr(_retry_policy, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
         core._setup_schema()
 
@@ -876,10 +876,10 @@ class TestSQLiteRunnerErrorHandling:
         core = _setup_budget_core(first_operation)
         core._stop_event = threading.Event()
 
-        monkeypatch.setattr(helpers_module.time, "monotonic", fake_monotonic)
-        monkeypatch.setattr(helpers_module.time, "time", lambda: 0.0)
-        monkeypatch.setattr(helpers_module, "interruptible_sleep", fake_sleep)
-        monkeypatch.setattr(helpers_module, "SETUP_RETRY_MAX_ELAPSED", 0.15)
+        monkeypatch.setattr(_retry_policy.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(_retry_policy.time, "time", lambda: 0.0)
+        monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
+        monkeypatch.setattr(_retry_policy, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
         with pytest.raises(OperationalError) as exc_info:
             core._setup_schema()
@@ -934,8 +934,8 @@ class TestSQLiteRunnerErrorHandling:
         core._lock = threading.RLock()  # type: ignore[assignment]
         core._stop_event = threading.Event()
 
-        monkeypatch.setattr(helpers_module.time, "monotonic", fake_monotonic)
-        monkeypatch.setattr(helpers_module, "SETUP_RETRY_MAX_ELAPSED", 0.15)
+        monkeypatch.setattr(_retry_policy.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(_retry_policy, "SETUP_RETRY_MAX_ELAPSED", 0.15)
 
         core._setup_schema()
 

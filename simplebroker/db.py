@@ -74,6 +74,12 @@ from ._message_search import (
     validate_body_contains,
     validate_body_search_limit,
 )
+from ._retry_policy import (
+    SetupProgressBudget,
+    _execute_connection_retry,
+    _execute_with_retry,
+    execute_setup_with_retry,
+)
 from ._runner import (
     SetupPhase,
     SQLiteRunner,
@@ -89,12 +95,6 @@ from ._timestamp import (
     TimestampGenerator,
     decode_hybrid_timestamp,
     validate_timestamp_bound,
-)
-from .helpers import (
-    SetupProgressBudget,
-    _execute_connection_retry,
-    _execute_with_retry,
-    execute_setup_with_retry,
 )
 from .metadata import QueueRenameResult, QueueStats
 

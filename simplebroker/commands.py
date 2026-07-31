@@ -33,10 +33,10 @@ from ._constants import (
 from ._dump import dump_lines, load_lines
 from ._exceptions import IntegrityError, TimestampError
 from ._message_id import INVALID_MESSAGE_ID_MESSAGE, normalize_message_id
+from ._paths import _is_valid_sqlite_db
 from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
 from .db import BrokerDB, DBConnection
-from .helpers import _is_valid_sqlite_db
 from .metadata import QueueRenameResult, QueueStats
 from .sbqueue import Queue, _close_iterator
 from .watcher import QueueMoveWatcher, QueueWatcher, StopWatching

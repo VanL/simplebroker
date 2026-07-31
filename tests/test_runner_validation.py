@@ -10,10 +10,9 @@ from typing import Any
 
 import pytest
 
-from simplebroker import Queue
+from simplebroker import Queue, _retry_policy
 from simplebroker import _phaselock as phaselock_module
 from simplebroker import _runner as runner_module
-from simplebroker import helpers as helpers_module
 from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import OperationalError, StopException
 from simplebroker._phaselock import PhaseLockService
@@ -404,7 +403,7 @@ class TestSQLiteRunnerValidation:
         """Forward-moving contention must not fail at a fixed attempt count."""
 
         monkeypatch.setattr(
-            helpers_module,
+            _retry_policy,
             "interruptible_sleep",
             lambda wait, stop_event=None: True,
         )
@@ -439,8 +438,8 @@ class TestSQLiteRunnerValidation:
             return True
 
         monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
-        monkeypatch.setattr(helpers_module, "interruptible_sleep", fake_sleep)
-        monkeypatch.setattr(helpers_module, "bounded_jitter", lambda wait: wait)
+        monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
+        monkeypatch.setattr(_retry_policy, "bounded_jitter", lambda wait: wait)
         runner = _TransientWriteLockRunner(str(tmp_path / "broker.db"))
         core = BrokerCore(runner)
         runner.write_lock_failures_remaining = 10_000
@@ -473,8 +472,8 @@ class TestSQLiteRunnerValidation:
             return True
 
         monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
-        monkeypatch.setattr(helpers_module, "interruptible_sleep", fake_sleep)
-        monkeypatch.setattr(helpers_module, "bounded_jitter", lambda wait: wait)
+        monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
+        monkeypatch.setattr(_retry_policy, "bounded_jitter", lambda wait: wait)
         monkeypatch.setattr("simplebroker.db.OPERATION_RETRY_MAX_ELAPSED", 0.15)
         monkeypatch.setattr("simplebroker.db.OPERATION_RETRY_MAX_DELAY", 0.1)
         runner = _ForwardProgressWriteLockRunner(str(tmp_path / "broker.db"))

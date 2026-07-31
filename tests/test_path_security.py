@@ -6,7 +6,7 @@ from typing import cast
 import pytest
 
 from simplebroker import _constants
-from simplebroker.helpers import _validate_safe_path_components
+from simplebroker._paths import _validate_safe_path_components
 
 
 class TestValidateSafePathComponents:
@@ -365,7 +365,7 @@ class TestBackwardCompatibilityPathTraversal:
 
     def test_path_traversal_function_compatibility(self) -> None:
         """Test that the old function still works as expected."""
-        from simplebroker.helpers import _validate_path_traversal_prevention
+        from simplebroker._paths import _validate_path_traversal_prevention
 
         # Should not raise for valid paths
         _validate_path_traversal_prevention("valid.db")

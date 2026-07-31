@@ -22,6 +22,7 @@ import pytest
 
 from simplebroker import Queue, _broker_session
 from simplebroker._exceptions import OperationalError
+from simplebroker._retry_policy import _execute_with_retry
 from simplebroker._runner import SQLiteRunner
 from simplebroker.db import (
     _LOCK_PROBE_QUANTUM,
@@ -29,7 +30,6 @@ from simplebroker.db import (
     BrokerDB,
     _PoisonAwareRLock,
 )
-from simplebroker.helpers import _execute_with_retry
 
 from .helper_scripts.timing import scale_timeout_for_ci
 

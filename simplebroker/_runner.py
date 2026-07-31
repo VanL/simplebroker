@@ -36,7 +36,7 @@ from ._phaselock import (
     PhaseLockTimeout,
     PhaseLockUnavailable,
 )
-from .helpers import (
+from ._retry_policy import (
     SETUP_PHASE_LOCK_TIMEOUT,
     execute_setup_with_retry,
     setup_busy_timeout_ms,

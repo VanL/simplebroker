@@ -15,12 +15,7 @@ from ._constants import (
     load_config,
 )
 from ._exceptions import DatabaseError
-from ._project_config import (
-    project_config_path_for_directory,
-    resolve_project_target,
-)
-from ._targets import BrokerTarget
-from .helpers import (
+from ._paths import (
     _find_project_database,
     _resolve_symlinks_safely,
     _validate_database_parent_directory,
@@ -31,6 +26,11 @@ from .helpers import (
     _validate_working_directory,
     ensure_compound_db_path,
 )
+from ._project_config import (
+    project_config_path_for_directory,
+    resolve_project_target,
+)
+from ._targets import BrokerTarget
 from .project import _configured_backend_target, resolve_broker_target
 
 # Cache the parser for better startup performance

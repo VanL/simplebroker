@@ -9,13 +9,13 @@ from typing import Any, cast
 
 from ._backend_plugins import BackendPlugin, get_backend_plugin
 from ._constants import load_config, resolve_config
+from ._paths import _find_project_database
 from ._project_config import (
     find_project_config,
     project_config_path_for_directory,
     resolve_project_target,
 )
 from ._targets import BrokerTarget
-from .helpers import _find_project_database
 
 
 def _config_dict(config: dict[str, Any] | None) -> dict[str, Any]:

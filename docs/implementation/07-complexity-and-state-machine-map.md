@@ -193,7 +193,7 @@ table and manifest below are authoritative for the completed implementation.
 | `SM-SQLITE-SCHEMA`, `SM-DUMP-LOAD`, `SM-TIMESTAMP-GENERATOR`, `SM-SQLITE-RUNNER` | `tests/test_core_persistence_transition_tables.py` |
 | `SM-DARWIN-XATTR`, `SM-PHASE-LOCK` | `tests/test_phaselock_transition_tables.py` |
 | `SM-CONNECTION`, `SM-PROCESS-SESSION`, `SM-DELIVERY-POISON` | `tests/test_connection_transition_tables.py` |
-| `SM-SETUP-BUDGET` | `tests/test_helpers_coverage.py` |
+| `SM-SETUP-BUDGET` | `tests/test_retry_policy_coverage.py` |
 | `SM-POLLING`, `SM-WATCHER-LIFECYCLE`, `SM-CLI-WATCH` | `tests/test_watcher_transition_tables.py` |
 | `SM-PG-LISTENER`, `SM-PG-VACUUM` | `extensions/simplebroker_pg/tests/test_pg_state_machine_transitions.py` |
 | `SM-REDIS-BROADCAST`, `SM-REDIS-WRITE`, `SM-REDIS-ACTIVITY-LISTENER`, `SM-REDIS-RUNNER` | `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py` |
@@ -224,7 +224,7 @@ remain observable.
 | `SM-PHASE-LOCK` (confirmed) | `simplebroker/_phaselock.py::PhaseLockService` | `tests/test_phaselock.py` | `tests/test_phaselock.py` | Advisory ownership and durable markers determine whether later processes wait, run, skip, cancel, or fail. |
 | `SM-CONNECTION` (confirmed) | `simplebroker/db.py::DBConnection` | `tests/test_db_connection_lifecycle.py` | connection lifecycle, fork, and process-session suites | Registry, thread-local handle, runner/core ownership, and closed state govern reuse and cleanup across threads and calls. |
 | `SM-PROCESS-SESSION` (confirmed) | `simplebroker/_broker_session.py::_ProcessBrokerSession` | `tests/test_process_broker_session.py` | `tests/test_process_broker_session.py` | Session lifecycle and runner leases constrain connection creation, reuse, release, and post-close calls across threads. |
-| `SM-SETUP-BUDGET` (confirmed) | `simplebroker/helpers.py::SetupProgressBudget` | `tests/test_helpers_coverage.py` | helpers coverage and runner setup/error suites | Last-progress time and idle budget persist across setup operations and choose wait, refresh, timeout, or cancellation. |
+| `SM-SETUP-BUDGET` (confirmed) | `simplebroker/_retry_policy.py::SetupProgressBudget` | `tests/test_retry_policy_coverage.py` | retry-policy coverage and runner setup/error suites | Last-progress time and idle budget persist across setup operations and choose wait, refresh, timeout, or cancellation. |
 | `SM-DELIVERY-POISON` (confirmed) | `simplebroker/db.py` sidecar and transactional-generator ownership | `tests/test_cross_thread_finalization_poisoning.py` | cross-thread poisoning, generator, and released-backend probe suites | Owner identity, suspended transaction, poison, and first cause govern legal `next`, `throw`, `close`, commit, and rollback effects across threads and yields. |
 | `SM-POLLING` (confirmed) | `simplebroker/watcher.py::PollingStrategy` | `tests/test_watcher.py` | watcher, burst-mode, edge-case, stop, and race suites | Waiter identity, burst/backoff phase, activity hints, and stop state persist across waits and callbacks. |
 | `SM-WATCHER-LIFECYCLE` (confirmed) | `simplebroker/watcher.py::BaseWatcher` | watcher lifecycle table beside `tests/test_watcher.py` | watcher lifecycle, cleanup, edge-case, concurrency, stop, and race suites | Thread state, waiter attachment, retry state, terminal exception propagation, and stop state govern legal start, run, stop, join, and cleanup calls. |

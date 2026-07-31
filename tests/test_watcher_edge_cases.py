@@ -14,7 +14,7 @@ import pytest
 
 import simplebroker.watcher as watcher_module
 from simplebroker._exceptions import DatabaseError, OperationalError
-from simplebroker.helpers import interruptible_sleep
+from simplebroker._retry import interruptible_sleep
 from simplebroker.watcher import (
     PollingStrategy,
     QueueMoveWatcher,

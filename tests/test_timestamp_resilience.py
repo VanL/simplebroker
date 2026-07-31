@@ -17,7 +17,7 @@ import warnings
 
 import pytest
 
-from simplebroker import helpers
+from simplebroker import _retry_policy
 from simplebroker._backend_plugins import BACKEND_API_VERSION
 from simplebroker._exceptions import OperationalError, TimestampError
 from simplebroker._timestamp import TimestampGenerator
@@ -327,7 +327,7 @@ def test_timestamp_retry_survives_more_than_fifteen_lock_errors(monkeypatch):
     """A contention burst longer than 15 attempts must not kill the writer;
     the retry budget is a wall-clock window, not a fixed attempt count."""
     monkeypatch.setattr(
-        helpers, "interruptible_sleep", lambda wait, stop_event=None: True
+        _retry_policy, "interruptible_sleep", lambda wait, stop_event=None: True
     )
 
     plugin = _LockedAdvancePlugin(fail_times=20)
@@ -353,7 +353,7 @@ def test_timestamp_retry_gives_up_after_elapsed_budget(monkeypatch):
         return True
 
     monkeypatch.setattr("simplebroker._retry.time.monotonic", fake_monotonic)
-    monkeypatch.setattr(helpers, "interruptible_sleep", fake_sleep)
+    monkeypatch.setattr(_retry_policy, "interruptible_sleep", fake_sleep)
 
     plugin = _LockedAdvancePlugin(fail_times=10**9)
     gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]

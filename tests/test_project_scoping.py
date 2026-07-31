@@ -23,18 +23,18 @@ from unittest.mock import patch
 import pytest
 
 from simplebroker._constants import DEFAULT_DB_NAME, _parse_bool, load_config
+from simplebroker._paths import (
+    _find_project_database,
+    _is_ancestor_of_working_directory,
+    _is_filesystem_root,
+    _is_valid_sqlite_db,
+)
 from simplebroker.cli import (
     _resolve_database_path,
     create_parser,
     main,
 )
 from simplebroker.db import BrokerDB
-from simplebroker.helpers import (
-    _find_project_database,
-    _is_ancestor_of_working_directory,
-    _is_filesystem_root,
-    _is_valid_sqlite_db,
-)
 
 TempDBCleanup = tuple[Path, Callable[[], None]]
 
@@ -278,7 +278,7 @@ class TestProjectDatabaseSearch:
         with BrokerDB(str(parent_db)):
             pass
         monkeypatch.setattr(
-            "simplebroker.helpers._same_filesystem",
+            "simplebroker._paths._same_filesystem",
             lambda current, parent: current != nested.resolve(),
         )
 
@@ -620,7 +620,7 @@ class TestCrossPlatformCompatibility:
     @pytest.mark.skipif(os.name != "nt", reason="Windows-specific test")
     def test_windows_drive_root_detection(self) -> None:
         """Test Windows drive root boundary detection."""
-        from simplebroker.helpers import _is_filesystem_root
+        from simplebroker._paths import _is_filesystem_root
 
         # Mock Windows environment
         with patch("os.name", "nt"):
@@ -631,7 +631,7 @@ class TestCrossPlatformCompatibility:
     @pytest.mark.skipif(os.name == "nt", reason="Unix-specific test")
     def test_unix_root_detection(self) -> None:
         """Test Unix filesystem root detection."""
-        from simplebroker.helpers import _is_filesystem_root
+        from simplebroker._paths import _is_filesystem_root
 
         root_path = Path("/")
         assert _is_filesystem_root(root_path) is True

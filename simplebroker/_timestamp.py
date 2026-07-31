@@ -25,7 +25,7 @@ from ._constants import (
     WAIT_FOR_NEXT_INCREMENT,
 )
 from ._exceptions import IntegrityError, OperationalError, TimestampError
-from .helpers import _execute_with_retry
+from ._retry_policy import _execute_with_retry
 
 if TYPE_CHECKING:
     from ._runner import SQLRunner

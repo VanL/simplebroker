@@ -89,9 +89,10 @@ from ._constants import (
     resolve_config,
 )
 from ._exceptions import OperationalError, StopException
+from ._retry import interruptible_sleep
+from ._retry_policy import _execute_watcher_operational_retry
 from ._targets import BrokerTarget
 from .db import BrokerDB
-from .helpers import _execute_watcher_operational_retry, interruptible_sleep
 from .sbqueue import Queue
 
 if TYPE_CHECKING:

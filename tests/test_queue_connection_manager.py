@@ -12,11 +12,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from simplebroker import Queue, helpers
+from simplebroker import Queue, _retry_policy
 from simplebroker._exceptions import StopException
+from simplebroker._retry_policy import _execute_connection_retry
 from simplebroker._runner import SetupPhase, SQLiteRunner
 from simplebroker.db import BrokerConnection, BrokerCore, BrokerDB, DBConnection
-from simplebroker.helpers import _execute_connection_retry
 
 
 def test_connection_retry_sleep_count(
@@ -28,7 +28,7 @@ def test_connection_retry_sleep_count(
         sleeps.append(wait)
         return True
 
-    monkeypatch.setattr(helpers, "interruptible_sleep", capture)
+    monkeypatch.setattr(_retry_policy, "interruptible_sleep", capture)
 
     def fail() -> None:
         raise RuntimeError("connection failed")
@@ -47,7 +47,7 @@ def test_connection_stop_during_sleep_raises_stop_exception(
     def interrupt_sleep(_wait: float, _ev: threading.Event | None) -> bool:
         return False
 
-    monkeypatch.setattr(helpers, "interruptible_sleep", interrupt_sleep)
+    monkeypatch.setattr(_retry_policy, "interruptible_sleep", interrupt_sleep)
 
     def fail() -> None:
         raise RuntimeError("connection failed")

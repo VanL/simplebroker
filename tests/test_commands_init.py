@@ -21,9 +21,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from simplebroker._constants import EXIT_SUCCESS, SIMPLEBROKER_MAGIC
+from simplebroker._paths import _is_valid_sqlite_db
 from simplebroker.commands import cmd_init
 from simplebroker.db import DBConnection
-from simplebroker.helpers import _is_valid_sqlite_db
 
 from .conftest import run_cli
 

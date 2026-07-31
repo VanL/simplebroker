@@ -2,7 +2,7 @@
 
 import pytest
 
-from simplebroker.helpers import _is_compound_db_name
+from simplebroker._paths import _is_compound_db_name
 
 
 class TestIsCompoundDbName:

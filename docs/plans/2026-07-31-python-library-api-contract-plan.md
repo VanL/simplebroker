@@ -269,12 +269,46 @@ A `helpers/` package with a re-exporting `__init__` was rejected: it organizes
 the interior while leaving `from .helpers import X` working, so no call site
 migrates and the discoverability problem survives behind a tidier facade.
 
-### Sequencing constraint
+### Sequencing constraint (resolved)
 
-The `helpers.py` split rewrites imports in roughly eight test modules. A
-concurrent change (`2026-07-31-core-test-mypy-gate-plan.md`) is rewriting most
-of `tests/` for the strict mypy gate. The split lands **after** that work
-settles; the signature correction and the docstring touch neither.
+The `helpers.py` split rewrites imports across the test suite, which collided
+with `2026-07-31-core-test-mypy-gate-plan.md` rewriting most of `tests/`. It
+waited until none of the importing test modules were in flight, then landed.
+
+### Split evidence
+
+An AST pass over module-level name usage found the two halves share **zero**
+names — no constant, import, or helper crosses the boundary at
+`_is_filesystem_root`. That is what made the split mechanical rather than a
+judgment call.
+
+Final shape:
+
+- `_retry_policy.py` — retry and setup policy. `_retry.py` owns the mechanism
+  (stop conditions, wait strategies, the execution loop); this owns which
+  errors are retryable, the setup budgets, and the progress-stall guard.
+- `_paths.py` — filesystem path security and project-database discovery.
+
+`helpers.py` re-exported `interruptible_sleep` from `_retry.py`, so four
+importers were reaching the retry mechanism through a path-security module.
+Those now import from `_retry.py` directly.
+
+`tests/test_helpers_coverage.py` was split to mirror the source, into
+`test_retry_policy_coverage.py` (696 lines) and `test_paths_coverage.py`
+(227 lines). An AST comparison of the deleted file against the two new ones
+confirms all 38 tests survive with none lost, duplicated, or renamed — the
+silent-loss failure mode a green suite would not have caught. The
+state-machine manifest's `test_module` binding and
+`docs/implementation/07-complexity-and-state-machine-map.md` were repointed in
+the same change.
+
+Import forms that escaped successive greps, recorded because the pattern
+recurs: `from .helpers import`, `from simplebroker import helpers`,
+`from simplebroker import helpers as helpers_module`, and
+`from simplebroker import Queue, helpers`. Only a sweep for the bare word
+found the last one. Local `as helpers` aliases were removed rather than left
+pointing at `_retry_policy`, since an alias named for a deleted module is the
+same defect at smaller scale.
 
 ### Open decision for the owner
 
