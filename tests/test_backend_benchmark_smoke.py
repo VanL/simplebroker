@@ -3,6 +3,7 @@
 import os
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -80,7 +81,7 @@ def test_postgres_benchmark_docker_mode_manages_container(
     monkeypatch.setattr(
         backend_benchmark,
         "_start_postgres_container",
-        lambda: calls.append(("start", "")) or ("pg-container", dsn),
+        lambda: (cast(Any, calls).append(("start", "")), ("pg-container", dsn))[1],
     )
     monkeypatch.setattr(
         backend_benchmark,
@@ -241,7 +242,7 @@ def test_redis_benchmark_docker_mode_manages_container(
     monkeypatch.setattr(
         backend_benchmark,
         "_start_valkey_container",
-        lambda: calls.append(("start", "")) or ("redis-container", url),
+        lambda: (cast(Any, calls).append(("start", "")), ("redis-container", url))[1],
     )
     monkeypatch.setattr(
         backend_benchmark,
@@ -386,7 +387,7 @@ def test_pg_docker_cli_ignores_stale_env_dsn(
     monkeypatch.setattr(
         backend_benchmark,
         "run_benchmarks",
-        lambda settings: captured_settings.append(settings) or [],
+        lambda settings: (cast(Any, captured_settings).append(settings), [])[1],
     )
 
     assert (
@@ -416,7 +417,7 @@ def test_redis_docker_cli_ignores_stale_env_url(
     monkeypatch.setattr(
         backend_benchmark,
         "run_benchmarks",
-        lambda settings: captured_settings.append(settings) or [],
+        lambda settings: (cast(Any, captured_settings).append(settings), [])[1],
     )
 
     assert (
