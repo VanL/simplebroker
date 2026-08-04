@@ -147,3 +147,11 @@ Dated moment-tier entries (foldable after age floor and distillation).
   in the promoted clause separately; grouped labels such as “duplicate
   handling” can hide normalization-order, empty-input, and high-water cases.
   (Phase 2A message-identity cutover completed-work review.)
+- 2026-08-04: Hand-maintained counts and completeness claims ("32 config
+  keys", "full catalog") drift from code and multiply across routing
+  surfaces (README, llms.txt, CHANGELOG). Verify any counted or
+  completeness claim mechanically against its source (`load_config()`,
+  `__all__`, an index) before writing it, and prefer making a "full"
+  claim true over weakening it on every surface that repeats it. Two
+  independent reviewers caught the same defect class in one migration.
+  (Docs IA plan, completion review CR2 + post-completion PC1.)
