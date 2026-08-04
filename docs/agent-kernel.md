@@ -347,7 +347,8 @@ SimpleBroker will comply; your product will not.
 
 | Need | Where |
 |------|--------|
-| Full command/flag/env contract | `README.md` |
+| Full command/flag contract | `README.md` |
+| Full config/env/scoping catalog | `docs/guides/configuration.md` |
 | Behavior deltas | `CHANGELOG.md` |
 | Machine-readable doc index | root `llms.txt` |
 | Safe job reservation | Move-to-inflight recipe above; README Critical Safety |

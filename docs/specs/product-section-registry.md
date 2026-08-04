@@ -44,7 +44,7 @@ contributing are **human entry** (not separate SoT rows). Project-scoping
 | Exact IDs / high-water / generate timestamp | `[SB-ID-*]` |
 | Sidecar / Command layer / Embedding | `[SB-API-7]`, `[SB-API-10]`, `[SB-API-1]`–`[SB-API-12]` |
 | Fan-out / broadcast examples | `[SB-BCAST-*]` |
-| Environment Variables / Project Scoping catalogs | Human catalog; targets/discovery callables `[SB-API-2]` |
+| Environment Variables (common-settings table; full catalog in `docs/guides/configuration.md`) / Project Scoping summary (full treatment in the same guide) | Human catalog; targets/discovery callables `[SB-API-2]` |
 
 ## Transition rule
 

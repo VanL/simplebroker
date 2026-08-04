@@ -660,6 +660,8 @@ equivalence (Testing plan).
 
 | Source (README section, pre-move lines) | Destination (file + anchor) or deleted-as-duplicate citation | Commit | Verified by |
 |-----------------------------------------|--------------------------------------------------------------|--------|-------------|
+| `### Environment Variables` full catalog (1577–1660) | `docs/guides/configuration.md` §Environment variables (verbatim); README keeps 6-key common-settings table + link | TB.1 | Phase B slice review |
+| `## Project Scoping` all subsections (1662–2057): basic/global scoping, DB/config names, error behavior, init, precedence list + notes + examples, security notes, common use cases | `docs/guides/configuration.md` §Project scoping + §Security (verbatim except: decision flowchart deleted-as-duplicate — its content is the §Precedence rules numbered list + notes, same guide; five Common Use Cases collapsed to §Worked example with an explicit sentence naming the covered shapes) | TB.1 | Phase B slice review |
 
 ## Related Plans
 
