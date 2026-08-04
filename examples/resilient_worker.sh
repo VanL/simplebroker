@@ -21,10 +21,13 @@ command -v broker >/dev/null || { echo "Error: broker command is required but no
 DB="${BROKER_DB:-${1:-.broker.db}}"
 QUEUE="${QUEUE:-events}"
 CHECKPOINT_FILE="${CHECKPOINT_FILE:-./.broker-worker-checkpoint}"
-BATCH_SIZE="${BATCH_SIZE:-100}"   # messages per batch before a batch-complete report
+# Messages per batch before a batch-complete report. Empty/unset uses the
+# default; any set value must be digits only and >= 1 (00, 0 rejected).
+BATCH_SIZE="${BATCH_SIZE:-100}"
 case "$BATCH_SIZE" in
-    ''|*[!0-9]*|0) echo "Error: BATCH_SIZE must be a positive integer" >&2; exit 1 ;;
+    ''|*[!0-9]*) echo "Error: BATCH_SIZE must be a positive integer" >&2; exit 1 ;;
 esac
+[ "$BATCH_SIZE" -ge 1 ] || { echo "Error: BATCH_SIZE must be a positive integer" >&2; exit 1; }
 
 # Example processing function — replace with your business logic.
 # Defined before the main loop so Bash can resolve it on first call.
