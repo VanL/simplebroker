@@ -35,7 +35,7 @@ def test_readme_exit_codes_link_cli_contract() -> None:
 
 
 def test_command_layer_does_not_advertise_an_extra_exit_code() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    section = readme.split("### Command layer", 1)[1].split("\n## ", 1)[0]
+    guide = (ROOT / "docs" / "guides" / "python.md").read_text(encoding="utf-8")
+    section = guide.split("### Command layer", 1)[1].split("\n## ", 1)[0]
 
     assert "`124`" not in section

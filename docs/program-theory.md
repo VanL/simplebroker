@@ -78,7 +78,7 @@ A backend supplies persistence and atomic storage operations. SQLite is the
 local default. Optional services can supply shared storage while owning their
 service topology, replication, consistency and availability mechanisms, and
 recovery. The registered embedding concern and
-[README Embedding section](../README.md#embedding-simplebroker-in-your-project)
+[embedding guide](guides/python.md#embedding-simplebroker-in-your-project)
 own the exact current capability statements.
 
 The application owns message meaning, task execution, business retries,
@@ -100,7 +100,7 @@ owner define exact current behavior.
 | Watcher/waiter | Adapter from queue activity to bounded waiting or consumption | SimpleBroker | Registry `Delivery guarantees, claim/peek/watch safety` → [`[SB-DELIVERY-*]`](specs/11-delivery.md); modes remain in [README Real-time Queue Watching](../README.md#real-time-queue-watching) |
 | Process session | Process-local owner of reusable backend resources | SimpleBroker | Registry `Python library / embedding API surfaces` → [`[SB-API-*]`](specs/16-python-library-api.md); rationale in [process-session ownership](implementation/06-process-session-core-ownership.md) |
 | Broker core | Queue-operation protocol and shared semantics over one resolved target | SimpleBroker | Registry `Queue and broker residual operations` → [`[SB-OPS-*]`](specs/17-ops.md); Registry `Broadcast selection, creation, and atomicity` → [`[SB-BCAST-*]`](specs/12-broadcast.md); specialized identity and delivery contracts remain with their registered rows |
-| Backend adapter/runner | Storage-specific atomic realization and substrate-resource ownership | Backend implementation | Registry `Python library / embedding API surfaces` → [`[SB-API-11]`](specs/16-python-library-api.md); [README Advanced Extensions](../README.md#advanced-custom-extensions) |
+| Backend adapter/runner | Storage-specific atomic realization and substrate-resource ownership | Backend implementation | Registry `Python library / embedding API surfaces` → [`[SB-API-11]`](specs/16-python-library-api.md); [Python guide extensions](guides/python.md#advanced-custom-extensions) |
 
 ## Design principles [THEORY-4]
 
