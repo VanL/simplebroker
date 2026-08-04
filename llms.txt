@@ -26,6 +26,8 @@
 - [AGENTS.md](AGENTS.md): Entry point for agents working *in this repository* (process, plans, reviews)
 - [SECURITY.md](SECURITY.md): Vulnerability reporting
 
+- [Storage schema and claim lifecycle](docs/implementation/09-storage-schema-and-claim-lifecycle.md): SQLite schema, claim-based deletion rationale, phase-lock setup coordination
+
 ## Agent context
 
 - [Program theory](docs/program-theory.md): Current conceptual account for repository design judgment (not exact behavior authority)

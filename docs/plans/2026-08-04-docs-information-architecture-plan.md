@@ -183,6 +183,7 @@ change.
 
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
+| Plan TB.2 / Appendix B (no spec) | New implementation doc named `07-storage-schema-and-claim-lifecycle.md` | Created as `09-storage-schema-and-claim-lifecycle.md` | Numbers 07 and 08 already exist in `docs/implementation/`; the plan was drafted without checking the index. Content and registration unchanged | n/a — plan-internal naming, no spec touched |
 
 (Empty at plan approval. Append one row per departure from this plan during
 execution; must not remain `pending` past the completion gate.)
@@ -662,6 +663,13 @@ equivalence (Testing plan).
 |-----------------------------------------|--------------------------------------------------------------|--------|-------------|
 | `### Environment Variables` full catalog (1577–1660) | `docs/guides/configuration.md` §Environment variables (verbatim); README keeps 6-key common-settings table + link | TB.1 | Phase B slice review |
 | `## Project Scoping` all subsections (1662–2057): basic/global scoping, DB/config names, error behavior, init, precedence list + notes + examples, security notes, common use cases | `docs/guides/configuration.md` §Project scoping + §Security (verbatim except: decision flowchart deleted-as-duplicate — its content is the §Precedence rules numbered list + notes, same guide; five Common Use Cases collapsed to §Worked example with an explicit sentence naming the covered shapes) | TB.1 | Phase B slice review |
+| `### Cross-Backend Benchmarking` (orig 1546–1575) | `docs/guides/backends.md` §Cross-backend benchmarking (verbatim); README keeps 3-line pointer | TB.2 | Phase B slice review |
+| Architecture `<details>`: Database Schema and Internals (orig 2086–2106) | `docs/implementation/09-storage-schema-and-claim-lifecycle.md` §Database schema (verbatim) | TB.2 | Phase B slice review |
+| Architecture `<details>`: Concurrency and Delivery Guarantees (orig 2108–2125) | `docs/implementation/09-…` §Concurrency and delivery realization (verbatim; README theory restatement lands in Phase C) | TB.2 | Phase B slice review |
+| Architecture `<details>`: Security Considerations (orig 2127–2139) | deleted-as-duplicate: `docs/guides/configuration.md` §General security considerations carries the identical bullet list (copied in Phase A) | TB.2 | Phase B slice review |
+| Architecture `<details>`: First-Party Backend Extensions (orig 2141–2333) | `docs/guides/backends.md` (packages, .broker.toml, backend shapes, runner/transaction ownership, fork note — verbatim) + `docs/guides/python.md` §Activity waiters (waiter/hook material — verbatim) | TB.2 | Phase B slice review |
+| Architecture `<details>`: Things That Look Weird but Aren't (orig 2335–2364) | split verbatim: settings-count + sync-mode Q&A → `docs/guides/configuration.md` §Environment variables; phaselock + claimed-rows Q&A → `docs/implementation/09-…`; Redis-parallel-core Q&A → `docs/guides/backends.md` §Backend authoring | TB.2 | Phase B slice review |
+| Performance & Tuning intro bullets | retained in README (orientation restatement); fuller home `docs/guides/configuration.md` §Performance and tuning | TB.2 | Phase B slice review |
 
 ## Related Plans
 

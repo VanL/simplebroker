@@ -26,6 +26,7 @@ read order stay aligned instead of competing.
 6. `06-process-session-core-ownership.md`
 7. `07-complexity-and-state-machine-map.md`
 8. `08-message-identity-and-write-visibility.md`
+9. `09-storage-schema-and-claim-lifecycle.md`
 
 For product-scope or concept-ownership questions, begin with
 `../program-theory.md` before selecting the implementation document.
