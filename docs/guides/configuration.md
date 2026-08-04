@@ -29,8 +29,10 @@ catalog.
 
 **Read Performance:**
 - `BROKER_READ_COMMIT_INTERVAL` - Number of messages to read before committing in `--all` mode (default: 1)
-  - Default of 1 provides exactly-once delivery guarantee
-  - Increase for better throughput with at-least-once delivery semantics
+  - Default of 1 keeps the per-message consume claim boundary
+    (`[SB-DELIVERY-1]` in [`docs/specs/11-delivery.md`](../specs/11-delivery.md))
+  - Increase for better throughput with at-least-once batch semantics
+    (`[SB-DELIVERY-5]`)
   - For values > 1, each batch is committed only after the full batch has been yielded to the consumer
   - If processing stops mid-batch (crash/interrupt), unread messages in that batch are rolled back and retried
   - Larger values keep transactions open longer and can increase write lock contention; tune batch size to workload

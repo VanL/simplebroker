@@ -16,7 +16,8 @@ Normative public surfaces (package root, `simplebroker.ext`, command layer):
 Materialized batch APIs such as `Queue.read_many()` and `Queue.move_many()`
 commit before returning their result lists. Passing
 `delivery_guarantee="at_least_once"` is supported on those APIs and is
-satisfied by the stricter exactly-once materialization behavior.
+satisfied by the stricter commit-before-return materialization behavior
+(`[SB-DELIVERY-5]`).
 
 Use generator APIs such as `Queue.read_generator()`, `Queue.move_generator()`,
 and `Queue.stream_messages(batch_processing=True, commit_interval=N)` with

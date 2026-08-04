@@ -674,10 +674,13 @@ with Queue("tasks") as q:
 
 ### Delivery guarantees
 
-Default operations are exactly-once: reads and moves commit the claim
-atomically before your code sees the message. Generator APIs accept
-`delivery_guarantee="at_least_once"` for retry-on-stop batch processing;
-generators are thread-affine and must be closed on their own thread.
+Default operations claim atomically: the claim commits before your code
+sees the message — the consume claim boundary, `[SB-DELIVERY-1]`. That is
+broker delivery state, not proof of application processing
+(see [Critical Safety Notes](#critical-safety-notes)). Generator APIs
+accept `delivery_guarantee="at_least_once"` (`[SB-DELIVERY-5]`) for
+retry-on-stop batch processing; generators are thread-affine and must be
+closed on their own thread.
 Normative rules: `docs/specs/11-delivery.md`
 (`[SB-DELIVERY-1]`–`[SB-DELIVERY-7]`); worked patterns, generator rules,
 and the cross-thread safety net are in the
@@ -779,7 +782,7 @@ The most-used settings:
 |----------|---------|---------|
 | `BROKER_BUSY_TIMEOUT` | `5000` | SQLite busy timeout (ms) |
 | `BROKER_SYNC_MODE` | `FULL` | Durability mode; `NORMAL` is ~25% faster with a small power-loss risk |
-| `BROKER_READ_COMMIT_INTERVAL` | `1` | Messages per commit in `--all` mode; `1` keeps exactly-once delivery |
+| `BROKER_READ_COMMIT_INTERVAL` | `1` | Messages per commit in `--all` mode; `1` keeps the per-message claim boundary (`[SB-DELIVERY-1]`), higher values batch with at-least-once semantics (`[SB-DELIVERY-5]`) |
 | `BROKER_DEFAULT_DB_NAME` | `.broker.db` | Database filename (all scopes) |
 | `BROKER_PROJECT_SCOPE` | unset | Enable git-like upward project discovery |
 | `BROKER_MAX_MESSAGE_SIZE` | 10MB | Maximum message body size |

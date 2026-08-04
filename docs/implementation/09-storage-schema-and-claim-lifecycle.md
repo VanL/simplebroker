@@ -30,8 +30,13 @@ CREATE TABLE messages (
 
 ## Concurrency and delivery realization
 
-**Exactly-Once Delivery:** Read and move operations use atomic backend
-transitions. A message is delivered exactly once to a consumer by default.
+**Consume claim boundary:** Read and move operations use atomic backend
+transitions. A message is claimed exactly once under normal consume
+delivery, and the claim commits before the message is handed to the
+caller ([`[SB-DELIVERY-1]`](../specs/11-delivery.md)). This is not a
+promise of exactly-once application processing or external side effects:
+a crash between the claim commit and the handoff can leave a message
+claimed and not handed off.
 
 **FIFO Ordering:** Messages are read in write order for a queue, regardless of
 which process wrote them. SQLite uses the autoincrement `id` plus serialized
@@ -43,7 +48,9 @@ contract.
 2. **Claim Phase**: Read marks message as "claimed" (fast, logical delete)
 3. **Maintenance Phase**: Explicit `--vacuum` or a due opportunistic check permanently removes claimed messages
 
-This optimization is transparent - messages are still delivered exactly once.
+This optimization is transparent to the delivery contract: claimed rows
+are never selected again for ordinary pending delivery
+([`[SB-DELIVERY-1]`](../specs/11-delivery.md)).
 
 **Why are read messages marked claimed before vacuum removes them?** Claiming
 keeps reads fast and atomic while deferring physical cleanup. Vacuum removes
