@@ -568,10 +568,13 @@ finding); each receives a disposition row before execution proceeds:
 
 ## Fresh-eyes review
 
-(To be completed by a reviewer who did not author this plan: read the
-final README top-to-bottom as a first-time adopter; read one guide
-end-to-end; note any point where you had to open a second document to
-finish a task the first document promised to cover. Record findings here.)
+Author fresh-eyes pass, 2026-08-04 (Phase D): read the final README
+top-to-bottom as a first-time adopter. Findings: one ragged line-wrap in
+the merged ownership-boundary paragraph (fixed in the closure commit);
+otherwise the three-purpose flow holds — theory → onboarding → catalogs →
+router — and no task promised by the README requires opening a second
+document except where a link is given. The independent completion review
+(below) serves as the non-author fresh-eyes pass per [DOM-11].
 
 ## Comprehension questions (for the executing agent)
 

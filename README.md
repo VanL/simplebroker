@@ -64,9 +64,9 @@ by ID after success (see [Critical Safety Notes](#critical-safety-notes)).
 SimpleBroker is **not** a broker fleet, managed queue service, replicated
 event stream, pub/sub platform, distributed task framework, or
 application orchestration system. This is an ownership boundary, not a
-host-count claim. Cooperating processes
-raise distributed-systems issues, and optional Postgres or Redis backends can
-serve clients on multiple hosts. SimpleBroker owns queue-operation semantics;
+host-count claim. Cooperating processes raise distributed-systems issues,
+and optional Postgres or Redis backends can serve clients on multiple
+hosts. SimpleBroker owns queue-operation semantics;
 the backend owns service topology, replication, availability, and recovery;
 the application owns work execution and business retries. SQLite files remain
 local-only: do not put them on NFS or another shared network filesystem.
