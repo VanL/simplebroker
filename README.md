@@ -380,10 +380,11 @@ messages.
 Normative delivery contract:
 `docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
 
-Single-consumer example: [`examples/safe_worker.sh`](examples/safe_worker.sh)
+Single-consumer example: [`examples/safe_worker.sh`](https://github.com/VanL/simplebroker/blob/main/examples/safe_worker.sh)
 watches in peek mode and acknowledges each message by deleting its exact
 ID after successful processing. For concurrent workers, use the
-move-to-inflight recipe in [`docs/agent-kernel.md`](docs/agent-kernel.md).
+move-to-inflight recipe in
+[`docs/agent-kernel.md`](https://github.com/VanL/simplebroker/blob/main/docs/agent-kernel.md).
 
 ## Core Concepts
 
@@ -574,7 +575,7 @@ broker move dlq tasks --all
 
 For a checkpointing worker with atomic checkpoint updates and
 per-message acknowledge-by-delete, see
-[`examples/resilient_worker.sh`](examples/resilient_worker.sh).
+[`examples/resilient_worker.sh`](https://github.com/VanL/simplebroker/blob/main/examples/resilient_worker.sh).
 
 ## Real-time Queue Watching
 
@@ -753,8 +754,8 @@ The most-used settings:
 | `BROKER_PROJECT_SCOPE` | unset | Enable git-like upward project discovery |
 | `BROKER_MAX_MESSAGE_SIZE` | 10MB | Maximum message body size |
 
-The full catalog — all 32 keys, vacuum and watcher tuning, database and
-config naming — is in the
+The full settings catalog — vacuum and watcher tuning, database and
+config naming, and the rest of the documented keys — is in the
 [configuration guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/configuration.md).
 
 ## Project Scoping

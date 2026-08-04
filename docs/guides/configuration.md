@@ -1,9 +1,12 @@
 # Configuration, Scoping, and Tuning
 
-This guide is the full catalog of SimpleBroker configuration: every
-`BROKER_*` environment variable, database scoping and discovery, project
-configuration files, security notes, and performance tuning. The README
-carries only the most-used settings; this file carries all of them.
+This guide is the home for SimpleBroker configuration: the `BROKER_*`
+environment variables users and embedders set, database scoping and
+discovery, project configuration files, security notes, and performance
+tuning. The README carries only the most-used settings. `load_config()`
+documents 32 keys in total; the catalog below covers the ones with
+user-facing effect, and the remainder are embedder plumbing reached
+through `resolve_config()`.
 
 Public discovery callables are normative in
 [`docs/specs/16-python-library-api.md`](../specs/16-python-library-api.md)
