@@ -21,6 +21,7 @@ command -v broker >/dev/null || { echo "Error: broker command is required but no
 DB="${BROKER_DB:-${1:-.broker.db}}"
 QUEUE="${QUEUE:-events}"
 CHECKPOINT_FILE="${CHECKPOINT_FILE:-./.broker-worker-checkpoint}"
+BATCH_SIZE="${BATCH_SIZE:-100}"   # messages per batch before a batch-complete report
 
 # Example processing function — replace with your business logic.
 # Defined before the main loop so Bash can resolve it on first call.
@@ -41,9 +42,14 @@ process_event() {
     return 0
 }
 
-# Signal handler to save checkpoint on interrupt
+# Signal handler to save checkpoint on interrupt.
+# Atomic write (temp file + rename) so a signal cannot leave a torn file.
 last_checkpoint=0
-trap 'echo "Interrupted, saving checkpoint: $last_checkpoint" >&2; echo "$last_checkpoint" > "$CHECKPOINT_FILE"; exit 0' INT TERM
+save_checkpoint() {
+    echo "$last_checkpoint" > "$CHECKPOINT_FILE.tmp"
+    mv "$CHECKPOINT_FILE.tmp" "$CHECKPOINT_FILE"
+}
+trap 'echo "Interrupted, saving checkpoint: $last_checkpoint" >&2; save_checkpoint; exit 0' INT TERM
 
 # Load last checkpoint (default to 0 if first run)
 if [ -f "$CHECKPOINT_FILE" ]; then
@@ -55,8 +61,15 @@ fi
 echo "Using database: $DB"
 echo "Starting from checkpoint: $last_checkpoint"
 
-# Main processing loop: one peek at a time (not peek --all + delete-in-loop)
+# Main processing loop: one peek at a time (not peek --all + delete-in-loop),
+# in bounded batches of BATCH_SIZE messages.
+processed=0
 while true; do
+    if [ "$processed" -ge "$BATCH_SIZE" ]; then
+        echo "Batch complete, processed $processed messages"
+        processed=0
+    fi
+
     message_data=$(broker -f "$DB" peek "$QUEUE" --json --after "$last_checkpoint" 2>/dev/null || true)
 
     if [ -z "$message_data" ]; then
@@ -80,10 +93,15 @@ while true; do
         if broker -f "$DB" delete "$QUEUE" -m "$timestamp" >/dev/null 2>&1; then
             printf "Successfully processed and deleted message %s\n" "$timestamp"
             last_checkpoint="$timestamp"
-            echo "$timestamp" > "$CHECKPOINT_FILE.tmp"
-            mv "$CHECKPOINT_FILE.tmp" "$CHECKPOINT_FILE"
+            save_checkpoint
+            processed=$((processed + 1))
         else
-            echo "Warning: Failed to delete message $timestamp after processing. It may be reprocessed." >&2
+            # Stop rather than continue: retrying immediately would repeat
+            # the message's side effects. It may be reprocessed on the next
+            # run.
+            echo "Error: processed message $timestamp but failed to delete it." >&2
+            echo "It may be reprocessed on the next run." >&2
+            exit 1
         fi
     else
         echo "Error processing message $timestamp. It remains in the queue for the next run." >&2

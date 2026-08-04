@@ -233,11 +233,43 @@ The watcher uses an efficient polling strategy:
 - **Graceful shutdown**: Handles SIGINT and SIGTERM cleanly
 
 ```python
+import logging
+
+from simplebroker import Queue, QueueWatcher
+
+
+# Peek-and-acknowledge pattern (message stays until delete by id)
+def process_message(message: str, timestamp: int):
+    """Process message and acknowledge only on success."""
+    logging.info(f"Processing: {message}")
+
+    # Simulate processing that might fail
+    if "error" in message:
+        raise ValueError("Simulated processing failure")
+
+    # If we get here, processing succeeded
+    # Now explicitly acknowledge by deleting the message
+    with Queue("tasks") as q:
+        q.delete(message_id=timestamp)
+    logging.info(f"Message {timestamp} acknowledged")
+
+
+def handle_error(exception: Exception, message: str, timestamp: int) -> bool:
+    """Log error and optionally move to dead-letter queue."""
+    logging.error(f"Failed to process message {timestamp}: {exception}")
+    # Message remains in queue for retry since we're using peek=True
+
+    # Optional: After N retries, move to a dead-letter queue
+    # Queue("errors").write(f"{timestamp}:{message}:{exception}")
+
+    return True  # Continue watching
+
+
 watcher = QueueWatcher(
     queue=Queue("tasks"),
     handler=process_message,
     error_handler=handle_error,
-    peek=True,  # observe without claiming
+    peek=True,  # observe without claiming; delete by id to acknowledge
 )
 
 # Start watching (blocks until stopped)
