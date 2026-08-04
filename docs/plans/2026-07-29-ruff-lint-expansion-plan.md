@@ -54,8 +54,9 @@ firing repository gate rather than an undocumented configuration accident.
   variation.
 - `docs/agent-context/runbooks/writing-plans.md` and
   `docs/agent-context/runbooks/testing-patterns.md`.
-- `docs/plans/2026-07-29-development-toolchain-refresh-plan.md`, which moves the
-  repository to Ruff 0.16.0 but deliberately leaves lint policy unchanged.
+- retired plan `2026-07-29-development-toolchain-refresh-plan.md` at
+  `197629e2`, which moves the repository to Ruff 0.16.0 but deliberately leaves
+  lint policy unchanged.
 
 ## Spec Baseline
 
@@ -63,9 +64,9 @@ firing repository gate rather than an undocumented configuration accident.
   `docs/specs/01-development-documentation-operating-model.md` at plan
   authoring time.
 - Implementation prerequisite: the Ruff 0.16.0 manifest and lock updates from
-  `docs/plans/2026-07-29-development-toolchain-refresh-plan.md` must be present
-  in the implementation baseline. Land this lint-policy change separately from
-  that dependency-refresh unit.
+  retired plan `2026-07-29-development-toolchain-refresh-plan.md` at
+  `197629e2` must be present in the implementation baseline. Land this
+  lint-policy change separately from that dependency-refresh unit.
 - Promotion baseline: `b21bbcd87af7ea868ad7ea02d0d8ce4c83dea8a8`
   plus worktree blob `7527756c69c0dcdd8dbe4353083d5a8d3efa8d7f`
   for `docs/specs/01-development-documentation-operating-model.md`.

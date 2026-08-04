@@ -7,8 +7,9 @@ step. Run it on all three backends (it is marked shared) and any semantic
 divergence between SQLite, Postgres, and Redis shows up as a shrunk,
 replayable operation script.
 
-Read Part I of docs/plans/2026-06-11-hypothesis-property-testing-plan.md
-(domain crash course + design decisions) before editing anything here.
+Before editing, read Part I (domain crash course + design decisions) from the
+retired plan with:
+git show 197629e2:docs/plans/2026-06-11-hypothesis-property-testing-plan.md
 """
 
 from __future__ import annotations

@@ -201,7 +201,7 @@ Pressure: PostgreSQL and Redis backends shipped, and current guidance directs mu
 Evidence:
 - contemporaneous: [THEORY-7] source-pinned founding evidence and current README shared-storage guidance
 - contemporaneous: `CHANGELOG.md` sections `3.0.0` and `3.7.0` at `2daa2fb48dd478fee5c01bec86add53793d55940`
-- contemporaneous: source-pinned `f133ce76b6eae7a7267022aa3873cba0932951d1:docs/plans/2026-05-14-simplebroker-redis-second-backend-plan.md`
+- contemporaneous: source-pinned `197629e2c46edd755c66b272d387c08e984bf32b:docs/plans/2026-05-14-simplebroker-redis-second-backend-plan.md`
 - owner-recalled: the product-owner boundary recorded in the related plan
 
 ### [REV-THEORY-003] Delivery state is not application completion
@@ -211,7 +211,7 @@ Supersedes: The founding account said messages were “delivered exactly once us
 Pressure: Claim-based deletion, watchers, concurrent consumers, move reservation, and retry-on-stop generators exposed distinct loss and duplicate windows. The unqualified wording could be read as crash-safe exactly-once processing.
 Evidence:
 - contemporaneous: [THEORY-7] source-pinned founding README and its delivery wording
-- contemporaneous: source-pinned `36e2f3568a8e97943b9fe7b06e35d2b2bc688406:docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`
+- contemporaneous: source-pinned `197629e2c46edd755c66b272d387c08e984bf32b:docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`
 - contemporaneous: `docs/specs/11-delivery.md` `[SB-DELIVERY-1]` through `[SB-DELIVERY-5]` at `2daa2fb48dd478fee5c01bec86add53793d55940`
 - contemporaneous: `CHANGELOG.md` `5.6.1` Documented entry
 
@@ -221,7 +221,7 @@ Current account: A `Queue` is a named capability over one resolved broker target
 Supersedes: Each persistent `Queue` previously owned an independent `DBConnection`, allowing queue count to scale backend runner and pool allocation.
 Pressure: Weft's multi-queue watcher naturally created one persistent handle per queue. With PostgreSQL, queue fan-out became pool fan-out and could exhaust server connection limits.
 Evidence:
-- contemporaneous: source-pinned `f133ce76b6eae7a7267022aa3873cba0932951d1:docs/plans/2026-05-04-process-local-broker-session-plan.md`
+- contemporaneous: source-pinned `197629e2c46edd755c66b272d387c08e984bf32b:docs/plans/2026-05-04-process-local-broker-session-plan.md`
 - contemporaneous: `CHANGELOG.md` section `3.3.0` and implementation commit `9d455e7830eb77a985cbbf0b5ae7dd50811431ff`
 - contemporaneous: current README Embedding and process-session guidance
 - contemporaneous: `docs/implementation/06-process-session-core-ownership.md` at `2daa2fb48dd478fee5c01bec86add53793d55940`
@@ -232,7 +232,7 @@ Current account: A suspended operation retains the ownership context needed to s
 Supersedes: Earlier recovery reasoning treated finalization as ordinary cleanup without making the suspended operation's continuing ownership explicit.
 Pressure: A concrete cross-thread generator-finalization bug exposed ownership that outlived the apparent call boundary and could not be coherently settled from another thread.
 Evidence:
-- contemporaneous: source-pinned `36e2f3568a8e97943b9fe7b06e35d2b2bc688406:docs/plans/2026-07-27-cross-thread-generator-orphan-healing-plan.md`
+- contemporaneous: source-pinned `197629e2c46edd755c66b272d387c08e984bf32b:docs/plans/2026-07-27-cross-thread-generator-orphan-healing-plan.md`
 - contemporaneous: `docs/implementation/04-cross-thread-finalization-poisoning.md` at `2daa2fb48dd478fee5c01bec86add53793d55940`
 - contemporaneous: `docs/specs/11-delivery.md` `[SB-DELIVERY-6]`
 - contemporaneous: `CHANGELOG.md` section `5.5.0` and implementation commit `9d03e77d258127acfff4352435251e892daa8493`

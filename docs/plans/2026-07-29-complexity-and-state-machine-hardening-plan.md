@@ -91,7 +91,7 @@ Product and implementation contracts:
 - `docs/specs/11-delivery.md` [SB-DELIVERY-1..7]
 - `docs/implementation/04-cross-thread-finalization-poisoning.md`
 - `docs/implementation/06-process-session-core-ownership.md`
-- `docs/plans/2026-07-29-code-quality-cleanup-plan.md`
+- retired plan `2026-07-29-code-quality-cleanup-plan.md` at `197629e2`
 - `docs/plans/2026-07-29-ruff-lint-expansion-plan.md`
 
 Source audit:

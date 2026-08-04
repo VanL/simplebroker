@@ -676,7 +676,10 @@ ceremony inside the plan file.
   backlinks convert to the retired citation form, and the ledger line is
   written (name, date range, one-sentence outcome, what absorbed it,
   source SHA). Physical deletion happens in a dedicated follow-up change only
-  after a second agent or the user verifies the harvest gate. Never
+  after a second agent or the user verifies the harvest gate. Git-backed
+  retirement is routine [DOM-14] maintenance: it needs neither a separate task
+  plan nor separate commit authorization when every source SHA resolves and no
+  durable guidance is promoted or materially revised. Never
   soft-retire and delete in the same change, and never create a
   retired/archived plans directory — git is the archive.
 - **Promoted alternatives survive physical deletion.** Before deleting a
@@ -684,8 +687,10 @@ ceremony inside the plan file.
   source-pinned form `<plan>.md at <source SHA> [ALT-...]`. The filename and
   SHA must match the Retired Plans ledger. Retrieve that source with
   `git show <source-sha>:docs/plans/<plan>.md` and verify the exact
-  `### [ALT-ID]` heading before deletion. Any failed conversion, retrieval, or
-  heading check blocks deletion.
+  `### [ALT-ID]` heading before deletion. The SHA must also be reachable from a
+  retained Git ref; a loose object that can be pruned is not a durable archive.
+  Any failed conversion, retrieval, reachability, or heading check blocks
+  deletion.
 - **Exemplar plans are exempt.** The status index may mark a plan
   `exemplar` (bootstrap or operating-model foundation plans that serve as
   onboarding examples). Exemplars are not retirement candidates until the

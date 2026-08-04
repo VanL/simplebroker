@@ -5,8 +5,8 @@ per its [DOM-14] promotion tier (3 distinct citations: taut MCP plan;
 mm RiskEvaluationApi contract; mm external-API/MCP contract plan).
 Full provenance lives in the guidance repo's plan
 "2026-07-15-interface-review-skill-promotion-plan" (its repository,
-not this one). This copy: adopted from agent-guidance @ `fc23eae` via
-`docs/plans/2026-07-16-agent-guidance-bootstrap-plan.md`.
+not this one). This copy: adopted from agent-guidance @ `fc23eae` via retired
+plan `2026-07-16-agent-guidance-bootstrap-plan.md` at `197629e2`.
 
 **This skill is the repeatable procedure for reviewing an agent-facing
 surface against `runbooks/designing-agent-facing-interfaces.md`. The

@@ -11,7 +11,7 @@ accounting in the agent-guidance repository's plan
 "2026-07-14-agent-facing-interfaces-runbook-plan" §2 (its repository,
 not this one).
 This copy: adopted from agent-guidance @ `fc23eae` via local bootstrap
-(retired: 2026-07-16-agent-guidance-bootstrap-plan — source f133ce7; see
+(retired: 2026-07-16-agent-guidance-bootstrap-plan — source 197629e2; see
 docs/plans/README.md).
 
 Owner: whoever designs or reviews an agent-facing surface. Boundary:

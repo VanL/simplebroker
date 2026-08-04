@@ -155,3 +155,80 @@ Dated moment-tier entries (foldable after age floor and distillation).
   claim true over weakening it on every surface that repeats it. Two
   independent reviewers caught the same defect class in one migration.
   (Docs IA plan, completion review CR2 + post-completion PC1.)
+- 2026-08-04: Native/backend activity notifications are wake hints, not
+  authoritative state. A hint can be stale, replayed, or lose a race to
+  another consumer, so re-check live pending state before treating the
+  notification as work; narrow same-watcher local hints may support an
+  explicitly bounded direct attempt. (Harvested from
+  2026-05-05-pg-watcher-followup-review-remediation-plan; source `197629e2`.)
+- 2026-08-04: Best-effort cleanup must remain honest when release fails. Keep
+  the resource tracked, expose the failure, and allow a later retry; dropping
+  bookkeeping after a failed close turns a live resource into an invisible
+  leak. (Harvested from 2026-05-11-sqlite-cross-thread-close-hardening-plan;
+  source `197629e2`.)
+- 2026-08-04: Pre-parser argument rewriting is a safety boundary. Help must be
+  side-effect free, the subcommand inventory must be complete, and destructive
+  global flags need explicit command-combination guards; otherwise a missed
+  subcommand can hoist a cleanup flag into an unintended action. (Harvested
+  from 2026-07-02-evaluation-fixes-plan; source `197629e2`.)
+- 2026-08-04: An ordering token and the row it orders must become visible in
+  one commit. Publishing a high-water mark before its row lets checkpoint
+  readers advance past work that is still uncommitted. (Harvested from
+  2026-07-02-evaluation-fixes-plan; source `197629e2`.)
+- 2026-08-04: “Unused” searches must include examples and every other ungated
+  consumer. Executable examples need at least one behavioral gate; syntax or
+  SQL that no normal test imports can otherwise remain broken indefinitely.
+  (Harvested from 2026-07-02-evaluation-fixes-plan; source `197629e2`.)
+- 2026-08-04: Test subprocess environments must sanitize session-start
+  developer-ambient configuration while preserving explicit harness channels
+  and per-test overrides. Otherwise the same subprocess suite silently
+  exercises different behavior on different machines; already-imported
+  in-process config snapshots are a separate boundary. (Harvested from
+  2026-07-02-evaluation-fixes-plan; source `197629e2`.)
+- 2026-08-04: A deadlock correction fixes lock order; stronger retry is not a
+  substitute. Prove both the statement/acquisition order and behavior under the
+  real lock manager, because mocks and retries can hide the same cycle.
+  (Harvested from 2026-07-02-watch-after-and-pg-rename-lock-plan; source
+  `197629e2`.)
+- 2026-08-04: Compatibility-handshake peers must declare their protocol
+  literals independently. Importing one side's constant into the other makes
+  mismatch detection tautological; protocol-version state must also remain
+  distinct from storage-schema state. (Harvested from
+  2026-07-03-backend-api-version-handshake-plan; source `197629e2`.)
+- 2026-08-04: Post-fork recovery must replace inherited locks before every
+  possible acquisition, not only inside the eventual resource getter. A lock
+  taken by a vanished thread can deadlock any earlier entry point in the child.
+  (Harvested from 2026-07-03-checkpoint-move-caveat-and-lock-hardening-plan;
+  source `197629e2`.)
+- 2026-08-04: Check `os.WIFEXITED(status)` before interpreting
+  `os.WEXITSTATUS(status)`. A signaled child has no normal exit code and can be
+  misreported as success if the predicates are reversed. (Harvested from
+  2026-07-03-checkpoint-move-caveat-and-lock-hardening-plan; source
+  `197629e2`.)
+- 2026-08-04: Secret-output boundaries should redact structurally and fail
+  closed. Keep secrets out of argv and ordinary output in the first place;
+  substring replacement is a fallback, not the primary security model.
+  (Harvested from 2026-07-05-independent-review-fixes-plan and
+  2026-07-12-code-scanning-alert-triage-plan; source `197629e2`.)
+- 2026-08-04: Irreversible release tags come after exact-SHA green validation.
+  A tag created before validation turns a correctable build or workflow defect
+  into repository-history repair. (Harvested from
+  2026-07-12-release-reproducibility-and-publication-hardening-plan; source
+  `197629e2`.)
+- 2026-08-04: Cleanup authority comes from resource ownership and live state,
+  never a path-name heuristic. Names describe location, not whether the current
+  process created or may delete the resource. (Harvested from
+  2026-07-13-project-assessment-remediation-plan; source `197629e2`.)
+- 2026-08-04: Resolved runtime configuration must flow through every validation
+  boundary. A module constant is only a default; CLI parsing, instance methods,
+  core writes, and watcher dispatch must validate against the resolved value
+  they actually use. (Harvested from
+  2026-05-05-review-findings-remediation-plan and
+  2026-07-09-core-reliability-issues-1-5-plan; source `197629e2`.)
+- 2026-08-04: When a mutation promises a global or current-set invariant,
+  check authoritative live state inside its atomic boundary, not a process
+  cache or client snapshot. Caches may optimize reads, but they cannot
+  authorize alias mutation, delete, or patternless broadcast semantics against
+  concurrently changing storage; weaker snapshot contracts must be named.
+  (Harvested from 2026-05-05-review-findings-remediation-plan and
+  2026-07-16-code-review-findings-remediation-plan; source `197629e2`.)

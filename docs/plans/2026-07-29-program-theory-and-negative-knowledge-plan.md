@@ -731,7 +731,7 @@ Evidence:
   “Advanced: First-Party Backend Extensions,” at
   `2daa2fb48dd478fee5c01bec86add53793d55940`
 - contemporaneous: source-pinned
-  `f133ce76b6eae7a7267022aa3873cba0932951d1:docs/plans/2026-05-14-simplebroker-redis-second-backend-plan.md`,
+  `197629e2c46edd755c66b272d387c08e984bf32b:docs/plans/2026-05-14-simplebroker-redis-second-backend-plan.md`,
   “Non-Negotiables” and “Target Semantics”
 - owner-recalled: the product-owner boundary recorded in this plan, Settled
   Decisions 7–8
@@ -753,7 +753,7 @@ Evidence:
 - contemporaneous: `README.md` at
   `f1bd821640d2f51006eec321b21d5341b0175cdc`, line 197
 - contemporaneous: source-pinned
-  `36e2f3568a8e97943b9fe7b06e35d2b2bc688406:docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`,
+  `197629e2c46edd755c66b272d387c08e984bf32b:docs/plans/2026-07-28-delivery-contract-spec-promotion-plan.md`,
   §§1, 3.2, and 6
 - contemporaneous: `docs/specs/11-delivery.md`, “Delivery risk
   model” and `[SB-DELIVERY-1]` through `[SB-DELIVERY-5]`, at
@@ -776,7 +776,7 @@ per queue. With PostgreSQL, queue fan-out became pool fan-out and could exhaust
 server connection limits.
 Evidence:
 - contemporaneous: source-pinned
-  `f133ce76b6eae7a7267022aa3873cba0932951d1:docs/plans/2026-05-04-process-local-broker-session-plan.md`,
+  `197629e2c46edd755c66b272d387c08e984bf32b:docs/plans/2026-05-04-process-local-broker-session-plan.md`,
   “Purpose,” “Ownership lock,” “Thread lock,” and “Current runtime map”
 - contemporaneous: `CHANGELOG.md` section `3.3.0` at
   `2daa2fb48dd478fee5c01bec86add53793d55940`; implementation commit
@@ -804,7 +804,7 @@ could not be released coherently from another thread. Repeated review rejected
 in-process recovery.
 Evidence:
 - contemporaneous: source-pinned
-  `36e2f3568a8e97943b9fe7b06e35d2b2bc688406:docs/plans/2026-07-27-cross-thread-generator-orphan-healing-plan.md`,
+  `197629e2c46edd755c66b272d387c08e984bf32b:docs/plans/2026-07-27-cross-thread-generator-orphan-healing-plan.md`,
   “Goal,” “The two wedge surfaces,” and round-4 recovery findings
 - contemporaneous:
   `docs/implementation/04-cross-thread-finalization-poisoning.md`, “A permanent

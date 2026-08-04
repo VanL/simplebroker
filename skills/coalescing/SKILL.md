@@ -5,8 +5,8 @@ Status: Active — governed by [DOM-14] in
 session-start trigger check is read-only; sweeps run only as authorized
 units of work. (Promotion provenance lives in the guidance repo's plan
 "2026-07-14-coalescing-layer-plan" — its repository, not this one.)
-This copy: adopted from agent-guidance @ `fc23eae` via
-`docs/plans/2026-07-16-agent-guidance-bootstrap-plan.md`.
+This copy: adopted from agent-guidance @ `fc23eae` via retired plan
+`2026-07-16-agent-guidance-bootstrap-plan.md` at `197629e2`.
 
 ## Purpose
 
@@ -37,6 +37,15 @@ everything raw.
   has not fired, do not re-report every session.
 - Do NOT use mid-task as a tidy-up reflex, and do NOT stretch "related
   work" to dodge the report: reporting costs one sentence.
+- An authorized routine sweep is plan-exempt when it only removes
+  already-distilled, expired, or nonnormative material whose verified Git
+  source cue is reachable from a retained ref, retires or deletes similarly
+  source-pinned plans, advances watermarks, and updates the run log. Git is the
+  archive; those removals are reversible maintenance, not a permanently
+  destructive edge.
+  Create a task plan before promoting or materially revising durable guidance
+  such as golden rules, principles, runbooks, skills, or cross-repository
+  rules, or when another repository planning trigger independently fires.
 
 ## Governing Spec References
 
@@ -81,13 +90,18 @@ repairable in-boundary defect is not a completed sweep. Coalescing is
 not generic cleanup: product behavior, unrelated documentation, and
 speculative redesign stay out of scope. Defer instead when the repair
 is ambiguous, destructive, or needs new authority — record the evidence
-gap, owner, and reconsideration condition; deletion, watermark
-advancement, plan soft-retirement, and archival transitions retain
-their landing-authorization requirements. Record every maintenance
+gap, owner, and reconsideration condition. Source-pinned deletion, watermark
+advancement, plan soft-retirement, and archival transitions proceed under the
+authorized sweep without a second landing or commit authorization. Record every maintenance
 repair in the run log; a deferred defect is recorded as a blocker, not
 presented as maintenance accomplished. (Folded up from taut's
 repair-in-sweep doctrine, its commit `3706d73`, by owner direction
 2026-07-28.)
+
+If an in-boundary repair would promote or materially revise a golden rule,
+principle, runbook, skill, gate, or cross-repository rule, stop and classify it
+before editing. Routine-sweep authority does not waive the durable-guidance
+planning boundary.
 
 Read the watermarks and **Derivation recipe** in `docs/coalescing.md`, then
 run that recipe (keep this skill and the state file identical). This
@@ -131,10 +145,11 @@ explicitly asked to sweep, stop — record nothing.
 ### 2. Lessons tier: distill, then retire
 
 At sweep start, pin the source: `source_sha` is a commit that verifiably
-contains the raw material about to be folded — check with
-`git show <source_sha>:docs/lessons.md`. If the entries exist only in the
-worktree, there is no valid source yet: the destructive phase is blocked
-until the raw state is committed (or the sweep stays additive-only).
+contains the raw material about to be folded and is reachable from a retained
+Git ref — check with `git show <source_sha>:docs/lessons.md` plus the
+repository's ref-reachability check. If the entries exist only in the worktree,
+there is no valid source yet: removal is blocked until the raw state is
+committed to a retained ref.
 
 **Cue portability:** where the repository has a published mirror, a cue
 must resolve in the published history too — a SHA that survives only on
@@ -177,11 +192,11 @@ For each tripped or requested fold:
    the fold commit, which cannot contain its own hash and does not contain
    the deleted entries. The fold commit may be added to the run log after
    it exists, as metadata.
-5. **Destructive phase — only with landing authorization.** Only after the
-   distillation is written, its links resolve, and `source_sha` is
-   verified, delete the folded raw entries and advance the lessons
-   watermark. In an uncommitted-review session, stop after step 4:
-   present the drafts and candidates, delete nothing, advance nothing.
+5. **Archive phase.** Only after the distillation is written, its links
+   resolve, and `source_sha` is verified and reachable from a retained ref,
+   delete the folded raw entries and advance the lessons watermark. The
+   authorized sweep needs no separate commit authorization: the retained
+   source SHA is the durable archive cue.
 6. Decay evidence is multi-signal: absence of citation alone never
    justifies a fold — agents follow rules without citing them. Weigh
    recent incidents, test coverage, review recurrence, last validation,
@@ -224,13 +239,16 @@ For each completed or superseded plan:
 4. Physical deletion is a dedicated follow-up change, made only after a
    second agent or the user re-verifies the harvest gate for each
    `retired-pending` plan. Never soft-retire and delete in the same
-   change. Before deletion, rewrite every steady-state source for a promoted
+   change. This Git-backed follow-up is plan-exempt and needs no separate
+   commit authorization when it does not promote or materially revise durable
+   guidance. Before deletion, rewrite every steady-state source for a promoted
    alternative from `[ALT-...] in docs/plans/<plan>.md` to
    `<plan>.md at <source SHA> [ALT-...]`; match the filename and SHA to the
    Retired Plans ledger; run
    `git show <source-sha>:docs/plans/<plan>.md`; and verify the exact
    `### [ALT-ID]` heading exists. Any failed conversion, retrieval, or heading
-   check blocks deletion.
+   check blocks deletion. Also verify the source SHA is reachable from a
+   retained ref; an otherwise resolvable loose object is not an archive.
 5. A plan that fails the gate stays in the tree at its current status;
    note the blocking item in the run log if the threshold keeps nagging.
 
@@ -279,13 +297,14 @@ repo's committed SHA — never from a working tree.
    entries within age floor"), and a reconsideration condition ("recount
    when 5 more entries land" / "when plan X closes"). This is what stops
    an unchanged count from re-nagging every session.
-3. Advance watermarks only in the destructive phase (landing-authorized).
-   An additive-only session leaves watermarks untouched and says so in
-   its run-log line.
+3. Advance watermarks only after every removed item has a verified pre-fold
+   source cue. If no such cue exists, leave the watermark untouched and say so
+   in the run-log line.
 4. Rerun the repo's traceability gate and record the result in the run-log
    line.
-5. Commit per the session's authorization; if the sweep stays uncommitted,
-   it must have been additive-only (see step 2 of the lessons tier).
+5. Apply the repository's general session/commit policy; coalescing adds no
+   separate commit-authorization gate. An uncommitted routine sweep may include
+   source-pinned removals because Git already holds the verified archive state.
 6. **When the sweep runs beside live concurrent sessions**, coalesce
    defensively: defer any rule whose domain is under active rework — fold
    it at a later sweep, not now — keep edits to contested files as

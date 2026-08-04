@@ -67,11 +67,11 @@ may return to `readme-only` per the ownership decision.
 ## Related Plans
 
 - retired: 2026-07-27-product-docs-source-ownership-decision — source
-  `36e2f356`; see the ledger in `docs/plans/README.md`
+  `197629e2`; see the ledger in `docs/plans/README.md`
 - retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
-  `36e2f356`; see the ledger in `docs/plans/README.md`
+  `197629e2`; see the ledger in `docs/plans/README.md`
 - retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
-  `36e2f356`; see the ledger in `docs/plans/README.md`
+  `197629e2`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md`
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
 - `docs/plans/2026-08-04-docs-information-architecture-plan.md` (README

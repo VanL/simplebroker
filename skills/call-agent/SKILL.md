@@ -4,7 +4,8 @@ Status: Active — pre-landing review passed 2026-07-14 (grok, two
 rounds, via this skill's own documented invocation; record in the
 guidance repo's plan "2026-07-14-call-agent-skill-plan" §7 — its
 repository, not this one). This copy: adopted from agent-guidance @
-`fc23eae` via `docs/plans/2026-07-16-agent-guidance-bootstrap-plan.md`.
+`fc23eae` via retired plan `2026-07-16-agent-guidance-bootstrap-plan.md` at
+`197629e2`.
 
 ## Purpose
 

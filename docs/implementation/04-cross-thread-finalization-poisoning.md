@@ -36,7 +36,7 @@ the mechanism.
   and restart instruction. `README.md`, **Delivery guarantees**, is the
   user-facing restatement.
 - retired: 2026-07-27-cross-thread-generator-orphan-healing-plan — source
-  `36e2f356`; see the ledger in `docs/plans/README.md`
+  `197629e2`; see the ledger in `docs/plans/README.md`
   records the design evidence, rejected recovery approaches, and verification
   matrix.
 

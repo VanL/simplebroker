@@ -110,7 +110,7 @@ _Implementation mapping_:
 - `docs/plans/2026-08-04-worker-example-error-handling-plan.md` (published
   shell workers preserve the three-way CLI exit contract)
 - retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
-  `36e2f356`; see the ledger in `docs/plans/README.md`
+  `197629e2`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md` (Phase 2B)
 
 ## Verification

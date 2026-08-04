@@ -11,8 +11,10 @@ Required action: the session-start check is **read-only** — derive the
 counts with the recipe below, compare against the deferral state, and
 report a new trip to the user in one sentence. All writes to this file or
 to coalesced material happen only inside an authorized maintenance task
-(`skills/coalescing/SKILL.md`); destructive steps additionally require
-landing authorization.
+(`skills/coalescing/SKILL.md`). A routine sweep needs no separate task plan or
+coalescing-specific commit authorization when every removal has a verified Git
+source cue reachable from a retained ref and the sweep does not promote or
+materially revise durable guidance.
 
 Counts are always derived from watermarks and the current tree — never
 stored, never trusted from memory. The skill and this file share one
@@ -98,8 +100,8 @@ Unchanged counts against an unchanged deferral row: do not re-nag.
 
 | Tier | Distilled through | Source SHA |
 |------|-------------------|------------|
-| Lessons | Golden Rules promoted 2026-07-27 (no dated ledger fold — 0 dated lines) | f133ce7 |
-| Plans | Soft-retire sweep 2026-07-27: 47 plans → `retired-pending` | f133ce7 (plan bodies); sweep commit follows |
+| Lessons | Golden Rules promoted 2026-07-27 (no dated ledger fold — 0 dated lines) | 197629e2 (byte-identical Golden Rules; published-mainline replacement for loose `f133ce7`) |
+| Plans | Physical-retirement sweep 2026-08-04: 67 plans → ledger-only Git archive | 197629e2 (published mainline; byte-identical final bodies for all 67) |
 | Promotion | (none) | — |
 
 ## Deferral State
@@ -109,10 +111,10 @@ not re-nag; a changed count or a fired reconsideration condition does.
 
 | Tier | Checked through (date, SHA) | Counts at check | Reason deferred | Reconsider when |
 |------|------------------------------|-----------------|-----------------|-----------------|
-| Lessons | 2026-07-29, `7355b73` | 10 dated ledger entries; all 1–2 days old | Under 30-day age floor / still hot; not folded and watermark unchanged | Oldest candidate reaches age floor, or user requests distill |
-| Plans | 2026-07-29, `7355b73` | harvest_candidates=1; retired-pending=67; true drafts=1 | 11 candidates soft-retired; this sweep plan remains below threshold; physical deletion stays a dedicated follow-up | harvest_candidates ≥5, or user authorizes physical-delete pass after independent gate verification |
-| Unindexed | 2026-07-29, `7355b73` | 0 | Census remains complete | unindexed &gt; 0 |
-| Promotion | 2026-07-29, `7355b73` | no coherent uncaptured workflow theme with 3 independent citations | Existing themes already owned by current skills/runbooks | Distinct uncaptured workflow theme cited ≥3 times |
+| Lessons | 2026-08-04, `695dc16a` + worktree | 27 dated ledger entries; 15 newly harvested, all 0 days old; oldest entries 8 days old | Under 30-day age floor / still hot; no raw lesson folded and watermark unchanged | Oldest candidate reaches age floor, or user requests distill |
+| Plans | 2026-08-04, `695dc16a` + worktree | harvest_candidates=12; retired-pending=0; true drafts=0 | The authorized pass physically retired the frozen 67-plan corpus; 12 newer completed plans have not received an independent harvest gate | Next authorized soft-retirement sweep |
+| Unindexed | 2026-08-04, `695dc16a` + worktree | 0 | Census remains complete after 67 physical deletions and two new indexed plans | unindexed &gt; 0 |
+| Promotion | 2026-08-04, `695dc16a` + worktree | owner-directed coalescing policy revision completed under its Class-5+P plan; no citation-driven workflow promotion | Fifteen harvested lessons remain in the hot moment tier; existing themes otherwise remain owned | Distinct uncaptured workflow theme cited ≥3 times or lesson cluster reaches promotion maturity |
 
 ## Run Log
 
@@ -121,6 +123,7 @@ spot-check against the diff. `checked-deferred` lines are valid runs.
 
 | Date | Tier(s) | Source SHA | Claim |
 |------|---------|------------|-------|
+| 2026-08-04 | plans + lessons + process | 67 plan bodies and 15 lesson sources @ published `197629e2`; worktree based on `695dc16a` | **Physically retired 67 source-pinned plans after independent per-plan harvest and reference verification:** all bodies were byte-identical at published `origin/main` source `197629e2`; loose/local-only ledger pins were repaired to that retained source; 67 Status Index rows and files were removed while all 67 ledger rows remained; zero candidate ALT records existed; live consumers were converted to historical retrieval form. The harvest review found and independently verified 15 missing reusable lessons, added as source-pinned faithful distillations to the hot dated tier; no raw lesson was folded. Owner-directed policy correction classifies retained-ref Git archive maintenance as Class 2 while preserving plans for durable-guidance promotion. Post-run: retired-pending=0, harvest=12 (newer corpus deferred to its own gate), unindexed=0, dated lessons=27; the sole draft was closed by owner decision as deferred pending new evidence. DOM fixtures/self-test, doc paths, coalescing cues, and diff check passed. |
 | 2026-07-29 | plans | 10 plans @ `36e2f356`; guidance-wave closure repair @ `54fa706` (local-only pin); sweep `7355b73` | **Soft-retired 11 plans after the four-part harvest gate:** deviation/proposal dispositions closed; durable rationale absorbed or explicitly judged non-durable; applicable lessons already extracted; surviving backlinks converted to source-pinned retired citations. The guidance-wave plan's stale active/review fields were repaired from landed commit `42049aa` and current green gates before checkpointing. No plan files deleted. Post-sweep harvest=1 (this sweep plan), retired-pending=67, unindexed=0. |
 | 2026-07-29 | lessons + promotion | `7355b73` | **Checked-deferred:** 10 dated lessons remain verbatim because all are 1–2 days old, below the 30-day age floor; watermark unchanged. No coherent uncaptured workflow theme had 3 independent citations, so no skill/runbook promotion. |
 | 2026-07-28 | — (gate correction; nothing folded) | — | **`coalesce-check` no longer probes the filesystem for sibling repositories** (corrected upstream in agent-theory and propagated). The old `SIBLING_ROOT = REPO_ROOT.parent` hardcoded a checkout layout no document declared, and reported SHAs resolvable only in a neighbouring working copy as *verified* — laundering a local-only claim into a green check, defeating the cue-portability rule the tool enforces. Now: own SHAs verified locally and against this repo's published remote; unresolvable SHAs reported as **foreign claims** naming the repository they cite (informational, never a verdict); an unresolvable SHA naming no repository is a genuine failure. `COALESCE_SIBLING_ROOT` is opt-in local convenience, off by default. |
@@ -129,6 +132,6 @@ spot-check against the diff. `checked-deferred` lines are valid runs.
 | 2026-07-27 | plans (+ lessons check, promotion skip) | plan bodies @ `f133ce7`; soft-retire in worktree | **Coalescing sweep (user-authorized):** derived harvest=47, unindexed=0, dated lessons=0. Lessons: nothing foldable. Promotion: none. Plans: soft-retired **47** completed/superseded plans to `retired-pending` with Retired Plans ledger lines (source `f133ce7`); product-plan rationale judged non-durable for always-read tier (README/CHANGELOG/code absorb the contract); process plans absorbed into agent-context/DOM/AGENTS. Converted local path backlinks for bootstrap/propagate/hygiene in DOM Related Plans + designing-agent-facing-interfaces. **No plan files deleted** (two-step retirement). Physical-delete pass still required. |
 | 2026-07-28 | — (propagation; nothing folded) | source agent-guidance @ `e42762c`; landed `42049aa` | Delta wave per retired plan 2026-07-28-propagate-guidance-delta-wave-plan (source `54fa706`; see `docs/plans/README.md`): coalescing-skill amendments, status-vocabulary bullet (index vocabulary aligned; `retired` leaves the index), harness scoping sentence, both executable gates. Supersedes the 2026-07-27 coalesce-check cancellation on all four statements (hub canonical tool ≠ local invention; state-file recipe authoritative). First gate runs: zero dangling paths; local-only pins `7409242`/`f133ce7`; lessons count 10 at threshold 10 — trip recorded for the next authorized sweep. Scoped review blocker F1–F4 fixed. No thresholds, watermarks, or folds touched. |
 | 2026-07-27 | all | worktree then `f133ce7` | Hygiene pass (prior): full Status Index census (unindexed→0); Golden Rules; AGENTS/skill recipe; coalesce-check cancelled. |
-| 2026-07-17 | — (propagation; nothing folded) | source agent-guidance @ `b248e1c`; landed `bc7de9e` (runbook units) + `3c39cdd` (call-agent, plan, index row) | Delta wave per `docs/plans/2026-07-17-propagate-guidance-delta-wave-plan.md`. No thresholds, watermarks, or folds touched. |
+| 2026-07-17 | — (propagation; nothing folded) | source agent-guidance @ `b248e1c`; landed `bc7de9e` (runbook units) + `3c39cdd` (call-agent, plan, index row) | Delta wave per retired plan `2026-07-17-propagate-guidance-delta-wave-plan.md` at `197629e2`. No thresholds, watermarks, or folds touched. |
 | 2026-07-16 | all | `2f93ee5` (wave commit; source agent-guidance @ `fc23eae`) | First sweep at bootstrap: checked-deferred; 51 legacy declared backfill debt (superseded by 2026-07-27 census). |
 | (bootstrap) | — | — | Initialized by the agent-guidance scaffold. |

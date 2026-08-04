@@ -2,8 +2,9 @@
 
 **Date:** 2026-07-17
 
-**Status:** draft — threshold-triggered follow-up; design decision and
-independent review required before implementation
+**Status:** completed — implementation deferred by owner decision on
+2026-08-04; reconsider only with new evidence that current migration waiting
+causes material operational harm
 
 **Class:** 4 — this changes concurrent database-open behavior and failure
 timing on a published library surface. It crosses process, persistence, and
@@ -20,12 +21,30 @@ rows and 273.111 seconds at 50 million rows against a fixed 20-second wait.
 This artifact records the required follow-up proposal. It does not authorize
 or implement a timeout change.
 
+## Decision and Reconsideration
+
+Owner decision, 2026-08-04: do not implement this proposal under the current
+evidence. The measured large-database timings establish that the fixed waiter
+budget can expire during a healthy migration, but they do not establish enough
+current operational harm to justify a new progress protocol, compatibility
+surface, or longer default wait.
+
+This is deferred rather than rejected: the failure model remains plausible and
+the candidate designs remain historical input. Reconsider only when new
+evidence shows material impact, such as repeated concurrent-opener failures on
+representative current databases, a concrete affected downstream deployment,
+or measurements showing the supported migration path routinely exceeds the
+wait budget. Any reconsideration starts a new or explicitly reopened reviewed
+plan; this completed record does not authorize implementation.
+
 ## Source Documents
 
-- `docs/plans/2026-07-16-code-review-findings-remediation-plan.md` — F21 and
-  Unit H threshold rule.
-- `docs/plans/2026-07-16-code-review-findings-remediation-plan-f21-memo.md` —
-  production-path fixture protocol, raw measurements, and decision.
+- retired plan `2026-07-16-code-review-findings-remediation-plan.md` at
+  `197629e2` — F21 and Unit H threshold rule.
+- retired plan
+  `2026-07-16-code-review-findings-remediation-plan-f21-memo.md` at
+  `197629e2` — production-path fixture protocol, raw measurements, and
+  decision.
 - `README.md` — published SQLite behavior and safety contract.
 - `docs/specs/01-development-documentation-operating-model.md` [DOM-5],
   [DOM-10], [DOM-11], [DOM-15].
