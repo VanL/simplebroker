@@ -22,6 +22,9 @@ DB="${BROKER_DB:-${1:-.broker.db}}"
 QUEUE="${QUEUE:-events}"
 CHECKPOINT_FILE="${CHECKPOINT_FILE:-./.broker-worker-checkpoint}"
 BATCH_SIZE="${BATCH_SIZE:-100}"   # messages per batch before a batch-complete report
+case "$BATCH_SIZE" in
+    ''|*[!0-9]*|0) echo "Error: BATCH_SIZE must be a positive integer" >&2; exit 1 ;;
+esac
 
 # Example processing function — replace with your business logic.
 # Defined before the main loop so Bash can resolve it on first call.
