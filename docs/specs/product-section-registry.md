@@ -74,3 +74,5 @@ may return to `readme-only` per the ownership decision.
   `36e2f356`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md`
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
+- `docs/plans/2026-08-04-docs-information-architecture-plan.md` (README
+  loci relocated to `docs/guides/`; locus and TOC cells updated)

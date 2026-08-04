@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documented
+- Restructured the documentation around three purposes: the README now
+  carries the project theory, rapid CLI/API onboarding, and a router to
+  owning documents (2,520 → 818 lines). New how-to guides hold the depth:
+  `docs/guides/python.md` (advanced API, embedding, sidecar, reactor),
+  `docs/guides/configuration.md` (full `BROKER_*` catalog, project
+  scoping, security, tuning), and `docs/guides/backends.md`
+  (Postgres/Redis, backend authoring). Contributor and release process
+  moved to `CONTRIBUTING.md`; storage internals to
+  `docs/implementation/09-storage-schema-and-claim-lifecycle.md`; long
+  shell recipes to `examples/` (new `safe_worker.sh`;
+  `resilient_worker.sh` hardened: atomic trap checkpoint,
+  stop-on-delete-failure, validated `BATCH_SIZE` bound). Performance
+  numbers replaced with measured values (~1,700 ops/s mixed API use,
+  ~30,000 ops/s optimized, ~20 ops/s CLI). Delivery claims now cite the
+  exact spec clauses (`[SB-DELIVERY-1]`, `[SB-DELIVERY-5]`) instead of
+  bare "exactly-once." No product behavior changed.
+
 ## [6.0.0] - 2026-07-31
 
 ### Breaking
