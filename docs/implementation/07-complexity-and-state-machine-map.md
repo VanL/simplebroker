@@ -158,7 +158,7 @@ failure or cleanup order.
 | unit-suffix parser (13) | `_parse_with_unit_suffix` (6) | Consolidated suffix conversion without changing parser precedence. |
 | `cli.main` (69) | `main` (10) | Named parse, global action, target preparation, and explicit command-family dispatch phases. |
 | `cmd_move` (12) | `cmd_move` (5) | Named all/next modes and explicit bounded-generator closure. |
-| `cmd_watch` (17) | `cmd_watch` (4) | Named input resolution, callbacks, watcher creation, and shutdown. |
+| `cmd_watch` (17) | `cmd_watch` (10) | Kept input resolution and the stateful callback as named subproblems; recomposed banner selection, watcher construction, and ordered flush/stop cleanup into the lifecycle owner after locality review. |
 | `cmd_init` (11) | `cmd_init` (2) | Named SQLite and non-SQL target initialization. |
 | `DBConnection.get_connection` (11) | `get_connection` (6) | One retry owner for normal and shared connection acquisition. |
 | `DBConnection.cleanup` (17) | `cleanup` (10) | Atomic ownership drain plus one best-effort close path. |
@@ -280,4 +280,5 @@ findings must update source, registry, and policy evidence atomically.
 
 ## Related Plan
 
+- `docs/plans/2026-08-04-cmd-watch-locality-plan.md`
 - `docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md`

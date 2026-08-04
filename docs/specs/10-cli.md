@@ -105,6 +105,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-04-cmd-watch-locality-plan.md` (behavior-preserving
+  command-lifecycle locality)
 - retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
   `36e2f356`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md` (Phase 2B)

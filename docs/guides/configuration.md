@@ -1,12 +1,13 @@
 # Configuration, Scoping, and Tuning
 
-This guide is the home for SimpleBroker configuration: the `BROKER_*`
-environment variables users and embedders set, database scoping and
-discovery, project configuration files, security notes, and performance
-tuning. The README carries only the most-used settings. `load_config()`
-documents 31 keys in total; the catalog below covers the ones with
-user-facing effect, and the remainder are embedder plumbing reached
-through `resolve_config()`.
+This guide is the home for SimpleBroker configuration: every `BROKER_*`
+environment variable, database scoping and discovery, project
+configuration files, security notes, and performance tuning. The README
+carries only the most-used settings. `load_config()` documents 31 keys;
+all 31 appear in this guide — most in the catalog below, with
+`BROKER_PROJECT_SCOPE`, `BROKER_DEFAULT_DB_LOCATION`, and
+`BROKER_MAX_MESSAGE_SIZE` documented in the Project scoping and Security
+sections where they belong.
 
 Public discovery callables are normative in
 [`docs/specs/16-python-library-api.md`](../specs/16-python-library-api.md)
@@ -63,6 +64,30 @@ pass. They share scheduling and eligibility, not per-pass deletion volume.
 **Watcher Tuning:**
 - `BROKER_INITIAL_CHECKS` - Number of checks with zero delay (default: 100)
 - `BROKER_MAX_INTERVAL` - Maximum polling interval in seconds (default: 0.1)
+- `BROKER_BURST_SLEEP` - Sleep between burst-mode checks in seconds (default: 0.00001)
+- `BROKER_JITTER_FACTOR` - Jitter factor applied to polling intervals to avoid thundering-herd wakeups (default: 0.15)
+- `BROKER_SKIP_IDLE_CHECK` - Skip the idle-queue optimization check (default: false; leave unset unless diagnosing watcher behavior)
+
+**Generator Batching:**
+- `BROKER_GENERATOR_BATCH_SIZE` - Rows fetched per batch by generator methods such as `read_generator()` (default: 100)
+
+**Diagnostics:**
+- `BROKER_DEBUG` - Enable debug output (default: off)
+- `BROKER_LOGGING_ENABLED` - Enable logging output, including the watcher's default error handler (default: off)
+
+**Backend Selection (used with the Postgres/Redis extensions; see the
+[backends guide](backends.md)):**
+- `BROKER_BACKEND` - Backend name (default: `sqlite`)
+- `BROKER_BACKEND_TARGET` - Full backend target (DSN/URL); when set, overrides the host/port/database fields (default: empty)
+- `BROKER_BACKEND_HOST` - Backend host (default: `localhost`)
+- `BROKER_BACKEND_PORT` - Backend port (default: 5432)
+- `BROKER_BACKEND_USER` - Backend user (default: `postgres`)
+- `BROKER_BACKEND_PASSWORD` - Backend password; prefer this env var over embedding secrets in `.broker.toml` (default: empty)
+- `BROKER_BACKEND_DATABASE` - Backend database name (default: `simplebroker`)
+- `BROKER_BACKEND_SCHEMA` - Postgres schema for broker tables (default: `simplebroker_pg_v1`)
+
+A project `.broker.toml` owns backend target fields when present; env
+remains the right place for secret material (see Precedence rules).
 
 **Database Naming:**
 - `BROKER_DEFAULT_DB_NAME` - name of the broker database file (default: .broker.db)

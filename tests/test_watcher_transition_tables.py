@@ -628,3 +628,51 @@ pathlib.Path(result_path).write_text(str(result), encoding="utf-8")
         probe = Queue("after", db_path=path)
         probe.write("watcher cleaned")
         probe.close()
+
+
+def test_cmd_watch_wires_ordinary_constructor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = str(tmp_path / "WIRE_ORDINARY_CONSTRUCTOR.db")
+    captured: dict[str, Any] = {"run_calls": 0, "stop_calls": 0}
+
+    class CapturingWatcher:
+        def __init__(
+            self,
+            queue_name: str,
+            handler: Any,
+            **kwargs: Any,
+        ) -> None:
+            captured.update(
+                queue_name=queue_name,
+                handler=handler,
+                db=kwargs["db"],
+                peek=kwargs["peek"],
+                after_timestamp=kwargs["after_timestamp"],
+            )
+
+        def run_forever(self) -> None:
+            captured["run_calls"] += 1
+
+        def stop(self) -> None:
+            captured["stop_calls"] += 1
+
+    monkeypatch.setattr(commands_module, "QueueWatcher", CapturingWatcher)
+
+    result = cmd_watch(
+        path,
+        "jobs",
+        quiet=True,
+        peek=True,
+        after_str="1705329000s",
+    )
+
+    assert result == 0
+    assert captured["queue_name"] == "jobs"
+    assert callable(captured["handler"])
+    assert captured["db"] == path
+    assert captured["peek"] is True
+    assert captured["after_timestamp"] == 1705329000000000000
+    assert captured["run_calls"] == 1
+    assert captured["stop_calls"] == 1

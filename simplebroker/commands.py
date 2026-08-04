@@ -1236,26 +1236,6 @@ def _resolve_watch_inputs(
     return canonical_queue, canonical_move_to, after_timestamp
 
 
-def _announce_watch(
-    canonical_queue: str,
-    *,
-    canonical_move_to: str | None,
-    peek: bool,
-    quiet: bool,
-) -> None:
-    """Print the selected watch mode unless diagnostics are quiet."""
-    if quiet:
-        return
-    mode = "peek" if peek else "consume"
-    if canonical_move_to is not None:
-        mode = f"move to {canonical_move_to}"
-    print(
-        f"Watching queue '{canonical_queue}' ({mode} mode)...",
-        file=sys.stderr,
-    )
-    sys.stderr.flush()
-
-
 def _watch_message_handler(
     *,
     json_output: bool,
@@ -1285,45 +1265,6 @@ def _watch_message_handler(
             raise StopWatching from None
 
     return handle_message
-
-
-def _create_watcher(
-    db_path: DBTarget,
-    canonical_queue: str,
-    canonical_move_to: str | None,
-    handle_message: Callable[[str, int], None],
-    *,
-    peek: bool,
-    after_timestamp: int | None,
-) -> QueueWatcher | QueueMoveWatcher:
-    """Create the watcher selected by the command mode."""
-    if canonical_move_to is not None:
-        return QueueMoveWatcher(
-            canonical_queue,
-            canonical_move_to,
-            handle_message,
-            db=db_path,
-        )
-    return QueueWatcher(
-        canonical_queue,
-        handle_message,
-        db=db_path,
-        peek=peek,
-        after_timestamp=after_timestamp,
-    )
-
-
-def _finish_watch(watcher: QueueWatcher | QueueMoveWatcher | None) -> None:
-    """Flush command output and stop an initialized watcher."""
-    try:
-        sys.stdout.flush()
-    except OSError as error:
-        if not _is_closed_pipe_error(error):
-            raise
-        _redirect_stdout_to_devnull()
-    sys.stderr.flush()
-    if watcher is not None:
-        watcher.stop()
 
 
 def cmd_watch(
@@ -1363,12 +1304,15 @@ def cmd_watch(
         return EXIT_ERROR
     canonical_queue, canonical_move_to, after_timestamp = watch_inputs
 
-    _announce_watch(
-        canonical_queue,
-        canonical_move_to=canonical_move_to,
-        peek=peek,
-        quiet=quiet,
-    )
+    if not quiet:
+        mode = "peek" if peek else "consume"
+        if canonical_move_to is not None:
+            mode = f"move to {canonical_move_to}"
+        print(
+            f"Watching queue '{canonical_queue}' ({mode} mode)...",
+            file=sys.stderr,
+        )
+        sys.stderr.flush()
     handle_message = _watch_message_handler(
         json_output=json_output,
         show_timestamps=show_timestamps,
@@ -1377,14 +1321,21 @@ def cmd_watch(
     watcher: QueueWatcher | QueueMoveWatcher | None = None
 
     try:
-        watcher = _create_watcher(
-            db_path,
-            canonical_queue,
-            canonical_move_to,
-            handle_message,
-            peek=peek,
-            after_timestamp=after_timestamp,
-        )
+        if canonical_move_to is not None:
+            watcher = QueueMoveWatcher(
+                canonical_queue,
+                canonical_move_to,
+                handle_message,
+                db=db_path,
+            )
+        else:
+            watcher = QueueWatcher(
+                canonical_queue,
+                handle_message,
+                db=db_path,
+                peek=peek,
+                after_timestamp=after_timestamp,
+            )
         watcher.run_forever()
     except KeyboardInterrupt:
         return EXIT_SUCCESS
@@ -1392,7 +1343,15 @@ def cmd_watch(
         _emit_error(error, code="ERROR", json_output=json_output)
         return EXIT_ERROR
     finally:
-        _finish_watch(watcher)
+        try:
+            sys.stdout.flush()
+        except OSError as error:
+            if not _is_closed_pipe_error(error):
+                raise
+            _redirect_stdout_to_devnull()
+        sys.stderr.flush()
+        if watcher is not None:
+            watcher.stop()
 
     return EXIT_SUCCESS
 
