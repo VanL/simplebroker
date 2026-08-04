@@ -28,109 +28,95 @@ dependencies and stores its state in one SQLite database.
 catalogs, examples, and short restatements with links. Agents should prefer
 `docs/agent-kernel.md` for use orientation.
 
+## How SimpleBroker Thinks
+
+One mental model explains the whole tool. Cooperating processes exchange
+durable messages through named queues on one resolved broker target.
+SimpleBroker owns the semantics of the queue operations: write, claim,
+peek, move, delete, watch. The backend owns storage and topology: SQLite
+is the local default, and optional Postgres or Redis/Valkey services
+supply shared storage with their own replication, availability, and
+recovery. The application owns what messages mean: task execution,
+business retries, worker topology, and completion.
+
+Four rules shape the code and the API:
+
+1. **One config path.** Runtime knobs are `BROKER_*` keys, loaded from
+   the environment and normalized through one typed path
+   (`resolve_config()`). Embedders translate their own settings into
+   those keys instead of inventing a second mechanism.
+2. **No base runtime dependencies.** The default install keeps
+   `dependencies = []`. Optional backends live in separate packages.
+3. **Public API first.** Embed against the names exported from
+   `simplebroker` and `simplebroker.ext`. Underscore-prefixed modules
+   are implementation details.
+4. **CLI and library share one operational model.** `broker write tasks
+   "hi"` and `Queue("tasks").write("hi")` mean the same queue operation
+   over the same resolved target.
+
+Delivery language is deliberately narrow. A read claims the message
+atomically, and the claim commits before your code sees the message —
+the consume claim boundary, `[SB-DELIVERY-1]`. A claim is broker
+delivery state, not proof that your application finished the work. For
+work that must survive crashes, reserve with an atomic move and delete
+by ID after success (see [Critical Safety Notes](#critical-safety-notes)).
+
+SimpleBroker is **not** a broker fleet, managed queue service, replicated
+event stream, pub/sub platform, distributed task framework, or
+application orchestration system. This is an ownership boundary, not a
+host-count claim. Cooperating processes
+raise distributed-systems issues, and optional Postgres or Redis backends can
+serve clients on multiple hosts. SimpleBroker owns queue-operation semantics;
+the backend owns service topology, replication, availability, and recovery;
+the application owns work execution and business retries. SQLite files remain
+local-only: do not put them on NFS or another shared network filesystem.
+
+The governed conceptual account behind this section is
+[docs/program-theory.md](https://github.com/VanL/simplebroker/blob/main/docs/program-theory.md);
+this README restates it for orientation and never overrides it.
+
 ## Recommended For
 
 - **Python projects that need a queue without infrastructure.** Most queue
   stacks assume Redis, RabbitMQ, Celery, or a managed service. SimpleBroker's
   default install does not. That matters for tools shipped to users who should
-  not have to set up a queue server.
+  not have to set up a queue server. Zero configuration: no servers, no
+  daemons; each directory gets its own isolated `.broker.db` with ACID
+  durability and safe concurrent access, at ~1,700 ops/second of mixed
+  API use.
 - **Shell scripts, cron jobs, and CI/CD pipelines.** `broker write tasks
-  "build #123"` composes with pipes, exit codes, and `--json` like a Unix tool.
+  "build #123"` composes with pipes, exit codes, and `--json` like a Unix
+  tool — decouple script stages, coordinate build steps, buffer logs, or
+  pass work between processes on one machine.
 - **Coding agents that need a queue primitive.** The CLI gives agents a durable
   coordination point without an MCP server, daemon, or project-specific setup.
 - **Library and tool authors embedding queue semantics.** Use a small client or
   context object over SimpleBroker, translate your app settings into `BROKER_*`
   config, and hand out queues bound to one resolved broker target. Weft is the
   reference implementation of this pattern.
+- **Event-driven workflows** via the built-in real-time watcher.
+
+**Not for:** Broker fleets, pub/sub, distributed task frameworks, application
+orchestration, or high-frequency trading.
 
 ## Table of Contents
 
 - [SimpleBroker](#simplebroker)
+  - [How SimpleBroker Thinks](#how-simplebroker-thinks)
   - [Recommended For](#recommended-for)
-  - [Table of Contents](#table-of-contents)
-  - [Features](#features)
-  - [Use Cases](#use-cases)
   - [Installation](#installation)
   - [Quick Start](#quick-start)
   - [Command Reference](#command-reference)
-    - [Global Options](#global-options)
-    - [Commands](#commands)
-      - [Queue Aliases](#queue-aliases)
-    - [Command Options](#command-options)
-    - [Exit Codes](#exit-codes)
   - [Critical Safety Notes](#critical-safety-notes)
-    - [Safe Message Handling](#safe-message-handling)
-    - [Robust message handling with `watch`](#robust-message-handling-with-watch)
   - [Core Concepts](#core-concepts)
-    - [Timestamps as Message IDs](#timestamps-as-message-ids)
-    - [JSON for Safe Processing](#json-for-safe-processing)
-    - [Filtering by message id (`--after` / `--before`)](#filtering-by-message-id---after----before)
   - [Common Patterns](#common-patterns)
   - [Real-time Queue Watching](#real-time-queue-watching)
-    - [Move Mode (`--move`)](#move-mode---move)
   - [Python API](#python-api)
-    - [Delivery guarantees](#delivery-guarantees)
-    - [Queue metadata](#queue-metadata)
-    - [Latest pending timestamp](#latest-pending-timestamp)
-    - [Generating timestamps without writing](#generating-timestamps-without-writing)
-    - [Inserting messages with exact IDs](#inserting-messages-with-exact-ids)
-    - [Tracking the last generated timestamp](#tracking-the-last-generated-timestamp)
-    - [Thread-Based Background Processing](#thread-based-background-processing)
-    - [Context Manager Support](#context-manager-support)
-    - [Advanced: Custom Extensions](#advanced-custom-extensions)
-    - [Sidecar tables (advanced)](#sidecar-tables-advanced)
-    - [Reactor example (advanced)](#reactor-example-advanced)
   - [Embedding SimpleBroker in Your Project](#embedding-simplebroker-in-your-project)
-  - [Performance \& Tuning](#performance--tuning)
-    - [Cross-Backend Benchmarking](#cross-backend-benchmarking)
-    - [Environment Variables](#environment-variables)
+  - [Performance & Tuning](#performance--tuning)
   - [Project Scoping](#project-scoping)
-    - [Basic Project Scoping](#basic-project-scoping)
-    - [Global Scope](#global-scope)
-    - [Project Database Names](#project-database-names)
-    - [Project Config Names](#project-config-names)
-    - [Error Behavior When No Project Database Found](#error-behavior-when-no-project-database-found)
-    - [Project Initialization](#project-initialization)
-    - [Precedence Rules](#precedence-rules)
-    - [Security Notes](#security-notes)
-    - [Common Use Cases](#common-use-cases)
-  - [Architecture \& Technical Details](#architecture--technical-details)
-  - [Development \& Contributing](#development--contributing)
-    - [Releases](#releases)
+  - [Going Further](#going-further)
   - [License](#license)
-  - [Acknowledgments](#acknowledgments)
-
-## Features
-
-- **Zero configuration** - No servers, daemons, or complex setup
-- **SQLite-backed** - Rock-solid reliability with true ACID guarantees
-- **Concurrent safe** - Multiple processes can read/write simultaneously
-- **Simple CLI** - Intuitive commands that work with pipes and scripts
-- **Portable** - Each directory gets its own isolated `.broker.db`
-- **Fast** - 1000+ messages/second throughput
-- **Lightweight** - No external dependencies and a compact operational model
-- **Real-time** - Built-in watcher for event-driven workflows
-
-## Use Cases
-
-- **Shell Scripting:** Decouple stages of a complex script
-- **Background Jobs:** Manage tasks for cron jobs or systemd services
-- **Development:** Simple message queue for local development without Docker
-- **Data Pipelines:** Pass file paths or data chunks between processing steps
-- **CI/CD Pipelines:** Coordinate build stages without external dependencies
-- **Log Processing:** Buffer logs before aggregation or analysis
-- **Simple IPC:** Communication between processes on the same machine
-
-**Good for:** Scripts, cron jobs, small services, development  
-**Not for:** Broker fleets, pub/sub, distributed task frameworks, application
-orchestration, or high-frequency trading
-
-This is an ownership boundary, not a host-count claim. Cooperating processes
-raise distributed-systems issues, and optional Postgres or Redis backends can
-serve clients on multiple hosts. SimpleBroker owns queue-operation semantics;
-the backend owns service topology, replication, availability, and recovery;
-the application owns work execution and business retries. SQLite files remain
-local-only: do not put them on NFS or another shared network filesystem.
 
 ## Installation
 
@@ -505,26 +491,6 @@ done
 </details>
 
 <details>
-<summary>Multiple Queues</summary>
-
-```bash
-# Different queues for different purposes
-$ broker write emails "send welcome to user@example.com"
-$ broker write logs "2023-12-01 system started"
-$ broker write metrics "cpu_usage:0.75"
-
-$ broker list
-emails
-logs
-metrics
-$ broker list --stats
-emails: 1
-logs: 1
-metrics: 1
-```
-</details>
-
-<details>
 <summary>Fan-out with Broadcast</summary>
 
 ```bash
@@ -818,43 +784,6 @@ Do not put SQLite databases on network filesystems; use the Postgres or
 Redis backends for multi-host access.
 
 
-## Architecture & Technical Details
-
-<details>
-<summary>Design Philosophy</summary>
-
-SimpleBroker is optimized for boring deployment and predictable embedding.
-Four rules shape the code and API:
-
-1. **One config path.** Supported runtime knobs are represented as `BROKER_*`
-   keys, loaded from environment variables by `load_config()`, and normalized
-   through `resolve_config()`. Not every internal constant is user-configurable;
-   the contract is that runtime configuration goes through one typed path.
-2. **No base runtime dependencies.** The root `pyproject.toml` keeps
-   `dependencies = []`. Optional backends live in separate packages such as
-   `simplebroker-pg` and `simplebroker-redis`. Small portability modules are
-   kept in-tree when they protect the zero-dependency install path.
-3. **Public API first.** Application embedders should use the names exported
-   from `simplebroker`: `Queue`, watcher classes, broker target helpers,
-   `open_broker()`, and `resolve_config()`. Backend authors should use
-   `simplebroker.ext`. Underscore-prefixed modules are implementation details.
-4. **CLI and library share the same operational model.** `broker write tasks
-   "hi"` and `Queue("tasks").write("hi")` should mean the same queue operation
-   over the same resolved target. The CLI has shell-specific affordances and
-   the library has Python-specific helpers, but the queue semantics stay shared.
-
-</details>
-
-The mechanical internals — storage schema, claim lifecycle, and
-cross-process setup coordination — are explained in
-[docs/implementation/09-storage-schema-and-claim-lifecycle.md](docs/implementation/09-storage-schema-and-claim-lifecycle.md).
-Security posture (queue-name validation, size limits, file permissions,
-config-secret handling) is in the
-[configuration guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/configuration.md).
-Optional Postgres and Redis/Valkey backends, backend selection, and
-backend authoring are in the
-[backends guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/backends.md).
-
 ## Development & Contributing
 
 Development setup, the test harness, lint and type checks, and the
@@ -862,6 +791,21 @@ release procedure are in
 [CONTRIBUTING.md](https://github.com/VanL/simplebroker/blob/main/CONTRIBUTING.md).
 Keep it simple, maintain backward compatibility, add tests, and update
 documentation.
+
+
+## Going Further
+
+| Need | Where |
+|------|-------|
+| Agent-oriented use and embedding kernel | [docs/agent-kernel.md](https://github.com/VanL/simplebroker/blob/main/docs/agent-kernel.md) |
+| Advanced Python API, embedding, sidecar, reactor | [Python guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/python.md) |
+| Full configuration, scoping, tuning, security | [Configuration guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/configuration.md) |
+| Postgres / Redis backends and backend authoring | [Backends guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/backends.md) |
+| Exact behavior contracts (`[SB-*]` codes) | [docs/specs/](https://github.com/VanL/simplebroker/blob/main/docs/specs/00-specs-index.md) — CLI `docs/specs/10-cli.md`, delivery `docs/specs/11-delivery.md`, broadcast `docs/specs/12-broadcast.md`, identity `docs/specs/13-message-identity.md`, selection `docs/specs/14-timestamp-selection.md`, dump/load `docs/specs/15-persistence-io.md`, library `docs/specs/16-python-library-api.md`, operations `docs/specs/17-ops.md` |
+| Runnable examples (workers, DLQ, migration, reactor) | [examples/](https://github.com/VanL/simplebroker/blob/main/examples/README.md) |
+| Storage internals and design rationale | [docs/implementation/](https://github.com/VanL/simplebroker/blob/main/docs/implementation/00-implementation-index.md) |
+| Behavior changes by release | [CHANGELOG.md](https://github.com/VanL/simplebroker/blob/main/CHANGELOG.md) |
+| Contributing and releases | [CONTRIBUTING.md](https://github.com/VanL/simplebroker/blob/main/CONTRIBUTING.md) |
 
 
 ## License
