@@ -54,6 +54,10 @@ When working with message queues:
 
 ### Bash Scripts
 
+- **[safe_worker.sh](safe_worker.sh)** - Single-consumer watch-peek-and-acknowledge loop
+  - `broker watch --peek --json` stream; delete by exact ID only after success
+  - Not safe under concurrent workers; use move-to-inflight instead (see `docs/agent-kernel.md`)
+
 - **[resilient_worker.sh](resilient_worker.sh)** - Single-consumer peek-and-ack sketch with checkpoint recovery
   - One `peek` per message (not `peek --all` + delete-in-loop)
   - Explicit `-f` database path (`BROKER_DB` or first arg)

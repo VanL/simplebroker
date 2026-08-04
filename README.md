@@ -394,29 +394,10 @@ messages.
 Normative delivery contract:
 `docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
 
-Single-consumer example:
-
-```bash
-#!/bin/bash
-# safe-worker.sh - single-consumer peek-and-acknowledge example
-# For concurrent workers, use move-to-inflight instead.
-
-# Watch in peek mode, which does not remove messages
-broker watch tasks --peek --json | while IFS= read -r line; do
-    message=$(echo "$line" | jq -r '.message')
-    timestamp=$(echo "$line" | jq -r '.timestamp')
-    
-    echo "Processing message ID: $timestamp"
-    if process_task "$message"; then
-        # Success: remove the specific message by its unique ID
-        broker delete tasks -m "$timestamp"
-    else
-        echo "Failed to process, message remains in queue for retry." >&2
-        # Optional: move to a dead-letter queue
-        # echo "$message" | broker write failed_tasks -
-    fi
-done
-```
+Single-consumer example: [`examples/safe_worker.sh`](examples/safe_worker.sh)
+watches in peek mode and acknowledges each message by deleting its exact
+ID after successful processing. For concurrent workers, use the
+move-to-inflight recipe in [`docs/agent-kernel.md`](docs/agent-kernel.md).
 
 ## Core Concepts
 
@@ -597,22 +578,8 @@ $ ssh server "cd /app && broker read tasks"
 $ broker -f /var/lib/myapp/queue.db write tasks "backup database"
 $ broker -f /var/lib/myapp/queue.db read tasks
 
-# Reserving work using move
-$ msg_json=$(broker move todo in-process --json 2>/dev/null)
-  if [ -n "$msg_json" ]; then
-      msg_id=$(echo "$msg_json" | jq -r '.timestamp')
-      msg_data=$(echo "$msg_json" | jq -r '.message')
-
-      echo "Processing message $msg_id: $msg_data"
-
-      # Process the message here
-      # ...
-
-      # Delete after successful processing
-      broker delete in-process -m "$msg_id"
-  else
-      echo "No messages to process"
-  fi
+# Reserving work with an atomic move: see the move-to-inflight recipe
+# in docs/agent-kernel.md (safe under concurrent workers).
 
 # broker move --all --json emits ndjson: one JSON object per line
 $ broker move todo in-process --all --json | while IFS= read -r msg_json; do
@@ -639,80 +606,9 @@ broker move dlq tasks --all
 ```
 </details>
 
-<details>
-<summary>Resilient Worker with Checkpointing</summary>
-
-```bash
-#!/bin/bash
-# resilient-worker.sh - Process messages with checkpoint recovery
-
-QUEUE="events"
-CHECKPOINT_FILE="/var/lib/myapp/checkpoint"
-BATCH_SIZE=100
-
-# Load last checkpoint (default to 0 if first run)
-last_checkpoint=$(cat "$CHECKPOINT_FILE" 2>/dev/null || echo 0)
-echo "Starting from checkpoint: $last_checkpoint"
-
-while true; do
-    echo "Processing new messages..."
-    
-    # Process messages one at a time with peek-then-delete acknowledgement
-    processed=0
-    while [ $processed -lt $BATCH_SIZE ]; do
-        # Peek exactly one message newer than checkpoint without removing it
-        message_data=$(broker peek "$QUEUE" --json --after "$last_checkpoint" 2>/dev/null)
-        
-        # Check if we got a message
-        if [ -z "$message_data" ]; then
-            echo "No more messages to process"
-            break
-        fi
-        
-        # Extract message and timestamp
-        message=$(echo "$message_data" | jq -r '.message')
-        timestamp=$(echo "$message_data" | jq -r '.timestamp')
-        
-        # Process the message
-        echo "Processing: $message"
-        if ! process_event "$message"; then
-            echo "Error processing message, will retry on next run"
-            # Exit without deleting or checkpointing - failed message will be reprocessed
-            exit 1
-        fi
-
-        # Acknowledge successful processing by deleting the exact message
-        if ! broker delete "$QUEUE" -m "$timestamp" >/dev/null 2>&1; then
-            echo "Warning: processed message $timestamp but failed to delete it" >&2
-            echo "It may be reprocessed on the next run" >&2
-            exit 1
-        fi
-        
-        # Atomically update checkpoint ONLY after successful processing and delete
-        echo "$timestamp" > "$CHECKPOINT_FILE.tmp"
-        mv "$CHECKPOINT_FILE.tmp" "$CHECKPOINT_FILE"
-        
-        # Update our local variable for next iteration
-        last_checkpoint="$timestamp"
-        processed=$((processed + 1))
-    done
-    
-    if [ $processed -eq 0 ]; then
-        echo "No messages processed, sleeping..."
-        sleep 5
-    else
-        echo "Batch complete, processed $processed messages"
-    fi
-done
-```
-
-Key features:
-- **No data loss from pipe buffering** - Peeks and acknowledges messages one at a time
-- **Atomic checkpoint updates** - Uses temp file + rename for crash safety
-- **Per-message checkpointing** - Updates checkpoint after each successful message
-- **Batch processing** - Processes up to BATCH_SIZE messages at a time for efficiency
-- **Failure recovery** - On error, exits without deleting or checkpointing so failed message is retried
-</details>
+For a checkpointing worker with atomic checkpoint updates and
+per-message acknowledge-by-delete, see
+[`examples/resilient_worker.sh`](examples/resilient_worker.sh).
 
 ## Real-time Queue Watching
 

@@ -91,3 +91,4 @@ weft/
 
 # Codex CLI session metadata
 .context/
+.gstack/
