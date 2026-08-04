@@ -22,7 +22,8 @@ DB="${BROKER_DB:-${1:-.broker.db}}"
 QUEUE="${QUEUE:-events}"
 CHECKPOINT_FILE="${CHECKPOINT_FILE:-./.broker-worker-checkpoint}"
 # Messages per batch before a batch-complete report. Empty/unset uses the
-# default; any set value must be digits only and >= 1 (00, 0 rejected).
+# default; any set value must be digits only, >= 1, and within the shell's
+# integer range (0, 00, and out-of-range values are rejected).
 BATCH_SIZE="${BATCH_SIZE:-100}"
 case "$BATCH_SIZE" in
     ''|*[!0-9]*) echo "Error: BATCH_SIZE must be a positive integer" >&2; exit 1 ;;
