@@ -103,6 +103,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | active — class 4; shared-runner transaction ownership and reactor sidecar-boundary correction |
 | 2026-08-04-docs-information-architecture-plan.md | completed — class 4; README 2,520→818 lines around three purposes; docs/guides tier, CONTRIBUTING.md, implementation doc 09 shipped; move ledger + 4-row deviation log; Codex plan review PASS, slice review (5 findings fixed), completion review PASS at `154524e` |
 | 2026-08-04-cmd-watch-locality-plan.md | completed — class 3; three one-use lifecycle helpers recomposed into `cmd_watch`; score 10; 2407 tests passed; independent implementation review PASS at `c403c5eb` |
+| 2026-08-04-worker-example-error-handling-plan.md | completed — class 4; published worker processing, acknowledgement, and broker-error handling repaired; 2,429 tests passed; independent review PASS |
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-extension-monorepo-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |

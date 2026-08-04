@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Corrected the published shell workers so processing and acknowledgement
+  failures stop before newer messages, broker failures remain visible instead
+  of becoming successful pipeline exits or "No new messages," and only CLI
+  exit `2` is treated as an empty queue. `safe_worker.sh` now polls one message
+  at a time and requires an explicit `PROCESS_TASK`; `resilient_worker.sh` now
+  rejects corrupt checkpoints and successful peeks with empty or invalid JSON.
+  Both preserve trailing-newline payloads and reject NUL before processing or
+  acknowledgement because Bash variables cannot represent NUL.
+
 ### Documented
 - Restructured the documentation around three purposes: the README now
   carries the project theory, rapid CLI/API onboarding, and a router to

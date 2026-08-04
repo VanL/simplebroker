@@ -54,14 +54,19 @@ When working with message queues:
 
 ### Bash Scripts
 
-- **[safe_worker.sh](safe_worker.sh)** - Single-consumer watch-peek-and-acknowledge loop
-  - `broker watch --peek --json` stream; delete by exact ID only after success
+- **[safe_worker.sh](safe_worker.sh)** - Single-consumer one-message peek-and-acknowledge loop
+  - Set `PROCESS_TASK` to one executable command or path; the message is passed as one quoted argument
+  - One `broker peek --json` per message; delete by exact ID only after success
+  - Exit on processing, acknowledgement, parse, or broker failure; only broker exit `2` means idle
+  - Preserve trailing newlines; reject NUL payloads because Bash variables cannot represent NUL
   - Not safe under concurrent workers; use move-to-inflight instead (see `docs/agent-kernel.md`)
 
 - **[resilient_worker.sh](resilient_worker.sh)** - Single-consumer peek-and-ack sketch with checkpoint recovery
   - One `peek` per message (not `peek --all` + delete-in-loop)
   - Explicit `-f` database path (`BROKER_DB` or first arg)
-  - Atomic checkpoint file updates; not safe under concurrent workers
+  - Optional `PROCESS_EVENT` executable for deterministic business handling; otherwise uses the demonstration handler
+  - Atomic, validated checkpoint file updates; operational broker errors are fatal
+  - Processing and acknowledgement failures stop the worker for later retry; not safe under concurrent workers
   - For concurrent job reservation see `docs/agent-kernel.md` (move-to-inflight)
 
 - **[dead_letter_queue.sh](dead_letter_queue.sh)** - Dead letter queue patterns for handling failures

@@ -194,5 +194,7 @@ _Implementation mapping_:
 
 - `docs/plans/2026-08-04-cmd-watch-locality-plan.md` (behavior-preserving
   `cmd_watch` lifecycle locality)
+- `docs/plans/2026-08-04-worker-example-error-handling-plan.md` (published
+  single-consumer workers stop on processing or acknowledgement failure)
 - retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
   `36e2f356`; see the ledger in `docs/plans/README.md`

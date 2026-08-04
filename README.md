@@ -381,8 +381,11 @@ Normative delivery contract:
 `docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
 
 Single-consumer example: [`examples/safe_worker.sh`](https://github.com/VanL/simplebroker/blob/main/examples/safe_worker.sh)
-watches in peek mode and acknowledges each message by deleting its exact
-ID after successful processing. For concurrent workers, use the
+polls one message at a time and acknowledges it by deleting its exact ID only
+after the configured `PROCESS_TASK` command succeeds. It exits on processing,
+acknowledgement, parse, or broker failure, so the current process cannot advance
+past a failed message. The Bash example preserves trailing newlines but rejects
+NUL payloads, which shell variables cannot represent. For concurrent workers, use the
 move-to-inflight recipe in
 [`docs/agent-kernel.md`](https://github.com/VanL/simplebroker/blob/main/docs/agent-kernel.md).
 
@@ -574,8 +577,11 @@ broker move dlq tasks --all
 </details>
 
 For a checkpointing worker with atomic checkpoint updates and
-per-message acknowledge-by-delete, see
+per-message acknowledge-by-delete, explicit empty-queue exit handling, and
+fatal operational-error handling, see
 [`examples/resilient_worker.sh`](https://github.com/VanL/simplebroker/blob/main/examples/resilient_worker.sh).
+Set `PROCESS_EVENT` to one executable command/path to replace its demonstration
+handler.
 
 ## Real-time Queue Watching
 
