@@ -18,10 +18,18 @@ for registered families.
 |---------|------|
 | `docs/program-theory.md` | Current conceptual account: purpose, mental model, concept ownership, durable principles/non-goals, tensions, and revisions; **not** exact behavior authority |
 | Root `README.md` | Human entry, command/env/API **catalogs**, examples, and concise restatements with links to canonical specs |
+| `docs/guides/` | Human **how-to tier**: task-oriented depth (advanced Python/embedding, configuration/scoping, backends) that restates and links canonical specs; never a competing SoT |
 | `docs/specs/` product sections (`[SB-*]`) | **Normative** for every registered product concern (`canonical-spec` in the registry) |
 | `CHANGELOG.md` | Behavior deltas for published releases |
 | `docs/agent-kernel.md` | Agent-oriented **view** of use-level rules; must not invent obligations beyond the winning SoT |
 | `llms.txt` | Machine-readable link index (not normative) |
+| `CONTRIBUTING.md` | Contributor entry: development setup, test harness, release procedure |
+
+**Duplication resolution rule:** a normative statement resolves to a
+spec-code link; orientation gets one short README restatement; a runnable
+recipe has exactly one home (agent kernel for agent recipes, `examples/`
+for shell scripts, guides for embedding narrative) and every other surface
+links that home.
 
 **Conflict rule:** For a registered product concern, the `canonical-spec`
 section in `docs/specs/product-section-registry.md` wins over README prose.

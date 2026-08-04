@@ -56,6 +56,8 @@ Product section authority: `product-section-registry.md`.
 
 - Root `README.md` — human entry, catalogs, and examples (exact behavior is
   owned by `canonical-spec` product sections in the registry)
+- `docs/guides/` — human how-to tier (advanced Python/embedding,
+  configuration, backends); restates and links canonical specs
 - `docs/agent-kernel.md` — agent use orientation
 - `docs/plans/` — execution
 - `docs/implementation/` — rationale and repository maps
