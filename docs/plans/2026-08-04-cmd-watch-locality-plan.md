@@ -1,7 +1,7 @@
 # `cmd_watch` Locality Plan
 
 Date: 2026-08-04
-Status: active
+Status: completed
 Class: 3 — behavior-preserving, one-module refactor. A zero-context
 implementer could easily change watcher construction or `finally` failure
 precedence without an explicit plan. No [DOM-5] risky trigger fires: this work
@@ -261,6 +261,7 @@ change requires another plan review.
 | 2026-08-04 | Independent plan re-review | Re-review after the four dispositions. | PASS: no remaining blockers; proof scope is bounded to one named test file and production scope remains one module. |
 | 2026-08-04 | Implementation preflight | Adding the constructor case inside `CLI_WATCH_TRANSITIONS` made its firing test Ruff C901 13. | Amended before production edits: keep the table unchanged and place the same proof in one standalone test in the already-approved file; independent re-review required. |
 | 2026-08-04 | Independent amendment re-review | Re-review standalone placement after the preflight stop. | PASS: all approved constructor assertions remain, the table is unchanged, normal Ruff is clean, and scope remains one test file plus one production module. |
+| 2026-08-04 | Independent implementation review | Review final source, test, implementation-map diff, and gate evidence. | PASS with no findings: behavior and failure precedence are unchanged, scope is exact, Ruff reports 10, and no replacement abstraction or suppression entered the diff. |
 
 ## Out of Scope
 
@@ -271,11 +272,11 @@ change requires another plan review.
 
 ## Fresh-Eyes Review
 
-- [ ] Exactly three helpers are inlined and two retained.
-- [ ] Their destinations and statement order are unambiguous.
-- [ ] Failure and cleanup precedence is explicit.
-- [ ] Verification uses real command boundaries and pinned Ruff measurement.
-- [ ] No unrelated metric or watcher redesign entered the plan.
+- [x] Exactly three helpers are inlined and two retained.
+- [x] Their destinations and statement order are unambiguous.
+- [x] Failure and cleanup precedence is explicit.
+- [x] Verification uses real command boundaries and pinned Ruff measurement.
+- [x] No unrelated metric or watcher redesign entered the plan.
 
 ## Execution Evidence
 
@@ -318,8 +319,18 @@ change requires another plan review.
 - `python3 bin/check-dom15-fixtures`, `bin/check-doc-paths`, and
   `bin/coalesce-check`: passed; coalescing reported 12 SHA claims, 3 foreign
   claims, and 0 retrieval cues.
-- `uv run --frozen --no-sync pytest`: passed, 2407 tests passed and 17 skipped
-  in 44.54 seconds.
+- `uv run --frozen --no-sync pytest`: passed twice. The final rerun against
+  current `HEAD` reported 2407 passed and 17 skipped in 50.66 seconds.
 
-Independent implementation review and residual-risk disposition remain before
-completion.
+### Review and residual risk
+
+- Independent implementation review passed with no findings. It verified the
+  exact helper delta, retained-helper stability, constructor arguments,
+  assignment timing, terminal outcomes, suppression ownership, closed-pipe and
+  cleanup precedence, test quality, Ruff score, and implementation-map text.
+- Residual risk is limited to Python cleanup precedence that is deliberately
+  unchanged and directly visible in the recomposed `finally` suite. The full
+  suite, real subprocess/queue watch cases, constructor characterization, and
+  source diff provide proportionate evidence for this reversible refactor.
+- Implementation code, the constructor characterization, related-plan links,
+  and the implementation-map reconciliation are present in `c403c5eb`.
