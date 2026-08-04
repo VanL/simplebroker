@@ -101,7 +101,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md | completed — class 5; zero reserved at exact-insert admission and ordinary Redis generated writes made allocation/publication atomic |
 | 2026-07-30-ruff-suppression-index-generator-plan.md | active — class 5+P; original scope completed 2026-07-31, reopened same day for Revision R1 keying the derived index on qualified symbols rather than lines |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | active — class 4; shared-runner transaction ownership and reactor sidecar-boundary correction |
-| 2026-08-04-docs-information-architecture-plan.md | active — class 4; three-purpose README, new docs/guides how-to tier, CONTRIBUTING.md split; independent plan review Codex PASS 2026-08-04 (4 rounds); execution authorized 2026-08-04 with recommended D1–D4 |
+| 2026-08-04-docs-information-architecture-plan.md | completed — class 4; README 2,520→818 lines around three purposes; docs/guides tier, CONTRIBUTING.md, implementation doc 09 shipped; move ledger + 4-row deviation log; Codex plan review PASS, slice review (5 findings fixed), completion review PASS at `154524e` |
 | pg-extra-packaging-and-python-support-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-backend-hardening-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |
 | postgres-extension-monorepo-plan.md | retired-pending — soft-retired 2026-07-27; source f133ce7 |

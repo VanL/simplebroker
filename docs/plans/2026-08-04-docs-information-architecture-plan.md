@@ -1,9 +1,30 @@
 # Docs Information Architecture Plan — Three-Purpose README and Guide Tier
 
 Date: 2026-08-04
-Status: active (index row is authoritative). Execution authorized by owner
-2026-08-04 "implement per plan"; D1–D4 resolved to the plan's recommended
-options.
+Status: completed (index row is authoritative). Execution authorized by
+owner 2026-08-04 "implement per plan"; D1–D4 resolved to the plan's
+recommended options. Completion review: Codex PASS at `154524e`.
+
+## Verification evidence (completion, 2026-08-04)
+
+- README: 2,520 lines at baseline `197629e` → 818 at completion. Guides:
+  python 827, configuration 463, backends 168; CONTRIBUTING 155;
+  implementation doc 09 created and registered.
+- Full `uv run pytest` exit 0 (Windows-only skips); the 11-file contract
+  selection plus `bin/check-dom15-fixtures` green at every commit
+  boundary (invariant 2 held; one late registry cell repaired next
+  commit, recorded as deviation).
+- Link/anchor audits clean after Phase A, Phase B, and closure
+  (read-only script, output "all links resolve").
+- TD.1 registry audit: loci verified against the final README; the two
+  discrepancies found by reviews (message-identity cell, selection cell)
+  were repaired and logged rather than silently fixed.
+- Independent reviews (Codex, per agent inventory): plan review PASS
+  after 4 rounds; Phase B slice review — 5 findings all fixed, rounds
+  2–4 closed at disposition; completion review PASS after 3 rounds
+  (round 1 timed out post-findings, handled per call-agent §4; final
+  verdict PASS at `154524e`). All dispositions in the Review Log.
+- Deviation Log: 4 rows, none pending.
 Class: 4 per [DOM-15] — crosses multiple documentation surfaces, relocates
 registered README loci, and retargets contract gates; no product-behavior
 change and no spec-wording change.
