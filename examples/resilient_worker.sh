@@ -28,7 +28,7 @@ BATCH_SIZE="${BATCH_SIZE:-100}"
 case "$BATCH_SIZE" in
     ''|*[!0-9]*) echo "Error: BATCH_SIZE must be a positive integer" >&2; exit 1 ;;
 esac
-[ "$BATCH_SIZE" -ge 1 ] || { echo "Error: BATCH_SIZE must be a positive integer" >&2; exit 1; }
+[ "$BATCH_SIZE" -ge 1 ] 2>/dev/null || { echo "Error: BATCH_SIZE must be a positive integer" >&2; exit 1; }
 
 # Example processing function — replace with your business logic.
 # Defined before the main loop so Bash can resolve it on first call.
