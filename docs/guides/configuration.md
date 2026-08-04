@@ -4,7 +4,7 @@ This guide is the home for SimpleBroker configuration: the `BROKER_*`
 environment variables users and embedders set, database scoping and
 discovery, project configuration files, security notes, and performance
 tuning. The README carries only the most-used settings. `load_config()`
-documents 32 keys in total; the catalog below covers the ones with
+documents 31 keys in total; the catalog below covers the ones with
 user-facing effect, and the remainder are embedder plumbing reached
 through `resolve_config()`.
 
@@ -96,7 +96,7 @@ export BROKER_PROJECT_SCOPE=true
 export BROKER_DEFAULT_DB_NAME=project-queue.db
 ```
 
-**Why so many `BROKER_*` settings?** `load_config()` documents 32 config keys
+**Why so many `BROKER_*` settings?** `load_config()` documents 31 config keys
 because SimpleBroker is also embedded by larger tools. Most users should never
 touch most of them. Embedders such as Weft translate their own namespace into
 those keys and pass the result through `resolve_config()`, which keeps
