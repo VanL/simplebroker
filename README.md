@@ -753,10 +753,17 @@ programmatic CLI equivalent) — is in the
 
 ## Performance & Tuning
 
-- **Throughput**: 1000+ messages/second on typical hardware
-- **Latency**: <10ms for write, <10ms for read
-- **Scalability**: Tested with 100k+ messages per queue
-- **Optimization**: Use `--all` for bulk operations
+On Apple-silicon laptops (M2 MacBook Air, M4 MacBook Pro): **~1,700
+ops/second** in regular mixed use through the Python API, **~30,000
+ops/second** in an optimized benchmark, and **~20 ops/second** through the
+CLI — each CLI call pays Python interpreter startup, which dominates the
+queue operation itself. Latency is <10ms per write or read, tested with
+100k+ messages per queue; use `--all` for bulk operations.
+
+For normal use in the embedding or shell-tool context, SimpleBroker is
+unlikely to be the bottleneck: the processes it coordinates typically take
+milliseconds to minutes per work item. Full numbers and tuning guidance:
+[configuration guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/configuration.md#performance-and-tuning).
 
 ### Cross-Backend Benchmarking
 

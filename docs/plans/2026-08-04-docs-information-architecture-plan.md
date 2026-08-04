@@ -184,6 +184,7 @@ change.
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
 | Plan TB.2 / Appendix B (no spec) | New implementation doc named `07-storage-schema-and-claim-lifecycle.md` | Created as `09-storage-schema-and-claim-lifecycle.md` | Numbers 07 and 08 already exist in `docs/implementation/`; the plan was drafted without checking the index. Content and registration unchanged | n/a — plan-internal naming, no spec touched |
+| Plan scope: relocation only (no spec) | Performance claims moved verbatim ("1000+ messages/second") | Replaced with owner-supplied measurements: ~1,700 ops/s mixed API use, ~30,000 ops/s optimized benchmark, ~20 ops/s CLI (Python startup), M2 Air / M4 Pro, plus not-the-bottleneck framing (README short form + configuration guide full form) | Owner instruction 2026-08-04 during execution; performance numbers are human catalog content, not a registered concern row, so no spec/registry gate applies | n/a — catalog content, owner-authorized |
 
 (Empty at plan approval. Append one row per departure from this plan during
 execution; must not remain `pending` past the completion gate.)

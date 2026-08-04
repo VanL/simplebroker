@@ -104,10 +104,25 @@ lets callers opt into the tradeoff.
 
 ## Performance and tuning
 
-- **Throughput**: 1000+ messages/second on typical hardware
+Measured on an M2 MacBook Air and an M4 MacBook Pro:
+
+- **~1,700 ops/second** — regular mixed use through the Python API
+- **~30,000 ops/second** — an optimized benchmark workload
+- **~20 ops/second** — CLI use; each CLI call starts a new Python
+  interpreter, and that startup cost dominates the queue operation itself
+
+Additional characteristics:
+
 - **Latency**: <10ms for write, <10ms for read
 - **Scalability**: Tested with 100k+ messages per queue
 - **Optimization**: Use `--all` for bulk operations
+
+Read these numbers in context. For normal use in the embedding or
+shell-tool context, SimpleBroker is unlikely to be the bottleneck: the
+processes it coordinates typically take milliseconds to minutes per work
+item. If the ~20 ops/second CLI ceiling matters to your workload, drive
+the broker through the Python API (or the `simplebroker.commands` layer)
+from a long-lived process instead of shelling out per message.
 
 For the cross-backend CLI benchmark harness, see the
 [backends guide](backends.md).
