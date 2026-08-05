@@ -16,9 +16,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at a time and requires an explicit `PROCESS_TASK`; `resilient_worker.sh` now
   rejects corrupt checkpoints and successful peeks with empty or invalid JSON.
   Both preserve trailing-newline payloads and reject NUL before processing or
-  acknowledgement because Bash variables cannot represent NUL.
+  acknowledgement because Bash variables cannot represent NUL. The workers now
+  require jq 1.7+ so 64-bit JSON IDs are not rounded, accept and canonically
+  target the full stored-ID range, stream bodies to handler stdin instead of
+  argv, and do not use the resilient worker's informational checkpoint as a
+  durable selection offset. Signal-time checkpoint failures also exit nonzero
+  explicitly.
+- Made `tests/test_worker_examples.py` collect on Windows by guarding the
+  Unix-only effective-user-ID probe.
+- Narrowly repair settled coverage shards whose exact installed schema contains
+  duplicate identical installed-version rows; conflicting versions and schema
+  shapes remain fatal.
 
 ### Documented
+- Corrected the README newline and dead-letter recipes, made specification links
+  work on PyPI, and documented the core-extension API-version handshake on both
+  first-party extension package pages.
 - Restructured the documentation around three purposes: the README now
   carries the project theory, rapid CLI/API onboarding, and a router to
   owning documents (2,520 → 818 lines). New how-to guides hold the depth:

@@ -1,9 +1,8 @@
 # Ruff Suppression Index Generator Plan
 
 Date: 2026-07-30
-Status: active — reopened 2026-07-31 for Revision R1 (symbol-keyed location
-index). The original scope completed 2026-07-31; R1 revises the derived index
-key and the one [DOM-10.1.1] sentence that grants its scope.
+Status: completed — the original stable-group generator and Revision R1's
+symbol-keyed location index landed.
 Class: 5+P. The base class is 5 because the implementation revises normative
 [DOM-10.1] and [DOM-10.1.1] verification policy. The `+P` modifier applies
 because the change materially alters how future suppressions are registered,

@@ -85,8 +85,8 @@ def _has_no_recoverable_coverage_data(path: Path) -> bool:
             connection.close()
 
 
-def _repair_missing_schema_version(path: Path) -> bool:
-    """Restore coverage.py's schema marker after interrupted initialization."""
+def _repair_schema_version_marker(path: Path) -> bool:
+    """Restore one valid marker after a narrow coverage initialization fault."""
 
     connection: sqlite3.Connection | None = None
     try:
@@ -98,7 +98,7 @@ def _repair_missing_schema_version(path: Path) -> bool:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-        if not set(_COVERAGE_SCHEMA_COLUMNS).issubset(tables):
+        if tables != set(_COVERAGE_SCHEMA_COLUMNS):
             return False
         for table, expected_columns in _COVERAGE_SCHEMA_COLUMNS.items():
             columns = tuple(
@@ -106,12 +106,16 @@ def _repair_missing_schema_version(path: Path) -> bool:
             )
             if columns != expected_columns:
                 return False
-        if (
-            connection.execute("SELECT version FROM coverage_schema").fetchone()
-            is not None
+        version_rows = connection.execute(
+            "SELECT version FROM coverage_schema"
+        ).fetchall()
+        if version_rows and not (
+            len(version_rows) > 1
+            and all(row == (SCHEMA_VERSION,) for row in version_rows)
         ):
             return False
 
+        connection.execute("DELETE FROM coverage_schema")
         connection.execute(
             "INSERT INTO coverage_schema (version) VALUES (?)",
             (SCHEMA_VERSION,),
@@ -174,7 +178,7 @@ def _settle_at_deadline(
 
     if last_error is not None:
         repaired_sources = (
-            [path for path in monitored if _repair_missing_schema_version(path)]
+            [path for path in monitored if _repair_schema_version_marker(path)]
             if inputs_are_stable
             else []
         )
@@ -331,8 +335,8 @@ def main() -> int:
     print(f"Combined {len(sources)} coverage data files into {data_file}")
     if repaired_sources:
         print(
-            f"Repaired {len(repaired_sources)} coverage data file(s) with a "
-            "missing schema version"
+            "Repaired schema version markers in "
+            f"{len(repaired_sources)} coverage data file(s)"
         )
     if empty_sources:
         print(

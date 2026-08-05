@@ -219,7 +219,10 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     readme = README.read_text(encoding="utf-8")
     normalized_spec = " ".join(text.split())
     normalized_readme = " ".join(readme.split())
-    assert "docs/specs/13-message-identity.md" in readme
+    assert (
+        "https://github.com/VanL/simplebroker/blob/main/"
+        "docs/specs/13-message-identity.md"
+    ) in readme
     assert "[SB-ID-1]" in readme
     assert "[SB-ID-5]" in readme
     assert "ID `0` is reserved" in normalized_spec

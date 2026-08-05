@@ -1,6 +1,6 @@
 # Program Theory and Negative Knowledge Documentation Plan
 
-Status: active
+Status: completed
 
 Class: 5+P. This plan changes the governing documentation model, the class
 definition for theory-changing work, and the required repository-agent read
@@ -2036,4 +2036,5 @@ upstream change.
 - [x] Structural tests make no semantic claims.
 - [x] Ordinary work gains no empty ceremony.
 - [x] The stale scaffold note is corrected.
-- [ ] SimpleBroker closes before upstream generalization begins.
+- [x] SimpleBroker closed before upstream generalization began; the export brief
+  landed in `b3f0bd59`, while generalization remained a separate later plan.

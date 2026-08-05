@@ -21,6 +21,22 @@ the complete requested set, intentionally recreating a queue deleted before
 the broadcast lock is acquired. Selection and insertion occur in one
 PostgreSQL transaction.
 
+## Core Compatibility
+
+This first-party extension moves in lockstep with the SimpleBroker backend
+seam, although the core and extension package version numbers do not match.
+The extension declares its backend API version independently, and SimpleBroker
+checks that handshake when it resolves the plugin. An incompatible pair fails
+at backend resolution with upgrade-or-pin guidance instead of running against
+an unknown interface. The backend API version is separate from the PostgreSQL
+storage schema version and is not stored in the database.
+
+Use core and extension releases published together. The package dependency is
+an install-time minimum; the runtime handshake is the authoritative interface
+check. Install the extension through the core release's `pg` extra. See the
+[backend authoring guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/backends.md#backend-authoring)
+for the handshake boundary.
+
 ## Installation
 
 ```bash

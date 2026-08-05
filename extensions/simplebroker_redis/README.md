@@ -71,3 +71,19 @@ registry selection is required.
 
 Exact-target broadcast requires backend API v5: SimpleBroker 5.6.1 or newer
 and `simplebroker-redis` 3.3.1 or newer.
+
+## Core Compatibility
+
+This first-party extension moves in lockstep with the SimpleBroker backend
+seam, although the core and extension package version numbers do not match.
+The extension declares its backend API version independently, and SimpleBroker
+checks that handshake when it resolves the plugin. An incompatible pair fails
+at backend resolution with upgrade-or-pin guidance instead of running against
+an unknown interface. The backend API version is separate from the Redis
+storage schema version and is not stored in Redis.
+
+Use core and extension releases published together. The package dependency is
+an install-time minimum; the runtime handshake is the authoritative interface
+check. Install the extension through the core release's `redis` extra. See the
+[backend authoring guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/backends.md#backend-authoring)
+for the handshake boundary.

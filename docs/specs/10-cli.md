@@ -109,6 +109,8 @@ _Implementation mapping_:
   command-lifecycle locality)
 - `docs/plans/2026-08-04-worker-example-error-handling-plan.md` (published
   shell workers preserve the three-way CLI exit contract)
+- `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
+  (workers require integer-preserving jq and canonicalize exact CLI selectors)
 - retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md` (Phase 2B)

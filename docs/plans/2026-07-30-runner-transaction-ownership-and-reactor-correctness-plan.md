@@ -1,6 +1,7 @@
 # Runner Transaction Ownership and Reactor Correctness Plan
 
-Status: active
+Status: status-review — implementation shipped, but the plan records no
+evidence for its required five post-commit coverage-diagnostics runs.
 
 Class: 4 — risky. The change repairs a cross-thread transaction ownership
 failure in the public `SQLRunner` compatibility surface, changes the

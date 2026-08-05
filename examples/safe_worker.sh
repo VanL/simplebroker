@@ -13,6 +13,18 @@ command -v jq >/dev/null || {
     echo "Error: jq is required but not installed" >&2
     exit 1
 }
+jq_version=$(jq --version) || {
+    echo "Error: failed to determine jq version; jq 1.7 or newer is required" >&2
+    exit 1
+}
+if [[ "$jq_version" =~ ^jq-([0-9]+)\.([0-9]+) ]] &&
+    { [ "${BASH_REMATCH[1]}" -gt 1 ] ||
+        { [ "${BASH_REMATCH[1]}" -eq 1 ] && [ "${BASH_REMATCH[2]}" -ge 7 ]; }; }; then
+    :
+else
+    echo "Error: jq 1.7 or newer is required to preserve message IDs exactly" >&2
+    exit 1
+fi
 command -v broker >/dev/null || {
     echo "Error: broker command is required but not found" >&2
     exit 1
@@ -26,6 +38,23 @@ fi
 
 QUEUE="${QUEUE:-tasks}"
 POLL_INTERVAL="${POLL_INTERVAL:-1}"
+
+canonical_message_id() {
+    local raw_id="$1"
+    local normalized_id padded_id
+
+    [[ "$raw_id" =~ ^[0-9]{1,19}$ ]] || return 1
+    normalized_id="${raw_id#"${raw_id%%[!0]*}"}"
+    [ -n "$normalized_id" ] || normalized_id=0
+    # Fixed-width decimal strings need lexical ordering; arithmetic can overflow.
+    # shellcheck disable=SC2071
+    if [ "${#normalized_id}" -eq 19 ] &&
+        [[ "$normalized_id" > 9223372036854775807 ]]; then
+        return 1
+    fi
+    printf -v padded_id '%019s' "$normalized_id"
+    printf '%s\n' "${padded_id// /0}"
+}
 
 while true; do
     message_data=
@@ -64,18 +93,20 @@ while true; do
         echo "Error: broker peek returned invalid message JSON" >&2
         exit 1
     fi
-    if [[ ! "$timestamp" =~ ^[0-9]{19}$ ]]; then
+    if ! canonical_timestamp=$(canonical_message_id "$timestamp"); then
         echo "Error: broker peek returned an invalid message ID" >&2
         exit 1
     fi
 
     printf "Processing message ID: %s\n" "$timestamp"
-    if ! "$PROCESS_TASK" "$message"; then
+    handler_status=0
+    printf '%s' "$message" | "$PROCESS_TASK" || handler_status=${PIPESTATUS[1]}
+    if [ "$handler_status" -ne 0 ]; then
         echo "Error processing message $timestamp. It remains pending for the next run." >&2
         exit 1
     fi
 
-    if broker delete "$QUEUE" -m "$timestamp"; then
+    if broker delete "$QUEUE" -m "$canonical_timestamp"; then
         printf "Successfully processed and deleted message %s\n" "$timestamp"
     else
         echo "Error: processed message $timestamp but failed to delete it." >&2

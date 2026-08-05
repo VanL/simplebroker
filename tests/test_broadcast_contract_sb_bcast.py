@@ -152,8 +152,11 @@ def test_broadcast_contract_clause_inventory_and_authority() -> None:
     assert "Base queue/broker operation catalog residual" not in registry
     assert "broadcast" in registry.lower()
 
-    assert "docs/specs/12-broadcast.md" in README.read_text(encoding="utf-8")
-    assert "[BCAST-" not in README.read_text(encoding="utf-8")
+    readme = README.read_text(encoding="utf-8")
+    assert (
+        "https://github.com/VanL/simplebroker/blob/main/docs/specs/12-broadcast.md"
+    ) in readme
+    assert "[BCAST-" not in readme
     for path in (KERNEL, LLMS):
         surface = path.read_text(encoding="utf-8")
         assert "docs/specs/12-broadcast.md" in surface

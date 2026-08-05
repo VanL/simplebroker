@@ -1,7 +1,7 @@
 # Ruff Lint Expansion Plan
 
 Date: 2026-07-29
-Status: active
+Status: completed
 Class: 3+P — [DOM-5] non-trivial triggers fire because the change revises a
 repository-wide verification workflow and drives cleanup across core, extension,
 test, example, fuzz, and maintenance-script surfaces. The `+P` modifier fires

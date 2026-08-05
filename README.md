@@ -385,7 +385,9 @@ polls one message at a time and acknowledges it by deleting its exact ID only
 after the configured `PROCESS_TASK` command succeeds. It exits on processing,
 acknowledgement, parse, or broker failure, so the current process cannot advance
 past a failed message. The Bash example preserves trailing newlines but rejects
-NUL payloads, which shell variables cannot represent. For concurrent workers, use the
+NUL payloads, which shell variables cannot represent. It requires jq 1.7+ to
+preserve 64-bit JSON message IDs exactly and streams bodies to the handler's
+standard input instead of placing them in process arguments. For concurrent workers, use the
 move-to-inflight recipe in
 [`docs/agent-kernel.md`](https://github.com/VanL/simplebroker/blob/main/docs/agent-kernel.md).
 
@@ -408,7 +410,7 @@ appears “behind” a bound.
 
 ID representation, allocation, write returns, high-water/cache meaning,
 exact-ID forms, and ID-preserving move are normative in the
-[message identity contract](docs/specs/13-message-identity.md)
+[message identity contract](https://github.com/VanL/simplebroker/blob/main/docs/specs/13-message-identity.md)
 `[SB-ID-1]` through `[SB-ID-5]`.
 
 Uniqueness is the ordinary coexistence rule for stored rows. Applications
@@ -424,16 +426,18 @@ flags.
 
 ### JSON for Safe Processing
 
-Messages with newlines or special characters can break shell pipelines. Use `--json` to avoid shell issues:
+Messages with newlines or special characters can break shell pipelines. Use `--json` to avoid shell issues.
+Recipes that extract a JSON `timestamp` with jq and pass it back to `broker`
+require **jq 1.7+**; jq 1.6 rounds 64-bit message IDs.
 
 ```bash
 # Problem: newlines break line counting
-$ broker write alerts "ERROR: Database connection failed\nRetrying in 5 seconds..."
+$ printf 'ERROR: Database connection failed\nRetrying in 5 seconds...' | broker write alerts -
 $ broker read alerts | wc -l
 2  # Wrong! One message counted as two
 
 # Solution: JSON output (line-delimited)
-$ broker write alerts "ERROR: Database connection failed\nRetrying in 5 seconds..."
+$ printf 'ERROR: Database connection failed\nRetrying in 5 seconds...' | broker write alerts -
 $ broker read alerts --json
 {"message": "ERROR: Database connection failed\nRetrying in 5 seconds...", "timestamp": 1837025672140161024}
 
@@ -516,7 +520,7 @@ Broadcast can target all existing queues, names matching a pattern, or an
 exact set of literal queue names. Python callers may explicitly create missing
 exact targets. Selection, validation, result counts, queue-creation policy,
 atomicity, CLI behavior, and backend compatibility are normative in the
-[broadcast contract](docs/specs/12-broadcast.md) `[SB-BCAST-1]`
+[broadcast contract](https://github.com/VanL/simplebroker/blob/main/docs/specs/12-broadcast.md) `[SB-BCAST-1]`
 through `[SB-BCAST-6]`.
 
 Broadcast is queue fan-out, not pub/sub: it inserts ordinary pending messages
@@ -564,10 +568,26 @@ done
 <summary>Dead Letter Queue Pattern</summary>
 
 ```bash
-# Process messages, moving failures to DLQ
-while msg=$(broker read tasks); do
-    if ! process_task "$msg"; then
-        echo "$msg" | broker write dlq -
+# Single-consumer peek-and-ack loop. process_task_json reads one JSON object
+# from stdin; successful processing is acknowledged by exact-id deletion.
+while true; do
+    if msg_json=$(broker peek tasks --json); then
+        :
+    else
+        rc=$?
+        [ "$rc" -eq 2 ] && break  # queue is empty
+        exit "$rc"                # broker failure is fatal
+    fi
+
+    # Python preserves the integer exactly; jq 1.6 rounds 19-digit JSON numbers.
+    msg_id=$(printf '%s\n' "$msg_json" | python3 -c \
+        'import json, sys; v=json.load(sys.stdin)["timestamp"]; (type(v) is int and 0 <= v < 2**63) or sys.exit("invalid message ID"); print(f"{v:019d}")') || exit 1
+
+    if printf '%s\n' "$msg_json" | process_task_json; then
+        broker delete tasks -m "$msg_id" >/dev/null || exit 1
+    else
+        # Exact-id move is atomic: a failed move leaves the source pending.
+        broker move tasks dlq -m "$msg_id" >/dev/null || exit 1
     fi
 done
 
@@ -581,7 +601,9 @@ per-message acknowledge-by-delete, explicit empty-queue exit handling, and
 fatal operational-error handling, see
 [`examples/resilient_worker.sh`](https://github.com/VanL/simplebroker/blob/main/examples/resilient_worker.sh).
 Set `PROCESS_EVENT` to one executable command/path to replace its demonstration
-handler.
+handler; the message is streamed to the command's standard input. Its checkpoint
+is an informational record of the last acknowledgement, not a `--after` filter,
+because older pending IDs can arrive later through exact insertion or move.
 
 ## Real-time Queue Watching
 
@@ -694,7 +716,7 @@ def handle_message(msg: str, ts: int):
 
 
 watcher = QueueWatcher("orders", handle_message, db="my.db")
-thread = watcher.run_in_thread()   # background thread; watcher.stop() to end
+thread = watcher.run_in_thread()  # background thread; watcher.stop() to end
 ```
 
 Watchers also work as context managers and support peek mode, error

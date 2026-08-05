@@ -320,3 +320,30 @@ def test_closed_pipe_contract_binds_black_box_cli_effects() -> None:
         "test_watch_stops_claiming_after_stdout_consumer_exits",
         "test_read_all_pipe_closure_rolls_back_active_at_least_once_batch",
     } <= _test_functions("tests/test_cli_broken_pipe.py")
+
+
+def test_readme_dlq_recipe_preserves_pending_work_on_failure() -> None:
+    """The human-entry DLQ recipe must not claim before its fallback is safe."""
+    readme = README.read_text(encoding="utf-8")
+    recipe = readme.split("<summary>Dead Letter Queue Pattern</summary>", 1)[1]
+    recipe = recipe.split("</details>", 1)[0]
+
+    assert "broker peek tasks --json" in recipe
+    assert 'broker move tasks dlq -m "$msg_id"' in recipe
+    assert 'broker delete tasks -m "$msg_id"' in recipe
+    assert "process_task_json" in recipe
+    assert "| python3 -c" in recipe
+    assert "broker read tasks" not in recipe
+    assert "broker write dlq" not in recipe
+    assert 'echo "$msg"' not in recipe
+
+
+def test_readme_newline_recipe_writes_an_actual_newline() -> None:
+    """A quoted backslash-n operand would store two literal characters."""
+    readme = README.read_text(encoding="utf-8")
+    section = readme.split("### JSON for Safe Processing", 1)[1]
+    section = section.split("### Filtering by message id", 1)[0]
+
+    assert section.count("printf 'ERROR: Database connection failed\\n") == 2
+    assert section.count("| broker write alerts -") == 2
+    assert 'broker write alerts "ERROR:' not in section

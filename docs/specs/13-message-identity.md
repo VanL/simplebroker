@@ -150,3 +150,6 @@ message id. It is the same message identity with the queue binding updated.
 
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
 - `docs/plans/2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md`
+- `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
+  (published workers accept the full stored integer-ID range and canonicalize
+  CLI selector strings)

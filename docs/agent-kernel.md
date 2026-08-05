@@ -194,7 +194,9 @@ Normative: `docs/specs/15-persistence-io.md` `[SB-IO-1]`–`[SB-IO-5]`.
 
 ## Minimal use recipes
 
-Always pin the database in automation:
+Always pin the database in automation. The shell recipes below require
+**jq 1.7+**; jq 1.6 rounds 64-bit JSON message IDs and must not be used when an
+extracted `timestamp` is passed back to `broker`.
 
 ```bash
 DB="/path/to/.broker.db"   # or any explicit path

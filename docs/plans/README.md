@@ -32,18 +32,19 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | completed — class 4; owner deferred implementation pending new evidence of material migration-wait harm |
 | 2026-07-29-coalescing-sweep-plan.md | completed — class 3; 11 plans soft-retired, hot lessons deferred, no promotion candidate, independently reviewed and verified |
 | 2026-07-29-complexity-and-state-machine-hardening-plan.md | completed — class 5+P; implementation 86f73f5; C901 audit registry, complexity refactors, and explicit all-transition state-machine verification |
-| 2026-07-29-program-theory-and-negative-knowledge-plan.md | active — class 5+P; program theory, negative-knowledge lifecycle, agent read path, and later upstream export |
-| 2026-07-29-ruff-lint-expansion-plan.md | active — class 3+P; Ruff 0.16 stable-default expansion and repository-wide cleanup in progress |
+| 2026-07-29-program-theory-and-negative-knowledge-plan.md | completed — class 5+P; program theory, negative-knowledge lifecycle, agent read path, structural gates, closure routing, and upstream export brief landed in b3f0bd59 |
+| 2026-07-29-ruff-lint-expansion-plan.md | completed — class 3+P; Ruff 0.16 stable-default expansion, repository-wide cleanup, policy gates, portability corrections, and independent review landed in 9f666232, c5a31e18, and 1324a1f6 |
 | 2026-07-30-product-documentation-cutover-plan.md | completed — class 5+P; product-doc authority cutover Phases 1–6; specs 10–17 all `canonical-spec` |
-| 2026-07-31-python-library-api-contract-plan.md | active — class 5 (raised by R1); original scope completed 2026-07-31, reopened same day for Revision R1 correcting command-layer signatures to keyword-only before `[SB-API-10]` freezes them; ships 6.0.0 |
+| 2026-07-31-python-library-api-contract-plan.md | completed — class 5; `[SB-API-1]`–`[SB-API-12]`, R1 keyword-only command signatures, helper split, and synchronized 6.0.0/3.5.0 release landed |
 | 2026-07-31-core-test-mypy-gate-plan.md | completed — class 5+P; core tests are explicitly type-checked in CI and root-release prechecks, with behavior-preserving test typing cleanup |
 | 2026-07-31-ci-release-remediation-plan.md | completed — repaired nine independent CI/release root causes in isolated commits; published simplebroker 6.0.0, simplebroker-pg 3.5.0, and simplebroker-redis 3.5.0 from exact green SHA `926ae54f` |
 | 2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md | completed — class 5; zero reserved at exact-insert admission and ordinary Redis generated writes made allocation/publication atomic |
-| 2026-07-30-ruff-suppression-index-generator-plan.md | active — class 5+P; original scope completed 2026-07-31, reopened same day for Revision R1 keying the derived index on qualified symbols rather than lines |
-| 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | active — class 4; shared-runner transaction ownership and reactor sidecar-boundary correction |
+| 2026-07-30-ruff-suppression-index-generator-plan.md | completed — class 5+P; stable-group generator and R1 symbol-keyed index landed in 49da9b2d and 4d4f61be |
+| 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | status-review — class 4; implementation and reviews landed in b01bc3cb and shipped in 5.6.2, but the plan records no evidence for its required five post-commit coverage-diagnostics runs |
 | 2026-08-04-docs-information-architecture-plan.md | completed — class 4; README 2,520→818 lines around three purposes; docs/guides tier, CONTRIBUTING.md, implementation doc 09 shipped; move ledger + 4-row deviation log; Codex plan review PASS, slice review (5 findings fixed), completion review PASS at `154524e` |
 | 2026-08-04-cmd-watch-locality-plan.md | completed — class 3; three one-use lifecycle helpers recomposed into `cmd_watch`; score 10; 2407 tests passed; independent implementation review PASS at `c403c5eb` |
 | 2026-08-04-worker-example-error-handling-plan.md | completed — class 4; published worker processing, acknowledgement, and broker-error handling repaired; 2,429 tests passed; independent review PASS |
+| 2026-08-05-worker-portability-and-example-corrections-plan.md | completed — class 4; worker portability/safety, published recipes, extension handshake visibility, narrow coverage repair, and plan-status audit; 2,457 tests passed; independent completion re-review PASS |
 | 2026-08-04-coalescing-git-archive-policy-plan.md | completed — class 5+P; source-pinned coalescing is reversible Class-2 maintenance; policy review PASS |
 | 2026-08-04-retired-plan-lesson-harvest-plan.md | completed — class 3; 15 reusable lessons extracted with independent fidelity review PASS |
 

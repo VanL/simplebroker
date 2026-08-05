@@ -11,7 +11,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SAFE_WORKER = REPO_ROOT / "examples" / "safe_worker.sh"
 RESILIENT_WORKER = REPO_ROOT / "examples" / "resilient_worker.sh"
+EXAMPLES_README = REPO_ROOT / "examples" / "README.md"
+AGENT_KERNEL = REPO_ROOT / "docs" / "agent-kernel.md"
 MESSAGE_ID = "1722783600000000000"
+MAX_MESSAGE_ID = str(2**63 - 1)
 
 
 class _WorkerEnv(dict[str, str]):
@@ -62,10 +65,14 @@ printf '%s\n' "$count" > "$BROKER_STATE"
 
 case "$BROKER_SCENARIO:$operation" in
     message:*|delete_failure:watch|delete_failure:peek)
-        printf '%s\n' '{{"message":"do work","timestamp":{MESSAGE_ID}}}'
+        printf '{{"message":"do work","timestamp":%s}}\n' "${{BROKER_MESSAGE_ID:-{MESSAGE_ID}}}"
         ;;
     delete_failure:delete)
         echo "simulated delete failure" >&2
+        exit 1
+        ;;
+    large_message:delete)
+        echo "simulated delete failure after large message" >&2
         exit 1
         ;;
     peek_failure:watch|peek_failure:peek)
@@ -91,6 +98,9 @@ case "$BROKER_SCENARIO:$operation" in
     nul_message:watch|nul_message:peek)
         printf '%s\n' '{{"message":"before\\u0000after","timestamp":{MESSAGE_ID}}}'
         ;;
+    large_message:watch|large_message:peek)
+        python3 -c 'import json; print(json.dumps({{"message": "x" * (3 * 1024 * 1024), "timestamp": {MESSAGE_ID}}}))'
+        ;;
     *)
         echo "unexpected broker call: $*" >&2
         exit 1
@@ -102,7 +112,7 @@ esac
         bin_dir / "handler-ok",
         """#!/bin/bash
 printf '%s' "$#" > "$HANDLER_ARGC_LOG"
-printf '%s' "$1" > "$HANDLER_CALL_LOG"
+cat > "$HANDLER_CALL_LOG"
 exit 0
 """,
     )
@@ -110,8 +120,16 @@ exit 0
         bin_dir / "handler-fail",
         """#!/bin/bash
 printf '%s' "$#" > "$HANDLER_ARGC_LOG"
-printf '%s' "$1" > "$HANDLER_CALL_LOG"
+cat > "$HANDLER_CALL_LOG"
 exit 7
+""",
+    )
+    _write_executable(
+        bin_dir / "handler-ignore-stdin",
+        """#!/bin/bash
+printf '%s' "$#" > "$HANDLER_ARGC_LOG"
+printf 'handler succeeded without reading stdin' > "$HANDLER_CALL_LOG"
+exit 0
 """,
     )
     _write_executable(
@@ -121,6 +139,9 @@ printf '%s\n' "$*" >> "$SLEEP_CALL_LOG"
 count=$(wc -l < "$SLEEP_CALL_LOG")
 if [ "$count" -gt "${SLEEP_FAIL_AFTER:-999}" ]; then
     exit 99
+fi
+if [ "${SLEEP_SEND_TERM:-0}" -eq 1 ]; then
+    kill -TERM "$PPID"
 fi
 exit 0
 """,
@@ -139,6 +160,7 @@ exit 0
             "BROKER_DB": str(tmp_path / "broker.db"),
             "CHECKPOINT_FILE": str(tmp_path / "checkpoint"),
             "BROKER_SCENARIO": "message",
+            "BROKER_MESSAGE_ID": MESSAGE_ID,
             "SLEEP_FAIL_AFTER": "0",
         }
     )
@@ -154,7 +176,7 @@ def _run_worker(
         env=env,
         capture_output=True,
         text=True,
-        timeout=5,
+        timeout=15,
         check=False,
     )
 
@@ -208,7 +230,7 @@ def test_safe_worker_stops_on_processing_failure(
     assert "next run" in result.stderr
     assert _calls(worker_env) == ["peek"]
     assert Path(worker_env["HANDLER_CALL_LOG"]).read_text(encoding="utf-8") == "do work"
-    assert Path(worker_env["HANDLER_ARGC_LOG"]).read_text(encoding="utf-8") == "1"
+    assert Path(worker_env["HANDLER_ARGC_LOG"]).read_text(encoding="utf-8") == "0"
 
 
 def test_safe_worker_stops_and_warns_on_delete_failure(
@@ -233,9 +255,7 @@ def test_safe_worker_stops_and_warns_on_delete_failure(
 def test_safe_worker_preserves_peek_failure(
     tmp_path: Path, worker_env: dict[str, str]
 ) -> None:
-    worker_env.update(
-        {"PROCESS_TASK": "handler-ok", "BROKER_SCENARIO": "peek_failure"}
-    )
+    worker_env.update({"PROCESS_TASK": "handler-ok", "BROKER_SCENARIO": "peek_failure"})
 
     result = _run_worker(SAFE_WORKER, tmp_path, worker_env)
 
@@ -281,9 +301,7 @@ def test_safe_worker_rejects_successful_empty_peek(
 def test_safe_worker_rejects_invalid_json(
     tmp_path: Path, worker_env: dict[str, str]
 ) -> None:
-    worker_env.update(
-        {"PROCESS_TASK": "handler-ok", "BROKER_SCENARIO": "invalid_json"}
-    )
+    worker_env.update({"PROCESS_TASK": "handler-ok", "BROKER_SCENARIO": "invalid_json"})
 
     result = _run_worker(SAFE_WORKER, tmp_path, worker_env)
 
@@ -293,7 +311,7 @@ def test_safe_worker_rejects_invalid_json(
 
 
 @pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
-def test_worker_preserves_trailing_newlines_as_one_handler_argument(
+def test_worker_preserves_trailing_newlines_on_handler_stdin(
     script: Path, tmp_path: Path, worker_env: dict[str, str]
 ) -> None:
     _set_handler(script, worker_env, "handler-fail")
@@ -303,7 +321,7 @@ def test_worker_preserves_trailing_newlines_as_one_handler_argument(
 
     assert result.returncode == 1
     assert Path(worker_env["HANDLER_CALL_LOG"]).read_bytes() == b"line one\n\n"
-    assert Path(worker_env["HANDLER_ARGC_LOG"]).read_text(encoding="utf-8") == "1"
+    assert Path(worker_env["HANDLER_ARGC_LOG"]).read_text(encoding="utf-8") == "0"
     assert _calls(worker_env) == ["peek"]
 
 
@@ -322,6 +340,108 @@ def test_worker_rejects_nul_before_handler_or_acknowledgement(
     assert _calls(worker_env) == ["peek"]
 
 
+@pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
+def test_worker_streams_large_valid_message_to_handler_stdin(
+    script: Path, tmp_path: Path, worker_env: dict[str, str]
+) -> None:
+    _set_handler(script, worker_env, "handler-fail")
+    worker_env["BROKER_SCENARIO"] = "large_message"
+
+    result = _run_worker(script, tmp_path, worker_env)
+
+    assert result.returncode == 1
+    assert Path(worker_env["HANDLER_CALL_LOG"]).stat().st_size == 3 * 1024 * 1024
+    assert Path(worker_env["HANDLER_ARGC_LOG"]).read_text(encoding="utf-8") == "0"
+    assert _calls(worker_env) == ["peek"]
+
+
+@pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
+def test_worker_uses_handler_status_when_success_handler_closes_stdin_early(
+    script: Path, tmp_path: Path, worker_env: dict[str, str]
+) -> None:
+    _set_handler(script, worker_env, "handler-ignore-stdin")
+    worker_env["BROKER_SCENARIO"] = "large_message"
+
+    result = _run_worker(script, tmp_path, worker_env)
+
+    assert result.returncode == 1
+    assert "failed to delete" in result.stderr
+    assert "Error processing" not in result.stderr
+    assert Path(worker_env["HANDLER_ARGC_LOG"]).read_text(encoding="utf-8") == "0"
+    assert _calls(worker_env) == ["peek", "delete"]
+
+
+@pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
+@pytest.mark.parametrize("message_id", ["0", "1", MAX_MESSAGE_ID])
+def test_worker_accepts_full_public_id_range_and_uses_canonical_cli_string(
+    script: Path,
+    tmp_path: Path,
+    worker_env: dict[str, str],
+    message_id: str,
+) -> None:
+    _set_handler(script, worker_env, "handler-ok")
+    worker_env.update(
+        {"BROKER_MESSAGE_ID": message_id, "BROKER_SCENARIO": "delete_failure"}
+    )
+
+    result = _run_worker(script, tmp_path, worker_env)
+
+    assert result.returncode == 1
+    delete_argv = _broker_argv(worker_env)[1]
+    assert delete_argv[-1] == message_id.zfill(19)
+
+
+@pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
+@pytest.mark.parametrize("message_id", ["-1", str(2**63), "10000000000000000000"])
+def test_worker_rejects_ids_outside_public_integer_range(
+    script: Path,
+    tmp_path: Path,
+    worker_env: dict[str, str],
+    message_id: str,
+) -> None:
+    _set_handler(script, worker_env, "handler-ok")
+    worker_env["BROKER_MESSAGE_ID"] = message_id
+
+    result = _run_worker(script, tmp_path, worker_env)
+
+    assert result.returncode == 1
+    assert "invalid message ID" in result.stderr
+    assert _calls(worker_env) == ["peek"]
+    assert not Path(worker_env["HANDLER_CALL_LOG"]).exists()
+
+
+@pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
+def test_worker_rejects_jq_1_6_before_broker_call(
+    script: Path, tmp_path: Path, worker_env: dict[str, str]
+) -> None:
+    fake_bin = tmp_path / "old-jq"
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "jq",
+        """#!/bin/bash
+if [ "${1:-}" = "--version" ]; then
+    echo jq-1.6
+    exit 0
+fi
+exit 99
+""",
+    )
+    _set_handler(script, worker_env, "handler-ok")
+    worker_env["PATH"] = f"{fake_bin}:{worker_env['PATH']}"
+
+    result = _run_worker(script, tmp_path, worker_env)
+
+    assert result.returncode == 1
+    assert "jq 1.7" in result.stderr
+    assert _calls(worker_env) == []
+
+
+def test_worker_docs_state_jq_version_floor() -> None:
+    for path in (REPO_ROOT / "README.md", EXAMPLES_README, AGENT_KERNEL):
+        text = path.read_text(encoding="utf-8")
+        assert "jq 1.7+" in text
+
+
 def test_resilient_worker_preserves_operational_peek_failure(
     tmp_path: Path, worker_env: dict[str, str]
 ) -> None:
@@ -338,9 +458,7 @@ def test_resilient_worker_preserves_operational_peek_failure(
 def test_resilient_worker_treats_only_exit_two_as_empty(
     tmp_path: Path, worker_env: dict[str, str]
 ) -> None:
-    worker_env.update(
-        {"BROKER_SCENARIO": "empty_then_error", "SLEEP_FAIL_AFTER": "1"}
-    )
+    worker_env.update({"BROKER_SCENARIO": "empty_then_error", "SLEEP_FAIL_AFTER": "1"})
 
     result = _run_worker(RESILIENT_WORKER, tmp_path, worker_env)
 
@@ -389,6 +507,29 @@ def test_resilient_worker_preserves_delete_failure_and_exact_id(
     assert _calls(worker_env) == ["peek", "delete"]
     delete_argv = _broker_argv(worker_env)[1]
     assert delete_argv[-4:] == ["delete", "events", "-m", MESSAGE_ID]
+    peek_argv = _broker_argv(worker_env)[0]
+    assert "--after" not in peek_argv
+
+
+def test_resilient_worker_does_not_skip_id_behind_checkpoint(
+    tmp_path: Path, worker_env: dict[str, str]
+) -> None:
+    Path(worker_env["CHECKPOINT_FILE"]).write_text(MESSAGE_ID, encoding="utf-8")
+    worker_env.update(
+        {
+            "BROKER_MESSAGE_ID": "1",
+            "BROKER_SCENARIO": "delete_failure",
+            "PROCESS_EVENT": "handler-ok",
+        }
+    )
+
+    result = _run_worker(RESILIENT_WORKER, tmp_path, worker_env)
+
+    assert result.returncode == 1
+    assert _calls(worker_env) == ["peek", "delete"]
+    peek_argv, delete_argv = _broker_argv(worker_env)
+    assert "--after" not in peek_argv
+    assert delete_argv[-1] == "0000000000000000001"
 
 
 def test_resilient_worker_checkpoint_write_failure_is_fatal_after_ack(
@@ -422,7 +563,13 @@ def test_resilient_worker_rejects_corrupt_checkpoint_before_broker_call(
     assert _calls(worker_env) == []
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode-000 files")
+_get_effective_uid = getattr(os, "geteuid", None)
+
+
+@pytest.mark.skipif(
+    not callable(_get_effective_uid) or _get_effective_uid() == 0,
+    reason="requires Unix mode permissions and a non-root effective user",
+)
 def test_resilient_worker_rejects_unreadable_checkpoint(
     tmp_path: Path, worker_env: dict[str, str]
 ) -> None:
@@ -435,6 +582,51 @@ def test_resilient_worker_rejects_unreadable_checkpoint(
     assert result.returncode == 1
     assert "checkpoint" in result.stderr.lower()
     assert _calls(worker_env) == []
+
+
+def test_worker_test_module_collects_when_os_has_no_geteuid(tmp_path: Path) -> None:
+    probe = subprocess.run(
+        [
+            os.sys.executable,
+            "-c",
+            (
+                "import os, runpy; "
+                "del os.geteuid; "
+                f"runpy.run_path({str(Path(__file__))!r}, run_name='worker_probe')"
+            ),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert probe.returncode == 0, probe.stderr
+
+
+def test_resilient_worker_trap_makes_checkpoint_failure_explicit() -> None:
+    source = RESILIENT_WORKER.read_text(encoding="utf-8")
+
+    assert "save_checkpoint || exit 1; exit 0" in source
+
+
+def test_resilient_worker_signal_checkpoint_failure_exits_nonzero(
+    tmp_path: Path, worker_env: dict[str, str]
+) -> None:
+    worker_env.update(
+        {
+            "BROKER_SCENARIO": "empty_then_error",
+            "CHECKPOINT_FILE": str(tmp_path / "missing" / "checkpoint"),
+            "SLEEP_FAIL_AFTER": "999",
+            "SLEEP_SEND_TERM": "1",
+        }
+    )
+
+    result = _run_worker(RESILIENT_WORKER, tmp_path, worker_env)
+
+    assert result.returncode != 0
+    assert "failed to write checkpoint" in result.stderr
+    assert _calls(worker_env) == ["peek"]
 
 
 def test_resilient_worker_rejects_broken_checkpoint_symlink(

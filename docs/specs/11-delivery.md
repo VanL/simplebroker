@@ -196,5 +196,7 @@ _Implementation mapping_:
   `cmd_watch` lifecycle locality)
 - `docs/plans/2026-08-04-worker-example-error-handling-plan.md` (published
   single-consumer workers stop on processing or acknowledgement failure)
+- `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
+  (workers stream bodies to handler stdin and keep peek/delete ordering)
 - retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`

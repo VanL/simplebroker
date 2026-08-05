@@ -55,16 +55,18 @@ When working with message queues:
 ### Bash Scripts
 
 - **[safe_worker.sh](safe_worker.sh)** - Single-consumer one-message peek-and-acknowledge loop
-  - Set `PROCESS_TASK` to one executable command or path; the message is passed as one quoted argument
+  - Requires jq 1.7+ so 64-bit JSON message IDs are preserved exactly
+  - Set `PROCESS_TASK` to one executable command or path; the message is streamed to its standard input
   - One `broker peek --json` per message; delete by exact ID only after success
   - Exit on processing, acknowledgement, parse, or broker failure; only broker exit `2` means idle
   - Preserve trailing newlines; reject NUL payloads because Bash variables cannot represent NUL
   - Not safe under concurrent workers; use move-to-inflight instead (see `docs/agent-kernel.md`)
 
-- **[resilient_worker.sh](resilient_worker.sh)** - Single-consumer peek-and-ack sketch with checkpoint recovery
+- **[resilient_worker.sh](resilient_worker.sh)** - Single-consumer peek-and-ack sketch with an informational progress checkpoint
   - One `peek` per message (not `peek --all` + delete-in-loop)
+  - Never uses the checkpoint as a `--after` filter; older IDs can arrive later through exact insertion or move
   - Explicit `-f` database path (`BROKER_DB` or first arg)
-  - Optional `PROCESS_EVENT` executable for deterministic business handling; otherwise uses the demonstration handler
+  - Optional `PROCESS_EVENT` executable reads the message from standard input; otherwise uses the demonstration handler
   - Atomic, validated checkpoint file updates; operational broker errors are fatal
   - Processing and acknowledgement failures stop the worker for later retry; not safe under concurrent workers
   - For concurrent job reservation see `docs/agent-kernel.md` (move-to-inflight)

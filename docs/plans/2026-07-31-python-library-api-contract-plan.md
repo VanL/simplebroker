@@ -1,7 +1,7 @@
 # Python Library API Contract
 
-Status: active — reopened 2026-07-31 for Revision R1 (command-layer signature
-correction before the surface freezes). Original scope completed 2026-07-31.
+Status: completed — Revision R1 command-layer signature correction and the
+synchronized 6.0.0/3.5.0 release landed.
 Date: 2026-07-31
 
 ## Goal
