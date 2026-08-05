@@ -1243,7 +1243,7 @@ def test_combine_coverage_rejects_conflicting_schema_versions(
     assert shard_file.exists()
     combined = CoverageData(basename=str(data_file))
     combined.read()
-    assert combined.lines(base_source.as_posix()) == [1]
+    assert combined.lines(str(base_source)) == [1]
 
 
 def test_combine_coverage_rejects_schema_repair_with_an_extra_table(

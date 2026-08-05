@@ -32,6 +32,9 @@ def _write_executable(path: Path, source: str) -> None:
 
 @pytest.fixture
 def worker_env(tmp_path: Path) -> dict[str, str]:
+    if os.name == "nt":
+        pytest.skip("published workers are illustrative Bash examples")
+
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     broker_log = tmp_path / "broker.log"
@@ -591,8 +594,9 @@ def test_worker_test_module_collects_when_os_has_no_geteuid(tmp_path: Path) -> N
             sys.executable,
             "-c",
             (
-                "import os, runpy; "
-                "del os.geteuid; "
+                "import os, runpy\n"
+                "if hasattr(os, 'geteuid'):\n"
+                "    del os.geteuid\n"
                 f"runpy.run_path({str(Path(__file__))!r}, run_name='worker_probe')"
             ),
         ],
