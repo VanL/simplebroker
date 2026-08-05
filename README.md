@@ -395,15 +395,18 @@ move-to-inflight recipe in
 ## Core Concepts
 
 ### Timestamps as Message IDs
-Every message receives a unique 64-bit number that serves dual purposes as a timestamp and 
-within-database unique message ID. Timestamps are always included in JSON output. 
-Timestamps can be included in regular output by passing the -t/--timestamps flag. 
+Every stored message has a public integer message ID, exposed as `timestamp`
+in JSON. Broker-generated IDs include a physical time component, but
+caller-supplied exact IDs need not represent creation time. Timestamps can be
+included in regular output by passing the `-t` / `--timestamps` flag.
 
-Timestamps are:
-- **Unique within a backend** - No collisions even with concurrent writers (enforced by database UNIQUE constraint)
-- **Time-ordered** - Natural chronological sorting
-- **Efficient** - 64-bit integers, not UUIDs
-- **Meaningful** - Can extract creation time from the ID
+Stored message IDs are:
+- **Unique within a backend** - No two stored rows share an ID.
+- **Monotonic when broker-generated** - Exact insertion may add a smaller ID
+  later, and `move` preserves an existing ID.
+- **Efficient** - They are 64-bit integers, not UUIDs.
+- **Time-related when broker-generated** - The physical component reflects
+  generation time within the encoding grain.
 
 Message bodies are payload only and may duplicate byte-for-byte. Message IDs are
 the sole durable identity for targeted broker operations and application-level
@@ -412,18 +415,20 @@ not retain a permanent tombstone for every historical ID; consumers that require
 idempotency should persist and deduplicate by message ID.
 
 Broker-generated message IDs are positive and equal generation time within
-the encoding grain (~4 µs). Exact insertion via the API may supply caller-chosen IDs,
-except for the value '0' which is reserved as a selector. The `move` operation preserves IDs. 
+the encoding grain (~4 µs). Exact insertion via the API may supply caller-chosen
+IDs except `0`, which is reserved as a lower-bound and empty-high-water origin.
+Exact selectors accept zero so legacy rows can be inspected and cleaned up.
+The `move` operation preserves IDs.
 
-The value `queue.last_ts` is a broker-global high-water mark and reflects the last 
-activity within the broker.
+The value `queue.last_ts` is a broker-global high-water cache, not the identity
+of the last write or a record of the broker's last activity.
 
 The format:
-- High 52 bits: microseconds after Unix epoch
-- Low 12 bits: logical counter for sub-microsecond ordering
-- Similar to Twitter's Snowflake IDs or UUID7
-- The format is compatible with time.time_ns(), but the precision is ~4 μs due
-  to limits on the precision of the host clock
+- High 52 bits: physical component from `time.time_ns()`, aligned to 4096 ns
+  steps rather than counted in microseconds.
+- Low 12 bits: logical counter.
+- The format is compatible with nanosecond Unix time, but the effective time
+  grain is ~4 µs (4096 ns). The physical component is not a microsecond counter.
 
 Python APIs that target one exact message ID, such as
 `Queue.read(message_id=...)`, `Queue.peek(message_id=...)`,

@@ -235,10 +235,9 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     assert "consume remaining logical-counter values" in normalized_spec
     assert "same message identity with the queue binding updated" in normalized_spec
     assert "Broker-generated message IDs are positive" in normalized_readme
-    assert "Exact selectors still accept zero" in normalized_readme
-    assert (
-        "move` preserves IDs" in normalized_readme
-        or "move preserves IDs" in normalized_readme
+    assert re.search(r"Exact selectors (?:still )?accept zero", normalized_readme)
+    assert re.search(
+        r"(?:the )?`?move`?(?: operation)? preserves IDs", normalized_readme
     )
     assert "19 decimal digits" in normalized_readme
     assert "High 52 bits: microseconds" not in readme
