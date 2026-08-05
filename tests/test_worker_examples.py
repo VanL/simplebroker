@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -587,7 +588,7 @@ def test_resilient_worker_rejects_unreadable_checkpoint(
 def test_worker_test_module_collects_when_os_has_no_geteuid(tmp_path: Path) -> None:
     probe = subprocess.run(
         [
-            os.sys.executable,
+            sys.executable,
             "-c",
             (
                 "import os, runpy; "
