@@ -32,9 +32,11 @@ compliance multi-tenant brokers, high-frequency trading.
 
 ---
 
-# Use (this is “simple”)
+# Use (what is “simple” about SimpleBroker)
 
-**Simple = CLI + matching client API for queue operations.** Same verbs map to
+**Simple = CLI + matching client API for queue operations.** SimpleBroker is 
+designed to be "deep" in the Ousterhout sense: a small number of easily-understood
+verbs that present a coherent operating model. The same verbs in the API map to
 the same **queue semantics** (write, claim, peek, move, delete, watch) over the
 same resolved target. If you only need a queue, stop after this section.
 
@@ -255,7 +257,7 @@ with Queue("tasks", db_path=db) as q:
 
 ---
 
-# Embedding (optional — not “simple”)
+# Embedding (optional)
 
 Use this section only when **building a runtime or product on** SimpleBroker
 (Weft-style orchestrators, Taut-style apps, long-lived services). Embedding
