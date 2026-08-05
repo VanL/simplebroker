@@ -21,60 +21,6 @@ project-local coordination that need durable queue semantics without operating
 Redis, RabbitMQ, or a cloud service. The default install has no runtime
 dependencies and stores its state in one SQLite database.
 
-**Exact product behavior** is owned by the canonical specs in
-`docs/specs/` (`10-cli.md` … `17-ops.md`, codes `[SB-CLI-*]` …
-`[SB-OPS-*]`), registered in
-`docs/specs/product-section-registry.md`. This README is the human entry:
-catalogs, examples, and short restatements with links. Agents should prefer
-`docs/agent-kernel.md` for use orientation.
-
-## How SimpleBroker Thinks
-
-One mental model explains the whole tool. Cooperating processes exchange
-durable messages through named queues on one resolved broker target.
-SimpleBroker owns the semantics of the queue operations: write, claim,
-peek, move, delete, watch. The backend owns storage and topology: SQLite
-is the local default, and optional Postgres or Redis/Valkey services
-supply shared storage with their own replication, availability, and
-recovery. The application owns what messages mean: task execution,
-business retries, worker topology, and completion.
-
-Four rules shape the code and the API:
-
-1. **One config path.** Runtime knobs are `BROKER_*` keys, loaded from
-   the environment and normalized through one typed path
-   (`resolve_config()`). Embedders translate their own settings into
-   those keys instead of inventing a second mechanism.
-2. **No base runtime dependencies.** The default install keeps
-   `dependencies = []`. Optional backends live in separate packages.
-3. **Public API first.** Embed against the names exported from
-   `simplebroker` and `simplebroker.ext`. Underscore-prefixed modules
-   are implementation details.
-4. **CLI and library share one operational model.** `broker write tasks
-   "hi"` and `Queue("tasks").write("hi")` mean the same queue operation
-   over the same resolved target.
-
-Delivery language is deliberately narrow. A read claims the message
-atomically, and the claim commits before your code sees the message —
-the consume claim boundary, `[SB-DELIVERY-1]`. A claim is broker
-delivery state, not proof that your application finished the work. For
-work that must survive crashes, reserve with an atomic move and delete
-by ID after success (see [Critical Safety Notes](#critical-safety-notes)).
-
-SimpleBroker is **not** a broker fleet, managed queue service, replicated
-event stream, pub/sub platform, distributed task framework, or
-application orchestration system. This is an ownership boundary, not a
-host-count claim. Cooperating processes raise distributed-systems issues,
-and optional Postgres or Redis backends can serve clients on multiple
-hosts. SimpleBroker owns queue-operation semantics;
-the backend owns service topology, replication, availability, and recovery;
-the application owns work execution and business retries. SQLite files remain
-local-only: do not put them on NFS or another shared network filesystem.
-
-The governed conceptual account behind this section is
-[docs/program-theory.md](https://github.com/VanL/simplebroker/blob/main/docs/program-theory.md);
-this README restates it for orientation and never overrides it.
-
 ## Recommended For
 
 - **Python projects that need a queue without infrastructure.** Most queue
@@ -96,14 +42,16 @@ this README restates it for orientation and never overrides it.
   reference implementation of this pattern.
 - **Event-driven workflows** via the built-in real-time watcher.
 
-**Not for:** Broker fleets, pub/sub, distributed task frameworks, application
-orchestration, or high-frequency trading.
+**Not for:** Broker fleets, pub/sub, distributed task frameworks, or applications
+needing very high scale or throughput (like high-frequency trading).
 
 ## Table of Contents
 
 - [SimpleBroker](#simplebroker)
-  - [How SimpleBroker Thinks](#how-simplebroker-thinks)
   - [Recommended For](#recommended-for)
+  - [The SimpleBroker Model](#the-simplebroker-model)
+  - [The SimpleBroker API](#the-simplebroker-api)
+  - [Project Specifications and Agent Instructions](#project-specifications-and-agent-instructions)
   - [Installation](#installation)
   - [Quick Start](#quick-start)
   - [Command Reference](#command-reference)
@@ -111,12 +59,55 @@ orchestration, or high-frequency trading.
   - [Core Concepts](#core-concepts)
   - [Common Patterns](#common-patterns)
   - [Real-time Queue Watching](#real-time-queue-watching)
-  - [Python API](#python-api)
   - [Embedding SimpleBroker in Your Project](#embedding-simplebroker-in-your-project)
   - [Performance & Tuning](#performance--tuning)
   - [Project Scoping](#project-scoping)
   - [Going Further](#going-further)
   - [License](#license)
+
+## The SimpleBroker Model
+
+SimpleBroker's core concept is the durable named queue - basically Unix pipes
+made durable, inspectable, and resumable. Cooperating processes exchange 
+messages through named queues on one resolved broker target (the "backend"). 
+
+- SimpleBroker owns the semantics of the queue operations: write, claim,
+peek, move, delete, watch. 
+- The backend owns storage and topology. SQLite is the default. Optional Postgres
+or Redis/Valkey services can also be used and provide their own replication,
+availability, and recovery features, separate from SimpleBroker.
+- The application or script using SimpleBroker owns what messages mean: task
+execution, business retries, worker topology, and completion.
+
+SimpleBroker's one concession to application state is the ability to route 
+`sidecar` tables to the same backend (on the SQLite and pg backends). This
+allows embedders to use the same configuration information and connection - but
+SimpleBroker does not constrain what is in sidecar tables.
+
+## The SimpleBroker API
+
+The SimpleBroker API is designed to mirror the CLI: `broker write tasks "hi"` 
+and `Queue("tasks").write("hi")` mean the same queue operation over the same 
+resolved target.
+
+The same configuration and tuning capabilities are resolved from the environment
+or configuration files (`BROKER_*` keys) and passed into functions and classes.
+Embedders translate their own settings into those keys to avoid name clashes.
+
+The public API consists of the names exported from `simplebroker` and 
+`simplebroker.ext`. Underscore-prefixed modules are implementation details and
+may change. Specifications: `docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-12]`).
+
+## Project Specifications and Agent Instructions
+
+Exact product behavior is owned by the canonical specs in `docs/specs/` 
+(`10-cli.md` … `17-ops.md`, codes `[SB-CLI-*]` … `[SB-OPS-*]`), registered in
+`docs/specs/product-section-registry.md`. 
+
+Agents should use `docs/agent-kernel.md` for use orientation. The `AGENTS.md`
+file is the entry point for agents doing work on this codebase, including the
+[program-theory.md](https://github.com/VanL/simplebroker/blob/main/docs/program-theory.md)
+and the broader agent context and runbooks.
 
 ## Installation
 
@@ -319,28 +310,41 @@ flag with a message that starts with `-`.
 - `list --pattern <glob>` uses fnmatch-style matching.
 - `--json` on `exists`, `stats`, or `list` emits JSON suitable for scripts.
 
-Normative metadata and existence: `docs/specs/17-ops.md` `[SB-OPS-1]`–
-`[SB-OPS-2]`.
-
 Queues are implicit: a queue exists when at least one message row exists for
 that name, including claimed rows. After vacuum removes claimed rows, a
-claimed-only queue no longer exists.
+claimed-only queue no longer exists. Normative specs: `docs/specs/17-ops.md` 
+`[SB-OPS-1]`–`[SB-OPS-2]`.
 
-**Timestamp formats for `--after` and `--before`:** see `[SB-CLI-5]`
+**Timestamp formats for `--after` and `--before`:** 
+- ISO 8601: `2024-01-15T14:30:00Z` or `2024-01-15` (midnight UTC)
+- Unix seconds: `1705329000` or `1705329000s`
+- Unix milliseconds: `1705329000000ms`
+- Unix nanoseconds/Native hybrid: `1837025672140161024` or `1837025672140161024ns`
+
+**Best practice:** Heuristics are used to distinguish between different values for 
+interactive use, but explicit suffixes (s/ms/ns) are recommended for clarity if 
+referring to particular times. 
+
+`--after` and `--before` use strict open bounds. Combined together, they select
+messages where `after_timestamp < message_timestamp < before_timestamp`.
+
+`-m` / `--message` is stricter than `--after` and `--before`: it accepts only
+the exact 19-digit broker message ID. A malformed `-m` value prints
+`invalid message ID: expected exactly 19 digits within range` on stderr and
+exits `1`. A well-formed ID that does not match a message is silent and exits
+`2`.
+
+Normative specifications: see `[SB-ID-4]`, `[SB-CLI-5]`
 (ISO, date-only UTC midnight, Unix s/ms/ns, native hybrid; suffixes
 recommended). Bounds are strict open intervals after parse
 (`[SB-SELECT-1]`).
-
-`-m` / `--message` targets one exact 19-digit message id (`[SB-ID-4]`). A
-malformed value errors and exits `1`; a well-formed id with no match is silent
-and exits `2`.
 
 ### Exit Codes
 - `0` - Success
 - `1` - General error (e.g., database access error, invalid arguments)
 - `2` - Queue empty or no matching messages
 
-Normative detail: `docs/specs/10-cli.md` ([SB-CLI-1]–[SB-CLI-5]).
+Normative specifications: `docs/specs/10-cli.md` ([SB-CLI-1]–[SB-CLI-5]).
 
 `watch` exits `0` when stopped by SIGINT/SIGTERM or when its stdout consumer
 closes the pipe (see [Pipe behavior](#pipe-behavior)).
@@ -350,9 +354,6 @@ matching rows immediately (`[SB-OPS-3]`). Reads still use claimed-row semantics
 and are reclaimed by `--vacuum` (`[SB-OPS-6]`).
 
 ## Critical Safety Notes
-
-Delivery claim, peek, watch, and move rules:
-`docs/specs/11-delivery.md` (`[SB-DELIVERY-1]`–`[SB-DELIVERY-7]`).
 
 ### Safe Message Handling
 
@@ -394,19 +395,42 @@ move-to-inflight recipe in
 ## Core Concepts
 
 ### Timestamps as Message IDs
+Every message receives a unique 64-bit number that serves dual purposes as a timestamp and 
+within-database unique message ID. Timestamps are always included in JSON output. 
+Timestamps can be included in regular output by passing the -t/--timestamps flag. 
 
-Every stored message has a public integer message ID, exposed as `timestamp`
-in JSON. Message bodies are payload and may duplicate. Producers should retain
-the ID returned by `Queue.write()` or printed by `broker write -t` / `--json`;
-`queue.last_ts` is a broker-global high-water cache, not the identity of that
-write.
+Timestamps are:
+- **Unique within a backend** - No collisions even with concurrent writers (enforced by database UNIQUE constraint)
+- **Time-ordered** - Natural chronological sorting
+- **Efficient** - 64-bit integers, not UUIDs
+- **Meaningful** - Can extract creation time from the ID
+
+Message bodies are payload only and may duplicate byte-for-byte. Message IDs are
+the sole durable identity for targeted broker operations and application-level
+deduplication. Because vacuum physically removes claimed rows, SimpleBroker does
+not retain a permanent tombstone for every historical ID; consumers that require
+idempotency should persist and deduplicate by message ID.
 
 Broker-generated message IDs are positive and equal generation time within
-the encoding grain (~4 µs). ID `0` is reserved as the lower-bound origin.
-Exact selectors still accept zero so legacy rows can be inspected and cleaned
-up. `move` preserves IDs. Exact insertion may supply caller-chosen IDs.
-`--after` / `--before` are selection filters, not a guarantee that nothing
-appears “behind” a bound.
+the encoding grain (~4 µs). Exact insertion via the API may supply caller-chosen IDs,
+except for the value '0' which is reserved as a selector. The `move` operation preserves IDs. 
+
+The value `queue.last_ts` is a broker-global high-water mark and reflects the last 
+activity within the broker.
+
+The format:
+- High 52 bits: microseconds after Unix epoch
+- Low 12 bits: logical counter for sub-microsecond ordering
+- Similar to Twitter's Snowflake IDs or UUID7
+- The format is compatible with time.time_ns(), but the precision is ~4 μs due
+  to limits on the precision of the host clock
+
+Python APIs that target one exact message ID, such as
+`Queue.read(message_id=...)`, `Queue.peek(message_id=...)`,
+`Queue.move(message_id=...)`, `Queue.delete(message_id=...)`,
+`Queue.delete_many(...)`, and exact-ID granular methods, accept either an
+integer ID or an exact 19-digit string ID. Malformed string IDs raise
+`ValueError`; unsupported types, including `bool`, raise `TypeError`.
 
 ID representation, allocation, write returns, high-water/cache meaning,
 exact-ID forms, and ID-preserving move are normative in the
@@ -449,10 +473,12 @@ Retrying in 5 seconds...
 
 ### Filtering by message id (`--after` / `--before`)
 
-`--after` / `--before` are **filters** on message id after parse
-(`[SB-SELECT-2]`). You may resume from a last-seen id with `--after`, but
-that does not guarantee a complete history under moves or exact-id inserts
-(`[SB-SELECT-3]`). Full rules:
+`--after` / `--before` and the corresponding API-level `after_timestamp` and 
+`before_timestamp` arguments are integer bounds used for selection only. ID `0` is 
+used as the lower-bound origin so rows moved into a queue or inserted via the API can
+be inspected and cleaned up. 
+
+Normative specifications: `[SB-SELECT-2]` and (`[SB-SELECT-3]`. Full rules:
 `docs/specs/14-timestamp-selection.md`.
 
 ```bash
@@ -650,23 +676,6 @@ Exit `0` means SimpleBroker shut down cleanly. It does not validate that the
 consumer processed any particular message; check the consumer's own exit
 status.
 
-## Python API
-
-Normative public surfaces (package root, `simplebroker.ext`, command layer):
-`docs/specs/16-python-library-api.md` (`[SB-API-1]`–`[SB-API-12]`).
-
-The Python API mirrors the CLI over the same queue semantics:
-
-```python
-from simplebroker import Queue
-
-with Queue("tasks") as q:
-    message_id = q.write("process order 123")  # returns the committed message ID
-    print(q.exists())
-    print(q.stats())
-    message = q.read()  # Returns: "process order 123"
-```
-
 ### Delivery guarantees
 
 Default operations claim atomically: the claim commits before your code
@@ -676,14 +685,13 @@ broker delivery state, not proof of application processing
 accept `delivery_guarantee="at_least_once"` (`[SB-DELIVERY-5]`) for
 retry-on-stop batch processing; generators are thread-affine and must be
 closed on their own thread.
-Normative rules: `docs/specs/11-delivery.md`
+
+Specifications: `docs/specs/11-delivery.md`
 (`[SB-DELIVERY-1]`–`[SB-DELIVERY-7]`); worked patterns, generator rules,
 and the cross-thread safety net are in the
 [Python guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/python.md#delivery-guarantees-in-practice).
 
 ### Queue metadata
-
-Normative: `docs/specs/17-ops.md` `[SB-OPS-1]`–`[SB-OPS-2]`.
 
 Use targeted metadata APIs when you need queue existence or counts:
 
@@ -704,6 +712,8 @@ is true when `total > 0`.
 For cross-queue metadata, `open_broker(...).list_queues()` returns queue names
 only, including claimed-only queues. Use `list_queue_stats()` when you need
 counts.
+
+Specifications: `docs/specs/17-ops.md` `[SB-OPS-1]`–`[SB-OPS-2]`.
 
 ### Watching from Python
 
@@ -771,7 +781,7 @@ Postgres, and Redis. Commands and options:
 
 ### Environment Variables
 
-The most-used settings:
+Most users will not need to adjust any settings. If tuning is desired, the most likely settings will be: 
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
