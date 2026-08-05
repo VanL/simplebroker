@@ -17,6 +17,9 @@ from simplebroker._exceptions import StopException
 from simplebroker._retry_policy import _execute_connection_retry
 from simplebroker._runner import SetupPhase, SQLiteRunner
 from simplebroker.db import BrokerConnection, BrokerCore, BrokerDB, DBConnection
+from tests.helper_scripts.timing import scale_timeout_for_ci
+
+_THREAD_FUTURE_TIMEOUT = scale_timeout_for_ci(10.0)
 
 
 def test_connection_retry_sleep_count(
@@ -260,7 +263,10 @@ class TestQueueConnectionManager:
                         max_workers=5
                     ) as executor:
                         futures = [executor.submit(get_connection) for _ in range(5)]
-                        results = [future.result(timeout=5.0) for future in futures]
+                        results = [
+                            future.result(timeout=_THREAD_FUTURE_TIMEOUT)
+                            for future in futures
+                        ]
 
                     connections = [pair for pair, _runner_ids in results]
                     connection_runner_ids = [
@@ -300,7 +306,9 @@ class TestQueueConnectionManager:
                 return list(caught)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            caught_warnings = executor.submit(close_queue).result(timeout=5.0)
+            caught_warnings = executor.submit(close_queue).result(
+                timeout=_THREAD_FUTURE_TIMEOUT
+            )
         resource_warnings = [
             warning
             for warning in caught_warnings
@@ -321,7 +329,7 @@ class TestQueueConnectionManager:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = [executor.submit(use_queue, index) for index in range(2)]
             for future in futures:
-                future.result(timeout=5.0)
+                future.result(timeout=_THREAD_FUTURE_TIMEOUT)
 
         with warnings.catch_warnings(record=True) as caught_warnings:
             warnings.simplefilter("always", ResourceWarning)
