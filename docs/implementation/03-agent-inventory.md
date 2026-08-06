@@ -33,14 +33,12 @@ To refresh this inventory:
 
 ## Current Observed Availability
 
-Last refreshed: 2026-07-29 (Grok remained live and read-only during a
-class-4 plan review, but exhausted repeated bounded turns without returning
-the requested verdict; Claude Sonnet completed the fallback review in two
-rounds and returned a final PASS)
+Last refreshed: 2026-08-06 (Claude 2.1.207 passed a bounded liveness probe and
+completed the class-4 access/backend benchmark plan review with a PASS verdict)
 
 | Agent family | Status | Notes |
 |--------------|--------|-------|
-| Claude | live | harness-level containment probed 2026-07-14; completed a two-round class-4 plan review on 2026-07-29 |
+| Claude | live | harness-level containment probed 2026-07-14; liveness re-probed and class-4 plan review completed 2026-08-06 |
 | Codex | live | OS-enforced read-only sandbox; probed 2026-07-14 |
 | Grok | live, degraded | Read-only sandbox held on 2026-07-29, but a long plan review inspected sources without producing a final verdict after bounded follow-ups; not currently suitable as the sole gate |
 | Qwen | blocked | API 404 / paid-slug config as of 2026-07-14 |

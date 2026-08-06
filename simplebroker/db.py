@@ -441,11 +441,9 @@ def _literal_prefix_from_fnmatch(pattern: str) -> str:
 # - This provides at-least-once delivery (messages may be redelivered)
 # - Database lock is held for entire batch, reducing concurrency
 #
-# Performance benchmarks:
-#   Interval=1:    ~10,000 messages/second (exactly-once, highest concurrency)
-#   Interval=10:   ~96,000 messages/second (at-least-once, moderate concurrency)
-#   Interval=50:   ~286,000 messages/second (at-least-once, lower concurrency)
-#   Interval=100:  ~335,000 messages/second (at-least-once, lowest concurrency)
+# Measure current single-operation throughput with bin/benchmark.py. Its access
+# matrix does not cover batched --all commit intervals; profile that separate
+# delivery tradeoff on a representative workload before changing this value.
 
 
 class DBConnection:

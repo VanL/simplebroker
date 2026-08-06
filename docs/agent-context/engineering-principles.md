@@ -146,6 +146,13 @@ a contract element without a gate is a contract element that will silently
 diverge. A declared element with no firing test is an untested contract and a
 verification failure, not a style nit.
 
+Gates do not gate gates. Every verification chain terminates in a declared
+claim plus independent review: a gate's own correctness is established at
+authoring — by a failing-first proof and review — not by a meta-gate over the
+gate. When a gate checks that citations or manifests match a contract, the
+gate itself is reviewed, not recursively gated; verification chains need a
+floor or they never close.
+
 ## 13. Variation Is Declared; Deficiency Is Gated
 
 Plans bend on contact with reality, and different pressures produce

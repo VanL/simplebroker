@@ -28,8 +28,9 @@ dependencies and stores its state in one SQLite database.
   default install does not. That matters for tools shipped to users who should
   not have to set up a queue server. Zero configuration: no servers, no
   daemons; each directory gets its own isolated `.broker.db` with ACID
-  durability and safe concurrent access, at ~1,700 ops/second of mixed
-  API use.
+  durability and safe concurrent access. On an M4 MacBook Pro,
+  [`bin/benchmark.py`](bin/benchmark.py) measured 897.1 mixed ops/second
+  through the default API and 9,206.5 through the persistent optimized API.
 - **Shell scripts, cron jobs, and CI/CD pipelines.** `broker write tasks
   "build #123"` composes with pipes, exit codes, and `--json` like a Unix
   tool — decouple script stages, coordinate build steps, buffer logs, or
@@ -775,12 +776,29 @@ programmatic CLI equivalent) — is in the
 
 ## Performance & Tuning
 
-On Apple-silicon laptops (M2 MacBook Air, M4 MacBook Pro): **~1,700
-ops/second** in regular mixed use through the Python API, **~30,000
-ops/second** in an optimized benchmark, and **~20 ops/second** through the
-CLI — each CLI call pays Python interpreter startup, which dominates the
-queue operation itself. Latency is <10ms per write or read, tested with
-100k+ messages per queue; use `--all` for bulk operations.
+[`bin/benchmark.py`](bin/benchmark.py) records a best-of-three
+operations/second matrix across workload, access type, and backend. This M4
+MacBook Pro run used 100 operations per sample, 100-byte messages, automatic
+vacuum disabled, and all other SimpleBroker settings at their defaults:
+
+| Backend | Access | Writes | Reads | Peeks | Mixed |
+|---------|--------|-------:|------:|------:|------:|
+| `sqlite` | `cli` | 18.8 | 18.7 | 18.7 | 18.1 |
+| `sqlite` | `api` | 875.2 | 744.8 | 1,065.0 | 897.1 |
+| `sqlite` | `optimized-api` | 6,940.0 | 7,776.9 | 23,553.0 | 9,206.5 |
+| `pg` | `cli` | 7.6 | 7.2 | 7.2 | 7.3 |
+| `pg` | `api` | 100.0 | 117.1 | 146.9 | 105.7 |
+| `pg` | `optimized-api` | 735.3 | 641.7 | 4,704.6 | 1,061.0 |
+| `redis` | `cli` | 9.8 | 9.3 | 9.5 | 9.4 |
+| `redis` | `api` | 212.0 | 233.0 | 204.5 | 198.9 |
+| `redis` | `optimized-api` | 2,376.4 | 5,207.4 | 4,052.6 | 3,562.0 |
+
+`cli` includes a fresh Python process for every operation. `api` uses the
+default ephemeral connection behavior. `optimized-api` runs the same calls
+with `persistent=True`. These are point-in-time measurements from a short
+local run, not performance guarantees; topology, hardware, load, and software
+versions will change the result. Use `--all` for bulk operations where its
+delivery semantics fit the workload.
 
 For normal use in the embedding or shell-tool context, SimpleBroker is
 unlikely to be the bottleneck: the processes it coordinates typically take
@@ -789,9 +807,11 @@ milliseconds to minutes per work item. Full numbers and tuning guidance:
 
 ### Cross-Backend Benchmarking
 
-The repository includes a black-box CLI benchmark harness for SQLite,
-Postgres, and Redis. Commands and options:
+The repository benchmark measures CLI, API, and optimized API access across
+SQLite, Postgres, and Redis. Reproduction commands and workload definitions:
 [backends guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/backends.md#cross-backend-benchmarking).
+An opt-in `--sqlite-tuning` argument appends a separate SQLite setting
+sensitivity table without expanding the default matrix.
 
 ### Environment Variables
 
@@ -800,7 +820,7 @@ Most users will not need to adjust any settings. If tuning is desired, the most 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `BROKER_BUSY_TIMEOUT` | `5000` | SQLite busy timeout (ms) |
-| `BROKER_SYNC_MODE` | `FULL` | Durability mode; `NORMAL` is ~25% faster with a small power-loss risk |
+| `BROKER_SYNC_MODE` | `FULL` | Durability mode; `NORMAL` can improve write throughput with a small power-loss risk, so benchmark the tradeoff on your workload |
 | `BROKER_READ_COMMIT_INTERVAL` | `1` | Messages per commit in `--all` mode; `1` keeps the per-message claim boundary (`[SB-DELIVERY-1]`), higher values batch with at-least-once semantics (`[SB-DELIVERY-5]`) |
 | `BROKER_DEFAULT_DB_NAME` | `.broker.db` | Database filename (all scopes) |
 | `BROKER_PROJECT_SCOPE` | unset | Enable git-like upward project discovery |

@@ -95,6 +95,22 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-06: A doctrine that has not been self-applied drifts first on the
+  corpus's own surfaces. The 2026-08-05 audit and its remediation showed the
+  enumeration-gate rule (§12) existed as written doctrine while spec-*writing*
+  had no such gate — a fourteen-review remediation still shipped one fresh
+  ungated enumeration (`dump` omitted from the [SB-CLI-1] clean-stop list).
+  New normative enumerations land their gate in the same change, and each new
+  doctrine names its floor (gate, or declared claim plus review). (Folded
+  into `runbooks/writing-specs.md`, `engineering-principles.md` §12, and
+  `runbooks/testing-patterns.md` Pattern 8 in the same change.)
+- 2026-08-06: Tests that configure away the hostile default they claim to
+  cover pass for years while the shipped default fails: the broken-pipe
+  suite forced `PYTHONUNBUFFERED=1` and 8 KB payloads, so the default
+  block-buffered `read --all` claimed messages into a dead pipe undetected.
+  Prove the shipped default path; altered-environment variants are companion
+  tests, never replacements. (Now `runbooks/testing-patterns.md` Pattern 8.)
+
 - 2026-07-27: Plan checklists and in-file `Status:` headers go stale. Before
   treating a plan as open work, verify the claimed behavior in code and
   CHANGELOG; open `- [ ]` boxes are not evidence that the feature is unshipped.

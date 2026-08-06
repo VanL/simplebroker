@@ -52,6 +52,13 @@ Preferred order:
 3. if no second agent is available, do a strict fresh-eyes review and note the
    limitation
 
+Attempts at a preferred reviewer are bounded and evidenced. Bound
+different-family attempts (default: two) with explicit timeouts, and record
+each attempt — command, timeout, outcome — in the plan's review log before
+falling back. "Not available" is evidenced by recorded attempts, never
+asserted; a timed-out or otherwise failed attempt yields no verdict, and
+none is inferred from it.
+
 For large changes, run review:
 
 - after each meaningful slice of work

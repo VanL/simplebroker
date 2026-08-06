@@ -128,7 +128,7 @@ def test_approved_suppressions_match_the_spec_registry() -> None:
     assert [group.group_id for group in snapshot.groups] == [
         f"RUFF-SUP-{number:03d}" for number in range(1, 35)
     ]
-    assert len(snapshot.directives) == 165
+    assert len(snapshot.directives) == 167
 
 
 def test_configured_complexity_boundary_fires_at_eleven() -> None:

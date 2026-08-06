@@ -26,7 +26,8 @@ CREATE TABLE messages (
 - The `id` column guarantees global FIFO ordering across all processes
 - The `ts` column serves as the public message identifier with uniqueness enforced
 - WAL mode enables concurrent readers and writers
-- Claim-based deletion enables ~3x faster reads
+- Claim-based deletion separates the consume commit from later physical cleanup,
+  avoiding deletion work on the read handoff path
 
 ## Concurrency and delivery realization
 

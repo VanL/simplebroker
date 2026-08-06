@@ -84,12 +84,12 @@ async for msg in queue.stream():
 
 ## Performance
 
-The async implementation with pooling provides significant performance improvements:
-
-- **Write throughput**: 5,000-10,000 msgs/sec
-- **Read throughput**: 10,000-20,000 msgs/sec  
-- **Concurrent operations**: Scales linearly with pool size
-- **Low latency**: Sub-millisecond operations
+Pooling avoids opening a new database connection for every operation, but the
+result depends on workload, pool size, concurrency, backend, and durability
+settings. The repository's [`bin/benchmark.py`](../bin/benchmark.py) measures
+the synchronous CLI and `Queue` surfaces; it does not validate async throughput
+or latency. Profile this example under the deployment's actual concurrency and
+backend before choosing pool or worker counts.
 
 ## Examples
 

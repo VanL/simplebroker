@@ -26,6 +26,13 @@ agents, and human contributors working in this repository.
    plus dated entries after the lessons watermark** (see `../coalescing.md`).
    Older entries are searchable reference material, not startup context.
 
+Read-order compliance is a declared-claim floor, not a gate: when you produce
+product-scope judgment — a plan, review, audit, or design opinion — declare
+which of these surfaces you consulted. Plans do this via their
+source-documents section; plan-free work declares it in its report. The
+declaration is checked by review, like task classification ([DOM-15]), not
+by tooling.
+
 ## Runbooks
 
 - `writing-plans.md`: how to write executable implementation plans (including

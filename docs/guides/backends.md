@@ -138,9 +138,69 @@ abandoned inherited connection, not reuse of a parent SQLite connection.
 
 ## Cross-backend benchmarking
 
-If you want an apples-to-apples CLI benchmark for SQLite, Postgres, and Redis,
-the repository includes a black-box harness that reuses the same `run_cli()`
-hook as the test suite:
+Use `bin/benchmark.py` to record a best-of-three matrix across storage backend,
+access type, and workload. PostgreSQL and Redis use the same automatic Docker
+startup, readiness, and cleanup paths as `bin/pytest-pg` and
+`bin/pytest-redis`; every sample gets a fresh SQLite file, PostgreSQL schema,
+or Redis namespace.
+
+```bash
+# Fast local smoke, including every access type and workload
+uv run python bin/benchmark.py --backends sqlite --operations 3
+
+# Full 3 x 3 x 4 matrix with the optional backend packages
+uv run --locked --extra pg --extra redis python bin/benchmark.py
+
+# Retain all three raw samples and the selected best sample as JSON
+uv run --locked --extra pg --extra redis \
+  python bin/benchmark.py --format json > benchmark.json
+
+# Append the SQLite-only configuration sensitivity table
+uv run python bin/benchmark.py --backends sqlite \
+  --access-types optimized-api --sqlite-tuning
+```
+
+The access types are `cli` (a fresh CLI process per operation), `api` (the
+public `Queue` API with its default ephemeral connection behavior), and
+`optimized-api` (the same API calls and payloads with `persistent=True`). The
+workloads are repeated single-message `writes`, pre-seeded `reads`, repeated
+non-consuming `peeks`, and `mixed`, which repeats `write`, `peek`, `read` and
+counts each primitive action as one operation. Setup, seeding, queue
+construction, and correctness checks are outside the timed interval. The
+default is 100 operations per sample; `--operations` accepts any value of at
+least three.
+
+`--sqlite-tuning` appends a separate table that keeps the operation surface at
+`optimized-api` while changing one SQLite setting at a time. It covers sync
+mode, cache size, WAL auto-checkpointing, and automatic vacuum, plus one
+explicit combined profile. Every row prints its configuration delta. Unsafe or
+cost-shifting experiments are labeled; they are measurements, not recommended
+production settings. Read commit intervals and generator batch sizes are not
+included because these workloads issue one operation per API call.
+
+PostgreSQL and Redis have no honest matching table. PostgreSQL commit policy
+and Redis AOF/RDB persistence are server configuration, not equivalent
+SimpleBroker settings. Redis pool size affects concurrent saturation rather
+than this sequential benchmark. Presenting those as comparable “tuned” rows
+would mix durability and workload contracts.
+
+The current M4 MacBook Pro best-of-three result catalog is in the root
+[`README.md`](../../README.md#performance--tuning). Treat it as a reproducible
+snapshot, not a performance guarantee; rerun this script on the deployment
+hardware and topology that matter to you.
+
+Automatic vacuum is disabled uniformly so its process-local scheduling does
+not charge only the persistent API path. Other SimpleBroker settings stay at
+their defaults. Server durability remains backend-managed; in particular, the
+temporary Valkey container does not make an AOF/RDB durability claim. CLI
+results include Python startup and argument parsing. SQLite is a local file
+while PostgreSQL and Redis run in Docker, so the output is useful for
+access/backend comparison but is not a pure storage-engine ranking. The tool
+creates only disposable benchmark targets; it does not use the application's
+configured backend.
+
+The older `tests.backend_benchmark` harness remains useful for an expanded,
+CLI-only workload set. It reuses the test suite's `run_cli()` hook:
 
 ```bash
 # Quick SQLite-only smoke run
@@ -159,7 +219,7 @@ uv run --with-editable './extensions/simplebroker_pg[dev]' \
   --pg-docker --redis-docker --format json
 ```
 
-The harness measures end-to-end CLI behavior for repeated single-message
+That harness measures end-to-end CLI behavior for repeated single-message
 `write` and `read`, bulk `read --all`, bulk `move --all`, and repeated
 `--status --json` calls.
 

@@ -150,6 +150,13 @@ Promoted to: none
 - “Simple at the use surface” has replaced source-line count as the useful
   simplicity test. Whether the advanced surface remains progressive is a live
   tension.
+- **Possession probes:** this account earns its keep only if the owner can
+  place a hypothetical feature, refuse a category error, and predict the
+  class of bug an audit will find before it reports. Run one such probe per
+  release or per class-5 plan completion — posed to an agent or
+  self-administered — and record the outcome in the plan or lessons. If
+  probes start failing, the account or its possession has drifted; one
+  probe, not a battery.
 - Optional networked backends widen operational reach without changing the
   local-first identity. Documentation that collapses those modes would
   challenge the account.

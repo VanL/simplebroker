@@ -28,12 +28,13 @@ Quick pointers to the key guidance documents in this repository.
 | `examples/` | Runnable usage examples (async wrappers, multi-queue) — examples are claims; keep them working |
 | `tests/` | Pytest suite (~148 files), `uv run pytest` |
 | `fuzz/` | Fuzzing harness |
-| `bin/` | Repo tooling (incl. `check-dom15-fixtures`, `check-doc-paths`, `coalesce-check`) |
+| `bin/` | Repo tooling (incl. `benchmark.py`, `check-dom15-fixtures`, `check-doc-paths`, `coalesce-check`) |
 
 ## Shared Agent Context
 
 | Path | Purpose |
 |------|---------|
+| `bin/benchmark.py` | Best-of-three writes/reads/peeks/mixed matrix across CLI, API, optimized API, SQLite, PostgreSQL, and Redis |
 | `bin/check-doc-paths` | Gate: every backticked repo-relative path claim in the guidance surfaces resolves |
 | `bin/coalesce-check` | Evidence trail for the coalescing layer: verifies every run-log SHA and retrieval cue (local, sibling, and published-remote), reports local-only pins, derives the lessons count |
 | `bin/ruff_suppression_index.py` | Gate and generator: reconciles human-approved Ruff suppression groups, local source pointers, raw diagnostics, and the derived location index |

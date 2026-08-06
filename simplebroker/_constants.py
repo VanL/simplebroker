@@ -672,7 +672,7 @@ def load_config() -> dict[str, Any]:
                 Default: "FULL"
                 Options:
                 - "FULL": Maximum durability, safe against power loss
-                - "NORMAL": ~25% faster writes, small risk on power loss
+                - "NORMAL": May improve write throughput, small risk on power loss
                 - "OFF": Fastest but unsafe - testing only
 
             BROKER_WAL_AUTOCHECKPOINT (int): WAL checkpoint threshold in pages.

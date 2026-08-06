@@ -79,6 +79,17 @@ grep -E '^- 20[0-9]{2}-[0-9]{2}-[0-9]{2}:' docs/lessons.md || true
 
 Unchanged counts against an unchanged deferral row: do not re-nag.
 
+## Reporting Cues (non-gating)
+
+Derived counts worth reporting alongside the threshold check when cheap to
+compute. They inform judgment and are never gates:
+
+- **Apparatus share** — the fraction of active (non-retired) plan files
+  whose subject is the process corpus itself (plans, docs, lessons,
+  coalescing, skills). A sustained rise is evidence that the process
+  surface is optimizing itself rather than the product; evaluate by
+  judgment, not by budget.
+
 **Repo-local fold units:**
 
 - Lessons: dated bullets under `## Ledger` in `docs/lessons.md` matching

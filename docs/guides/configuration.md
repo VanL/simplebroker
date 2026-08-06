@@ -25,7 +25,7 @@ context.
   - Recommended: 10-50 MB for typical workloads, 100+ MB for heavy use
 - `BROKER_SYNC_MODE` - SQLite synchronous mode: FULL, NORMAL, or OFF (default: FULL)
   - `FULL`: Maximum durability, safe against power loss (default)
-  - `NORMAL`: ~25% faster writes, safe against app crashes, small risk on power loss
+  - `NORMAL`: Can improve write throughput, safe against app crashes, small risk on power loss
 - `BROKER_WAL_AUTOCHECKPOINT` - WAL auto-checkpoint threshold in pages (default: 1000)
   - Controls when SQLite automatically moves WAL data to the main database
   - Default of 1000 pages ≈ 1MB (with 1KB page size)
@@ -138,33 +138,42 @@ those keys and pass the result through `resolve_config()`, which keeps
 configuration mechanical instead of one-off.
 
 **Why is `BROKER_SYNC_MODE=FULL` the default?** The default favors durability
-over benchmark numbers. `NORMAL` is faster and often reasonable, but it changes
+over benchmark numbers. `NORMAL` may improve write throughput, but it changes
 the power-loss risk profile. SimpleBroker starts from the safer default and
-lets callers opt into the tradeoff.
+lets callers measure and opt into the tradeoff.
 
 ## Performance and tuning
 
-Measured on an M2 MacBook Air and an M4 MacBook Pro:
+Current throughput figures come from [`bin/benchmark.py`](../../bin/benchmark.py),
+which measures writes, reads, peeks, and mixed use through the CLI, default API,
+and persistent optimized API on SQLite, Postgres, and Redis. The current M4
+MacBook Pro result table lives in the root
+[`README.md`](../../README.md#performance--tuning); reproduction commands and
+the exact timing boundaries live in the
+[backends guide](backends.md#cross-backend-benchmarking).
 
-- **~1,700 ops/second** — regular mixed use through the Python API
-- **~30,000 ops/second** — an optimized benchmark workload
-- **~20 ops/second** — CLI use; each CLI call starts a new Python
-  interpreter, and that startup cost dominates the queue operation itself
+Use the benchmark's opt-in `--sqlite-tuning` table to measure the SQLite
+settings that touch these single-operation workloads. The table stays separate
+from the compact cross-backend matrix and discloses each configuration delta.
+Postgres commit policy and Redis persistence are server-managed, so the script
+does not imply that they have equivalent tuning profiles.
 
-Additional characteristics:
-
-- **Latency**: <10ms for write, <10ms for read
-- **Scalability**: Tested with 100k+ messages per queue
-- **Optimization**: Use `--all` for bulk operations
+Read those figures as point-in-time local measurements, not promises. The CLI
+includes Python startup for every operation. SQLite is a local file while the
+Postgres and Redis benchmark services run in Docker. The script keeps other
+SimpleBroker settings at their defaults and disables automatic vacuum
+uniformly so the persistent API path is not charged for process-local
+maintenance scheduling. Server durability is backend-managed and is not made
+equivalent by this benchmark.
 
 Read these numbers in context. For normal use in the embedding or
 shell-tool context, SimpleBroker is unlikely to be the bottleneck: the
 processes it coordinates typically take milliseconds to minutes per work
-item. If the ~20 ops/second CLI ceiling matters to your workload, drive
+item. If per-operation CLI startup matters to your workload, drive
 the broker through the Python API (or the `simplebroker.commands` layer)
 from a long-lived process instead of shelling out per message.
 
-For the cross-backend CLI benchmark harness, see the
+For the full cross-backend access matrix, see the
 [backends guide](backends.md).
 
 ## Project scoping

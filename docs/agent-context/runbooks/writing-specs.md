@@ -162,6 +162,12 @@ reviewer's job includes checking rule-vs-code, not just rule-vs-intent.
   boundaries.
 - When you notice that kind of ambiguity during work, notify the user and
   suggest a concrete improvement.
+- Adding or editing a normative enumerated list (exit codes, issue codes,
+  config keys, flag sets, command inventories) lands its executable gate in
+  the **same change** — a new or updated firing test, manifest, or checker —
+  or names an explicit judgment floor for why the list stays ungated. New
+  prose enumerations drift fastest precisely because no existing gate covers
+  them yet (see `engineering-principles.md` §12).
 
 ## Anti-Patterns
 
@@ -187,3 +193,5 @@ reviewer's job includes checking rule-vs-code, not just rule-vs-intent.
   field at a time
 - promoting rule-form spec text without verifying each rule against what
   the implementation actually enforces — memory-drafted rules overclaim
+- adding or editing a normative enumerated list without its executable gate
+  in the same change — a fresh enumeration is an ungated contract at birth

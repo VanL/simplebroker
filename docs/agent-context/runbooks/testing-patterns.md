@@ -140,6 +140,25 @@ Fix:
 - on failure, report received child IDs plus each process's PID, exit code, and
   liveness; do not turn a missing result into a silent pass
 
+### Pattern 8: The Test Neutralizes the Hostile Default It Claims to Cover
+
+Symptoms:
+
+- the test forces an environment variable, buffering mode, payload size, or
+  timeout that bypasses the condition under test — `PYTHONUNBUFFERED=1` in a
+  closed-pipe test, payloads larger than the buffer the bug lives behind,
+  timeouts so generous the race never fires
+- the suite stays green for years while the shipped default invocation fails
+  in exactly the way the test names
+
+Fix:
+
+- run the case under the shipped default configuration; a fast or
+  deterministic variant is a second test, never a replacement for the
+  default-path one
+- when reaching the seam requires altering the environment, name the altered
+  dimension in the test and prove the default path in a companion test
+
 ## Verification Pattern
 
 For meaningful changes:

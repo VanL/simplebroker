@@ -29,6 +29,8 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-06-plan-context-gate-plan.md | active — class 3+P (effective 5); consulted-surfaces declaration gated for in-flight plans |
+| 2026-08-06-access-backend-benchmark-plan.md | active — class 4; implementation and independent completion review reconciled, all gates pass, awaiting owner commit |
 | 2026-08-06-audit-remediation-plan.md | completed — class 5+P; all HIGH/MEDIUM findings fixed or codified, follow-up review PASS, synchronized 6.0.2/3.5.1 release files prepared |
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | completed — class 4; owner deferred implementation pending new evidence of material migration-wait harm |
 | 2026-07-29-coalescing-sweep-plan.md | completed — class 3; 11 plans soft-retired, hot lessons deferred, no promotion candidate, independently reviewed and verified |
