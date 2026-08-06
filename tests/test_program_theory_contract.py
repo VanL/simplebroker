@@ -630,12 +630,14 @@ def test_repository_and_product_entry_orders() -> None:
     assert agents.index("docs/agent-context/context.index.yaml") < agents.index(
         "winning product contract"
     )
-    assert (
-        "docs/program-theory.md"
-        not in agents.split("## Shared Agent Context", 1)[1].split(
-            "## Project Conventions", 1
-        )[0]
-    )
+    shared_agent_context = agents.split("## Shared Agent Context", 1)[1].split(
+        "## Project Conventions", 1
+    )[0]
+    assert "docs/program-theory.md" in shared_agent_context
+    assert "load-bearing for product-scope *judgment*" in shared_agent_context
+    assert shared_agent_context.index(
+        "docs/agent-context/context.index.yaml"
+    ) < shared_agent_context.index("docs/program-theory.md")
     assert "docs/program-theory.md" in (ROOT / "docs" / "README.md").read_text(
         encoding="utf-8"
     )
