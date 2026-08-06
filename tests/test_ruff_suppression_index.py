@@ -12,23 +12,61 @@ from bin import ruff_suppression_index
 from bin.ruff_suppression_index import repository_path
 
 ROOT = Path(__file__).resolve().parents[1]
+DOM_SPEC = ROOT / "docs/specs/01-development-documentation-operating-model.md"
+REGISTRY = ROOT / "docs/implementation/10-ruff-suppression-registry.md"
+IMPLEMENTATION_INDEX = ROOT / "docs/implementation/00-implementation-index.md"
+CONTEXT_INDEX = ROOT / "docs/agent-context/context.index.yaml"
 CHECK_COMMAND = "uv run --frozen --no-sync python bin/ruff_suppression_index.py --check"
 WRITE_COMMAND = "uv run --frozen --no-sync python bin/ruff_suppression_index.py --write"
 
 
 def test_registry_and_script_document_both_direct_commands() -> None:
-    spec = (
-        ROOT / "docs/specs/01-development-documentation-operating-model.md"
-    ).read_text(encoding="utf-8")
-    registry = spec.split(ruff_suppression_index.REGISTRY_HEADING, 1)[1].split(
-        "\n### ", 1
-    )[0]
+    registry = REGISTRY.read_text(encoding="utf-8")
     script_help = ruff_suppression_index.__doc__ or ""
 
     assert CHECK_COMMAND in registry
     assert WRITE_COMMAND in registry
     assert CHECK_COMMAND in script_help
     assert WRITE_COMMAND in script_help
+
+
+def test_registry_is_task_scoped_not_required_reading() -> None:
+    spec = DOM_SPEC.read_text(encoding="utf-8")
+    implementation_index = IMPLEMENTATION_INDEX.read_text(encoding="utf-8")
+    context_index = CONTEXT_INDEX.read_text(encoding="utf-8")
+    recommended, task_scoped = implementation_index.split(
+        "## Task-Scoped Operational Registries", 1
+    )
+
+    assert "docs/implementation/10-ruff-suppression-registry.md" in spec
+    assert "| Group | Rules | Approved cardinality |" not in spec
+    assert ruff_suppression_index.BEGIN_MARKER not in spec
+    assert "10-ruff-suppression-registry.md" not in recommended
+    assert "10-ruff-suppression-registry.md" in task_scoped
+    assert "10-ruff-suppression-registry.md" not in context_index
+
+
+def test_cli_names_the_explicit_document_a_registry() -> None:
+    help_result = subprocess.run(
+        [sys.executable, str(ROOT / "bin/ruff_suppression_index.py"), "--help"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    removed_option = subprocess.run(
+        [sys.executable, str(ROOT / "bin/ruff_suppression_index.py"), "--spec", "x"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert help_result.returncode == 0
+    assert "--registry" in help_result.stdout
+    assert "--spec" not in help_result.stdout
+    assert removed_option.returncode == 2
+    assert "unrecognized arguments: --spec x" in removed_option.stderr
 
 
 def test_repository_path_uses_posix_separators() -> None:
@@ -60,7 +98,7 @@ def contain_failure(callback):
         """\
 # Policy
 
-#### Approved Ruff Suppression Registry [DOM-10.1.1]
+# Approved Ruff Suppression Registry
 
 | Group | Rules | Approved cardinality | Protected invariant | Real proof | Rejected alternatives | Approval |
 |-------|-------|----------------------|---------------------|------------|-----------------------|----------|
@@ -89,7 +127,7 @@ def _run_tool(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
             str(ROOT / "bin" / "ruff_suppression_index.py"),
             "--repo-root",
             str(repo),
-            "--spec",
+            "--registry",
             "policy.md",
             *args,
         ],
@@ -303,7 +341,7 @@ class Context:
     spec = tmp_path / "policy.md"
     spec.write_text(
         """\
-#### Approved Ruff Suppression Registry [DOM-10.1.1]
+# Approved Ruff Suppression Registry
 
 | Group | Rules | Approved cardinality | Protected invariant | Real proof | Rejected alternatives | Approval |
 |-------|-------|----------------------|---------------------|------------|-----------------------|----------|
@@ -374,7 +412,7 @@ def test_fenced_heading_and_markers_are_inert(tmp_path: Path) -> None:
     text = spec.read_text(encoding="utf-8")
     example = """\
 ```markdown
-#### Approved Ruff Suppression Registry [DOM-10.1.1]
+# Approved Ruff Suppression Registry
 <!-- BEGIN GENERATED RUFF SUPPRESSION INDEX -->
 <!-- END GENERATED RUFF SUPPRESSION INDEX -->
 ```
@@ -477,7 +515,7 @@ def test_replacement_failure_leaves_the_spec_and_no_temp_file(
         [
             "--repo-root",
             str(tmp_path),
-            "--spec",
+            "--registry",
             "policy.md",
             "--write",
         ]

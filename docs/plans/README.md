@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-06-ruff-suppression-registry-extraction-plan.md | completed — class 5+P; approval ledger extracted from required spec reading into a task-scoped registry with exact inventory conservation |
 | 2026-08-06-plan-context-gate-plan.md | completed — class 3+P (effective 5); plan-context checker and CI document-gate seams implemented and reviewed |
 | 2026-08-06-access-backend-benchmark-plan.md | active — class 4; implementation and independent completion review reconciled, all gates pass, awaiting owner commit |
 | 2026-08-06-audit-remediation-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `94e15bc` |

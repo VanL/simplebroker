@@ -13,8 +13,8 @@ from bin.ruff_suppression_index import repository_path, run
 ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
 RULE_FIXTURE = ROOT / "tests" / "fixtures" / "ruff-enabled-rules.txt"
-STATIC_ANALYSIS_SPEC = (
-    ROOT / "docs" / "specs" / "01-development-documentation-operating-model.md"
+SUPPRESSION_REGISTRY = (
+    ROOT / "docs" / "implementation" / "10-ruff-suppression-registry.md"
 )
 
 REVIEWED_FAMILIES = ["E", "W", "F", "I", "B", "C901", "C4", "UP"]
@@ -118,10 +118,10 @@ def test_repository_path_uses_forward_slashes() -> None:
     )
 
 
-def test_approved_suppressions_match_the_spec_registry() -> None:
+def test_approved_suppressions_match_the_registry() -> None:
     snapshot = run(
         repo_root=ROOT,
-        spec=STATIC_ANALYSIS_SPEC,
+        registry=SUPPRESSION_REGISTRY,
         write=False,
     )
 

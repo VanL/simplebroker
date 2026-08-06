@@ -38,6 +38,7 @@ Quick pointers to the key guidance documents in this repository.
 | `bin/check-doc-paths` | Gate: every backticked repo-relative path claim in the guidance surfaces resolves |
 | `bin/coalesce-check` | Evidence trail for the coalescing layer: verifies every run-log SHA and retrieval cue (local, sibling, and published-remote), reports local-only pins, derives the lessons count |
 | `bin/ruff_suppression_index.py` | Gate and generator: reconciles human-approved Ruff suppression groups, local source pointers, raw diagnostics, and the derived location index |
+| `docs/implementation/10-ruff-suppression-registry.md` | Task-scoped Ruff suppression approvals and generated evidence; not startup or general implementation reading |
 | `docs/agent-context/README.md` | Context hub and read order |
 | `docs/agent-context/context.index.yaml` | Machine-readable context index |
 | `docs/agent-context/decision-hierarchy.md` | Conflict-resolution order |

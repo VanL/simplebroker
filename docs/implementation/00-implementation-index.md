@@ -30,3 +30,12 @@ read order stay aligned instead of competing.
 
 For product-scope or concept-ownership questions, begin with
 `../program-theory.md` before selecting the implementation document.
+
+## Task-Scoped Operational Registries
+
+These documents are not part of the recommended starting sequence. Consult
+them only for the named maintenance task.
+
+- `10-ruff-suppression-registry.md` — approved suppression evidence and the
+  generated location inventory; read when proposing, reviewing, regrouping,
+  regenerating, or auditing a Ruff suppression
