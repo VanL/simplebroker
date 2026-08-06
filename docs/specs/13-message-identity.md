@@ -152,9 +152,12 @@ message id. It is the same message identity with the queue binding updated.
 
 ## Related Plans
 
-- `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
-- `docs/plans/2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md`
+- retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
+  see the ledger in `docs/plans/README.md`
+- retired: 2026-07-30-reserved-zero-and-redis-write-atomicity-plan — source
+  `5023710`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
   (published workers accept the full stored integer-ID range and canonicalize
   CLI selector strings)
-- `docs/plans/2026-08-06-audit-remediation-plan.md`
+- retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
+  ledger in `docs/plans/README.md`

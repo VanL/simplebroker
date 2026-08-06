@@ -72,7 +72,9 @@ may return to `readme-only` per the ownership decision.
   `197629e2`; see the ledger in `docs/plans/README.md`
 - retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`
-- `docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md`
-- `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
+- retired: 2026-07-29-program-theory-and-negative-knowledge-plan — source
+  `5023710`; see the ledger in `docs/plans/README.md`
+- retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
+  see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-08-04-docs-information-architecture-plan.md` (README
   loci relocated to `docs/guides/`; locus and TOC cells updated)

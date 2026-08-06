@@ -31,25 +31,25 @@ assignments use `draft` with a note rather than inventing `completed`.
 |------|--------|
 | 2026-08-06-plan-context-gate-plan.md | completed — class 3+P (effective 5); plan-context checker and CI document-gate seams implemented and reviewed |
 | 2026-08-06-access-backend-benchmark-plan.md | active — class 4; implementation and independent completion review reconciled, all gates pass, awaiting owner commit |
-| 2026-08-06-audit-remediation-plan.md | completed — class 5+P; all HIGH/MEDIUM findings fixed or codified, follow-up review PASS, synchronized 6.0.2/3.5.1 release files prepared |
+| 2026-08-06-audit-remediation-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `94e15bc` |
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | completed — class 4; owner deferred implementation pending new evidence of material migration-wait harm |
-| 2026-07-29-coalescing-sweep-plan.md | completed — class 3; 11 plans soft-retired, hot lessons deferred, no promotion candidate, independently reviewed and verified |
-| 2026-07-29-complexity-and-state-machine-hardening-plan.md | completed — class 5+P; implementation 86f73f5; C901 audit registry, complexity refactors, and explicit all-transition state-machine verification |
-| 2026-07-29-program-theory-and-negative-knowledge-plan.md | completed — class 5+P; program theory, negative-knowledge lifecycle, agent read path, structural gates, closure routing, and upstream export brief landed in b3f0bd59 |
+| 2026-07-29-coalescing-sweep-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
+| 2026-07-29-complexity-and-state-machine-hardening-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
+| 2026-07-29-program-theory-and-negative-knowledge-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 | 2026-07-29-ruff-lint-expansion-plan.md | completed — class 3+P; Ruff 0.16 stable-default expansion, repository-wide cleanup, policy gates, portability corrections, and independent review landed in 9f666232, c5a31e18, and 1324a1f6 |
-| 2026-07-30-product-documentation-cutover-plan.md | completed — class 5+P; product-doc authority cutover Phases 1–6; specs 10–17 all `canonical-spec` |
+| 2026-07-30-product-documentation-cutover-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 | 2026-07-31-python-library-api-contract-plan.md | completed — class 5; `[SB-API-1]`–`[SB-API-12]`, R1 keyword-only command signatures, helper split, and synchronized 6.0.0/3.5.0 release landed |
 | 2026-07-31-core-test-mypy-gate-plan.md | completed — class 5+P; core tests are explicitly type-checked in CI and root-release prechecks, with behavior-preserving test typing cleanup |
 | 2026-07-31-ci-release-remediation-plan.md | completed — repaired nine independent CI/release root causes in isolated commits; published simplebroker 6.0.0, simplebroker-pg 3.5.0, and simplebroker-redis 3.5.0 from exact green SHA `926ae54f` |
-| 2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md | completed — class 5; zero reserved at exact-insert admission and ordinary Redis generated writes made allocation/publication atomic |
+| 2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 | 2026-07-30-ruff-suppression-index-generator-plan.md | completed — class 5+P; stable-group generator and R1 symbol-keyed index landed in 49da9b2d and 4d4f61be |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | status-review — class 4; implementation and reviews landed in b01bc3cb and shipped in 5.6.2, but the plan records no evidence for its required five post-commit coverage-diagnostics runs |
 | 2026-08-04-docs-information-architecture-plan.md | completed — class 4; README 2,520→818 lines around three purposes; docs/guides tier, CONTRIBUTING.md, implementation doc 09 shipped; move ledger + 4-row deviation log; Codex plan review PASS, slice review (5 findings fixed), completion review PASS at `154524e` |
-| 2026-08-04-cmd-watch-locality-plan.md | completed — class 3; three one-use lifecycle helpers recomposed into `cmd_watch`; score 10; 2407 tests passed; independent implementation review PASS at `c403c5eb` |
+| 2026-08-04-cmd-watch-locality-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 | 2026-08-04-worker-example-error-handling-plan.md | completed — class 4; published worker processing, acknowledgement, and broker-error handling repaired; 2,429 tests passed; independent review PASS |
 | 2026-08-05-worker-portability-and-example-corrections-plan.md | completed — class 4; worker portability/safety, published recipes, extension handshake visibility, narrow coverage repair, and plan-status audit; 2,457 tests passed; independent completion re-review PASS |
-| 2026-08-04-coalescing-git-archive-policy-plan.md | completed — class 5+P; source-pinned coalescing is reversible Class-2 maintenance; policy review PASS |
-| 2026-08-04-retired-plan-lesson-harvest-plan.md | completed — class 3; 15 reusable lessons extracted with independent fidelity review PASS |
+| 2026-08-04-coalescing-git-archive-policy-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
+| 2026-08-04-retired-plan-lesson-harvest-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 
 ## Retired Plans
 
@@ -127,6 +127,15 @@ an otherwise routine coalescing run.
 | 2026-07-29-code-quality-cleanup-plan.md | 2026-07-29 | Behavior-neutral quality cleanup landed; local rationale judged non-durable. | Code and tests; session/core boundary retained in `docs/implementation/06-process-session-core-ownership.md` | `197629e2` |
 | 2026-07-29-development-toolchain-refresh-plan.md | 2026-07-29 | Development, test, fuzz, build, and uv policies refreshed and verified. | README uv policy, updater, workflow tests, manifests and locks; version inventory judged non-durable | `197629e2` |
 | 2026-07-29-process-session-core-factory-plan.md | 2026-07-29 | Process-session construction and ownership boundary implemented and verified. | `docs/implementation/06-process-session-core-ownership.md`; production code and firing tests | `197629e2` |
+| 2026-08-06-audit-remediation-plan.md | 2026-08-06 | Resolved or codified all audited HIGH/MEDIUM findings across timestamp repair, CLI delivery/errors, aliases, persistence/API/watch behavior, evidence gates, and release preparation. | Specs 10–17; implementation docs; code/tests; README; CHANGELOG | `94e15bc` |
+| 2026-07-29-coalescing-sweep-plan.md | 2026-08-06 | Soft-retired 11 independently audited plans, deferred 10 hot lessons, found no promotion candidate, and recorded verified source pins and traceability results. | `docs/coalescing.md`; this ledger; coalescing guidance | `5023710` |
+| 2026-07-29-complexity-and-state-machine-hardening-plan.md | 2026-08-06 | Established repository-wide auditable C901 policy, refactored accidental complexity, retained cohesive exceptions with reasons, and mapped every state machine to all-transition executable contracts. | `[DOM-10.1]`, `[DOM-10.2]`; `docs/implementation/07-complexity-and-state-machine-map.md`; code/tests | `5023710` |
+| 2026-07-29-program-theory-and-negative-knowledge-plan.md | 2026-08-06 | Established program theory, negative-knowledge and revision lifecycles, first-read routing, structural gates, reciprocal alternative promotion, and the reviewed upstream export brief. | `docs/program-theory.md`; `[DOM-16]`; `docs/implementation/01-documentation-system.md` | `5023710` |
+| 2026-07-30-product-documentation-cutover-plan.md | 2026-08-06 | Moved every product concern to canonical specs `[SB-CLI-*]` through `[SB-OPS-*]`, leaving README as entry/catalog and installing promise-equivalence and final-cutover gates. | Product-section registry; specs 10–17; product inventory; final-cutover tests | `5023710` |
+| 2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md | 2026-08-06 | Reserved ID zero at exact-insert admission while preserving legacy recovery, and made ordinary Redis generated-write allocation and row publication atomic. | `[SB-ID-1/2/4]`; message-identity implementation rationale; registry gates; backend tests | `5023710` |
+| 2026-08-04-cmd-watch-locality-plan.md | 2026-08-06 | Recomposed three one-use helpers into `cmd_watch` without behavior change. | `docs/implementation/07-complexity-and-state-machine-map.md`; specs 10, 11, 14, and 16; code/tests | `5023710` |
+| 2026-08-04-coalescing-git-archive-policy-plan.md | 2026-08-06 | Classified retained-ref Git-backed coalescing as reversible Class-2 maintenance while preserving plan and review governance for durable-guidance promotion. | `[DOM-5/14/15]`; coalescing skill/state; plan-lifecycle runbook | `5023710` |
+| 2026-08-04-retired-plan-lesson-harvest-plan.md | 2026-08-06 | Added 15 missing reusable, source-pinned lessons and explicitly retained two nonrecurring findings as plan-local. | `docs/lessons.md`; `docs/coalescing.md` run log | `5023710` |
 
 ## Rules for agents
 

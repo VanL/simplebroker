@@ -93,9 +93,11 @@ lower bound filter on eligibility; it does not change claim semantics
 
 ## Related Plans
 
-- `docs/plans/2026-08-06-audit-remediation-plan.md`
-- `docs/plans/2026-08-04-cmd-watch-locality-plan.md` (preserves watch input
-  resolution and lower-bound wiring while recomposing lifecycle-local code)
-- `docs/plans/2026-07-30-product-documentation-cutover-plan.md` (Phase 2B)
+- retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
+  ledger in `docs/plans/README.md`
+- retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the
+  ledger in `docs/plans/README.md`
+- retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
+  see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
   (removes checkpoint-as-offset filtering from the resilient worker)

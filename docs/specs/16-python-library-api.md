@@ -303,8 +303,10 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
-- `docs/plans/2026-08-06-audit-remediation-plan.md`
-- `docs/plans/2026-08-04-cmd-watch-locality-plan.md` (preserves the public
-  `cmd_watch` surface while recomposing private lifecycle helpers)
+- retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
+  ledger in `docs/plans/README.md`
+- retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the
+  ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-31-python-library-api-contract-plan.md`
-- `docs/plans/2026-07-30-product-documentation-cutover-plan.md` (Phase 4)
+- retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
+  see the ledger in `docs/plans/README.md`

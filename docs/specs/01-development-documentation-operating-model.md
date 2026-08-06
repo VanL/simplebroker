@@ -943,10 +943,13 @@ Local adoption record (soft-retired; not a live path claim):
 Local plans:
 
 - `docs/plans/2026-08-06-plan-context-gate-plan.md`
-- `docs/plans/2026-08-04-coalescing-git-archive-policy-plan.md`
+- retired: 2026-08-04-coalescing-git-archive-policy-plan — source `5023710`;
+  see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-29-ruff-lint-expansion-plan.md`
-- `docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md`
-- `docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md`
+- retired: 2026-07-29-complexity-and-state-machine-hardening-plan — source
+  `5023710`; see the ledger in `docs/plans/README.md`
+- retired: 2026-07-29-program-theory-and-negative-knowledge-plan — source
+  `5023710`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-30-ruff-suppression-index-generator-plan.md`
 
 Hub plans (names only; live in agent-guidance):

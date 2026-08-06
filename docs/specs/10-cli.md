@@ -124,16 +124,18 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- `docs/plans/2026-08-06-audit-remediation-plan.md`
-- `docs/plans/2026-08-04-cmd-watch-locality-plan.md` (behavior-preserving
-  command-lifecycle locality)
+- retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
+  ledger in `docs/plans/README.md`
+- retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the
+  ledger in `docs/plans/README.md`
 - `docs/plans/2026-08-04-worker-example-error-handling-plan.md` (published
   shell workers preserve the three-way CLI exit contract)
 - `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
   (workers require integer-preserving jq and canonicalize exact CLI selectors)
 - retired: 2026-07-27-product-spec-doctrine-and-cli-vertical-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`
-- `docs/plans/2026-07-30-product-documentation-cutover-plan.md` (Phase 2B)
+- retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
+  see the ledger in `docs/plans/README.md`
 
 ## Verification
 

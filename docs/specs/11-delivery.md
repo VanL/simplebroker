@@ -194,9 +194,10 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- `docs/plans/2026-08-06-audit-remediation-plan.md`
-- `docs/plans/2026-08-04-cmd-watch-locality-plan.md` (behavior-preserving
-  `cmd_watch` lifecycle locality)
+- retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
+  ledger in `docs/plans/README.md`
+- retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the
+  ledger in `docs/plans/README.md`
 - `docs/plans/2026-08-04-worker-example-error-handling-plan.md` (published
   single-consumer workers stop on processing or acknowledgement failure)
 - `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
