@@ -194,7 +194,9 @@ def test_trial_target_cleanup_preserves_primary_failure(
 
     assert [call[0] for call in calls] == ["initialize", "cleanup"]
     assert calls[0][2] == calls[1][2]
-    assert calls[0][2]["namespace"].startswith("simplebroker_bench_")
+    namespace = calls[0][2]["namespace"]
+    assert isinstance(namespace, str)
+    assert namespace.startswith("simplebroker_bench_")
 
 
 @pytest.mark.parametrize(
