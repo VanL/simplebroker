@@ -168,10 +168,13 @@ Environment variables:
 
 - `BROKER_BUSY_TIMEOUT` - SQLite busy timeout (default: 5000ms)
 - `BROKER_CACHE_MB` - Cache size in MB (default: 10)
-- `BROKER_SYNC_MODE` - Sync mode: OFF, NORMAL, FULL, EXTRA (default: FULL)
+- `BROKER_SYNC_MODE` - Sync mode: FULL, NORMAL, or OFF (default: FULL)
 - `BROKER_AUTO_VACUUM` - Enable auto vacuum (default: 1)
 - `BROKER_AUTO_VACUUM_INTERVAL` - Vacuum check interval (default: 100)
-- `BROKER_VACUUM_THRESHOLD` - Vacuum threshold percentage (default: 10)
+- `BROKER_VACUUM_THRESHOLD` - Vacuum threshold (default: 10%); string and
+  environment values are percentages, while typed numeric values in `[0, 1]`
+  are ratios. See the canonical
+  [configuration guide](../docs/guides/configuration.md#environment-variables).
 - `BROKER_MAX_MESSAGE_SIZE` - Max message size in bytes (default: 10MB)
 
 ## Running Examples

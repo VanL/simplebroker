@@ -5,14 +5,15 @@ transactions in `simplebroker/db.py`; Redis ordinary-write allocation and row
 publication in `extensions/simplebroker_redis/simplebroker_redis/core.py` and
 `extensions/simplebroker_redis/simplebroker_redis/scripts.py`.
 
-Boundary: realizes `[SB-ID-1]`, `[SB-ID-2]`, and `[SB-ID-4]` from
+Boundary: realizes `[SB-ID-1]` through `[SB-ID-4]` from
 `docs/specs/13-message-identity.md`. It does not own strict timestamp
 selection, watcher lifecycle, move identity, patterned-broadcast atomicity, or
 dump format.
 
-Verification: shared reserved-zero and SQL transaction-ordering tests, plus
-real-Valkey stale-fence, two-writer visibility, monotone-resync, command-count,
-same-core contention, and `SM-REDIS-WRITE` transition tests.
+Verification: shared reserved-zero and SQL transaction-ordering tests, a real
+two-connection PostgreSQL monotone-resync test, plus real-Valkey stale-fence,
+two-writer visibility, monotone-resync, command-count, same-core contention,
+and `SM-REDIS-WRITE` transition tests.
 
 Required action: keep zero decodable but reject it at exact-insert admission;
 keep every expected Redis Lua result before the first mutation; preserve the
@@ -45,6 +46,27 @@ The real runner sequence is:
 The pass-through recorder in `tests/test_write_visibility.py` observes that
 sequence without replacing SQL execution. Redis is explicitly excluded from
 that SQL-only proof.
+
+## SQL conflict repair
+
+Shared SQL conflict repair reads persisted high-water and the maximum stored
+message ID inside one transaction, then calls the backend's guarded
+compare-and-advance operation. SQLite's `BEGIN IMMEDIATE` serializes this
+repair against competing writers. PostgreSQL's corresponding operation is an
+ordinary READ COMMITTED `BEGIN`, so its initial reads may be stale by the time
+the repair mutates `meta`. The guarded `UPDATE ... WHERE last_ts < candidate`
+therefore remains required on both backends: a later concurrent high-water
+wins instead of being overwritten by the stale repair.
+
+Before commit, repair reads the transaction-visible surviving high-water into
+the generator cache. Under PostgreSQL READ COMMITTED this sees either the
+already-committed contender or the repair transaction's own guarded update.
+The warning and local cache report that surviving value, which may be greater
+than the maximum the repair originally observed. Keeping this read before
+commit avoids reporting a failed repair after its mutation already committed;
+a later commit failure can leave only a safe high cache value. `write_last_ts`
+remains an explicit administrative/test corruption primitive; repair never
+uses it.
 
 ## Redis ordinary writes
 
@@ -82,7 +104,7 @@ after a fork so a child cannot inherit a lock held by a vanished parent thread.
 Different processes remain concurrent and are reconciled by the Lua fence and
 bounded retry protocol.
 
-Conflict repair reads current high-water and the maximum stored ID, calls the
+Redis conflict repair reads current high-water and the maximum stored ID, calls the
 backend's compare-and-advance operation, then refreshes the local generator.
 It never performs an unconditional high-water write, so a concurrent later
 advance cannot be overwritten backward.
@@ -102,9 +124,9 @@ implementation does not turn `after_timestamp` into a durable broker offset.
 
 ## Rollback and observation
 
-Code and contract must be reverted together. Redis data written by the new
-script remains readable by older releases, so rollback needs no migration, but
-it reopens the two-operation visibility and backward-resync races.
+Code and contract must be reverted together. Neither the SQL guarded repair nor
+the Redis script changes stored representation, so rollback needs no migration,
+but it reopens backward-resync races.
 
 Post-release signals are Redis write error rate, terminal timestamp-conflict
 rate, high-water regressions, generated rows observed behind later ordinary
@@ -115,3 +137,4 @@ not pass/fail thresholds.
 ## Related plan
 
 - `docs/plans/2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md`
+- `docs/plans/2026-08-06-audit-remediation-plan.md`

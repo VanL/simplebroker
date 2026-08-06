@@ -202,6 +202,45 @@ def test_resync_cannot_overwrite_concurrent_high_water_backward(
         advancing.close()
 
 
+@pytest.mark.parametrize(
+    "attempts",
+    [(("a", "b"), ("b", "a")), (("shared", "left"), ("shared", "right"))],
+)
+def test_concurrent_alias_adds_have_one_winner_and_flat_live_state(
+    redis_runner: RedisRunner,
+    attempts: tuple[tuple[str, str], tuple[str, str]],
+) -> None:
+    first = RedisBrokerCore(redis_runner)
+    second = RedisBrokerCore(redis_runner)
+    barrier = threading.Barrier(2)
+
+    def add(core: RedisBrokerCore, alias: str, target: str) -> bool:
+        barrier.wait(timeout=5)
+        try:
+            core.add_alias(alias, target)
+        except ValueError:
+            return False
+        return True
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            futures = (
+                executor.submit(add, first, *attempts[0]),
+                executor.submit(add, second, *attempts[1]),
+            )
+            assert sorted(future.result(timeout=5) for future in futures) == [
+                False,
+                True,
+            ]
+
+        aliases = dict(first.list_aliases())
+        assert len(aliases) == 1
+        assert next(iter(aliases.values())) not in aliases
+    finally:
+        second.close()
+        first.close()
+
+
 def test_steady_state_ordinary_write_uses_one_data_eval(
     redis_runner: RedisRunner,
     monkeypatch: pytest.MonkeyPatch,
@@ -524,6 +563,52 @@ def test_delete_queue_script_rechecks_reservation_without_partial_mutation(
     finally:
         core._client.delete(keys.reserved("jobs"))
         core.close()
+
+
+def test_delete_all_reports_real_partial_completion_when_later_queue_reserved(
+    redis_runner: RedisRunner,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deleting = RedisBrokerCore(redis_runner)
+    reserving = RedisBrokerCore(redis_runner)
+    reservation = None
+    original_delete_queue = deleting._delete_queue_atomically
+    try:
+        deleting.write("alpha", "delete-me")
+        deleting.write("beta", "reserve-me")
+        monkeypatch.setattr(deleting, "_queue_names", lambda: ["alpha", "beta"])
+
+        def delete_then_reserve_beta(name: str) -> int:
+            nonlocal reservation
+            result = original_delete_queue(name)
+            if name == "alpha":
+                reservation = reserving.claim_generator(
+                    "beta",
+                    delivery_guarantee="at_least_once",
+                    batch_size=1,
+                    with_timestamps=False,
+                )
+                assert next(reservation) == "reserve-me"
+            return result
+
+        monkeypatch.setattr(
+            deleting, "_delete_queue_atomically", delete_then_reserve_beta
+        )
+
+        with pytest.raises(OperationalError, match="at_least_once batch"):
+            deleting.delete()
+
+        assert reservation is not None
+        reservation.close()
+        reservation = None
+        assert deleting.queue_exists("alpha") is False
+        assert deleting.queue_exists("beta") is True
+        assert deleting.peek_one("beta", with_timestamps=False) == "reserve-me"
+    finally:
+        if reservation is not None:
+            reservation.close()
+        reserving.close()
+        deleting.close()
 
 
 def test_vacuum_script_keeps_nonempty_queue_registered(
@@ -1277,6 +1362,37 @@ def test_exact_create_rejects_pending_layout_before_registry_or_message_mutation
         assert core._client.zrange(keys.all_ids, 0, -1) == state_before["all_ids"]
     finally:
         core._client.delete(keys.pending("new-a"))
+        core.close()
+
+
+def test_exact_create_rejects_queue_registry_layout_before_message_mutation(
+    redis_runner: RedisRunner,
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    keys = RedisKeys(redis_runner.namespace)
+    try:
+        core._client.delete(keys.queues)
+        core._client.set(keys.queues, "wrong-type")
+        state_before = {
+            "last_ts": core._client.hget(keys.meta, "last_ts"),
+            "bodies": core._client.hgetall(keys.bodies),
+            "all_ids": core._client.zrange(keys.all_ids, 0, -1),
+        }
+
+        with pytest.raises(OperationalError, match="WRONGTYPE"):
+            core.broadcast(
+                "announcement",
+                queue_names=["new-a"],
+                create_missing=True,
+            )
+
+        assert core._client.get(keys.queues) == "wrong-type"
+        assert core._client.exists(keys.pending("new-a")) == 0
+        assert core._client.hget(keys.meta, "last_ts") == state_before["last_ts"]
+        assert core._client.hgetall(keys.bodies) == state_before["bodies"]
+        assert core._client.zrange(keys.all_ids, 0, -1) == state_before["all_ids"]
+    finally:
+        core._client.delete(keys.queues)
         core.close()
 
 

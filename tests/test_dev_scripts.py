@@ -1694,6 +1694,35 @@ def test_route_pytest_args_limits_run_to_extension_suite() -> None:
     assert dist == "loadscope"
 
 
+def test_route_pytest_args_limits_run_to_redis_extension_suite() -> None:
+    (
+        shared_args,
+        extension_args,
+        run_shared,
+        run_extension,
+        marker_expr,
+        numprocesses,
+        dist,
+    ) = _route_pytest_args(
+        [
+            "extensions/simplebroker_redis/tests/test_smoke.py::test_redis_backend",
+            "-q",
+        ],
+        extension_suite_path="extensions/simplebroker_redis/tests",
+    )
+
+    assert run_shared is False
+    assert run_extension is True
+    assert shared_args == ["-q"]
+    assert extension_args == [
+        "extensions/simplebroker_redis/tests/test_smoke.py::test_redis_backend",
+        "-q",
+    ]
+    assert marker_expr is None
+    assert numprocesses is None
+    assert dist is None
+
+
 def test_route_pytest_args_combines_multiple_marker_filters() -> None:
     _, _, _, _, marker_expr, _, _ = _route_pytest_args(
         ["-m", "smoke", "-m", "not slow"]
@@ -1728,6 +1757,14 @@ def test_extract_pytest_runner_overrides_accepts_compact_forms() -> None:
     assert marker_expr is None
     assert numprocesses is None
     assert dist == "loadfile"
+
+
+def test_extract_pytest_runner_overrides_names_the_selected_runner() -> None:
+    with pytest.raises(SystemExit, match="pytest-redis: -m requires an argument"):
+        _extract_pytest_runner_overrides(
+            ["-m"],
+            runner_name="pytest-redis",
+        )
 
 
 @pytest.mark.parametrize("args", [["-m"], ["-n"], ["--dist"]])
@@ -2147,10 +2184,14 @@ def test_pg_test_uv_command_uses_pg_test_dependencies() -> None:
     ]
 
 
-def test_redis_test_uv_command_uses_the_locked_root_project() -> None:
+def test_pytest_redis_bin_delegates_to_shared_runner_owner() -> None:
     redis_script = runpy.run_path(str(REPO_ROOT / "bin" / "pytest-redis"))
 
-    assert redis_script["_uv_command"]("pytest", "tests") == [
+    assert redis_script["pytest_redis_main"] is _scripts.pytest_redis_main
+
+
+def test_redis_test_uv_command_uses_the_locked_root_project() -> None:
+    assert _scripts._redis_test_uv_command("pytest", "tests") == [
         "uv",
         "run",
         "--project",
@@ -2419,11 +2460,8 @@ def test_pytest_pg_fast_coverage_runs_pg_only_extension_phase(
 def test_pytest_redis_fast_coverage_runs_redis_only_extension_phase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    redis_script = runpy.run_path(str(REPO_ROOT / "bin" / "pytest-redis"))
-    redis_main = redis_script["main"]
-    redis_globals = redis_main.__globals__
     calls: list[tuple[Any, ...]] = []
-    cleanup_calls = []
+    cleanup_calls: list[str] = []
     coverage_args = [
         "--cov=simplebroker",
         "--cov=extensions/simplebroker_pg/simplebroker_pg",
@@ -2432,31 +2470,36 @@ def test_pytest_redis_fast_coverage_runs_redis_only_extension_phase(
         "--cov-report=",
     ]
 
+    monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
-        redis_globals["shutil"], "which", lambda name: f"/usr/bin/{name}"
-    )
-    monkeypatch.setattr(
-        redis_globals["sys"],
+        _scripts.sys,
         "argv",
         ["pytest-redis", "--fast", *coverage_args],
     )
-    monkeypatch.setitem(
-        redis_globals,
+    monkeypatch.setattr(
+        _scripts,
         "_start_valkey_container",
         lambda: ("redis-container", "redis://127.0.0.1:6379/15"),
     )
-    monkeypatch.setitem(
-        redis_globals,
+    monkeypatch.setattr(
+        _scripts,
         "_cleanup_container",
         lambda container_name: cleanup_calls.append(container_name),
     )
 
-    def fake_run(cmd, *, env=None):
+    def fake_run(
+        cmd: list[str],
+        *,
+        cwd: Path = _scripts.ROOT,
+        env: dict[str, str] | None = None,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
         calls.append(("run", cmd, env))
+        return subprocess.CompletedProcess(cmd, 0)
 
-    monkeypatch.setitem(redis_globals, "_run", fake_run)
+    monkeypatch.setattr(_scripts, "_run", fake_run)
 
-    assert redis_main() == 0
+    assert _scripts.pytest_redis_main() == 0
 
     run_commands = [call[1] for call in calls if call[0] == "run"]
     assert len(run_commands) == 2
@@ -2468,6 +2511,63 @@ def test_pytest_redis_fast_coverage_runs_redis_only_extension_phase(
     for arg in coverage_args:
         assert arg in shared_command
         assert arg in extension_command
+    assert cleanup_calls == ["redis-container"]
+
+
+def test_pytest_redis_routes_compact_overrides_to_explicit_extension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], dict[str, str] | None]] = []
+    cleanup_calls: list[str] = []
+    target = (
+        "extensions/simplebroker_redis/tests/test_redis_keys.py::"
+        "test_redis_message_ids_reject_values_outside_the_sortable_range"
+    )
+
+    monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        _scripts.sys,
+        "argv",
+        [
+            "pytest-redis",
+            target,
+            "-k",
+            "redis_message_ids",
+            "-mnot benchmark",
+            "-n1",
+            "--dist=loadscope",
+        ],
+    )
+    monkeypatch.setattr(
+        _scripts,
+        "_start_valkey_container",
+        lambda: ("redis-container", "redis://127.0.0.1:6379/15"),
+    )
+    monkeypatch.setattr(_scripts, "_cleanup_container", cleanup_calls.append)
+
+    def fake_run(
+        cmd: list[str],
+        *,
+        cwd: Path = _scripts.ROOT,
+        env: dict[str, str] | None = None,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((cmd, env))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(_scripts, "_run", fake_run)
+
+    assert _scripts.pytest_redis_main() == 0
+    assert len(calls) == 1
+    command, env = calls[0]
+    assert target in command
+    assert command[command.index("-k") + 1] == "redis_message_ids"
+    assert command[command.index("-m") + 1] == "(redis_only) and (not benchmark)"
+    assert command[command.index("-n") + 1] == "1"
+    assert command[command.index("--dist") + 1] == "loadscope"
+    assert env is not None
+    assert env["SIMPLEBROKER_VALKEY_TEST_URL"] == "redis://127.0.0.1:6379/15"
+    assert "BROKER_TEST_BACKEND" not in env
     assert cleanup_calls == ["redis-container"]
 
 

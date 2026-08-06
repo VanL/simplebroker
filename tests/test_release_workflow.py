@@ -589,6 +589,25 @@ def test_coverage_workflow_runs_four_independent_producers() -> None:
         assert "if-no-files-found: error" in job
 
 
+def test_hypothesis_ci_profile_is_selected_only_in_coverage_linux() -> None:
+    workflow_text = _workflow_text("test.yml")
+    linux_job = workflow_text.split("  coverage-linux:", 1)[1].split(
+        "  coverage-postgres:", 1
+    )[0]
+    non_linux_jobs = workflow_text.replace(linux_job, "")
+
+    assert "HYPOTHESIS_PROFILE: ci" in linux_job
+    assert "HYPOTHESIS_PROFILE: ci" not in non_linux_jobs
+
+
+def test_coverage_does_not_hide_repr_or_bare_pass_lines() -> None:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    exclusions = pyproject["tool"]["coverage"]["report"]["exclude_lines"]
+
+    assert "def __repr__" not in exclusions
+    assert "pass" not in exclusions
+
+
 def test_coverage_jobs_bound_hangs_and_report_the_active_test() -> None:
     workflow_text = _workflow_text("test.yml")
     linux_job = workflow_text.split("  coverage-linux:", 1)[1].split(

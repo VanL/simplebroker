@@ -16,12 +16,17 @@ from simplebroker.project import target_for_directory
 from .conftest import run_cli
 
 
-def _spawn_broker(workdir: Path, *args: str) -> subprocess.Popen[str]:
+def _spawn_broker(
+    workdir: Path, *args: str, unbuffered: bool = True
+) -> subprocess.Popen[str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
         filter(None, [str(Path(__file__).parents[1]), env.get("PYTHONPATH", "")])
     )
-    env["PYTHONUNBUFFERED"] = "1"
+    if unbuffered:
+        env["PYTHONUNBUFFERED"] = "1"
+    else:
+        env.pop("PYTHONUNBUFFERED", None)
     return subprocess.Popen(
         [sys.executable, "-m", "simplebroker.cli", *args],
         cwd=workdir,
@@ -133,6 +138,109 @@ def test_read_all_pipe_closure_rolls_back_active_at_least_once_batch(
     assert stderr == ""
     with Queue("bulk", db_path=target_for_directory(workdir)) as queue:
         assert queue.stats().pending == 128
+
+
+def test_short_default_buffered_read_all_rolls_back_before_commit(
+    workdir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("BROKER_READ_COMMIT_INTERVAL", "128")
+    with Queue(
+        "short", db_path=target_for_directory(workdir), persistent=True
+    ) as queue:
+        for index in range(5):
+            queue.write(f"message-{index}")
+
+    process = _spawn_broker(
+        workdir,
+        "read",
+        "short",
+        "--all",
+        unbuffered=False,
+    )
+    returncode, stderr = _close_consumer_and_wait(process)
+
+    assert returncode == 0, stderr
+    assert stderr == ""
+    with Queue("short", db_path=target_for_directory(workdir)) as queue:
+        stats = queue.stats()
+        assert stats.pending == 5
+        assert stats.claimed == 0
+
+
+def test_exact_message_pipe_closure_is_clean(workdir: Path) -> None:
+    with Queue(
+        "exact", db_path=target_for_directory(workdir), persistent=True
+    ) as queue:
+        message_id = queue.write("payload")
+
+    process = _spawn_broker(workdir, "read", "exact", "-m", str(message_id))
+    returncode, stderr = _close_consumer_and_wait(process)
+
+    assert returncode == 0, stderr
+    assert stderr == ""
+
+
+def test_exact_message_json_pipe_closure_is_clean(workdir: Path) -> None:
+    with Queue(
+        "exact-json", db_path=target_for_directory(workdir), persistent=True
+    ) as queue:
+        message_id = queue.write("payload")
+
+    process = _spawn_broker(
+        workdir,
+        "read",
+        "exact-json",
+        "-m",
+        str(message_id),
+        "--json",
+    )
+    returncode, stderr = _close_consumer_and_wait(process)
+
+    assert returncode == 0, stderr
+    assert stderr == ""
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_exact_move_pipe_closure_is_clean(workdir: Path, json_output: bool) -> None:
+    with Queue(
+        "move-source", db_path=target_for_directory(workdir), persistent=True
+    ) as queue:
+        message_id = queue.write("payload")
+
+    args = ["move", "move-source", "move-dest", "-m", str(message_id)]
+    if json_output:
+        args.append("--json")
+    process = _spawn_broker(workdir, *args)
+    returncode, stderr = _close_consumer_and_wait(process)
+
+    assert returncode == 0, stderr
+    assert stderr == ""
+    with Queue("move-dest", db_path=target_for_directory(workdir)) as destination:
+        assert destination.peek(message_id=message_id) == "payload"
+
+
+def test_move_all_pipe_closure_is_clean_after_atomic_move(workdir: Path) -> None:
+    with Queue(
+        "move-all-source",
+        db_path=target_for_directory(workdir),
+        persistent=True,
+    ) as source:
+        for index in range(5):
+            source.write(f"payload-{index}")
+
+    process = _spawn_broker(
+        workdir,
+        "move",
+        "move-all-source",
+        "move-all-dest",
+        "--all",
+    )
+    returncode, stderr = _close_consumer_and_wait(process)
+
+    assert returncode == 0, stderr
+    assert stderr == ""
+    with Queue("move-all-dest", db_path=target_for_directory(workdir)) as destination:
+        assert destination.stats().pending == 5
 
 
 def test_dump_pipe_closure_is_clean(workdir: Path) -> None:

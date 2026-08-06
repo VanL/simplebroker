@@ -232,8 +232,10 @@ Global options must appear before the command, for example `broker -f queue.db r
 | `load` | Restore a dump from stdin into a **fresh** broker (duplicate ids fail loudly); exit codes 0/1 — `[SB-IO-4]` |
 | `init` | Initialize SimpleBroker database in current directory (does not accept `-d` or `-f` flags) |
 
-`read --all`, `peek --all`, `dump`, and `watch` treat a downstream stdout
-consumer closing its pipe as a clean shutdown. See [Pipe behavior](#pipe-behavior).
+`read`, `peek`, `move`, `dump`, and `watch` treat a downstream stdout consumer
+closing its pipe as a clean shutdown, including exact-message and `--all`
+forms. Effects completed before the failed output remain completed. See
+[Pipe behavior](#pipe-behavior).
 
 #### Queue Aliases
 
@@ -264,7 +266,12 @@ $ broker alias remove task1.outbox
   defined the command fails.
 - Alias names are plain queue names (no `@` prefix); when *using* an alias on the CLI, prefix it with `@`.
 - Use `alias list --target <queue>` to see which aliases point to a specific queue (reverse lookup).
-- A target must be a real queue name (not another alias). Attempts to alias an alias or create cycles raise `ValueError`.
+- Alias names and targets use the normal queue-name syntax. The target is a
+  canonical queue name, but it need not contain messages yet. New aliases must
+  remain flat: neither creation order may make an alias point to another
+  alias. Conflicting concurrent additions yield one winner.
+- Legacy invalid alias rows remain listable, one-hop resolvable, and removable;
+  SimpleBroker does not rewrite or recursively resolve them.
 - Removing an alias does not affect stored messages; they remain under the canonical queue name.
 - `rename` accepts `@alias` operands on the CLI and records canonical queue
   names in JSON output. The Python API uses literal queue names only.
@@ -379,7 +386,7 @@ or `Queue.peek_generator()`, because their live offset pagination can skip
 messages.
 
 Normative delivery contract:
-`docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-7]).
+`docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-8]).
 
 Single-consumer example: [`examples/safe_worker.sh`](https://github.com/VanL/simplebroker/blob/main/examples/safe_worker.sh)
 polls one message at a time and acknowledges it by deleting its exact ID only
@@ -675,7 +682,9 @@ tries to write to it. With the default consume semantics, the message whose
 delivery detected the closed pipe was already claimed and is not returned to
 the queue; no further messages are claimed. A configured at-least-once
 `read --all` batch instead rolls back its still-uncommitted batch when the
-stream closes.
+stream closes. Exact reads and moves may have completed their atomic claim or
+move before output detects closure; `move --all` completes its selected atomic
+moves before printing them. Those completed effects are not reversed.
 
 Exit `0` means SimpleBroker shut down cleanly. It does not validate that the
 consumer processed any particular message; check the consumer's own exit
@@ -692,7 +701,7 @@ retry-on-stop batch processing; generators are thread-affine and must be
 closed on their own thread.
 
 Specifications: `docs/specs/11-delivery.md`
-(`[SB-DELIVERY-1]`–`[SB-DELIVERY-7]`); worked patterns, generator rules,
+(`[SB-DELIVERY-1]`–`[SB-DELIVERY-8]`); worked patterns, generator rules,
 and the cross-thread safety net are in the
 [Python guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/python.md#delivery-guarantees-in-practice).
 

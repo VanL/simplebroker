@@ -1474,6 +1474,8 @@ class BrokerCore:
                 self._lock.release_held()
 
     def _validate_message_size(self, message: str) -> None:
+        if not isinstance(message, str):
+            raise MessageError("Message body must be a string")
         try:
             message_size = len(message.encode("utf-8"))
         except UnicodeEncodeError as e:
@@ -2577,18 +2579,25 @@ class BrokerCore:
 
                 # Only resync if actually inconsistent
                 if max_msg_ts > old_last_ts:
-                    self._backend_plugin.write_last_ts(self._runner, int(max_msg_ts))
+                    self._backend_plugin.advance_last_ts(
+                        self._runner,
+                        new_ts=int(max_msg_ts),
+                    )
+                    surviving_last_ts = self._timestamp_gen.refresh_last_ts()
                     self._runner.commit()
 
                     # Decode timestamps for logging
                     old_physical, old_logical = decode_hybrid_timestamp(old_last_ts)
-                    new_physical, new_logical = decode_hybrid_timestamp(max_msg_ts)
+                    new_physical, new_logical = decode_hybrid_timestamp(
+                        surviving_last_ts
+                    )
 
                     warnings.warn(
                         f"Timestamp generator resynchronized. "
                         f"Old: {old_last_ts} ({old_physical}ns + {old_logical}), "
-                        f"New: {max_msg_ts} ({new_physical}ns + {new_logical}). "
-                        f"Gap: {max_msg_ts - old_last_ts} timestamps. "
+                        f"New: {surviving_last_ts} "
+                        f"({new_physical}ns + {new_logical}). "
+                        f"Gap: {surviving_last_ts - old_last_ts} timestamps. "
                         f"This indicates past state inconsistency.",
                         RuntimeWarning,
                         stacklevel=3,
@@ -3414,6 +3423,8 @@ class BrokerCore:
             raise ValueError("Target names should not include the '@' prefix")
         if not target:
             raise ValueError("Alias target cannot be empty")
+        self._validate_queue_name(alias)
+        self._validate_queue_name(target)
 
     def _validate_alias_invariants_locked(self, alias: str, target: str) -> None:
         """Validate alias graph invariants against freshly loaded state."""
@@ -3423,13 +3434,15 @@ class BrokerCore:
         if target in self._alias_cache:
             raise ValueError("Cannot target another alias")
 
+        if alias in self._alias_cache.values():
+            raise ValueError("Cannot turn an existing alias target into an alias")
+
     def add_alias(self, alias: str, target: str) -> None:
         self._assert_no_reentrant_mutation_during_batch("add_alias")
+        self._validate_alias_target(alias, target)
         should_warn = self.queue_exists_and_has_messages(alias)
 
         with self._lock:
-            self._validate_alias_target(alias, target)
-
             self._runner.begin_immediate()
             try:
                 prepare_alias_mutation = getattr(

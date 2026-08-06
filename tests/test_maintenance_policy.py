@@ -49,6 +49,7 @@ def test_failed_maintenance_check_remains_due() -> None:
         (0, 0, 0.1, False),
         (1, 10, 0.2, False),
         (2, 10, 0.2, True),
+        (10_000, 20_000, 1.0, False),
         (10_001, 20_000, 1.0, True),
     ],
 )

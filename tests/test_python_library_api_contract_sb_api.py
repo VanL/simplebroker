@@ -5,7 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 import simplebroker
+import simplebroker.sbqueue as sbqueue_module
 from simplebroker import (
     Queue,
     commands,
@@ -15,6 +18,7 @@ from simplebroker import (
     open_broker,
     project,
 )
+from simplebroker._exceptions import QueueNameError
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = ROOT / "docs" / "specs" / "16-python-library-api.md"
@@ -75,6 +79,17 @@ def test_api_root_ext_commands_all_are_importable() -> None:
         assert hasattr(ext, name), name
     for name in commands.__all__:
         assert hasattr(commands, name), name
+
+
+def test_api_queue_rejects_alias_sigil_before_config_or_target_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def config_setup_must_not_run(_config: object) -> object:
+        raise AssertionError("invalid queue reached config/target setup")
+
+    monkeypatch.setattr(sbqueue_module, "resolve_config", config_setup_must_not_run)
+    with pytest.raises(QueueNameError):
+        Queue("@alias", persistent=True)
 
 
 def test_api_project_config_helpers_on_ext_and_project() -> None:

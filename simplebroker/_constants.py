@@ -36,7 +36,7 @@ from typing import Any, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "6.0.1"
+__version__: Final[str] = "6.0.2"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
@@ -102,16 +102,20 @@ TIMESTAMP_EXACT_NUM_DIGITS: Final[int] = 19
 """Exact number of digits required for message ID timestamps in string form."""
 
 PHYSICAL_TIME_BITS: Final[int] = 52
-"""Number of bits used for microseconds after epoch (supports until ~2113)."""
+"""Nominal physical-width constant retained for compatibility.
+
+Generated IDs retain ``time.time_ns()`` magnitude and clear the low 12 bits;
+they do not encode a 52-bit microsecond counter.
+"""
 
 LOGICAL_COUNTER_BITS: Final[int] = 12
-"""Number of bits used for the monotonic counter to handle sub-microsecond events."""
+"""Low bits reserved for ordering within one 4,096-nanosecond time grain."""
 
 LOGICAL_COUNTER_MASK: Final[int] = (1 << LOGICAL_COUNTER_BITS) - 1
 """Bitmask for extracting the logical counter from a hybrid timestamp."""
 
 MAX_LOGICAL_COUNTER: Final[int] = 1 << LOGICAL_COUNTER_BITS
-"""Maximum value for logical counter (4096) before time must advance."""
+"""Exclusive logical-counter bound (4096) before physical time must advance."""
 
 UNIX_NATIVE_BOUNDARY: Final[int] = 2**44
 """Boundary for distinguishing Unix timestamps from native format (~17.6 trillion, year 2527)."""
@@ -453,7 +457,7 @@ def _parse_debug_flag(value: Any) -> bool:
 
 
 def _parse_vacuum_threshold(value: Any) -> float:
-    """Normalize vacuum threshold overrides to the canonical fractional form."""
+    """Normalize string percentages or typed ratio/percentage overrides."""
 
     if isinstance(value, str):
         return float(value) / 100
@@ -701,9 +705,10 @@ def load_config() -> dict[str, Any]:
                 historical check-after-every-mutation behavior. The schedule is
                 in-memory and per core; it is not a timer or background process.
 
-            BROKER_VACUUM_THRESHOLD (float): Percentage of claimed messages to trigger vacuum.
-                Default: 0.1 (10%)
-                Vacuum runs when claimed messages exceed this percentage of total.
+            BROKER_VACUUM_THRESHOLD (float): Claimed-message ratio that triggers
+                vacuum. Default: 0.1 (10%). String/environment inputs are
+                percentages; typed numeric inputs in [0, 1] are ratios and
+                typed values over 1 are percentages.
 
             BROKER_VACUUM_BATCH_SIZE (int): Messages to delete per vacuum batch.
                 Default: 1000

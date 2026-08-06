@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-06-audit-remediation-plan.md | completed — class 5+P; all HIGH/MEDIUM findings fixed or codified, follow-up review PASS, synchronized 6.0.2/3.5.1 release files prepared |
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | completed — class 4; owner deferred implementation pending new evidence of material migration-wait harm |
 | 2026-07-29-coalescing-sweep-plan.md | completed — class 3; 11 plans soft-retired, hot lessons deferred, no promotion candidate, independently reviewed and verified |
 | 2026-07-29-complexity-and-state-machine-hardening-plan.md | completed — class 5+P; implementation 86f73f5; C901 audit registry, complexity refactors, and explicit all-transition state-machine verification |

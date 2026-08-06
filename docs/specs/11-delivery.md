@@ -160,8 +160,10 @@ underscore, period, and hyphen, and beginning with an ASCII letter, digit,
 or underscore. Non-ASCII letters are not accepted. Violations raise
 `QueueNameError`.
 
-**Message bodies** are UTF-8 text. Bodies that are not UTF-8 encodable
-(including lone surrogates) raise `MessageError`.
+**Message bodies** are Python strings containing UTF-8 text. A non-string
+body, or a string that is not UTF-8 encodable (including a lone surrogate),
+raises `MessageError` before message, high-water, alias, or broadcast-target
+mutation.
 
 **Message size** is limited to 10 MB by default; override with
 `BROKER_MAX_MESSAGE_SIZE`. Oversized bodies raise `MessageError`.
@@ -188,10 +190,11 @@ _Implementation mapping_:
 | [SB-DELIVERY-5] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_generator_methods.py`; `extensions/simplebroker_redis/tests/test_redis_batches.py` |
 | [SB-DELIVERY-6] | `tests/test_delivery_contract_sb_delivery.py` (structural binding); `tests/test_cross_thread_finalization_poisoning.py`; `tests/test_cross_thread_generator_probe.py`; `extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`; `extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py` |
 | [SB-DELIVERY-7] | `tests/test_cli_broken_pipe.py`; `tests/test_delivery_contract_sb_delivery.py` |
-| [SB-DELIVERY-8] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_property_queue_names.py`; `tests/test_message_size_contract.py`; `tests/test_property_message_roundtrip.py::test_lone_surrogate_bodies_raise_message_error`, `::test_nul_byte_bodies_pinned_per_backend` (shared, per-backend NUL stance) |
+| [SB-DELIVERY-8] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_property_queue_names.py`; `tests/test_message_size_contract.py::test_non_string_bodies_raise_message_error_before_any_mutation`; `tests/test_property_message_roundtrip.py::test_lone_surrogate_bodies_raise_message_error`, `::test_nul_byte_bodies_pinned_per_backend` (shared, per-backend NUL stance) |
 
 ## Related Plans
 
+- `docs/plans/2026-08-06-audit-remediation-plan.md`
 - `docs/plans/2026-08-04-cmd-watch-locality-plan.md` (behavior-preserving
   `cmd_watch` lifecycle locality)
 - `docs/plans/2026-08-04-worker-example-error-handling-plan.md` (published

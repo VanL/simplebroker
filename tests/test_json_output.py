@@ -1,12 +1,19 @@
 """Tests for line-delimited JSON (ndjson) output format in read and peek commands."""
 
 import json
+import sys
 import time
 
 import pytest
 
+from simplebroker.cli import main
+
 from .conftest import run_cli
 from .helper_scripts.timestamp_validation import validate_timestamp
+
+
+class _ClassifiedRuntimeError(RuntimeError):
+    retryable: bool
 
 
 def test_read_json_single_message(workdir):
@@ -228,6 +235,51 @@ def test_list_json_database_validation_error_is_json(workdir):
     assert payload["error"] == "ERROR"
     assert payload["retryable"] is False
     assert "not a valid SQLite database" in payload["message"]
+
+
+def test_json_error_reports_explicit_retryable_classification(
+    workdir, monkeypatch, capsys
+):
+    """Only an exception's explicit retryable marker may set the JSON field."""
+    error = _ClassifiedRuntimeError("backend is temporarily unavailable")
+    error.retryable = True
+    monkeypatch.setattr(sys, "argv", ["broker", "-d", str(workdir), "list", "--json"])
+    monkeypatch.setattr(
+        "simplebroker.commands.cmd_list",
+        lambda *args, **kwargs: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setattr(
+        "simplebroker.cli._validate_command_target", lambda *a, **k: None
+    )
+
+    assert main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {
+        "error": "ERROR",
+        "message": "backend is temporarily unavailable",
+        "retryable": True,
+    }
+
+
+def test_json_error_reports_explicit_nonretryable_classification(
+    workdir, monkeypatch, capsys
+):
+    error = _ClassifiedRuntimeError("request is permanently invalid")
+    error.retryable = False
+    monkeypatch.setattr(sys, "argv", ["broker", "-d", str(workdir), "list", "--json"])
+    monkeypatch.setattr(
+        "simplebroker.commands.cmd_list",
+        lambda *args, **kwargs: (_ for _ in ()).throw(error),
+    )
+    monkeypatch.setattr(
+        "simplebroker.cli._validate_command_target", lambda *a, **k: None
+    )
+
+    assert main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err)["retryable"] is False
 
 
 def test_plain_error_stays_plain_without_json(workdir):

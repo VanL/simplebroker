@@ -12,7 +12,9 @@ sections where they belong.
 Public discovery callables are normative in
 [`docs/specs/16-python-library-api.md`](../specs/16-python-library-api.md)
 `[SB-API-2]`. The environment and TOML field lists below are a human
-catalog.
+catalog. The absolute claimed-row vacuum backstop is normative in
+[`[SB-OPS-6]`](../specs/17-ops.md); this guide explains its configuration
+context.
 
 ## Environment variables
 
@@ -47,6 +49,14 @@ catalog.
   - Values below 1 retain the historical check-every-mutation behavior and are normalized internally to 1
 - `BROKER_VACUUM_THRESHOLD` - Claimed-message ratio that triggers auto-vacuum (default: 10%)
 - `BROKER_VACUUM_BATCH_SIZE` - Number of messages to delete per vacuum batch (default: 1000)
+
+`BROKER_VACUUM_THRESHOLD` keeps its established representation-sensitive
+input rules. String and environment values are percentages: `"0.5"` becomes
+`0.005`, while `"50"` becomes `0.5`. Typed numeric values from 0 through 1
+are ratios: `0.5` remains `0.5`. Typed numeric values over 1 are percentages,
+so numeric `50` also becomes `0.5`. Independently of the configured ratio,
+automatic vacuum is eligible when there are more than 10,000 claimed messages;
+10,000 alone does not fire that absolute backstop.
 
 Automatic maintenance is synchronous and best effort, not a background
 process. A due check runs after the triggering message transaction commits;

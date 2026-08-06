@@ -35,6 +35,12 @@ pool_timeout = 5.0
 Pool exhaustion is bounded by `pool_timeout` and surfaces as an operational
 error from broker operations.
 
+Alias creation validates the live alias map and publishes the alias plus its
+version in one Lua operation. New aliases must remain flat in either creation
+order. A canonical target may have no messages or existing rows; it only needs
+valid queue-name syntax. Legacy invalid rows remain available for one-hop
+lookup and removal and are not rewritten automatically.
+
 ## Concurrency semantics
 
 Queue deletion is atomic per queue. `delete()` first snapshots the queue

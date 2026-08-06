@@ -102,7 +102,7 @@ Normative: `docs/specs/10-cli.md` [SB-CLI-1]–[SB-CLI-4].
 ## Delivery (use-level)
 
 Normative: `docs/specs/11-delivery.md`
-[SB-DELIVERY-1]–[SB-DELIVERY-7].
+[SB-DELIVERY-1]–[SB-DELIVERY-8].
 
 | Path | What happens |
 |------|----------------|

@@ -77,8 +77,8 @@ class TestCLIEdgeCases:
             result = main()
             assert result == 1
 
-    def test_general_exception_quiet_mode(self):
-        """Test that general exceptions respect quiet mode."""
+    def test_general_exception_quiet_mode_keeps_error_visible(self):
+        """Quiet mode suppresses commentary, never error diagnostics."""
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("sys.argv", ["simplebroker", "-d", tmpdir, "-q", "list"]),
@@ -93,9 +93,8 @@ class TestCLIEdgeCases:
             with patch("sys.stderr", captured_output):
                 result = main()
                 assert result == 1
-                # In quiet mode, error should not be printed
                 output = captured_output.getvalue()
-                assert "Database error" not in output
+                assert "Database error" in output
 
     def test_keyboard_interrupt_handling(self):
         """Test graceful handling of Ctrl-C."""

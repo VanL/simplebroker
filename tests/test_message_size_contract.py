@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from simplebroker import Queue
+from simplebroker._exceptions import MessageError
 
 pytestmark = [pytest.mark.shared]
 
@@ -52,3 +53,34 @@ def test_queue_write_rejects_lone_surrogate(broker_target: Any) -> None:
             queue.write("\ud800")
 
         assert queue.peek() is None
+
+
+def test_non_string_bodies_raise_message_error_before_any_mutation(
+    broker: Any,
+) -> None:
+    broker.add_alias("stable_alias", "stable_target")
+
+    def durable_state() -> tuple[int, tuple[tuple[str, str], ...], int, object]:
+        return (
+            broker.get_meta()["last_ts"],
+            tuple(broker.list_aliases()),
+            broker.get_alias_version(),
+            broker.get_queue_stats(),
+        )
+
+    before = durable_state()
+    with pytest.raises(MessageError, match="string"):
+        broker.write("write_target", 123)
+    assert durable_state() == before
+
+    with pytest.raises(MessageError, match="string"):
+        broker.broadcast(
+            123,
+            queue_names=["broadcast_target"],
+            create_missing=True,
+        )
+    assert durable_state() == before
+
+    with pytest.raises(MessageError, match="string"):
+        broker.insert_messages([("insert_target", 123, 1000)])
+    assert durable_state() == before

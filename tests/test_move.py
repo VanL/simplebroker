@@ -76,9 +76,8 @@ def test_move_only_unclaimed(queue_factory):
 
 def test_move_invalid_queue_names(queue_factory):
     """Test that move validates queue names."""
-    invalid_source = queue_factory(".invalid")
     with pytest.raises(ValueError, match="Invalid queue name"):
-        invalid_source.move_one("dest")
+        queue_factory(".invalid")
 
     source = queue_factory("source")
     with pytest.raises(ValueError, match="Invalid queue name"):

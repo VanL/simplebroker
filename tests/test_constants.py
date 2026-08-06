@@ -1,6 +1,7 @@
 """Tests for the _constants module."""
 
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -312,6 +313,45 @@ class TestLoadConfig:
             assert config["BROKER_AUTO_VACUUM_INTERVAL"] == 50
             assert config["BROKER_VACUUM_THRESHOLD"] == 0.2  # Converted to decimal
             assert config["BROKER_VACUUM_BATCH_SIZE"] == 500
+
+    @pytest.mark.parametrize(
+        ("raw_value", "expected"),
+        [
+            ("0.5", 0.005),
+            (0.5, 0.5),
+            ("50", 0.5),
+            (50, 0.5),
+        ],
+    )
+    def test_vacuum_threshold_preserves_input_representation_semantics(
+        self,
+        raw_value: str | float,
+        expected: float,
+    ) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            assert (
+                resolve_config({"BROKER_VACUUM_THRESHOLD": raw_value})[
+                    "BROKER_VACUUM_THRESHOLD"
+                ]
+                == expected
+            )
+
+    def test_configuration_guide_explains_vacuum_threshold_semantics(self) -> None:
+        guide = " ".join(
+            (Path(__file__).parent.parent / "docs" / "guides" / "configuration.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+
+        required_phrases = (
+            "String and environment values are percentages",
+            '`"0.5"` becomes `0.005`',
+            "Typed numeric values from 0 through 1 are ratios",
+            "`0.5` remains `0.5`",
+            "more than 10,000 claimed messages",
+        )
+        for phrase in required_phrases:
+            assert phrase in guide
 
     def test_watcher_settings(self) -> None:
         """Test watcher-related environment variables."""

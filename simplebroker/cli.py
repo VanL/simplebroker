@@ -199,7 +199,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         help=f"database filename or absolute path (default: {default_file})",
     )
     parser.add_argument(
-        "-q", "--quiet", action="store_true", help="suppress diagnostics"
+        "-q", "--quiet", action="store_true", help="suppress non-error commentary"
     )
     parser.add_argument("--version", action="store_true", help="show version")
     parser.add_argument(
@@ -407,7 +407,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     alias_add.add_argument(
         "alias", help="alias name (must be prefixed with @ when used)"
     )
-    alias_add.add_argument("target", help="existing queue that alias points to")
+    alias_add.add_argument("target", help="canonical queue name for the alias")
     alias_add.add_argument(
         "-q",
         "--quiet",
@@ -946,6 +946,19 @@ def _validate_global_flags(
     status_json_output: bool,
 ) -> int | None:
     """Reject invalid combinations of global actions and commands."""
+    if args.command == "init":
+        for attribute, flag in (
+            ("_dir_explicitly_provided", "--dir"),
+            ("_file_explicitly_provided", "--file"),
+        ):
+            if getattr(args, attribute, False):
+                commands._emit_error(
+                    f"init does not accept {flag}; run it from the directory to initialize",
+                    code="INVALID_ARGUMENT",
+                    json_output=status_json_output,
+                )
+                return EXIT_ERROR
+
     if getattr(args, "status", False) and args.command:
         commands._emit_error(
             "--status cannot be used with commands",
@@ -1565,16 +1578,15 @@ def main(*, config: dict[str, Any] = _config) -> int:
         print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
         return EXIT_SUCCESS
     except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        if not args.quiet:
-            code = "INVALID_ARGUMENT" if isinstance(e, ArgumentParserError) else "ERROR"
-            commands._emit_error(
-                e,
-                code=code,
-                json_output=_json_output_requested(
-                    args,
-                    status_json_output=status_json_output,
-                ),
-            )
+        code = "INVALID_ARGUMENT" if isinstance(e, ArgumentParserError) else "ERROR"
+        commands._emit_error(
+            e,
+            code=code,
+            json_output=_json_output_requested(
+                args,
+                status_json_output=status_json_output,
+            ),
+        )
         return EXIT_ERROR
 
 

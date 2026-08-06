@@ -14,6 +14,29 @@ end
 return 0
 """
 
+ADD_ALIAS = """
+local aliases = KEYS[1]
+local meta = KEYS[2]
+local alias = ARGV[1]
+local target = ARGV[2]
+local alias_version = ARGV[3]
+if redis.call('HEXISTS', aliases, alias) == 1 then
+  return -1
+end
+if redis.call('HEXISTS', aliases, target) == 1 then
+  return -2
+end
+local entries = redis.call('HGETALL', aliases)
+for index = 2, #entries, 2 do
+  if entries[index] == alias then
+    return -3
+  end
+end
+redis.call('HSET', aliases, alias, target)
+redis.call('HSET', meta, 'alias_version', alias_version)
+return 1
+"""
+
 WRITE_MESSAGE = """
 local meta = KEYS[1]
 local bodies = KEYS[2]
@@ -139,6 +162,8 @@ if #queue_names == 0 then
   return {1}
 end
 if selector_mode == 'exact_create' then
+  -- Type-preflight the queue registry before any message/high-water mutation.
+  -- Redis script runtime errors do not roll back commands already executed.
   redis.call('SCARD', queues)
 end
 local seen = {}
@@ -151,6 +176,7 @@ for index = 1, #queue_names do
   if redis.call('HEXISTS', bodies, id) == 1 or redis.call('ZSCORE', all_ids, id) ~= false then
     return {-1}
   end
+  -- Type-preflight every pending key before mutating shared message state.
   redis.call('ZCARD', pending_prefix .. queue_names[index] .. ':pending')
 end
 local function pad19(value)

@@ -326,15 +326,15 @@ def test_queue_repr_redacts_resolved_targets_and_uses_python_quoting() -> None:
         backend_options={"schema": "option-secret"},
     )
 
-    representation = repr(Queue("task's", db_path=target))
+    representation = repr(Queue("tasks", db_path=target))
 
     assert "target-secret" not in representation
     assert "option-secret" not in representation
     assert "postgresql://user:***@db.example.com/app" in representation
-    assert repr("task's") in representation
+    assert repr("tasks") in representation
 
-    sqlite_representation = repr(Queue("task's", db_path="/tmp/broker's data.sqlite"))
-    assert repr("task's") in sqlite_representation
+    sqlite_representation = repr(Queue("tasks", db_path="/tmp/broker's data.sqlite"))
+    assert repr("tasks") in sqlite_representation
     assert (
         repr(str(Path("/tmp/broker's data.sqlite").resolve())) in sqlite_representation
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -18,6 +19,30 @@ README = ROOT / "README.md"
 KERNEL = ROOT / "docs" / "agent-kernel.md"
 LLMS = ROOT / "llms.txt"
 
+AFFECTED_EVIDENCE = {
+    "SB-SELECT-1": {
+        "tests/test_timestamp_selection_contract_sb_select.py": {
+            "test_strict_open_bounds_on_queue_api"
+        },
+        "tests/test_after_flag.py": {"test_after_exact_boundary"},
+        "tests/test_generator_methods.py": {
+            "TestGeneratorMethods::test_generator_with_after_timestamp"
+        },
+        "tests/test_watcher.py": {
+            "TestQueueWatcher::test_explicit_zero_after_timestamp_excludes_legacy_zero"
+        },
+    },
+    "SB-SELECT-4": {
+        "tests/test_timestamp_selection_contract_sb_select.py": {
+            "test_select_watch_progress"
+        },
+        "tests/test_watcher.py": {
+            "TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint",
+            "TestQueueWatcher::test_explicit_zero_after_timestamp_excludes_legacy_zero",
+        },
+    },
+}
+
 
 def _section(code: str) -> str:
     text = SPEC.read_text(encoding="utf-8")
@@ -28,6 +53,45 @@ def _section(code: str) -> str:
     )
     assert match is not None, f"missing section {code}"
     return match.group("body")
+
+
+def _verification_row(code: str) -> str:
+    prefix = f"| [{code}] |"
+    return next(
+        line
+        for line in SPEC.read_text(encoding="utf-8").splitlines()
+        if line.startswith(prefix)
+    )
+
+
+def _cited_nodes(row: str) -> dict[str, set[str]]:
+    citations: dict[str, set[str]] = {}
+    python_citations = re.findall(r"`([^`]+\.py(?:[^`]*)?)`", row)
+    for citation in python_citations:
+        match = re.fullmatch(
+            r"(?P<path>[^`]+\.py)::(?P<node>[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)",
+            citation,
+        )
+        assert match is not None, f"Python evidence must cite an AST node: {citation}"
+        citations.setdefault(match.group("path"), set()).add(match.group("node"))
+    return citations
+
+
+def _test_nodes(relative_path: str) -> set[str]:
+    tree = ast.parse((ROOT / relative_path).read_text(encoding="utf-8"))
+    nodes = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            nodes.update(
+                f"{node.name}::{child.name}"
+                for child in node.body
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+    return nodes
 
 
 def test_select_clause_inventory_and_authority() -> None:
@@ -56,6 +120,14 @@ def test_select_clause_inventory_and_authority() -> None:
     assert "[SB-CLI-5]" in cli
     assert "ISO 8601" in cli
     assert "1705329000s" in cli or "Unix seconds" in cli
+
+
+def test_select_affected_evidence_rows_match_exact_executable_manifests() -> None:
+    for code, manifest in AFFECTED_EVIDENCE.items():
+        citations = _cited_nodes(_verification_row(code))
+        assert citations == manifest
+        for relative_path, nodes in citations.items():
+            assert nodes <= _test_nodes(relative_path)
 
 
 def test_select_predicates_are_strict_open_bounds() -> None:

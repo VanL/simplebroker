@@ -7,13 +7,14 @@ import subprocess
 import sys
 import threading
 import time
+from typing import Any
 
 import pytest
 
 from simplebroker import Queue
 from simplebroker._constants import load_config
 
-from .helper_scripts.broker_factory import make_broker
+from .helper_scripts.broker_factory import active_backend, make_broker
 from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 from .helper_scripts.watcher_base import WatcherTestBase
 
@@ -24,6 +25,22 @@ from simplebroker.watcher import QueueWatcher, StopWatching
 pytestmark = [pytest.mark.shared]
 
 logger = logging.getLogger(__name__)
+
+
+def _insert_native_legacy_zero(broker: Any, queue: str) -> None:
+    """Create a pre-contract zero row only to exercise legacy selection."""
+    if active_backend() == "redis":
+        encoded = "0000000000000000000"
+        broker._client.hset(broker._keys.bodies, encoded, "legacy-zero")
+        broker._client.zadd(broker._keys.all_ids, {encoded: 0})
+        broker._client.zadd(broker._keys.pending(queue), {encoded: 0})
+        broker._client.sadd(broker._keys.queues, queue)
+        return
+    broker._runner.run(
+        "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
+        (queue, "legacy-zero", 0),
+    )
+    broker._runner.commit()
 
 
 class MessageCollector:
@@ -1335,6 +1352,27 @@ class TestQueueWatcher(WatcherTestBase):
         for i, (msg, ts) in enumerate(messages):
             assert msg == f"msg{i + 50:03d}"
             assert ts > ts_mid
+
+    def test_explicit_zero_after_timestamp_excludes_legacy_zero(
+        self, broker, broker_target
+    ) -> None:
+        _insert_native_legacy_zero(broker, "test_queue")
+        positive_id = broker.write("test_queue", "positive")
+        collector = MessageCollector()
+        watcher = QueueWatcher(
+            "test_queue",
+            collector.handler,
+            db=broker_target,
+            peek=True,
+            after_timestamp=0,
+            batch_processing=True,
+        )
+        try:
+            assert watcher._process_peek_messages() is True
+        finally:
+            watcher.stop(join=False)
+
+        assert collector.get_messages() == [("positive", positive_id)]
 
     def test_after_timestamp_filters_consume_single_message_drain(
         self, broker, broker_target

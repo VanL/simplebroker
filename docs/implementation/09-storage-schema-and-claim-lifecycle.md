@@ -38,6 +38,15 @@ promise of exactly-once application processing or external side effects:
 a crash between the claim commit and the handoff can leave a message
 claimed and not handed off.
 
+**Buffered CLI delivery seam:** Batched at-least-once `read --all` keeps the
+active claim transaction open across yielded records and commits when the
+generator is resumed after its final yield. The CLI therefore flushes each
+record at the stdout seam before asking the generator for another record. If
+the consumer has closed the pipe, `_StdoutClosed` closes the iterator while
+the batch is still uncommitted, so its claims roll back and remain eligible for
+retry. A flush after the batch would be too late: resuming past the final yield
+would already have committed the claims.
+
 **FIFO Ordering:** Messages are read in write order for a queue, regardless of
 which process wrote them. SQLite uses the autoincrement `id` plus serialized
 write transactions; other backends must preserve the same public ordering
@@ -63,3 +72,7 @@ total rows.
 processes and platforms. The phase-lock module coordinates setup work with
 file locks and extended-attribute fallback so multiple processes do not race
 schema or optimization phases. It is internal, but deliberately self-contained.
+
+## Related Plans
+
+- [`2026-08-06 audit remediation`](../plans/2026-08-06-audit-remediation-plan.md)

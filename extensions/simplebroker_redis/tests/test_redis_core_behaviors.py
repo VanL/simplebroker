@@ -345,6 +345,28 @@ def test_redis_alias_api_validates_and_updates_alias_metadata(
         core.close()
 
 
+def test_redis_add_alias_translates_client_errors(
+    redis_runner: RedisRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    try:
+
+        def fail_eval(*_args: object, **_kwargs: object) -> NoReturn:
+            raise redis.RedisError("injected alias failure")
+
+        monkeypatch.setattr(core._client, "eval", fail_eval)
+
+        with pytest.raises(
+            OperationalError, match="injected alias failure"
+        ) as exc_info:
+            core.add_alias("alias", "target")
+
+        assert isinstance(exc_info.value.__cause__, redis.RedisError)
+        assert core.list_aliases() == []
+    finally:
+        core.close()
+
+
 def test_redis_recover_stale_batches_ignores_unrecoverable_metadata(
     redis_runner: RedisRunner,
 ) -> None:

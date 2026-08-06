@@ -223,6 +223,8 @@ class RedisBrokerCore:
             raise QueueNameError(error)
 
     def _validate_message_size(self, message: str) -> None:
+        if not isinstance(message, str):
+            raise MessageError("Message body must be a string")
         try:
             message_size = len(message.encode("utf-8"))
         except UnicodeEncodeError as e:
@@ -1242,27 +1244,31 @@ class RedisBrokerCore:
         deleted = 0
         for name in queues:
             self._validate_queue_name(name)
-            try:
-                result = self._client.eval(
-                    scripts.DELETE_QUEUE,
-                    6,
-                    self._keys.pending(name),
-                    self._keys.claimed(name),
-                    self._keys.reserved(name),
-                    self._keys.bodies,
-                    self._keys.all_ids,
-                    self._keys.queues,
-                    name,
-                )
-            except redis.RedisError as exc:
-                raise _translate_redis_error(exc) from exc
-            result_int = response_int(result)
+            result_int = self._delete_queue_atomically(name)
             if result_int < 0:
                 raise OperationalError(
                     "Cannot delete queue while an at_least_once batch is active"
                 )
             deleted += result_int
         return deleted
+
+    def _delete_queue_atomically(self, name: str) -> int:
+        """Run the real per-queue Lua boundary used by delete and race tests."""
+        try:
+            result = self._client.eval(
+                scripts.DELETE_QUEUE,
+                6,
+                self._keys.pending(name),
+                self._keys.claimed(name),
+                self._keys.reserved(name),
+                self._keys.bodies,
+                self._keys.all_ids,
+                self._keys.queues,
+                name,
+            )
+        except redis.RedisError as exc:
+            raise _translate_redis_error(exc) from exc
+        return response_int(result)
 
     def delete_message_ids(
         self, queue: str, message_ids: Sequence[MessageIdInput]
@@ -1850,15 +1856,12 @@ class RedisBrokerCore:
             raise ValueError("Target names should not include the '@' prefix")
         if not target:
             raise ValueError("Alias target cannot be empty")
+        self._validate_queue_name(alias)
+        self._validate_queue_name(target)
 
     def add_alias(self, alias: str, target: str) -> None:
         self._assert_no_reentrant_mutation_during_batch("add_alias")
         self._validate_alias_target(alias, target)
-        aliases = dict(self.list_aliases())
-        if alias in aliases:
-            raise ValueError(f"Alias '{alias}' already exists")
-        if target in aliases:
-            raise ValueError("Cannot target another alias")
         if self.queue_exists_and_has_messages(alias):
             warnings.warn(
                 (
@@ -1869,10 +1872,27 @@ class RedisBrokerCore:
                 RuntimeWarning,
                 stacklevel=3,
             )
-        with self._client.pipeline(transaction=True) as pipe:
-            pipe.hset(self._key("aliases"), alias, target)
-            pipe.hset(self._key("meta"), "alias_version", str(time.time_ns()))
-            pipe.execute()
+        try:
+            raw_result = self._client.eval(
+                scripts.ADD_ALIAS,
+                2,
+                self._key("aliases"),
+                self._key("meta"),
+                alias,
+                target,
+                str(time.time_ns()),
+            )
+        except redis.RedisError as exc:
+            raise _translate_redis_error(exc) from exc
+        result = response_int(raw_result)
+        if result == -1:
+            raise ValueError(f"Alias '{alias}' already exists")
+        if result == -2:
+            raise ValueError("Cannot target another alias")
+        if result == -3:
+            raise ValueError("Cannot turn an existing alias target into an alias")
+        if result != 1:
+            raise OperationalError(f"Unexpected Redis alias result: {result}")
 
     def remove_alias(self, alias: str) -> None:
         self._assert_no_reentrant_mutation_during_batch("remove_alias")

@@ -21,6 +21,11 @@ the complete requested set, intentionally recreating a queue deleted before
 the broadcast lock is acquired. Selection and insertion occur in one
 PostgreSQL transaction.
 
+Timestamp resynchronization uses a guarded compare-and-advance update. If a
+concurrent allocator publishes a higher durable `last_ts` after repair begins,
+the repair preserves that winner and refreshes its local cache from the
+surviving value; it never moves PostgreSQL high-water backward.
+
 ## Core Compatibility
 
 This first-party extension moves in lockstep with the SimpleBroker backend

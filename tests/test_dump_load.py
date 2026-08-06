@@ -157,6 +157,23 @@ def test_load_rejects_malformed_message_id_with_line_context(tmp_path: Path) -> 
     assert Queue("jobs", db_path=db).peek() is None
 
 
+def test_load_rejects_huge_json_integer_with_line_context(tmp_path: Path) -> None:
+    header = json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1})
+    huge_integer = "9" * 5000
+    target = tmp_path / "huge-integer.db"
+    with (
+        open_broker(str(target)) as broker,
+        pytest.raises(ValueError, match="invalid dump input at line 2"),
+    ):
+        load_lines(
+            broker,
+            [
+                header,
+                '{"type":"message","queue":"q","body":"b","id":' + huge_integer + "}",
+            ],
+        )
+
+
 @pytest.mark.shared
 def test_load_rejects_reserved_zero_with_line_context_before_batch_flush(
     broker: Any,

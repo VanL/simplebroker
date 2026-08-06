@@ -188,6 +188,10 @@ def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:  #
             record = json.loads(line)
         except json.JSONDecodeError as exc:
             raise _error(line_number, f"malformed JSON ({exc.msg})") from exc
+        except ValueError as exc:
+            raise _error(
+                line_number, "malformed JSON (numeric value is too large)"
+            ) from exc
         if not isinstance(record, dict):
             raise _error(line_number, "record must be a JSON object")
 

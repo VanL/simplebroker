@@ -45,6 +45,10 @@ DBTarget = str | BrokerTarget
 _config = load_config()
 _MOVE_ALL_LIMIT = 1_000_000
 _WINDOWS_CLOSED_PIPE_ERRORS = frozenset({109, 232})
+_JSON_ERROR_CODES = frozenset(
+    {"INVALID_ARGUMENT", "INVALID_MESSAGE_ID", "INVALID_TIMESTAMP", "ERROR"}
+)
+_JSON_ERROR_KEYS = ("error", "message", "retryable")
 
 
 class _StdoutClosed(Exception):
@@ -97,7 +101,7 @@ def _redirect_stdout_to_devnull() -> None:
 def _print_stdout(value: str) -> None:
     """Print one value, translating only a closed stdout into control flow."""
     try:
-        print(value)
+        print(value, flush=True)
     except OSError as error:
         if not _is_closed_pipe_error(error):
             raise
@@ -119,18 +123,19 @@ def _emit_error(
     *,
     code: str,
     json_output: bool,
-    retryable: bool = False,
 ) -> None:
     """Emit an error to stderr, honoring command-local JSON mode."""
 
     text = str(error)
     if json_output:
+        if code not in _JSON_ERROR_CODES:
+            raise ValueError(f"unsupported JSON error code: {code}")
         print(
             json.dumps(
                 {
                     "error": code,
                     "message": text,
-                    "retryable": retryable,
+                    "retryable": getattr(error, "retryable", None) is True,
                 }
             ),
             file=sys.stderr,
@@ -428,11 +433,14 @@ def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exc
         if result is None:
             return EXIT_QUEUE_EMPTY
 
-        if with_timestamps:
-            message, timestamp = cast(tuple[str, int], result)
-            _output_message(message, timestamp, json_output, show_timestamps, False)
-        else:
-            print(cast(str, result))
+        try:
+            if with_timestamps:
+                message, timestamp = cast(tuple[str, int], result)
+                _output_message(message, timestamp, json_output, show_timestamps, False)
+            else:
+                _print_stdout(cast(str, result))
+        except _StdoutClosed:
+            pass
         return EXIT_SUCCESS
 
     if all_messages:
@@ -893,7 +901,10 @@ def _print_moved_message(
     if result is None:
         return EXIT_QUEUE_EMPTY
     message, timestamp = result
-    _output_message(message, timestamp, json_output, show_timestamps, False)
+    try:
+        _output_message(message, timestamp, json_output, show_timestamps, False)
+    except _StdoutClosed:
+        pass
     return EXIT_SUCCESS
 
 
@@ -936,6 +947,8 @@ def _move_all_messages(
                 file=sys.stderr,
             )
         return EXIT_SUCCESS if results else EXIT_QUEUE_EMPTY
+    except _StdoutClosed:
+        return EXIT_SUCCESS
     except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         _emit_error(error, code="ERROR", json_output=json_output)
         return EXIT_ERROR

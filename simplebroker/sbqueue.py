@@ -23,13 +23,14 @@ from ._backend_plugins import (
 )
 from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
 from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
+from ._exceptions import QueueNameError
 from ._key_material import FrozenValue, freeze_key_material
 from ._message_id import MessageIdInput
 from ._message_search import BODY_SEARCH_DEFAULT_LIMIT
 from ._runner import SQLRunner
 from ._sidecar import SidecarSession
 from ._targets import BrokerTarget
-from .db import DBConnection
+from .db import DBConnection, _validate_queue_name_cached
 from .metadata import QueueStats
 from .project import target_for_directory
 
@@ -175,6 +176,9 @@ class Queue:
                     Injected runners are caller-owned and are reused for the
                     lifetime of this Queue object.
         """
+        queue_name_error = _validate_queue_name_cached(name)
+        if queue_name_error is not None:
+            raise QueueNameError(queue_name_error)
         self.name = name
         self._persistent = persistent
         self._runner = runner

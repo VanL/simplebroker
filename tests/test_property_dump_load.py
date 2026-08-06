@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from simplebroker import Queue, dump_lines, load_lines, open_broker
@@ -130,7 +130,13 @@ def test_filter_algebra_property(
 
 
 @settings(suppress_health_check=[HealthCheck.too_slow])
-@given(lines=st.lists(st.text(max_size=80), max_size=8))
+@example(
+    lines=[
+        '{"type":"header","format":"simplebroker-dump","version":1}',
+        '{"type":"message","queue":"q","body":"b","id":' + "9" * 5000 + "}",
+    ]
+)
+@given(lines=st.lists(st.text(max_size=6000), max_size=8))
 def test_parser_totality_property(lines: list[str]) -> None:
     """load_lines on junk: documented ValueError or success, nothing else.
 

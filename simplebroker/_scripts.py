@@ -293,6 +293,23 @@ def _pg_test_uv_command(*args: str) -> list[str]:
     ]
 
 
+def _redis_test_uv_command(*args: str) -> list[str]:
+    """Build a uv command with the dependencies used by Redis-backed tests."""
+
+    return [
+        "uv",
+        "run",
+        "--project",
+        str(ROOT),
+        "--locked",
+        "--extra",
+        "dev",
+        "--extra",
+        "redis",
+        *args,
+    ]
+
+
 _POSTGRES_DSN_VERIFY_COMMAND = (
     "from simplebroker._scripts import _verify_postgres_test_dsn_from_env; "
     "_verify_postgres_test_dsn_from_env()"
@@ -367,7 +384,11 @@ def _append_marker_expression(
     return f"({current}) and ({extra})"
 
 
-def _classify_pytest_target(arg: str) -> str | None:
+def _classify_pytest_target(
+    arg: str,
+    *,
+    extension_suite_path: str = "extensions/simplebroker_pg/tests",
+) -> str | None:
     """Map a pytest path or node id to the shared or extension suite."""
 
     if arg.startswith("-"):
@@ -388,8 +409,8 @@ def _classify_pytest_target(arg: str) -> str | None:
 
     if relative == "tests" or relative.startswith("tests/"):
         return "shared"
-    if relative == "extensions/simplebroker_pg/tests" or relative.startswith(
-        "extensions/simplebroker_pg/tests/"
+    if relative == extension_suite_path or relative.startswith(
+        f"{extension_suite_path}/"
     ):
         return "extension"
     return None
@@ -404,13 +425,25 @@ def _with_default_suite_path(args: list[str], default_path: str) -> list[str]:
     do not classify as targets, so they do not suppress the default either.
     """
 
-    if any(_classify_pytest_target(arg) is not None for arg in args):
+    extension_suite_path = (
+        default_path if default_path != "tests" else "extensions/simplebroker_pg/tests"
+    )
+    if any(
+        _classify_pytest_target(
+            arg,
+            extension_suite_path=extension_suite_path,
+        )
+        is not None
+        for arg in args
+    ):
         return list(args)
     return [*args, default_path]
 
 
 def _extract_pytest_runner_overrides(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-012] exception
     pytest_args: list[str],
+    *,
+    runner_name: str = "pytest-pg",
 ) -> tuple[list[str], str | None, str | None, str | None]:
     """Extract pytest args that need to be merged with runner defaults."""
 
@@ -428,7 +461,7 @@ def _extract_pytest_runner_overrides(  # noqa: C901 approved [DOM-10.1.1] [RUFF-
             continue
         if arg == "-m":
             if index + 1 >= len(pytest_args):
-                raise SystemExit("pytest-pg: -m requires an argument")
+                raise SystemExit(f"{runner_name}: -m requires an argument")
             marker_expr = _append_marker_expression(marker_expr, pytest_args[index + 1])
             index += 2
             continue
@@ -439,7 +472,7 @@ def _extract_pytest_runner_overrides(  # noqa: C901 approved [DOM-10.1.1] [RUFF-
             continue
         if arg == "-n":
             if index + 1 >= len(pytest_args):
-                raise SystemExit("pytest-pg: -n requires an argument")
+                raise SystemExit(f"{runner_name}: -n requires an argument")
             numprocesses = pytest_args[index + 1]
             index += 2
             continue
@@ -449,7 +482,7 @@ def _extract_pytest_runner_overrides(  # noqa: C901 approved [DOM-10.1.1] [RUFF-
             continue
         if arg == "--dist":
             if index + 1 >= len(pytest_args):
-                raise SystemExit("pytest-pg: --dist requires an argument")
+                raise SystemExit(f"{runner_name}: --dist requires an argument")
             dist = pytest_args[index + 1]
             index += 2
             continue
@@ -466,11 +499,15 @@ def _extract_pytest_runner_overrides(  # noqa: C901 approved [DOM-10.1.1] [RUFF-
 
 def _route_pytest_args(
     pytest_args: list[str],
+    *,
+    extension_suite_path: str = "extensions/simplebroker_pg/tests",
+    runner_name: str = "pytest-pg",
 ) -> tuple[list[str], list[str], bool, bool, str | None, str | None, str | None]:
     """Split passthrough pytest args between core and extension suites."""
 
     filtered_args, marker_expr, numprocesses, dist = _extract_pytest_runner_overrides(
-        pytest_args
+        pytest_args,
+        runner_name=runner_name,
     )
 
     shared_args: list[str] = []
@@ -479,7 +516,10 @@ def _route_pytest_args(
     extension_selected = False
 
     for arg in filtered_args:
-        target = _classify_pytest_target(arg)
+        target = _classify_pytest_target(
+            arg,
+            extension_suite_path=extension_suite_path,
+        )
         if target == "shared":
             shared_selected = True
             shared_args.append(arg)
@@ -577,6 +617,110 @@ def pytest_pg_main() -> int:
                     "pytest",
                     *_with_default_suite_path(
                         extension_pytest_args, "extensions/simplebroker_pg/tests"
+                    ),
+                    "-m",
+                    extension_marker,
+                    "-n",
+                    numprocesses,
+                    "--dist",
+                    dist_mode,
+                ),
+                env=extension_env,
+            )
+        return 0
+    except subprocess.CalledProcessError as exc:
+        return exc.returncode or 1
+    except KeyboardInterrupt:
+        print("Interrupted", file=sys.stderr)
+        return 130
+    except Exception as exc:  # pragma: no cover - defensive CLI wrapper  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        if container_name and not args.keep_container:
+            _cleanup_container(container_name)
+
+
+def pytest_redis_main() -> int:
+    """Run Redis-backed SimpleBroker test suites with Docker setup."""
+
+    parser = argparse.ArgumentParser(
+        description="Run Redis-backed tests with automatic Docker setup."
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help=(
+            "Run the release-gate subset (shared and not benchmark) instead of all "
+            "shared tests."
+        ),
+    )
+    parser.add_argument(
+        "--keep-container",
+        action="store_true",
+        help="Leave the temporary Valkey container running for debugging.",
+    )
+    args, pytest_args = parser.parse_known_args()
+
+    if shutil.which("docker") is None:
+        print("docker is required to run Redis-backed tests", file=sys.stderr)
+        return 1
+    if shutil.which("uv") is None:
+        print("uv is required to run Redis-backed tests", file=sys.stderr)
+        return 1
+
+    shared_marker = "shared and not benchmark" if args.fast else "shared"
+    (
+        shared_pytest_args,
+        extension_pytest_args,
+        run_shared_suite,
+        run_extension_suite,
+        extra_marker_expr,
+        numprocesses,
+        dist_mode,
+    ) = _route_pytest_args(
+        pytest_args,
+        extension_suite_path="extensions/simplebroker_redis/tests",
+        runner_name="pytest-redis",
+    )
+    shared_marker = _merge_marker_expressions(shared_marker, extra_marker_expr)
+    extension_marker = _merge_marker_expressions("redis_only", extra_marker_expr)
+    numprocesses = numprocesses or "auto"
+    dist_mode = dist_mode or "loadgroup"
+    container_name: str | None = None
+
+    try:
+        container_name, url = _start_valkey_container()
+        print(f"Valkey test URL: {redact_backend_target(url)}", flush=True)
+
+        shared_env = os.environ.copy()
+        shared_env["SIMPLEBROKER_VALKEY_TEST_URL"] = url
+        shared_env["BROKER_TEST_BACKEND"] = "redis"
+        extension_env = os.environ.copy()
+        extension_env["SIMPLEBROKER_VALKEY_TEST_URL"] = url
+
+        if run_shared_suite:
+            _run(
+                _redis_test_uv_command(
+                    "pytest",
+                    *_with_default_suite_path(shared_pytest_args, "tests"),
+                    "-m",
+                    shared_marker,
+                    "-n",
+                    numprocesses,
+                    "--dist",
+                    dist_mode,
+                ),
+                env=shared_env,
+            )
+
+        if run_extension_suite:
+            _run(
+                _redis_test_uv_command(
+                    "pytest",
+                    *_with_default_suite_path(
+                        extension_pytest_args,
+                        "extensions/simplebroker_redis/tests",
                     ),
                     "-m",
                     extension_marker,
@@ -895,4 +1039,5 @@ __all__ = [
     "_assert_wheel_contains_license",
     "packaging_smoke_main",
     "pytest_pg_main",
+    "pytest_redis_main",
 ]

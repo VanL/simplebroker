@@ -83,15 +83,14 @@ def test_grammar_valid_names_work_end_to_end(
 @settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )
-def test_grammar_invalid_names_are_rejected_at_first_use(
+def test_grammar_invalid_names_are_rejected_at_construction(
     queue_factory, name: str
 ) -> None:
     """Invalid names raise QueueNameError, as the docstrings promise
     (finding F5, resolved: QueueNameError also subclasses ValueError so
     pre-existing `except ValueError` callers keep working)."""
-    q = queue_factory(name)  # construction does not validate ...
     with pytest.raises(QueueNameError):
-        q.write("x")  # ... first use does
+        queue_factory(name)
 
 
 def test_queue_name_error_is_a_value_error() -> None:
@@ -106,6 +105,5 @@ def test_trailing_newline_name_rejected(queue_factory) -> None:
     validation uses fullmatch, so '$'-before-newline acceptance is closed and
     the validator matches its documented charset (and the prefix validator,
     which always used fullmatch)."""
-    q = queue_factory("nl_quirk\n")
     with pytest.raises(QueueNameError):
-        q.write("hello")
+        queue_factory("nl_quirk\n")

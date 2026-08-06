@@ -42,7 +42,7 @@ def test_agent_kernel_cites_delivery_contract() -> None:
     section = text.split("## Delivery (use-level)", 1)[1].split("## ", 1)[0]
     assert "docs/specs/11-delivery.md" in section
     assert "[SB-DELIVERY-1]" in section
-    assert "[SB-DELIVERY-7]" in section
+    assert "[SB-DELIVERY-8]" in section
 
 
 def test_agent_kernel_forbids_delete_while_peek_stream() -> None:

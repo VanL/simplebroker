@@ -61,6 +61,13 @@ and does not leave deletion-pending claimed rows for the deleted content.
 | Delete queue (by name) | Removes all rows for that queue name |
 | Delete all queues | Removes all message rows in the broker |
 
+Successful delete is atomic per queue. Delete-all is not promised to be
+failure-atomic across every selected queue on every backend: Redis performs a
+start-of-operation selection followed by per-queue atomic deletion, so a later
+reservation or operational failure may be reported after an earlier subset was
+removed. Callers must re-list live state after an error and may retry deletion
+idempotently. SQL backends may provide stronger transaction atomicity.
+
 CLI `delete` exit codes follow `[SB-CLI-1]`. Library `Queue.delete` /
 `delete_many` and connection-level delete helpers use return values /
 exceptions (`[SB-API-4]`).
@@ -72,7 +79,10 @@ claim semantics.
 _Implementation mapping_:
 - `simplebroker/db.py`, `simplebroker/sbqueue.py`
 - `simplebroker/commands.py` (`cmd_delete`)
-- `tests/test_batch_delete.py`, `tests/test_delete_from_queues.py`
+- `extensions/simplebroker_redis/simplebroker_redis/core.py`
+- `extensions/simplebroker_redis/simplebroker_redis/scripts.py`
+- `tests/test_batch_delete.py`, `tests/test_delete_from_queues.py`,
+  `tests/test_queue_api_additions.py`, `tests/test_safety_fixes.py`
 
 ## Rename [SB-OPS-4]
 
@@ -106,8 +116,19 @@ Aliases map an alternate **name** to a **canonical queue name**.
   an alias may share a name without colliding. `canonicalize_queue(name)`
   applies this rule: it returns a plain name unchanged, resolves `@name` to
   its target, and raises `ValueError` for an empty or undefined alias.
-- Alias **names** are stored without `@`. Targets must be real queue names,
-  not aliases (no alias-to-alias / cycles).
+- Alias names and targets obey the ordinary queue-name grammar. Because queues
+  are implicit, a syntactically valid target need not currently have message
+  rows.
+- Alias mutation validates authoritative live state and publishes the alias
+  plus alias-version update atomically. A new alias is rejected when its target
+  is already an alias or when its own name is already the target of a stored
+  alias. Concurrent conflicting adds have at most one successful winner and
+  never silently overwrite another definition. New mutations therefore cannot
+  create alias-to-alias chains or cycles in either order.
+- Legacy invalid alias rows created by earlier releases are not automatically
+  rewritten or deleted. They remain listable, one-hop resolvable, and removable
+  so operators can unwind them; new mutation must not deepen or overwrite the
+  invalid graph.
 - Removing an alias does not delete messages; rows stay under the canonical
   name.
 - Exact broadcast selectors do not resolve aliases (`[SB-BCAST-*]`).
@@ -121,7 +142,10 @@ Aliases map an alternate **name** to a **canonical queue name**.
 _Implementation mapping_:
 - `simplebroker/db.py` alias store
 - `simplebroker/commands.py` (`cmd_alias_*`)
+- `extensions/simplebroker_redis/simplebroker_redis/core.py`
+- `extensions/simplebroker_redis/simplebroker_redis/scripts.py`
 - `tests/test_aliases_db.py`, `tests/test_alias_cli.py`
+- `extensions/simplebroker_redis/tests/test_redis_atomicity.py`
 
 ## Vacuum claimed rows [SB-OPS-6]
 
@@ -133,8 +157,11 @@ _Implementation mapping_:
   space. Compact is not required for correctness of claimed-row removal.
 - Automatic maintenance may vacuum under config (`MaintenanceSchedule` /
   `vacuum_is_eligible` on `simplebroker.ext` are advanced surfaces —
-  `[SB-API-11]`); product promise here is that vacuum’s effect is removal of
-  claimed rows, not a schedule contract.
+  `[SB-API-11]`). Automatic vacuum is eligible when there are more than 10,000
+  claimed messages regardless of the configured ratio; 10,000 alone does not
+  fire that absolute backstop. Other scheduling details are implementation
+  policy; product promise here is the backstop and that vacuum’s effect is
+  removal of claimed rows.
 
 Claimed rows may disappear at any time once vacuum is eligible; do not use
 claimed visibility as durable application state (`[SB-IO-5]`).
@@ -142,7 +169,8 @@ claimed visibility as durable application state (`[SB-IO-5]`).
 _Implementation mapping_:
 - `simplebroker/commands.py` (`cmd_vacuum`), `simplebroker/cli.py`
 - `simplebroker/_maintenance.py`, backend vacuum paths
-- `tests/test_vacuum_compact.py`, `tests/test_queue_metadata.py`
+- `tests/test_vacuum_compact.py`, `tests/test_queue_metadata.py`,
+  `tests/test_maintenance_policy.py`, `tests/test_constants.py`
 
 ## What this family does not own
 
@@ -171,11 +199,12 @@ _Implementation mapping_:
 |--------|-----------------|
 | [SB-OPS-1] | `tests/test_operations_contract_sb_ops.py`; `tests/test_queue_metadata.py::test_vacuum_removes_claimed_only_queue_existence` |
 | [SB-OPS-2] | `tests/test_operations_contract_sb_ops.py`; `tests/test_cli_queue_metadata.py`; `tests/test_queue_metadata.py` |
-| [SB-OPS-3] | `tests/test_operations_contract_sb_ops.py`; `tests/test_batch_delete.py`; `tests/test_delete_from_queues.py` |
+| [SB-OPS-3] | `tests/test_operations_contract_sb_ops.py::test_ops_delete_removes_row_immediately`; `tests/test_queue_api_additions.py::test_queue_delete_all`; `tests/test_batch_delete.py::test_queue_delete_many_uses_physical_batch_delete`; `tests/test_safety_fixes.py::test_delete_with_all_flag`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_delete_queue_script_rechecks_reservation_without_partial_mutation`, `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_delete_all_reports_real_partial_completion_when_later_queue_reserved` |
 | [SB-OPS-4] | `tests/test_queue_rename.py`; `tests/test_cli_rename.py`; `tests/test_operations_contract_sb_ops.py` |
-| [SB-OPS-5] | `tests/test_aliases_db.py`; `tests/test_alias_cli.py`; `tests/test_operations_contract_sb_ops.py` |
-| [SB-OPS-6] | `tests/test_vacuum_compact.py`; `tests/test_queue_metadata.py`; `tests/test_operations_contract_sb_ops.py` |
+| [SB-OPS-5] | `tests/test_aliases_db.py::test_alias_and_target_use_queue_name_grammar`, `tests/test_aliases_db.py::test_alias_rejects_chain_in_creation_order_without_mutation`, `tests/test_aliases_db.py::test_alias_add_revalidates_against_live_state`, `tests/test_aliases_db.py::test_legacy_alias_chain_remains_one_hop_visible_and_removable`; `tests/test_alias_cli.py::test_alias_add_help_calls_target_a_canonical_queue_name`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_concurrent_alias_adds_have_one_winner_and_flat_live_state` |
+| [SB-OPS-6] | `tests/test_operations_contract_sb_ops.py::test_ops_language_core_promises`; `tests/test_maintenance_policy.py::test_vacuum_eligibility_preserves_ratio_and_absolute_rules`; `tests/test_queue_metadata.py::test_vacuum_removes_claimed_only_queue_existence`; `tests/test_vacuum_compact.py::test_vacuum_with_compact_flag` |
 
 ## Related Plans
 
+- `docs/plans/2026-08-06-audit-remediation-plan.md`
 - `docs/plans/2026-07-30-product-documentation-cutover-plan.md` (Phase 5)

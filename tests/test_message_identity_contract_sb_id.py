@@ -96,6 +96,9 @@ FIRING_TESTS = {
         "tests/test_write_returns_id.py": {
             "test_write_return_id_remains_row_identity_after_global_last_ts_advances",
         },
+        "extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py": {
+            "test_resync_cannot_overwrite_concurrent_high_water_backward",
+        },
     },
     "SB-ID-4": {
         "tests/test_message_id_validation.py": {

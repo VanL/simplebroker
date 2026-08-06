@@ -20,6 +20,12 @@ match is silent and exits `2`; `watch` exits `0` when stopped by
 SIGINT/SIGTERM or when its stdout consumer closes the pipe) follow the same
 meanings.
 
+For `read`, `peek`, `move`, `dump`, and `watch`, a stdout consumer that closes its
+pipe is a clean stop: the command detects closure at the stdout write or flush
+seam, stops producing further output, does not select new work after detection,
+and exits `0`. Selection or mutation already completed before the output seam
+remains completed; delivery effects are governed by `[SB-DELIVERY-*]`.
+
 Invalid global-option placement is an error and exits `1`.
 
 _Implementation mapping_:
@@ -40,8 +46,8 @@ On a successful data-bearing read, the message body — plain or JSON — is
 written to **stdout**, never to stderr. Redirecting stdout captures the
 payload in full.
 
-Quiet mode may suppress commentary on stderr; it does not move payload to
-stderr.
+Quiet mode suppresses human commentary on stderr. It never suppresses an error
+diagnostic and never moves payload or errors to a different stream.
 
 _Implementation mapping_:
 - `simplebroker/commands.py`
@@ -51,6 +57,10 @@ _Implementation mapping_:
 
 Global options (for example `-f` / `--file`, `-d` / `--dir`) must appear
 **before** the subcommand.
+
+`init` is current-directory initialization and rejects an explicitly supplied
+`-d` / `--dir` or `-f` / `--file` with exit `1`; it never silently discards an
+explicit target.
 
 _Implementation mapping_:
 - `simplebroker/cli.py`
@@ -71,8 +81,17 @@ Public CLI `--json` (and dump NDJSON) shapes by command family:
 Timestamps are included on message-line JSON (`message` + `timestamp`). Other
 JSON shapes follow the command-specific objects above.
 
+When JSON mode is requested and a command reports an error after argument
+parsing, stderr contains one object with `error` (stable code), `message`
+(human diagnostic), and `retryable` (boolean). The stable codes are
+`INVALID_ARGUMENT`, `INVALID_MESSAGE_ID`, `INVALID_TIMESTAMP`, and `ERROR`.
+`retryable` is true only when the underlying exception explicitly carries
+`retryable is True`; validation errors, strings, unclassified failures, and
+explicitly non-retryable failures emit false.
+
 _Implementation mapping_:
 - `simplebroker/commands.py`
+- `simplebroker/cli.py`
 
 ## Non-exact bound string forms [SB-CLI-5]
 
@@ -105,6 +124,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-06-audit-remediation-plan.md`
 - `docs/plans/2026-08-04-cmd-watch-locality-plan.md` (behavior-preserving
   command-lifecycle locality)
 - `docs/plans/2026-08-04-worker-example-error-handling-plan.md` (published

@@ -1556,6 +1556,7 @@ class QueueWatcher(BaseWatcher):
         self._queue = self._queue_name  # Backward compatibility
         # Store watcher configuration
         self._peek = peek
+        self._has_after_timestamp_filter = after_timestamp is not None
         self._last_seen_ts = after_timestamp if after_timestamp is not None else 0
         self._batch_processing = batch_processing
         self._native_startup_backlog_mode = False
@@ -1582,9 +1583,7 @@ class QueueWatcher(BaseWatcher):
         self._strategy.consume_native_activity_hint()
 
         def check_func() -> bool:
-            return self._queue_obj.has_pending(
-                self._last_seen_ts if self._last_seen_ts > 0 else None
-            )
+            return self._queue_obj.has_pending(self._after_timestamp_filter())
 
         result = bool(self._process_with_retry(check_func, "pending_messages_check"))
         if result:
@@ -1684,7 +1683,9 @@ class QueueWatcher(BaseWatcher):
         return found_messages
 
     def _after_timestamp_filter(self) -> int | None:
-        return self._last_seen_ts if self._last_seen_ts > 0 else None
+        if self._has_after_timestamp_filter or self._last_seen_ts > 0:
+            return self._last_seen_ts
+        return None
 
     def _process_single_message(self) -> bool:
         """Process exactly one message in consume mode."""

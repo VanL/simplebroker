@@ -5,6 +5,62 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [6.0.2] - 2026-08-06
+
+### Fixed
+- Made shared SQL timestamp resynchronization use guarded high-water advance,
+  so a stale PostgreSQL repair cannot overwrite a larger value committed by a
+  concurrent allocator. Repair diagnostics and the local generator cache now
+  reflect the durable surviving high-water.
+- Made closed stdout a clean exit for default-buffered short `read --all`
+  batches and exact `read` / `move` output, with active at-least-once batches
+  rolled back before commit. Quiet mode no longer hides errors, `init` rejects
+  explicit `-d` / `-f` targets instead of ignoring them, and JSON errors now
+  report explicit retryability through the documented code/key inventory.
+  Closed-pipe truthfulness requires per-record flushing and can reduce bulk CLI
+  drain throughput compared with exit-time buffering.
+- Enforced flat alias creation in either mutation order across SQL and Redis.
+  Alias names and canonical targets now use the ordinary queue-name grammar;
+  Redis validates live graph state and publishes its version atomically. Old
+  invalid rows remain available for one-hop inspection and removal. The Redis
+  delete-all partial-completion floor is now explicit and regression-tested;
+  Redis client failures during alias mutation now raise the same
+  `OperationalError` family as sibling Redis operations.
+- Validated `Queue` names at construction, preserved line context for oversized
+  JSON integer tokens during load, honored an explicit watcher
+  `after_timestamp=0`, and made every backend reject non-string bodies with
+  `MessageError` before mutation.
+- Repaired the standalone async SQLite example so fresh and incorrectly
+  v5-stamped databases contain the v5 pending-queue index, removed the
+  unsupported `EXTRA` sync-mode example, and documented the distinct string
+  percentage and numeric fraction forms of `BROKER_VACUUM_THRESHOLD` plus its
+  absolute backstop above 10,000 claimed rows.
+- Bound delivery clause ranges and affected spec evidence citations to
+  executable semantic manifests, including routine versus opt-in cross-backend
+  dump/load suites and the real SQLite broadcast lock owner.
+- Unified the PostgreSQL and Redis pytest wrappers on one argument-routing and
+  owned-container cleanup path, enabled the CI Hypothesis profile in the Linux
+  coverage lane, and stopped excluding all `__repr__` and bare `pass` lines
+  from coverage.
+
+### Changed
+- Bumped the synchronized first-party `simplebroker-pg` and
+  `simplebroker-redis` packages to 3.5.1, raised both extension core floors to
+  `simplebroker>=6.0.2`, and raised the root optional backend floors to those
+  extension versions.
+
+### simplebroker-pg 3.5.1
+- Synchronized release for SimpleBroker 6.0.2. Shared SQL timestamp repair now
+  preserves a higher high-water committed concurrently by another PostgreSQL
+  connection.
+
+### simplebroker-redis 3.5.1
+- Synchronized release for SimpleBroker 6.0.2. Alias creation now validates
+  and publishes the flat live graph atomically, and delete-all reports truthful
+  partial completion if a later queue cannot be removed.
+
 
 ## [6.0.1] - 2026-08-04
 

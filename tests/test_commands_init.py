@@ -310,38 +310,30 @@ class TestInitCommand:
         assert stdout == ""
         assert "already exists" in stderr
 
-    def test_init_integration_custom_database_name(self, workdir):
-        """Test that init command ignores global -f."""
-        code, _stdout, _stderr = run_cli("-f", "custom.db", "init", cwd=workdir)
+    def test_init_rejects_explicit_database_name(self, workdir):
+        """Init never silently ignores an explicitly selected file."""
+        code, stdout, stderr = run_cli("-f", "custom.db", "init", cwd=workdir)
 
-        # Should succeed
-        assert code == 0
+        assert code == 1
+        assert stdout == ""
+        assert "init" in stderr
+        assert "--file" in stderr
+        assert not (workdir / ".broker.db").exists()
+        assert not (workdir / "custom.db").exists()
 
-        default_db = workdir / ".broker.db"
-        assert default_db.exists()
-        assert _is_valid_sqlite_db(default_db) is True
-
-        custom_db = workdir / "custom.db"
-        assert not custom_db.exists()
-
-    def test_init_integration_custom_directory(self, workdir):
-        """Test that init command ignores global -d."""
-        # Create subdirectory
+    def test_init_rejects_explicit_directory(self, workdir):
+        """Init never silently ignores an explicitly selected directory."""
         subdir = workdir / "subdir"
         subdir.mkdir()
 
-        code, _stdout, _stderr = run_cli("-d", str(subdir), "init", cwd=workdir)
+        code, stdout, stderr = run_cli("-d", str(subdir), "init", cwd=workdir)
 
-        # Should succeed
-        assert code == 0
-
-        # Should create database in current directory, not specified directory
-        default_db = workdir / ".broker.db"
-        assert default_db.exists()
-        assert _is_valid_sqlite_db(default_db) is True
-
-        subdir_db = subdir / ".broker.db"
-        assert not subdir_db.exists()
+        assert code == 1
+        assert stdout == ""
+        assert "init" in stderr
+        assert "--dir" in stderr
+        assert not (workdir / ".broker.db").exists()
+        assert not (subdir / ".broker.db").exists()
 
     def test_init_creates_in_current_directory_only(self, workdir):
         """Test that init always creates database in current directory only."""

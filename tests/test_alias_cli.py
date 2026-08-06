@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from simplebroker import commands
+from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerDB
 from tests.conftest import run_cli
 
@@ -11,6 +12,11 @@ from tests.conftest import run_cli
 @pytest.fixture()
 def workdir(tmp_path: Path) -> Path:
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def _isolate_alias_backend(broker_target: BrokerTarget) -> None:
+    """Reset the selected shared backend before each CLI alias test."""
 
 
 def test_alias_add_list_remove(workdir: Path) -> None:
@@ -55,6 +61,14 @@ def test_alias_list_with_target(workdir: Path) -> None:
     assert rc == 2
     assert out == ""
     assert err == ""
+
+
+def test_alias_add_help_calls_target_a_canonical_queue_name(workdir: Path) -> None:
+    rc, out, err = run_cli("alias", "add", "--help", cwd=workdir)
+
+    assert rc == 0, err
+    assert "canonical queue name" in out
+    assert "existing queue that alias points to" not in out
 
 
 @pytest.mark.sqlite_only

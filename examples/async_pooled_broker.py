@@ -27,7 +27,6 @@ import asyncio
 import contextvars
 import re
 import time
-import warnings
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any, Protocol, cast
@@ -68,6 +67,9 @@ from simplebroker._sql import (
     CREATE_META_TABLE as SQL_CREATE_TABLE_META,
 )
 from simplebroker._sql import (
+    CREATE_PENDING_QUEUE_TS_INDEX as SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS,
+)
+from simplebroker._sql import (
     CREATE_QUEUE_TS_ID_INDEX as SQL_CREATE_IDX_MESSAGES_QUEUE_TS_ID,
 )
 from simplebroker._sql import (
@@ -101,7 +103,12 @@ from simplebroker._sql import (
 from simplebroker._sql import (
     INSERT_MESSAGE as SQL_INSERT_MESSAGE,
 )
-from simplebroker.ext import DataError, IntegrityError, OperationalError
+from simplebroker.ext import (
+    DataError,
+    IntegrityError,
+    OperationalError,
+    vacuum_is_eligible,
+)
 
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
 
@@ -210,14 +217,7 @@ class PooledAsyncSQLiteRunner:
         cache_mb = int(self._config["BROKER_CACHE_MB"])
         await conn.execute(f"PRAGMA cache_size=-{cache_mb * 1024}")
 
-        sync_mode = str(self._config["BROKER_SYNC_MODE"]).upper()
-        if sync_mode not in ("OFF", "NORMAL", "FULL", "EXTRA"):
-            warnings.warn(
-                f"Invalid BROKER_SYNC_MODE '{sync_mode}', defaulting to FULL",
-                RuntimeWarning,
-                stacklevel=4,
-            )
-            sync_mode = "FULL"
+        sync_mode = str(self._config["BROKER_SYNC_MODE"])
         await conn.execute(f"PRAGMA synchronous={sync_mode}")
 
         # Enable WAL mode
@@ -430,6 +430,7 @@ class AsyncBrokerCore:
             await self._ensure_schema_v2()
             await self._ensure_schema_v3()
             await self._ensure_schema_v4()
+            await self._ensure_schema_v5()
             self._timestamp_gen = AsyncTimestampGenerator(self._runner)
             self._initialized = True
 
@@ -627,6 +628,20 @@ class AsyncBrokerCore:
                 await self._runner.run(SQL_INSERT_ALIAS_VERSION_META)
                 if current_version < 4:
                     await self._write_schema_version_locked(4)
+                await self._runner.commit()
+            except Exception:
+                await self._runner.rollback()
+                raise
+
+    async def _ensure_schema_v5(self) -> None:
+        """Ensure schema v5's pending queue/timestamp index exists."""
+        async with self._lock:
+            current_version = await self._read_schema_version_locked()
+            try:
+                await self._runner.begin_immediate()
+                await self._runner.run(SQL_CREATE_IDX_MESSAGES_PENDING_QUEUE_TS)
+                if current_version < 5:
+                    await self._write_schema_version_locked(5)
                 await self._runner.commit()
             except Exception:
                 await self._runner.rollback()
@@ -1030,10 +1045,10 @@ class AsyncBrokerCore:
             if total_count == 0:
                 return False
 
-            threshold_pct = float(self._config["BROKER_VACUUM_THRESHOLD"])
-            return bool(
-                (claimed_count >= total_count * threshold_pct)
-                or (claimed_count > 10000)
+            return vacuum_is_eligible(
+                claimed_count=int(claimed_count),
+                total_count=int(total_count),
+                threshold=float(self._config["BROKER_VACUUM_THRESHOLD"]),
             )
 
     async def _vacuum_claimed_messages(self) -> None:

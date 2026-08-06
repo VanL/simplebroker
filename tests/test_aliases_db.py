@@ -1,10 +1,19 @@
 import pytest
 
+from simplebroker._exceptions import QueueNameError
 from simplebroker._targets import BrokerTarget
 
-from .helper_scripts.broker_factory import make_broker
+from .helper_scripts.broker_factory import active_backend, make_broker
 
 pytestmark = [pytest.mark.shared]
+
+
+def _insert_legacy_invalid_alias(broker, alias: str, target: str) -> None:
+    if active_backend() == "redis":
+        broker._client.hset(broker._key("aliases"), alias, target)
+        return
+    broker._runner.run(broker._sql.INSERT_ALIAS, (alias, target))
+    broker._runner.commit()
 
 
 def test_alias_store_and_resolve(broker) -> None:
@@ -66,11 +75,23 @@ def test_alias_reject_self_reference(broker) -> None:
         broker.add_alias("queue", "queue")
 
 
-def test_alias_detect_cycle(broker) -> None:
+@pytest.mark.parametrize(
+    ("alias", "target"),
+    (("bad alias", "target"), ("alias", "bad target")),
+)
+def test_alias_and_target_use_queue_name_grammar(broker, alias, target) -> None:
+    with pytest.raises(QueueNameError):
+        broker.add_alias(alias, target)
+    assert broker.list_aliases() == []
+
+
+def test_alias_rejects_chain_in_creation_order_without_mutation(broker) -> None:
     broker.add_alias("a", "b")
-    broker.add_alias("b", "c")
+    version = broker.get_alias_version()
     with pytest.raises(ValueError):
-        broker.add_alias("c", "a")
+        broker.add_alias("b", "c")
+    assert dict(broker.list_aliases()) == {"a": "b"}
+    assert broker.get_alias_version() == version
 
 
 def test_alias_version_bumps(broker) -> None:
@@ -122,6 +143,29 @@ def test_alias_add_revalidates_against_live_state(
     finally:
         db1.shutdown()
         db2.shutdown()
+
+
+def test_legacy_invalid_alias_remains_visible_resolvable_and_removable(broker) -> None:
+    _insert_legacy_invalid_alias(broker, "legacy", "bad target")
+
+    assert ("legacy", "bad target") in broker.list_aliases()
+    assert broker.resolve_alias("legacy") == "bad target"
+    broker.remove_alias("legacy")
+    assert broker.resolve_alias("legacy") is None
+
+
+def test_legacy_alias_chain_remains_one_hop_visible_and_removable(broker) -> None:
+    _insert_legacy_invalid_alias(broker, "legacy-a", "legacy-b")
+    _insert_legacy_invalid_alias(broker, "legacy-b", "canonical")
+
+    assert dict(broker.list_aliases()) == {
+        "legacy-a": "legacy-b",
+        "legacy-b": "canonical",
+    }
+    assert broker.resolve_alias("legacy-a") == "legacy-b"
+    broker.remove_alias("legacy-a")
+    broker.remove_alias("legacy-b")
+    assert broker.list_aliases() == []
 
 
 def test_canonicalize_queue_resolves_only_behind_the_sigil(broker) -> None:

@@ -55,13 +55,17 @@ def _test_functions(relative_path: str) -> set[str]:
 def test_delivery_contract_clause_inventory_and_bindings() -> None:
     """Every canonical delivery clause has an implementation and firing gate."""
     text = SPEC.read_text(encoding="utf-8")
-    heading_codes = {
+    heading_codes = [
         int(code)
         for code in re.findall(r"^## .+ \[SB-DELIVERY-(\d+)\]$", text, re.MULTILINE)
-    }
-    assert heading_codes == set(range(1, 9))
+    ]
+    assert heading_codes == list(range(1, 9))
 
     verification = text.split("## Verification", 1)[1].split("## Related Plans", 1)[0]
+    verification_codes = re.findall(
+        r"^\| \[(SB-DELIVERY-\d+)\] \|", verification, re.MULTILINE
+    )
+    assert verification_codes == [f"SB-DELIVERY-{code}" for code in range(1, 9)]
     for code in range(1, 9):
         assert f"| [SB-DELIVERY-{code}] |" in verification
         assert "tests/test_delivery_contract_sb_delivery.py" in _verification_row(
@@ -90,6 +94,29 @@ def test_delivery_contract_clause_inventory_and_bindings() -> None:
 
     for path in (README, KERNEL, LLMS):
         assert "docs/specs/11-delivery.md" in path.read_text(encoding="utf-8")
+
+
+def test_readme_and_kernel_delivery_ranges_reach_the_canonical_terminal_clause() -> (
+    None
+):
+    """Enumerable delivery restatements cannot silently stop before clause 8."""
+    terminal = max(
+        int(code)
+        for code in re.findall(
+            r"^## .+ \[SB-DELIVERY-(\d+)\]$",
+            SPEC.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    )
+    range_pattern = re.compile(r"\[SB-DELIVERY-1\]`?\s*[–-]\s*`?\[SB-DELIVERY-(\d+)\]")
+
+    for path in (README, KERNEL):
+        terminal_clauses = {
+            int(value)
+            for value in range_pattern.findall(path.read_text(encoding="utf-8"))
+        }
+        assert terminal_clauses
+        assert terminal_clauses == {terminal}
 
 
 def test_watch_mode_clause_binds_all_modes_and_runtime_gates() -> None:
