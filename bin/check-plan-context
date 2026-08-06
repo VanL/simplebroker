@@ -679,6 +679,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception as exc:  # noqa: BLE001 - checker owns a no-traceback boundary
+    except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         print(f"check-plan-context: internal error: {exc}")
         sys.exit(2)
