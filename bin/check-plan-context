@@ -1,0 +1,515 @@
+#!/usr/bin/env python3
+"""Gate source-document declarations for in-flight plans.
+
+The Status Index is authoritative for scope. Plans whose primary status is
+``draft``, ``active``, or ``status-review`` must declare a Source Documents
+section containing at least one resolving repo path or the exact labeled source
+waiver. Effective-class-5 plans must also cite a concrete theory/revision/
+alternative record or use the exact labeled theory waiver.
+
+This checker verifies declaration presence and path resolution only. It does
+not verify that anyone read or understood the declared material. Completed,
+superseded, and retired plans are grandfathered history and are not checked.
+
+Exit codes: 0 clean, 1 contract violation, 2 invocation/internal error. The
+script never intentionally prints a traceback.
+
+Usage:
+  check-plan-context [--root DIR] [--self-test]
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+INDEX_PATH = Path("docs/plans/README.md")
+PLAN_DIR = Path("docs/plans")
+IN_FLIGHT_STATUSES = frozenset({"draft", "active", "status-review"})
+
+INDEX_ROW_RE = re.compile(r"^\|\s*([^|]+\.md)\s*\|\s*([^|]+)\|", re.MULTILINE)
+PATH_CLAIM_RE = re.compile(r"`((?:docs|skills|bin)/[A-Za-z0-9_./-]+)`")
+PATH_NON_CLAIM_RE = re.compile(r"[*{}<>]|YYYY|<[a-z]|\.\.\.")
+SOURCE_WAIVER_RE = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+)?Source spec:[ \t]+None[ \t]+—[ \t]+\S[^\r\n]*$",
+    re.MULTILINE,
+)
+THEORY_WAIVER_RE = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+)?Theory:[ \t]+N/A[ \t]+—[ \t]+\S[^\r\n]*$",
+    re.MULTILINE,
+)
+THEORY_RECORD_RE = re.compile(
+    r"\[(?:THEORY|REV|ALT)-(?=[A-Za-z0-9._-]*[A-Za-z0-9])"
+    r"[A-Za-z0-9._-]+\]"
+)
+INDEX_CLASS_RE = re.compile(r"\bclass\s+([0-5])(\+P)?\b", re.IGNORECASE)
+HEADER_CLASS_RE = re.compile(
+    r"^Class:\s*(?:class\s+)?([0-5])(\+P)?\b", re.IGNORECASE | re.MULTILINE
+)
+
+
+class InvocationError(Exception):
+    """The requested repository corpus could not be loaded."""
+
+
+def error_detail(exc: OSError | UnicodeError) -> str:
+    """Render filesystem and decoding failures without relying on errno fields."""
+    return getattr(exc, "strerror", None) or str(exc)
+
+
+def strip_fenced_blocks(text: str) -> str:
+    """Remove fenced blocks so example grammar cannot satisfy the gate."""
+    output: list[str] = []
+    fenced = False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        if not fenced:
+            output.append(line)
+    return "\n".join(output)
+
+
+def extract_status_index(text: str) -> str:
+    """Return only the live Status Index table region."""
+    text = strip_fenced_blocks(text)
+    try:
+        return text.split("## Status Index", 1)[1].split("## Retired Plans", 1)[0]
+    except IndexError as exc:
+        raise InvocationError(
+            "status index must contain ## Status Index and ## Retired Plans"
+        ) from exc
+
+
+def primary_status(status_cell: str) -> str:
+    """Normalize the first status-cell word, the index's status authority."""
+    words = status_cell.strip().split()
+    if not words:
+        return ""
+    return words[0].lower().strip("*_,;`")
+
+
+def extract_source_documents(text: str) -> str | None:
+    """Extract the first unfenced ``## Source Documents*`` section."""
+    lines = strip_fenced_blocks(text).splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if line.startswith("## Source Documents")),
+        None,
+    )
+    if start is None:
+        return None
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+        len(lines),
+    )
+    return "\n".join(lines[start + 1 : end])
+
+
+def effective_class(index_status: str, plan_text: str) -> int | None:
+    """Parse the index class first, falling back to the plan metadata line."""
+    match = INDEX_CLASS_RE.search(index_status) or HEADER_CLASS_RE.search(plan_text)
+    if match is None:
+        return None
+    base = int(match.group(1))
+    return max(base, 5) if match.group(2) else base
+
+
+def has_resolving_path(section: str, root: Path) -> bool:
+    """Return whether at least one concrete backticked repo path resolves."""
+    resolved_root = root.resolve()
+    for match in PATH_CLAIM_RE.finditer(section):
+        claim = match.group(1)
+        if PATH_NON_CLAIM_RE.search(claim):
+            continue
+        target = root / claim
+        try:
+            target.resolve(strict=False).relative_to(resolved_root)
+        except ValueError:
+            continue
+        if target.exists() or target.is_symlink():
+            return True
+    return False
+
+
+def check_tree(root: Path) -> tuple[list[str], int]:
+    """Check the tree and return contract problems plus the in-scope count."""
+    index_file = root / INDEX_PATH
+    try:
+        index_text = index_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise InvocationError(
+            f"cannot read status index {index_file}: {error_detail(exc)}"
+        ) from exc
+
+    index = extract_status_index(index_text)
+    rows = INDEX_ROW_RE.findall(index)
+    if not rows:
+        raise InvocationError("status index contains no parseable plan rows")
+    problems: list[str] = []
+    checked = 0
+    for plan_name, status_cell in rows:
+        if primary_status(status_cell) not in IN_FLIGHT_STATUSES:
+            continue
+        checked += 1
+        if Path(plan_name).name != plan_name:
+            problems.append(f"{plan_name}: indexed plan name is not a plain filename")
+            continue
+        plan_file = root / PLAN_DIR / plan_name
+        try:
+            plan_text = plan_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            problems.append(
+                f"{plan_name}: cannot read indexed plan: {error_detail(exc)}"
+            )
+            continue
+
+        section = extract_source_documents(plan_text)
+        if section is None:
+            problems.append(f"{plan_name}: missing ## Source Documents* section")
+            continue
+
+        if not has_resolving_path(section, root) and not SOURCE_WAIVER_RE.search(
+            section
+        ):
+            problems.append(
+                f"{plan_name}: Source Documents has no resolving backticked repo "
+                "path and no exact 'Source spec: None — <reason>' waiver"
+            )
+
+        if effective_class(status_cell, plan_text) == 5 and not (
+            THEORY_RECORD_RE.search(section) or THEORY_WAIVER_RE.search(section)
+        ):
+            problems.append(
+                f"{plan_name}: effective class 5 requires a concrete bracketed "
+                "THEORY/REV/ALT record or exact 'Theory: N/A — <reason>' waiver"
+            )
+    return problems, checked
+
+
+def run_root(root: Path) -> int:
+    """Run the live-tree check with truthful exit classes."""
+    try:
+        problems, checked = check_tree(root)
+    except InvocationError as exc:
+        print(f"check-plan-context: invocation error: {exc}")
+        return 2
+    if problems:
+        print(f"check-plan-context: {len(problems)} contract violation(s):")
+        for problem in problems:
+            print(f"  {problem}")
+        return 1
+    print(
+        f"check-plan-context: OK ({checked} in-flight plan source declarations resolve)"
+    )
+    return 0
+
+
+def fixture_index() -> str:
+    """Build the self-test's complete status/class fixture table."""
+    rows = [
+        ("active.md", "active — class 3"),
+        ("draft-waiver.md", "draft — class 5"),
+        ("review-theory.md", "status-review — class 5"),
+        ("revision.md", "active — class 5"),
+        ("alternative.md", "draft — class 5"),
+        ("process.md", "active — class 3+P (effective 5)"),
+        ("fallback.md", "active — classification in plan header"),
+        ("unclassified.md", "status-review — no class recorded"),
+        ("completed.md", "completed — class 5"),
+        ("superseded.md", "superseded — class 5"),
+        ("retired-pending.md", "retired-pending — class 5"),
+        ("retired.md", "retired — class 5"),
+    ]
+    body = ["## Status Index", "", "| Plan | Status |", "|------|--------|"]
+    body.extend(f"| {plan} | {status} |" for plan, status in rows)
+    body.extend(
+        [
+            "",
+            "```markdown",
+            "| fenced-backtick.md | active — class 5 |",
+            "```",
+            "~~~markdown",
+            "| fenced-tilde.md | active — class 5 |",
+            "~~~",
+            "",
+            "## Retired Plans",
+            "",
+        ]
+    )
+    return "\n".join(body)
+
+
+def fixture_plans() -> dict[str, str]:
+    """Return a passing corpus covering every declared grammar branch."""
+    path_source = "- `docs/specs/source.md`"
+    return {
+        "active.md": f"""# Active
+Class: 3
+
+## Source Documents
+
+{path_source}
+""",
+        "draft-waiver.md": """# Draft waiver
+Class: 5
+
+## Source Documents
+
+- Source spec: None — tooling-only plan with no governing spec.
+- Theory: N/A — no governing theory record.
+""",
+        "review-theory.md": f"""# Theory
+Class: 5
+
+## Source Documents and Evidence
+
+{path_source}
+- `docs/program-theory.md` [THEORY-1]
+""",
+        "revision.md": f"""# Revision
+Class: 5
+
+## Source Documents and Baseline
+
+{path_source}
+- `docs/program-theory.md` [REV-THEORY-001]
+""",
+        "alternative.md": f"""# Alternative
+Class: 5
+
+## Source Documents
+
+{path_source}
+- `docs/program-theory.md` [ALT-PT20260729-005]
+""",
+        "process.md": f"""# Process
+Class: 3+P
+
+## Source Documents
+
+{path_source}
+Theory: N/A — no governing product-theory record.
+""",
+        "fallback.md": f"""# Fallback
+Class: 5
+
+## Source Documents
+
+{path_source}
+- `docs/program-theory.md` [THEORY-0]
+""",
+        "unclassified.md": f"""# Unclassified
+
+## Source Documents
+
+{path_source}
+""",
+        # These malformed historical bodies prove grandfathering by status.
+        "completed.md": "# Completed\n",
+        "superseded.md": "# Superseded\n",
+        "retired-pending.md": "# Retired pending\n",
+        "retired.md": "# Retired\n",
+    }
+
+
+def write_fixture(root: Path, plans: dict[str, str] | None = None) -> None:
+    """Write one isolated self-test tree."""
+    plan_dir = root / PLAN_DIR
+    spec_dir = root / "docs/specs"
+    plan_dir.mkdir(parents=True)
+    spec_dir.mkdir(parents=True)
+    (plan_dir / "README.md").write_text(fixture_index(), encoding="utf-8")
+    (spec_dir / "source.md").write_text("# Source\n", encoding="utf-8")
+    (root / "docs/program-theory.md").write_text("# Theory\n", encoding="utf-8")
+    for name, body in (plans or fixture_plans()).items():
+        (plan_dir / name).write_text(body, encoding="utf-8")
+
+
+def mutation_problems(root: Path, plan_name: str, old: str, new: str) -> list[str]:
+    """Apply one mutation, evaluate it, and restore the passing fixture."""
+    plan_file = root / PLAN_DIR / plan_name
+    original = plan_file.read_text(encoding="utf-8")
+    if old not in original:
+        return [f"self-test setup error: {old!r} absent from {plan_name}"]
+    plan_file.write_text(original.replace(old, new, 1), encoding="utf-8")
+    try:
+        problems, _ = check_tree(root)
+        return problems
+    finally:
+        plan_file.write_text(original, encoding="utf-8")
+
+
+def mutation_probe_failures(root: Path) -> list[str]:
+    """Return failures from the declared contract-mutation probes."""
+    failures: list[str] = []
+    mutations = {
+        "missing section": (
+            "active.md",
+            "## Source Documents",
+            "## Context",
+            "missing ## Source Documents",
+        ),
+        "unresolvable path": (
+            "active.md",
+            "docs/specs/source.md",
+            "docs/specs/missing.md",
+            "no resolving backticked repo path",
+        ),
+        "unrelated None waiver": (
+            "draft-waiver.md",
+            "Source spec: None — tooling-only plan with no governing spec.",
+            "Database: None — not the labeled source waiver.",
+            "no exact 'Source spec: None",
+        ),
+        "empty source-waiver reason": (
+            "draft-waiver.md",
+            "Source spec: None — tooling-only plan with no governing spec.",
+            "Source spec: None —",
+            "no exact 'Source spec: None",
+        ),
+        "class-5 theory omission": (
+            "review-theory.md",
+            " [THEORY-1]",
+            "",
+            "requires a concrete bracketed THEORY/REV/ALT",
+        ),
+        "wildcard theory placeholder": (
+            "review-theory.md",
+            "[THEORY-1]",
+            "[THEORY-*]",
+            "requires a concrete bracketed THEORY/REV/ALT",
+        ),
+        "+P effective class": (
+            "process.md",
+            "Theory: N/A — no governing product-theory record.",
+            "Theory note: none.",
+            "requires a concrete bracketed THEORY/REV/ALT",
+        ),
+        "empty theory-waiver reason": (
+            "process.md",
+            "Theory: N/A — no governing product-theory record.",
+            "Theory: N/A —",
+            "requires a concrete bracketed THEORY/REV/ALT",
+        ),
+        "fenced heading mimicry": (
+            "active.md",
+            "## Source Documents\n\n- `docs/specs/source.md`",
+            "```markdown\n## Source Documents\n- `docs/specs/source.md`\n```",
+            "missing ## Source Documents",
+        ),
+        "tilde-fenced heading mimicry": (
+            "active.md",
+            "## Source Documents\n\n- `docs/specs/source.md`",
+            "~~~markdown\n## Source Documents\n- `docs/specs/source.md`\n~~~",
+            "missing ## Source Documents",
+        ),
+    }
+    for name, (plan_name, old, new, expected) in mutations.items():
+        problems = mutation_problems(root, plan_name, old, new)
+        if not any(expected in problem for problem in problems):
+            failures.append(f"mutation not caught ({name}): {problems}")
+
+    escape_claim = "docs/../../../../../../etc/passwd"
+    problems = mutation_problems(
+        root, "active.md", "docs/specs/source.md", escape_claim
+    )
+    if not any("no resolving backticked repo path" in p for p in problems):
+        failures.append(f"repo-escape path not caught: {problems}")
+    return failures
+
+
+def missing_plan_probe(root: Path) -> str | None:
+    """Prove that an unreadable in-flight index target is a violation."""
+    absent = root / "docs/plans/active.md"
+    active_body = absent.read_text(encoding="utf-8")
+    absent.unlink()
+    try:
+        problems, _ = check_tree(root)
+        if not any("cannot read indexed plan" in p for p in problems):
+            return f"missing indexed plan not caught: {problems}"
+    finally:
+        absent.write_text(active_body, encoding="utf-8")
+    return None
+
+
+def missing_index_probe(root: Path) -> str | None:
+    """Prove that a missing scope source is an invocation error."""
+    try:
+        check_tree(root / "missing-root")
+    except InvocationError:
+        return None
+    return "missing status index was not an invocation error"
+
+
+def hostile_encoding_probe(root: Path) -> str | None:
+    """Prove that one unreadable plan is isolated and the batch continues."""
+    active = root / PLAN_DIR / "active.md"
+    review = root / PLAN_DIR / "review-theory.md"
+    active_body = active.read_bytes()
+    review_body = review.read_text(encoding="utf-8")
+    active.write_bytes(b"\xff\xfe\x00")
+    review.write_text(review_body.replace(" [THEORY-1]", ""), encoding="utf-8")
+    try:
+        problems, checked = check_tree(root)
+    finally:
+        active.write_bytes(active_body)
+        review.write_text(review_body, encoding="utf-8")
+    if checked != 8:
+        return f"hostile encoding aborted the batch after {checked} plan(s)"
+    if not any("active.md: cannot read indexed plan" in p for p in problems):
+        return f"hostile encoding lacked a per-file diagnostic: {problems}"
+    if not any("review-theory.md: effective class 5" in p for p in problems):
+        return f"hostile encoding hid later plan findings: {problems}"
+    return None
+
+
+def self_test() -> int:
+    """Exercise the live parser through contract-breaking corpus mutations."""
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="check-plan-context-") as temp_dir:
+        root = Path(temp_dir)
+        write_fixture(root)
+        baseline, checked = check_tree(root)
+        if baseline:
+            failures.append(f"passing fixture failed: {baseline}")
+        if checked != 8:
+            failures.append(f"expected 8 in-flight plans, checked {checked}")
+        failures.extend(mutation_probe_failures(root))
+        failures.extend(
+            failure
+            for failure in (
+                missing_plan_probe(root),
+                missing_index_probe(root),
+                hostile_encoding_probe(root),
+            )
+            if failure is not None
+        )
+
+    if failures:
+        for failure in failures:
+            print(f"check-plan-context self-test FAIL: {failure}")
+        return 1
+    print("check-plan-context self-test: all mutation cases and probes pass")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=REPO_ROOT)
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+    if args.self_test:
+        return self_test()
+    return run_root(args.root)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as exc:  # noqa: BLE001 - checker owns a no-traceback boundary
+        print(f"check-plan-context: internal error: {exc}")
+        sys.exit(2)

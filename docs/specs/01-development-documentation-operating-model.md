@@ -645,7 +645,7 @@ change requires — not by what the author chooses to produce:
 | 0 — Read-only | Nothing in the repository changes | None | None; claims cite evidence and distinguish verified from inferred |
 | 1 — Trivial | A change with no observable behavior change and no normative doc force (typos, comments, link repairs, formatting) | Classification line plus what/why/verification, recorded in the commit message — or in the handoff report when the work is left uncommitted for review | None |
 | 2 — Small | Observable behavior changes but **conforms to existing intended behavior**, evidenced by something independently inspectable — a governing spec section, an explicit user requirement in the session, or an existing contract test. Author inference is not intent evidence; without it, the class is 3. Also requires: reversible, and **no [DOM-5] non-trivial or risky trigger fires** | The abbreviated preflight, pre-edit: (1) outcome checklist, (2) the intent evidence or `Source spec: None — <reason>`, (3) invariants that must not move, (4) the planned verification command. The observed result is appended at completion. Recorded in the commit/PR description or handoff report | Author fresh-eyes |
-| 3 — Standard | Any **[DOM-5] non-trivial trigger** | Full dated plan per `runbooks/writing-plans.md`, status-index row, deviation log | Independent review of the plan **and** of the completed work ([DOM-11]) |
+| 3 — Standard | Any **[DOM-5] non-trivial trigger** | Full dated plan per `runbooks/writing-plans.md`, status-index row, deviation log, consulted-surfaces declaration (gated for in-flight plans by `bin/check-plan-context`) | Independent review of the plan **and** of the completed work ([DOM-11]) |
 | 4 — Risky | Any **[DOM-5] risky trigger** | Class 3 plus the hardening-plans checklist | Class 3 plus review before implementation begins |
 | 5 — Theory/spec-changing | **[DOM-16] requires a material program-theory change**; a normative theory claim is added, removed, or reworded; **[DOM-6] requires a spec change**; or normative spec text is edited, including clarification-only spec edits, which use promotion strategy D per `writing-plans.md` §4c | Class 3 plus theory/spec baseline, exact proposed delta, named promotion strategy; the hardening-plans checklist **only if a [DOM-5] risky trigger also fires** — otherwise declare `hardening: N/A — no risky trigger` and state that no risky trigger fires | Class 3 reviews plus independent review of the delta before promotion; review-before-implementation when hardening applies |
 | +P — Process-changing (modifier, not a class) | The change is [DOM-6]-material to how future work is **planned, implemented, reviewed, or verified** — regardless of which surface hosts it. A non-material edit to a skill or runbook (a typo, a link fix) is not +P; a material process change hiding in an "implementation" doc is | Declared as `Class N+P`; effective requirements are `max(N, 5)`'s | Effective class's review plus pre-landing review, different agent family preferred |
@@ -942,6 +942,7 @@ Local adoption record (soft-retired; not a live path claim):
 
 Local plans:
 
+- `docs/plans/2026-08-06-plan-context-gate-plan.md`
 - `docs/plans/2026-08-04-coalescing-git-archive-policy-plan.md`
 - `docs/plans/2026-07-29-ruff-lint-expansion-plan.md`
 - `docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md`

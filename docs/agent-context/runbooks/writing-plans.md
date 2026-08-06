@@ -121,6 +121,19 @@ If no spec exists, say so plainly:
 Source spec: None — bug fix / refactor / tooling change
 ```
 
+**Gate (class 3+).** For plans whose Status Index row is `draft`,
+`active`, or `status-review`, this section is a gated contract checked by
+`bin/check-plan-context`: the section must name at least one path that
+resolves, or use the exact labeled waiver form above (`Source spec: None —
+<reason>`; an optional Markdown list marker is allowed). Class-5 plans — base
+class 5 or any `+P` declaration, which is effective 5 — additionally cite a
+concrete governing `[THEORY-<id>]` / `[REV-<id>]` / `[ALT-<id>]` record
+(wildcard placeholders do not count) or carry an explicit waiver line
+(`Theory: N/A — <reason>`; an optional Markdown list marker is allowed). Both
+waiver forms require a non-empty reason. The gate verifies that the
+declaration exists and resolves; it does not verify that reading happened —
+possession is checked by review.
+
 ### 3. Context and Key Files
 
 For the change, list:

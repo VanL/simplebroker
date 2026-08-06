@@ -54,6 +54,11 @@ read the current agent inventory when relevant, followed by the relevant
 winning product contract, active plan, implementation rationale, code, tests,
 and task-specific skill or runbook.
 
+`docs/program-theory.md` is load-bearing for product-scope *judgment* —
+audits, reviews, feature-fit and design opinions — not only for
+implementation. Skipping it because a task looks like verification is the
+observed failure mode.
+
 For product use or embedding rather than repository work, start with
 `docs/agent-kernel.md`, then follow its product-section-registry links to the
 winning README or canonical-spec owner. The kernel is not a competing
@@ -134,7 +139,7 @@ authoritative.
 - Harness: `uv run pytest` (~140+ test modules under `tests/`; prefer
   targeted selections during iteration), plus `fuzz/` and `extensions/`
   suites where relevant. Docs-only changes still run
-  `python3 bin/check-dom15-fixtures`.
+  `python3 bin/check-dom15-fixtures` and `bin/check-plan-context`.
 - The **gstack** external skill suite is active in `.claude/skills/`;
   see `docs/agent-context/runbooks/external-skill-suites.md` for
   precedence — repository guidance and the decision hierarchy outrank

@@ -1,7 +1,7 @@
 # Plan-Context Gate Plan
 
 Date: 2026-08-06
-Status: active
+Status: completed
 Class: 3+P (effective 5) — materially changes a gate and a runbook
 ([DOM-6]-material to how future work is verified; fixture row "Materially
 change a skill, runbook, or gate") and edits normative [DOM-15] text (class-5
@@ -36,11 +36,14 @@ reading happened.
   §4b–4d (spec baseline/delta/promotion), Plan Lifecycle
 - `docs/agent-context/engineering-principles.md` §12 (enumerable contracts
   get executable gates; recursion floor — gates do not gate gates)
+- `docs/agent-context/runbooks/adversarial-acceptance-probes.md` (developer-tool
+  floors: truthful exit classes, no traceback, hostile-input isolation,
+  grammar mimicry, missing-target classification, self-application)
 - `docs/agent-context/README.md` Read Order (declared-claim floor, added
   2026-08-06)
 - Theory record: none governs beyond the cited principle — this plan changes
   no product concept, owner, durable principle, or non-goal.
-  `Theory: N/A — no governing record`.
+  Theory: N/A — no governing record.
 - Session evidence (not a governing contract): the 2026-08-05→06 audit cycle
   in which the session's top-level agent skipped the agent-context read
   order; user-reported ~95% read-order compliance in other harnesses.
@@ -50,6 +53,13 @@ reading happened.
 - `6f09185` — `docs/specs/01-development-documentation-operating-model.md`
   and `docs/agent-context/runbooks/writing-plans.md` at plan authoring time
   (both unchanged from HEAD; verified by `git diff --stat HEAD`).
+
+## Promotion Baseline
+
+- `829b032` + current worktree diff — the exact [DOM-15],
+  `writing-plans.md`, `AGENTS.md`, and reciprocal Related Plans deltas were
+  applied before checker implementation; `python3 bin/check-dom15-fixtures`
+  passed against this promoted state.
 
 ## Context and Key Files
 
@@ -71,9 +81,15 @@ reading happened.
   backticked-path resolution). The new checker resolves paths only inside the
   Source Documents section, not the whole plan.
 - **Existing waiver form:** `writing-plans.md` §2 already defines
-  `Source spec: None — <reason>`; the checker accepts a `None —` line as a
-  valid declaration for check 2. Check 3's waiver is new text:
-  `Theory: N/A — <reason>`.
+  `Source spec: None — <reason>`; check 2 accepts only that labeled form
+  (after an optional Markdown list marker, with a non-empty reason), not an
+  arbitrary line containing `None —`. Check 3's waiver is new text:
+  `Theory: N/A — <reason>` (the same optional-list-marker and non-empty-reason
+  rules apply).
+- **Concrete theory-record grammar:** a class-5 citation is a bracketed
+  `[THEORY-<id>]`, `[REV-<id>]`, or `[ALT-<id>]` token whose payload contains
+  at least one alphanumeric character and no wildcard. Notational placeholders
+  such as `[THEORY-*]`, `[REV-*]`, and `[ALT-*]` are not record citations.
 - **CI reach:** `.github/workflows/test.yml` runs the pytest suite; no
   workflow step and no test currently invokes `bin/check-dom15-fixtures`,
   `bin/check-doc-paths`, or `bin/coalesce-check` (verified by grep
@@ -129,7 +145,7 @@ unlink-first staging.
 
 | Spec/doc file | Strategy | Sections touched |
 |---------------|----------|------------------|
-| `docs/specs/01-development-documentation-operating-model.md` | B — atomic | [DOM-15] class-3 row, Planning artifact cell |
+| `docs/specs/01-development-documentation-operating-model.md` | B — atomic | [DOM-15] class-3 row, Planning artifact cell; Related Plans backlink |
 | `docs/agent-context/runbooks/writing-plans.md` | B — atomic | §2 Source Documents, append gate subsection |
 | `AGENTS.md` | B — atomic | Harness line; Shared Agent Context paragraph |
 
@@ -150,12 +166,21 @@ With:
 > **Gate (class 3+).** For plans whose Status Index row is `draft`,
 > `active`, or `status-review`, this section is a gated contract checked by
 > `bin/check-plan-context`: the section must name at least one path that
-> resolves, or use the plain waiver form above. Class-5 plans — base class 5
-> or any `+P` declaration, which is effective 5 — additionally cite a
-> governing `[THEORY-*]` / `[REV-*]` / `[ALT-*]` record or carry an explicit
-> waiver line (`Theory: N/A — <reason>`). The gate verifies that the
+> resolves, or use the exact labeled waiver form above (`Source spec: None —
+> <reason>`; an optional Markdown list marker is allowed). Class-5 plans — base
+> class 5 or any `+P` declaration, which is effective 5 — additionally cite a
+> concrete governing `[THEORY-<id>]` / `[REV-<id>]` / `[ALT-<id>]` record
+> (wildcard placeholders do not count) or carry an explicit waiver line
+> (`Theory: N/A — <reason>`; an optional Markdown list marker is allowed). Both
+> waiver forms require a non-empty reason. The gate verifies that the
 > declaration exists and resolves; it does not verify that reading happened —
 > possession is checked by review.
+
+### `docs/specs/01-development-documentation-operating-model.md` Related Plans
+
+Under `Local plans:`, add:
+
+> - `docs/plans/2026-08-06-plan-context-gate-plan.md`
 
 ### `AGENTS.md`
 
@@ -171,25 +196,34 @@ With:
 ## Tasks
 
 1. **Spec-promotion slice (strategy B, lands with the code in one change;
-   apply text first):** apply the three deltas above exactly. Verify:
+   apply text first):** apply the four deltas above exactly, including the
+   reciprocal Related Plans backlink. Verify:
    `git diff` matches the delta; `python3 bin/check-dom15-fixtures` still
    passes (fixture table untouched).
 2. **Write `bin/check-plan-context`** per the contract in Context:
    parse the Status Index; select `draft`/`active`/`status-review` rows; for
    each, require a `## Source Documents*` heading whose section contains a
-   resolving backticked path or a `None —` waiver line; for effective-class-5
+   resolving backticked path or an exact `Source spec: None — <reason>` waiver
+   line (optional Markdown list marker; non-empty reason); for effective-class-5
    rows — the class parsed from the index-row text, falling back to the
    plan's in-file `Class:` header, where the effective class is the base
    class raised to 5 whenever `+P` is declared (`max(base, 5)` per [DOM-15]);
-   unclassified in-scope rows get checks 1–2 only — require a
-   `[THEORY-`/`[REV-`/`[ALT-` citation or a `Theory: N/A —` line. Exit 0/1/2;
+   unclassified in-scope rows get checks 1–2 only — require a concrete
+   bracketed `[THEORY-<id>]`/`[REV-<id>]`/`[ALT-<id>]` citation whose payload
+   contains an alphanumeric character and no wildcard, or an exact `Theory:
+   N/A — <reason>` waiver line (optional Markdown list marker; non-empty
+   reason). Exit 0/1/2;
    `--self-test` with mutation fixtures. Modeled on
    `bin/check-dom15-fixtures`; read it first.
 3. **Write `tests/test_plan_context_gate.py`:** (a) subprocess-run the
    checker on the live tree, assert exit 0 — this puts the gate in CI;
    (b) run `--self-test`, assert it catches each mutation class (missing
    section, unresolvable path, class-5 without theory citation) and accepts
-   both waiver forms. No mocks; real script, real tree.
+   both exact waiver forms. It must also reject an unrelated `None —` line and
+   wildcard theory placeholders. Black-box probes additionally fire exit
+   classes 1 and 2, both fence styles, a hostile-encoding plan without batch
+   abort, missing indexed-plan versus missing-root classification, and the
+   no-traceback boundary. No mocks; real script, real tree.
 4. **Write `tests/test_doc_gates.py`:** subprocess-run the three existing
    doc gates via `sys.executable` (Windows matrix legs cannot exec bare
    shebang paths; never invoke them as `bin/...` directly):
@@ -214,8 +248,9 @@ With:
   `--self-test` exits nonzero on each mutation class; `uv run pytest
   tests/test_plan_context_gate.py tests/test_doc_gates.py -q` passes.
 - Invariants protected: honest exit classes (0/1/2, no tracebacks);
-  grandfathering (mutating a completed-row fixture does not trip the
-  checker); waiver acceptance.
+  grandfathering (mutating completed/superseded/retired fixtures does not trip
+  the checker); exact waiver acceptance; one unreadable plan produces a
+  per-file diagnostic without hiding findings from later plans.
 - Docs edits verified by the doc gates and `git diff` inspection against the
   proposed delta, not by runtime tests.
 
@@ -234,8 +269,9 @@ Final gates before any completion claim (rerun from current state):
   `bin/coalesce-check`
 - `uv run ruff check bin/check-plan-context tests/test_plan_context_gate.py
   tests/test_doc_gates.py` and `uv run ruff format --check` on the same files
-- `git diff` review: spec/runbook/AGENTS text matches the proposed delta
-  exactly; Status Index row closed in the same change.
+- `git diff` review: spec/runbook/AGENTS text and the reciprocal Related Plans
+  backlink match the proposed delta exactly; Status Index row closed in the
+  same change.
 
 ## Independent Review Loop
 
@@ -278,6 +314,33 @@ Final gates before any completion claim (rerun from current state):
 | 2026-08-06 | Independent plan review attempt 2 | claude CLI (`claude -p … --permission-mode plan`), different family; no verdict | Stopped at author's mis-calibrated 240s bound before producing output; the user reported claude reviews take 10–15 minutes, so the bound was raised to 900s and the attempt relaunched. No verdict inferred. |
 | 2026-08-06 | Independent plan review round 1 | claude CLI, different family; **BLOCKED** | Accepted F1 (coalesce-check/shallow-clone contradiction — reproduced: `test.yml` checkout has no `fetch-depth: 0`; `bin/coalesce-check` resolves cited SHAs via `git cat-file` and exits 1 when they are absent; Task 4 and Context now guard with an `is-shallow-repository` skip, keeping the no-workflow-edits constraint), F2 (`+P` effective-class ambiguity — reproduced against this plan's own `class 3+P (effective 5)` index row; Task 2 and the §2 delta now define effective class as `max(base, 5)`), F3 (Windows portability — all gate invocations now via `sys.executable`). Overengineering observation (drop or narrow checks 1–2) **rejected with reasoning**: the declaration floor's value is catching future drift of a currently-trusted convention, not current violations — that is exactly what §12 binds; the reviewer-noted independent value of Task 4 is retained as a task, not split. Scoped round-2 review pending. |
 | 2026-08-06 | Independent plan review round 2 | claude CLI, same reviewer, scoped to F1–F3; **PASS** | All three fixes confirmed against the current plan text with mechanisms re-verified (all eight `test.yml` checkouts confirmed depth-1; [DOM-15] `max(base, 5)` citation confirmed accurate; self-application confirmed — this plan's `class 3+P (effective 5)` row plus `Theory: N/A` waiver passes its own check 3). Accepted new minor finding F4: the Goal overclaimed — the F1 guard means `coalesce-check` skips on every current CI leg, so only two gates gain unconditional CI reach. Fixed: Goal wording now states `coalesce-check`'s CI reach is contingent on full history. No remaining scoped defect; plan is implementation-ready. |
+| 2026-08-06 | Owner-directed pre-implementation clarification | User directed the three identified gaps to be fixed and waived another plan review | Tightened the source waiver to the exact labeled form, required concrete non-wildcard theory-record IDs, and added the missing reciprocal [DOM-15] Related Plans backlink to the exact proposed delta. These clarifications narrow false-green behavior and restore existing traceability; they do not change ownership, authority, blast radius, or the accepted design. |
+| 2026-08-06 | Independent completed-work review | Claude CLI 2.1.207, different family; **no blocker** | F1 (dead `PATH_NON_CLAIM_RE` alternatives) left unchanged because the filter deliberately mirrors `check-doc-paths`; harmless redundancy is preferable to silently diverging the shared grammar. F2 (fenced Status Index rows were not stripped) accepted: `extract_status_index` now strips fences, with backtick and tilde fixture rows proving they are inert. F3 (some adversarial cases live inside the black-box `--self-test` rather than separate pytest functions) rejected: pytest executes the real script and the self-test executes real isolated trees, so duplicating each probe would add no distinct seam. Residual risks accepted: class-5 reach depends on a declared class; exact em-dash waiver syntax is intentionally strict; declarations do not prove comprehension. |
+
+## Verification Results
+
+- Red gate: `uv run pytest tests/test_plan_context_gate.py
+  tests/test_doc_gates.py -q` failed with three expected missing-checker/path
+  failures before `bin/check-plan-context` existed.
+- Pre-closure self-application: `bin/check-plan-context --self-test` reported
+  all mutation cases and probes passing; `bin/check-plan-context` reported OK
+  for three in-flight plans, including this effective-class-5 plan.
+- Targeted behavior: `uv run pytest tests/test_plan_context_gate.py
+  tests/test_doc_gates.py -q` passed 7 tests.
+- Neighbor suite: `uv run pytest tests/test_dev_scripts.py -q` passed 113
+  tests.
+- Document gates: `python3 bin/check-dom15-fixtures`, `python3
+  bin/check-doc-paths`, and `python3 bin/coalesce-check` all exited 0;
+  coalescing reported 14 SHA claims, 0 retrieval cues, and 29 dated lessons.
+- Static/diff gates: targeted `ruff check`, `ruff format --check`, and `git
+  diff --check` all passed.
+- Independent completed-work review: Claude CLI 2.1.207 returned **no
+  blocker**; its one accepted parser-consistency finding was fixed and the
+  targeted/full gate set above was rerun afterward.
+- Final post-closure rerun: the exact targeted, neighboring, checker,
+  document, coalescing, Ruff, formatting, and diff commands above all exited
+  0; the live checker reported two remaining in-flight plans after this row
+  moved to `completed`.
 
 ## Completion Gate
 
