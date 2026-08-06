@@ -32,7 +32,7 @@ PLAN_DIR = Path("docs/plans")
 IN_FLIGHT_STATUSES = frozenset({"draft", "active", "status-review"})
 
 INDEX_ROW_RE = re.compile(r"^\|\s*([^|]+\.md)\s*\|\s*([^|]+)\|", re.MULTILINE)
-PATH_CLAIM_RE = re.compile(r"`((?:docs|skills|bin)/[A-Za-z0-9_./-]+)`")
+PATH_CLAIM_RE = re.compile(r"`([^`\r\n]+)`")
 PATH_NON_CLAIM_RE = re.compile(r"[*{}<>]|YYYY|<[a-z]|\.\.\.")
 SOURCE_WAIVER_RE = re.compile(
     r"^[ \t]*(?:[-*+][ \t]+)?Source spec:[ \t]+None[ \t]+—[ \t]+\S[^\r\n]*$",
@@ -64,12 +64,28 @@ def error_detail(exc: OSError | UnicodeError) -> str:
 def strip_fenced_blocks(text: str) -> str:
     """Remove fenced blocks so example grammar cannot satisfy the gate."""
     output: list[str] = []
-    fenced = False
+    fence: tuple[str, int] | None = None
     for line in text.splitlines():
-        if line.lstrip().startswith(("```", "~~~")):
-            fenced = not fenced
+        marker: tuple[str, int, str] | None = None
+        leading_spaces = len(line) - len(line.lstrip(" "))
+        stripped = line[leading_spaces:]
+        if leading_spaces <= 3 and stripped.startswith(("```", "~~~")):
+            char = stripped[0]
+            length = len(stripped) - len(stripped.lstrip(char))
+            marker = (char, length, stripped[length:])
+        if fence is None and marker is not None:
+            fence = marker[0], marker[1]
             continue
-        if not fenced:
+        if fence is not None:
+            if (
+                marker is not None
+                and marker[0] == fence[0]
+                and marker[1] >= fence[1]
+                and not marker[2].strip()
+            ):
+                fence = None
+            continue
+        if fence is None:
             output.append(line)
     return "\n".join(output)
 
@@ -111,7 +127,9 @@ def extract_source_documents(text: str) -> str | None:
 
 def effective_class(index_status: str, plan_text: str) -> int | None:
     """Parse the index class first, falling back to the plan metadata line."""
-    match = INDEX_CLASS_RE.search(index_status) or HEADER_CLASS_RE.search(plan_text)
+    match = INDEX_CLASS_RE.search(index_status) or HEADER_CLASS_RE.search(
+        strip_fenced_blocks(plan_text)
+    )
     if match is None:
         return None
     base = int(match.group(1))
@@ -125,13 +143,15 @@ def has_resolving_path(section: str, root: Path) -> bool:
         claim = match.group(1)
         if PATH_NON_CLAIM_RE.search(claim):
             continue
-        target = root / claim
-        try:
-            target.resolve(strict=False).relative_to(resolved_root)
-        except ValueError:
+        claim_path = Path(claim)
+        if claim_path.is_absolute():
             continue
-        if target.exists() or target.is_symlink():
-            return True
+        target = root / claim_path
+        try:
+            target.resolve(strict=True).relative_to(resolved_root)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        return True
     return False
 
 
@@ -212,12 +232,15 @@ def fixture_index() -> str:
     """Build the self-test's complete status/class fixture table."""
     rows = [
         ("active.md", "active — class 3"),
+        ("code-source.md", "active — class 3"),
+        ("root-source.md", "active — class 3"),
         ("draft-waiver.md", "draft — class 5"),
         ("review-theory.md", "status-review — class 5"),
         ("revision.md", "active — class 5"),
         ("alternative.md", "draft — class 5"),
         ("process.md", "active — class 3+P (effective 5)"),
         ("fallback.md", "active — classification in plan header"),
+        ("indented-fallback.md", "active — classification in plan header"),
         ("unclassified.md", "status-review — no class recorded"),
         ("completed.md", "completed — class 5"),
         ("superseded.md", "superseded — class 5"),
@@ -248,11 +271,25 @@ def fixture_plans() -> dict[str, str]:
     path_source = "- `docs/specs/source.md`"
     return {
         "active.md": f"""# Active
-Class: 3
+Class: 5
 
 ## Source Documents
 
 {path_source}
+""",
+        "code-source.md": """# Code source
+Class: 3
+
+## Source Documents
+
+- `simplebroker/db.py`
+""",
+        "root-source.md": """# Root source
+Class: 3
+
+## Source Documents
+
+- `README.md`
 """,
         "draft-waiver.md": """# Draft waiver
 Class: 5
@@ -302,11 +339,32 @@ Class: 5
 {path_source}
 - `docs/program-theory.md` [THEORY-0]
 """,
+        "indented-fallback.md": f"""# Indented fallback
+    ```markdown
+Class: 5
+    ```
+
+## Source Documents
+
+{path_source}
+- `docs/program-theory.md` [THEORY-INDENT]
+""",
         "unclassified.md": f"""# Unclassified
 
 ## Source Documents
 
 {path_source}
+
+````markdown
+```text
+Class: 5
+```
+````
+~~~~markdown
+```text
+Class: 5
+```
+~~~~
 """,
         # These malformed historical bodies prove grandfathering by status.
         "completed.md": "# Completed\n",
@@ -320,10 +378,17 @@ def write_fixture(root: Path, plans: dict[str, str] | None = None) -> None:
     """Write one isolated self-test tree."""
     plan_dir = root / PLAN_DIR
     spec_dir = root / "docs/specs"
+    placeholder_dir = root / "docs/YYYY"
+    code_dir = root / "simplebroker"
     plan_dir.mkdir(parents=True)
     spec_dir.mkdir(parents=True)
+    placeholder_dir.mkdir(parents=True)
+    code_dir.mkdir(parents=True)
     (plan_dir / "README.md").write_text(fixture_index(), encoding="utf-8")
+    (root / "README.md").write_text("# Root source\n", encoding="utf-8")
     (spec_dir / "source.md").write_text("# Source\n", encoding="utf-8")
+    (placeholder_dir / "source.md").write_text("# Placeholder\n", encoding="utf-8")
+    (code_dir / "db.py").write_text("# Code source\n", encoding="utf-8")
     (root / "docs/program-theory.md").write_text("# Theory\n", encoding="utf-8")
     for name, body in (plans or fixture_plans()).items():
         (plan_dir / name).write_text(body, encoding="utf-8")
@@ -343,6 +408,102 @@ def mutation_problems(root: Path, plan_name: str, old: str, new: str) -> list[st
         plan_file.write_text(original, encoding="utf-8")
 
 
+def rejected_path_failure(
+    root: Path, plan_name: str, old: str, claim: str, label: str
+) -> str | None:
+    """Return a diagnostic when a path that must be rejected is accepted."""
+    problems = mutation_problems(root, plan_name, old, claim)
+    if any("no resolving backticked repo path" in problem for problem in problems):
+        return None
+    return f"{label} not caught: {problems}"
+
+
+def path_probe_failures(root: Path) -> list[str]:
+    """Exercise escape and absolute-path rejection."""
+    probes = (
+        (
+            "active.md",
+            "docs/specs/source.md",
+            "docs/../../../../../../etc/passwd",
+            "repo-escape path",
+        ),
+        (
+            "root-source.md",
+            "README.md",
+            str((root / "README.md").resolve()),
+            "absolute repo path",
+        ),
+    )
+    return [
+        failure
+        for plan_name, old, claim, label in probes
+        if (failure := rejected_path_failure(root, plan_name, old, claim, label))
+        is not None
+    ]
+
+
+def symlink_claim_failure(
+    root: Path, link: Path, *, should_resolve: bool, label: str
+) -> str | None:
+    """Evaluate one already-created symlink through the real plan checker."""
+    try:
+        problems = mutation_problems(root, "root-source.md", "README.md", link.name)
+    except RuntimeError as exc:
+        return f"{label} escaped path validation: {exc}"
+    rejected = any("no resolving backticked repo path" in p for p in problems)
+    if should_resolve and problems:
+        return f"{label} rejected: {problems}"
+    if not should_resolve and not rejected:
+        return f"{label} not caught: {problems}"
+    return None
+
+
+def symlink_probe_failures(root: Path) -> list[str]:
+    """Exercise valid, broken, outside-tree, and looping symlinks."""
+    failures: list[str] = []
+    outside_source = root.parent / f"{root.name}-outside-source.md"
+    outside_source.write_text("# Outside\n", encoding="utf-8")
+    probes = (
+        (root / "linked-source.md", "README.md", True, "valid in-repo symlink"),
+        (root / "broken-source.md", "missing-source.md", False, "broken symlink"),
+        (root / "outside-source.md", outside_source, False, "outside symlink"),
+    )
+    for link, target, should_resolve, label in probes:
+        try:
+            link.symlink_to(target)
+        except (NotImplementedError, OSError):
+            continue
+        try:
+            failure = symlink_claim_failure(
+                root, link, should_resolve=should_resolve, label=label
+            )
+            if failure is not None:
+                failures.append(failure)
+        finally:
+            link.unlink()
+    outside_source.unlink()
+
+    loop_a = root / "loop-a.md"
+    loop_b = root / "loop-b.md"
+    created: list[Path] = []
+    try:
+        for link, target in ((loop_a, loop_b.name), (loop_b, loop_a.name)):
+            link.symlink_to(target)
+            created.append(link)
+    except (NotImplementedError, OSError):
+        pass
+    else:
+        failure = symlink_claim_failure(
+            root, loop_a, should_resolve=False, label="symlink loop"
+        )
+        if failure is not None:
+            failures.append(failure)
+    finally:
+        for link in created:
+            link.unlink()
+    return failures
+
+
 def mutation_probe_failures(root: Path) -> list[str]:
     """Return failures from the declared contract-mutation probes."""
     failures: list[str] = []
@@ -357,6 +518,12 @@ def mutation_probe_failures(root: Path) -> list[str]:
             "active.md",
             "docs/specs/source.md",
             "docs/specs/missing.md",
+            "no resolving backticked repo path",
+        ),
+        "existing placeholder path": (
+            "active.md",
+            "docs/specs/source.md",
+            "docs/YYYY/source.md",
             "no resolving backticked repo path",
         ),
         "unrelated None waiver": (
@@ -407,18 +574,20 @@ def mutation_probe_failures(root: Path) -> list[str]:
             "~~~markdown\n## Source Documents\n- `docs/specs/source.md`\n~~~",
             "missing ## Source Documents",
         ),
+        "four-space pseudo-fence": (
+            "indented-fallback.md",
+            " [THEORY-INDENT]",
+            "",
+            "requires a concrete bracketed THEORY/REV/ALT",
+        ),
     }
     for name, (plan_name, old, new, expected) in mutations.items():
         problems = mutation_problems(root, plan_name, old, new)
         if not any(expected in problem for problem in problems):
             failures.append(f"mutation not caught ({name}): {problems}")
 
-    escape_claim = "docs/../../../../../../etc/passwd"
-    problems = mutation_problems(
-        root, "active.md", "docs/specs/source.md", escape_claim
-    )
-    if not any("no resolving backticked repo path" in p for p in problems):
-        failures.append(f"repo-escape path not caught: {problems}")
+    failures.extend(path_probe_failures(root))
+    failures.extend(symlink_probe_failures(root))
     return failures
 
 
@@ -458,7 +627,7 @@ def hostile_encoding_probe(root: Path) -> str | None:
     finally:
         active.write_bytes(active_body)
         review.write_text(review_body, encoding="utf-8")
-    if checked != 8:
+    if checked != 11:
         return f"hostile encoding aborted the batch after {checked} plan(s)"
     if not any("active.md: cannot read indexed plan" in p for p in problems):
         return f"hostile encoding lacked a per-file diagnostic: {problems}"
@@ -476,8 +645,8 @@ def self_test() -> int:
         baseline, checked = check_tree(root)
         if baseline:
             failures.append(f"passing fixture failed: {baseline}")
-        if checked != 8:
-            failures.append(f"expected 8 in-flight plans, checked {checked}")
+        if checked != 11:
+            failures.append(f"expected 11 in-flight plans, checked {checked}")
         failures.extend(mutation_probe_failures(root))
         failures.extend(
             failure
