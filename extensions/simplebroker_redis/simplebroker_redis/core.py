@@ -1862,16 +1862,7 @@ class RedisBrokerCore:
     def add_alias(self, alias: str, target: str) -> None:
         self._assert_no_reentrant_mutation_during_batch("add_alias")
         self._validate_alias_target(alias, target)
-        if self.queue_exists_and_has_messages(alias):
-            warnings.warn(
-                (
-                    f"Queue '{alias}' already exists with messages. "
-                    f"The alias @{alias} will redirect to '{target}' while "
-                    f"the queue {alias} remains accessible directly."
-                ),
-                RuntimeWarning,
-                stacklevel=3,
-            )
+        shadows_existing_queue = self.queue_exists_and_has_messages(alias)
         try:
             raw_result = self._client.eval(
                 scripts.ADD_ALIAS,
@@ -1893,6 +1884,16 @@ class RedisBrokerCore:
             raise ValueError("Cannot turn an existing alias target into an alias")
         if result != 1:
             raise OperationalError(f"Unexpected Redis alias result: {result}")
+        if shadows_existing_queue:
+            warnings.warn(
+                (
+                    f"Queue '{alias}' already exists with messages. "
+                    f"The alias @{alias} will redirect to '{target}' while "
+                    f"the queue {alias} remains accessible directly."
+                ),
+                RuntimeWarning,
+                stacklevel=3,
+            )
 
     def remove_alias(self, alias: str) -> None:
         self._assert_no_reentrant_mutation_during_batch("remove_alias")

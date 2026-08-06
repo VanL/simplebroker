@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import warnings
 from typing import NoReturn
 
 import pytest
@@ -323,8 +324,10 @@ def test_redis_alias_api_validates_and_updates_alias_metadata(
         assert core.aliases_for_target("target") == ["existing"]
         assert core.get_alias_version() > 0
 
-        with pytest.raises(ValueError, match="already exists"):
-            core.add_alias("existing", "other")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            with pytest.raises(ValueError, match="already exists"):
+                core.add_alias("existing", "other")
         with pytest.raises(ValueError, match="Cannot target another alias"):
             core.add_alias("other", "existing")
         with pytest.raises(ValueError, match="must differ"):
