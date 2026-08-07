@@ -30,7 +30,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 | Plan | Status |
 |------|--------|
 | 2026-08-06-pre-release-review-remediation-plan.md | completed — class 5; A/E/I/J and B's operator-owned permission documentation released from exact green SHA `fb2e6ba7`; all four Windows jobs and three finalization probes passed; immutable tags published simplebroker 6.0.2, pg 3.5.1, and redis 3.5.1; clean-index installs, metadata floors, Weft retained forms, and the possession probe passed; C/D/F/G/H remain deferred with named reopen conditions |
-| 2026-08-07-agent-theory-delta-wave-plan.md | draft — Class 5+P; agent-theory delta wave, source `0423923`; awaiting scoped adaptation review |
+| 2026-08-07-agent-theory-delta-wave-plan.md | completed — Class 5+P; agent-theory delta wave (source `0423923`); scoped review blocker F1-F8 applied, round-2 waived with disclosure; landed `6595df5`, sweep `230d59d` |
 | 2026-08-06-ruff-suppression-registry-extraction-plan.md | completed — class 5+P; approval ledger extracted from required spec reading into a task-scoped registry with exact inventory conservation |
 | 2026-08-06-plan-context-gate-plan.md | completed — class 3+P (effective 5); plan-context checker and CI document-gate seams implemented and reviewed |
 | 2026-08-06-access-backend-benchmark-plan.md | completed — class 4; implementation and independent completion review reconciled, all gates passed, and owner commit `829b032` landed |

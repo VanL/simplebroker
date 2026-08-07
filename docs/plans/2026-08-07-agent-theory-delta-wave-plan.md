@@ -1,7 +1,9 @@
 # Agent-Theory Delta Wave Plan (2026-08-07)
 
 Date: 2026-08-07
-Status: draft — propagation wave from the guidance hub
+Status: completed — landed `6595df5` (wave) and `230d59d` (sweep: nine
+retired plans deleted under the adopted rule; 13 harvest candidates
+checked-deferred); all review findings applied
 Class: 5+P — normative spec text lands ([DOM-14], [DOM-15], [DOM-16]
 drafting note), and runbooks, skills, and gate scripts are materially
 changed. Effective requirements: class 5 plus pre-landing
