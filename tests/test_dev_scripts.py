@@ -149,6 +149,24 @@ def _settlement_env(
     monkeypatch.setenv("COVERAGE_COMBINE_SETTLE_SECONDS", str(settle_seconds))
 
 
+def _signal_matching_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+    predicate: Callable[[Any], bool],
+) -> threading.Event:
+    """Signal after the settlement reader has observed a required state."""
+    observed = threading.Event()
+    real_inspect_sources = combine_coverage._inspect_sources
+
+    def inspect_and_signal(monitored: list[Path]):
+        inspection = real_inspect_sources(monitored)
+        if predicate(inspection):
+            observed.set()
+        return inspection
+
+    monkeypatch.setattr(combine_coverage, "_inspect_sources", inspect_and_signal)
+    return observed
+
+
 def _settlement_accepts_stable_readable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -175,20 +193,29 @@ def _settlement_waits_for_corrupt_writer(
     replacement = tmp_path / "replacement.coverage"
     _write_coverage_lines(data_file, tmp_path / "base.py", {1})
     shard.write_bytes(b"incomplete coverage database")
+    corrupt_observed = _signal_matching_inspection(
+        monkeypatch,
+        lambda inspection: inspection.error is not None,
+    )
+    writer_finished = threading.Event()
 
     def finish_writer() -> None:
-        time.sleep(0.05)
+        if not corrupt_observed.wait(timeout=2.0):
+            return
         _write_coverage_lines(replacement, tmp_path / "worker.py", {2})
         _replace_with_retry(replacement, shard)
+        writer_finished.set()
 
     thread = threading.Thread(target=finish_writer)
     thread.start()
-    _settlement_env(monkeypatch, retry_timeout=1.0, settle_seconds=0.05)
+    _settlement_env(monkeypatch, retry_timeout=3.0, settle_seconds=0.05)
     try:
         sources, empty, repaired = combine_coverage._wait_for_stable_sources(data_file)
     finally:
-        thread.join(timeout=2.0)
+        thread.join(timeout=3.0)
     assert not thread.is_alive()
+    assert corrupt_observed.is_set()
+    assert writer_finished.is_set()
     assert sources == [shard.resolve()]
     assert empty == []
     assert repaired == []
@@ -209,20 +236,29 @@ def _settlement_waits_for_empty_writer(
     replacement = tmp_path / "replacement.coverage"
     _write_coverage_lines(data_file, tmp_path / "base.py", {1})
     _write_interrupted_empty_coverage_database(shard)
+    empty_observed = _signal_matching_inspection(
+        monkeypatch,
+        lambda inspection: bool(inspection.empty_sources),
+    )
+    writer_finished = threading.Event()
 
     def finish_writer() -> None:
-        time.sleep(0.05)
+        if not empty_observed.wait(timeout=2.0):
+            return
         _write_coverage_lines(replacement, tmp_path / "worker.py", {2})
         _replace_with_retry(replacement, shard)
+        writer_finished.set()
 
     thread = threading.Thread(target=finish_writer)
     thread.start()
-    _settlement_env(monkeypatch, retry_timeout=1.0, settle_seconds=0.05)
+    _settlement_env(monkeypatch, retry_timeout=3.0, settle_seconds=0.05)
     try:
         sources, empty, repaired = combine_coverage._wait_for_stable_sources(data_file)
     finally:
-        thread.join(timeout=2.0)
+        thread.join(timeout=3.0)
     assert not thread.is_alive()
+    assert empty_observed.is_set()
+    assert writer_finished.is_set()
     assert sources == [shard.resolve()]
     assert empty == []
     assert repaired == []
@@ -243,20 +279,33 @@ def _settlement_restarts_after_readable_change(
     replacement = tmp_path / "replacement.coverage"
     source = tmp_path / "worker.py"
     _write_coverage_lines(shard, source, {2})
+    readable_observed = _signal_matching_inspection(
+        monkeypatch,
+        lambda inspection: (
+            inspection.error is None
+            and inspection.snapshot is not None
+            and not inspection.empty_sources
+        ),
+    )
+    writer_finished = threading.Event()
 
     def update_writer() -> None:
-        time.sleep(0.05)
+        if not readable_observed.wait(timeout=2.0):
+            return
         _write_coverage_lines(replacement, source, {3})
         _replace_with_retry(replacement, shard)
+        writer_finished.set()
 
     thread = threading.Thread(target=update_writer)
     thread.start()
-    _settlement_env(monkeypatch, retry_timeout=1.0, settle_seconds=0.15)
+    _settlement_env(monkeypatch, retry_timeout=3.0, settle_seconds=0.15)
     try:
         sources, empty, repaired = combine_coverage._wait_for_stable_sources(data_file)
     finally:
-        thread.join(timeout=2.0)
+        thread.join(timeout=3.0)
     assert not thread.is_alive()
+    assert readable_observed.is_set()
+    assert writer_finished.is_set()
     assert sources == [shard.resolve()]
     assert empty == []
     assert repaired == []

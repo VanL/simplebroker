@@ -12,9 +12,9 @@ explicitly undefined per SQLite upstream. The CLI's deletion-attempt,
 diagnostic, and exit semantics remain defined. The round-2 owner amendments (no fractional bounds; Weft
 unaffected; asynchronous release mechanism retained) continue to outrank
 conflicting older text.
-Status: active — initial implementation landed in `a38e6a9`; the first-run CI
-remediation is recorded below. The final blocker (conflicting durable lesson)
-was corrected in place, and the
+Status: active — initial implementation landed in `a38e6a9`; two Windows CI
+remediation passes are recorded below. The final blocker (conflicting durable
+lesson) was corrected in place, and the
 owner's implementation direction authorized A, E, I, and J (B is reduced to
 documentation in J; C/D/F/G/H are deferred and severed). The plan remains
 active: no release tag, publication, or K0/K release execution occurred in
@@ -1076,6 +1076,54 @@ Status Index still described the `a38e6a9` implementation as uncommitted; the
 index remains `active` but now records that committed baseline and the unrun
 K0/K release gates accurately.
 
+### Second-run CI remediation (2026-08-07)
+
+The exact-SHA verification run for the first remediation, GitHub Actions run
+[`31190183571`](https://github.com/VanL/simplebroker/actions/runs/31190183571),
+had three failed Windows jobs: Python 3.12, 3.13, and 3.14. All non-Windows,
+PostgreSQL, and Redis jobs passed. Windows 3.11 also passed, including the new
+dedicated serial streaming phase.
+
+The failures divide into one deterministic portability assertion and two test
+coordination defects; current evidence does not show a new production-code
+failure:
+
+- Python 3.13/3.14 reached the cleanup embedded-NUL rejection through `lstat()`
+  rather than `Path.resolve()`. Both routes raise the promised clean,
+  pre-deletion `DatabaseError`, and the separate observation-failure test pins
+  zero mutation. The test now accepts either truthful operation name instead
+  of depending on a Python-minor implementation detail.
+- Python 3.12 timed out four isolated SQLite CLI commands on four xdist workers
+  at the same point in the run. Moving the prior streaming/resilience tests did
+  not remove the shared-load cause; it moved the collision to one large
+  broadcast and three vacuum tests. Windows full-suite concurrency is now fixed
+  at two workers instead of host-derived `auto`. Vacuum tests seed state through
+  `BrokerDB` and retain subprocesses only for the CLI vacuum behavior under
+  test. The 10 MiB broadcast assertion keeps its real stdin/CLI path but applies
+  the repository's CI timeout scaling to its explicit 20-second safety valve.
+- Python 3.14's corrupt-to-readable coverage transition used a 50 ms writer
+  sleep, a one-second reader deadline, and a two-second Windows replacement
+  retry. The reader could exhaust its aggregate deadline before the writer
+  published the valid generation. All three coverage writer-transition tests
+  now use observation events instead of sleeps, and give the aggregate reader
+  deadline room to cover the writer's bounded retry.
+
+Local evidence after the second-pass fixes: the five-file cleanup, workflow,
+coverage-script, vacuum, and safety slice passed under two-worker xdist (one
+expected non-Windows open-handle skip); the four-test mixed broadcast/vacuum
+set passed ten consecutive two-worker runs (40 assertions); and the exact
+coverage corrupt-to-readable, empty-to-readable, and readable-snapshot-change
+transitions each passed 25 consecutive coverage-enabled serial runs (75
+assertions). The Windows workflow rerun remains the platform confirmation gate.
+
+Independent second-pass CI review: **PASS with no findings.** The reviewer
+checked the three job classifications against run `31190183571`, both Windows
+full-suite worker-budget seams, the cleanup zero-delete control, retained CLI
+vacuum/broadcast assertions, and all three event-driven coverage transitions.
+Focused workflow, cleanup, vacuum, safety, coverage-transition, Ruff, YAML, and
+plan/document gates passed. The reviewer agreed that the next Windows Actions
+run is the remaining platform confirmation.
+
 ## Out of Scope
 
 - The five deferred units (C, D, F, G, H) — register above with
@@ -1098,8 +1146,9 @@ K0/K release gates accurately.
 
 | Spec ref | Planned behavior | Actual behavior | Rationale | Spec proposal |
 |----------|------------------|-----------------|-----------|---------------|
+| T-A coverage node "bounded Weft retained-form smoke" | Weft-side smoke matrix over retained integer/ISO bound forms lands with Unit A | Deferred — not implemented in this train | Weft pins simplebroker from PyPI; 6.0.2 is unpublished, so a weft-side matrix cannot execute until the synchronized publish. Implementing agent raised it; owner approved the deferral 2026-08-07. Runs as a post-publish verification alongside K's clean-install checks. | None — plan-internal deliverable, no spec text affected |
 
-(Empty through the verified uncommitted implementation.)
+(One owner-approved deferral row above; otherwise empty through the verified implementation.)
 
 ## Fresh-Eyes Review (revision 2 authoring pass; historical)
 

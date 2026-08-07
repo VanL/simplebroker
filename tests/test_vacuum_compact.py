@@ -9,6 +9,15 @@ from simplebroker.db import BrokerDB
 from .conftest import run_cli
 
 
+def _seed_cli_vacuum_target(db_path: Path, *, claimed: bool) -> None:
+    """Create the database state needed by a CLI vacuum assertion."""
+    with BrokerDB(str(db_path)) as db:
+        db.write("test_queue", "message1")
+        if claimed:
+            messages = db.claim_many("test_queue", limit=1, with_timestamps=False)
+            assert messages == ["message1"]
+
+
 def test_vacuum_with_compact_flag(workdir: Path):
     """Test that vacuum with compact=True runs SQLite VACUUM command."""
     db_path = workdir / "test.db"
@@ -72,18 +81,7 @@ def test_vacuum_without_compact_flag(workdir: Path):
 def test_cli_vacuum_with_compact(workdir: Path):
     """Test CLI vacuum command with --compact flag."""
     db_path = workdir / "test.db"
-
-    # Create database with some messages
-    returncode, stdout, stderr = run_cli(
-        "-f", str(db_path), "write", "test_queue", "message1", cwd=workdir
-    )
-    assert returncode == 0
-
-    # Read to claim the message
-    returncode, stdout, stderr = run_cli(
-        "-f", str(db_path), "read", "test_queue", cwd=workdir
-    )
-    assert returncode == 0
+    _seed_cli_vacuum_target(db_path, claimed=True)
 
     # Run vacuum with compact
     returncode, stdout, stderr = run_cli(
@@ -97,16 +95,7 @@ def test_cli_vacuum_with_compact(workdir: Path):
 def test_cli_vacuum_status_goes_to_stderr(workdir: Path):
     """Vacuum status is diagnostic output, not stdout payload."""
     db_path = workdir / "test.db"
-
-    returncode, _, stderr = run_cli(
-        "-f", str(db_path), "write", "test_queue", "message1", cwd=workdir
-    )
-    assert returncode == 0, stderr
-
-    returncode, _, stderr = run_cli(
-        "-f", str(db_path), "read", "test_queue", cwd=workdir
-    )
-    assert returncode == 0, stderr
+    _seed_cli_vacuum_target(db_path, claimed=True)
 
     returncode, stdout, stderr = run_cli("-f", str(db_path), "--vacuum", cwd=workdir)
 
@@ -118,16 +107,7 @@ def test_cli_vacuum_status_goes_to_stderr(workdir: Path):
 def test_cli_vacuum_quiet_suppresses_status(workdir: Path):
     """Quiet mode suppresses vacuum status without changing the exit code."""
     db_path = workdir / "test.db"
-
-    returncode, _, stderr = run_cli(
-        "-f", str(db_path), "write", "test_queue", "message1", cwd=workdir
-    )
-    assert returncode == 0, stderr
-
-    returncode, _, stderr = run_cli(
-        "-f", str(db_path), "read", "test_queue", cwd=workdir
-    )
-    assert returncode == 0, stderr
+    _seed_cli_vacuum_target(db_path, claimed=True)
 
     returncode, stdout, stderr = run_cli(
         "-f", str(db_path), "--quiet", "--vacuum", cwd=workdir
@@ -141,11 +121,7 @@ def test_cli_vacuum_quiet_suppresses_status(workdir: Path):
 def test_cli_vacuum_no_claimed_status_goes_to_stderr(workdir: Path):
     """The no-op vacuum message is status output on stderr."""
     db_path = workdir / "test.db"
-
-    returncode, _, stderr = run_cli(
-        "-f", str(db_path), "write", "test_queue", "message1", cwd=workdir
-    )
-    assert returncode == 0, stderr
+    _seed_cli_vacuum_target(db_path, claimed=False)
 
     returncode, stdout, stderr = run_cli("-f", str(db_path), "--vacuum", cwd=workdir)
 

@@ -157,8 +157,11 @@ def test_cleanup_no_namespace_targets_are_noops_without_path_derivation(
 
 @pytest.mark.sqlite_only
 def test_cleanup_path_derivation_error_is_a_clean_database_error():
-    """[SB-OPS-7] Invalid filesystem spelling fails before any deletion."""
-    with pytest.raises(DatabaseError, match="Cannot resolve SQLite cleanup target"):
+    """[SB-OPS-7] Invalid spelling fails at a clean pre-deletion path operation."""
+    with pytest.raises(
+        DatabaseError,
+        match=r"Cannot (?:resolve|inspect) SQLite cleanup target",
+    ):
         get_backend_plugin("sqlite").cleanup_target("invalid\0broker.db")
 
 

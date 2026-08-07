@@ -16,7 +16,7 @@ import pytest
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
-from .helper_scripts.timing import scale_timeout_for_calibration
+from .helper_scripts.timing import scale_timeout_for_calibration, scale_timeout_for_ci
 
 
 def test_delete_safety_no_args(workdir):
@@ -172,6 +172,7 @@ def test_broadcast_size_utf8(workdir):
     emoji = "🎉"
     big_message = emoji * 2_621_440  # Just under 10MB
     too_big_message = big_message + emoji  # Just over 10MB
+    timeout = scale_timeout_for_ci(20.0)
 
     # This should work (increase timeout for large message)
     rc, _, _ = run_cli(
@@ -179,7 +180,7 @@ def test_broadcast_size_utf8(workdir):
         "-",
         cwd=workdir,
         stdin=big_message,
-        timeout=20,
+        timeout=timeout,
     )
     assert rc == 0
 
@@ -189,7 +190,7 @@ def test_broadcast_size_utf8(workdir):
         "-",
         cwd=workdir,
         stdin=too_big_message,
-        timeout=20,
+        timeout=timeout,
     )
     assert rc == 1
     assert "exceeds maximum size" in err

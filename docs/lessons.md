@@ -95,6 +95,12 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-07: Serializing known slow modules does not cure suite-wide process
+  oversubscription. If isolated subprocess tests time out concurrently on every
+  xdist worker, a module group can only move the collision to different tests.
+  Fix the owning workflow's worker budget, remove subprocess setup that is not
+  part of the assertion, and scale only deadlines that are safety valves rather
+  than timing contracts. (Windows run `31190183571`.)
 - 2026-08-07: An xdist `node down` on Windows is not evidence by itself of a
   native crash. Correlate it with the active pytest-timeout budget and inspect
   the configured timeout method: thread mode dumps stacks and calls

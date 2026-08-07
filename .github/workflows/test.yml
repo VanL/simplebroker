@@ -96,7 +96,7 @@ jobs:
     - name: Run Windows tests with pytest
       if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
       run: |
-        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark and not windows_serial" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --max-worker-restart=0"
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark and not windows_serial" --override-ini="addopts=-ra -q --strict-markers -n 2 --dist loadgroup --max-worker-restart=0"
 
     - name: Run SQLite cross-thread finalization probe
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
@@ -115,7 +115,7 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        uv run --frozen --no-sync pytest --tb=short -m "not benchmark and not windows_serial" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
+        uv run --frozen --no-sync pytest --tb=short -m "not benchmark and not windows_serial" --override-ini="addopts=-ra -vv --strict-markers -n 2 --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
 
     - name: Run Windows streaming tests serially
       if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'

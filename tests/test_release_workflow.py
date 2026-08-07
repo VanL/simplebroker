@@ -684,6 +684,8 @@ def test_windows_streaming_proofs_run_outside_xdist() -> None:
             "    - name:", 1
         )[0]
         assert "not windows_serial" in step
+        assert "-n 2" in step
+        assert "-n auto" not in step
 
     for step_name in (
         "Run Windows streaming tests serially",

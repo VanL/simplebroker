@@ -29,7 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-08-06-pre-release-review-remediation-plan.md | active — initial implementation committed at `a38e6a9`; class 5; revision 6 A/E/I/J passed full root, PostgreSQL, Redis, explicit probe, static, interface, and independent re-review gates on 2026-08-07; first-run CI remediation is locally verified and independently reviewed; B is operator-owned permission documentation; C/D/F/G/H deferred; no tag/publish; K0/K remain release-time stop gates |
+| 2026-08-06-pre-release-review-remediation-plan.md | active — initial implementation committed at `a38e6a9`; first Windows CI remediation committed at `4946dfd`; class 5; revision 6 A/E/I/J passed full root, PostgreSQL, Redis, explicit probe, static, interface, and independent re-review gates on 2026-08-07; second Windows CI remediation is locally verified, independently reviewed, and awaits a platform rerun; B is operator-owned permission documentation; C/D/F/G/H deferred; no tag/publish; K0/K remain release-time stop gates |
 | 2026-08-06-ruff-suppression-registry-extraction-plan.md | completed — class 5+P; approval ledger extracted from required spec reading into a task-scoped registry with exact inventory conservation |
 | 2026-08-06-plan-context-gate-plan.md | completed — class 3+P (effective 5); plan-context checker and CI document-gate seams implemented and reviewed |
 | 2026-08-06-access-backend-benchmark-plan.md | completed — class 4; implementation and independent completion review reconciled, all gates passed, and owner commit `829b032` landed |
