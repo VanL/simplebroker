@@ -101,7 +101,9 @@ repair-in-sweep doctrine, its commit `3706d73`, by owner direction
 If an in-boundary repair would promote or materially revise a golden rule,
 principle, runbook, skill, gate, or cross-repository rule, stop and classify it
 before editing. Routine-sweep authority does not waive the durable-guidance
-planning boundary.
+planning boundary, and the promotion gate is the human owner — agent
+review supports the decision but does not substitute for owner
+ratification (hub owner decision 2026-08-07).
 
 Read the watermarks and **Derivation recipe** in `docs/coalescing.md`, then
 run that recipe (keep this skill and the state file identical). This
@@ -236,9 +238,12 @@ For each completed or superseded plan:
    ledger line to `docs/plans/README.md` Retired Plans: plan, dates,
    one-sentence outcome, what absorbed it, source SHA (a commit verifiably
    containing the plan file).
-4. Physical deletion is a dedicated follow-up change, made only after a
-   second agent or the user re-verifies the harvest gate for each
-   `retired-pending` plan. Never soft-retire and delete in the same
+4. Physical deletion is a dedicated follow-up change, made after
+   re-checking each `retired-pending` plan's harvest gate from the
+   current tree — retrieval from the source SHA verified, the SHA
+   reachable from a retained ref. Second-agent verification is
+   optional, not required: deletion of source-pinned plans is
+   reversible archive maintenance (hub owner decision 2026-08-07). Never soft-retire and delete in the same
    change. This Git-backed follow-up is plan-exempt and needs no separate
    commit authorization when it does not promote or materially revise durable
    guidance. Before deletion, rewrite every steady-state source for a promoted

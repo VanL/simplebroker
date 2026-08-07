@@ -57,7 +57,10 @@ different-family attempts (default: two) with explicit timeouts, and record
 each attempt — command, timeout, outcome — in the plan's review log before
 falling back. "Not available" is evidenced by recorded attempts, never
 asserted; a timed-out or otherwise failed attempt yields no verdict, and
-none is inferred from it.
+none is inferred from it. Calibrate the bound to the reviewer's observed
+latency: a too-short author-chosen timeout manufactures a false
+"unavailable." A bound raise plus relaunch is recorded as a distinct
+attempt, not as a failure of the reviewer.
 
 For large changes, run review:
 
@@ -81,6 +84,14 @@ abstraction, or ceremony that does not address a real risk or improve
 correctness — before the work is treated as done. A review that only ever
 adds requirements is itself a warning sign; findings that remove
 unnecessary machinery count fully.
+
+**Existence-check first.** Before grading anything else, the reviewer
+existence-checks every named flag, test path, seam, citation, and
+driver order against the executable code and pinned sources the work
+cites. Form fluency carries no information about correctness:
+agent-authored plans reproduce every hardening artifact while naming
+nonexistent surfaces with identical confidence. (Promoted by hub owner
+direction 2026-08-07 from this repository's 2026-08-06 lessons.)
 
 ## 4. Recommended Plan Review Prompt
 
@@ -172,6 +183,33 @@ The loop is not complete until each review point has been:
 If the reviewer says they could not implement confidently and correctly, treat
 that as a blocker until the missing detail is fixed or the limitation is
 recorded explicitly.
+
+**Guidance surfaces are reviewable and blockable.** A reviewer may block
+on a defect in a guidance document (a lessons entry, a runbook rule),
+not only on code or plan defects. Concurrent edits to a shared guidance
+file are raised as findings for their author, never silently
+overwritten by the review. When the author deviates from a reviewer's
+suggested wording, the deviation is recorded with reasoning. Reviews
+that defer accepted findings register each deferral with a named reopen
+condition (Unit | Finding | Why deferred | Reopens when), and the
+reviewer verifies the deferrals are cleanly severed — no retained task
+depends on deferred work.
+
+## 5a. Audit-Response Protocol (large or systemic audits)
+
+For audits with many findings or a cross-cutting process failure —
+ordinary reviews keep the Review Log discipline above:
+
+- **Investigation Disposition Matrix:** one row per finding — Finding |
+  disposition | owning implementation slice — so no finding floats
+  free of an owner.
+- **The no-action register:** findings that did not survive
+  investigation are recorded with why, so they are not re-raised.
+- **Principle-Level Diagnosis:** when findings are not independent
+  accidents, assign each to the engineering principle whose violation
+  produced it; the principle dictates the remediation's shape (an
+  enumerable-contracts violation gets a firing gate, not another prose
+  rule).
 
 ## 6. Review Output Standard
 

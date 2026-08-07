@@ -11,6 +11,7 @@ Adopted from agent-guidance @ `e42762c` via retired plan
 for this repository: the hub's `--scaffold` mode is dropped (no
 bootstrap generator here), the scan set covers this repo's extra agent
 surfaces (`docs/agent-kernel.md`, `llms.txt`), and path claims into the
+guidance surfaces must resolve against this repository's tree.
 
 
 Usage:

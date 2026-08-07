@@ -270,6 +270,11 @@ Better:
 - state what the implementer should understand afterward
 - include one or two comprehension questions for the riskiest areas
 
+The binding mechanics (answers written in the execution log, expected
+answers in the plan, wrong answer blocks implementation) are normative
+in the writing-plans runbook §3 (Context and Key Files) — this
+section only motivates them.
+
 Good comprehension checks:
 
 - when is an existing row reused?
@@ -277,6 +282,34 @@ Good comprehension checks:
 - which layer owns the public response shape?
 
 This turns reading from a passive step into an active gate.
+
+## 15. Release Plans Carry Stop-Gates
+
+For plans whose endpoint is a release or publication (in this
+repository: the tag-push release-gate workflows driven by
+`bin/release.py`):
+
+- **The executable release driver outranks plan prose.** Before
+  accepting a plan's proposed release order or collection roots,
+  compare them to `bin/release.py` and the release-gate workflows; a
+  contradiction is a plan defect, not a driver bug to work around.
+- **Final gates rerun from the release identifier.** A prior green run
+  is not evidence; the gate that authorizes the irreversible step runs
+  against the exact SHA being released.
+- **The irreversible publication step comes only after exact-SHA
+  green.** Tagging before validation turns a correctable build defect
+  into repository-history repair.
+- **Recovery reruns the failed mechanism for the same immutable
+  identifier.** A tag with no workflow run means stop and investigate —
+  never move or force-push it; a corrective version is a new plan.
+- **State rollback honestly.** No statement may claim rollback after a
+  PyPI publish; asynchronous transients (windows where package
+  pairings are temporarily uninstallable) are documented as accepted,
+  not promised away.
+- **Post-release acceptance runs against the built release artifacts,
+  not the source tree** (clean-venv installs of the exact published
+  versions), and absence of warnings alone is not proof — name the
+  positive signal that confirms the release worked.
 
 ## When To Stop and Re-Plan
 

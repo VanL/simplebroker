@@ -505,12 +505,19 @@ Requirements:
   (status `retired-pending`, backlinks converted, ledger line written)
   only after the harvest gate in `runbooks/writing-plans.md` passes, and
   physical deletion happens in a dedicated follow-up change after the
-  gate is independently verified; plans marked `exemplar` in the status
+  recorded gate results are re-checked from the current tree with
+  retrieval from the source SHA verified and the SHA reachable from a
+  retained ref. Second-agent verification is optional, not required —
+  deletion of source-pinned plans is reversible archive maintenance
+  (hub owner decision 2026-08-07); plans marked `exemplar` in the status
   index are exempt until their exemplar role is superseded
 - routine coalescing maintenance is plan-exempt. Promotion or material revision
   of durable guidance (golden rules, principles, runbooks, skills, or
   cross-repository rules) follows the ordinary [DOM-5]/[DOM-15] planning and
-  review requirements before that promotion is written
+  review requirements before that promotion is written, and its
+  gate is the human owner — agent review supports the promotion
+  decision but does not substitute for owner ratification (hub owner
+  decision 2026-08-07)
 - run-log entries are claims: each fold line must be spot-checkable
   against the diff of the fold commit
 
@@ -555,6 +562,14 @@ Rules:
   revision that changes current design judgment. Link repairs, source
   corrections, metadata edits, and other changes with no behavior change and
   no normative-force change do not trigger class 5 by file location alone
+- ordinary maintenance — repairs, cleanups, and reversible
+  housekeeping performed under an existing procedure — defaults to
+  Class 2 when intent is evidenced and the work is reversible; it
+  escalates only when it explicitly changes ongoing procedure or
+  durable guidance, or another [DOM-5]/[DOM-6] trigger independently
+  fires. For durable-guidance promotions the gate is the **human
+  owner**: agent review supports the decision but does not substitute
+  for owner ratification (hub owner decision 2026-08-07)
 - the review and verification floors accumulate; planning artifacts
   **subsume**: a higher-class plan replaces the lower-class records, it
   does not add to them (a class-3 plan is the planning record — no
@@ -777,6 +792,15 @@ strings remain inside the owning test module and are passed directly to parser
 helpers, not discovered as repository records. The provenance token is one of
 the four closed values shown above. Mixed provenance uses separate evidence
 rows, never a compound token.
+
+Choose references in theory accounts on two tests: **accurately
+represented** and **load-bearing**. A load-bearing reference
+contributes a concept, distinction, refusal, or vocabulary the theory
+actually uses. Make that contribution explicit where it would
+otherwise be unclear; omit ornamental citations. Treat any register
+effect as a drafting hypothesis, never as evidence that the theory or
+its outputs are correct (hub theory record [REV-AT-003] in the
+agent-theory repository).
 
 Revision records are current-account-first to reduce anchoring. Historical
 sources are evidence, not startup assignments. A dedicated lineage section may

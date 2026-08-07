@@ -29,7 +29,7 @@ CLASS_CELL_RE = re.compile(r"^(?:[0-5]\b|Class\s+[0-5]\+P\b|Escalate to [0-5]\b)
 # Adopters: this marker list is repo-adapted by design. When your
 # fixtures use local phrasing (name-based triggers, different negation
 # wording), EXTEND this tuple — do not reword your fixtures back to
-# canonical brackets. (Adaptation guidance lives in the agent-guidance
+# canonical brackets. (Adaptation guidance lives in the agent-theory
 # repository's propagate-guidance skill, which is hub-only by design.)
 NEGATIVE_FACT_MARKERS = (
     "no [DOM-5]",
@@ -44,16 +44,38 @@ NEGATIVE_FACT_MARKERS = (
 
 
 def strip_fenced_blocks(text: str) -> str:
-    """Remove fenced code blocks so grammar mimicry inside them is inert."""
-    out, fenced = [], False
+    """Remove fenced blocks so grammar mimicry inside them is inert.
+
+    Tracks the fence character and length: a block closes only on a
+    fence of the same character, at least as long, with no info string,
+    indented at most three spaces (adopted from simplebroker's
+    check-plan-context at pin a38e6a9 — a naive open/close toggle
+    mis-parses a longer fence wrapping a shorter one).
+    """
+    output: list[str] = []
+    fence: tuple[str, int] | None = None
     for line in text.splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith(("```", "~~~")):
-            fenced = not fenced
+        marker: tuple[str, int, str] | None = None
+        leading_spaces = len(line) - len(line.lstrip(" "))
+        stripped = line[leading_spaces:]
+        if leading_spaces <= 3 and stripped.startswith(("```", "~~~")):
+            char = stripped[0]
+            length = len(stripped) - len(stripped.lstrip(char))
+            marker = (char, length, stripped[length:])
+        if fence is None and marker is not None:
+            fence = marker[0], marker[1]
             continue
-        if not fenced:
-            out.append(line)
-    return "\n".join(out)
+        if fence is not None:
+            if (
+                marker is not None
+                and marker[0] == fence[0]
+                and marker[1] >= fence[1]
+                and not marker[2].strip()
+            ):
+                fence = None
+            continue
+        output.append(line)
+    return "\n".join(output)
 
 
 def extract_section(text: str) -> str | None:
@@ -159,10 +181,50 @@ def self_test() -> int:
     for name, mutated in mutations.items():
         if not check(mutated):
             failures.append(f"mutation not caught: {name}")
+    # Fence probes go through extract_section — the real invocation path
+    # that strips fences; calling check() directly would bypass stripping
+    # and pass or fail vacuously.
+    def full_check(text: str) -> list[str]:
+        section = extract_section(text)
+        return ["no section"] if section is None else check(section)
+
     # probe: fenced grammar mimicry must be inert
     fenced = GOOD_SAMPLE + "\n```\n| bogus | 9 |\n```\n"
-    if check(fenced):
+    if full_check(fenced):
         failures.append("fenced-block fixture text was not ignored")
+    # probe: a longer fence wrapping a shorter one must not leak its
+    # interior — a naive open/close toggle closes at the inner fence
+    nested = GOOD_SAMPLE + (
+        "\n````markdown\n```\n"
+        "| Fixture (trigger facts stated) | Class |\n"
+        "|---------|-------|\n"
+        "| nested-fence example | 9 |\n"
+        "````\n"
+    )
+    if full_check(nested):
+        failures.append("nested-fence interior leaked into the fixture table")
+    bogus_table = (
+        "| Fixture (trigger facts stated) | Class |\n"
+        "|---------|-------|\n"
+        "| probe row | 9 |\n"
+    )
+    # probe: tilde fences strip like backtick fences
+    tilde = GOOD_SAMPLE + "\n~~~\n" + bogus_table + "~~~\n"
+    if full_check(tilde):
+        failures.append("tilde-fenced fixture text was not ignored")
+    # probe: a fence closes only on its own character
+    mismatch = GOOD_SAMPLE + "\n```\n~~~\n" + bogus_table + "```\n"
+    if full_check(mismatch):
+        failures.append("mismatched-character line closed a fence early")
+    # probe: a closer carrying an info string does not close
+    info_closer = GOOD_SAMPLE + "\n```\n``` markdown\n" + bogus_table + "```\n"
+    if full_check(info_closer):
+        failures.append("info-string line closed a fence early")
+    # probe: a 4-space-indented fence line is not a fence — the text
+    # after it must stay VISIBLE (this probe asserts non-stripping)
+    indented = GOOD_SAMPLE + "\n    ```\n" + bogus_table + "    ```\n"
+    if not full_check(indented):
+        failures.append("4-space-indented line was wrongly treated as a fence")
     # probe: missing target is an invocation error, not a crash
     if run(["--spec", "/nonexistent/dom15-spec.md"]) != 2:
         failures.append("missing spec file did not exit with invocation-error class")

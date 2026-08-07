@@ -168,6 +168,14 @@ reviewer's job includes checking rule-vs-code, not just rule-vs-intent.
   or names an explicit judgment floor for why the list stays ungated. New
   prose enumerations drift fastest precisely because no existing gate covers
   them yet (see `engineering-principles.md` §12).
+- Writing a gate is not wiring it: every gate names its execution path to
+  CI, or it is the same ungated-convention defect one level up. In this
+  repository gates reach CI through the test suite (for example
+  `tests/test_doc_gates.py`), invoked portably via `sys.executable`. A
+  history-dependent gate (one that resolves commit SHAs or retrieval
+  cues) must either run on full history or detect a shallow clone and
+  skip loudly with a printed reason — silently passing and falsely
+  failing on a shallow clone are both invalid.
 
 ## Anti-Patterns
 

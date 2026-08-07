@@ -25,6 +25,11 @@ authoritative for the plans and unindexed tiers.
 Adopted from agent-guidance @ `e42762c` via retired plan
 2026-07-28-propagate-guidance-delta-wave-plan (source `54fa706`; see
 `docs/plans/README.md`).
+
+On a shallow clone the SHA-resolution and retrieval-cue legs cannot
+be truthful (history is absent), so they are SKIPPED loudly with
+exit 0 — a false BROKEN is as invalid as a silent pass. Enforcement
+requires full history. (Adopted from agent-theory @ 0423923.)
 """
 
 from __future__ import annotations
@@ -210,7 +215,25 @@ def main() -> int:
         print("coalesce-check: no docs/coalescing.md — nothing to check")
         return 0
     text = STATE.read_text()
+
+    if git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+        # History-dependent legs cannot be truthful here; skip loudly.
+        # (Adopted from agent-theory @ 0423923 — scaffold contract
+        # change: was false BROKEN/exit 1 on shallow clones.)
+        cues = sorted(set(CUE_RE.findall(text)))
+        print("coalesce-check: shallow clone detected — SHA-resolution and "
+              "retrieval-cue checks SKIPPED (history absent; cues cannot be "
+              "verified here). Enforcement requires full history "
+              "(fetch-depth: 0).")
+        print(f"  retrieval cues found (syntax only, unverified here): {len(cues)}")
+        print(f"  lessons dated entries: {count_lesson_entries()}")
+        return 0
+
     cues = sorted(set(CUE_RE.findall(text)))
+    # Known limitation (hub lessons 2026-08-07): the ancestry check
+    # hardcodes origin/main; a consumer with a different default branch
+    # gets false local-only-pin reports. Fix candidate: resolve the
+    # default via origin/HEAD, falling back to origin/main.
     remote_ok = (
         git("rev-parse", "--verify", "origin/HEAD").returncode == 0
         or git("rev-parse", "--verify", "origin/main").returncode == 0
