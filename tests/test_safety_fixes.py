@@ -10,6 +10,10 @@ Tests verify:
 """
 
 import multiprocessing
+import time
+from multiprocessing.connection import Connection
+from multiprocessing.process import BaseProcess
+from pathlib import Path
 
 import pytest
 
@@ -196,29 +200,130 @@ def test_broadcast_size_utf8(workdir):
     assert "exceeds maximum size" in err
 
 
-def write_messages_subprocess(process_id, workdir):
-    """Write messages using the broker CLI from a subprocess."""
-    errors = []
+def write_messages_subprocess(
+    process_id: int,
+    workdir: Path,
+) -> tuple[list[str], list[str]]:
+    """Write messages through one independent broker process."""
     messages_written = []
+    db_path = workdir / ".broker.db"
 
-    for i in range(20):
-        msg = f"process_{process_id}_msg_{i}"
-        rc, _, err = run_cli("write", f"queue_{process_id}", msg, cwd=workdir)
-        if rc == 0:
+    with BrokerDB(str(db_path)) as broker:
+        for i in range(20):
+            msg = f"process_{process_id}_msg_{i}"
+            broker.write(f"queue_{process_id}", msg)
             messages_written.append(msg)
-        else:
-            errors.append(f"Message {i}: {err}")
 
-    return messages_written, errors
+    return messages_written, []
 
 
+def _timestamp_writer(
+    process_id: int,
+    workdir: Path,
+    result_pipe: Connection,
+) -> None:
+    """Publish one spawned writer's result without a pool shutdown signal."""
+    try:
+        result_pipe.send(write_messages_subprocess(process_id, workdir))
+    finally:
+        result_pipe.close()
+
+
+def _stop_timestamp_writers(processes: list[BaseProcess]) -> list[str]:
+    """Kill stuck coverage children without invoking their SIGTERM handlers."""
+    for process in processes:
+        if process.is_alive():
+            process.kill()
+    for process in processes:
+        if process.pid is not None:
+            process.join(timeout=scale_timeout_for_ci(2.0))
+    return [process.name for process in processes if process.is_alive()]
+
+
+def _run_timestamp_writers(
+    workdir: Path,
+) -> tuple[
+    list[tuple[list[str], list[str]]],
+    list[str],
+    list[str],
+    list[int | None],
+]:
+    """Run independent writers with bounded process and result cleanup."""
+    ctx = multiprocessing.get_context("spawn")
+    processes: list[BaseProcess] = []
+    receivers: list[Connection] = []
+    senders: list[Connection] = []
+
+    for process_id in range(5):
+        receiver, sender = ctx.Pipe(duplex=False)
+        spawned_process = ctx.Process(
+            target=_timestamp_writer,
+            args=(process_id, workdir, sender),
+            name=f"timestamp-writer-{process_id}",
+        )
+        processes.append(spawned_process)
+        receivers.append(receiver)
+        senders.append(sender)
+
+    active_at_deadline: list[str] = []
+    results: list[tuple[list[str], list[str]]] = []
+    cleanup_survivors: list[str] = []
+    try:
+        for process, sender in zip(processes, senders, strict=True):
+            process.start()
+            sender.close()
+
+        deadline = time.monotonic() + scale_timeout_for_ci(60.0)
+        while active := [process for process in processes if process.is_alive()]:
+            if time.monotonic() >= deadline:
+                active_at_deadline = [process.name for process in active]
+                break
+            for process in active:
+                process.join(timeout=0.01)
+    finally:
+        cleanup_survivors = _stop_timestamp_writers(processes)
+        for sender in senders:
+            sender.close()
+        for process, receiver in zip(processes, receivers, strict=True):
+            try:
+                if receiver.poll():
+                    results.append(receiver.recv())
+                else:
+                    results.append(([], [f"{process.name} returned no result"]))
+            finally:
+                receiver.close()
+
+    return (
+        results,
+        active_at_deadline,
+        cleanup_survivors,
+        [process.exitcode for process in processes],
+    )
+
+
+@pytest.mark.xdist_group(name="sqlite_process_stress")
+@pytest.mark.sqlite_only
 def test_timestamp_uniqueness_across_instances(workdir):
-    """Test that timestamps are unique even across multiple broker CLI instances."""
-    # Run multiple subprocesses, each calling the broker CLI
-    with multiprocessing.Pool(processes=5) as pool:
-        # Create args for each subprocess: (process_id, workdir)
-        args = [(i, workdir) for i in range(5)]
-        results = pool.starmap(write_messages_subprocess, args)
+    """Test timestamp uniqueness across independent broker processes."""
+    # Spawn rather than fork so an xdist worker's control descriptors and
+    # coverage state are not inherited. Each process keeps one real BrokerDB
+    # open instead of starting 20 nested CLI interpreters. Successful workers
+    # exit normally; only a deadline failure uses kill(), which bypasses the
+    # coverage SIGTERM handler that caused the original shutdown deadlock.
+    (
+        results,
+        active_at_deadline,
+        cleanup_survivors,
+        writer_exitcodes,
+    ) = _run_timestamp_writers(workdir)
+
+    assert not active_at_deadline, (
+        f"timestamp writers exceeded the bounded runtime: {active_at_deadline}"
+    )
+    assert not cleanup_survivors, f"writer cleanup failed: {cleanup_survivors}"
+    assert writer_exitcodes == [0] * 5, (
+        f"timestamp writers exited unsuccessfully: {writer_exitcodes}"
+    )
 
     # Collect results
     all_messages = {}

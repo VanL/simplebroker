@@ -7,7 +7,6 @@ import os
 import sqlite3
 import tempfile
 import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -311,29 +310,29 @@ class TestSQLiteRunnerErrorHandling:
         owner_began = threading.Event()
         request_owner_commit = threading.Event()
         owner_committed = threading.Event()
-        contender_at_connection = threading.Event()
-        release_contender = threading.Event()
+        contender_waiting_for_admission = threading.Event()
         start_barrier = threading.Barrier(3)
         errors: list[Exception] = []
-        owner_commit_latency: list[float] = []
 
         class CoordinatedSQLiteRunner(SQLiteRunner):
             contender_ident: int | None = None
 
-            def get_connection(self) -> sqlite3.Connection:
-                connection = super().get_connection()
+            def _wait_for_transaction_state(
+                self,
+                *,
+                operation: str,
+                predicate: Callable[[], bool],
+            ) -> None:
                 if (
                     self.contender_ident == threading.get_ident()
-                    and owner_began.is_set()
-                    and not release_contender.is_set()
+                    and operation == "begin_immediate"
+                    and not predicate()
                 ):
-                    # On the broken implementation begin_immediate() reaches
-                    # this seam while holding _operation_lock. Releasing this
-                    # wait sends the real connection into SQLite's busy wait.
-                    contender_at_connection.set()
-                    if not release_contender.wait(timeout=scale_timeout_for_ci(3.0)):
-                        raise TimeoutError("contender coordination timed out")
-                return connection
+                    contender_waiting_for_admission.set()
+                super()._wait_for_transaction_state(
+                    operation=operation,
+                    predicate=predicate,
+                )
 
         runner = CoordinatedSQLiteRunner(
             str(tmp_path / "shared-runner-owner-progress.db"),
@@ -357,9 +356,7 @@ class TestSQLiteRunnerErrorHandling:
             owner_began.set()
             if not request_owner_commit.wait(timeout=scale_timeout_for_ci(3.0)):
                 raise TimeoutError("owner commit was not requested")
-            started = time.monotonic()
             runner.commit()
-            owner_commit_latency.append(time.monotonic() - started)
             owner_committed.set()
 
         def contender_work() -> None:
@@ -386,34 +383,33 @@ class TestSQLiteRunnerErrorHandling:
             start_barrier.wait(timeout=scale_timeout_for_ci(3.0))
             assert owner_began.wait(timeout=scale_timeout_for_ci(3.0))
 
-            # Broken path: observe that the contender reached get_connection()
-            # under _operation_lock, request the owner's commit, then let the
-            # contender enter real SQLite. Fixed path: admission keeps the
-            # contender above get_connection(), so the release is a no-op and
-            # the owner commits directly.
-            contender_at_connection.wait(timeout=scale_timeout_for_ci(0.25))
-            request_owner_commit.set()
-            release_contender.set()
-
-            owner_made_bounded_progress = owner_committed.wait(
-                timeout=scale_timeout_for_ci(0.5)
+            # Observe the invariant directly instead of inferring it from how
+            # quickly Windows schedules the owner. The contender must wait in
+            # transaction admission while _operation_lock remains available
+            # to the owner. A regression that moves admission under that lock
+            # makes this non-blocking acquisition fail deterministically.
+            assert contender_waiting_for_admission.wait(
+                timeout=scale_timeout_for_ci(10.0)
             )
-        finally:
-            release_contender.set()
+            operation_lock_was_available = runner._operation_lock.acquire(
+                blocking=False
+            )
+            assert operation_lock_was_available, (
+                "transaction contender held _operation_lock while waiting for admission"
+            )
+            runner._operation_lock.release()
+
             request_owner_commit.set()
-            owner_thread.join(timeout=scale_timeout_for_ci(4.0))
-            contender_thread.join(timeout=scale_timeout_for_ci(4.0))
+            assert owner_committed.wait(timeout=scale_timeout_for_ci(10.0))
+        finally:
+            request_owner_commit.set()
+            owner_thread.join(timeout=scale_timeout_for_ci(10.0))
+            contender_thread.join(timeout=scale_timeout_for_ci(10.0))
             runner.close()
 
         assert not owner_thread.is_alive()
         assert not contender_thread.is_alive()
-        assert owner_made_bounded_progress, (
-            "transaction owner could not commit before the contender's "
-            "SQLite busy timeout"
-        )
         assert errors == []
-        assert len(owner_commit_latency) == 1
-        assert owner_commit_latency[0] < scale_timeout_for_ci(0.5)
 
     def test_shared_runner_owner_rolls_back_before_three_contenders_enter(
         self,

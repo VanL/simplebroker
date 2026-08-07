@@ -362,6 +362,15 @@ acceptable to make the final handoff between the observable â€œabout to executeâ
 phase and SQLite's internal busy wait high-confidence; the real SQLite lock
 must remain load-bearing.
 
+2026-08-07 evidence amendment: the controlled real-SQLite interleaving below
+remains the historical red proof for the original implementation. The repaired
+implementation is now guarded by a stronger direct invariant instead of the
+short owner-progress timing assertion: after the contender is observed waiting
+in transaction admission, the test must acquire `_operation_lock`
+non-blockingly. Reversing admission and `_operation_lock` acquisition makes
+that check fail without depending on OS thread scheduling. Real owner commit,
+contender completion, bounded joins, and error capture remain load-bearing.
+
 Done signal:
 
 - one targeted command fails on the baseline with the owner/contender
@@ -790,6 +799,7 @@ Append evidence during implementation. Do not record transient worktree state.
 | 2026-07-30 | T5 contract and rationale | Updated README, `SQLRunner` docstring, process-session ownership rationale, state-machine map, reactor guidance, CHANGELOG, and suppression-registry line references. | One documented model: transaction progress is runner policy; deliberately shared SQLite reads and writes serialize behind the active owner. |
 | 2026-07-30 | Local final gates | `uv run pytest` -> `2308 passed, 17 skipped`; `uv run ruff check .`; production mypy partition -> 60 files clean; reference-reactor mypy -> 42 files clean; DOM-15 fixture, Ruff policy, state-machine policy/table, coalescing, and `git diff --check` all passed. | PostgreSQL/Redis service integration, ordinary CI, and five post-commit coverage workflow runs remain landing gates because this implementation is not yet committed or pushed. |
 | 2026-07-30 | Independent implementation review | Claude returned `no blocker`; F1/F2 were accepted and fixed, F3's optional preflight removal was declined against Task 4, and focused round-2 verification returned `PASS`. | No unresolved implementation-review finding. |
+| 2026-08-07 | Post-release-gate test-proof correction | GitHub Test run `31198663672` failed only on Windows 3.13 when the owner thread was not scheduled within the old one-second CI-scaled progress window; Windows 3.11, 3.12, and 3.14 passed. The test now observes the contender inside `_wait_for_transaction_state()` and checks `_operation_lock` availability directly. | Classified as a test-synchronization fault, not an application lock-order failure. Exact test passed 50 consecutive CI-scaled local runs, the full runner error-handling module passed, and independent review found the structural proof sound; the historical timing assertion above is superseded by this amendment. |
 
 ## Fresh-Eyes Review
 

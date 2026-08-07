@@ -13,12 +13,12 @@ diagnostic, and exit semantics remain defined. The round-2 owner amendments (no 
 unaffected; asynchronous release mechanism retained) continue to outrank
 conflicting older text.
 Status: active — initial implementation landed in `a38e6a9`; CI remediation
-and release-gate passes are recorded below. The final blocker (conflicting durable
-lesson) was corrected in place, and the
-owner's implementation direction authorized A, E, I, and J (B is reduced to
-documentation in J; C/D/F/G/H are deferred and severed). The plan remains
-active: no release tag, publication, or K0/K release execution occurred in
-this pass. Unit E's revision-5 destructive contract
+and three release-gate stops are recorded below. The final blocker (conflicting
+durable lesson) was corrected in place, and the owner's implementation direction
+authorized A, E, I, and J (B is reduced to documentation in J; C/D/F/G/H are
+deferred and severed). The plan remains active: every release attempt stopped
+before tags, so no publication occurred and a fresh complete K pass is still
+required. Unit E's revision-5 destructive contract
 passed the recorded focused primary, interface, and independent lifecycle
 re-reviews below.
 Class: 5 — [DOM-6] fires: normative deltas to `docs/specs/10-cli.md`
@@ -1201,6 +1201,71 @@ generic collection hook, own backend-valid selection; user `-m` filters remain
 AND-composed and cannot re-admit SQLite-only tests; explicit extension routing
 is unchanged; and the normal/fast help and command tests cover the expression
 variants.
+
+### Third release-gate attempt and bounded process tests (2026-08-07)
+
+`bin/release.py all` next ran from committed SHA `9a1f11ed`. The complete local
+root, benchmark, PostgreSQL, Redis, examples, lint, type, lock, build, and clean
+wheel-install gates passed. The helper pushed that exact SHA and waited for
+[Test run `31198663672`](https://github.com/VanL/simplebroker/actions/runs/31198663672),
+[PostgreSQL run `31198663438`](https://github.com/VanL/simplebroker/actions/runs/31198663438),
+and [Redis run `31198663202`](https://github.com/VanL/simplebroker/actions/runs/31198663202).
+Both backend workflows passed. In Test, all ordinary Linux/macOS jobs, both
+backend coverage jobs, Windows 3.11, Windows 3.12, and Windows 3.14 passed.
+
+Windows 3.13 failed only
+`test_shared_runner_transaction_owner_reaches_commit_before_busy_timeout`.
+The old test inferred the runner's lock-order invariant from whether Windows
+scheduled the owner within a one-second CI-scaled window. The threads later
+completed cleanly with no runner error. The test now observes the contender
+inside transaction admission and directly verifies that `_operation_lock` is
+nonblockingly available before requesting the real owner commit. Reversing the
+production ordering makes that structural check fail deterministically; OS
+scheduling is no longer the correctness oracle. The exact test passed 50
+consecutive CI-scaled runs and its full module passed. Independent review found
+the code proof sound and required the historical runner-plan amendment recorded
+above before landing.
+
+The same Test workflow's Linux coverage job reached 99% in about seven minutes,
+then remained alive until its 45-minute job cap with two uncompleted nodes:
+`test_timestamp_uniqueness_across_instances` and
+`test_checkpoint_reader_sees_every_message`. The first nested a fork-based pool
+around 100 coverage-instrumented CLI interpreters. The second started 16 spawned
+writers behind a barrier and polled them without a parent deadline or descendant
+cleanup. A local exact coverage/xdist reproduction hung in the first test.
+Process sampling and the interrupted traceback proved the mechanism:
+`multiprocessing.Pool.__exit__` sent SIGTERM after successful work, and
+coverage.py's SIGTERM handler re-entered `coverage.stop()` while its
+`sys.monitoring` lock was held. The parent waited in `waitpid`, while the child
+could not exit.
+
+The timestamp proof now uses five explicit spawned, long-lived, independent
+`BrokerDB` processes with one-way result pipes. Successful children exit
+normally; a bounded deadline directly kills a stuck child without invoking
+coverage's SIGTERM handler. Both process-heavy tests share one xdist group. The visibility proof now
+pre-creates its database, includes the parent in a bounded start barrier, has a
+bounded writer deadline, yields during polling on small runners, and always
+terminates/joins descendants on failure. The real multi-process writes,
+checkpoint polling, exact message set, exit codes, and timestamp uniqueness
+remain load-bearing. The exact two-node coverage/xdist shape first reproduced
+the hang, then completed in 4.7 seconds and passed ten consecutive repetitions.
+The complete Linux coverage workflow shape then completed all 2,624 collected
+nodes in 63.71 seconds (`2606 passed, 18 skipped`) with the same 16-worker
+load-group scheduling, subprocess coverage, and timeout policy as CI.
+
+The helper observed the failed Test workflow and refused publication. Local and
+remote checks again found no `simplebroker_pg/v3.5.1`,
+`simplebroker_redis/v3.5.1`, or `v6.0.2` tag. A fourth committed SHA and fresh
+complete release pass remain required; no failed workflow will be reused as
+release evidence.
+
+Independent final CI-remediation review: **PASS after one P1 and one P2
+correction.** The P1 replaced the timestamp pool's unbounded exceptional join
+with explicit spawned workers, a hard deadline, direct kill, bounded joins, and
+closed result pipes. The P2 narrowed the durable barrier lesson to tests whose
+contract depends on simultaneous admission. The reviewer confirmed the runner
+lock proof, both process-test invariants, failure classifications, cleanup
+bounds, xdist grouping, and release-stop evidence.
 
 ## Out of Scope
 

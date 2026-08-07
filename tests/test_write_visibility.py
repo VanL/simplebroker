@@ -16,9 +16,12 @@ Two tests pin the fix from opposite directions:
 """
 
 import multiprocessing
-from collections.abc import Iterator
+import threading
+import time
+from collections.abc import Callable, Iterator, Sequence
+from multiprocessing.process import BaseProcess
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -26,37 +29,98 @@ from simplebroker import Queue
 from simplebroker.db import BrokerCore
 
 from .helper_scripts.broker_factory import active_backend
+from .helper_scripts.timing import scale_timeout_for_ci
 
 NUM_WRITERS = 16
 MESSAGES_PER_WRITER = 40
 
 
-def _writer_proc(db_path: str, writer_id: int, barrier) -> None:
+def _writer_proc(
+    db_path: str,
+    writer_id: int,
+    barrier: Any,
+    barrier_timeout: float,
+) -> None:
     """Module-level so it pickles under the spawn start method."""
-    q = Queue("race", db_path=db_path)
-    barrier.wait()
-    for i in range(MESSAGES_PER_WRITER):
-        q.write(f"w{writer_id}-{i}")
-    q.close()
+    with Queue("race", db_path=db_path) as q:
+        barrier.wait(timeout=barrier_timeout)
+        for i in range(MESSAGES_PER_WRITER):
+            q.write(f"w{writer_id}-{i}")
 
 
-@pytest.mark.xdist_group(name="write_visibility")
+def _run_visibility_writers(
+    processes: Sequence[BaseProcess],
+    *,
+    barrier: Any,
+    barrier_timeout: float,
+    drain: Callable[[], None],
+) -> tuple[list[str], list[int | None]]:
+    """Run the synchronized writer phase and return timeout/exit diagnostics."""
+
+    for process in processes:
+        process.start()
+
+    try:
+        barrier.wait(timeout=barrier_timeout)
+    except threading.BrokenBarrierError as exc:
+        states = {process.name: process.exitcode for process in processes}
+        raise AssertionError(
+            f"writers did not reach the start barrier: {states}"
+        ) from exc
+
+    active_at_deadline: list[str] = []
+    deadline = time.monotonic() + scale_timeout_for_ci(60.0)
+    while active := [process for process in processes if process.is_alive()]:
+        if time.monotonic() >= deadline:
+            active_at_deadline = [process.name for process in active]
+            break
+        drain()
+        time.sleep(0.001)
+
+    if not active_at_deadline:
+        for _ in range(5):
+            drain()
+
+    for process in processes:
+        process.join(timeout=scale_timeout_for_ci(1.0))
+    return active_at_deadline, [process.exitcode for process in processes]
+
+
+def _stop_visibility_writers(processes: Sequence[BaseProcess]) -> list[str]:
+    """Bound cleanup and return any child that survived terminate and kill."""
+
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+    for process in processes:
+        process.join(timeout=scale_timeout_for_ci(2.0))
+    for process in processes:
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=scale_timeout_for_ci(2.0))
+    return [process.name for process in processes if process.is_alive()]
+
+
+@pytest.mark.xdist_group(name="sqlite_process_stress")
 @pytest.mark.sqlite_only
 def test_checkpoint_reader_sees_every_message(tmp_path: Path) -> None:
     """A checkpoint reader polling during concurrent writes misses nothing."""
     db_path = str(tmp_path / "race.db")
     ctx = multiprocessing.get_context("spawn")
-    barrier = ctx.Barrier(NUM_WRITERS)
+    barrier_timeout = scale_timeout_for_ci(20.0)
+    barrier = ctx.Barrier(NUM_WRITERS + 1)
     procs = [
-        ctx.Process(target=_writer_proc, args=(db_path, wid, barrier))
+        ctx.Process(
+            target=_writer_proc,
+            args=(db_path, wid, barrier, barrier_timeout),
+            name=f"visibility-writer-{wid}",
+        )
         for wid in range(NUM_WRITERS)
     ]
-    for p in procs:
-        p.start()
-
     reader = Queue("race", db_path=db_path)
     seen: set[str] = set()
     checkpoint = 0
+    cleanup_survivors: list[str] = []
 
     def drain() -> None:
         nonlocal checkpoint
@@ -70,26 +134,33 @@ def test_checkpoint_reader_sees_every_message(tmp_path: Path) -> None:
             seen.add(body)
             checkpoint = max(checkpoint, ts)
 
-    # Poll aggressively WHILE writers run: pre-fix, the skip only happens
-    # when the reader observes a higher committed ts during another
-    # writer's allocate->insert window.
-    while any(p.is_alive() for p in procs):
-        drain()
-    for p in procs:
-        p.join(timeout=60)
-        assert p.exitcode == 0, f"writer crashed with exit code {p.exitcode}"
+    try:
+        # Poll aggressively WHILE writers run: pre-fix, the skip only happens
+        # when the reader observes a higher committed ts during another
+        # writer's allocate->insert window. Yield briefly so this polling
+        # process cannot starve writers on a small CI runner.
+        writers_active_at_deadline, writer_exitcodes = _run_visibility_writers(
+            procs,
+            barrier=barrier,
+            barrier_timeout=barrier_timeout,
+            drain=drain,
+        )
+    finally:
+        cleanup_survivors = _stop_visibility_writers(procs)
+        reader.close()
 
-    # Final settled drains, still via the checkpoint pattern: a message
-    # skipped by the checkpoint stays invisible forever, which is exactly
-    # the bug.
-    for _ in range(5):
-        drain()
+    assert not cleanup_survivors, f"writer cleanup failed: {cleanup_survivors}"
+    assert not writers_active_at_deadline, (
+        f"writers exceeded the bounded runtime: {writers_active_at_deadline}"
+    )
+    assert writer_exitcodes == [0] * NUM_WRITERS, (
+        f"writers exited unsuccessfully: {writer_exitcodes}"
+    )
 
     expected = {
         f"w{wid}-{i}" for wid in range(NUM_WRITERS) for i in range(MESSAGES_PER_WRITER)
     }
     missing = expected - seen
-    reader.close()
     assert not missing, (
         f"checkpoint reader permanently skipped {len(missing)} message(s), "
         f"e.g. {sorted(missing)[:5]}"

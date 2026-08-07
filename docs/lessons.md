@@ -95,6 +95,21 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-07: `multiprocessing.Pool`'s context manager terminates workers even
+  after successful work. With coverage subprocess tracing and SIGTERM saving,
+  that signal can re-enter `coverage.stop()` while its monitoring lock is held,
+  leaving the parent in `waitpid` and defeating the outer pytest timeout. On a
+  successful process test, use spawn and let workers exit normally; keep a
+  separate bounded direct-kill path for failure so coverage's SIGTERM handler
+  is not invoked. Multi-process tests need an overall deadline, descendant
+  cleanup, and an xdist group that prevents overlapping process storms; when
+  the contract depends on simultaneous admission, add a parent-owned ready
+  barrier as well. (Release gate run `31198663672`.)
+- 2026-08-07: A concurrency test should assert the synchronization state it
+  owns, not OS scheduling speed. To prove that a transaction contender cannot
+  block its owner, observe the contender in admission and directly check the
+  owner's lock is available. Keep wall-clock limits only as deadlock safety
+  valves. (Release gate run `31198663672`.)
 - 2026-08-07: Pytest markers inherited from a module and added to a function
   are cumulative, not overrides. A function marked `sqlite_only` inside a
   `shared` module still matches `-m shared`. Backend wrappers must state the
