@@ -12,13 +12,12 @@ explicitly undefined per SQLite upstream. The CLI's deletion-attempt,
 diagnostic, and exit semantics remain defined. The round-2 owner amendments (no fractional bounds; Weft
 unaffected; asynchronous release mechanism retained) continue to outrank
 conflicting older text.
-Status: active — initial implementation landed in `a38e6a9`; CI remediation
-and three release-gate stops are recorded below. The final blocker (conflicting
-durable lesson) was corrected in place, and the owner's implementation direction
-authorized A, E, I, and J (B is reduced to documentation in J; C/D/F/G/H are
-deferred and severed). The plan remains active: every release attempt stopped
-before tags, so no publication occurred and a fresh complete K pass is still
-required. Unit E's revision-5 destructive contract
+Status: completed — release SHA `fb2e6ba7` passed the complete local and
+exact-SHA CI gates, then published simplebroker 6.0.2, simplebroker-pg 3.5.1,
+and simplebroker-redis 3.5.1. Post-publish installs, metadata floors, Weft
+retained-form compatibility, and the possession probe passed. A, E, I, and J
+landed (B is documentation in J); C/D/F/G/H remain deferred with the registered
+reopen conditions. Unit E's revision-5 destructive contract
 passed the recorded focused primary, interface, and independent lifecycle
 re-reviews below.
 Class: 5 — [DOM-6] fires: normative deltas to `docs/specs/10-cli.md`
@@ -1266,6 +1265,179 @@ closed result pipes. The P2 narrowed the durable barrier lesson to tests whose
 contract depends on simultaneous admission. The reviewer confirmed the runner
 lock proof, both process-test invariants, failure classifications, cleanup
 bounds, xdist grouping, and release-stop evidence.
+
+### Successful fourth release and closeout (2026-08-07)
+
+Commit `fb2e6ba78c072b7c533a8111f60aebb16e560e4c` was the single green release
+SHA. `bin/release.py all` passed the complete local gate: root 2,606 passed with
+18 expected skips; 14 benchmarks passed; PostgreSQL shared/extension suites
+passed 1,117/175 with eight expected skips; Redis shared/extension suites
+passed 1,109/246 with twelve expected skips; 118 example tests passed; shell,
+Ruff, format, every mypy partition, lock, build, and clean Python 3.11 wheel
+smoke gates passed.
+
+Fresh exact-SHA workflows were terminal green before any tag was pushed:
+
+- [Test `31204027929`](https://github.com/VanL/simplebroker/actions/runs/31204027929),
+  including Windows 3.11, 3.12, 3.13, and 3.14 plus Linux, PostgreSQL, and Redis
+  coverage. The Linux coverage job that previously timed out passed.
+- [Test Postgres Extension `31204027499`](https://github.com/VanL/simplebroker/actions/runs/31204027499).
+- [Test Redis Extension `31204027509`](https://github.com/VanL/simplebroker/actions/runs/31204027509).
+
+The SQLite, PostgreSQL, and Redis Python 3.13 finalization-probe steps are
+visible in those runs and each concluded success. The driver then pushed the
+immutable tags in the required order: `simplebroker_pg/v3.5.1`,
+`simplebroker_redis/v3.5.1`, and `v6.0.2`. All resolve remotely to the exact
+release SHA. Their independently completing publication workflows passed:
+
+- [simplebroker-pg release `31206334165`](https://github.com/VanL/simplebroker/actions/runs/31206334165)
+- [simplebroker-redis release `31206340128`](https://github.com/VanL/simplebroker/actions/runs/31206340128)
+- [simplebroker release `31206341250`](https://github.com/VanL/simplebroker/actions/runs/31206341250)
+
+PyPI clean-index installs in three new Python 3.11 environments passed for
+`simplebroker==6.0.2`, `simplebroker[pg]==6.0.2`, and
+`simplebroker[redis]==6.0.2`; imports resolved from each environment's
+`site-packages`, not this checkout. Installed metadata pins the extension
+floors at 3.5.1 and each extension's core floor at 6.0.2. The published core
+validator rejected representative bare, suffixed, and ISO fractional forms
+with the documented integral-second and integer-ms/ns guidance.
+
+Literal public-index evidence (commands ran with import checks from `/tmp`,
+outside the SimpleBroker checkout; observed `SMOKE_ROOT` was
+`/var/folders/m_/2tncpj593tj8s_jdbdhj8g5m0000gn/T/tmp.VSSW7Ibh1v`):
+
+```bash
+SMOKE_ROOT=$(mktemp -d)
+uv venv --python 3.11 "$SMOKE_ROOT/core"
+uv pip install --refresh --python "$SMOKE_ROOT/core/bin/python" 'simplebroker==6.0.2'
+uv venv --python 3.11 "$SMOKE_ROOT/pg"
+uv pip install --refresh --python "$SMOKE_ROOT/pg/bin/python" 'simplebroker[pg]==6.0.2'
+uv venv --python 3.11 "$SMOKE_ROOT/redis"
+uv pip install --refresh --python "$SMOKE_ROOT/redis/bin/python" 'simplebroker[redis]==6.0.2'
+(
+  cd /tmp
+  "$SMOKE_ROOT/core/bin/python" -c \
+    "from importlib.metadata import version; import simplebroker; assert version('simplebroker') == '6.0.2'; assert 'site-packages' in simplebroker.__file__; print('core', version('simplebroker'), simplebroker.__file__)"
+  "$SMOKE_ROOT/pg/bin/python" -c \
+    "from importlib.metadata import version; import simplebroker; from simplebroker.ext import get_backend_plugin; assert version('simplebroker') == '6.0.2'; assert version('simplebroker-pg') == '3.5.1'; assert 'site-packages' in simplebroker.__file__; assert get_backend_plugin('postgres').name == 'postgres'; print('pg', version('simplebroker'), version('simplebroker-pg'), simplebroker.__file__)"
+  "$SMOKE_ROOT/redis/bin/python" -c \
+    "from importlib.metadata import version; import simplebroker; from simplebroker.ext import get_backend_plugin; assert version('simplebroker') == '6.0.2'; assert version('simplebroker-redis') == '3.5.1'; assert 'site-packages' in simplebroker.__file__; assert get_backend_plugin('redis').name == 'redis'; print('redis', version('simplebroker'), version('simplebroker-redis'), simplebroker.__file__)"
+)
+```
+
+Each environment then ran `python -c` assertions for
+`importlib.metadata.version`, a `site-packages` module path, and (for each
+extension) `get_backend_plugin()`. Observed output was `core 6.0.2`,
+`pg 6.0.2 3.5.1`, and `redis 6.0.2 3.5.1`. Further
+`metadata().get_all("Requires-Dist")` assertions observed core floors
+`simplebroker-pg>=3.5.1`/`simplebroker-redis>=3.5.1` and extension floors
+`simplebroker>=6.0.2`. The core interpreter also ran:
+
+```bash
+(
+  cd /tmp
+  "$SMOKE_ROOT/core/bin/python" - <<'PY'
+from simplebroker.ext import TimestampError, TimestampGenerator
+
+for form in ("1705329000.5", "1.5ms", "2024-01-15T14:30:00.5Z"):
+    try:
+        TimestampGenerator.validate(form)
+    except TimestampError as exc:
+        message = str(exc)
+        assert "integral seconds" in message
+        assert "integer ms" in message
+        assert "integer ns" in message
+    else:
+        raise AssertionError(f"published validator accepted {form}")
+PY
+)
+```
+
+The literal three-form matrix observed
+`TimestampError` plus `integral seconds`, `integer ms`, and `integer ns` in
+every diagnostic.
+
+The public GitHub Releases are immutable, non-draft, and target the release
+SHA: [simplebroker 6.0.2](https://github.com/VanL/simplebroker/releases/tag/v6.0.2),
+[simplebroker-pg 3.5.1](https://github.com/VanL/simplebroker/releases/tag/simplebroker_pg/v3.5.1),
+and [simplebroker-redis 3.5.1](https://github.com/VanL/simplebroker/releases/tag/simplebroker_redis/v3.5.1).
+
+The deferred downstream check used a clean detached clone of Weft commit
+`5ea1f2e4a9d1e1d685fd558eb01324afb0e57ebf` (empty `git status --short`) and
+overlaid published `simplebroker==6.0.2`, not the local SimpleBroker source tree.
+The successful invocations were:
+
+```bash
+WEFT_ROOT=$(mktemp -d)
+git clone --quiet --shared --no-checkout /Users/van/Developer/weft "$WEFT_ROOT/weft"
+git -C "$WEFT_ROOT/weft" checkout --quiet --detach 5ea1f2e4a9d1e1d685fd558eb01324afb0e57ebf
+(
+  cd "$WEFT_ROOT/weft"
+  uv run --project . --with 'simplebroker==6.0.2' python - <<'PY'
+from importlib.metadata import version
+from tempfile import TemporaryDirectory
+
+import simplebroker
+from weft.commands.queue import move_command
+
+assert version("simplebroker") == "6.0.2"
+assert "site-packages" in simplebroker.__file__, simplebroker.__file__
+forms = (
+    "1705329000",
+    "1705329000s",
+    "1705329000500ms",
+    "1705329000500000000ns",
+    "2024-01-15T14:30:00+05:00",
+    "1837025672140161024",
+)
+with TemporaryDirectory() as root:
+    for bound in ("after", "before"):
+        for form in forms:
+            result = move_command(
+                "retained.source",
+                "retained.destination",
+                limit=1,
+                spec_context=root,
+                **{bound: form},
+            )
+            assert result == (2, "", ""), (bound, form, result)
+print(simplebroker.__file__)
+print(
+    f"weft retained-form smoke: {len(forms) * 2} cases with "
+    f"simplebroker {version('simplebroker')}"
+)
+PY
+)
+(
+  cd "$WEFT_ROOT/weft"
+  uv run --project . --extra dev --with 'simplebroker==6.0.2' pytest -q -n0 \
+    tests/cli/test_cli_queue.py::test_queue_read_after_and_before_filters \
+    tests/commands/test_queue.py::test_queue_command_filter_validation_matches_simplebroker \
+    tests/architecture/test_import_boundaries.py::test_weft_uses_only_supported_simplebroker_surfaces
+)
+```
+
+The stdin Python matrix called Weft's `move_command(limit=1)` for both `after`
+and `before` with `1705329000`, `1705329000s`, `1705329000500ms`,
+`1705329000500000000ns`, `2024-01-15T14:30:00+05:00`, and
+`1837025672140161024`. Its direct
+`TimestampGenerator.validate()` path passed 12 `after`/`before` cases covering
+integral seconds, `s`, `ms`, `ns`, ISO-with-offset, and native hybrid-ID forms;
+observed output was `weft retained-form smoke: 12 cases with simplebroker
+6.0.2`; the preceding path was
+`/Users/van/.cache/uv/archive-v0/edMVn9Islbp9a5Px/lib/python3.14/site-packages/simplebroker/__init__.py`.
+The existing Weft range-filter, SimpleBroker-validation delegation,
+and public-surface invocation then passed (`3 passed`).
+
+Possession probe: **Should SimpleBroker add automatic Redis cluster membership
+and failover? No.** [THEORY-2] assigns service topology, replication,
+availability, and recovery to the optional backend; [THEORY-5] explicitly
+excludes cluster membership; [ALT-THEORY-001] says to use ownership rather than
+host count as the boundary. SimpleBroker may expose backend configuration and
+truthful queue-operation errors, but taking over membership/failover would be a
+category error and would reopen the theory boundary. The probe was answered
+from ownership before considering how many hosts are involved, so possession
+is intact.
 
 ## Out of Scope
 
