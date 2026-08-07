@@ -645,6 +645,63 @@ def test_coverage_jobs_bound_hangs_and_report_the_active_test() -> None:
         assert "--max-worker-restart=0" in step
 
 
+def test_matrix_jobs_fail_closed_on_worker_loss() -> None:
+    workflow_text = _workflow_text("test.yml")
+    matrix_job = workflow_text.split("  test:", 1)[1].split("  lint:", 1)[0]
+    job_header = matrix_job.split("    steps:", 1)[0]
+
+    assert "    timeout-minutes: 45" in job_header
+
+    for step_name in (
+        "Run tests with pytest",
+        "Run Windows tests with pytest",
+        "Run phaselock fallback-path gate",
+    ):
+        step = matrix_job.split(f"    - name: {step_name}", 1)[1].split(
+            "    - name:", 1
+        )[0]
+        assert "--max-worker-restart=0" in step
+
+
+def test_windows_streaming_proofs_run_outside_xdist() -> None:
+    workflow_text = _workflow_text("test.yml")
+    matrix_job = workflow_text.split("  test:", 1)[1].split("  lint:", 1)[0]
+    pytest_config = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["tool"]["pytest"]["ini_options"]
+    streaming_tests = (ROOT / "tests/test_streaming.py").read_text(encoding="utf-8")
+
+    assert any(
+        marker.startswith("windows_serial:") for marker in pytest_config["markers"]
+    )
+    assert streaming_tests.count("@pytest.mark.windows_serial") == 2
+
+    for step_name in (
+        "Run Windows tests with pytest",
+        "Run Windows tests with coverage",
+    ):
+        step = matrix_job.split(f"    - name: {step_name}", 1)[1].split(
+            "    - name:", 1
+        )[0]
+        assert "not windows_serial" in step
+
+    for step_name in (
+        "Run Windows streaming tests serially",
+        "Run Windows streaming tests serially with coverage",
+    ):
+        step = matrix_job.split(f"    - name: {step_name}", 1)[1].split(
+            "    - name:", 1
+        )[0]
+        assert "-n0" in step
+        assert '-m "windows_serial"' in step
+        assert "tests/test_streaming.py" in step
+
+    coverage_step = matrix_job.split(
+        "    - name: Run Windows streaming tests serially with coverage", 1
+    )[1].split("    - name:", 1)[0]
+    assert "--cov-append" in coverage_step
+
+
 def test_coverage_diagnostics_can_run_one_suite_from_gh() -> None:
     workflow_text = _workflow_text("coverage-diagnostics.yml")
     install_step = workflow_text.split("    - name: Install dependencies", 1)[1].split(
@@ -744,7 +801,7 @@ def test_windows_314_runner_produces_merged_coverage_data() -> None:
     windows_condition = (
         "matrix.os == 'windows-latest' && matrix.python-version == '3.14'"
     )
-    assert test_job.count(windows_condition) == 4
+    assert test_job.count(windows_condition) == 5
     assert "- name: Run Windows tests with coverage" in test_job
     assert "- name: Run Windows phaselock fallback-path gate with coverage" in test_job
     assert "Path('.coverage').replace('.coverage.windows')" in test_job

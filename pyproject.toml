@@ -109,6 +109,7 @@ markers = [
     "sqlite_only: tests that validate built-in SQLite-specific behavior",
     "pg_only: tests that validate the Postgres extension package",
     "redis_only: tests that validate the Valkey/Redis extension package",
+    "windows_serial: slow proof run in a dedicated serial phase on Windows",
 ]
 
 [tool.mypy]

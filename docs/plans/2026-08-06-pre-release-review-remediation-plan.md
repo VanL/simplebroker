@@ -12,12 +12,13 @@ explicitly undefined per SQLite upstream. The CLI's deletion-attempt,
 diagnostic, and exit semantics remain defined. The round-2 owner amendments (no fractional bounds; Weft
 unaffected; asynchronous release mechanism retained) continue to outrank
 conflicting older text.
-Status: active — implementation verified in the uncommitted 2026-08-07 worktree; the
-final blocker (conflicting durable lesson) was corrected in place, and the
+Status: active — initial implementation landed in `a38e6a9`; the first-run CI
+remediation is recorded below. The final blocker (conflicting durable lesson)
+was corrected in place, and the
 owner's implementation direction authorized A, E, I, and J (B is reduced to
 documentation in J; C/D/F/G/H are deferred and severed). The plan remains
-active: no owner commit, tag, publication, or K0/K release execution occurred
-in this pass. Unit E's revision-5 destructive contract
+active: no release tag, publication, or K0/K release execution occurred in
+this pass. Unit E's revision-5 destructive contract
 passed the recorded focused primary, interface, and independent lifecycle
 re-reviews below.
 Class: 5 — [DOM-6] fires: normative deltas to `docs/specs/10-cli.md`
@@ -938,7 +939,7 @@ possession-probe outcome recorded.
   B findings by removing the proposed mode behavior and retaining only the
   explicit operator-owned permission limitation.
 
-## Verified Implementation Record (2026-08-07, uncommitted)
+## Verified Implementation Record (2026-08-07, initial implementation)
 
 Scope implemented: A (integral-only timestamp-bound grammar), B/J
 (operator-owned cross-platform permission limitation and remaining truthfulness
@@ -1005,6 +1006,76 @@ enumerable-contract gate.
   SQLite outcome is deliberately not asserted. No release, publish, or
   possession probe was run.
 
+### First-run CI remediation (2026-08-07)
+
+The first exact-SHA run for `a38e6a9`, GitHub Actions run
+[`31184958528`](https://github.com/VanL/simplebroker/actions/runs/31184958528),
+separated deterministic portability defects from two Windows scheduling
+failures.
+
+Deterministic classification and fixes:
+
+- **Test error:** `test_cleanup_general_error` mocked global `Path.exists()`
+  after cleanup ownership moved to the SQLite backend adapter. An ignored
+  repository-root `.broker.db` made the stale test pass locally while clean CI
+  correctly returned the absent-target no-op. The test now uses an isolated
+  target and injects the error at `SQLiteBackendPlugin.cleanup_target()`.
+- **Test error:** the aggregate-failure fixture assumed `.status` did not exist,
+  although the real write can leave that owned coordination entry. The fixture
+  now removes the file before replacing it with the directory used to force a
+  portable unlink refusal.
+- **Test portability error:** `?` is not a legal Windows filename. The literal
+  URI-metacharacter proof skips only that spelling on Windows; `#` and `%`
+  continue to exercise the portable backend validation boundary.
+- **Application error:** Python 3.13/3.14 on Windows allowed an embedded-NUL
+  path through `Path.resolve()` and raised `ValueError` later at `lstat()`.
+  The cleanup observation gate now translates both `OSError` and `ValueError`
+  to the promised zero-delete `DatabaseError`.
+
+The intermittent failures are classified as test/CI topology errors unless a
+serial Windows rerun produces contrary evidence. On Windows 3.11, the four
+xdist workers were occupied by one invalid-filename phase-lock retry and three
+resilient-worker tests that each launched a fresh CLI process for their first
+SQLite write; all three child commands exhausted the 24-second CI helper
+budget on isolated targets. No changed production write path explains that
+cluster. The tests now seed through one backend-native `Queue` connection and
+retain CLI calls only for the checkpoint behavior under test; the resilient
+module also shares one xdist group.
+
+On Windows 3.13, `test_streaming_read_all` ended as `node down: Not properly
+terminated`. The leading explanation is the known `pytest-timeout` thread
+mechanism, not a native crash: the test has a 360-second marker and the
+installed timer ends the worker with `os._exit(1)`. The quiet xdist log did not
+print the test's exact start time, so the signature alone is not conclusive;
+the same signature did occur at the measured 180-second boundary in run
+`30658218016`. The two preserved
+1,000-message streaming proofs now run in a dedicated `-n0` Windows phase;
+the normal Windows xdist phase excludes their marker. Every xdist matrix
+invocation disables synchronous worker replacement, and the matrix job has a
+45-minute bound, so a hard worker loss fails promptly instead of entering a
+replacement tail.
+
+Local evidence after the fixes: the deterministic cleanup/CLI/workflow slice
+passed; ten four-worker resilient repetitions passed; ten serial repetitions
+of both streaming proofs passed; the full root suite passed serially with 18
+expected skips; the dedicated serial coverage command passed; and Ruff
+check/format, mypy, DOM-15 fixtures, plan-context, and `git diff --check`
+passed. The deciding residual is the next Windows CI run. If a serial streaming
+proof still reaches 360 seconds, capture that dedicated step's stacks and a
+Windows native dump before changing the workload or timeout. Separately,
+phase-lock currently spends its full 20-second budget on permanent Windows
+invalid-filename `EINVAL`; that slow rejection is not needed to support an
+unrepresentable filename and is a follow-up retry-classification question, not
+part of this CI repair.
+
+Independent completed-work review: **PASS after one P2 documentation fix.**
+The reviewer found no behavioral or CI-policy blocker and verified the cleanup
+zero-delete gate, retained checkpoint assertions, serial Windows coverage
+append, xdist fail-closed policy, and local gates. Its only finding was that the
+Status Index still described the `a38e6a9` implementation as uncommitted; the
+index remains `active` but now records that committed baseline and the unrun
+K0/K release gates accurately.
+
 ## Out of Scope
 
 - The five deferred units (C, D, F, G, H) — register above with
@@ -1014,8 +1085,8 @@ enumerable-contract gate.
   checkpoint-before-delete protocol, or any defined storage outcome for
   concurrent SQLite cleanup. Revision 5 deliberately specifies destructive
   deletion instead.
-- Coverage-pipeline simplification; version compatibility matrix;
-  Windows xdist structural isolation; alternatives comparison.
+- Coverage-pipeline simplification; version compatibility matrix; broader
+  xdist redesign; alternatives comparison.
 - Message-ID non-canonical-spelling acceptance ([SB-ID-4]).
 - Any poisoning-machinery, redis, pg-extension, watcher, or
   config-bootstrap code change.

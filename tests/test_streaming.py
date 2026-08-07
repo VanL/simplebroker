@@ -28,6 +28,7 @@ def _bulk_write(workdir: Path, queue_name: str, count: int) -> None:
         q.close()
 
 
+@pytest.mark.windows_serial
 @pytest.mark.timeout(360)
 def test_streaming_read_all(workdir: Path) -> None:
     """Test that read --all uses streaming and doesn't blow memory."""
@@ -54,6 +55,7 @@ def test_streaming_read_all(workdir: Path) -> None:
     assert stdout.splitlines()[0] == (f"test_queue: 0 ({count} total, {count} claimed)")
 
 
+@pytest.mark.windows_serial
 @pytest.mark.timeout(360)
 def test_streaming_peek_all(workdir: Path) -> None:
     """Test that peek --all uses streaming and doesn't blow memory."""

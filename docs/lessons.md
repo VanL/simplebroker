@@ -95,6 +95,21 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-07: An xdist `node down` on Windows is not evidence by itself of a
+  native crash. Correlate it with the active pytest-timeout budget and inspect
+  the configured timeout method: thread mode dumps stacks and calls
+  `os._exit(1)`, which xdist reports as an improperly terminated worker. Slow
+  proof tests that repeatedly reach that boundary under shared load belong in
+  a dedicated serial platform phase; do not first hide the signal by raising
+  the timeout or shrinking the proof workload. When the CLI is not the setup
+  behavior under test, seed through the backend API rather than launch one
+  interpreter and database setup lifecycle per record. (Run `31184958528`.)
+- 2026-08-07: Filesystem lifecycle tests should inject failure at the owning
+  adapter seam and use an explicit isolated target. Mocking a global predicate
+  such as `Path.exists()` can stop firing after ownership moves, while an
+  ignored local database makes the stale test pass only in a dirty developer
+  checkout. Reproduce missing-state tests from a clean directory before
+  changing product behavior. (First-run cleanup CI after `a38e6a9`.)
 - 2026-08-06: A doctrine that has not been self-applied drifts first on the
   corpus's own surfaces. The 2026-08-05 audit and its remediation showed the
   enumeration-gate rule (§12) existed as written doctrine while spec-*writing*

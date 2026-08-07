@@ -109,7 +109,7 @@ def _main_was_observed(path: Path) -> bool:
         _lstat_path(path)
     except FileNotFoundError:
         return False
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise DatabaseError(
             f"Cannot inspect SQLite cleanup target {path}: {exc}"
         ) from exc

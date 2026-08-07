@@ -44,14 +44,22 @@ class TestCLIEdgeCases:
             result = main()
             assert result == 1
 
-    def test_cleanup_general_error(self):
+    def test_cleanup_general_error(self, tmp_path, capsys):
         """Test cleanup with general error."""
         with (
-            patch("sys.argv", ["simplebroker", "--cleanup"]),
-            patch("pathlib.Path.exists", side_effect=Exception("Unexpected error")),
+            patch(
+                "sys.argv",
+                ["simplebroker", "-d", str(tmp_path), "--cleanup"],
+            ),
+            patch(
+                "simplebroker._backends.sqlite.plugin.SQLiteBackendPlugin.cleanup_target",
+                side_effect=Exception("Unexpected error"),
+            ),
         ):
             result = main()
-            assert result == 1
+
+        assert result == 1
+        assert "Unexpected error" in capsys.readouterr().err
 
     def test_dir_is_file_error(self):
         """Test error when -d points to a file instead of directory."""

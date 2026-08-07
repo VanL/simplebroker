@@ -5,8 +5,26 @@ Tests the checkpoint-based consumption pattern for building robust workers.
 """
 
 import json
+from collections.abc import Iterable
+from pathlib import Path
+
+import pytest
+
+from simplebroker import Queue, target_for_directory
 
 from .conftest import run_cli
+
+pytestmark = pytest.mark.xdist_group(name="cli_io_serial")
+
+
+def _seed_messages(workdir: Path, queue_name: str, messages: Iterable[str]) -> None:
+    """Seed through one backend connection; the checkpoint CLI remains under test."""
+    queue = Queue(queue_name, db_path=target_for_directory(workdir))
+    try:
+        for message in messages:
+            queue.write(message)
+    finally:
+        queue.close()
 
 
 def test_resilient_worker_checkpoint_recovery(workdir):
@@ -14,8 +32,7 @@ def test_resilient_worker_checkpoint_recovery(workdir):
     queue_name = "worker_queue"
 
     # Write initial messages
-    for i in range(5):
-        run_cli("write", queue_name, f"task_{i}", cwd=workdir)
+    _seed_messages(workdir, queue_name, (f"task_{i}" for i in range(5)))
 
     # Get all messages with timestamps to simulate processing
     rc, out, _ = run_cli(
@@ -30,8 +47,7 @@ def test_resilient_worker_checkpoint_recovery(workdir):
     checkpoint = messages[2]["timestamp"]
 
     # Add more messages while "worker was down"
-    for i in range(5, 8):
-        run_cli("write", queue_name, f"task_{i}", cwd=workdir)
+    _seed_messages(workdir, queue_name, (f"task_{i}" for i in range(5, 8)))
 
     # Resume from checkpoint - should only get messages after task_2
     rc, out, _ = run_cli(
@@ -59,8 +75,7 @@ def test_batch_processing_with_checkpoint(workdir):
     batch_size = 3
 
     # Write 10 messages
-    for i in range(10):
-        run_cli("write", queue_name, f"msg_{i}", cwd=workdir)
+    _seed_messages(workdir, queue_name, (f"msg_{i}" for i in range(10)))
 
     checkpoint = 0
     processed_count = 0
@@ -116,8 +131,7 @@ def test_worker_failure_retry(workdir):
 
     # Write messages
     messages = ["good_1", "bad_message", "good_2", "good_3"]
-    for msg in messages:
-        run_cli("write", queue_name, msg, cwd=workdir)
+    _seed_messages(workdir, queue_name, messages)
 
     # Get timestamps for tracking
     rc, out, err = run_cli(
@@ -156,8 +170,7 @@ def test_concurrent_workers_with_checkpoints(workdir):
     queue_name = "shared_queue"
 
     # Write messages
-    for i in range(20):
-        run_cli("write", queue_name, f"job_{i}", cwd=workdir)
+    _seed_messages(workdir, queue_name, (f"job_{i}" for i in range(20)))
 
     # Worker 1 processes even messages
     # Worker 2 processes odd messages
@@ -201,8 +214,7 @@ def test_checkpoint_with_empty_queue_recovery(workdir):
     queue_name = "refill_queue"
 
     # Initial messages
-    run_cli("write", queue_name, "msg_1", cwd=workdir)
-    run_cli("write", queue_name, "msg_2", cwd=workdir)
+    _seed_messages(workdir, queue_name, ("msg_1", "msg_2"))
 
     # Read all and get checkpoint
     rc, out, _ = run_cli(
@@ -222,8 +234,7 @@ def test_checkpoint_with_empty_queue_recovery(workdir):
     assert rc == 2
 
     # Add new messages
-    run_cli("write", queue_name, "msg_3", cwd=workdir)
-    run_cli("write", queue_name, "msg_4", cwd=workdir)
+    _seed_messages(workdir, queue_name, ("msg_3", "msg_4"))
 
     # Check from checkpoint - should see only new messages
     rc, out, _ = run_cli(

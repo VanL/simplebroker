@@ -43,6 +43,7 @@ jobs:
 
   test:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     env:
       UV_PYTHON: ${{ matrix.python-version }}
     strategy:
@@ -88,9 +89,14 @@ jobs:
         uv run --frozen --no-sync python -c "import sys; expected = tuple(map(int, '${{ matrix.python-version }}'.split('.'))); assert sys.version_info[:2] == expected, (sys.version, expected)"
 
     - name: Run tests with pytest
-      if: matrix.os != 'windows-latest' || matrix.python-version != '3.14'
+      if: matrix.os != 'windows-latest'
       run: |
-        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup"
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --max-worker-restart=0"
+
+    - name: Run Windows tests with pytest
+      if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
+      run: |
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark and not windows_serial" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --max-worker-restart=0"
 
     - name: Run SQLite cross-thread finalization probe
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
@@ -109,14 +115,29 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        uv run --frozen --no-sync pytest --tb=short -m "not benchmark" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
+        uv run --frozen --no-sync pytest --tb=short -m "not benchmark and not windows_serial" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
+
+    - name: Run Windows streaming tests serially
+      if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
+      timeout-minutes: 15
+      run: |
+        uv run --frozen --no-sync pytest -n0 -vv --tb=short -m "windows_serial" tests/test_streaming.py
+
+    - name: Run Windows streaming tests serially with coverage
+      if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
+      timeout-minutes: 15
+      env:
+        COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
+        COVERAGE_FILE: ${{ github.workspace }}/.coverage
+      run: |
+        uv run --frozen --no-sync pytest -n0 -vv --tb=short -m "windows_serial" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0 tests/test_streaming.py
 
     - name: Run phaselock fallback-path gate
       if: matrix.os != 'windows-latest' || matrix.python-version != '3.14'
       env:
         PHASELOCK_ENABLE_XATTRS: "0"
       run: |
-        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup" tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --max-worker-restart=0" tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
 
     - name: Run Windows phaselock fallback-path gate with coverage
       if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'

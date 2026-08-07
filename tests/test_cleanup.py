@@ -345,7 +345,19 @@ def test_cleanup_freezes_resolved_symlink_target_namespace(workdir):
 
 
 @pytest.mark.sqlite_only
-@pytest.mark.parametrize("filename", ["broker?.db", "broker#.db", "broker%.db"])
+@pytest.mark.parametrize(
+    "filename",
+    [
+        pytest.param(
+            "broker?.db",
+            marks=pytest.mark.skipif(
+                os.name == "nt", reason="question mark is invalid in Windows filenames"
+            ),
+        ),
+        "broker#.db",
+        "broker%.db",
+    ],
+)
 def test_cleanup_validates_literal_uri_metacharacters(tmp_path, filename):
     """[SB-OPS-7] Validation URI encoding preserves the literal main filename."""
     db_path = tmp_path / filename
@@ -435,8 +447,9 @@ def test_cleanup_aggregates_multiple_cli_failures_and_json_error(workdir):
     db_path = workdir / ".broker.db"
     first_failure = workdir / ".broker.db.status"
     second_failure = workdir / ".broker.db.vacuum.lock"
-    first_failure.mkdir()
-    second_failure.mkdir()
+    for failed_path in (first_failure, second_failure):
+        failed_path.unlink(missing_ok=True)
+        failed_path.mkdir()
 
     rc, out, err = run_cli("--cleanup", cwd=workdir)
 
@@ -466,7 +479,16 @@ def test_cleanup_aggregates_multiple_cli_failures_and_json_error(workdir):
 
 
 @pytest.mark.sqlite_only
-def test_cleanup_main_lstat_failure_is_a_zero_delete_gate(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "inspection_error",
+    [
+        pytest.param(PermissionError("cannot inspect"), id="os-error"),
+        pytest.param(ValueError("embedded null character"), id="value-error"),
+    ],
+)
+def test_cleanup_main_lstat_failure_is_a_zero_delete_gate(
+    tmp_path, monkeypatch, inspection_error
+):
     """[SB-OPS-7] An inspection error cannot cross the mutation boundary."""
     db_path = (tmp_path / "broker.db").resolve()
     plugin = get_backend_plugin("sqlite")
@@ -475,8 +497,8 @@ def test_cleanup_main_lstat_failure_is_a_zero_delete_gate(tmp_path, monkeypatch)
     sidecar.write_text("keep", encoding="utf-8")
     unlink_calls = []
 
-    def fail_lstat(path):
-        raise PermissionError(f"cannot inspect {path}")
+    def fail_lstat(_path):
+        raise inspection_error
 
     def record_unlink(path):
         unlink_calls.append(path)
