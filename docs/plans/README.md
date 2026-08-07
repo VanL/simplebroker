@@ -34,25 +34,16 @@ assignments use `draft` with a note rather than inventing `completed`.
 | 2026-08-06-ruff-suppression-registry-extraction-plan.md | completed — class 5+P; approval ledger extracted from required spec reading into a task-scoped registry with exact inventory conservation |
 | 2026-08-06-plan-context-gate-plan.md | completed — class 3+P (effective 5); plan-context checker and CI document-gate seams implemented and reviewed |
 | 2026-08-06-access-backend-benchmark-plan.md | completed — class 4; implementation and independent completion review reconciled, all gates passed, and owner commit `829b032` landed |
-| 2026-08-06-audit-remediation-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `94e15bc` |
 | 2026-07-17-schema-migration-aware-waiting-proposal.md | completed — class 4; owner deferred implementation pending new evidence of material migration-wait harm |
-| 2026-07-29-coalescing-sweep-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
-| 2026-07-29-complexity-and-state-machine-hardening-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
-| 2026-07-29-program-theory-and-negative-knowledge-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 | 2026-07-29-ruff-lint-expansion-plan.md | completed — class 3+P; Ruff 0.16 stable-default expansion, repository-wide cleanup, policy gates, portability corrections, and independent review landed in 9f666232, c5a31e18, and 1324a1f6 |
-| 2026-07-30-product-documentation-cutover-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 | 2026-07-31-python-library-api-contract-plan.md | completed — class 5; `[SB-API-1]`–`[SB-API-12]`, R1 keyword-only command signatures, helper split, and synchronized 6.0.0/3.5.0 release landed |
 | 2026-07-31-core-test-mypy-gate-plan.md | completed — class 5+P; core tests are explicitly type-checked in CI and root-release prechecks, with behavior-preserving test typing cleanup |
 | 2026-07-31-ci-release-remediation-plan.md | completed — repaired nine independent CI/release root causes in isolated commits; published simplebroker 6.0.0, simplebroker-pg 3.5.0, and simplebroker-redis 3.5.0 from exact green SHA `926ae54f` |
-| 2026-07-30-reserved-zero-and-redis-write-atomicity-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 | 2026-07-30-ruff-suppression-index-generator-plan.md | completed — class 5+P; stable-group generator and R1 symbol-keyed index landed in 49da9b2d and 4d4f61be |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | status-review — class 4; implementation and reviews landed in b01bc3cb and shipped in 5.6.2, but the plan records no evidence for its required five post-commit coverage-diagnostics runs |
 | 2026-08-04-docs-information-architecture-plan.md | completed — class 4; README 2,520→818 lines around three purposes; docs/guides tier, CONTRIBUTING.md, implementation doc 09 shipped; move ledger + 4-row deviation log; Codex plan review PASS, slice review (5 findings fixed), completion review PASS at `154524e` |
-| 2026-08-04-cmd-watch-locality-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 | 2026-08-04-worker-example-error-handling-plan.md | completed — class 4; published worker processing, acknowledgement, and broker-error handling repaired; 2,429 tests passed; independent review PASS |
 | 2026-08-05-worker-portability-and-example-corrections-plan.md | completed — class 4; worker portability/safety, published recipes, extension handshake visibility, narrow coverage repair, and plan-status audit; 2,457 tests passed; independent completion re-review PASS |
-| 2026-08-04-coalescing-git-archive-policy-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
-| 2026-08-04-retired-plan-lesson-harvest-plan.md | retired-pending — soft-retired 2026-08-06 after five-gate harvest review; source `5023710` |
 
 ## Retired Plans
 
