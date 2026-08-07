@@ -1168,6 +1168,40 @@ Release was published. A new committed SHA and full `bin/release.py all` pass
 remain required; the failed workflow must not be rerun as release evidence for
 the changed helper.
 
+### Second release-gate attempt and backend marker scope (2026-08-07)
+
+The next `bin/release.py all` pass ran from committed SHA `ab21b689`. Its full
+local gate set passed again, it pushed `main`, and fresh exact-SHA workflows
+started. The release helper stopped before tags when Redis Python 3.13 failed
+the same watcher SIGINT test. The improved diagnostics proved that this was no
+longer a startup-readiness failure: the child printed both
+`READY_FOR_SIGNALS` and `Received: test_message` before shutdown escalation.
+
+The test should not have been in that workflow. `tests/test_watcher.py` is
+module-marked `shared`, while this method is function-marked `sqlite_only`.
+Pytest markers are additive, so the wrappers' `-m shared` expression selected
+the method despite the narrower function marker and ran its file-backed helper
+with `BROKER_TEST_BACKEND=redis`. Collection found 22 dual-marked nodes across
+six shared modules. PostgreSQL and Redis wrappers now select
+`shared and not sqlite_only`; `--fast` additionally excludes benchmarks. The
+normal PostgreSQL command and both fast wrapper commands were pinned red first,
+then passed with the corrected expressions. Real `--fast` wrappers passed:
+PostgreSQL ran 1,117 shared and 175 extension tests with eight expected skips;
+Redis ran 1,109 shared and 246 extension tests with twelve expected skips.
+
+The Redis workflow failure caused the helper to refuse publication immediately.
+The same SHA's Ubuntu Python 3.14 core job passed, confirming the watcher
+synchronization fix on the originally failing platform, and its PostgreSQL
+workflow passed. No release tag was pushed. A third committed SHA and complete
+release pass are required; the older exact-SHA workflows are not release
+evidence for this wrapper change.
+
+Independent marker-scope review: **PASS.** It confirmed that wrappers, not the
+generic collection hook, own backend-valid selection; user `-m` filters remain
+AND-composed and cannot re-admit SQLite-only tests; explicit extension routing
+is unchanged; and the normal/fast help and command tests cover the expression
+variants.
+
 ## Out of Scope
 
 - The five deferred units (C, D, F, G, H) — register above with

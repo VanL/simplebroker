@@ -29,6 +29,7 @@ POSTGRES_DB = os.environ.get("SIMPLEBROKER_PG_TEST_DB", "simplebroker_test")
 POSTGRES_USER = os.environ.get("SIMPLEBROKER_PG_TEST_USER", "postgres")
 POSTGRES_PASSWORD = os.environ.get("SIMPLEBROKER_PG_TEST_PASSWORD", "postgres")
 VALKEY_IMAGE = os.environ.get("SIMPLEBROKER_VALKEY_TEST_IMAGE", "valkey/valkey:7.2")
+_SHARED_BACKEND_MARKER = "shared and not sqlite_only"
 
 
 def _run(
@@ -554,8 +555,8 @@ def pytest_pg_main() -> int:
         "--fast",
         action="store_true",
         help=(
-            "Run the release-gate subset (shared and not benchmark) instead of all "
-            "shared tests."
+            "Run the release-gate subset (shared, not SQLite-only, and not "
+            "benchmark) instead of all shared backend tests."
         ),
     )
     parser.add_argument(
@@ -572,7 +573,9 @@ def pytest_pg_main() -> int:
         print("uv is required to run PG-backed tests", file=sys.stderr)
         return 1
 
-    shared_marker = "shared and not benchmark" if args.fast else "shared"
+    shared_marker = _SHARED_BACKEND_MARKER
+    if args.fast:
+        shared_marker += " and not benchmark"
     (
         shared_pytest_args,
         extension_pytest_args,
@@ -651,8 +654,8 @@ def pytest_redis_main() -> int:
         "--fast",
         action="store_true",
         help=(
-            "Run the release-gate subset (shared and not benchmark) instead of all "
-            "shared tests."
+            "Run the release-gate subset (shared, not SQLite-only, and not "
+            "benchmark) instead of all shared backend tests."
         ),
     )
     parser.add_argument(
@@ -669,7 +672,9 @@ def pytest_redis_main() -> int:
         print("uv is required to run Redis-backed tests", file=sys.stderr)
         return 1
 
-    shared_marker = "shared and not benchmark" if args.fast else "shared"
+    shared_marker = _SHARED_BACKEND_MARKER
+    if args.fast:
+        shared_marker += " and not benchmark"
     (
         shared_pytest_args,
         extension_pytest_args,

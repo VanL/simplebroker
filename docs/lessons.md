@@ -95,6 +95,12 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-07: Pytest markers inherited from a module and added to a function
+  are cumulative, not overrides. A function marked `sqlite_only` inside a
+  `shared` module still matches `-m shared`. Backend wrappers must state the
+  exclusion in their selection expression (`shared and not sqlite_only`), and
+  wrapper command tests must pin both normal and reduced-suite forms. (Release
+  gate run `31197432103`.)
 - 2026-08-07: A subprocess readiness marker must prove the exact lifecycle
   state the parent intends to test. Publishing after object construction but
   before a blocking run method installs signal handlers turns a shutdown test

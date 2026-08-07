@@ -2405,6 +2405,7 @@ def test_pytest_pg_main_preflights_dsn_before_pytest(
     run_call = calls[1]
     assert run_call[0] == "run"
     assert run_call[1][9:11] == ["pytest", "tests/test_smoke.py"]
+    assert run_call[1][run_call[1].index("-m") + 1] == ("shared and not sqlite_only")
     assert run_call[2]["SIMPLEBROKER_PG_TEST_DSN"] == "postgresql://example/test"
     assert run_call[2]["BROKER_TEST_BACKEND"] == "postgres"
     assert calls[2] == ("cleanup", "pg-container")
@@ -2498,7 +2499,9 @@ def test_pytest_pg_fast_coverage_runs_pg_only_extension_phase(
     assert len(run_commands) == 2
     shared_command, extension_command = run_commands
     assert "tests" in shared_command
-    assert shared_command[shared_command.index("-m") + 1] == "shared and not benchmark"
+    assert shared_command[shared_command.index("-m") + 1] == (
+        "shared and not sqlite_only and not benchmark"
+    )
     assert "extensions/simplebroker_pg/tests" in extension_command
     assert extension_command[extension_command.index("-m") + 1] == "pg_only"
     for arg in coverage_args:
@@ -2554,7 +2557,9 @@ def test_pytest_redis_fast_coverage_runs_redis_only_extension_phase(
     assert len(run_commands) == 2
     shared_command, extension_command = run_commands
     assert "tests" in shared_command
-    assert shared_command[shared_command.index("-m") + 1] == "shared and not benchmark"
+    assert shared_command[shared_command.index("-m") + 1] == (
+        "shared and not sqlite_only and not benchmark"
+    )
     assert "extensions/simplebroker_redis/tests" in extension_command
     assert extension_command[extension_command.index("-m") + 1] == "redis_only"
     for arg in coverage_args:
