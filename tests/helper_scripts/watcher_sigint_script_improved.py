@@ -1,6 +1,5 @@
-"""Improved SIGINT test script with race condition mitigation."""
+"""SIGINT test script with an active-watcher readiness handshake."""
 
-import signal
 import sys
 import time
 from pathlib import Path
@@ -69,17 +68,24 @@ def main() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-031] exception
                 )
                 sys.exit(1)
 
-    # Strategy 3: Use a dedicated message handler that signals readiness
-    handler_called = False
-
+    # Strategy 3: Use a dedicated message handler for dispatch evidence.
     def handler(msg: str, ts: float) -> None:
-        nonlocal handler_called
-        handler_called = True
         print(f"Received: {msg}")
+
+    class ReadyQueueWatcher(QueueWatcher):
+        """Publish readiness only after the run lifecycle owns its strategy."""
+
+        def _start_strategy(self) -> None:
+            super()._start_strategy()
+            # run_forever installs signal handlers before strategy startup.
+            # Publishing here works for empty queues while proving the parent
+            # cannot signal the pre-run bootstrap handoff.
+            ready_file.touch()
+            print("READY_FOR_SIGNALS", flush=True)
 
     # Create watcher
     try:
-        watcher = QueueWatcher(
+        watcher = ReadyQueueWatcher(
             "sigint_test_queue",
             handler,
             db=db,
@@ -88,19 +94,6 @@ def main() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-031] exception
         print(f"Watcher creation failed: {e}", flush=True)
         db.close()
         sys.exit(1)
-
-    # Install a bootstrap handler before publishing readiness. run_forever()
-    # replaces it with the watcher's handler and restores it on exit, but a
-    # signal arriving in that narrow handoff window must still request the
-    # same graceful stop.
-    previous_sigint_handler = signal.getsignal(signal.SIGINT)
-
-    def request_stop(_signum: int, _frame: object) -> None:
-        watcher.stop(join=False)
-
-    signal.signal(signal.SIGINT, request_stop)
-    ready_file.touch()
-    print("READY_FOR_SIGNALS", flush=True)
 
     try:
         # This should exit gracefully when receiving SIGINT
@@ -120,8 +113,6 @@ def main() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-031] exception
                 unique_db_path.unlink()
         except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
             print(f"Cleanup error: {e}", flush=True)
-        finally:
-            signal.signal(signal.SIGINT, previous_sigint_handler)
 
     sys.exit(exit_code)
 

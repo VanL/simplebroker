@@ -12,8 +12,8 @@ explicitly undefined per SQLite upstream. The CLI's deletion-attempt,
 diagnostic, and exit semantics remain defined. The round-2 owner amendments (no fractional bounds; Weft
 unaffected; asynchronous release mechanism retained) continue to outrank
 conflicting older text.
-Status: active — initial implementation landed in `a38e6a9`; two Windows CI
-remediation passes are recorded below. The final blocker (conflicting durable
+Status: active — initial implementation landed in `a38e6a9`; CI remediation
+and release-gate passes are recorded below. The final blocker (conflicting durable
 lesson) was corrected in place, and the
 owner's implementation direction authorized A, E, I, and J (B is reduced to
 documentation in J; C/D/F/G/H are deferred and severed). The plan remains
@@ -1123,6 +1123,50 @@ vacuum/broadcast assertions, and all three event-driven coverage transitions.
 Focused workflow, cleanup, vacuum, safety, coverage-transition, Ruff, YAML, and
 plan/document gates passed. The reviewer agreed that the next Windows Actions
 run is the remaining platform confirmation.
+
+### First release-gate attempt and watcher synchronization (2026-08-07)
+
+`bin/release.py all` ran from committed SHA `fb4b4a25`, passed its complete
+local root, benchmark, PostgreSQL, Redis, examples, lint, type, lock, build,
+and clean-wheel-install gates, then pushed `main` and waited for exact-SHA CI.
+The PostgreSQL and Redis workflows passed. All four Windows jobs in Test passed,
+including the prior 3.12 timeout set, 3.13 cleanup assertion, and 3.14 coverage
+transition failures. This confirms the second Windows remediation on the
+owning platform.
+
+The Test workflow failed only on Ubuntu Python 3.14 at
+`TestQueueWatcher.test_graceful_shutdown_sigint`: the child did not exit after
+the requested SIGINT, and cleanup escalated to SIGKILL. The test's ready file
+was published before `QueueWatcher.run_forever()` installed its signal handlers
+or entered the run lifecycle, so the parent could signal a bootstrap handoff
+instead of the active-watcher behavior named by the test. The helper now uses a
+test-only `QueueWatcher` subclass to publish readiness after `run_forever()` has
+installed the real signal handlers and completed polling-strategy startup. This
+also preserves the helper's executable empty-queue transitions. The parent uses
+the managed process-group interrupt seam and includes child stdout/stderr in any
+escalation failure. The exact test passed 25 consecutive four-worker local
+runs; the helper's six-case transition table and full watcher module passed;
+Ruff, format, mypy, and diff checks passed.
+
+Independent review initially **blocked** the handler-based readiness draft: the
+helper's `ready`, `retry`, and `interrupt` transition probes intentionally use
+an empty queue, so a data-callback-only marker could never fire. The strategy-
+startup hook above resolves that deterministic regression while retaining the
+stronger active-lifecycle proof; the previously failing three cases and the
+full six-case table now pass.
+
+Independent re-review: **PASS.** It confirmed that signal handlers and the real
+polling strategy precede readiness, the immediate post-readiness stop path
+reaches normal cleanup, empty-queue transitions remain live, and POSIX
+process-group delivery is valid while Windows stays an explicit termination
+seam rather than a graceful-SIGINT assertion.
+
+The release helper observed the failed Test workflow and refused to push any
+tag. Local and remote checks confirmed that `simplebroker_pg/v3.5.1`,
+`simplebroker_redis/v3.5.1`, and `v6.0.2` do not exist. No package or GitHub
+Release was published. A new committed SHA and full `bin/release.py all` pass
+remain required; the failed workflow must not be rerun as release evidence for
+the changed helper.
 
 ## Out of Scope
 

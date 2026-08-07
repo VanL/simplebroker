@@ -52,7 +52,10 @@ SIGINT_PROBE_TRANSITIONS = (
         event="initialize the unique database",
         guard="the source database does not exist and the first attempt succeeds",
         next_state="ready",
-        effects="the watcher is created, the ready file is touched, and readiness prints",
+        effects=(
+            "the watcher enters its run lifecycle, installs signal handlers and its "
+            "polling strategy, then publishes readiness"
+        ),
         expected_result="the process remains alive waiting for a signal",
         payload=SigintProbePayload("ready"),
     ),
@@ -90,7 +93,10 @@ SIGINT_PROBE_TRANSITIONS = (
         transition_id="interrupt-cleans-and-exits",
         start_state="watching",
         event="receive the requested interrupt",
-        guard="readiness was published under the bootstrap or watcher signal handler",
+        guard=(
+            "readiness was published after the watcher installed its signal handlers "
+            "and polling strategy"
+        ),
         next_state="stopped",
         effects="the watcher exits, the database closes, and the unique file is removed",
         expected_result="the helper exits without signal escalation",

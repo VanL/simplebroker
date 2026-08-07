@@ -95,6 +95,13 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-07: A subprocess readiness marker must prove the exact lifecycle
+  state the parent intends to test. Publishing after object construction but
+  before a blocking run method installs signal handlers turns a shutdown test
+  into a scheduler-dependent startup-handoff test. Publish from an event that
+  can occur only inside the active lifecycle, and include child output when
+  cleanup escalates. For empty-input cases, use a lifecycle hook rather than
+  making readiness depend on a data callback. (Release-gate run `31194135500`.)
 - 2026-08-07: Serializing known slow modules does not cure suite-wide process
   oversubscription. If isolated subprocess tests time out concurrently on every
   xdist worker, a module group can only move the collision to different tests.

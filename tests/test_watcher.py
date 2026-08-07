@@ -536,11 +536,9 @@ class TestQueueWatcher(WatcherTestBase):
             # Verify process is still running
             assert proc.proc.poll() is None, "Subprocess terminated prematurely"
 
-            # Send SIGINT signal (Ctrl-C) on Unix, terminate on Windows
-            if sys.platform == "win32":
-                proc.terminate()
-            else:
-                proc.proc.send_signal(signal.SIGINT)
+            # Use terminal-like process-group delivery on POSIX and the
+            # managed Windows termination seam.
+            proc.interrupt()
 
             # Wait for graceful exit with timeout
             fallback_signal: str | None = None
@@ -564,9 +562,13 @@ class TestQueueWatcher(WatcherTestBase):
                     except subprocess.TimeoutExpired:
                         pytest.fail("Failed to terminate subprocess even with SIGKILL")
 
+            stdout_output = proc.stdout
+            stderr_output = proc.stderr
             assert fallback_signal is None, (
                 "Watcher did not shut down from the requested interrupt; "
-                f"cleanup escalated to {fallback_signal} and exited {exit_code}"
+                f"cleanup escalated to {fallback_signal} and exited {exit_code}\n"
+                f"stdout:\n{stdout_output!r}\n"
+                f"stderr:\n{stderr_output!r}"
             )
 
             # Check exit code
