@@ -146,5 +146,9 @@ def test_cleanup_help_uses_backend_generic_target_wording(workdir: Path) -> None
 
     assert code == 0
     help_text = f"{stdout}\n{stderr}"
-    assert "delete broker target state and exit" in help_text
+    normalized_help = " ".join(help_text.split())
+    assert (
+        "destructively delete configured backend target state and exit"
+        in normalized_help
+    )
     assert "delete the database file and exit" not in help_text

@@ -37,6 +37,10 @@ The human registry columns are `Group`, `Rules`, `Approved cardinality`,
 the only codes the group may own. Approved cardinality records the permitted
 directive count and raw-diagnostic count by code. Every human group must have
 at least one live source directive.
+Retired group IDs remain unassigned and are not reused; live group numbering
+therefore need not be contiguous. `[RUFF-SUP-013]` was retired when the
+integral-only timestamp grammar simplified both former parser owners below the
+complexity threshold.
 
 This document also owns one complete, lexically sorted
 `Global raw-\`noqa\` inventory:` line using backticked `CODE=count`
@@ -58,7 +62,6 @@ aggregate count tripwire, not a second group registry.
 | `[RUFF-SUP-010]` | `C901` | `2` directives; raw: `C901=2` | Darwin provider discovery and durable phase completion keep cache publication, fallback, cancellation, lock ownership, and marker state local. | `tests/test_phaselock.py`; SM-DARWIN-XATTR and SM-PHASE-LOCK transition tables. | Moving lock stages across modules obscures unwind ownership. A generic state-machine layer adds indirection without a second adapter. Advisory acquisition was simplified at a real retry seam; further splitting these two owners would separate state publication from its failure order. | P3 retained after T9/T12 refactor and transition-contract review; user approved 2026-07-29. |
 | `[RUFF-SUP-011]` | `C901` | `1` directive; raw: `C901=1` | Retry attempt, elapsed-budget, stop, notification, and wait-generator decisions remain readable as one bounded retry algorithm. | `tests/test_retry.py`, watcher/setup retry integration, and interruption tests. | Callback wrappers or a generic retry DSL would scatter stop and error precedence while leaving the same decisions. | P3 retained; initial C901 activation; user approved 2026-07-29. |
 | `[RUFF-SUP-012]` | `C901` | `1` directive; raw: `C901=1` | Pytest override parsing keeps ordered argument-shape, worker, timeout, and compatibility precedence in one parser. | Script argument, development-tool, and subprocess suites. | A generic command framework enlarges the seam. Tiny branch wrappers hide rather than remove parser precedence. Packaging smoke orchestration was separately simplified into build, inspection, and install phases. | P3 retained after T12 refactor review; user approved 2026-07-29. |
-| `[RUFF-SUP-013]` | `C901` | `2` directives; raw: `C901=2` | Timestamp validation and numeric precedence stay in one parser family with exact accepted forms, error order, and ordering semantics. | Timestamp edge, resilience, property, and backend integration suites; SM-TIMESTAMP-GENERATOR transition table. | Parser-combinator machinery would be larger than the grammar. Score-only predicates would duplicate precedence and diagnostics. Unit-suffix conversion was extracted at a genuine seam. | P3 retained after T12 refactor and transition-contract review; user approved 2026-07-29. |
 | `[RUFF-SUP-014]` | `C901` | `1` directive; raw: `C901=1` | Queue fetch keeps selection, delivery, output, and empty-result precedence beside the public command result. | Command helper, fetch, CLI subprocess, and delivery suites. | A generic command runner obscures command-specific exit and cleanup contracts. Move, watch, and init were simplified through owner-local mode and lifecycle seams. | P3 retained after T12 refactor review; user approved 2026-07-29. |
 | `[RUFF-SUP-015]` | `C901` | `2` directives; raw: `C901=2` | Suspended sidecar and transactional-batch frames retain lock, transaction, owner-thread, poison, and cleanup-failure precedence in one frame. | Sidecar, generator-method, exactly-once, cross-thread poisoning, and SM-DELIVERY-POISON transition suites. | Extraction would pass live transaction state across helpers or create a second unsafe cleanup path. A generic state-machine runtime weakens locality. | P3 retained after transition-contract review; user approved 2026-07-29. |
 | `[RUFF-SUP-016]` | `C901` | `1` directive; raw: `C901=1` | Queue move retains delivery-mode selection, return semantics, generator closure, and public error translation at the queue interface. | Queue move, generator, delivery, watcher, typing, and public behavior suites. | Moving public-mode logic into detached helpers enlarges the interface. Stream cleanup now uses one shared iterator-close path and no longer needs an exception. | P3 retained after T12 refactor review; user approved 2026-07-29. |
@@ -81,7 +84,7 @@ aggregate count tripwire, not a second group registry.
 | `[RUFF-SUP-033]` | `C901` | `5` directives; raw: `C901=5` | Real watcher concurrency tests keep actor startup, exact expected observations, liveness, contention, results, and cleanup in one causal proof. | Watcher concurrency, race, thundering-herd, and SM-WATCHER-LIFECYCLE integration suites. | Mocks cannot prove scheduling or locks. Over-shared helpers would conceal which actor or queue failed and can recreate silent passes. Every peek observer now must see the complete sequence. | P3 retained after T8/T12 transition review; user approved 2026-07-29. |
 | `[RUFF-SUP-034]` | `C901` | `7` directives; raw: `C901=7` | Multiprocess watcher workers and scenarios keep spawn readiness, aggregate deadlines, queue activity, lock state, results, diagnostics, and cleanup together. | The five real multiprocess scenarios and SM-MULTIPROCESS-WATCHER transition table on supported platforms. | Thread mocks cannot prove spawn behavior. Generic worker/test DSLs hide PID, exit, and liveness diagnostics. Aggregate scaled deadlines, watcher-thread liveness, joins, and late-result inspection were strengthened in place. | P3 retained after T12 transition-contract review; user approved 2026-07-29. |
 
-Global raw-`noqa` inventory: `BLE001=103`, `C901=53`, `E402=2`, `F401=4`, `PYI034=6`, `PYI036=19`, `SIM115=1`
+Global raw-`noqa` inventory: `BLE001=103`, `C901=51`, `E402=2`, `F401=4`, `PYI034=6`, `PYI036=19`, `SIM115=1`
 
 The generated location index is enclosed by the unique markers below. Its
 columns are `Group`, `Locations`, `Directives`, and `Raw diagnostics`.
@@ -105,7 +108,6 @@ regeneration.
 | `[RUFF-SUP-010]` | `simplebroker/_phaselock.py::PhaseLockService.run_phases`; `simplebroker/_phaselock.py::_discover_darwin_xattr_provider` | 2 | `C901=2` |
 | `[RUFF-SUP-011]` | `simplebroker/_retry.py::execute_retry` | 1 | `C901=1` |
 | `[RUFF-SUP-012]` | `simplebroker/_scripts.py::_extract_pytest_runner_overrides` | 1 | `C901=1` |
-| `[RUFF-SUP-013]` | `simplebroker/_timestamp.py::TimestampGenerator._parse_numeric_timestamp`; `simplebroker/_timestamp.py::TimestampGenerator.validate` | 2 | `C901=2` |
 | `[RUFF-SUP-014]` | `simplebroker/commands.py::_process_queue_fetch` | 1 | `C901=1` |
 | `[RUFF-SUP-015]` | `simplebroker/db.py::BrokerCore._yield_transactional_batches`; `simplebroker/db.py::BrokerCore.sidecar` | 2 | `C901=2` |
 | `[RUFF-SUP-016]` | `simplebroker/sbqueue.py::Queue.move` | 1 | `C901=1` |

@@ -137,8 +137,10 @@ registry.
 ## Final C901 Reconciliation
 
 The implementation pass reduced the raw inventory from 76 findings to 53.
-All 23 removed findings crossed a real same-owner phase, validation, cleanup,
-or dispatch seam. The remaining 53 are reviewed P3 exceptions in
+The 2026-08-07 integral-only timestamp grammar then removed the obsolete float
+branches from both retained parser owners, reducing the live inventory to 51.
+All 25 removed findings crossed a real same-owner phase, validation, cleanup,
+dispatch, or contract-narrowing seam. The remaining 51 are reviewed P3 exceptions in
 [DOM-10.1.1], including former P2 candidates whose executable transition
 contracts showed that further splitting would separate live state from its
 failure or cleanup order.
@@ -155,7 +157,9 @@ failure or cleanup order.
 | `load_config` (19) | `load_config` (2) | One 31-field schema plus named default-path and project-config validation phases. |
 | advisory `acquire` (12) | `acquire` (10) | Named the shared lock-retry decision while keeping acquisition ownership local. |
 | `packaging_smoke_main` (12) | `packaging_smoke_main` (5) | Named build, artifact inspection, install, and smoke phases. |
-| unit-suffix parser (13) | `_parse_with_unit_suffix` (6) | Consolidated suffix conversion without changing parser precedence. |
+| `TimestampGenerator.validate` (11) | `validate` (9) | Removed float fallback and made each integral grammar's rejection/precedence explicit. |
+| unit-suffix parser (13) | `_parse_with_unit_suffix` (7) | Consolidated suffix conversion and made the decimal-only suffix boundary explicit without changing parser precedence. |
+| `_parse_numeric_timestamp` (11) | `_parse_numeric_timestamp` (5) | Removed fractional numeric branches; the owner now performs only decimal-integer unit conversion and range checks. |
 | `cli.main` (69) | `main` (10) | Named parse, global action, target preparation, and explicit command-family dispatch phases. |
 | `cmd_move` (12) | `cmd_move` (5) | Named all/next modes and explicit bounded-generator closure. |
 | `cmd_watch` (17) | `cmd_watch` (10) | Kept input resolution and the stateful callback as named subproblems; recomposed banner selection, watcher construction, and ordered flush/stop cleanup into the lifecycle owner after locality review. |

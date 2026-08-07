@@ -76,8 +76,9 @@ Normative library surfaces: `docs/specs/16-python-library-api.md`
 | `broker watch Q` | `QueueWatcher` / `QueueMoveWatcher` |
 | `broker dump` / `load` | `dump_lines` / `load_lines` (+ `open_broker`) |
 | `--vacuum` | reclaim claimed rows (`[SB-OPS-6]`) |
+| `--cleanup` | destructively delete backend target state (`[SB-OPS-7]`); no Python `Queue` equivalent |
 
-Normative residual ops: `docs/specs/17-ops.md` `[SB-OPS-1]`–`[SB-OPS-6]`.
+Normative residual ops: `docs/specs/17-ops.md` `[SB-OPS-1]`–`[SB-OPS-7]`.
 
 ## Exit codes and I/O (CLI)
 
@@ -144,6 +145,9 @@ place older ids behind a bound you already use. Normative:
 `docs/specs/14-timestamp-selection.md` `[SB-SELECT-1]`–`[SB-SELECT-4]`;
 CLI string forms `[SB-CLI-5]`.
 
+Bound strings do not accept fractional seconds in any grammar. Use integer
+`ms`, integer `ns`, or a native hybrid message ID for finer granularity.
+
 Queue names: tight grammar (alphanumeric + `_` `-` `.`). `@alias` is a
 separate **CLI** naming layer (`[SB-OPS-5]`); broadcast matches **queue
 names**, not aliases.
@@ -183,6 +187,13 @@ Public targets and discovery packaging: `docs/specs/16-python-library-api.md`
   verbs; different ops/durability. Zero-deps is the **default core** only.
 - `serialize_broker_target` may embed credentials; do not log it. Use
   display/redaction helpers for user-facing errors.
+
+`--cleanup` is a destructive, non-atomic backend-target operation. For SQLite
+it attempts the main database and the known `-journal`, `-wal`, `-shm`,
+`.lock`, `.status`, `.status.tmp.<pid>.<time_ns>`, and `.vacuum.lock` names.
+Concurrent SimpleBroker or raw SQLite activity has undefined storage and client
+outcomes. Stop all such activity and make any required backup first. Exact
+attempt, error, and exit semantics are `[SB-OPS-7]`.
 
 ## Dump / load boundaries
 

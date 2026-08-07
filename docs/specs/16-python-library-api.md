@@ -235,6 +235,12 @@ a full alternate backend may still require private modules under pin and the
 `backend_api_version` handshake described in the `simplebroker.ext` module
 docstring.
 
+`TimestampGenerator.validate()` is the public string-parser surface for
+timestamp bounds. Its accepted and rejected spellings are the three grammars in
+`[SB-CLI-5]`; library methods whose `after_timestamp` / `before_timestamp`
+parameters already accept integer message IDs do not reparse those integers as
+strings.
+
 _Implementation mapping_:
 - `simplebroker/ext.py` and its re-export sources
 - first-party `extensions/simplebroker_pg`, `extensions/simplebroker_redis`
@@ -298,11 +304,12 @@ boundary rather than in the storage layer:
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py` |
 | [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py` |
 | [SB-API-10] | `tests/test_public_surface.py`; `tests/test_python_library_api_contract_sb_api.py` |
-| [SB-API-11] | `tests/test_ext_imports.py`; `tests/test_python_library_api_contract_sb_api.py` |
+| [SB-API-11] | `tests/test_ext_imports.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_timestamp_bound_grammar.py` (public validator grammar) |
 | [SB-API-12] | `tests/test_python_library_api_contract_sb_api.py` (matrix present); kernel CLI↔Python map |
 
 ## Related Plans
 
+- `docs/plans/2026-08-06-pre-release-review-remediation-plan.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the

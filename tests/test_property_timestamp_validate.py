@@ -1,7 +1,8 @@
 """Property-based tests for TimestampGenerator.validate().
 
-validate() is the canonical multi-format timestamp parser used by the CLI
-(-m / --since flags) and extensions. Formats: native 19-digit hybrid IDs,
+validate() is the canonical multi-format timestamp parser used by CLI exact
+message targeting and the --after/--before bound flags, plus extensions. Formats:
+native 19-digit hybrid IDs,
 ISO-8601 dates/datetimes, unix seconds/ms/ns (bare, by digit-count heuristic,
 or with explicit s/ms/ns suffixes). These properties pin its contract:
 
@@ -70,10 +71,10 @@ def test_exact_mode_rejects_out_of_range_19_digit_ids(ts: int) -> None:
 
 @given(
     st.text(max_size=30).filter(
-        # Mirror the implementation gate (len==19 and str.isdigit() after
+        # Mirror the implementation gate (len==19 and str.isdecimal() after
         # strip) exactly, so this property is the complement of acceptance.
-        # str.isdigit (not an ASCII check) is intentional — see finding F3.
-        lambda s: not (len(s.strip()) == 19 and s.strip().isdigit())
+        # isdecimal() (not an ASCII check) preserves Unicode decimal digits.
+        lambda s: not (len(s.strip()) == 19 and s.strip().isdecimal())
     )
 )
 def test_exact_mode_rejects_everything_else(s: str) -> None:

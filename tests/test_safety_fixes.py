@@ -347,16 +347,19 @@ def test_cleanup_toctou_fix(workdir):
     assert rc == 0
 
     db_path = workdir / ".broker.db"
+    lock_path = workdir / ".broker.db.lock"
     assert db_path.exists()
+    assert lock_path.exists()
 
     # Delete the file manually to simulate race condition
     db_path.unlink()
 
-    # Cleanup should still succeed without error
+    # Cleanup should still succeed and remove the orphaned owned namespace.
     rc, out, err = run_cli("--cleanup", cwd=workdir)
     assert rc == 0
     assert out == ""
-    assert "Database not found, nothing to clean up" in err
+    assert "Database cleaned up" in err
+    assert not lock_path.exists()
 
     # Run cleanup again on non-existent file - should still succeed
     rc, out, err = run_cli("--cleanup", cwd=workdir)

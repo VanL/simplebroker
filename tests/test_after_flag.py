@@ -30,13 +30,13 @@ VALID_TIMESTAMPS = [
 UNIT_SUFFIX_TESTS = [
     # (input, description, should_work)
     ("1705329000s", "Unix seconds with suffix", True),
-    ("1705329000.5s", "Unix float seconds with suffix", True),
+    ("1705329000.5s", "Fractional Unix seconds with suffix", False),
     ("1705329000000ms", "Unix milliseconds with suffix", True),
     ("1705329000000000000ns", "Unix nanoseconds with suffix", True),
     ("1837025672140161024", "Native hybrid", True),
     ("1837025672140161024hyb", "Native hybrid with hyb suffix", False),
     ("1.5hyb", "Float hybrid timestamp", False),
-    ("1.532", "Float seconds", True),  # Should work - like time.time() output
+    ("1.532", "Fractional seconds", False),
     ("1e10s", "Scientific notation", False),
 ]
 
@@ -63,14 +63,21 @@ def get_human_readable_test_data():
         (now.strftime("%Y-%m-%d"), "ISO date today", True),
         (tomorrow.strftime("%Y-%m-%d"), "ISO date tomorrow", False),
         # ISO datetime formats
-        ((now - datetime.timedelta(hours=1)).isoformat(), "ISO datetime 1h ago", True),
         (
-            (now + datetime.timedelta(hours=1)).isoformat(),
+            (now - datetime.timedelta(hours=1)).replace(microsecond=0).isoformat(),
+            "ISO datetime 1h ago",
+            True,
+        ),
+        (
+            (now + datetime.timedelta(hours=1)).replace(microsecond=0).isoformat(),
             "ISO datetime 1h future",
             False,
         ),
         (
-            (now - datetime.timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+            (now - datetime.timedelta(hours=1))
+            .replace(microsecond=0)
+            .isoformat()
+            .replace("+00:00", "Z"),
             "ISO datetime with Z",
             True,
         ),
@@ -89,9 +96,7 @@ def get_human_readable_test_data():
 INVALID_TIMESTAMPS = [
     ("", "Invalid timestamp: empty string"),  # Empty string validation
     ("abc", "Invalid timestamp: abc"),
-    ("-1", "Invalid timestamp: cannot be negative"),
-    # Note: "1.5" is actually valid - it means 1.5 seconds after Unix epoch (Jan 1, 1970)
-    # This is accepted after time.time() returns floats and fractional seconds are common
+    ("-1", "timestamp bounds require integral seconds"),
     ("1e10", "Invalid timestamp: scientific notation not supported"),
     ("0x123", "Invalid timestamp: 0x123"),
     ("123abc", "Invalid timestamp: 123abc"),
@@ -527,7 +532,7 @@ def test_after_iso_datetime_formats(workdir):
     time.sleep(0.2)  # 200ms gap to ensure clear separation
 
     # Get timestamp between messages
-    checkpoint = datetime.datetime.now(datetime.UTC)
+    checkpoint = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
 
     time.sleep(0.2)  # 200ms gap
     run_cli("write", queue_name, "msg2", cwd=workdir)
@@ -1177,7 +1182,9 @@ def test_after_naive_datetime_utc_assumption(workdir):
     # Convert native timestamp to datetime
     # Native timestamp is microseconds after epoch << 12
     us_after_epoch = native_ts >> 12
-    dt_utc = datetime.datetime.fromtimestamp(us_after_epoch / 1_000_000, datetime.UTC)
+    dt_utc = datetime.datetime.fromtimestamp(
+        us_after_epoch / 1_000_000, datetime.UTC
+    ).replace(microsecond=0)
 
     # Create naive datetime (no timezone info)
     dt_naive = dt_utc.replace(tzinfo=None)
@@ -1225,7 +1232,7 @@ def test_after_error_messages_are_helpful(workdir):
     # Test 2: Negative values
     rc, _out, err = run_cli("peek", queue_name, "--after=-1", cwd=workdir)
     assert rc == 1
-    assert "Invalid timestamp: cannot be negative" in err
+    assert "timestamp bounds require integral seconds" in err
 
     # Test 3: Invalid ISO format
     rc, _out, err = run_cli("peek", queue_name, "--after", "2024-13-45", cwd=workdir)

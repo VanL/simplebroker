@@ -50,7 +50,8 @@ def validate_database(file_path: Path, verify_magic: bool = True) -> None:  # no
     conn: sqlite3.Connection | None = None
     cursor: sqlite3.Cursor | None = None
     try:
-        conn = sqlite3.connect(f"file:{file_path}?mode=ro", uri=True)
+        database_uri = file_path.resolve().as_uri()
+        conn = sqlite3.connect(f"{database_uri}?mode=ro", uri=True)
         cursor = conn.cursor()
         try:
             cursor.execute("PRAGMA schema_version")

@@ -36,6 +36,10 @@ from .project import _configured_backend_target, resolve_broker_target
 # Cache the parser for better startup performance
 _PARSER_CACHE = None
 
+_TIMESTAMP_BOUND_LIMIT = (
+    "fractional seconds unsupported; use integer ms, integer ns, or a native hybrid ID"
+)
+
 # Get the config
 _config = load_config()
 
@@ -130,13 +134,14 @@ def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
         metavar="TIMESTAMP",
         help="return messages after timestamp (supports: ISO date '2024-01-15', "
         "Unix time '1705329000' or '1705329000s', milliseconds '1705329000000ms', "
-        "or native hybrid timestamp)",
+        f"or native hybrid timestamp; {_TIMESTAMP_BOUND_LIMIT})",
     )
     parser.add_argument(
         "--before",
         type=str,
         metavar="TIMESTAMP",
-        help="return messages before timestamp (supports same formats as --after)",
+        help="return messages before timestamp (same formats and integral-only "
+        "limit as --after)",
     )
 
 
@@ -203,7 +208,9 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     )
     parser.add_argument("--version", action="store_true", help="show version")
     parser.add_argument(
-        "--cleanup", action="store_true", help="delete broker target state and exit"
+        "--cleanup",
+        action="store_true",
+        help="destructively delete configured backend target state and exit",
     )
     parser.add_argument(
         "--vacuum", action="store_true", help="remove claimed messages and exit"
@@ -329,13 +336,13 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         "--after",
         type=str,
         metavar="TIMESTAMP",
-        help="only move messages newer than timestamp",
+        help=f"only move messages newer than timestamp ({_TIMESTAMP_BOUND_LIMIT})",
     )
     move_parser.add_argument(
         "--before",
         type=str,
         metavar="TIMESTAMP",
-        help="only move messages older than timestamp",
+        help=f"only move messages older than timestamp ({_TIMESTAMP_BOUND_LIMIT})",
     )
     move_parser.add_argument(
         "--json",
@@ -462,7 +469,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         "--after",
         type=str,
         metavar="TIMESTAMP",
-        help="watch for messages after timestamp",
+        help=f"watch for messages after timestamp ({_TIMESTAMP_BOUND_LIMIT})",
     )
 
     # Init command - does not inherit global -d/-f flags
@@ -914,7 +921,7 @@ def _parse_cli_args(
     raw_args = list(sys.argv[1:])
     status_probe = ArgumentProcessor()
     status_probe.process(raw_args)
-    if "--status" in status_probe.global_args:
+    if {"--status", "--cleanup"}.intersection(status_probe.global_args):
         processed_args: list[str] = []
         options_ended = False
         for arg in raw_args:
@@ -997,6 +1004,11 @@ def _run_cleanup(
     try:
         if resolved_target.legacy_sqlite_path_mode:
             assert db_path is not None
+            _validate_safe_path_components(
+                str(args.dir), "Directory argument (-d/--dir)"
+            )
+            if not resolved_target.used_project_scope:
+                _validate_path_traversal_prevention(args.file)
 
             try:
                 file_existed = resolved_target.plugin.cleanup_target(

@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [6.0.2] - 2026-08-06
 
 ### Fixed
+- Timestamp bounds now use integral seconds only. Fractional components in bare
+  numeric, suffixed numeric, and ISO-8601 spellings are rejected with guidance
+  to use integer `ms`, integer `ns`, or a native hybrid message ID. Numeric
+  bounds also require decimal-digit-only spellings; forms such as
+  `1_705_329_000` or `+99999999999` can no longer select the wrong unit because
+  punctuation was counted during unit classification.
+- SQLite `--cleanup` now attempts the configured main database plus its
+  `-journal`, `-wal`, `-shm`, `.lock`, `.status`,
+  `.status.tmp.<pid>.<time_ns>`, and `.vacuum.lock` state. It remains
+  deliberately destructive and non-atomic. Concurrent SQLite storage outcomes
+  are undefined per SQLite upstream, while validation, exit, quiet, and
+  partial-failure diagnostics remain defined.
 - Made shared SQL timestamp resynchronization use guarded high-water advance,
   so a stale PostgreSQL repair cannot overwrite a larger value committed by a
   concurrent allocator. Repair diagnostics and the local generator cache now
@@ -50,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `simplebroker-redis` packages to 3.5.1, raised both extension core floors to
   `simplebroker>=6.0.2`, and raised the root optional backend floors to those
   extension versions.
+
+### Documented
+- Clarified the SQLite filesystem access boundary: cross-user deployments must
+  grant every intended writer access to the main database, all SQLite and
+  SimpleBroker companion files, and the containing directory on POSIX and
+  Windows. SimpleBroker does not automatically provision or preserve a
+  group-sharing policy.
+- Recorded the SimpleBroker 6.0.0 removal of the unsupported
+  `simplebroker.helpers` compatibility module; import supported helpers from
+  their documented public modules instead.
 
 ### simplebroker-pg 3.5.1
 - Synchronized release for SimpleBroker 6.0.2. Shared SQL timestamp repair now

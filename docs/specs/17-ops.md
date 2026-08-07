@@ -3,7 +3,7 @@
 Normative residual **queue and broker operations** not owned by the
 CLI-packaging, delivery, broadcast, identity, selection, I/O, or library-surface
 verticals: implicit queue existence, metadata, physical delete, rename, aliases,
-and vacuum of claimed rows.
+vacuum of claimed rows, and destructive backend target cleanup.
 
 Write / read / peek / move / watch **meanings** remain
 `[SB-DELIVERY-*]`, `[SB-ID-*]`, `[SB-SELECT-*]`, `[SB-BCAST-*]`. CLI exit codes
@@ -172,6 +172,74 @@ _Implementation mapping_:
 - `tests/test_vacuum_compact.py`, `tests/test_queue_metadata.py`,
   `tests/test_maintenance_policy.py`, `tests/test_constants.py`
 
+## Destructive backend target cleanup [SB-OPS-7]
+
+Global `--cleanup` is an explicitly destructive request to delete the
+configured backend target state and exit. It is not a backup, rollback, or
+quiescent-maintenance operation. Backend-specific effects are authoritative;
+CLI exit codes and streams follow `[SB-CLI-1]` / `[SB-CLI-2]`.
+
+SQLite `:memory:` and empty targets have no owned filesystem namespace; cleanup
+is a successful no-op and derives no filenames for them. For a SQLite filesystem
+target, one expanded, resolved path is frozen for validation and all owned-name
+derivation.
+
+For a SQLite filesystem target, cleanup owns the complete known SimpleBroker
+filesystem namespace: the resolved configured main path; names formed by
+appending `-journal`, `-wal`, `-shm`, `.lock`, `.status`, and `.vacuum.lock`;
+and crash-residue entries matching
+`.status.tmp.<decimal-pid>.<decimal-time_ns>` in the same directory. Both
+variable components are nonempty ASCII decimal digits. No other prefix, glob,
+or recursive scan is authorized.
+
+Path derivation and main-path inspection are a zero-delete ownership preflight:
+an inspection error aborts before mutation. Status-temp enumeration is
+best-effort; a missing parent is empty, while any other enumeration error is
+recorded, every fixed owned name is still attempted, and the command later
+reports the error. Matching temp entries yielded before a mid-iteration error
+remain candidates and are attempted in lexical order. If the main path exists,
+it must validate as an initialized SimpleBroker database before any owned entry
+is unlinked; failed validation leaves the whole namespace untouched. If the
+main path is absent, the explicit destructive request may still unlink the
+complete orphan namespace. An owned entry that is a symlink, including a
+dangling symlink, is counted and unlinked without following it.
+
+After validation, cleanup attempts `.status.tmp.*` residues, `.status`,
+`.vacuum.lock`, `.lock`, `-journal`, `-wal`, `-shm`, then the main path. Fixed
+names are unlinked directly: success means found and `FileNotFoundError` means
+absent. A main or temp entry observed earlier still counts as found if it
+disappears before unlink. Cleanup attempts every candidate even after a prior
+failure; a partial result is possible and irreversible. Exit `0` means
+enumeration succeeded and every candidate was absent or unlinked. After all
+possible attempts, an enumeration or unlink failure produces one nonzero
+operational-error result and one stderr diagnostic naming the failed attempts
+and stating that other entries may already be gone. Cleanup does not retry or
+roll back. `--quiet` suppresses success/no-op status but not this error. No
+result promises that a concurrent process will not recreate a deleted name.
+
+Apart from short-lived read-only ownership validation when the main file exists,
+cleanup does not open SQLite, checkpoint, or wait for other connections. If any
+active SimpleBroker operation/process using the target or any raw SQLite
+connection overlaps cleanup, **the exact storage, coordination, and client
+outcomes are undefined**. This includes durability and visibility of old or new
+writes, which database generation a client observes, whether an operation errors
+or appears to succeed, whether owned names reappear, whether generations
+interfere, and when unlinked disk space is reclaimed. This is SQLite's upstream
+boundary for unlinking an open database on Unix, not a SimpleBroker concurrency
+guarantee. Active SimpleBroker setup, phaselock, status-publication, and vacuum
+operations are also undefined overlap because deleting a held lock path can
+split coordination across old and replacement inodes. Concurrent directory-entry
+replacement is likewise outside the validation guarantee. On Windows and other
+systems that refuse deletion of an open entry, those failures follow the same
+aggregate error contract; earlier successful deletions are not rolled back.
+Operators who need a predictable result must stop all SimpleBroker activity and
+raw SQLite clients before cleanup and must make any required backup first.
+
+_Implementation mapping_:
+- `simplebroker/_backends/sqlite/plugin.py` (`cleanup_target`)
+- `simplebroker/_backends/sqlite/validation.py` (ownership validation)
+- `simplebroker/cli.py` (exit, quiet, JSON, and diagnostics)
+
 ## What this family does not own
 
 | Concern | Owner |
@@ -192,6 +260,7 @@ _Implementation mapping_:
 - Aliases: `db.py`, `commands.py`
 - Delete: `db.py`, `sbqueue.py`, `commands.py`
 - Vacuum: `commands.py`, `cli.py`, maintenance helpers
+- Cleanup: SQLite backend plugin/validation and `cli.py`
 
 ## Verification
 
@@ -203,9 +272,11 @@ _Implementation mapping_:
 | [SB-OPS-4] | `tests/test_queue_rename.py`; `tests/test_cli_rename.py`; `tests/test_operations_contract_sb_ops.py` |
 | [SB-OPS-5] | `tests/test_aliases_db.py::test_alias_and_target_use_queue_name_grammar`, `tests/test_aliases_db.py::test_alias_rejects_chain_in_creation_order_without_mutation`, `tests/test_aliases_db.py::test_alias_add_revalidates_against_live_state`, `tests/test_aliases_db.py::test_legacy_alias_chain_remains_one_hop_visible_and_removable`; `tests/test_alias_cli.py::test_alias_add_help_calls_target_a_canonical_queue_name`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_concurrent_alias_adds_have_one_winner_and_flat_live_state` |
 | [SB-OPS-6] | `tests/test_operations_contract_sb_ops.py::test_ops_language_core_promises`; `tests/test_maintenance_policy.py::test_vacuum_eligibility_preserves_ratio_and_absolute_rules`; `tests/test_queue_metadata.py::test_vacuum_removes_claimed_only_queue_existence`; `tests/test_vacuum_compact.py::test_vacuum_with_compact_flag` |
+| [SB-OPS-7] | `tests/test_operations_contract_sb_ops.py::test_ops_language_core_promises`; `tests/test_cli_argument_parsing.py::test_cleanup_help_uses_backend_generic_target_wording`; `tests/test_cleanup.py::test_cleanup_removes_complete_owned_namespace_only`; `tests/test_cleanup.py::test_cleanup_nonexistent_database`; `tests/test_cleanup.py::test_cleanup_rejects_plain_file`; `tests/test_cleanup.py::test_cleanup_rejects_directory_main_before_deleting_sidecars`; `tests/test_cleanup.py::test_cleanup_rejects_unreadable_main_before_deleting_sidecars`; `tests/test_cleanup.py::test_cleanup_rejects_sqlite_db_with_wrong_magic`; `tests/test_cleanup.py::test_cleanup_removes_owned_orphans_when_main_is_absent`; `tests/test_cleanup.py::test_cleanup_attempts_every_later_path_after_each_unlink_failure`; `tests/test_cleanup.py::test_cleanup_unlinks_owned_symlinks_without_touching_targets`; `tests/test_cleanup.py::test_cleanup_observed_main_disappearance_still_counts_as_found`; `tests/test_cleanup.py::test_cleanup_enumerated_temp_disappearance_still_counts_as_found`; `tests/test_cleanup.py::test_cleanup_aggregates_multiple_cli_failures_and_json_error`; `tests/test_cleanup.py::test_cleanup_windows_open_handle_refusal_is_clean_and_nonrollback`; `tests/test_cleanup.py::test_cleanup_validates_literal_uri_metacharacters`; `tests/test_cleanup.py::test_cleanup_cli_accepts_literal_percent_filename`; `tests/test_cleanup.py::test_cleanup_cli_retains_unsafe_metacharacter_rejection`; `tests/test_cleanup.py::test_cleanup_no_namespace_targets_are_noops_without_path_derivation`; `tests/test_cleanup.py::test_cleanup_path_derivation_error_is_a_clean_database_error`; `tests/test_cleanup.py::test_cleanup_freezes_resolved_symlink_target_namespace`; `tests/test_cleanup.py::test_cleanup_main_lstat_failure_is_a_zero_delete_gate`; `tests/test_cleanup.py::test_cleanup_enumeration_failure_still_attempts_frozen_names_and_all_fixed`; `tests/test_cleanup.py::test_cleanup_reports_enumeration_before_ordered_unlink_failures`; `tests/test_cleanup.py::test_cleanup_multiple_temp_failures_are_reported_in_lexical_order`; `tests/test_cleanup.py::test_cleanup_with_quiet` |
 
 ## Related Plans
 
+- `docs/plans/2026-08-06-pre-release-review-remediation-plan.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;

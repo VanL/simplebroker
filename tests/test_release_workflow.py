@@ -767,3 +767,59 @@ def test_uv_uses_each_jobs_synced_python_without_environment_warnings() -> None:
     assert 'UV_PYTHON: "3.12"' in _workflow_text("fuzz.yml")
     for workflow_name in RELEASE_WORKFLOWS:
         assert 'UV_PYTHON: "3.13"' in _workflow_text(workflow_name)
+
+
+def test_finalization_probes_run_once_in_their_owning_linux_workflows() -> None:
+    expected_probes = {
+        "test.yml": (
+            "test",
+            "${{ matrix.os }}",
+            "matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'",
+            "tests/test_cross_thread_generator_probe.py",
+            "uv run --frozen --no-sync pytest -n0 -q",
+        ),
+        "test-pg-extension.yml": (
+            "test-pg",
+            "ubuntu-latest",
+            "matrix.python-version == '3.13'",
+            "extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py",
+            "uv run --frozen --no-sync ./bin/pytest-pg --fast -n0 -q",
+        ),
+        "test-redis-extension.yml": (
+            "test-redis",
+            "ubuntu-latest",
+            "matrix.python-version == '3.13'",
+            "extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py",
+            "uv run --frozen --no-sync ./bin/pytest-redis --fast -n0 -q",
+        ),
+    }
+    assertion = 'test "${SIMPLEBROKER_RUN_FINALIZATION_PROBE}" = "1"'
+    probe_paths = {probe_path for _, _, _, probe_path, _ in expected_probes.values()}
+
+    for workflow_name, expected in expected_probes.items():
+        job_name, runner, condition, probe_path, command = expected
+        workflow_text = _workflow_text(workflow_name)
+        job_match = re.search(
+            rf"(?ms)^  {re.escape(job_name)}:\n.*?(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+            workflow_text,
+        )
+        assert job_match is not None
+        job = job_match.group(0)
+        matching_steps = [
+            step
+            for step in re.findall(r"(?ms)^    - name: .*?(?=^    - name:|\Z)", job)
+            if probe_path in step
+        ]
+
+        assert f"    runs-on: {runner}" in job
+        assert len(matching_steps) == 1
+        step = matching_steps[0]
+        assert f"      if: {condition}" in step
+        assert step.count('SIMPLEBROKER_RUN_FINALIZATION_PROBE: "1"') == 1
+        assert step.count(assertion) == 1
+        assert step.count(f"{command} {probe_path}") == 1
+        assert step.index(assertion) < step.index(f"{command} {probe_path}")
+        assert "--cov" not in step
+        assert workflow_text.count(probe_path) == 1
+        for other_probe_path in probe_paths - {probe_path}:
+            assert other_probe_path not in workflow_text

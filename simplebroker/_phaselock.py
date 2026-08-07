@@ -975,6 +975,10 @@ class PhaseLockService:
         Use this only when the target itself is known to be stale or absent.
         Advisory lock files are deliberately left alone because existence is not
         ownership, and another thread or process may currently hold the lock.
+        Explicit destructive global ``--cleanup`` is the sole exception to the
+        ordinary lifecycle rule. If it overlaps phaselock/status activity,
+        deletion and recreation can split coordination across file generations;
+        [SB-OPS-7] makes that overlap undefined.
         """
 
         for path in self._status_paths():

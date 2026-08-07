@@ -54,6 +54,15 @@ jobs:
       run: |
         uv run --frozen --no-sync ./bin/pytest-redis
 
+    - name: Run Redis cross-thread finalization probe
+      if: matrix.python-version == '3.13'
+      env:
+        SIMPLEBROKER_RUN_FINALIZATION_PROBE: "1"
+        PYTEST_ADDOPTS: ""
+      run: |
+        test "${SIMPLEBROKER_RUN_FINALIZATION_PROBE}" = "1"
+        uv run --frozen --no-sync ./bin/pytest-redis --fast -n0 -q extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py
+
   lint:
     runs-on: ubuntu-latest
     env:

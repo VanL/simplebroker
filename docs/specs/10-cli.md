@@ -108,9 +108,25 @@ ids for the predicates in `docs/specs/14-timestamp-selection.md`
 Heuristics may distinguish bare numeric values for interactive use; explicit
 suffixes (`s` / `ms` / `ns`) are recommended when a particular unit is intended.
 
-Digits in these forms may be any Unicode decimal digits (`str.isdecimal()`).
-They are folded to ASCII before parsing, so a value's script never changes how
+Digits in these forms may be any Unicode decimal digits. Bound strings parse
+under exactly three grammars, applied after whitespace stripping and digit
+folding:
+
+1. **ISO-8601** follows that grammar but does not permit a fractional-second
+   component.
+2. **Unsuffixed numeric** requires the entire candidate to satisfy
+   `str.isdecimal()` before unit classification. Underscore separators, sign
+   prefixes, and other characters accepted by `int()` are rejected rather than
+   silently changing the unit classification.
+3. **Suffixed numeric** (`<digits><unit>`) requires the complete number portion
+   to satisfy `str.isdecimal()` under the same rejection rule.
+
+Digits are folded to ASCII before parsing, so a value's script never changes how
 it is interpreted: `20240115` and `٢٠٢٤٠١١٥` select the same instant.
+Fractional seconds are unsupported in every grammar. Use integer `ms`, integer
+`ns`, or a native hybrid message ID for finer granularity. A string failing all
+three grammars is rejected with an actionable bound-parse error that states this
+limitation.
 
 Exact single-message targeting (`-m` / `--message`) is not this clause: it
 accepts only an exact 19-digit broker message id and is owned by `[SB-ID-4]`.
@@ -120,10 +136,12 @@ no match is silent and exits `2` (`[SB-CLI-1]`).
 Integer predicates and filter meaning after parsing are `[SB-SELECT-*]`.
 
 _Implementation mapping_:
-- `simplebroker/commands.py` (timestamp string validation)
+- `simplebroker/_timestamp.py` (`TimestampGenerator.validate`)
+- `simplebroker/cli.py` (`--after` / `--before` presentation)
 
 ## Related Plans
 
+- `docs/plans/2026-08-06-pre-release-review-remediation-plan.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the
@@ -144,3 +162,14 @@ _Implementation mapping_:
 - `tests/test_cli_contract_sb_cli.py` — [SB-CLI-2], [SB-CLI-3], [SB-CLI-4]
 - `tests/test_timestamp_selection_contract_sb_select.py` — [SB-CLI-5] structural
   bind with `[SB-SELECT-*]`
+- `[SB-CLI-5]` exact executable evidence:
+  - `tests/test_timestamp_bound_grammar.py::test_public_validator_rejects_bare_fraction_with_finer_grain_guidance`
+  - `tests/test_timestamp_bound_grammar.py::test_public_validator_rejects_invalid_suffixed_numeric_with_guidance`
+  - `tests/test_timestamp_bound_grammar.py::test_public_validator_rejects_iso_fraction_with_guidance`
+  - `tests/test_timestamp_bound_grammar.py::test_public_validator_rejects_sign_and_underscore_pseudonumerics_with_guidance`
+  - `tests/test_timestamp_bound_grammar.py::test_public_validator_rejects_scientific_notation_with_guidance`
+  - `tests/test_timestamp_bound_grammar.py::test_public_validator_preserves_integral_timestamp_forms`
+  - `tests/test_timestamp_bound_grammar.py::test_public_validator_preserves_exact_hybrid_message_ids`
+  - `tests/test_timestamp_bound_grammar.py::test_cli_bound_flags_reject_fractions_on_stderr`
+  - `tests/test_timestamp_bound_grammar.py::test_cli_json_scientific_notation_error_has_actionable_guidance`
+  - `tests/test_timestamp_bound_grammar.py::test_cli_bound_help_teaches_integral_limit_and_alternatives`

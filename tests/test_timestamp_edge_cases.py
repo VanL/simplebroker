@@ -288,14 +288,14 @@ class TestTimestampEdgeCases:
             TimestampGenerator.validate("hello")
 
     def test_validate_negative_timestamps(self):
-        """Test that negative timestamps are rejected."""
-        with pytest.raises(TimestampError, match="cannot be negative"):
+        """Signed pseudo-numerics are rejected with integral-bound guidance."""
+        with pytest.raises(TimestampError, match="integral seconds"):
             TimestampGenerator.validate("-1000")
 
-        with pytest.raises(TimestampError, match="cannot be negative"):
+        with pytest.raises(TimestampError, match="integral seconds"):
             TimestampGenerator.validate("-1000s")
 
-        with pytest.raises(TimestampError, match="cannot be negative"):
+        with pytest.raises(TimestampError, match="integral seconds"):
             TimestampGenerator.validate("-1000ms")
 
     def test_validate_exact_mode_errors(self):
@@ -417,14 +417,11 @@ class TestTimestampEdgeCases:
         result = TimestampGenerator.validate("123456789012")
         assert result > 0
 
-        # Test float with many decimal places
-        result = TimestampGenerator.validate("1234567890.123456789")
-        assert result > 0
-
-    def test_fractional_unix_milliseconds_preserve_the_fraction(self) -> None:
-        """Fractional milliseconds must be converted before hybrid-bit masking."""
-
-        assert TimestampGenerator.validate("123456789012.5") == 123456789012496384
+    def test_fractional_numeric_bounds_are_rejected(self) -> None:
+        """Bare numeric bounds do not accept fractional seconds or milliseconds."""
+        for value in ("1234567890.123456789", "123456789012.5"):
+            with pytest.raises(TimestampError, match="integral seconds"):
+                TimestampGenerator.validate(value)
 
     def test_iso8601_timezone_handling(self):
         """Test ISO 8601 parsing with different timezone formats."""

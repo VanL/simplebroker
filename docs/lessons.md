@@ -248,3 +248,56 @@ Dated moment-tier entries (foldable after age floor and distillation).
   concurrently changing storage; weaker snapshot contracts must be named.
   (Harvested from 2026-05-05-review-findings-remediation-plan and
   2026-07-16-code-review-findings-remediation-plan; source `197629e2`.)
+- 2026-08-06: A well-formed plan is not a verified plan. Agent-authored
+  plans reproduce hardening form (invariants, stop gates, anti-mocking
+  clauses) with high fluency while still naming nonexistent surfaces
+  (`--since`, `evalsha`) and proposing lock-order deadlocks. Review must
+  existence-check every named flag, test path, seam, and driver order
+  against executable code before grading anything else; form quality
+  carries no information. (From rounds 1–2 of
+  2026-08-06-pre-release-review-remediation-plan.)
+- 2026-08-06: Fix proposals touching a registered concurrency state
+  machine, lock order, or object lifecycle are architectural regardless
+  of diff size. Three of five "small debts" in one pre-release plan were
+  a PostgreSQL lock-order cycle, a reentrant-lock self-deadlock, and a
+  structurally unreachable finalizer — each looked like a one-liner.
+  Classify by the surface touched, not the lines changed. (From F6–F8 of
+  the same plan's round-1 review.)
+- 2026-08-06: Negative knowledge stored in a closed plan does not
+  transfer; refusals must live at the tier the next actor loads before
+  judgment. The cross-thread ownership refusal recorded in the
+  2026-07-13 plan's Unit D was read, cited, and still re-proposed as
+  "healing" until it was promoted to [REV-THEORY-005]. Record *why* a
+  rejected fix was dangerous wherever the next proposer will look, not
+  only where the rejection happened. (From the 2026-07-27 generator
+  poisoning review arc.)
+- 2026-08-06: SQL `BEGIN EXCLUSIVE` is not SQLite's WAL lifecycle lock,
+  and no in-process SQL protocol can quiesce a database for deletion.
+  Round-3 probes disproved the plausible protocol on every leg:
+  `PRAGMA wal_checkpoint(TRUNCATE)` inside `BEGIN EXCLUSIVE` fails
+  with `database table is locked` even with zero other connections; in
+  WAL mode `BEGIN EXCLUSIVE` equals `BEGIN IMMEDIATE` and excludes
+  only writers — idle holders and active readers coexist with it; and
+  unlinking an open database is upstream-undefined
+  (howtocorrupt.html §2.5: old and replacement generations can share
+  pathname-derived WAL/SHM names). WAL last-close cleanup is driven by
+  SQLite's internal main-file `SQLITE_LOCK_EXCLUSIVE`, which SQL
+  cannot take. Consequences: an enforceable protective cleanup would
+  need out-of-band lifetime coordination across every connection (its
+  own class-5 design); the shipped alternative is revision 5's
+  explicitly destructive contract — delete the bounded owned namespace
+  under explicit authority, with concurrent-storage outcomes
+  documented as undefined per upstream, and deterministic CLI
+  attempt/diagnostic/exit semantics. An earlier version of this entry
+  taught the disproved exclusive-transaction protocol as durable
+  guidance hours after it was drafted — the lessons ledger is itself a
+  reviewable surface, not a place confident text lands unreviewed.
+  (From rounds 3–5 of 2026-08-06-pre-release-review-remediation-plan;
+  supersedes the rejected R2-era entry in place, pre-landing.)
+- 2026-08-07: A closed plan's unexecuted task with no deviation row is
+  invisible debt. The cross-thread generator finalization probes existed in
+  all three backend suites, but their opt-in gates were never enabled in the
+  owning CI workflows. Closure review must diff every planned task against
+  executable evidence, not merely accept a checked list or a passing default
+  suite. (From Unit I of
+  2026-08-06-pre-release-review-remediation-plan.)

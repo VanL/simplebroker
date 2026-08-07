@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -15,6 +16,18 @@ from .conftest import run_cli
 
 SPEC = Path(__file__).parents[1] / "docs" / "specs" / "10-cli.md"
 README = Path(__file__).parents[1] / "README.md"
+SB_CLI_5_EVIDENCE = {
+    "test_public_validator_rejects_bare_fraction_with_finer_grain_guidance",
+    "test_public_validator_rejects_invalid_suffixed_numeric_with_guidance",
+    "test_public_validator_rejects_iso_fraction_with_guidance",
+    "test_public_validator_rejects_sign_and_underscore_pseudonumerics_with_guidance",
+    "test_public_validator_rejects_scientific_notation_with_guidance",
+    "test_public_validator_preserves_integral_timestamp_forms",
+    "test_public_validator_preserves_exact_hybrid_message_ids",
+    "test_cli_bound_flags_reject_fractions_on_stderr",
+    "test_cli_json_scientific_notation_error_has_actionable_guidance",
+    "test_cli_bound_help_teaches_integral_limit_and_alternatives",
+}
 
 
 def test_sb_cli_1_closed_pipe_command_inventory_is_exact() -> None:
@@ -180,3 +193,29 @@ def test_sb_cli_4_error_inventory_and_public_paths(workdir: Path) -> None:
         assert tuple(payload) == _JSON_ERROR_KEYS
         assert payload["error"] == expected_code
         assert payload["retryable"] is False
+
+
+def test_sb_cli_5_exact_evidence_manifest() -> None:
+    verification = SPEC.read_text(encoding="utf-8").split("## Verification", 1)[1]
+    marker = "- `[SB-CLI-5]` exact executable evidence:"
+    assert marker in verification
+    evidence = verification.split(marker, 1)[1]
+    cited_nodes = set(
+        re.findall(
+            r"`tests/test_timestamp_bound_grammar\.py::([A-Za-z_][A-Za-z0-9_]*)`",
+            evidence,
+        )
+    )
+    assert cited_nodes == SB_CLI_5_EVIDENCE
+
+    tree = ast.parse(
+        (README.parent / "tests" / "test_timestamp_bound_grammar.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    executable_nodes = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert cited_nodes <= executable_nodes

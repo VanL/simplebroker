@@ -160,7 +160,11 @@ def test_read_json_invalid_timestamp_error_is_json(workdir):
     payload = json.loads(err)
     assert payload == {
         "error": "INVALID_TIMESTAMP",
-        "message": "Invalid timestamp: invalid",
+        "message": (
+            "Invalid timestamp: invalid; timestamp bounds require integral seconds. "
+            "For finer granularity, use integer ms, integer ns, or a native hybrid "
+            "message ID."
+        ),
         "retryable": False,
     }
 

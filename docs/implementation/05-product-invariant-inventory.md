@@ -16,7 +16,7 @@ behavior). Specs: `docs/specs/10-cli.md` … `17-ops.md`.
 | Ordered timestamp selection and filter consequences | Strict open bounds as filters; late older ids under a bound; watch progress | `14-timestamp-selection.md` `[SB-SELECT-*]`; CLI string forms `[SB-CLI-5]` | `SB-SELECT-*` | `tests/test_timestamp_selection_contract_sb_select.py`; `tests/test_after_flag.py` | `canonical-spec` |
 | Dump/load / claimed | Dump/load v1 format; pending-only dump; fresh load; claimed inspection | `15-persistence-io.md` `[SB-IO-*]` | `SB-IO-*` | `tests/test_persistence_io_contract_sb_io.py` exact-binds claimed-inspection evidence and routine versus opt-in cross-backend pipes; `tests/test_dump_load.py` | `canonical-spec` |
 | Python library / embedding API surfaces | Public root/`ext`/commands packaging, targets, sidecar entry | `16-python-library-api.md` `[SB-API-*]` | `SB-API-*` | `tests/test_python_library_api_contract_sb_api.py`; ext/public-surface suites | `canonical-spec` |
-| Queue and broker residual operations | Implicit queues, metadata, physical delete, rename, aliases, vacuum | `17-ops.md` `[SB-OPS-*]` | `SB-OPS-*` | `tests/test_operations_contract_sb_ops.py`; metadata/rename/alias/delete/vacuum suites | `canonical-spec` |
+| Queue and broker residual operations | Implicit queues, metadata, physical delete, rename, aliases, vacuum, destructive target cleanup | `17-ops.md` `[SB-OPS-*]` | `SB-OPS-*` | `tests/test_operations_contract_sb_ops.py`; metadata/rename/alias/delete/vacuum/cleanup suites | `canonical-spec` |
 
 ## Related Plans
 

@@ -33,7 +33,8 @@ Product section authority: `product-section-registry.md`.
    command layer, targets, library packaging when the registry marks
    canonical)
 8. `17-ops.md` — `[SB-OPS-*]` (implicit queues, metadata, delete, rename,
-   aliases, vacuum when the registry marks canonical)
+   aliases, vacuum, and destructive backend target cleanup when the registry
+   marks canonical)
 
 ## Rules
 

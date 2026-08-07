@@ -92,6 +92,15 @@ jobs:
       run: |
         uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup"
 
+    - name: Run SQLite cross-thread finalization probe
+      if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
+      env:
+        SIMPLEBROKER_RUN_FINALIZATION_PROBE: "1"
+        PYTEST_ADDOPTS: ""
+      run: |
+        test "${SIMPLEBROKER_RUN_FINALIZATION_PROBE}" = "1"
+        uv run --frozen --no-sync pytest -n0 -q tests/test_cross_thread_generator_probe.py
+
     - name: Run Windows tests with coverage
       if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
       timeout-minutes: 45

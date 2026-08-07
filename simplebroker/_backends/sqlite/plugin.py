@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -36,6 +37,123 @@ from .validation import validate_database
 
 if TYPE_CHECKING:
     from ..._runner import SQLiteRunner, SQLRunner
+
+_CleanupFailure = tuple[str, Path, BaseException]
+
+
+def _lstat_path(path: Path) -> os.stat_result:
+    """Inspect one cleanup entry without following its final component."""
+
+    return path.lstat()
+
+
+def _iter_directory_names(path: Path) -> Iterable[str]:
+    """Yield directory entry names for cleanup residue discovery."""
+
+    with os.scandir(path) as entries:
+        for entry in entries:
+            yield entry.name
+
+
+def _unlink_path(path: Path) -> None:
+    """Unlink one cleanup entry without following symlinks."""
+
+    path.unlink()
+
+
+def _is_status_temp_name(name: str, *, prefix: str) -> bool:
+    """Return whether ``name`` is an exact phaselock status-temp residue."""
+
+    if not name.startswith(prefix):
+        return False
+    components = name[len(prefix) :].split(".")
+    return (
+        len(components) == 2
+        and all(components)
+        and all(
+            all("0" <= character <= "9" for character in component)
+            for component in components
+        )
+    )
+
+
+def _cleanup_failure_message(
+    failures: Sequence[_CleanupFailure],
+) -> str:
+    details = "; ".join(
+        f"{operation} {path}: {error}" for operation, path, error in failures
+    )
+    return (
+        "SQLite cleanup was incomplete; other entries may already be gone; "
+        f"failed attempts: {details}"
+    )
+
+
+def _resolve_cleanup_path(target: str) -> Path | None:
+    """Freeze one expanded, resolved cleanup identity."""
+
+    if target in {"", ":memory:"}:
+        return None
+    try:
+        return Path(target).expanduser().resolve()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise DatabaseError(
+            f"Cannot resolve SQLite cleanup target {target}: {exc}"
+        ) from exc
+
+
+def _main_was_observed(path: Path) -> bool:
+    """Run the zero-delete main inspection preflight."""
+
+    try:
+        _lstat_path(path)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise DatabaseError(
+            f"Cannot inspect SQLite cleanup target {path}: {exc}"
+        ) from exc
+    return True
+
+
+def _status_temp_paths(
+    path: Path,
+    failures: list[_CleanupFailure],
+) -> list[Path]:
+    """Freeze matching status-temp residues and record enumeration failure."""
+
+    temp_prefix = f"{path.name}.status.tmp."
+    candidates: list[Path] = []
+    try:
+        for name in _iter_directory_names(path.parent):
+            if _is_status_temp_name(name, prefix=temp_prefix):
+                candidates.append(path.parent / name)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        failures.append(("enumerate status-temp entries in", path.parent, exc))
+    candidates.sort(key=lambda candidate: candidate.name)
+    return candidates
+
+
+def _unlink_cleanup_paths(
+    paths: Iterable[Path],
+    *,
+    found: bool,
+    failures: list[_CleanupFailure],
+) -> bool:
+    """Attempt every frozen cleanup candidate and return observation accounting."""
+
+    for candidate in paths:
+        try:
+            _unlink_path(candidate)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failures.append(("unlink", candidate, exc))
+        else:
+            found = True
+    return found
 
 
 def _as_row_list(rows: Iterable[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
@@ -109,15 +227,34 @@ class SQLiteBackendPlugin:
         config: Mapping[str, Any] | None = None,
     ) -> bool:
         del backend_options, config
-        path = Path(target)
-        existed = path.exists()
-        if existed:
+        path = _resolve_cleanup_path(target)
+        if path is None:
+            return False
+
+        main_observed = _main_was_observed(path)
+        if main_observed:
             validate_database(path, verify_magic=True)
-        try:
-            path.unlink(missing_ok=True)
-        except PermissionError as exc:
-            raise DatabaseError(f"Permission denied: {target}") from exc
-        return existed
+
+        failures: list[_CleanupFailure] = []
+        status_temp_paths = _status_temp_paths(path, failures)
+        fixed_paths = [
+            Path(f"{path}.status"),
+            Path(f"{path}.vacuum.lock"),
+            Path(f"{path}.lock"),
+            Path(f"{path}-journal"),
+            Path(f"{path}-wal"),
+            Path(f"{path}-shm"),
+            path,
+        ]
+        found = _unlink_cleanup_paths(
+            [*status_temp_paths, *fixed_paths],
+            found=main_observed or bool(status_temp_paths),
+            failures=failures,
+        )
+
+        if failures:
+            raise DatabaseError(_cleanup_failure_message(failures))
+        return found
 
     def check_version(self) -> None:
         check_version()

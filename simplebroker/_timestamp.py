@@ -1,7 +1,8 @@
 """Hybrid timestamp generation and validation for consistent ordering.
 
 This module provides the canonical timestamp generation and validation logic
-that all SimpleBroker extensions must use to ensure consistency.
+that all SimpleBroker extensions must use to ensure consistency. Timestamp-bound
+string grammar is governed by [SB-CLI-5] and exposed publicly by [SB-API-11].
 """
 
 import os
@@ -38,6 +39,14 @@ if TYPE_CHECKING:
 TS_RETRY_MAX_ELAPSED = 30.0
 TS_RETRY_MAX_DELAY = 0.25
 _SCIENTIFIC_NOTATION_RE = re.compile(r"[+-]?(\d+\.?\d*|\.\d+)[eE][+-]?\d+(?:ns|ms|s)?")
+# Python's ISO parser accepts fractions on both the wall-clock seconds and an
+# offset's seconds. The bound contract permits neither, so reject any decimal
+# fraction after the date/time separator before delegating to ``fromisoformat``.
+_ISO_FRACTIONAL_SECONDS_RE = re.compile(r"[T ].*[.,]\d+", re.IGNORECASE)
+_BOUND_PARSE_GUIDANCE = (
+    "timestamp bounds require integral seconds. For finer granularity, use integer "
+    "ms, integer ns, or a native hybrid message ID."
+)
 
 
 def decode_hybrid_timestamp(ts: int) -> tuple[int, int]:
@@ -296,7 +305,7 @@ class TimestampGenerator:
         return self._backend_plugin.read_last_ts(self._runner)
 
     @staticmethod
-    def validate(timestamp_str: str, exact: bool = False) -> int:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-013] exception
+    def validate(timestamp_str: str, exact: bool = False) -> int:
         """Validate and parse timestamp string into a 64-bit hybrid timestamp.
 
         This is the canonical validation logic used by the -m flag and other
@@ -318,6 +327,9 @@ class TimestampGenerator:
                 (the Unix epoch). Digits may be any Unicode decimal digits;
                 they are folded to ASCII before parsing, so a value's script
                 never changes how it is interpreted.
+                Fractional seconds and sign/underscore pseudo-numerics are not
+                accepted. Use integer milliseconds, integer nanoseconds, or a
+                native hybrid message ID when finer granularity is required.
             exact: If True, only accept exact 19-digit message IDs (for strict validation)
 
         Returns:
@@ -332,7 +344,7 @@ class TimestampGenerator:
             raise TimestampError("Invalid timestamp: empty string")
 
         # Fold non-ASCII decimal digits to ASCII once, before any parsing.
-        # int()/float() already accept Unicode decimal digits but
+        # int() already accepts Unicode decimal digits but
         # datetime.fromisoformat() does not, so without this the *meaning* of a
         # value would depend on its script: "20240115" read as a compact
         # YYYYMMDD date, "٢٠٢٤٠١١٥" as unix seconds. Folding first makes the
@@ -349,7 +361,10 @@ class TimestampGenerator:
 
         # Reject numeric scientific notation early for consistency.
         if _SCIENTIFIC_NOTATION_RE.fullmatch(timestamp_str):
-            raise TimestampError("Invalid timestamp: scientific notation not supported")
+            raise TimestampError(
+                "Invalid timestamp: scientific notation not supported; "
+                f"{_BOUND_PARSE_GUIDANCE}"
+            )
 
         # Check for explicit unit suffixes
         ts = TimestampGenerator._parse_with_unit_suffix(timestamp_str)
@@ -372,17 +387,9 @@ class TimestampGenerator:
         if ts is not None:
             return ts
 
-        # 3. Unix float format (e.g., from time.time())
-        try:
-            ts = TimestampGenerator._parse_numeric_timestamp(timestamp_str)
-            if ts is not None:
-                return ts
-        except ValueError as e:
-            if "Invalid timestamp" in str(e):
-                raise
-            # Fall through to final error
-
-        raise TimestampError(f"Invalid timestamp: {timestamp_str}")
+        raise TimestampError(
+            f"Invalid timestamp: {timestamp_str}; {_BOUND_PARSE_GUIDANCE}"
+        )
 
     @staticmethod
     def _validate_exact_timestamp(timestamp_str: str) -> int:
@@ -415,9 +422,13 @@ class TimestampGenerator:
         if suffixed_value is None:
             return None
         timestamp_str, multiplier = suffixed_value
+        if not timestamp_str.isdecimal():
+            raise TimestampError(
+                f"Invalid timestamp: {original_str}; {_BOUND_PARSE_GUIDANCE}"
+            )
 
         try:
-            val = float(timestamp_str) if "." in timestamp_str else int(timestamp_str)
+            val = int(timestamp_str)
             if val < 0:
                 raise TimestampError("Invalid timestamp: cannot be negative")
 
@@ -444,8 +455,8 @@ class TimestampGenerator:
         if (
             timestamp_str.endswith("s")
             and not timestamp_str.endswith("Z")
-            # isdecimal(), not isdigit(): this value goes to int()/float(),
-            # which accept Unicode decimal digits but reject digit-like
+            # isdecimal(), not isdigit(): this value goes to int(), which
+            # accepts Unicode decimal digits but rejects digit-like
             # characters such as superscripts.
             and timestamp_str[-2:-1].isdecimal()
         ):
@@ -455,6 +466,9 @@ class TimestampGenerator:
     @staticmethod
     def _parse_native_or_unix(timestamp_str: str) -> int | None:
         """Parse as native timestamp or Unix timestamp based on heuristic."""
+        if not timestamp_str.isdecimal():
+            return None
+
         try:
             # Try integer first
             val = int(timestamp_str)
@@ -496,6 +510,11 @@ class TimestampGenerator:
             or (len(timestamp_str) == 8 and timestamp_str.isdecimal())
         ):
             return None
+
+        if _ISO_FRACTIONAL_SECONDS_RE.search(timestamp_str):
+            raise TimestampError(
+                f"Invalid timestamp: {timestamp_str}; {_BOUND_PARSE_GUIDANCE}"
+            )
 
         # Handle both date-only and full datetime formats
         # Replace 'Z' with UTC offset for compatibility
@@ -541,49 +560,21 @@ class TimestampGenerator:
         return hybrid_ts
 
     @staticmethod
-    def _parse_numeric_timestamp(timestamp_str: str) -> int | None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-013] exception
-        """Parse numeric timestamp with unit heuristic."""
+    def _parse_numeric_timestamp(timestamp_str: str) -> int | None:
+        """Parse a decimal integer timestamp with the unit heuristic."""
         try:
-            # Handle decimal numbers
-            if "." in timestamp_str:
-                # Parse as float
-                unix_ts = float(timestamp_str)
-                if unix_ts < 0:
-                    raise ValueError("Invalid timestamp: cannot be negative")
-                int_part = str(int(unix_ts))
-                integer_digits = len(int_part)
-            else:
-                # Pure integer - avoid float conversion to preserve precision
-                int_val = int(timestamp_str)
-                if int_val < 0:
-                    raise ValueError("Invalid timestamp: cannot be negative")
-
-                integer_digits = len(timestamp_str.lstrip("0") or "0")
-                unix_ts = int_val
+            int_val = int(timestamp_str)
+            integer_digits = len(timestamp_str.lstrip("0") or "0")
 
             # Heuristic based on number of digits for the integer part
             # Current time (2025) is ~10 digits in seconds, ~13 digits in ms, ~19 digits in ns
 
             if integer_digits > 16:  # Likely nanoseconds
-                # Already in nanoseconds
-                if "." in timestamp_str:
-                    ns_after_epoch = int(unix_ts)
-                else:
-                    ns_after_epoch = int(timestamp_str)
+                ns_after_epoch = int_val
             elif integer_digits > 11:  # Likely milliseconds
-                # Convert milliseconds to nanoseconds
-                if "." in timestamp_str:
-                    ns_after_epoch = int(unix_ts * 1_000_000)
-                else:
-                    ns_after_epoch = int(timestamp_str) * 1_000_000
+                ns_after_epoch = int_val * 1_000_000
             else:  # Likely seconds
-                # Convert seconds to nanoseconds
-                if "." in timestamp_str:
-                    # Preserve fractional seconds
-                    ns_after_epoch = int(unix_ts * 1_000_000_000)
-                else:
-                    # Pure integer - multiply without float conversion
-                    ns_after_epoch = int(timestamp_str) * 1_000_000_000
+                ns_after_epoch = int_val * 1_000_000_000
 
             # Clear bottom bits for counter (hybrid timestamp format)
             time_mask = ~LOGICAL_COUNTER_MASK

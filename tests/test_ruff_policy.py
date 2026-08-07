@@ -125,10 +125,12 @@ def test_approved_suppressions_match_the_registry() -> None:
         write=False,
     )
 
+    # Stable retired IDs are not reused or filled by renumbering later groups.
+    expected_numbers = [*range(1, 13), *range(14, 35)]
     assert [group.group_id for group in snapshot.groups] == [
-        f"RUFF-SUP-{number:03d}" for number in range(1, 35)
+        f"RUFF-SUP-{number:03d}" for number in expected_numbers
     ]
-    assert len(snapshot.directives) == 168
+    assert len(snapshot.directives) == 166
 
 
 def test_configured_complexity_boundary_fires_at_eleven() -> None:

@@ -297,8 +297,9 @@ When project scoping is enabled but no project database is found, SimpleBroker w
 export BROKER_PROJECT_SCOPE=true
 cd /tmp/isolated_directory
 broker write tasks "test message"
-# Error: No SimpleBroker database found in project scope.
-# Run 'broker init' to create a project database.
+# simplebroker: error: BROKER_PROJECT_SCOPE is enabled but no project database
+# '.broker.db' was found in '/tmp/isolated_directory' or any parent directory.
+# Run 'broker init' in the project root directory to create one.
 ```
 
 **This is intentional behavior** - SimpleBroker requires explicit initialization to avoid accidentally creating databases in unexpected locations.
@@ -490,7 +491,33 @@ fi
 
 - **Queue names**: Validated (alphanumeric + underscore + hyphen + period only)
 - **Message size**: Limited to 10MB by default; override with `BROKER_MAX_MESSAGE_SIZE`
-- **Database files**: Created with 0600 permissions (user-only)
+- **SQLite filesystem access**: For access by more than one OS user, the
+  filesystem must grant every intended writer effective read and write access
+  to the broker database and every associated file that exists or may be
+  created: `<db>-journal`, `<db>-wal`, `<db>-shm`, `<db>.lock`, `<db>.status`,
+  `<db>.status.tmp.<pid>.<time_ns>`, and `<db>.vacuum.lock`. The containing
+  directory must let every intended writer traverse it and create, replace,
+  and remove those entries. On POSIX this requires suitable file permissions
+  or ACLs plus directory write and execute/search permission. On Windows it
+  requires the equivalent effective file and directory ACL rights.
+  SimpleBroker does not promise to provision or preserve a group-sharing
+  policy. Operators own directory placement, ownership, groups or principals,
+  ACLs, existing permissions, and (on POSIX) the process umask. For sensitive
+  broker contents, use a directory restricted to the intended users and a
+  suitable umask on POSIX. Do not rely on one exact permission set across all
+  artifacts.
+
+  This is the ordinary application-data model on both platform families. POSIX
+  file creation applies the process [file-creation
+  mask](https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html)
+  to a requested mode. SQLite's standard Unix build requests
+  [`0644`](https://sqlite.org/compile.html), and Git follows the umask by
+  default while making shared-repository permissions an explicit
+  [`core.sharedRepository`](https://git-scm.com/docs/git-config/2.44.3.html#Documentation/git-config.txt-coresharedRepository)
+  choice. Windows uses file and directory security descriptors with inherited
+  [ACLs](https://learn.microsoft.com/en-us/windows/win32/fileio/file-security-and-access-rights).
+  Broker data can be sensitive, but it is not inherently a private-key-style
+  secret that warrants silently overriding an operator's sharing policy.
 - **Project config secrets**: Prefer `BROKER_BACKEND_PASSWORD` or another
   environment variable over embedding passwords in `.broker.toml`. SimpleBroker
   warns without printing the secret when a target embeds a password, and on

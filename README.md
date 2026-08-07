@@ -185,16 +185,17 @@ $ broker broadcast \
     --queue notify.carol \
     "Thread updated"
 
-# Clean up when done
+# After stopping all users, destructively remove the target state
 $ broker --cleanup
 ```
 
 ## Command Reference
 
 Residual queue/broker operations (existence, metadata, delete, rename, aliases,
-vacuum): `docs/specs/17-ops.md` (`[SB-OPS-1]`–`[SB-OPS-6]`). Delivery, identity,
-selection, broadcast, dump/load, CLI packaging, and library surfaces have their
-own specs (see `docs/specs/product-section-registry.md`).
+vacuum, destructive target cleanup): `docs/specs/17-ops.md`
+(`[SB-OPS-1]`–`[SB-OPS-7]`). Delivery, identity, selection, broadcast,
+dump/load, CLI packaging, and library surfaces have their own specs (see
+`docs/specs/product-section-registry.md`).
 
 ### Global Options
 
@@ -205,7 +206,10 @@ Global options must appear before the command, for example `broker -f queue.db r
   - If an absolute path is provided, the directory is extracted automatically
   - Cannot be used with `-d` if the directories don't match
 - `-q, --quiet` - Suppress non-error output
-- `--cleanup` - Delete the database file and exit
+- `--cleanup` - Destructively delete the configured backend target state and
+  exit. SQLite cleanup attempts the database and its known SQLite and
+  SimpleBroker companion files. It is non-atomic; stop all activity and make
+  any required backup first (`[SB-OPS-7]`).
 - `--vacuum` - Remove claimed messages and exit
 - `--compact` - With `--vacuum`, also run SQLite VACUUM to reclaim disk space
 - `--status` - Show global message count, last timestamp, and DB size (`--status --json` for JSON output)
@@ -329,9 +333,15 @@ claimed-only queue no longer exists. Normative specs: `docs/specs/17-ops.md`
 - Unix milliseconds: `1705329000000ms`
 - Unix nanoseconds/Native hybrid: `1837025672140161024` or `1837025672140161024ns`
 
-**Best practice:** Heuristics are used to distinguish between different values for 
-interactive use, but explicit suffixes (s/ms/ns) are recommended for clarity if 
-referring to particular times. 
+Fractional seconds are not supported in ISO, bare numeric, or suffixed numeric
+bounds. Use integer `ms`, integer `ns`, or a native hybrid message ID when you
+need finer granularity than seconds. Numeric spellings contain decimal digits
+only; signs and separators such as `_` are rejected. Unicode decimal digits are
+accepted and normalized before parsing.
+
+**Best practice:** Heuristics distinguish bare numeric values for interactive
+use, but explicit suffixes (`s`/`ms`/`ns`) are recommended when a particular
+unit is intended.
 
 `--after` and `--before` use strict open bounds. Combined together, they select
 messages where `after_timestamp < message_timestamp < before_timestamp`.
@@ -853,6 +863,10 @@ broker write build-tasks "compile assets"   # shares /project/.broker.db
 Discovery precedence, database and config naming, boundary and trust
 rules, and security notes:
 [configuration guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/configuration.md).
+For use by more than one OS user, that guide defines the required effective
+permissions on the SQLite database, all companion files, and their containing
+directory. SimpleBroker does not provision or preserve a cross-user sharing
+policy.
 Do not put SQLite databases on network filesystems; use the Postgres or
 Redis backends for multi-host access.
 

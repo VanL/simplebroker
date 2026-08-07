@@ -74,6 +74,27 @@ processes and platforms. The phase-lock module coordinates setup work with
 file locks and extended-attribute fallback so multiple processes do not race
 schema or optimization phases. It is internal, but deliberately self-contained.
 
+Ordinary setup, status publication, and vacuum keep their coordination-file
+names stable while an operation may hold them. Global `--cleanup` is the sole
+exception: it deliberately removes the complete known target namespace,
+including coordination and maintenance files. It does not join the ordinary
+SQLite or phase-lock lifecycle. If cleanup overlaps any SimpleBroker activity
+or raw SQLite connection, old and replacement file generations can diverge and
+the exact storage, coordination, and client outcomes are undefined. This is why
+cleanup is specified as a destructive operator action, not a quiescence or
+maintenance protocol. See [`[SB-OPS-7]`](../specs/17-ops.md).
+
+## Filesystem permission boundary
+
+SimpleBroker does not impose one cross-platform sharing mode on SQLite state.
+Private-directory placement is the usual machine-local boundary. Cross-user
+deployments instead require effective access to the main database, every SQLite
+and SimpleBroker companion file, and the containing directory. POSIX mode,
+ownership, ACL, and umask policy or Windows ACL policy belongs to the operator;
+the full deployment condition is in the
+[`configuration guide`](../guides/configuration.md#general-security-considerations).
+
 ## Related Plans
 
+- [`2026-08-06 pre-release review remediation`](../plans/2026-08-06-pre-release-review-remediation-plan.md)
 - [`2026-08-06 audit remediation`](../plans/2026-08-06-audit-remediation-plan.md)

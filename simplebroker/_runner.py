@@ -959,7 +959,10 @@ class SQLiteRunner:
         the same database; if one handle unlinks a shared setup lock or status
         file while another process is still using it, the next opener can
         bypass the intended cross-process serialization. Keep those shared
-        files for every database path.
+        files for every database path. Explicit destructive global
+        ``--cleanup`` is the sole exception. If it overlaps setup, deleting and
+        recreating these names can split coordination across file generations;
+        [SB-OPS-7] therefore leaves that overlap undefined.
         """
         self._created_files.clear()
 

@@ -163,9 +163,13 @@ def vacuum(
     process holds the lock, this pass skips silently and a later call retries
     -- nothing is lost. Failure to open the lock file propagates so automatic
     maintenance records a failed attempt and remains due. The lock file is
-    never unlinked (phaselock doctrine: the flock is ownership, the file is
-    permanent), so a SIGKILL cannot strand the lock: the kernel releases the
-    flock when the holder dies.
+    never unlinked by ordinary vacuum or handle cleanup (phaselock doctrine:
+    the flock is ownership, the file is permanent), so a SIGKILL cannot strand
+    the lock: the kernel releases the flock when the holder dies. Explicit
+    destructive global ``--cleanup`` is the sole exception. If it overlaps a
+    vacuum, deleting and recreating this pathname can split coordination across
+    old and replacement lock-file generations; that overlap is undefined by
+    [SB-OPS-7].
     """
     db_path = getattr(runner, "_db_path", None)
     if not db_path:

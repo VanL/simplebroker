@@ -55,6 +55,38 @@ EVIDENCE_MANIFESTS = {
         },
         "tests/test_vacuum_compact.py": {"test_vacuum_with_compact_flag"},
     },
+    "SB-OPS-7": {
+        "tests/test_cleanup.py": {
+            "test_cleanup_removes_complete_owned_namespace_only",
+            "test_cleanup_nonexistent_database",
+            "test_cleanup_rejects_plain_file",
+            "test_cleanup_rejects_directory_main_before_deleting_sidecars",
+            "test_cleanup_rejects_unreadable_main_before_deleting_sidecars",
+            "test_cleanup_rejects_sqlite_db_with_wrong_magic",
+            "test_cleanup_removes_owned_orphans_when_main_is_absent",
+            "test_cleanup_attempts_every_later_path_after_each_unlink_failure",
+            "test_cleanup_unlinks_owned_symlinks_without_touching_targets",
+            "test_cleanup_observed_main_disappearance_still_counts_as_found",
+            "test_cleanup_enumerated_temp_disappearance_still_counts_as_found",
+            "test_cleanup_aggregates_multiple_cli_failures_and_json_error",
+            "test_cleanup_windows_open_handle_refusal_is_clean_and_nonrollback",
+            "test_cleanup_validates_literal_uri_metacharacters",
+            "test_cleanup_cli_accepts_literal_percent_filename",
+            "test_cleanup_cli_retains_unsafe_metacharacter_rejection",
+            "test_cleanup_no_namespace_targets_are_noops_without_path_derivation",
+            "test_cleanup_path_derivation_error_is_a_clean_database_error",
+            "test_cleanup_freezes_resolved_symlink_target_namespace",
+            "test_cleanup_main_lstat_failure_is_a_zero_delete_gate",
+            "test_cleanup_enumeration_failure_still_attempts_frozen_names_and_all_fixed",
+            "test_cleanup_reports_enumeration_before_ordered_unlink_failures",
+            "test_cleanup_multiple_temp_failures_are_reported_in_lexical_order",
+            "test_cleanup_with_quiet",
+        },
+        "tests/test_cli_argument_parsing.py": {
+            "test_cleanup_help_uses_backend_generic_target_wording"
+        },
+        "tests/test_operations_contract_sb_ops.py": {"test_ops_language_core_promises"},
+    },
 }
 
 
@@ -99,12 +131,12 @@ def _test_functions(relative_path: str) -> set[str]:
 def test_ops_clause_inventory_and_authority() -> None:
     text = SPEC.read_text(encoding="utf-8")
     codes = re.findall(r"^## .+ \[SB-OPS-(\d+)\]$", text, re.MULTILINE)
-    assert codes == [str(i) for i in range(1, 7)]
+    assert codes == [str(i) for i in range(1, 8)]
     verification = text.split("## Verification", 1)[1].split("## Related Plans", 1)[0]
     verification_codes = re.findall(
         r"^\| \[(SB-OPS-\d+)\] \|", verification, re.MULTILINE
     )
-    assert verification_codes == [f"SB-OPS-{number}" for number in range(1, 7)]
+    assert verification_codes == [f"SB-OPS-{number}" for number in range(1, 8)]
     for number in codes:
         assert f"| [SB-OPS-{number}] |" in text
 
@@ -176,6 +208,17 @@ def test_ops_language_core_promises() -> None:
     assert "compact" in vacuum.lower()
     assert "more than 10,000 claimed messages" in vacuum
     assert "10,000 alone does not fire" in vacuum
+
+    cleanup = " ".join(_section("SB-OPS-7").split())
+    for phrase in (
+        "explicitly destructive",
+        ".status.tmp.<decimal-pid>.<decimal-time_ns>",
+        "validation leaves the whole namespace untouched",
+        "other entries may already be gone",
+        "does not retry or roll back",
+        "exact storage, coordination, and client outcomes are undefined",
+    ):
+        assert phrase in cleanup
 
 
 def test_ops_affected_evidence_rows_match_exact_executable_manifests() -> None:
