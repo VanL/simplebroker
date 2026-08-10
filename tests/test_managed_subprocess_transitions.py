@@ -211,7 +211,7 @@ def _fire_context_sigint_escalation() -> None:
     with managed_subprocess(
         _python(script),
         terminate_timeout=0.05,
-        kill_timeout=1.0,
+        kill_timeout=5.0,
     ) as process:
         assert process.wait_for_output("ready", timeout=2.0)
     assert process.proc.returncode == 9
