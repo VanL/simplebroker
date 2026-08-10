@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking:** SimpleBroker-owned JSON now emits
   message IDs and broker high-water values as exact 19-digit ASCII decimal
-  strings instead of JSON numbers. This covers CLI `timestamp` and
+  strings instead of JSON numbers, because JavaScript does not ensure integer 
+  stability for numbers larger than 2^53-1, which is smaller than the 64-bit 
+  numbers used for message IDs. This covers CLI `timestamp` and
   `last_timestamp`, dump-v1 `id` and `last_ts`, and the public watcher JSON
   handler. Python queue/connection APIs, callbacks, status dictionaries, and
   backend/storage protocols remain integer-valued. Dump v1 keeps accepting
