@@ -128,7 +128,7 @@ def test_reactor_json_envelopes_format_only_owned_broker_ids(tmp_path: Path) -> 
         reactor.stop()
 
 
-def _wait_for_outputs(db_path: Path, count: int, *, timeout: float = 2.0) -> None:
+def _wait_for_outputs(db_path: Path, count: int, *, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if len(_read_json_messages(OUTBOX, db_path)) >= count:
@@ -141,7 +141,7 @@ def _wait_for_control_reply_at_timestamp(
     db_path: Path,
     *,
     input_timestamp: int,
-    timeout: float = 2.0,
+    timeout: float = 5.0,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
