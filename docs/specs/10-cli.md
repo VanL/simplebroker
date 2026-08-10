@@ -144,6 +144,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
 - `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
 - `docs/plans/2026-08-06-pre-release-review-remediation-plan.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
@@ -168,7 +169,7 @@ _Implementation mapping_:
   `tests/test_json_message_id_contract.py`,
   `tests/test_cli_write_output.py::test_write_json_prints_timestamp_only`,
   `tests/test_status_command.py::test_status_json_output`, and
-  `tests/test_cli_watch.py::TestWatchCommand::test_watch_json_output`
+  `tests/test_cli_watch.py::TestWatchCommand::test_watch_json_includes_timestamps`
 - `tests/test_timestamp_selection_contract_sb_select.py` — [SB-CLI-5] structural
   bind with `[SB-SELECT-*]`
 - `[SB-CLI-5]` exact executable evidence:

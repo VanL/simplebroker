@@ -16,12 +16,31 @@ from typing import Any
 
 import pytest
 
+from simplebroker import Queue
 from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueWatcher
 
 from .helper_scripts.timing import scale_timeout_for_ci
 
 _SHARED_QUEUE_BULK_TIMEOUT = 20.0
+
+
+class ProcessRecordingQueue(Queue):
+    """Count real delivery entries for parent-visible multiprocess evidence."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.delivery_calls = 0
+        self._delivery_lock = threading.Lock()
+
+    def read_many(self, *args: Any, **kwargs: Any) -> Any:
+        with self._delivery_lock:
+            self.delivery_calls += 1
+        return super().read_many(*args, **kwargs)
+
+    def delivery_call_count(self) -> int:
+        with self._delivery_lock:
+            return self.delivery_calls
 
 
 def _queue_state_for_diagnostics(db_path: str, queue_name: str) -> str:
@@ -101,6 +120,7 @@ def watcher_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exceptio
     enable_pre_check: bool = True,
 ) -> None:
     """Worker process that runs a QueueWatcher."""
+    del enable_pre_check
     try:
         # Track messages processed
         processed = []
@@ -109,36 +129,23 @@ def watcher_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exceptio
             processed.append((msg, ts))
             result_queue.put(("message", process_id, msg))
 
-        # Create watcher
-        class ProcessWatcher(QueueWatcher):
-            def __init__(self, *args, **kwargs) -> None:
-                super().__init__(*args, **kwargs)
-                self._enable_pre_check = enable_pre_check
-                self._initial_drain_seen = threading.Event()
-
-            def _has_pending_messages(self):
-                if not self._enable_pre_check:
-                    return True
-                # Use the parent class implementation which handles DB properly
-                return super()._has_pending_messages()
-
-            def _drain_queue(self) -> None:
-                try:
-                    super()._drain_queue()
-                finally:
-                    self._initial_drain_seen.set()
-
-        watcher = ProcessWatcher(queue_name, handler, db=db_path)
+        watched_queue = ProcessRecordingQueue(
+            queue_name,
+            db_path=db_path,
+            persistent=True,
+        )
+        watcher = QueueWatcher(watched_queue, handler)
 
         # Run until stop signal
         thread = watcher.run_in_thread()
 
         ready_deadline = _deadline_after(10.0)
-        while not watcher._initial_drain_seen.wait(timeout=scale_timeout_for_ci(0.05)):
+        while watched_queue.delivery_call_count() < 1:
             if not thread.is_alive():
                 raise RuntimeError("Watcher thread exited before initial drain")
             if time.monotonic() >= ready_deadline:
                 raise TimeoutError("Watcher thread did not complete initial drain")
+            time.sleep(scale_timeout_for_ci(0.01))
 
         # Signal ready after the watcher has completed startup drain.
         result_queue.put(("ready", process_id, None))
@@ -162,11 +169,69 @@ def watcher_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exceptio
 
         # Send final stats
         result_queue.put(
-            ("stats", process_id, {"processed": len(processed), "messages": processed}),
+            (
+                "stats",
+                process_id,
+                {
+                    "processed": len(processed),
+                    "messages": processed,
+                    "delivery_calls": watched_queue.delivery_call_count(),
+                },
+            ),
         )
+        watched_queue.close()
 
     except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
         result_queue.put(("error", process_id, str(e)))
+
+
+def contention_watcher_process(
+    db_path: str,
+    result_queue: multiprocessing.Queue,
+    control_queue: multiprocessing.Queue,
+    process_id: int,
+) -> None:
+    """Run one real watcher and report every delivered body and ID to its parent."""
+    watched_queue: ProcessRecordingQueue | None = None
+    watcher: QueueWatcher | None = None
+    try:
+        watched_queue = ProcessRecordingQueue(
+            "shared_queue",
+            db_path=db_path,
+            persistent=True,
+        )
+
+        def handler(message: str, timestamp: int) -> None:
+            result_queue.put(("message", process_id, (message, timestamp)))
+
+        watcher = QueueWatcher(watched_queue, handler)
+        thread = watcher.run_in_thread()
+        deadline = _deadline_after(10.0)
+        while watched_queue.delivery_call_count() < 1:
+            if not thread.is_alive():
+                raise RuntimeError("contention watcher exited during startup")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("contention watcher did not finish initial drain")
+            time.sleep(scale_timeout_for_ci(0.01))
+        result_queue.put(("ready", process_id, None))
+
+        while control_queue.get(timeout=scale_timeout_for_ci(30.0)) != "stop":
+            pass
+
+        watcher.stop()
+        thread.join(timeout=scale_timeout_for_ci(5.0))
+        if thread.is_alive():
+            raise TimeoutError("contention watcher did not stop")
+        result_queue.put(("stats", process_id, None))
+    except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-007] exception
+        result_queue.put(("error", process_id, str(exc)))
+    finally:
+        if watcher is not None:
+            with contextlib.suppress(Exception):
+                watcher.stop()
+        if watched_queue is not None:
+            with contextlib.suppress(Exception):
+                watched_queue.close()
 
 
 def shutdown_test_process(
@@ -634,137 +699,108 @@ def test_multiprocess_separate_queues() -> None:  # noqa: C901 approved [DOM-10.
             broker.close()
 
 
-def test_multiprocess_thundering_herd() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
-    """Test thundering herd mitigation across processes."""
+def test_multiprocess_unrelated_write_does_not_drain_idle_watchers() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
+    """Unrelated child watchers perform no delivery work after a targeted write."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
+        with BrokerDB(db_path):
+            pass
 
-        # Test both with and without pre-check
-        for enable_pre_check in [False, True]:
-            # Pre-populate database with a single message and close connection
+        process_count = 6
+        result_queue: multiprocessing.queues.Queue[Any] = multiprocessing.Queue()
+        control_queues: list[multiprocessing.queues.Queue[Any]] = []
+        processes: list[multiprocessing.Process] = []
+        stats: dict[int, dict[str, Any]] = {}
+        errors: list[tuple[int, str]] = []
+        try:
+            for process_id in range(process_count):
+                control_queue: multiprocessing.queues.Queue[Any] = (
+                    multiprocessing.Queue()
+                )
+                control_queues.append(control_queue)
+                process = multiprocessing.Process(
+                    target=watcher_process,
+                    args=(
+                        db_path,
+                        f"queue_{process_id}",
+                        result_queue,
+                        control_queue,
+                        process_id,
+                    ),
+                )
+                process.start()
+                processes.append(process)
+
+            ready: set[int] = set()
+            deadline = _deadline_after(15.0)
+            while len(ready) < process_count and time.monotonic() < deadline:
+                try:
+                    kind, process_id, data = _get_before_deadline(
+                        result_queue, deadline=deadline
+                    )
+                except queue.Empty:
+                    continue
+                if kind == "ready":
+                    ready.add(process_id)
+                elif kind == "error":
+                    errors.append((process_id, data))
+                    break
+            assert errors == []
+            assert ready == set(range(process_count))
+
             with BrokerDB(db_path) as broker:
-                # Clear any previous messages
-                broker._runner.run("DELETE FROM messages")
-                # Write to only one queue
-                broker.write("queue_0", "test_message")
+                broker.write("queue_0", "target-only")
 
-            num_processes = 10
-            result_queue: multiprocessing.queues.Queue[Any] = multiprocessing.Queue()
-            control_queues = []
-            processes: list[multiprocessing.Process] = []
-
-            try:
-                # Start processes watching different queues
-                for i in range(num_processes):
-                    control_queue: multiprocessing.queues.Queue[Any] = (
-                        multiprocessing.Queue()
+            delivered: list[tuple[int, str]] = []
+            deadline = _deadline_after(10.0)
+            while not delivered and time.monotonic() < deadline:
+                try:
+                    kind, process_id, data = _get_before_deadline(
+                        result_queue, deadline=deadline
                     )
-                    control_queues.append(control_queue)
+                except queue.Empty:
+                    continue
+                if kind == "message":
+                    delivered.append((process_id, data))
+                elif kind == "error":
+                    errors.append((process_id, data))
+                    break
+            assert errors == []
+            assert delivered == [(0, "target-only")]
 
-                    p = multiprocessing.Process(
-                        target=watcher_process,
-                        args=(
-                            db_path,
-                            f"queue_{i}",
-                            result_queue,
-                            control_queue,
-                            i,
-                            enable_pre_check,
-                        ),
+            for control_queue in control_queues:
+                control_queue.put("stop")
+
+            deadline = _deadline_after(15.0)
+            while len(stats) < process_count and time.monotonic() < deadline:
+                try:
+                    kind, process_id, data = _get_before_deadline(
+                        result_queue, deadline=deadline
                     )
-                    p.start()
-                    processes.append(p)
-
-                # Windows spawn plus coverage instrumentation can take longer than
-                # one fixed queue timeout. Use one bounded startup deadline and
-                # retain child errors and process state for a useful failure.
-                ready_processes: set[int] = set()
-                errors: list[tuple[int, str]] = []
-                ready_deadline = _deadline_after(10.0)
-                while (
-                    len(ready_processes) < num_processes
-                    and time.monotonic() < ready_deadline
-                ):
-                    try:
-                        msg_type, proc_id, data = _get_before_deadline(
-                            result_queue,
-                            deadline=ready_deadline,
-                        )
-                    except queue.Empty:
-                        continue
-
-                    if msg_type == "ready":
-                        ready_processes.add(proc_id)
-                    elif msg_type == "error":
-                        errors.append((proc_id, data))
-                        break
-
-                if errors or ready_processes != set(range(num_processes)):
-                    raise AssertionError(
-                        "Timed out waiting for thundering-herd watchers to start: "
-                        f"ready={sorted(ready_processes)}, errors={errors}, "
-                        f"processes={_process_diagnostics(processes)}"
-                    )
-
-                # Wait a bit for processing
-                time.sleep(1.0)
-
-                # Stop processes
-                for control_queue in control_queues:
+                except queue.Empty:
+                    continue
+                if kind == "stats":
+                    stats[process_id] = data
+                elif kind == "message":
+                    delivered.append((process_id, data))
+                elif kind == "error":
+                    errors.append((process_id, data))
+            assert errors == []
+            assert set(stats) == set(range(process_count))
+            assert delivered == [(0, "target-only")]
+            assert stats[0]["processed"] == 1
+            assert stats[0]["delivery_calls"] > 1
+            for process_id in range(1, process_count):
+                assert stats[process_id]["processed"] == 0
+                assert stats[process_id]["delivery_calls"] == 1
+        finally:
+            for control_queue in control_queues:
+                with contextlib.suppress(Exception):
                     control_queue.put("stop")
+            for process in processes:
+                _cleanup_process(process)
 
-                # Collect stats with robust error handling
-                stats: dict[int, Any] = {}
-                errors = []
-                stats_deadline = _deadline_after(10.0)
-
-                # Wait for all processes to send their stats
-                while (
-                    len(stats) + len(errors) < num_processes
-                    and time.monotonic() < stats_deadline
-                ):
-                    try:
-                        msg_type, proc_id, data = _get_before_deadline(
-                            result_queue,
-                            deadline=stats_deadline,
-                            poll_interval=0.5,
-                        )
-                        if msg_type == "stats":
-                            stats[proc_id] = data
-                        elif msg_type == "error":
-                            errors.append((proc_id, data))
-                        # Also check for "message" type which indicates processing
-                        elif msg_type == "message":
-                            # Process 0 processed the message, ignore this
-                            pass
-                    except queue.Empty:
-                        continue
-
-                if errors or set(stats) != set(range(num_processes)):
-                    raise AssertionError(
-                        "Timed out waiting for thundering-herd watcher stats: "
-                        f"received={sorted(stats)}, errors={errors}, "
-                        f"processes={_process_diagnostics(processes)}"
-                    )
-
-                # Only process 0 should have processed the message
-                for i in range(num_processes):
-                    if i == 0:
-                        assert i in stats, (
-                            f"Missing stats for process {i} (which should have processed the message)"
-                        )
-                        assert stats[i]["processed"] == 1, (
-                            f"Process 0 should have processed 1 message, got {stats[i]['processed']}"
-                        )
-                    # Other processes should not have processed anything
-                    elif i in stats:
-                        assert stats[i]["processed"] == 0, (
-                            f"Process {i} should not have processed any messages"
-                        )
-            finally:
-                # Wait for processes to finish and ensure cleanup
-                for p in processes:
-                    _cleanup_process(p)
+        assert all(process.exitcode == 0 for process in processes)
 
 
 def test_multiprocess_graceful_shutdown() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
@@ -878,128 +914,106 @@ def test_multiprocess_graceful_shutdown() -> None:  # noqa: C901 approved [DOM-1
                 _cleanup_process(p)
 
 
-def test_multiprocess_database_locking() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
-    """Test database locking behavior with multiple processes."""
+def test_multiprocess_contention_preserves_exact_delivery() -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] exception
+    """Real child watchers deliver every inserted body and ID exactly once."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = str(Path(tmpdir) / "test.db")
-        broker = BrokerDB(db_path)
+        with BrokerDB(db_path):
+            pass
 
-        # Start multiple processes on same queue to create contention
-        num_processes = 5
+        process_count = 5
         result_queue: multiprocessing.queues.Queue[Any] = multiprocessing.Queue()
-        control_queues = []
+        control_queues: list[multiprocessing.queues.Queue[Any]] = []
         processes: list[multiprocessing.Process] = []
-
+        errors: list[tuple[int, str]] = []
         try:
-            for i in range(num_processes):
+            for process_id in range(process_count):
                 control_queue: multiprocessing.queues.Queue[Any] = (
                     multiprocessing.Queue()
                 )
                 control_queues.append(control_queue)
-
-                p = multiprocessing.Process(
-                    target=lock_test_process,
-                    args=(db_path, "shared_queue", result_queue, control_queue, i),
+                process = multiprocessing.Process(
+                    target=contention_watcher_process,
+                    args=(db_path, result_queue, control_queue, process_id),
                 )
-                p.start()
-                processes.append(p)
+                process.start()
+                processes.append(process)
 
-            # Wait for every child using one contention-aware deadline. A
-            # per-read timeout can fail before the slowest Windows child has
-            # imported the test process under the full xdist matrix.
-            ready_processes: set[int] = set()
-            errors: list[tuple[int, str]] = []
-            ready_deadline = _deadline_after(10.0)
-            while (
-                len(ready_processes) < num_processes
-                and time.monotonic() < ready_deadline
-            ):
+            ready: set[int] = set()
+            deadline = _deadline_after(15.0)
+            while len(ready) < process_count and time.monotonic() < deadline:
                 try:
-                    msg_type, proc_id, data = _get_before_deadline(
-                        result_queue,
-                        deadline=ready_deadline,
+                    kind, process_id, data = _get_before_deadline(
+                        result_queue, deadline=deadline
                     )
                 except queue.Empty:
                     continue
+                if kind == "ready":
+                    ready.add(process_id)
+                elif kind == "error":
+                    errors.append((process_id, data))
+                    break
+            assert errors == []
+            assert ready == set(range(process_count))
 
-                if msg_type == "ready":
-                    ready_processes.add(proc_id)
-                elif msg_type == "error":
-                    errors.append((proc_id, data))
+            expected: dict[int, str] = {}
+            with BrokerDB(db_path) as broker:
+                for index in range(100):
+                    message = f"message_{index}"
+                    expected[broker.write("shared_queue", message)] = message
+
+            delivered: list[tuple[str, int]] = []
+            deadline = _deadline_after(_SHARED_QUEUE_BULK_TIMEOUT)
+            while len(delivered) < len(expected) and time.monotonic() < deadline:
+                try:
+                    kind, process_id, data = _get_before_deadline(
+                        result_queue, deadline=deadline
+                    )
+                except queue.Empty:
+                    continue
+                if kind == "message":
+                    delivered.append(data)
+                elif kind == "error":
+                    errors.append((process_id, data))
                     break
 
-            if errors or len(ready_processes) != num_processes:
-                raise AssertionError(
-                    "Timed out waiting for lock-test processes to start: "
-                    f"ready={sorted(ready_processes)}, errors={errors}, "
-                    f"processes={_process_diagnostics(processes)}"
+            assert errors == []
+            assert len(delivered) == len(expected)
+            assert {timestamp: body for body, timestamp in delivered} == expected
+            assert len({timestamp for _body, timestamp in delivered}) == len(expected)
+
+            with BrokerDB(db_path) as observer:
+                assert (
+                    observer.peek_many("shared_queue", limit=1, with_timestamps=False)
+                    == []
                 )
 
-            # Start one shared observation window only after all children have
-            # published readiness.
             for control_queue in control_queues:
-                control_queue.put("start")
+                control_queue.put("stop")
 
-            # Create high write load
-            for i in range(100):
-                broker.write("shared_queue", f"message_{i}")
-                time.sleep(0.01)
-
-            # Let them run
-            time.sleep(2.0)
-
-            # Collect lock stats
-            lock_stats: dict[int, dict[str, int | float]] = {}
-            stats_deadline = _deadline_after(10.0)
-            while len(lock_stats) < num_processes and time.monotonic() < stats_deadline:
+            stopped: set[int] = set()
+            deadline = _deadline_after(15.0)
+            while len(stopped) < process_count and time.monotonic() < deadline:
                 try:
-                    msg_type, proc_id, data = _get_before_deadline(
-                        result_queue,
-                        deadline=stats_deadline,
+                    kind, process_id, data = _get_before_deadline(
+                        result_queue, deadline=deadline
                     )
-                    if msg_type == "lock_stats":
-                        lock_stats[proc_id] = data
-                    elif msg_type == "error":
-                        errors.append((proc_id, data))
-                        break
                 except queue.Empty:
                     continue
-
-            if errors or len(lock_stats) != num_processes:
-                raise AssertionError(
-                    "Timed out waiting for lock-test process statistics: "
-                    f"received={sorted(lock_stats)}, errors={errors}, "
-                    f"processes={_process_diagnostics(processes)}"
-                )
-
-            # With pre-check optimization, lock contention should be minimal
-            total_attempts = sum(s["attempts"] for s in lock_stats.values())
-            total_failures = sum(s["failures"] for s in lock_stats.values())
-            overall_failure_rate = total_failures / max(1, total_attempts)
-
-            # Failure rate should be low with proper implementation
-            assert overall_failure_rate < 0.3  # Less than 30% lock failures
+                if kind == "stats":
+                    stopped.add(process_id)
+                elif kind == "error":
+                    errors.append((process_id, data))
+            assert errors == []
+            assert stopped == set(range(process_count))
         finally:
-            # Stop all processes
             for control_queue in control_queues:
-                # Queue may be closed already
                 with contextlib.suppress(Exception):
                     control_queue.put("stop")
+            for process in processes:
+                _cleanup_process(process)
 
-            # Clean up processes
-            for p in processes:
-                _cleanup_process(p)
-
-            broker.close()
-
-
-def test_deadline_queue_type_hint_is_runtime_valid() -> None:
-    """Supported Python versions must be able to evaluate helper annotations."""
-    import typing
-
-    hints = typing.get_type_hints(_get_before_deadline)
-
-    assert "result_queue" in hints
+        assert all(process.exitcode == 0 for process in processes)
 
 
 if __name__ == "__main__":

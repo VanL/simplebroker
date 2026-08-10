@@ -304,8 +304,6 @@ def test_timestamp_overflow_protection(workdir: Path) -> None:
         f"--after={max_safe_ms}ms",
         cwd=workdir,
     )
-    # Should succeed - queue exists but no messages match filter
-    # Note: rc could be 0 (no messages match filter) or 2 (queue empty after filter)
-    # Both are valid after the queue exists
-    assert rc in [0, 2], f"Expected exit code 0 or 2, got {rc}"
-    assert out == ""  # No messages returned
+    assert rc == 2, f"Expected queue-empty exit code, got {rc}: {err}"
+    assert out == ""
+    assert err == ""

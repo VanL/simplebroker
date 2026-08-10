@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-10-test-suite-signal-remediation-plan.md | completed — class 4; behavior-first test remediation, database/phase-lock permission-policy corrections, benchmark provenance, and evidence reconciliation implemented and independently reviewed; owner closed the plan with Windows CI and the broken editable sibling Weft import recorded as explicit external follow-ups |
 | 2026-08-08-json-timestamp-string-contract-plan.md | completed — Class 5; exact 19-digit JSON string contract, embedder helper, docs/examples, and 7.0.0/3.5.2 release metadata implemented and reviewed; owner-directed changeset closes implementation while tag and package publication remain separate |
 | 2026-08-06-pre-release-review-remediation-plan.md | completed — class 5; A/E/I/J and B's operator-owned permission documentation released from exact green SHA `fb2e6ba7`; all four Windows jobs and three finalization probes passed; immutable tags published simplebroker 6.0.2, pg 3.5.1, and redis 3.5.1; clean-index installs, metadata floors, Weft retained forms, and the possession probe passed; C/D/F/G/H remain deferred with named reopen conditions |
 | 2026-08-07-agent-theory-delta-wave-plan.md | completed — Class 5+P; agent-theory delta wave (source `0423923`); scoped review blocker F1-F8 applied, round-2 waived with disclosure; landed `6595df5`, sweep `230d59d` |

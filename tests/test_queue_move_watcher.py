@@ -121,41 +121,6 @@ class TestQueueMoveWatcher(WatcherTestBase):
         )
         assert len(from_messages) == 0
 
-    def test_handler_execution_verification(self, broker, broker_target):
-        """Test that handler is called for each moved message."""
-        # Add messages
-        broker.write("source", "msg1")
-        broker.write("source", "msg2")
-
-        handler_calls = []
-
-        def tracking_handler(body: str, ts: int):
-            handler_calls.append(
-                {
-                    "body": body,
-                    "timestamp": ts,
-                    "queue": "dest",  # We know it's the destination queue
-                }
-            )
-
-        watcher = QueueMoveWatcher(
-            "source",
-            "dest",
-            tracking_handler,
-            db=broker_target,
-        )
-        register_watcher(watcher)
-
-        # Run watcher with timeout safety
-        self.run_watcher_with_timeout(watcher, timeout=2.0)
-
-        # Verify handler received correct message data
-        assert len(handler_calls) == 2
-        assert handler_calls[0]["body"] == "msg1"
-        assert handler_calls[0]["queue"] == "dest"
-        assert handler_calls[1]["body"] == "msg2"
-        assert handler_calls[1]["queue"] == "dest"
-
     def test_handler_failure_isolation(self, broker, broker_target):
         """Test that handler failures don't prevent message move."""
         # Add messages
@@ -195,34 +160,6 @@ class TestQueueMoveWatcher(WatcherTestBase):
         handler_calls = collector.get_handler_calls()
         assert len(handler_calls) == 2
         assert [body for body, ts in handler_calls] == ["message1", "message3"]
-
-    def test_order_preservation_global_id(self, broker, broker_target):
-        """Test that moved messages maintain their global ID order."""
-        # Add messages - they'll get sequential global IDs
-        broker.write("source", "msg1")  # ID=1
-        broker.write("source", "msg2")  # ID=2
-        broker.write("source", "msg3")  # ID=3
-
-        moved_ids = []
-
-        def capture_id_handler(body: str, ts: int):
-            # We can't capture ID anymore with new signature
-            moved_ids.append(body)
-
-        watcher = QueueMoveWatcher(
-            "source",
-            "dest",
-            capture_id_handler,
-            db=broker_target,
-        )
-        register_watcher(watcher)
-
-        # Run watcher with timeout safety
-        self.run_watcher_with_timeout(watcher, timeout=2.0)
-
-        # Verify messages were moved in order
-        assert len(moved_ids) == 3
-        assert moved_ids == ["msg1", "msg2", "msg3"]  # Should maintain order
 
     def test_mixed_source_ordering_behavior(self, broker, broker_target):
         """Test ordering when destination queue already has messages."""
@@ -570,12 +507,10 @@ class TestQueueMoveWatcher(WatcherTestBase):
         assert peeked is not None
         original_body, original_ts = peeked
 
-        preserved_data: dict[str, str | int] = {}
+        handler_calls: list[tuple[str, int]] = []
 
         def capture_handler(body: str, ts: int):
-            preserved_data["body"] = body
-            preserved_data["ts"] = ts
-            preserved_data["queue"] = "dest"  # We know it's destination
+            handler_calls.append((body, ts))
 
         watcher = QueueMoveWatcher(
             "source",
@@ -588,11 +523,11 @@ class TestQueueMoveWatcher(WatcherTestBase):
         # Run watcher with timeout safety
         self.run_watcher_with_timeout(watcher, timeout=2.0)
 
-        # Verify preservation
-        # We can't verify ID anymore with new handler signature
-        assert preserved_data["body"] == original_body
-        assert preserved_data["ts"] == original_ts
-        assert preserved_data["queue"] == "dest"  # Only queue changes
+        assert handler_calls == [(original_body, original_ts)]
+        assert broker.peek_one("source", with_timestamps=True) is None
+        assert broker.peek_many("dest", limit=10, with_timestamps=True) == [
+            (original_body, original_ts)
+        ]
 
     def test_error_handler_called_on_handler_failure(self, broker, broker_target):
         """Test that error_handler is properly called when handler fails."""

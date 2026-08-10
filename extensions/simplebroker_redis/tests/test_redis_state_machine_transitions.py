@@ -1093,6 +1093,10 @@ def _broadcast_exact_filters_missing(
             )
             == 1
         )
+        assert core.peek_many("jobs", limit=10, with_timestamps=False) == [
+            "seed",
+            "announcement",
+        ]
         assert not core.queue_exists("missing")
     finally:
         core.close()
@@ -1145,6 +1149,14 @@ def _broadcast_pattern_matches(
         core.write("jobs-b", "seed")
         core.write("other", "seed")
         assert core.broadcast("announcement", pattern="jobs-*") == 2
+        assert core.peek_many("jobs-a", limit=10, with_timestamps=False) == [
+            "seed",
+            "announcement",
+        ]
+        assert core.peek_many("jobs-b", limit=10, with_timestamps=False) == [
+            "seed",
+            "announcement",
+        ]
         assert core.peek_many("other", limit=10, with_timestamps=False) == ["seed"]
     finally:
         core.close()

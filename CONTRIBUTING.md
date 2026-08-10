@@ -26,7 +26,7 @@ uv run ./bin/pytest-pg     # All PG-backed tests with automatic Docker setup/tea
 uv run ./bin/pytest-redis  # All Redis-backed tests with automatic Docker setup/teardown (Valkey)
 HYPOTHESIS_PROFILE=ci uv run pytest tests/test_property_*.py  # deeper property-test run (50 -> 200 examples per property)
 python fuzz/fuzz_timestamp_validate.py  # coverage-guided fuzzing via Atheris (Linux only; see fuzz/*.py)
-uv run ./bin/pytest-pg -q tests/test_watcher_metrics.py -k basic
+uv run ./bin/pytest-pg -q tests/test_watcher.py -k basic_consuming_mode
 uv run ./bin/packaging-smoke --python 3.11
 
 # Lint and format

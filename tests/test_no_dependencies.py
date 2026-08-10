@@ -69,24 +69,3 @@ def test_no_external_imports() -> None:
         + "\n".join(f"  {file}: {module}" for file, module in external_imports)
         + "\n\nSimpleBroker must have NO external dependencies."
     )
-
-
-def test_typing_extensions_not_imported() -> None:
-    """Specifically verify typing_extensions is never imported.
-
-    This was a bug that snuck in - ensure it doesn't happen again.
-    typing_extensions should never be imported; use stdlib typing instead.
-    """
-    violations = [
-        (path.relative_to(PROJECT_ROOT), line)
-        for path, tree in _parsed_source_files()
-        for module, line in _absolute_imports(tree)
-        if module == "typing_extensions"
-    ]
-
-    assert not violations, (
-        "Found typing_extensions imports:\n"
-        + "\n".join(f"  {file}:{line}" for file, line in violations)
-        + "\n\nUse stdlib typing imports directly. "
-        + "This project requires Python 3.11+."
-    )

@@ -20,6 +20,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
+from simplebroker import Queue
 from simplebroker._constants import EXIT_SUCCESS, SIMPLEBROKER_MAGIC
 from simplebroker._paths import _is_valid_sqlite_db
 from simplebroker.commands import cmd_init
@@ -69,16 +70,8 @@ class TestInitCommand:
         """Test init with existing valid SimpleBroker database."""
         db_path = tmp_path / ".broker.db"
 
-        # Create initial valid database using proper infrastructure
-        with DBConnection(str(db_path)) as conn:
-            db = conn.get_connection()
-            # Add some test data to verify preservation
-            with db._lock:  # type: ignore[attr-defined]
-                db._conn.execute(  # type: ignore[attr-defined]
-                    "INSERT INTO messages (queue, body, ts) VALUES (?, ?, ?)",
-                    ("test_queue", "test message", 1234567890123456789),
-                )
-                db._conn.commit()  # type: ignore[attr-defined]
+        with Queue("test_queue", db_path=db_path) as queue:
+            message_id = queue.write("test message")
 
         # Verify database exists and is valid
         assert db_path.exists()
@@ -90,13 +83,8 @@ class TestInitCommand:
         # Should succeed and report existing database
         assert result == EXIT_SUCCESS
 
-        # Verify existing data is preserved
-        with closing(sqlite3.connect(str(db_path))) as conn:
-            cursor = conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE queue = 'test_queue'"
-            )
-            count = cursor.fetchone()[0]
-            assert count == 1
+        with Queue("test_queue", db_path=db_path) as queue:
+            assert queue.peek_one(with_timestamps=True) == ("test message", message_id)
 
     def test_init_existing_invalid_file(self, tmp_path):
         """Test init with existing non-SimpleBroker file."""
@@ -224,22 +212,6 @@ class TestInitCommand:
         assert captured.out == ""
         assert "Initialized SimpleBroker database" in captured.err
         assert str(db_path) in captured.err
-
-    def test_init_database_file_permissions(self, tmp_path):
-        """Test that init sets proper file permissions on created database."""
-        db_path = tmp_path / ".broker.db"
-
-        # Run init
-        result = cmd_init(str(db_path), quiet=True)
-
-        # Should succeed
-        assert result == EXIT_SUCCESS
-
-        # Check file permissions (should be readable/writable by owner only)
-        # Note: This tests the DBConnection behavior, which should set 0o600
-        stat = db_path.stat()
-        # On some systems, the exact permissions might vary, but it should at least be readable/writable
-        assert stat.st_mode & 0o600 == 0o600
 
     def test_init_error_messages_content(self, tmp_path, capsys):
         """Test that init command produces helpful error messages."""
@@ -405,39 +377,6 @@ class TestInitCommand:
             journal_mode = cursor.fetchone()[0]
             # Should be WAL mode (the DBConnection sets this up)
             assert journal_mode.lower() == "wal"
-
-    def test_init_concurrent_access_safety(self, tmp_path):
-        """Test that init handles concurrent access scenarios safely."""
-        db_path = tmp_path / ".broker.db"
-
-        # First init
-        result1 = cmd_init(str(db_path), quiet=True)
-        assert result1 == EXIT_SUCCESS
-
-        # Simulate concurrent init (should be safe due to existing validation)
-        result2 = cmd_init(str(db_path), quiet=True)
-        assert result2 == EXIT_SUCCESS
-
-        # Database should still be valid and usable
-        assert _is_valid_sqlite_db(db_path) is True
-
-    def test_init_cleanup_on_error(self, tmp_path):
-        """Test that init cleans up properly when errors occur."""
-        db_path = tmp_path / ".broker.db"
-
-        # Mock to cause error after database creation starts
-        with patch(
-            "simplebroker.db.BrokerDB.__init__", side_effect=RuntimeError("Test error")
-        ):
-            result = cmd_init(str(db_path), quiet=True)
-
-            # Should fail
-            assert result == 1
-
-            # Depending on implementation, the file might or might not exist
-            # But if it does exist, it should not be a valid SimpleBroker database
-            if db_path.exists():
-                assert not _is_valid_sqlite_db(db_path)
 
     def test_is_valid_sqlite_db_edge_cases(self, tmp_path):
         """Test the database validation function with various edge cases."""

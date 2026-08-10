@@ -182,25 +182,44 @@ def test_initialize_database_bootstraps_core_schema_and_metadata(
         runner.close()
 
 
-def test_initialize_database_uses_one_explicit_transaction(tmp_path: Path) -> None:
-    runner = _runner(tmp_path / "broker.db")
-    conn = runner.get_connection()
-    statements: list[str] = []
-    conn.set_trace_callback(statements.append)
-
+@pytest.mark.parametrize(
+    "failure_marker",
+    [
+        "CREATE TABLE IF NOT EXISTS messages",
+        "CREATE TABLE IF NOT EXISTS meta",
+        "VALUES ('schema_version', ?)",
+    ],
+    ids=["early", "middle", "late"],
+)
+def test_initialize_database_bootstrap_is_atomic_at_each_failure_point(
+    tmp_path: Path, failure_marker: str
+) -> None:
+    runner = _runner(tmp_path / f"broker-{failure_marker.count(' ')}.db")
+    failing_runner = _FailOnceRunner(
+        runner,
+        failure_marker,
+        OperationalError("injected bootstrap failure"),
+    )
     try:
-        initialize_database(runner, run_with_retry=_run_direct)
-    finally:
-        conn.set_trace_callback(None)
-        runner.close()
+        with pytest.raises(OperationalError, match="injected bootstrap failure"):
+            initialize_database(failing_runner, run_with_retry=_run_direct)
 
-    transaction_statements = [
-        statement
-        for statement in statements
-        if statement.lstrip().split(None, maxsplit=1)[0].upper()
-        in {"BEGIN", "COMMIT", "ROLLBACK"}
-    ]
-    assert transaction_statements == ["BEGIN IMMEDIATE", "COMMIT"]
+        visible_objects = runner.run(
+            "SELECT name FROM sqlite_master "
+            "WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%'",
+            fetch=True,
+        )
+        assert visible_objects == []
+
+        initialize_database(failing_runner, run_with_retry=_run_direct)
+        assert messages_has_claimed_column(runner) is True
+        assert pending_queue_ts_index_exists(runner) is True
+        metadata = dict(runner.run("SELECT key, value FROM meta", fetch=True))
+        assert metadata["magic"] == SIMPLEBROKER_MAGIC
+        assert int(metadata["schema_version"]) == SCHEMA_VERSION
+        assert int(metadata["alias_version"]) == 0
+    finally:
+        runner.close()
 
 
 def test_initialize_database_rolls_back_bootstrap_errors(tmp_path: Path) -> None:

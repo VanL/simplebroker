@@ -6,11 +6,10 @@ import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import Any, get_type_hints
+from typing import Any
 
 import pytest
 import simplebroker_redis.plugin as redis_plugin_module
-from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.plugin import RedisBackendPlugin
 from simplebroker_redis.validation import NamespaceInspection, NamespaceState
 
@@ -58,15 +57,6 @@ class CustomRedisCore(RedisBrokerCore):
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_public_exit_annotations_keep_any_typed_parameters() -> None:
-    """Pin the permissive Redis annotations exported consumers may inspect."""
-    hints = get_type_hints(RedisBrokerCore.__exit__)
-
-    assert hints["exc_type"] is Any
-    assert hints["exc_val"] is Any
-    assert hints["exc_tb"] is Any
 
 
 def _listener() -> Any:

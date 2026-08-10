@@ -1,14 +1,14 @@
 """Test that watchers are properly cleaned up."""
 
 import threading
-import time
 
 import pytest
 
 from simplebroker.watcher import QueueWatcher
 
 # Import cleanup helper
-from .helper_scripts.cleanup import register_watcher
+from .helper_scripts.cleanup import WatcherTracker, register_watcher
+from .helper_scripts.timing import scale_timeout_for_ci
 
 pytestmark = [pytest.mark.shared]
 
@@ -16,72 +16,57 @@ pytestmark = [pytest.mark.shared]
 class TestWatcherCleanup:
     """Test watcher cleanup functionality."""
 
-    def test_watcher_auto_cleanup(self, broker_target):
-        """Test that watchers are automatically cleaned up."""
-        # Get initial thread count
-        initial_threads = len(threading.enumerate())
-
-        # Create and start a watcher
-        watcher = QueueWatcher("test_queue", lambda m, t: None, db=broker_target)
-        register_watcher(watcher)  # Register for automatic cleanup
-        thread = watcher.run_in_thread()
-
-        # Verify thread is running
-        assert thread.is_alive()
-
-        # The watcher thread should be one of the live threads. Total process
-        # thread count is not stable under backend helpers and pytest workers.
-        assert thread in threading.enumerate()
-        assert len(threading.enumerate()) >= initial_threads
-
-        # Don't stop explicitly - let cleanup handle it
-
-    def test_multiple_watchers_cleanup(self, broker_target):
-        """Test multiple watchers are cleaned up."""
-        # Create multiple watchers
-        watchers = []
+    def test_tracker_stop_all_stops_registered_watchers(self, broker_target):
+        """The cleanup tracker stops every watcher it owns before returning."""
+        tracker = WatcherTracker()
+        watchers = [
+            QueueWatcher(f"queue_{index}", lambda _m, _t: None, db=broker_target)
+            for index in range(3)
+        ]
         threads = []
 
-        for i in range(3):
-            watcher = QueueWatcher(f"queue_{i}", lambda m, t: None, db=broker_target)
-            register_watcher(watcher)  # Register for automatic cleanup
-            thread = watcher.run_in_thread()
-            watchers.append(watcher)
-            threads.append(thread)
+        try:
+            for watcher in watchers:
+                tracker.register(watcher)
+                threads.append(watcher.run_in_thread())
 
-        # All threads should be running
-        for thread in threads:
-            assert thread.is_alive()
+            assert all(thread.is_alive() for thread in threads)
 
-        # Don't stop them - cleanup should handle it
+            tracker.stop_all(timeout=scale_timeout_for_ci(5.0))
+            for thread in threads:
+                thread.join(timeout=scale_timeout_for_ci(5.0))
+
+            assert all(not thread.is_alive() for thread in threads)
+            assert all(not watcher.is_running() for watcher in watchers)
+        finally:
+            for watcher in watchers:
+                watcher.stop()
 
     def test_watcher_stops_quickly(self, broker, broker_target):
         """Test that watchers stop within reasonable time."""
-        # Add a message
+        handler_started = threading.Event()
+        handler_release = threading.Event()
+
         broker.write("test_queue", "test message")
 
-        # Create watcher with slow handler
-        def slow_handler(msg, ts):
-            time.sleep(0.5)  # Simulate slow processing
+        def slow_handler(_msg, _ts):
+            handler_started.set()
+            assert handler_release.wait(timeout=scale_timeout_for_ci(5.0))
 
         watcher = QueueWatcher("test_queue", slow_handler, db=broker_target)
         register_watcher(watcher)  # Register for automatic cleanup
         thread = watcher.run_in_thread()
 
         try:
-            # Let it start processing
-            time.sleep(0.1)
-
-            # Stop should be quick even with slow handler
-            start_time = time.monotonic()
-            watcher.stop()
-            thread.join(timeout=3.0)
-            stop_time = time.monotonic() - start_time
-
+            assert handler_started.wait(timeout=scale_timeout_for_ci(5.0))
+            watcher.stop(join=False)
+            assert thread.is_alive()
+            handler_release.set()
+            thread.join(timeout=scale_timeout_for_ci(5.0))
             assert not thread.is_alive()
-            assert stop_time < 3.0
+            assert not watcher.is_running()
         finally:
-            # Ensure cleanup even if test fails
+            handler_release.set()
             if thread.is_alive():
                 watcher.stop()
-                thread.join(timeout=1.0)
+                thread.join(timeout=scale_timeout_for_ci(5.0))

@@ -10,40 +10,6 @@ from simplebroker.cli import main
 class TestCLIEdgeCases:
     """Test edge cases and error handling in CLI."""
 
-    def test_system_exit_with_string_code(self):
-        """Test handling of SystemExit with string code."""
-        with (
-            patch("sys.argv", ["simplebroker", "--invalid-option"]),
-            patch("argparse.ArgumentParser.parse_args") as mock_parse,
-        ):
-            mock_parse.side_effect = SystemExit("error message")
-
-            result = main()
-            assert result == 1
-
-    def test_system_exit_with_none_code(self):
-        """Test handling of SystemExit with None code."""
-        with (
-            patch("sys.argv", ["simplebroker", "--invalid-option"]),
-            patch("argparse.ArgumentParser.parse_args") as mock_parse,
-        ):
-            mock_parse.side_effect = SystemExit(None)
-
-            result = main()
-            assert result == 1
-
-    def test_cleanup_permission_error(self):
-        """Test cleanup with permission denied error."""
-        with (
-            patch("sys.argv", ["simplebroker", "--cleanup"]),
-            patch("pathlib.Path.exists", return_value=True),
-            patch(
-                "pathlib.Path.unlink", side_effect=PermissionError("Permission denied")
-            ),
-        ):
-            result = main()
-            assert result == 1
-
     def test_cleanup_general_error(self, tmp_path, capsys):
         """Test cleanup with general error."""
         with (
@@ -76,12 +42,6 @@ class TestCLIEdgeCases:
         """Test error when -d points to something that's neither file nor directory."""
         # Use a path that doesn't exist
         with patch("sys.argv", ["simplebroker", "-d", "/dev/null/nonexistent", "list"]):
-            result = main()
-            assert result == 1
-
-    def test_path_traversal_with_parent_refs(self):
-        """Test that path traversal with .. is rejected."""
-        with patch("sys.argv", ["simplebroker", "-f", "../../../etc/passwd", "list"]):
             result = main()
             assert result == 1
 

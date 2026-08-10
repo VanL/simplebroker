@@ -127,20 +127,22 @@ registry.
 | `tests/test_watcher_multiprocess.py:162` | `lock_test_process` (13) | P2 | Name lock-worker phases while retaining process-boundary result capture. |
 | `tests/test_watcher_multiprocess.py:266` | `test_multiprocess_single_queue` (19) | P2 | Share only genuine process orchestration; preserve the full single-queue proof. |
 | `tests/test_watcher_multiprocess.py:404` | `test_multiprocess_separate_queues` (21) | P2 | Share only genuine process orchestration; preserve queue-isolation proof. |
-| `tests/test_watcher_multiprocess.py:532` | `test_multiprocess_thundering_herd` (20) | P2 | Share only genuine process orchestration; preserve wakeup and delivery proof. |
+| `tests/test_watcher_multiprocess.py:702` | `test_multiprocess_unrelated_write_does_not_drain_idle_watchers` (20) | P2 | Share only genuine process orchestration; preserve the real unrelated-wakeup and idle-drain proof. |
 | `tests/test_watcher_multiprocess.py:661` | `test_multiprocess_graceful_shutdown` (19) | P2 | Share only genuine process orchestration; preserve exact shutdown outcomes. |
-| `tests/test_watcher_multiprocess.py:768` | `test_multiprocess_database_locking` (17) | P2 | Share only genuine process orchestration; preserve real lock contention. |
+| `tests/test_watcher_multiprocess.py:917` | `test_multiprocess_contention_preserves_exact_delivery` (17) | P2 | Share only genuine process orchestration; preserve real contention and exact delivery conservation. |
 | `tests/test_watcher_race_conditions.py:472` | `test_multiple_queues_concurrent_activity` (14) | P2 | Name actor setup and assertions while preserving concurrent queue behavior. |
 | `tests/test_watcher_race_conditions.py:745` | `test_pre_check_database_contention` (12) | P2 | Clarify contention setup while retaining the real database boundary. |
-| `tests/test_watcher_thundering_herd.py:246` | `test_thundering_herd_with_multiple_active_queues` (11) | P3 | Retain the end-to-end multi-active-queue scenario. |
 
 ## Final C901 Reconciliation
 
 The implementation pass reduced the raw inventory from 76 findings to 53.
 The 2026-08-07 integral-only timestamp grammar then removed the obsolete float
 branches from both retained parser owners, reducing the live inventory to 51.
-All 25 removed findings crossed a real same-owner phase, validation, cleanup,
-dispatch, or contract-narrowing seam. The remaining 51 are reviewed P3 exceptions in
+The 2026-08-10 test-signal remediation then replaced a test-owned herd
+scenario with smaller real-watcher behavior and reduced the live inventory to
+50.
+All 26 removed findings crossed a real same-owner phase, validation, cleanup,
+dispatch, or contract-narrowing seam. The remaining 50 are reviewed P3 exceptions in
 [DOM-10.1.1], including former P2 candidates whose executable transition
 contracts showed that further splitting would separate live state from its
 failure or cleanup order.

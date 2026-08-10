@@ -1134,32 +1134,6 @@ class TestSQLiteRunnerErrorHandling:
         assert enter_count == 1
         assert max_active == 1
 
-    def test_corrupted_database_detection(self) -> None:
-        """Test handling of corrupted database."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "test.db")
-
-            # Create a corrupted database
-            DatabaseErrorInjector.create_corrupted_database(db_path)
-
-            runner = SQLiteRunner(db_path)
-            try:
-                # Try to query corrupted database - may raise various errors
-                try:
-                    result = list(runner.run("PRAGMA integrity_check", fetch=True))
-                    # If it doesn't raise, check that it detected corruption
-                    if result and result[0][0] != "ok":
-                        # Corruption was detected
-                        assert (
-                            "corrupt" in str(result[0][0]).lower()
-                            or result[0][0] != "ok"
-                        )
-                except (OperationalError, sqlite3.DatabaseError):
-                    # Corrupted database raised an error, which is expected
-                    pass
-            finally:
-                runner.close()
-
     def test_database_lock_timeout(self) -> None:
         """Test that SQLiteRunner respects timeout under lock contention."""
         with tempfile.TemporaryDirectory() as tmpdir:

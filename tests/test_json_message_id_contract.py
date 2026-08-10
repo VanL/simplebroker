@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import re
-from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -14,53 +12,9 @@ from simplebroker import Queue, dump_lines, format_message_id, open_broker
 from simplebroker.commands import _output_message, cmd_status, cmd_write
 from simplebroker.watcher import json_print_handler
 
+from .conftest import run_cli
+
 UNSAFE_MESSAGE_ID = 1234567890123456789
-
-ROOT = Path(__file__).resolve().parents[1]
-IDENTITY_FIELD_NAMES = frozenset({"timestamp", "last_timestamp", "last_ts", "id"})
-
-
-class _IdentityFieldVisitor(ast.NodeVisitor):
-    def __init__(
-        self,
-        relative_path: str,
-        observed: Counter[tuple[str, str, str, bool]],
-    ) -> None:
-        self.relative_path = relative_path
-        self.observed = observed
-        self.function_stack: list[str] = []
-
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self.function_stack.append(node.name)
-        self.generic_visit(node)
-        self.function_stack.pop()
-
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self.function_stack.append(node.name)
-        self.generic_visit(node)
-        self.function_stack.pop()
-
-    def visit_Dict(self, node: ast.Dict) -> None:
-        for key, value in zip(node.keys, node.values, strict=True):
-            if (
-                isinstance(key, ast.Constant)
-                and isinstance(key.value, str)
-                and key.value in IDENTITY_FIELD_NAMES
-            ):
-                is_formatted = (
-                    isinstance(value, ast.Call)
-                    and isinstance(value.func, ast.Name)
-                    and value.func.id == "format_message_id"
-                )
-                self.observed[
-                    (
-                        self.relative_path,
-                        self.function_stack[-1] if self.function_stack else "<module>",
-                        key.value,
-                        is_formatted,
-                    )
-                ] += 1
-        self.generic_visit(node)
 
 
 def _assert_identity_token(raw: str, field: str, expected: int) -> None:
@@ -73,43 +27,65 @@ def _assert_identity_token(raw: str, field: str, expected: int) -> None:
     assert re.search(rf'"{field}"\s*:\s*"[0-9]{{19}}"', raw)
 
 
-def test_core_identity_dict_fields_are_exhaustively_classified() -> None:
-    """A new identity-looking core field must choose wire string or domain int."""
-    observed: Counter[tuple[str, str, str, bool]] = Counter()
+@pytest.mark.sqlite_only
+def test_public_json_identity_producers_preserve_message_ids(
+    workdir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Public JSON producers preserve integer identity as 19 ASCII digits."""
+    db = workdir / "identity.db"
+    exact_ids = {
+        "peek": UNSAFE_MESSAGE_ID,
+        "read": UNSAFE_MESSAGE_ID + 1,
+        "move": UNSAFE_MESSAGE_ID + 2,
+        "dump": UNSAFE_MESSAGE_ID + 3,
+    }
+    for queue_name, message_id in exact_ids.items():
+        with Queue(queue_name, db_path=str(db)) as queue:
+            queue.insert_messages([(queue_name, message_id)])
 
-    for path in sorted((ROOT / "simplebroker").rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        _IdentityFieldVisitor(path.relative_to(ROOT).as_posix(), observed).visit(tree)
+    raw_outputs: list[tuple[str, str, int]] = []
+    for command in ("peek", "read"):
+        rc, out, err = run_cli("-f", str(db), command, command, "--json", cwd=workdir)
+        assert rc == 0, err
+        raw_outputs.append((out, "timestamp", exact_ids[command]))
 
-    expected = Counter(
-        {
-            ("simplebroker/commands.py", "_output_message", "timestamp", True): 1,
-            ("simplebroker/commands.py", "cmd_write", "timestamp", True): 1,
-            (
-                "simplebroker/commands.py",
-                "cmd_status",
-                "last_timestamp",
-                True,
-            ): 1,
-            ("simplebroker/_dump.py", "dump_lines", "last_ts", True): 1,
-            ("simplebroker/_dump.py", "dump_lines", "id", True): 1,
-            (
-                "simplebroker/watcher.py",
-                "json_print_handler",
-                "timestamp",
-                True,
-            ): 1,
-            ("simplebroker/db.py", "status", "last_timestamp", False): 1,
-            ("simplebroker/sbqueue.py", "move", "timestamp", False): 3,
-            (
-                "simplebroker/sbqueue.py",
-                "dict_generator",
-                "timestamp",
-                False,
-            ): 1,
-        }
+    rc, out, err = run_cli(
+        "-f", str(db), "move", "move", "moved", "--json", cwd=workdir
     )
-    assert observed == expected
+    assert rc == 0, err
+    raw_outputs.append((out, "timestamp", exact_ids["move"]))
+
+    rc, out, err = run_cli("-f", str(db), "dump", cwd=workdir)
+    assert rc == 0, err
+    dump_lines_output = out.splitlines()
+    with Queue("dump", db_path=str(db)) as queue:
+        expected_last_ts = queue.last_ts
+    assert expected_last_ts is not None
+    raw_outputs.append((dump_lines_output[0], "last_ts", expected_last_ts))
+    parsed_dump = [(line, json.loads(line)) for line in dump_lines_output]
+    dump_record = next(
+        line
+        for line, record in parsed_dump
+        if record.get("type") == "message" and record["queue"] == "dump"
+    )
+    raw_outputs.append((dump_record, "id", exact_ids["dump"]))
+
+    rc, write_out, err = run_cli(
+        "-f", str(db), "write", "write", "body", "--json", cwd=workdir
+    )
+    assert rc == 0, err
+    write_id = int(json.loads(write_out)["timestamp"])
+    raw_outputs.append((write_out, "timestamp", write_id))
+
+    rc, status_out, err = run_cli("-f", str(db), "--status", "--json", cwd=workdir)
+    assert rc == 0, err
+    raw_outputs.append((status_out, "last_timestamp", write_id))
+
+    json_print_handler("watch", exact_ids["peek"])
+    raw_outputs.append((capsys.readouterr().out, "timestamp", exact_ids["peek"]))
+
+    for raw, field, expected in raw_outputs:
+        _assert_identity_token(raw, field, expected)
 
 
 def test_shared_message_line_formats_id_without_rewriting_body(

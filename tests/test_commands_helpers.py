@@ -58,21 +58,6 @@ class TestResolveTimestampFilters:
         captured = capsys.readouterr()
         assert "simplebroker: error" in captured.err
 
-    def test_invalid_message_id_returns_exit_error(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        error, after_ts, before_ts, exact_ts = _resolve_timestamp_filters(
-            None, None, "not-a-ts"
-        )
-
-        assert error == EXIT_ERROR
-        assert after_ts is None and before_ts is None and exact_ts is None
-        captured = capsys.readouterr()
-        assert (
-            captured.err
-            == "simplebroker: error: invalid message ID: expected exactly 19 digits within range\n"
-        )
-
 
 class TestGetMessageContent:
     def test_reads_from_stdin_when_message_omitted_and_stdin_is_piped(

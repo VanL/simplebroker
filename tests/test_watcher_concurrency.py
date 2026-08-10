@@ -118,8 +118,11 @@ class TestWorkerPool(WatcherTestBase):
                 thread = watcher.run_in_thread()
                 workers.append((watcher, thread, None))
 
-            # Let workers start and begin polling
-            time.sleep(0.1)
+            assert wait_for_condition(
+                lambda: all(watcher.is_running() for watcher, _thread, _ in workers),
+                timeout=scale_timeout_for_ci(5.0),
+                message="worker pool did not reach running state",
+            )
 
             # NOW create messages - this gives all workers a fair chance
             db = make_broker(broker_target)
@@ -311,8 +314,11 @@ class TestWorkerPool(WatcherTestBase):
             late_thread = late_watcher.run_in_thread()
             workers.append((late_watcher, late_thread))
 
-            # Give the late worker time to start polling
-            time.sleep(0.2)
+            assert wait_for_condition(
+                late_watcher.is_running,
+                timeout=scale_timeout_for_ci(5.0),
+                message="late watcher did not reach its public running state",
+            )
 
             # Add more messages
             db = make_broker(broker_target)
@@ -347,23 +353,12 @@ class TestWorkerPool(WatcherTestBase):
         for collector in collectors:
             all_messages.extend(collector.get_messages())
 
-        assert len(all_messages) == 100
-        assert len(set(all_messages)) == 100
-
-        # Late worker MAY have gotten some messages, but it's not guaranteed
-        # In a fast system with burst polling, early workers might process everything
-        # The important thing is that all messages were processed exactly once
-        late_messages = len(late_collector.get_messages())
-        print(f"Late worker processed {late_messages} messages")
-
-        # What we can verify is that work was distributed among workers
-        worker_counts = {}
-        for collector in collectors:
-            worker_counts[collector.worker_id] = len(collector.get_messages())
-        print(f"Work distribution: {worker_counts}")
-
-        # At least verify that messages were processed
-        assert sum(worker_counts.values()) == 100
+        expected = {
+            *(f"early_msg_{index}" for index in range(50)),
+            *(f"late_msg_{index}" for index in range(50)),
+        }
+        assert len(all_messages) == len(expected)
+        assert set(all_messages) == expected
 
 
 class TestMixedMode(WatcherTestBase):
@@ -414,7 +409,11 @@ class TestMixedMode(WatcherTestBase):
             )
             read_thread = read_watcher.run_in_thread()
 
-            time.sleep(0.1)
+            assert wait_for_condition(
+                lambda: peek_watcher.is_running() and read_watcher.is_running(),
+                timeout=scale_timeout_for_ci(5.0),
+                message="mixed-mode watchers did not reach running state",
+            )
 
             # Add messages
             db = make_broker(broker_target)
@@ -460,13 +459,9 @@ class TestMixedMode(WatcherTestBase):
         finally:
             db.shutdown()
 
-        # Peek might have seen some/all messages
-        # Can't guarantee exact behavior due to race conditions
-        assert len(peek_messages) >= 0
-        assert len(peek_messages) <= 10
-
-        # Peek messages should be subset of original messages
-        assert set(peek_messages).issubset({f"msg_{i}" for i in range(10)})
+        expected = {f"msg_{i}" for i in range(10)}
+        assert set(peek_messages) <= expected
+        assert len(peek_messages) == len(set(peek_messages))
 
     def test_multiple_peek_watchers(self, broker_target):  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-033] exception
         """Test multiple peek watchers see same messages."""
@@ -789,19 +784,3 @@ class TestEdgeCases(WatcherTestBase):
             release_setup.set()
             watcher.stop()
             thread.join(timeout=scale_timeout_for_ci(2.0))
-
-    def test_queue_name_validation(self, broker_target):
-        """Test that watcher respects queue name validation."""
-        # Should work with valid names
-        valid_names = ["test", "test_queue", "test-queue", "test.queue", "123"]
-
-        for name in valid_names:
-            watcher = QueueWatcher(
-                name,
-                lambda m, t: None,
-                db=broker_target,
-            )
-            assert watcher is not None
-
-        # Invalid names should raise error when trying to read/write
-        # This will be caught during actual operation

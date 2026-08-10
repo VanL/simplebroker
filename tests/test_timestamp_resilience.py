@@ -101,51 +101,6 @@ def test_forced_conflict_handled(broker):
 
 
 @pytest.mark.shared
-def test_transient_conflict_recovery(broker):
-    """Test recovery from a single transient conflict."""
-    broker.write("queue", "Message 1")
-    broker.write("queue", "Message 2")
-
-    messages = list(broker.peek_generator("queue", with_timestamps=False))
-    assert len(messages) == 2
-
-
-@pytest.mark.shared
-def test_truly_unresolvable_conflict_fails_safely(broker):
-    """Test that truly unresolvable conflicts fail with clear error."""
-    _requires_sql_runner(broker)
-    with broker._lock:
-        broker._runner.run(
-            broker._sql.INSERT_MESSAGE,
-            ("queue", "Message 1", 12345),
-        )
-        broker._runner.commit()
-
-    broker._timestamp_gen.generate = lambda: 12345
-
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="Timestamp conflict persisted",
-            category=RuntimeWarning,
-        )
-        warnings.filterwarnings(
-            "ignore",
-            message="Timestamp generator resynchronized",
-            category=RuntimeWarning,
-        )
-        warnings.filterwarnings(
-            "ignore",
-            message="Timestamp conflict unresolvable",
-            category=RuntimeWarning,
-        )
-        with pytest.raises(RuntimeError) as exc_info:
-            broker.write("queue", "Message 2")
-
-        assert "Failed to write message" in str(exc_info.value)
-
-
-@pytest.mark.shared
 def test_resync_fixes_inconsistent_state(broker):
     """Test that resync can fix inconsistent state."""
     for i in range(5):

@@ -3552,8 +3552,8 @@ class BrokerDB(BrokerCore):
 
     BrokerCore supplies backend-neutral SQL queue behavior around a caller-provided
     runner. BrokerDB supplies the distinct SQLite ownership layer: it resolves the
-    database path, creates and owns SQLiteRunner, applies file permissions, and
-    manages the SQLite connection lifecycle.
+    database path, creates and owns SQLiteRunner, leaves file permissions to the
+    filesystem and operator policy, and manages the SQLite connection lifecycle.
 
     This class is thread-safe and can be shared across multiple threads
     in the same process. All database operations are protected by a lock
@@ -3588,9 +3588,6 @@ class BrokerDB(BrokerCore):
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Check if database already existed
-        existing_db = self.db_path.exists()
-
         # Create SQLite runner
         self._runner = SQLiteRunner(str(self.db_path), config=config)
 
@@ -3604,25 +3601,6 @@ class BrokerDB(BrokerCore):
 
         # Store conn reference internally for compatibility
         self._conn = self._runner._conn
-
-        # Set restrictive permissions if new database
-        if not existing_db:
-            try:
-                # Set file permissions to owner read/write only
-                # IMPORTANT WINDOWS LIMITATION:
-                # On Windows, chmod() only affects the read-only bit, not full POSIX permissions.
-                # The 0o600 permission translates to removing the read-only flag on Windows,
-                # while on Unix-like systems it properly sets owner-only read/write (rw-------).
-                # This is a fundamental Windows filesystem limitation, not a Python issue.
-                # The call is safe on all platforms and provides the best available security.
-                os.chmod(self.db_path, 0o600)
-            except OSError as e:
-                # Don't crash on permission issues, just warn
-                warnings.warn(
-                    f"Could not set file permissions on {self.db_path}: {e}",
-                    RuntimeWarning,
-                    stacklevel=2,
-                )
 
     def __enter__(self) -> "BrokerDB":  # noqa: PYI034 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Enter context manager."""

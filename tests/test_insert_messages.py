@@ -6,7 +6,6 @@ from typing import Any
 import pytest
 
 from simplebroker import Queue
-from simplebroker import _message_insert as message_insert_module
 from simplebroker import _timestamp as timestamp_module
 from simplebroker._constants import (
     LOGICAL_COUNTER_MASK,
@@ -14,7 +13,6 @@ from simplebroker._constants import (
     SQLITE_MAX_INT64,
 )
 from simplebroker._exceptions import TimestampError
-from simplebroker._message_insert import normalize_insert_records
 from simplebroker.ext import IntegrityError
 
 from .helper_scripts.broker_factory import active_backend
@@ -197,23 +195,6 @@ def test_broker_insert_messages_rejects_unadvanceable_high_water(
 
     assert broker.refresh_last_timestamp() == 0
     assert broker.peek_one("jobs") is None
-
-
-def test_insert_normalization_rejects_missing_high_water_from_validator(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        message_insert_module,
-        "validate_timestamp_bound",
-        lambda name, value: None,
-    )
-
-    with pytest.raises(TypeError, match="high-water timestamp must be an int"):
-        normalize_insert_records(
-            [("jobs", "body", 1000)],
-            validate_queue_name=lambda queue: None,
-            validate_message_size=lambda message: None,
-        )
 
 
 def test_broker_insert_messages_accepts_exact_string_message_id(broker: Any) -> None:

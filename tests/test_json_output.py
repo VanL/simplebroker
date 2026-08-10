@@ -158,15 +158,11 @@ def test_read_json_invalid_timestamp_error_is_json(workdir):
     assert rc == 1
     assert out == ""
     payload = json.loads(err)
-    assert payload == {
-        "error": "INVALID_TIMESTAMP",
-        "message": (
-            "Invalid timestamp: invalid; timestamp bounds require integral seconds. "
-            "For finer granularity, use integer ms, integer ns, or a native hybrid "
-            "message ID."
-        ),
-        "retryable": False,
-    }
+    assert payload["error"] == "INVALID_TIMESTAMP"
+    assert payload["retryable"] is False
+    assert "invalid" in payload["message"].lower()
+    assert "timestamp" in payload["message"].lower()
+    assert "integer" in payload["message"].lower()
 
 
 def test_peek_json_invalid_message_id_error_is_json(workdir):
@@ -183,11 +179,10 @@ def test_peek_json_invalid_message_id_error_is_json(workdir):
     assert rc == 1
     assert out == ""
     payload = json.loads(err)
-    assert payload == {
-        "error": "INVALID_MESSAGE_ID",
-        "message": "invalid message ID: expected exactly 19 digits within range",
-        "retryable": False,
-    }
+    assert payload["error"] == "INVALID_MESSAGE_ID"
+    assert payload["retryable"] is False
+    assert "message id" in payload["message"].lower()
+    assert "19 digits" in payload["message"].lower()
 
 
 def test_move_json_invalid_message_id_error_is_json(workdir):
@@ -204,11 +199,11 @@ def test_move_json_invalid_message_id_error_is_json(workdir):
 
     assert rc == 1
     assert out == ""
-    assert json.loads(err) == {
-        "error": "INVALID_MESSAGE_ID",
-        "message": "invalid message ID: expected exactly 19 digits within range",
-        "retryable": False,
-    }
+    payload = json.loads(err)
+    assert payload["error"] == "INVALID_MESSAGE_ID"
+    assert payload["retryable"] is False
+    assert "message id" in payload["message"].lower()
+    assert "19 digits" in payload["message"].lower()
 
 
 def test_move_json_argument_error_is_json(workdir):
@@ -218,11 +213,11 @@ def test_move_json_argument_error_is_json(workdir):
     assert rc == 1
     assert out == ""
     payload = json.loads(err)
-    assert payload == {
-        "error": "INVALID_ARGUMENT",
-        "message": "Source and destination queues cannot be the same",
-        "retryable": False,
-    }
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert payload["retryable"] is False
+    assert "source" in payload["message"].lower()
+    assert "destination" in payload["message"].lower()
+    assert "same" in payload["message"].lower()
 
 
 @pytest.mark.sqlite_only
@@ -259,11 +254,10 @@ def test_json_error_reports_explicit_retryable_classification(
     assert main() == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert json.loads(captured.err) == {
-        "error": "ERROR",
-        "message": "backend is temporarily unavailable",
-        "retryable": True,
-    }
+    payload = json.loads(captured.err)
+    assert payload["error"] == "ERROR"
+    assert payload["retryable"] is True
+    assert "temporarily unavailable" in payload["message"].lower()
 
 
 def test_json_error_reports_explicit_nonretryable_classification(

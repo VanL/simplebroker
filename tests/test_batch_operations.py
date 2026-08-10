@@ -58,29 +58,9 @@ class TestBatchOperations:
             "message5",
         ]
 
-    def test_move_many_exactly_once(self, broker):
-        """Test move_many with exactly-once delivery."""
-        for i in range(5):
-            broker.write("source_queue", f"message{i + 1}")
-
-        messages = broker.move_many(
-            "source_queue", "dest_queue", limit=3, with_timestamps=False
-        )
-        assert len(messages) == 3
-        assert messages == ["message1", "message2", "message3"]
-
-        source_remaining = broker.peek_many(
-            "source_queue", limit=10, with_timestamps=False
-        )
-        assert len(source_remaining) == 2
-        assert source_remaining == ["message4", "message5"]
-
-        dest_messages = broker.peek_many("dest_queue", limit=10, with_timestamps=False)
-        assert len(dest_messages) == 3
-        assert dest_messages == ["message1", "message2", "message3"]
-
-    def test_move_many_at_least_once(self, broker):
-        """Test move_many accepts at-least-once as exactly-once materialization."""
+    @pytest.mark.parametrize("delivery_guarantee", ["exactly_once", "at_least_once"])
+    def test_move_many_materialized_semantics(self, broker, delivery_guarantee):
+        """Materialized moves commit one exact source-to-destination transfer."""
         for i in range(5):
             broker.write("source_queue", f"message{i + 1}")
 
@@ -88,19 +68,18 @@ class TestBatchOperations:
             "source_queue",
             "dest_queue",
             limit=3,
-            delivery_guarantee="at_least_once",
+            delivery_guarantee=delivery_guarantee,
             with_timestamps=False,
         )
-        assert len(messages) == 3
         assert messages == ["message1", "message2", "message3"]
 
         source_remaining = broker.peek_many(
             "source_queue", limit=10, with_timestamps=False
         )
-        assert len(source_remaining) == 2
+        assert source_remaining == ["message4", "message5"]
 
         dest_messages = broker.peek_many("dest_queue", limit=10, with_timestamps=False)
-        assert len(dest_messages) == 3
+        assert dest_messages == ["message1", "message2", "message3"]
 
     def test_batch_with_after_timestamp(self, broker):
         """Test batch operations with after_timestamp filter."""

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Literal
 
@@ -23,7 +24,6 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
 from simplebroker import Queue, dump_lines, load_lines, open_broker
-from simplebroker._dump import _selected
 from simplebroker.db import QUEUE_NAME_PATTERN
 
 # Queue names: generated from the broker's own validation pattern, the same
@@ -109,24 +109,22 @@ def test_filter_algebra_property(
         full = list(dump_lines(broker))
         filtered = list(dump_lines(broker, include=include, exclude=exclude))
 
-    # P2a: every filtered line exists verbatim in the full dump (no rewriting)
-    assert set(filtered[1:]) <= set(full[1:])
-    # P2b: exactly the selected queues appear
-    full_queues = {
-        json.loads(ln)["queue"]
-        for ln in full[1:]
-        if json.loads(ln)["type"] == "message"
-    }
-    filtered_queues = {
-        json.loads(ln)["queue"]
-        for ln in filtered[1:]
-        if json.loads(ln)["type"] == "message"
-    }
-    assert filtered_queues == {q for q in full_queues if _selected(q, include, exclude)}
-    # P2c: relative order is preserved
-    positions = {ln: i for i, ln in enumerate(full)}
-    kept = [positions[ln] for ln in filtered[1:]]
-    assert kept == sorted(kept)
+    def reference_selected(queue: str) -> bool:
+        included = include is None or any(fnmatchcase(queue, glob) for glob in include)
+        excluded = exclude is not None and any(
+            fnmatchcase(queue, glob) for glob in exclude
+        )
+        return included and not excluded
+
+    # The oracle is an independent stdlib model over the unfiltered records.
+    # Exact line equality proves identity, content, and relative order together.
+    expected = [
+        line
+        for line in full[1:]
+        if (record := json.loads(line))["type"] != "message"
+        or reference_selected(record["queue"])
+    ]
+    assert filtered[1:] == expected
 
 
 @settings(suppress_health_check=[HealthCheck.too_slow])

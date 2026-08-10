@@ -29,8 +29,8 @@ dependencies and stores its state in one SQLite database.
   not have to set up a queue server. Zero configuration: no servers, no
   daemons; each directory gets its own isolated `.broker.db` with ACID
   durability and safe concurrent access. On an M4 MacBook Pro,
-  [`bin/benchmark.py`](bin/benchmark.py) measured 897.1 mixed ops/second
-  through the default API and 9,206.5 through the persistent optimized API.
+  [`bin/benchmark.py`](bin/benchmark.py) measured 962.8 mixed ops/second
+  through the default API and 7,879.6 through the persistent optimized API.
 - **Shell scripts, cron jobs, and CI/CD pipelines.** `broker write tasks
   "build #123"` composes with pipes, exit codes, and `--json` like a Unix
   tool — decouple script stages, coordinate build steps, buffer logs, or
@@ -818,21 +818,23 @@ vacuum disabled, and all other SimpleBroker settings at their defaults:
 
 | Backend | Access | Writes | Reads | Peeks | Mixed |
 |---------|--------|-------:|------:|------:|------:|
-| `sqlite` | `cli` | 18.8 | 18.7 | 18.7 | 18.1 |
-| `sqlite` | `api` | 875.2 | 744.8 | 1,065.0 | 897.1 |
-| `sqlite` | `optimized-api` | 6,940.0 | 7,776.9 | 23,553.0 | 9,206.5 |
-| `pg` | `cli` | 7.6 | 7.2 | 7.2 | 7.3 |
-| `pg` | `api` | 100.0 | 117.1 | 146.9 | 105.7 |
-| `pg` | `optimized-api` | 735.3 | 641.7 | 4,704.6 | 1,061.0 |
-| `redis` | `cli` | 9.8 | 9.3 | 9.5 | 9.4 |
-| `redis` | `api` | 212.0 | 233.0 | 204.5 | 198.9 |
-| `redis` | `optimized-api` | 2,376.4 | 5,207.4 | 4,052.6 | 3,562.0 |
+| `sqlite` | `cli` | 14.7 | 12.4 | 12.5 | 13.1 |
+| `sqlite` | `api` | 909.1 | 898.2 | 1,139.8 | 962.8 |
+| `sqlite` | `optimized-api` | 7,125.2 | 5,945.4 | 22,314.6 | 7,879.6 |
+| `pg` | `cli` | 6.3 | 5.8 | 5.9 | 6.1 |
+| `pg` | `api` | 105.7 | 113.1 | 130.9 | 102.5 |
+| `pg` | `optimized-api` | 767.5 | 1,039.8 | 4,423.3 | 1,402.0 |
+| `redis` | `cli` | 8.0 | 7.9 | 8.0 | 8.0 |
+| `redis` | `api` | 250.2 | 263.0 | 205.7 | 145.8 |
+| `redis` | `optimized-api` | 2,145.0 | 5,252.6 | 3,934.5 | 3,700.5 |
 
 `cli` includes a fresh Python process for every operation. `api` uses the
 default ephemeral connection behavior. `optimized-api` runs the same calls
 with `persistent=True`. These are point-in-time measurements from a short
 local run, not performance guarantees; topology, hardware, load, and software
-versions will change the result. Use `--all` for bulk operations where its
+versions will change the result. The attributable raw measurements are in the
+[result artifact](benchmarks/results/2026-08-10-m4-matrix.json). Use `--all`
+for bulk operations where its
 delivery semantics fit the workload.
 
 For normal use in the embedding or shell-tool context, SimpleBroker is

@@ -11,12 +11,14 @@ import pytest
 from simplebroker import resolve_config, target_for_directory
 from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
 from simplebroker._constants import load_config
+from simplebroker._exceptions import MessageError
 from simplebroker._runner import SQLiteRunner
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore, DBConnection
-from simplebroker.watcher import QueueWatcher
+from simplebroker.watcher import PollingStrategy, QueueWatcher
 
 from .helper_scripts.broker_factory import make_broker
+from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 
 
 def test_resolve_config_normalizes_partial_override_values() -> None:
@@ -60,19 +62,24 @@ def test_resolve_config_preserves_typed_debug_and_percentage_overrides() -> None
 
 
 def test_broker_core_merges_partial_config_with_defaults(tmp_path: Path) -> None:
-    """Direct BrokerCore construction should accept override-only configs."""
+    """A partial size override governs writes while other defaults remain usable."""
     runner = SQLiteRunner(str(tmp_path / "test.db"))
 
-    with BrokerCore(runner, config={"BROKER_AUTO_VACUUM_INTERVAL": "100"}) as core:
-        assert core._config["BROKER_AUTO_VACUUM_INTERVAL"] == 100
-        assert isinstance(core._config["BROKER_AUTO_VACUUM_INTERVAL"], int)
+    with BrokerCore(runner, config={"BROKER_MAX_MESSAGE_SIZE": 5}) as core:
+        core.write("jobs", "12345")
+        with pytest.raises(
+            MessageError, match=r"exceeds maximum allowed size \(5 bytes\)"
+        ):
+            core.write("jobs", "123456")
+
+        assert core.peek_many("jobs", limit=10, with_timestamps=False) == ["12345"]
 
 
 def test_dbconnection_non_sqlite_target_accepts_partial_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Non-SQLite connection setup should not require a fully materialized config."""
+    """Partial config changes real operations through a resolved target."""
     target = BrokerTarget(
         backend_name="postgres",
         target=str(tmp_path / "test.db"),
@@ -87,12 +94,16 @@ def test_dbconnection_non_sqlite_target_accepts_partial_config(
 
     with DBConnection(
         target,
-        config={"BROKER_AUTO_VACUUM_INTERVAL": "100"},
+        config={"BROKER_MAX_MESSAGE_SIZE": 5},
     ) as conn:
         core = conn.get_connection()
-        assert isinstance(core, BrokerCore)
-        assert core._config["BROKER_AUTO_VACUUM_INTERVAL"] == 100
-        assert isinstance(core._config["BROKER_AUTO_VACUUM_INTERVAL"], int)
+        core.write("jobs", "12345")
+        with pytest.raises(
+            MessageError, match=r"exceeds maximum allowed size \(5 bytes\)"
+        ):
+            core.write("jobs", "123456")
+
+        assert core.peek_many("jobs", limit=10, with_timestamps=False) == ["12345"]
 
 
 def test_target_for_directory_normalizes_partial_backend_config(
@@ -134,25 +145,81 @@ def test_target_for_directory_normalizes_partial_backend_config(
     assert isinstance(seen["BROKER_AUTO_VACUUM_INTERVAL"], int)
 
 
-def test_watcher_default_strategy_uses_instance_config(tmp_path: Path) -> None:
+def test_watcher_instance_config_controls_live_polling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delays: list[float] = []
+    original_get_delay = PollingStrategy._get_delay
+
+    def recording_get_delay(strategy: PollingStrategy) -> float:
+        delay = original_get_delay(strategy)
+        delays.append(delay)
+        return delay
+
+    monkeypatch.setattr(PollingStrategy, "_get_delay", recording_get_delay)
     watcher = QueueWatcher(
         "jobs",
         lambda _message, _timestamp: None,
         db=tmp_path / "watcher.db",
         config={
-            "BROKER_INITIAL_CHECKS": 7,
-            "BROKER_MAX_INTERVAL": 2.5,
-            "BROKER_BURST_SLEEP": 0.3,
-            "BROKER_JITTER_FACTOR": 0.01,
+            "BROKER_INITIAL_CHECKS": 2,
+            "BROKER_MAX_INTERVAL": 0.01,
+            "BROKER_BURST_SLEEP": 0.0001,
+            "BROKER_JITTER_FACTOR": 0,
         },
     )
     try:
-        assert watcher._strategy._initial_checks == 7
-        assert watcher._strategy._max_interval == 2.5
-        assert watcher._strategy._burst_sleep == 0.3
-        assert watcher._strategy._jitter_factor == 0.01
+        watcher.run_in_thread()
+        assert wait_for_condition(
+            lambda: len(delays) >= 5,
+            timeout=scale_timeout_for_ci(5.0),
+            message="configured watcher did not enter its live polling schedule",
+        )
     finally:
         watcher.stop()
+
+    assert delays[:3] == [0, 0, 0]
+    assert delays[3] > 0
+
+
+def test_watcher_environment_config_controls_live_polling(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BROKER_INITIAL_CHECKS", "0")
+    monkeypatch.setenv("BROKER_MAX_INTERVAL", "0.007")
+    monkeypatch.setenv("BROKER_BURST_SLEEP", "0.0001")
+    monkeypatch.setenv("BROKER_JITTER_FACTOR", "0")
+
+    delays: list[float] = []
+    original_get_delay = PollingStrategy._get_delay
+
+    def recording_get_delay(strategy: PollingStrategy) -> float:
+        delay = original_get_delay(strategy)
+        delays.append(delay)
+        return delay
+
+    monkeypatch.setattr(PollingStrategy, "_get_delay", recording_get_delay)
+    watcher = QueueWatcher(
+        "jobs",
+        lambda _message, _timestamp: None,
+        db=tmp_path / "environment-watcher.db",
+        config=load_config(),
+    )
+    try:
+        watcher.run_in_thread()
+        assert wait_for_condition(
+            lambda: len(delays) >= 4,
+            timeout=scale_timeout_for_ci(5.0),
+            message="environment-configured watcher did not poll",
+        )
+    finally:
+        watcher.stop()
+
+    assert delays[0] == 0
+    assert delays[1] > 0
+    assert all(0 <= delay <= 0.007 for delay in delays)
 
 
 @pytest.mark.shared

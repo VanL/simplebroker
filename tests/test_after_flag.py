@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from simplebroker import Queue, commands
-from simplebroker._constants import load_config
+from simplebroker import Queue, commands, target_for_directory
+from simplebroker._constants import LOGICAL_COUNTER_MASK, load_config
 
 from .conftest import _reset_pg_tables, run_cli
 
@@ -443,54 +443,25 @@ def test_after_human_readable_formats(workdir):
 def test_after_iso_date_precise_boundary(workdir):
     """Test that date-only strings are interpreted as midnight UTC precisely."""
     queue_name = "iso_boundary_queue"
-
-    # We need to create messages with specific timestamps
-    # Since we can't control the exact write time, we'll use --after with precise times
-
-    # Write several messages
-    run_cli("write", queue_name, "msg1", cwd=workdir)
-    time.sleep(0.001)
-    run_cli("write", queue_name, "msg2", cwd=workdir)
-    time.sleep(0.001)
-    run_cli("write", queue_name, "msg3", cwd=workdir)
-
-    # Get all timestamps
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--all", "--timestamps", "--json", cwd=workdir
-    )
-    [json.loads(line) for line in out.strip().split("\n")]
-
-    # Test with specific ISO timestamps
-    # Use a date far in the past to get all messages
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--all", "--after", "2020-01-01", cwd=workdir
-    )
-    assert rc == 0
-    assert len(out.strip().split("\n")) == 3
-
-    # Use a date far in the future to get no messages
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--all", "--after", "2030-01-01", cwd=workdir
-    )
-    assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
-    assert out == ""
-
-    # Test precise midnight boundary
-    # Create ISO strings that test the boundary
     test_date = "2024-01-15"
-    at_midnight = "2024-01-15T00:00:00Z"
+    days_since_epoch = (datetime.date(2024, 1, 15) - datetime.date(1970, 1, 1)).days
+    midnight_ns = days_since_epoch * 86_400 * 1_000_000_000
+    midnight = midnight_ns & ~LOGICAL_COUNTER_MASK
+    target = target_for_directory(workdir)
+    with Queue(queue_name, db_path=target) as queue:
+        queue.insert_messages(
+            [
+                ("before", midnight - 1),
+                ("at", midnight),
+                ("after", midnight + 1),
+            ]
+        )
 
-    # Helper to check if a timestamp would filter our messages
-    def check_after(ts_str):
-        return run_cli("peek", queue_name, "--all", f"--after={ts_str}", cwd=workdir)
-
-    # All these should behave identically (date-only = midnight UTC)
-    rc1, _, _ = check_after(test_date)
-    rc2, _, _ = check_after(at_midnight)
-
-    # The date-only format should be equivalent to midnight
-    # Both should give the same result (either all messages or none)
-    assert rc1 == rc2, f"Date-only '{test_date}' should equal '{at_midnight}'"
+    rc, out, err = run_cli(
+        "peek", queue_name, "--all", "--after", test_date, cwd=workdir
+    )
+    assert rc == 0, err
+    assert out.splitlines() == ["after"]
 
 
 def test_after_iso_date_formats(workdir):
@@ -943,67 +914,26 @@ def test_after_timestamp_heuristic_edge_cases(workdir):
 
 
 def test_after_timestamp_heuristic(workdir):
-    """Test the heuristic that distinguishes native vs. Unix timestamps."""
+    """Documented timestamp forms select the same observable queue rows."""
     queue_name = "heuristic_queue"
+    rc, out, err = run_cli("write", queue_name, "message", "--json", cwd=workdir)
+    assert rc == 0, err
+    native_id = json.loads(out)["timestamp"]
 
-    # Define the actual boundary used in the implementation
-    BOUNDARY = 1 << 44  # Same as in commands.py (approx 1.76e13)
-
-    # A small timestamp that should be interpreted as Unix milliseconds
-    # Jan 12, 1970 is approximately 1 million seconds = 1 billion milliseconds
-    small_unix_ts_ms = 1_000_000_000  # 1 billion ms = Jan 12, 1970
-    assert small_unix_ts_ms < BOUNDARY  # This will be treated as Unix
-
-    # Write a message
-    run_cli("write", queue_name, "message", cwd=workdir)
-
-    # Test that `small_unix_ts_ms` is interpreted as a Unix timestamp in ms,
-    # which corresponds to Jan 12, 1970, so it should return the message.
-    rc, out, err = run_cli(
-        "peek", queue_name, "--after", str(small_unix_ts_ms), cwd=workdir
+    documented_instant = (
+        "1705329000",
+        "1705329000s",
+        "1705329000000ms",
+        "1705329000000000000ns",
     )
-    if rc != 0:
-        print(f"Error: {err}")
-        print(f"Output: {out}")
-    assert rc == 0
-    assert out == "message"
+    for timestamp in documented_instant:
+        rc, out, err = run_cli("peek", queue_name, "--after", timestamp, cwd=workdir)
+        assert rc == 0, (timestamp, err)
+        assert out == "message"
 
-    # Verify with a large Unix timestamp in milliseconds
-    large_unix_ts_ms = int(time.time() * 1000)
-    assert large_unix_ts_ms < BOUNDARY  # Still treated as Unix
-
-    # This should filter out our existing message (after it's in the future)
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--after", str(large_unix_ts_ms), cwd=workdir
-    )
-    assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
+    rc, out, err = run_cli("peek", queue_name, "--after", native_id, cwd=workdir)
+    assert rc == 2, err
     assert out == ""
-
-    # Test boundary behavior with realistic values
-    # A 13-digit value (typical milliseconds) - should be treated as Unix ms
-    thirteen_digits = 1700000000000  # Nov 2023 in milliseconds
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--after", str(thirteen_digits), cwd=workdir
-    )
-    assert rc == 0  # Should return message
-
-    # Test actual boundary - values >= 2^44 are treated as native
-    # The smallest valid native timestamp that won't overflow
-    native_ts = BOUNDARY
-    rc, out, _ = run_cli("peek", queue_name, "--after", str(native_ts), cwd=workdir)
-    # This native timestamp represents ~16.8 seconds after epoch
-    # So it should return the message
-    assert rc == 0
-    assert out == "message"
-
-    # Test a large native timestamp from current time
-    current_native = int(time.time() * 1_000_000) << 12
-    assert current_native > BOUNDARY  # Should be treated as native
-    rc, out, _ = run_cli(
-        "peek", queue_name, "--after", str(current_native), cwd=workdir
-    )
-    assert rc == 2  # EXIT_QUEUE_EMPTY when no messages match filter
-    assert out == ""  # Empty (future timestamp)
 
 
 def test_after_hybrid_timestamp_ordering(workdir):
@@ -1315,23 +1245,3 @@ def test_after_single_message_mode(workdir):
     rc, out, _ = run_cli("read", queue_name, "--all", cwd=workdir)
     assert rc == 0
     assert out == "msg0\nmsg1\nmsg3\nmsg4"
-
-
-@pytest.mark.sqlite_only
-def test_after_error_propagation(workdir):
-    """Test that database errors are properly propagated with --after."""
-    # Create a queue
-    run_cli("write", "error_queue", "test", cwd=workdir)
-
-    # Make database read-only to trigger errors
-    db_path = workdir / ".broker.db"
-    db_path.chmod(0o444)
-
-    try:
-        # Attempt to read with --after (should handle error gracefully)
-        rc, _out, _err = run_cli("read", "error_queue", "--after", "0", cwd=workdir)
-        # Should get an error but not crash
-        assert rc != 0
-    finally:
-        # Restore permissions
-        db_path.chmod(0o644)

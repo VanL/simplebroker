@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 import pytest
@@ -141,41 +142,28 @@ def test_watcher_omitted_db_uses_configured_default(
 ) -> None:
     monkeypatch.chdir(tmp_path)
 
+    received: list[str] = []
+    handled = threading.Event()
+
+    def handler(message: str, _timestamp: int) -> None:
+        received.append(message)
+        handled.set()
+
+    config = {"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"}
     watcher = QueueWatcher(
         "probe",
-        lambda _message, _timestamp: None,
-        config={"BROKER_DEFAULT_DB_NAME": ".weft/broker.db"},
+        handler,
+        config=config,
     )
+    writer = Queue("probe", config=config)
     try:
-        watcher._queue_obj.generate_timestamp()
+        watcher.run_in_thread()
+        writer.write("configured target")
+        assert handled.wait(timeout=5.0)
     finally:
         watcher.stop()
+        writer.close()
 
+    assert received == ["configured target"]
     assert (tmp_path / ".weft" / "broker.db").is_file()
     assert not (tmp_path / ".broker.db").exists()
-
-
-def test_watcher_dispatch_uses_configured_message_size_limit(tmp_path: Path) -> None:
-    handled: list[tuple[str, int]] = []
-    errors: list[tuple[Exception, str, int]] = []
-
-    def error_handler(exc: Exception, message: str, timestamp: int) -> bool:
-        errors.append((exc, message, timestamp))
-        return True
-
-    watcher = QueueWatcher(
-        "probe",
-        lambda message, timestamp: handled.append((message, timestamp)),
-        db=str(tmp_path / "broker.db"),
-        error_handler=error_handler,
-        config={"BROKER_MAX_MESSAGE_SIZE": 3},
-    )
-    try:
-        watcher._dispatch("toolong", 123, config=watcher._config)
-    finally:
-        watcher.stop()
-
-    assert handled == []
-    assert len(errors) == 1
-    assert isinstance(errors[0][0], ValueError)
-    assert "3 byte limit" in str(errors[0][0])

@@ -36,6 +36,7 @@ Quick pointers to the key guidance documents in this repository.
 | Path | Purpose |
 |------|---------|
 | `bin/benchmark.py` | Best-of-three writes/reads/peeks/mixed matrix across CLI, API, optimized API, SQLite, PostgreSQL, and Redis |
+| `benchmarks/results/` | Non-normative, attributed raw benchmark snapshots used to derive published performance tables |
 | `bin/check-doc-paths` | Gate: every backticked repo-relative path claim in the guidance surfaces resolves |
 | `bin/coalesce-check` | Evidence trail for the coalescing layer: verifies every run-log SHA and retrieval cue (local, sibling, and published-remote), reports local-only pins, derives the lessons count |
 | `bin/ruff_suppression_index.py` | Gate and generator: reconciles human-approved Ruff suppression groups, local source pointers, raw diagnostics, and the derived location index |

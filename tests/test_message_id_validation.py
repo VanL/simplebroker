@@ -10,7 +10,6 @@ from simplebroker._message_id import (
     INVALID_MESSAGE_ID_MESSAGE,
     normalize_message_id,
 )
-from simplebroker.commands import parse_exact_message_id
 
 pytestmark = [pytest.mark.shared]
 
@@ -104,8 +103,3 @@ def test_normalize_message_id_rejects_out_of_range_ints(value: int) -> None:
 def test_normalize_message_id_rejects_non_id_types(value: object) -> None:
     with pytest.raises(TypeError):
         normalize_message_id(value)
-
-
-def test_parse_exact_message_id_delegates_to_canonical_validator() -> None:
-    assert parse_exact_message_id("0000000000000000001") == 1
-    assert parse_exact_message_id("9223372036854775808") is None

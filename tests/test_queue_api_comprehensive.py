@@ -81,24 +81,6 @@ class TestQueueReadMethods:
         # Empty queue
         assert q.read_many(10) == []
 
-    def test_read_many_delivery_guarantees(self, queue_factory):
-        """Test read_many accepts at-least-once as exactly-once materialization."""
-        q = queue_factory("test")
-
-        for i in range(10):
-            q.write(f"message{i}")
-
-        # Test exactly_once (default)
-        messages = q.read_many(
-            5, delivery_guarantee="exactly_once", with_timestamps=False
-        )
-        assert len(messages) == 5
-
-        messages = q.read_many(
-            5, delivery_guarantee="at_least_once", with_timestamps=False
-        )
-        assert len(messages) == 5
-
     def test_read_many_after_timestamp(self, queue_factory):
         """Test read_many with after_timestamp filter."""
         q = queue_factory("test")
@@ -417,34 +399,6 @@ class TestQueueLastTimestampCaching:
         messages = list(dest.peek_generator(with_timestamps=False))
         assert messages == ["message2"]
 
-    def test_move_one_require_unclaimed(self, queue_factory):
-        """Test move_one with require_unclaimed parameter."""
-        source = queue_factory("source")
-
-        source.write("message1")
-        source.write("message2")
-
-        # Read (claim) first message
-        claimed = source.read_one(with_timestamps=False)
-        assert claimed == "message1"
-
-        # Try to move with require_unclaimed=True (default)
-        result = source.move_one("dest", with_timestamps=False)
-        assert result == "message2"  # Skips claimed message1
-
-        # Now try to move claimed message with require_unclaimed=False
-        # Get timestamp of claimed message
-        messages = list(source.peek_generator(with_timestamps=True))
-        if messages:
-            claimed_ts = messages[0][1]
-            result = source.move_one(
-                "dest",
-                exact_timestamp=claimed_ts,
-                require_unclaimed=False,
-                with_timestamps=False,
-            )
-            # Note: This might still be None if the message was already deleted
-
     def test_move_many_basic(self, queue_factory):
         """Test move_many method."""
         source = queue_factory("source")
@@ -483,27 +437,6 @@ class TestQueueLastTimestampCaching:
 
         dest = queue_factory("dest")
         assert list(dest.peek_generator(with_timestamps=False)) == ["old1", "old2"]
-
-    def test_move_many_delivery_guarantees(self, queue_factory):
-        """Test move_many accepts at-least-once as exactly-once materialization."""
-        source = queue_factory("source")
-
-        for i in range(10):
-            source.write(f"message{i}")
-
-        # Test exactly_once (default)
-        messages = source.move_many(
-            "dest1", 5, delivery_guarantee="exactly_once", with_timestamps=False
-        )
-        assert len(messages) == 5
-
-        messages = source.move_many(
-            "dest2",
-            5,
-            delivery_guarantee="at_least_once",
-            with_timestamps=False,
-        )
-        assert len(messages) == 5
 
     def test_move_generator_basic(self, queue_factory):
         """Test move_generator method."""
@@ -580,26 +513,21 @@ class TestQueueHelperMethods:
         q.write("new1")
         assert q.has_pending(after_timestamp=cutoff_ts) is True
 
-    def test_get_data_version(self, queue_factory):
-        """Test get_data_version method."""
-        # Use persistent mode for this test
-        q = queue_factory("test")
+    def test_get_data_version_advances_after_external_write(self, queue_factory):
+        """A separate writer advances a persistent SQLite observer's version."""
+        observer = queue_factory("test")
+        writer = queue_factory("test", persistent=False)
 
-        # Get initial version
-        version1 = q.get_data_version()
+        # Materialize both independent connections before taking the baseline.
+        assert observer.peek_one(with_timestamps=False) is None
+        version1 = observer.get_data_version()
         if version1 is None:
-            # PG backend returns None (no equivalent of SQLite data_version)
             pytest.skip("get_data_version not supported on this backend")
-        assert isinstance(version1, int)
+        writer.write("external")
 
-        # Write a message (changes database)
-        q.write("message")
-
-        # Version should change after a write
-        version2 = q.get_data_version()
-        assert version2 is not None
-        # Note: In some cases version might not change if using same connection
-        # Just verify it's a valid integer
+        version2 = observer.get_data_version()
+        assert version2 > version1
+        assert observer.read_one(with_timestamps=False) == "external"
         assert isinstance(version2, int)
 
     def test_stream_messages(self, queue_factory):
@@ -760,39 +688,6 @@ class TestQueueHelperMethods:
         # Batch 2 should roll back when the generator is closed mid-batch.
         remaining = list(q.peek_generator(with_timestamps=False))
         assert remaining == ["message3", "message4", "message5", "message6"]
-
-
-class TestQueueConnectionModes:
-    """Test persistent vs ephemeral connection modes."""
-
-    def test_ephemeral_mode_default(self, queue_factory):
-        """Test that ephemeral mode is the default."""
-        q = queue_factory("test", persistent=False)
-        assert q._persistent is False
-        assert q.conn is None
-
-    def test_persistent_mode(self, queue_factory):
-        """Test persistent mode."""
-        q = queue_factory("test")
-        assert q._persistent is True
-        assert q.conn is not None
-
-        # Write and read work normally
-        q.write("message")
-        assert q.read_one(with_timestamps=False) == "message"
-
-    def test_context_manager(self, queue_factory):
-        """Test Queue as context manager."""
-        q = queue_factory("test")
-
-        with q:
-            q.write("message")
-            assert q.read_one(with_timestamps=False) == "message"
-
-        # After context, queue should be closed
-        # Create new queue to verify data persisted
-        q2 = queue_factory("test")
-        assert q2.peek_one() is None  # Message was consumed
 
 
 class TestQueueDelete:

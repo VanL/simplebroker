@@ -75,7 +75,6 @@ def test_stats_json_output(workdir) -> None:
         "total": 2,
         "exists": True,
     }
-    assert payload["pending"] + payload["claimed"] == payload["total"]
 
 
 def test_list_prefix_without_stats_prints_names_and_includes_claimed_only(

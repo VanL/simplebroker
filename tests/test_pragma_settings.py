@@ -229,23 +229,6 @@ def test_sync_mode_case_insensitive(tmp_path: Path) -> None:
         assert sync_mode == 1  # NORMAL = 1
 
 
-def test_write_with_normal_sync_works(tmp_path: Path) -> None:
-    """Test that writes work correctly with NORMAL sync mode."""
-    db_path = tmp_path / "test.db"
-
-    # Write messages
-    with BrokerDB(str(db_path), config={"BROKER_SYNC_MODE": "NORMAL"}) as db:
-        for i in range(10):
-            db.write("test_queue", f"message {i}")
-
-    # Read them back to verify
-    with BrokerDB(str(db_path)) as db:
-        messages = db.peek_many("test_queue", limit=10, with_timestamps=False)
-        assert len(messages) == 10
-        for i, msg in enumerate(messages):
-            assert msg == f"message {i}"
-
-
 def test_custom_wal_autocheckpoint(tmp_path: Path) -> None:
     """Test that BROKER_WAL_AUTOCHECKPOINT config works."""
     db_path = tmp_path / "test.db"

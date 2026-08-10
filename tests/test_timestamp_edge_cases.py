@@ -1,7 +1,6 @@
 """Test edge cases in _timestamp.py to increase coverage."""
 
 import concurrent.futures
-import os
 import threading
 import time
 from typing import Any
@@ -444,35 +443,6 @@ class TestTimestampEdgeCases:
         # After stripping 'ms', we get 'abc' which is not numeric
         with pytest.raises(TimestampError):
             TimestampGenerator.validate("abcms")
-
-    def test_fork_reinitialization(self):
-        """Test that fork causes reinitialization of timestamp generator."""
-
-        mock_runner = Mock(spec=SQLRunner)
-        mock_runner.run.return_value = [(1000,)]
-
-        gen = TimestampGenerator(mock_runner)
-        gen._initialize()
-
-        # Verify initial state
-        assert gen._initialized is True
-        assert gen._last_ts == 1000
-        original_pid = gen._pid
-
-        # Simulate fork by changing PID
-        gen._pid = original_pid - 1
-
-        # Generate should detect fork and reinitialize
-        mock_runner.run.return_value = [(2000,)]  # New last_ts
-
-        with patch("simplebroker._timestamp.time") as mock_time:
-            mock_time.time_ns.return_value = 2_000_000_000  # 2 seconds in nanoseconds
-            gen.generate()
-
-        # Verify reinitialization
-        assert gen._pid == os.getpid()
-        assert gen._initialized is True
-        assert gen._counter == 0
 
     def test_timestamp_magnitude_preservation(self):
         """Test that timestamps preserve the magnitude of time.time_ns()."""

@@ -1,5 +1,9 @@
 """Test portability and Windows compatibility fixes."""
 
+import os
+import stat
+import subprocess
+import sys
 import unittest.mock
 import warnings
 from pathlib import Path
@@ -9,30 +13,6 @@ import pytest
 from simplebroker.db import BrokerDB
 
 pytestmark = [pytest.mark.sqlite_only]
-
-
-def test_chmod_windows_compatibility(tmp_path):
-    """Test that chmod failures are handled gracefully."""
-    db_path = tmp_path / "test.db"
-
-    # Mock os.chmod to raise OSError (simulating Windows permission issue)
-    with (
-        unittest.mock.patch("os.chmod", side_effect=OSError("Permission denied")),
-        warnings.catch_warnings(record=True) as w,
-    ):
-        warnings.simplefilter("always")
-        # Should not crash, just warn
-        db = BrokerDB(str(db_path))
-        try:
-            pass  # Database created successfully despite chmod failure
-        finally:
-            db.close()
-
-        # Verify warning was issued
-        assert len(w) == 1
-        assert issubclass(w[0].category, RuntimeWarning)
-        assert "Could not set file permissions" in str(w[0].message)
-        assert str(db_path) in str(w[0].message)
 
 
 def test_path_resolve_edge_case(tmp_path):
@@ -61,53 +41,55 @@ def test_path_resolve_edge_case(tmp_path):
         assert "Could not resolve path" in str(w[0].message)
 
 
-def test_chmod_called_on_new_database(tmp_path):
-    """Test that chmod is called for new databases on all platforms."""
-    db_path = tmp_path / "new.db"
+@pytest.mark.skipif(os.name == "nt", reason="POSIX umask contract")
+@pytest.mark.parametrize(
+    ("umask", "expected_mode"),
+    [(0o000, 0o644), (0o002, 0o644), (0o077, 0o600)],
+)
+def test_database_creation_respects_operator_umask(
+    tmp_path: Path, umask: int, expected_mode: int
+) -> None:
+    """Fresh SQLite mode follows SQLite's request filtered by process umask."""
+    db_path = tmp_path / f"new-{umask:o}.db"
+    probe = """
+import os
+import stat
+import sys
 
-    with unittest.mock.patch("os.chmod") as mock_chmod:
-        db = BrokerDB(str(db_path))
-        try:
-            pass  # Database created successfully
-        finally:
-            db.close()
+from simplebroker.db import BrokerDB
 
-        # Verify chmod was called with correct permissions
-        # Now also called for marker files, so check database file specifically
-        chmod_calls = [
-            call for call in mock_chmod.call_args_list if call[0][0] == db_path
-        ]
-        assert len(chmod_calls) == 1
-        assert chmod_calls[0][0] == (db_path, 0o600)
+os.umask(int(sys.argv[2], 8))
+with BrokerDB(sys.argv[1]) as db:
+    db.write("jobs", "usable")
+with BrokerDB(sys.argv[1]) as db:
+    body = db.claim_one("jobs", with_timestamps=False)
+print(f"{stat.S_IMODE(os.stat(sys.argv[1]).st_mode):04o} {body}")
+"""
+
+    completed = subprocess.run(
+        [sys.executable, "-c", probe, str(db_path), f"{umask:o}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == f"{expected_mode:04o} usable"
 
 
-def test_chmod_not_called_on_existing_database(tmp_path):
-    """Test that chmod is not called for existing database file itself."""
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode preservation contract")
+def test_reopen_preserves_existing_database_mode(tmp_path: Path) -> None:
+    """Reopening preserves an operator-selected mode on an existing database."""
     db_path = tmp_path / "existing.db"
 
-    # Create the database first
-    db = BrokerDB(str(db_path))
-    try:
-        pass  # Database created successfully
-    finally:
-        db.close()
+    with BrokerDB(str(db_path)) as db:
+        db.write("jobs", "before-reopen")
+    db_path.chmod(0o660)
 
-    # Now open it again
-    with unittest.mock.patch("os.chmod") as mock_chmod:
-        db = BrokerDB(str(db_path))
-        try:
-            pass  # Database opened successfully
-        finally:
-            db.close()
+    with BrokerDB(str(db_path)) as reopened:
+        assert reopened.claim_one("jobs", with_timestamps=False) == "before-reopen"
 
-        # Verify chmod was NOT called on the database file itself
-        # (it may be called on lock files, which is expected)
-        db_chmod_calls = [
-            call for call in mock_chmod.call_args_list if call[0][0] == str(db_path)
-        ]
-        assert len(db_chmod_calls) == 0, (
-            f"chmod should not be called on existing database file, but was called with {db_chmod_calls}"
-        )
+    assert stat.S_IMODE(db_path.stat().st_mode) == 0o660
 
 
 def test_normal_operation_still_works(tmp_path):

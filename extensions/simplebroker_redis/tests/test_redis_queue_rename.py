@@ -5,27 +5,23 @@ from __future__ import annotations
 import pytest
 from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
-from simplebroker_redis.keys import RedisKeys, encode_id
 
 from simplebroker._exceptions import OperationalError
 
 pytestmark = [pytest.mark.redis_only]
 
 
-def test_redis_rename_cleans_old_keys_and_queue_set(
+def test_redis_rename_preserves_pending_claimed_ids_and_removes_old_queue(
     redis_runner: RedisRunner,
 ) -> None:
     core = RedisBrokerCore(redis_runner)
-    keys = RedisKeys(redis_runner.namespace)
     try:
-        core.write("old", "pending")
-        core.write("old", "claimed")
-        timestamps = dict(core.peek_many("old", limit=10))
+        core.insert_messages([("old", "pending", 10), ("old", "claimed", 20)])
 
         assert (
             core.claim_one(
                 "old",
-                exact_timestamp=timestamps["claimed"],
+                exact_timestamp=20,
                 with_timestamps=False,
             )
             == "claimed"
@@ -34,21 +30,18 @@ def test_redis_rename_cleans_old_keys_and_queue_set(
         result = core.rename_queue("old", "new")
 
         assert result.messages_renamed == 2
-        assert core._runner.client.zcard(keys.pending("old")) == 0
-        assert core._runner.client.zcard(keys.claimed("old")) == 0
-        assert core._runner.client.zcard(keys.reserved("old")) == 0
-        assert set(core._runner.client.zrange(keys.pending("new"), 0, -1)) == {
-            encode_id(timestamps["pending"])
-        }
-        assert set(core._runner.client.zrange(keys.claimed("new"), 0, -1)) == {
-            encode_id(timestamps["claimed"])
-        }
-        assert "old" not in core._runner.client.smembers(keys.queues)
-        assert "new" in core._runner.client.smembers(keys.queues)
-        for timestamp in timestamps.values():
-            encoded = encode_id(timestamp)
-            assert core._runner.client.hget(keys.bodies, encoded) is not None
-            assert core._runner.client.zscore(keys.all_ids, encoded) is not None
+        assert core.peek_many(
+            "new", limit=10, with_timestamps=True, include_claimed=True
+        ) == [("pending", 10), ("claimed", 20)]
+        assert core.peek_many(
+            "new", limit=10, with_timestamps=True, include_claimed=False
+        ) == [("pending", 10)]
+        assert (
+            core.peek_many("old", limit=10, with_timestamps=True, include_claimed=True)
+            == []
+        )
+        assert core.queue_exists("old") is False
+        assert core.queue_exists("new") is True
     finally:
         core.close()
 
@@ -93,41 +86,62 @@ def test_redis_rename_rejects_active_reserved_source(
 
 
 def test_redis_rename_rejects_reserved_target_collision(
-    redis_runner: RedisRunner,
+    redis_url: str,
+    redis_namespace: str,
 ) -> None:
-    core = RedisBrokerCore(redis_runner)
-    keys = RedisKeys(redis_runner.namespace)
+    source_runner = RedisRunner(
+        redis_url, namespace=redis_namespace, stale_batch_seconds=300
+    )
+    renaming_runner = RedisRunner(
+        redis_url, namespace=redis_namespace, stale_batch_seconds=300
+    )
+    source_core = RedisBrokerCore(source_runner)
+    renaming_core = RedisBrokerCore(renaming_runner)
+    generator = None
     try:
-        core.write("old", "payload")
-        core._runner.client.zadd(keys.reserved("new"), {encode_id(1): 0})
+        renaming_core.write("old", "source-payload")
+        source_core.write("new", "reserved-target")
+        generator = source_core.claim_generator(
+            "new",
+            delivery_guarantee="at_least_once",
+            batch_size=1,
+            with_timestamps=False,
+        )
+        assert next(generator) == "reserved-target"
 
         with pytest.raises(ValueError, match="Target queue already exists"):
-            core.rename_queue("old", "new")
+            renaming_core.rename_queue("old", "new")
 
-        assert core.peek_many("old", limit=10, with_timestamps=False) == ["payload"]
-        assert core._runner.client.zscore(keys.reserved("new"), encode_id(1)) == 0.0
+        assert renaming_core.peek_many(
+            "old", limit=10, with_timestamps=False, include_claimed=True
+        ) == ["source-payload"]
+        assert renaming_core.peek_many(
+            "new", limit=10, with_timestamps=False, include_claimed=True
+        ) == ["reserved-target"]
     finally:
-        core._runner.client.delete(keys.reserved("new"))
-        core.close()
+        if generator is not None:
+            generator.close()
+        renaming_core.shutdown()
+        source_core.shutdown()
+        get_backend_plugin().cleanup_target(
+            redis_url, backend_options={"namespace": redis_namespace}
+        )
 
 
 def test_redis_rename_retargets_aliases_and_bumps_version(
     redis_runner: RedisRunner,
 ) -> None:
     core = RedisBrokerCore(redis_runner)
-    keys = RedisKeys(redis_runner.namespace)
     try:
         core.add_alias("alias", "old")
         core.write("old", "payload")
-        alias_version = int(core._runner.client.hget(keys.meta, "alias_version") or 0)
+        alias_version = core.get_alias_version()
 
         result = core.rename_queue("old", "new")
 
         assert result.aliases_retargeted == 1
         assert core.resolve_alias("alias") == "new"
-        assert int(core._runner.client.hget(keys.meta, "alias_version") or 0) > (
-            alias_version
-        )
+        assert core.get_alias_version() > alias_version
     finally:
         core.close()
 
@@ -174,17 +188,15 @@ def test_redis_rename_missing_source_does_not_create_new_keys(
     redis_runner: RedisRunner,
 ) -> None:
     core = RedisBrokerCore(redis_runner)
-    keys = RedisKeys(redis_runner.namespace)
     try:
         result = core.rename_queue("missing", "new")
 
         assert result.messages_renamed == 0
-        assert (
-            core._runner.client.exists(
-                keys.pending("new"), keys.claimed("new"), keys.reserved("new")
-            )
-            == 0
-        )
-        assert "new" not in core._runner.client.smembers(keys.queues)
+        assert core.queue_exists("new") is False
+
+        core.write("new", "created-after-miss")
+        assert core.peek_many(
+            "new", limit=10, with_timestamps=False, include_claimed=True
+        ) == ["created-after-miss"]
     finally:
         core.close()

@@ -2,7 +2,6 @@
 
 import sqlite3
 from pathlib import Path
-from unittest.mock import patch
 
 from simplebroker.db import BrokerDB
 
@@ -16,66 +15,6 @@ def _seed_cli_vacuum_target(db_path: Path, *, claimed: bool) -> None:
         if claimed:
             messages = db.claim_many("test_queue", limit=1, with_timestamps=False)
             assert messages == ["message1"]
-
-
-def test_vacuum_with_compact_flag(workdir: Path):
-    """Test that vacuum with compact=True runs SQLite VACUUM command."""
-    db_path = workdir / "test.db"
-
-    # Create database with some messages
-    with BrokerDB(str(db_path)) as db:
-        for i in range(5):
-            db.write("test_queue", f"message{i}")
-
-    # Claim messages
-    with BrokerDB(str(db_path)) as db:
-        messages = db.claim_many("test_queue", limit=5, with_timestamps=False)
-        assert len(messages) == 5
-
-    # Mock the runner to track SQL commands
-    with BrokerDB(str(db_path)) as db:
-        original_run = db._runner.run
-        sql_commands = []
-
-        def track_sql(sql, params=(), *, fetch=False):
-            sql_commands.append(sql.strip())
-            return original_run(sql, params, fetch=fetch)
-
-        with patch.object(db._runner, "run", side_effect=track_sql):
-            db.vacuum(compact=True)
-
-        # Check that VACUUM command was executed
-        assert "VACUUM" in sql_commands
-
-
-def test_vacuum_without_compact_flag(workdir: Path):
-    """Test that vacuum without compact=True doesn't run SQLite VACUUM command."""
-    db_path = workdir / "test.db"
-
-    # Create database with some messages
-    with BrokerDB(str(db_path)) as db:
-        for i in range(5):
-            db.write("test_queue", f"message{i}")
-
-    # Claim messages
-    with BrokerDB(str(db_path)) as db:
-        messages = db.claim_many("test_queue", limit=5, with_timestamps=False)
-        assert len(messages) == 5
-
-    # Mock the runner to track SQL commands
-    with BrokerDB(str(db_path)) as db:
-        original_run = db._runner.run
-        sql_commands = []
-
-        def track_sql(sql, params=(), *, fetch=False):
-            sql_commands.append(sql.strip())
-            return original_run(sql, params, fetch=fetch)
-
-        with patch.object(db._runner, "run", side_effect=track_sql):
-            db.vacuum(compact=False)
-
-        # Check that VACUUM command was NOT executed
-        assert "VACUUM" not in sql_commands
 
 
 def test_cli_vacuum_with_compact(workdir: Path):
@@ -150,30 +89,6 @@ def test_cli_vacuum_exclusive_with_commands(workdir: Path):
     )
     assert returncode == 1
     assert "--vacuum cannot be used with commands" in stderr
-
-
-def test_compact_with_no_claimed_messages(workdir: Path):
-    """Test compact runs even when no claimed messages exist."""
-    db_path = workdir / "test.db"
-
-    # Create database with unclaimed messages only
-    with BrokerDB(str(db_path)) as db:
-        db.write("test_queue", "message")
-
-    # Run vacuum with compact when no claimed messages
-    with BrokerDB(str(db_path)) as db:
-        original_run = db._runner.run
-        sql_commands = []
-
-        def track_sql(sql, params=(), *, fetch=False):
-            sql_commands.append(sql.strip())
-            return original_run(sql, params, fetch=fetch)
-
-        with patch.object(db._runner, "run", side_effect=track_sql):
-            db.vacuum(compact=True)
-
-        # VACUUM should still run even with no claimed messages
-        assert "VACUUM" in sql_commands
 
 
 def test_vacuum_compact_database_size_reduction(workdir: Path):
@@ -257,53 +172,3 @@ def test_vacuum_compact_sets_auto_vacuum(workdir: Path):
 
     # Should now be 2 (INCREMENTAL)
     assert auto_vacuum_mode == 2
-
-
-def test_automatic_vacuum_runs_incremental_vacuum(workdir: Path):
-    """Test that automatic vacuum runs incremental_vacuum when auto_vacuum is set."""
-    db_path = workdir / "test.db"
-
-    # Create database (will have auto_vacuum=INCREMENTAL)
-    with BrokerDB(str(db_path)) as db:
-        for i in range(5):
-            db.write("test_queue", f"message{i}")
-
-    # Claim messages
-    with BrokerDB(str(db_path)) as db:
-        messages = db.claim_many("test_queue", limit=5, with_timestamps=False)
-        assert len(messages) == 5
-
-    # Mock the runner to track SQL commands during automatic vacuum
-    with BrokerDB(str(db_path)) as db:
-        original_run = db._runner.run
-        sql_commands = []
-
-        def track_sql(sql, params=(), *, fetch=False):
-            sql_commands.append(sql.strip())
-            return original_run(sql, params, fetch=fetch)
-
-        with patch.object(db._runner, "run", side_effect=track_sql):
-            # Call the internal vacuum method (simulating automatic vacuum)
-            db._vacuum_claimed_messages(compact=False)
-
-        # Check that incremental_vacuum was called
-        assert "PRAGMA incremental_vacuum(100)" in sql_commands
-        # Should NOT have run full VACUUM
-        assert "VACUUM" not in sql_commands
-
-
-def test_vacuum_claimed_messages_holds_core_lock(workdir: Path):
-    """Internal vacuum should honor BrokerCore's serialized-operation contract."""
-    db_path = workdir / "test.db"
-
-    with BrokerDB(str(db_path)) as db:
-        observed_lock_state = []
-
-        def track_vacuum(runner, *, compact, config):
-            del runner, compact, config
-            observed_lock_state.append(db._lock._is_owned())
-
-        with patch.object(db._backend_plugin, "vacuum", side_effect=track_vacuum):
-            db._vacuum_claimed_messages(compact=False)
-
-        assert observed_lock_state == [True]

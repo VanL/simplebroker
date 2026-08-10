@@ -834,39 +834,6 @@ def test_cleanup_with_command_is_rejected(workdir):
     assert rc == 2  # EXIT_QUEUE_EMPTY -- nothing was written
 
 
-@pytest.mark.sqlite_only
-def test_cleanup_permission_error(workdir, monkeypatch):
-    """Test cleanup handles permission errors gracefully."""
-    import os
-
-    # Create a database
-    rc, _, _ = run_cli("write", "test", "message", cwd=workdir)
-    assert rc == 0
-
-    db_path = workdir / ".broker.db"
-    assert db_path.exists()
-
-    # Make database read-only
-    os.chmod(db_path, 0o444)
-
-    # Try to cleanup - should get permission error
-    rc, _, err = run_cli("--cleanup", cwd=workdir)
-
-    # Check if file still exists before trying to restore permissions
-    if db_path.exists():
-        # Restore permissions before assertions (cleanup)
-        os.chmod(db_path, 0o644)
-
-    # On some systems (especially CI), permission changes might not prevent deletion
-    # So we check for either success or permission error
-    if rc == 1:
-        assert "Permission denied" in err or "error:" in err
-    else:
-        # If it succeeded despite read-only, that's OK too
-        assert rc == 0
-        assert not db_path.exists()
-
-
 def test_cleanup_order_with_other_flags(workdir):
     """Test that cleanup works correctly when mixed with other global flags."""
     # Create database

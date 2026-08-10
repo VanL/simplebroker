@@ -777,17 +777,6 @@ def test_theory_links_and_stable_references_resolve(theory_text: str) -> None:
     _assert_stable_references_resolve(theory_text)
 
 
-def test_revisions_put_current_account_first(
-    corpus_records: dict[str, Record],
-) -> None:
-    revisions = [record for record in corpus_records.values() if record.kind == "REV"]
-    assert revisions
-    for revision in revisions:
-        assert revision.body.index("Current account:") < revision.body.index(
-            "Supersedes:"
-        )
-
-
 def test_lineage_is_bounded_and_current_first(theory_text: str) -> None:
     theory_seven = _section(theory_text, "[THEORY-7]")
     quote_rows = [

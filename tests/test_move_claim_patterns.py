@@ -10,24 +10,30 @@ This tests the patterns that make sense for move operations:
 """
 
 import concurrent.futures as cf
-import sqlite3
+import threading
+from collections import Counter
 from pathlib import Path
 
+import pytest
+
+from simplebroker._exceptions import IntegrityError
 from simplebroker.db import BrokerDB
 
 
 def _concurrent_move_worker(
-    args: tuple[int, str, str, str],
-) -> list[str | tuple[str, int]]:
+    args: tuple[int, str, str, str, threading.Barrier],
+) -> list[tuple[str, int]]:
     """Worker function for concurrent move tests."""
-    _worker_id, db_path, source_queue, dest_queue = args
-    moved = []
+    _worker_id, db_path, source_queue, dest_queue, start_barrier = args
+    moved: list[tuple[str, int]] = []
 
     with BrokerDB(db_path) as db:
+        start_barrier.wait(timeout=5)
         # Each worker tries to move 5 messages
         for _ in range(5):
-            result = db.move_one(source_queue, dest_queue, with_timestamps=False)
+            result = db.move_one(source_queue, dest_queue, with_timestamps=True)
             if result:
+                assert isinstance(result, tuple)
                 moved.append(result)
             else:
                 break  # No more messages
@@ -40,17 +46,20 @@ def test_concurrent_moves_no_duplicate_move(workdir: Path):
     db_path = workdir / "test.db"
 
     # Write 20 messages to source queue
+    expected: list[tuple[str, int]] = []
     with BrokerDB(str(db_path)) as db:
         for i in range(20):
-            db.write("source_queue", f"message{i:02d}")
+            body = f"message{i:02d}"
+            expected.append((body, db.write("source_queue", body)))
 
     # Start 4 concurrent move workers
+    start_barrier = threading.Barrier(4)
     with cf.ThreadPoolExecutor(max_workers=4) as executor:
         futures = []
         for i in range(4):
             future = executor.submit(
                 _concurrent_move_worker,
-                (i, str(db_path), "source_queue", "dest_queue"),
+                (i, str(db_path), "source_queue", "dest_queue", start_barrier),
             )
             futures.append(future)
 
@@ -60,34 +69,29 @@ def test_concurrent_moves_no_duplicate_move(workdir: Path):
             messages = future.result()
             all_moved.extend(messages)
 
-    # Verify no duplicates
-    assert len(all_moved) == 20
-    moved_bodies = [msg if isinstance(msg, str) else msg[0] for msg in all_moved]
-    assert len(set(moved_bodies)) == 20  # All unique
-
-    # Verify all messages were moved
-    expected = {f"message{i:02d}" for i in range(20)}
-    assert set(moved_bodies) == expected
+    assert Counter(all_moved) == Counter(expected)
 
     # Verify source queue is empty
     with BrokerDB(str(db_path)) as db:
-        remaining = list(db.peek_generator("source_queue", with_timestamps=False))
-        assert len(remaining) == 0
+        remaining = list(db.peek_generator("source_queue", with_timestamps=True))
+        assert remaining == []
 
     # Verify dest queue has all messages
     with BrokerDB(str(db_path)) as db:
-        dest_messages = list(db.peek_generator("dest_queue", with_timestamps=False))
-        assert len(dest_messages) == 20
+        dest_messages = list(db.peek_generator("dest_queue", with_timestamps=True))
+        assert Counter(dest_messages) == Counter(expected)
 
 
 def test_move_updates_claimed_status(workdir: Path):
-    """Test that move operations move messages by updating queue column."""
+    """A move exposes the exact pending state through public operations."""
     db_path = workdir / "test.db"
 
     # Write messages
+    written: list[tuple[str, int]] = []
     with BrokerDB(str(db_path)) as db:
         for i in range(5):
-            db.write("source", f"message{i}")
+            body = f"message{i}"
+            written.append((body, db.write("source", body)))
 
     # Move first message
     with BrokerDB(str(db_path)) as db:
@@ -95,28 +99,16 @@ def test_move_updates_claimed_status(workdir: Path):
         assert result is not None
         assert result == "message0"
 
-    # Check database state
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    # Source should have 4 messages remaining (message0 was moved)
-    cursor.execute(
-        "SELECT body, claimed FROM messages WHERE queue = 'source' ORDER BY id"
-    )
-    source_messages = cursor.fetchall()
-    assert len(source_messages) == 4
-    assert source_messages[0] == ("message1", 0)  # Next message is unclaimed
-    assert all(msg[1] == 0 for msg in source_messages)  # All unclaimed
-
-    # Dest should have the moved message
-    cursor.execute(
-        "SELECT body, claimed FROM messages WHERE queue = 'dest' ORDER BY id"
-    )
-    dest_messages = cursor.fetchall()
-    assert len(dest_messages) == 1
-    assert dest_messages[0] == ("message0", 0)  # Movered message is unclaimed
-
-    conn.close()
+    with BrokerDB(str(db_path)) as db:
+        assert Counter(
+            db.peek_many("source", limit=10, with_timestamps=True)
+        ) == Counter(written[1:])
+        assert Counter(db.peek_many("dest", limit=10, with_timestamps=True)) == Counter(
+            written[:1]
+        )
+        assert {
+            name: (pending, total) for name, pending, total in db.get_queue_stats()
+        } == {"dest": (1, 1), "source": (4, 4)}
 
 
 def test_move_with_vacuum_interaction(workdir: Path):
@@ -124,9 +116,11 @@ def test_move_with_vacuum_interaction(workdir: Path):
     db_path = workdir / "test.db"
 
     # Create messages in source queue
+    written: list[tuple[str, int]] = []
     with BrokerDB(str(db_path)) as db:
         for i in range(10):
-            db.write("vacuum_source", f"msg{i}")
+            body = f"msg{i}"
+            written.append((body, db.write("vacuum_source", body)))
 
     # Move half the messages
     with BrokerDB(str(db_path)) as db:
@@ -134,85 +128,43 @@ def test_move_with_vacuum_interaction(workdir: Path):
             result = db.move_one("vacuum_source", "vacuum_dest", with_timestamps=False)
             assert result is not None
 
-    # Check state before vacuum
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    # Source should have 5 messages remaining (5 were moved)
-    cursor.execute(
-        "SELECT COUNT(*), SUM(claimed) FROM messages WHERE queue = 'vacuum_source'"
-    )
-    source_stats = cursor.fetchone()
-    assert source_stats == (5, 0)  # 5 unclaimed messages remain
-
-    # Dest should have 5 messages, 0 claimed
-    cursor.execute(
-        "SELECT COUNT(*), SUM(claimed) FROM messages WHERE queue = 'vacuum_dest'"
-    )
-    dest_stats = cursor.fetchone()
-    assert dest_stats == (5, 0)
+    with BrokerDB(str(db_path)) as db:
+        dest_before = db.peek_many("vacuum_dest", limit=10, with_timestamps=True)
+        assert {
+            name: (pending, total) for name, pending, total in db.get_queue_stats()
+        } == {"vacuum_dest": (5, 5), "vacuum_source": (5, 5)}
 
     # Now claim some messages in source to test vacuum interaction
     with BrokerDB(str(db_path)) as db:
         # Read 2 messages from source to claim them
         for _ in range(2):
             db.claim_one("vacuum_source", with_timestamps=False)
+        assert {
+            name: (pending, total) for name, pending, total in db.get_queue_stats()
+        } == {"vacuum_dest": (5, 5), "vacuum_source": (3, 5)}
+        assert Counter(
+            db.peek_many(
+                "vacuum_source",
+                limit=10,
+                with_timestamps=True,
+                include_claimed=True,
+            )
+        ) == Counter(written[5:])
 
     # Run vacuum
     with BrokerDB(str(db_path)) as db:
         db.vacuum()
 
-    # Check state after vacuum
-    # Source should have 3 unclaimed messages (2 claimed ones removed)
-    cursor.execute(
-        "SELECT COUNT(*), SUM(claimed) FROM messages WHERE queue = 'vacuum_source'"
-    )
-    source_after = cursor.fetchone()
-    assert source_after == (3, 0)
-
-    # Dest should be unchanged
-    cursor.execute(
-        "SELECT COUNT(*), SUM(claimed) FROM messages WHERE queue = 'vacuum_dest'"
-    )
-    dest_after = cursor.fetchone()
-    assert dest_after == (5, 0)
-
-    conn.close()
-
-
-def test_move_schema_verification(workdir: Path):
-    """Test that move works correctly with claimed column schema."""
-    db_path = workdir / "test.db"
-
-    # Create database with messages
     with BrokerDB(str(db_path)) as db:
-        db.write("schema_test", "test_message")
-
-    # Verify schema includes claimed column
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    cursor.execute("PRAGMA table_info(messages)")
-    columns = {row[1]: row[2] for row in cursor.fetchall()}
-    assert "claimed" in columns
-    assert columns["claimed"] == "INTEGER"
-
-    # Verify partial index exists for performance
-    cursor.execute("""
-        SELECT sql FROM sqlite_master
-        WHERE type = 'index' AND sql LIKE '%claimed%'
-    """)
-    index_sql = cursor.fetchone()
-    assert index_sql is not None
-    assert "WHERE claimed = 0" in index_sql[0] or "WHERE claimed=0" in index_sql[0]
-
-    # Test move uses the index correctly
-    with BrokerDB(str(db_path)) as db:
-        result = db.move_one("schema_test", "schema_dest", with_timestamps=False)
-        assert result is not None
-        assert result == "test_message"
-
-    conn.close()
+        assert {
+            name: (pending, total) for name, pending, total in db.get_queue_stats()
+        } == {"vacuum_dest": (5, 5), "vacuum_source": (3, 3)}
+        assert Counter(
+            db.peek_many("vacuum_source", limit=10, with_timestamps=True)
+        ) == Counter(written[7:])
+        assert Counter(
+            db.peek_many("vacuum_dest", limit=10, with_timestamps=True)
+        ) == Counter(dest_before)
 
 
 def test_move_with_mixed_claimed_unclaimed(workdir: Path):
@@ -249,8 +201,8 @@ def test_move_with_mixed_claimed_unclaimed(workdir: Path):
         assert result is None
 
 
-def test_move_atomicity(workdir: Path):
-    """Test that move is atomic - either completes fully or not at all."""
+def test_move_failure_is_atomic(workdir: Path, monkeypatch: pytest.MonkeyPatch):
+    """A database failure cannot expose a partial source-to-destination move."""
     db_path = workdir / "test.db"
 
     # Write messages
@@ -258,34 +210,33 @@ def test_move_atomicity(workdir: Path):
         for i in range(5):
             db.write("atomic_source", f"message{i}")
 
-    # Get initial state
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE queue = 'atomic_source'")
-    initial_source_count = cursor.fetchone()[0]
-    assert initial_source_count == 5
-
-    # Perform move
     with BrokerDB(str(db_path)) as db:
-        result = db.move_one("atomic_source", "atomic_dest", with_timestamps=False)
-        assert result is not None
+        source_before = db.peek_many("atomic_source", limit=10, with_timestamps=True)
 
-    # Verify atomicity - exactly one message moved
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE queue = 'atomic_source'")
-    source_count = cursor.fetchone()[0]
-    assert source_count == 4  # One message was moved
+    with BrokerDB(str(db_path)) as db:
+        real_run = db._runner.run
 
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE queue = 'atomic_dest'")
-    dest_count = cursor.fetchone()[0]
-    assert dest_count == 1
+        def fail_after_real_move(
+            sql: str,
+            params: tuple[object, ...] = (),
+            *,
+            fetch: bool = False,
+        ):
+            rows = real_run(sql, params, fetch=fetch)
+            if fetch:
+                raise IntegrityError("injected post-move failure")
+            return rows
 
-    # Verify total message count is preserved
-    cursor.execute("SELECT COUNT(*) FROM messages")
-    total_count = cursor.fetchone()[0]
-    assert total_count == 5  # Same total, just moved between queues
+        with monkeypatch.context() as transaction_fault:
+            transaction_fault.setattr(db._runner, "run", fail_after_real_move)
+            with pytest.raises(IntegrityError, match="injected post-move failure"):
+                db.move_one("atomic_source", "atomic_dest", with_timestamps=False)
 
-    conn.close()
+        assert (
+            db.peek_many("atomic_source", limit=10, with_timestamps=True)
+            == source_before
+        )
+        assert db.peek_many("atomic_dest", limit=10, with_timestamps=True) == []
 
 
 def test_move_preserves_message_ordering(workdir: Path):

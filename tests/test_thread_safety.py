@@ -19,8 +19,13 @@ def test_shared_broker_thread_safety(broker):
     messages_read = []
     write_lock = threading.Lock()
     read_lock = threading.Lock()
+    num_writers = 5
+    num_readers = 3
+    messages_per_writer = 20
+    start_barrier = threading.Barrier(num_writers + num_readers)
 
     def writer(thread_id, count):
+        start_barrier.wait(timeout=5)
         for i in range(count):
             msg = f"thread{thread_id}_msg{i}"
             broker.write("shared_queue", msg)
@@ -29,6 +34,7 @@ def test_shared_broker_thread_safety(broker):
             time.sleep(0.001)
 
     def reader(thread_id, count):
+        start_barrier.wait(timeout=5)
         for _ in range(count):
             msg_result = broker.claim_one("shared_queue", with_timestamps=False)
             if msg_result:
@@ -36,16 +42,10 @@ def test_shared_broker_thread_safety(broker):
                     messages_read.append(msg_result)
             time.sleep(0.001)
 
-    num_writers = 5
-    num_readers = 3
-    messages_per_writer = 20
-
     with cf.ThreadPoolExecutor(max_workers=num_writers + num_readers) as pool:
         writer_futures = [
             pool.submit(writer, i, messages_per_writer) for i in range(num_writers)
         ]
-
-        time.sleep(0.05)
 
         reader_futures = [
             pool.submit(reader, i, messages_per_writer) for i in range(num_readers)
@@ -58,12 +58,7 @@ def test_shared_broker_thread_safety(broker):
     messages_read.extend(remaining)
 
     assert len(messages_written) == num_writers * messages_per_writer
-    assert len(messages_read) <= len(messages_written)
-
-    for msg in messages_read:
-        assert msg in messages_written
-
-    assert len(messages_read) == len(set(messages_read))
+    assert sorted(messages_read) == sorted(messages_written)
 
 
 def test_concurrent_operations_different_queues(broker):
@@ -138,8 +133,8 @@ def test_brokerdb_not_picklable():
             db.close()
 
 
-def test_database_lock_timeout(broker_target: BrokerTarget):
-    """Test that database operations handle lock timeouts gracefully."""
+def test_cross_instance_shared_target_visibility(broker_target: BrokerTarget):
+    """Two broker instances observe the same exact target state."""
     db1 = make_broker(broker_target)
     db2 = make_broker(broker_target)
 
@@ -150,10 +145,8 @@ def test_database_lock_timeout(broker_target: BrokerTarget):
         msgs1 = db1.peek_many("test_queue", limit=100, with_timestamps=False)
         msgs2 = db2.peek_many("test_queue", limit=100, with_timestamps=False)
 
-        assert len(msgs1) == 2
-        assert len(msgs2) == 2
-        assert set(msgs1) == {"msg1", "msg2"}
-        assert set(msgs2) == {"msg1", "msg2"}
+        assert msgs1 == ["msg1", "msg2"]
+        assert msgs2 == ["msg1", "msg2"]
 
     finally:
         db1.shutdown()

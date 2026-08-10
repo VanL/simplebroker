@@ -168,34 +168,6 @@ class TestDefaultErrorHandler:
 
 
 class TestHandlerIntegration:
-    """Test handlers work with actual QueueWatcher instances."""
-
-    def test_default_handlers_with_queuewatcher(self, temp_db):
-        """Test that default handlers can be used with QueueWatcher."""
-        from simplebroker.watcher import QueueWatcher
-
-        # Test message handlers
-        message_handlers = [simple_print_handler, logger_handler]
-
-        for handler in message_handlers:
-            # Should not raise any errors
-            watcher = QueueWatcher("test_queue", handler, db=temp_db)
-            assert callable(watcher._handler)
-            assert watcher._handler == handler
-
-        # Test error handler
-        def dummy_msg_handler(msg, ts):
-            pass
-
-        watcher = QueueWatcher(
-            "test_queue",
-            dummy_msg_handler,
-            db=temp_db,
-            error_handler=default_error_handler,
-        )
-        assert callable(watcher._error_handler)
-        assert watcher._error_handler == default_error_handler
-
     def test_json_handler_produces_valid_json(self, capsys):
         """Test that json_print_handler always produces valid JSON."""
         test_messages = [
@@ -219,9 +191,3 @@ class TestHandlerIntegration:
             data = json.loads(line)
             assert data["message"] == test_messages[i][0]
             assert data["timestamp"] == f"{test_messages[i][1]:019d}"
-
-
-@pytest.fixture
-def temp_db(tmp_path):
-    """Create a temporary database file."""
-    return str(tmp_path / "test.db")

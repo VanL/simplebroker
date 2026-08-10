@@ -55,60 +55,39 @@ def test_all_current_product_registry_rows_are_canonical() -> None:
         assert (ROOT / "docs" / "specs" / name).is_file()
 
 
-def test_readme_toc_ownership_audit_section_present() -> None:
+def test_registered_product_owners_and_entry_links_resolve() -> None:
     registry = REGISTRY.read_text(encoding="utf-8")
-    assert "## README TOC ownership (final cutover audit)" in registry
-    for needle in (
-        "Exit Codes",
-        "SB-CLI",
-        "SB-DELIVERY",
-        "SB-ID",
-        "SB-SELECT",
-        "SB-IO",
-        "SB-API",
-        "SB-OPS",
-        "SB-BCAST",
-    ):
-        assert needle in registry
+    registered_specs = tuple(
+        match.group(1)
+        for row in _product_table_rows(registry)
+        if (match := re.search(r"`([0-9]{2}-[^`]+\.md)`", row)) is not None
+    )
+    assert registered_specs == CANONICAL_SPECS
 
+    docs_readme = DOCS_README.read_text(encoding="utf-8")
+    assert "Exact intended behavior lives under" in docs_readme
+    assert "It is not a competing SoT" in docs_readme
 
-def test_docs_readme_declares_specs_own_exact_behavior() -> None:
-    text = DOCS_README.read_text(encoding="utf-8")
-    assert "canonical-spec" in text
-    assert "exact" in text.lower()
-    assert "product-section-registry.md" in text
-    # Human entry, not competing SoT for registered families
-    assert "not a competing SoT" in text or "not a competing" in text
-
-
-def test_root_readme_points_at_canonical_specs() -> None:
-    text = ROOT_README.read_text(encoding="utf-8")
-    assert "docs/specs/" in text
-    assert "product-section-registry.md" in text
-    assert "17-ops.md" in text or "[SB-OPS" in text
-
-
-def test_kernel_and_llms_list_every_canonical_product_spec() -> None:
+    root_readme = ROOT_README.read_text(encoding="utf-8")
     kernel = KERNEL.read_text(encoding="utf-8")
     llms = LLMS.read_text(encoding="utf-8")
     index = SPEC_INDEX.read_text(encoding="utf-8")
-    for name in CANONICAL_SPECS:
+    for name in registered_specs:
         path = f"docs/specs/{name}"
+        code_family = {
+            "10-cli.md": "SB-CLI",
+            "11-delivery.md": "SB-DELIVERY",
+            "12-broadcast.md": "SB-BCAST",
+            "13-message-identity.md": "SB-ID",
+            "14-timestamp-selection.md": "SB-SELECT",
+            "15-persistence-io.md": "SB-IO",
+            "16-python-library-api.md": "SB-API",
+            "17-ops.md": "SB-OPS",
+        }[name]
+
+        assert (ROOT / path).is_file(), path
+        assert path in root_readme, path
         assert path in kernel or name in kernel, name
+        assert code_family in kernel, code_family
         assert path in llms, name
         assert name in index, name
-
-
-def test_kernel_cites_primary_code_families() -> None:
-    kernel = KERNEL.read_text(encoding="utf-8")
-    for family in (
-        "SB-CLI",
-        "SB-DELIVERY",
-        "SB-ID",
-        "SB-SELECT",
-        "SB-BCAST",
-        "SB-IO",
-        "SB-API",
-        "SB-OPS",
-    ):
-        assert family in kernel, family

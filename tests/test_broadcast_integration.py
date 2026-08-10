@@ -136,65 +136,39 @@ def test_broadcast_ordering_with_timestamps(workdir):
 
 
 def test_broadcast_empty_queue_behavior(workdir):
-    """Test broadcast behavior with empty queues and --after."""
-    # Create and immediately empty a queue
+    """A claimed-only queue remains an existing broadcast target."""
+    # Create a queue, then leave it with one claimed row and no pending rows.
     run_cli("write", "ephemeral", "temp", cwd=workdir)
     rc, out, _ = run_cli("read", "ephemeral", "--timestamps", cwd=workdir)
     int(out.split("\t")[0])
 
-    # Queue is now empty
+    # The queue has no pending message but still exists.
     rc, _, _ = run_cli("peek", "ephemeral", cwd=workdir)
     assert rc == 2
 
     # Create new queues
     run_cli("write", "new_queue", "msg", cwd=workdir)
 
-    # Broadcast
-    run_cli("broadcast", "broadcast_to_all", cwd=workdir)
+    rc, out, err = run_cli("broadcast", "broadcast_to_all", cwd=workdir)
+    assert rc == 0, err
+    assert out == ""
 
-    # Original empty queue should have the broadcast
-    # Note: There's a potential race - if broadcast completes before we check,
-    # the ephemeral queue will have the message
+    # Claimed rows still keep the queue in the broadcast target set.
     rc, out, _ = run_cli("peek", "ephemeral", cwd=workdir)
+    assert rc == 0
+    assert out == "broadcast_to_all"
 
-    # The queue might be empty (rc=2) if broadcast happened before queue existed
-    # or have the message (rc=0) if the queue existed during broadcast
-    if rc == 0:
-        assert out == "broadcast_to_all"
-    else:
-        # Queue was created after broadcast, so it's empty
-        assert rc == 2
+    rc, out, err = run_cli("stats", "ephemeral", "--json", cwd=workdir)
+    assert rc == 0, err
+    assert json.loads(out) == {
+        "queue": "ephemeral",
+        "pending": 1,
+        "claimed": 1,
+        "total": 2,
+        "exists": True,
+    }
 
     # New queue should have both messages
     rc, out, _ = run_cli("peek", "new_queue", "--all", cwd=workdir)
     assert rc == 0
     assert out == "msg\nbroadcast_to_all"
-
-
-def test_broadcast_race_condition_documentation(workdir):
-    """Test to verify the documented broadcast race condition behavior."""
-    # This test documents that queues created after broadcast starts
-    # won't receive the message
-
-    # Create initial queue
-    run_cli("write", "existing_queue", "msg", cwd=workdir)
-
-    # In a real scenario, broadcast would be running here
-    # and a new queue would be created concurrently
-
-    # Broadcast message
-    run_cli("broadcast", "broadcast_msg", cwd=workdir)
-
-    # Create new queue after broadcast
-    run_cli("write", "new_queue", "msg", cwd=workdir)
-
-    # Existing queue has broadcast
-    rc, out, err = run_cli("peek", "existing_queue", "--all", cwd=workdir)
-    assert rc == 0, err
-    assert "broadcast_msg" in out
-
-    # New queue does not have broadcast (as documented)
-    rc, out, err = run_cli("peek", "new_queue", "--all", cwd=workdir)
-    assert rc == 0, err
-    assert "broadcast_msg" not in out
-    assert out == "msg"

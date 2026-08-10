@@ -666,12 +666,6 @@ def test_worker_test_module_collects_when_os_has_no_geteuid(tmp_path: Path) -> N
     assert probe.returncode == 0, probe.stderr
 
 
-def test_resilient_worker_trap_makes_checkpoint_failure_explicit() -> None:
-    source = RESILIENT_WORKER.read_text(encoding="utf-8")
-
-    assert "save_checkpoint || exit 1; exit 0" in source
-
-
 def test_resilient_worker_signal_checkpoint_failure_exits_nonzero(
     tmp_path: Path, worker_env: dict[str, str]
 ) -> None:

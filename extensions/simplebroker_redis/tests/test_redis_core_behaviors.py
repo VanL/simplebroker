@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import time
 import warnings
+from contextlib import ExitStack
 from typing import NoReturn
 
 import pytest
 import redis
-from simplebroker_redis import RedisRunner
+from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys
 
@@ -241,45 +242,62 @@ def test_redis_core_rejects_invalid_inputs(
         core.close()
 
 
-def test_redis_core_internal_state_edges_are_safe(
+def test_redis_namespaces_isolate_public_queue_state(
+    redis_url: str, redis_namespace: str
+) -> None:
+    first_namespace = f"{redis_namespace}-first"
+    second_namespace = f"{redis_namespace}-second"
+    plugin = get_backend_plugin()
+
+    with ExitStack() as stack:
+        stack.callback(
+            plugin.cleanup_target,
+            redis_url,
+            backend_options={"namespace": first_namespace},
+        )
+        stack.callback(
+            plugin.cleanup_target,
+            redis_url,
+            backend_options={"namespace": second_namespace},
+        )
+        first = RedisBrokerCore(RedisRunner(redis_url, namespace=first_namespace))
+        stack.callback(first.shutdown)
+        second = RedisBrokerCore(RedisRunner(redis_url, namespace=second_namespace))
+        stack.callback(second.shutdown)
+
+        first.write("jobs", "first-only")
+        second.write("jobs", "second-only")
+
+        assert first.peek_many("jobs", limit=10, with_timestamps=False) == [
+            "first-only"
+        ]
+        assert second.peek_many("jobs", limit=10, with_timestamps=False) == [
+            "second-only"
+        ]
+
+
+def test_redis_reserved_batch_rejects_unknown_token_without_mutation(
     redis_runner: RedisRunner,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     core = RedisBrokerCore(redis_runner)
     try:
-        assert core._qkey("jobs", "custom") == (
-            f"simplebroker:{redis_runner.namespace}:q:jobs:custom"
+        core.insert_messages([("jobs", "first", 10), ("jobs", "second", 20)])
+        before = core.peek_many(
+            "jobs", limit=10, with_timestamps=True, include_claimed=True
         )
 
-        core._publish(None)
-        core._pid = -1
-        core._check_fork_safety()
-        assert core._pid > 0
-
-        core._active_generator_batch = "claim"
-        core._active_generator_batch_owner = -1
-        core._assert_no_reentrant_mutation_during_batch("write")
-        core._set_active_generator_batch(None)
-
-        core._commit_claim_batch("jobs", "unused", [])
-        core._commit_move_batch("jobs", "other", "unused", [])
-
         with pytest.raises(OperationalError, match="invalid Redis claim batch"):
-            core._commit_claim_batch("jobs", "missing-token", [("payload", 1)])
-        with pytest.raises(OperationalError, match="invalid Redis move batch"):
-            core._commit_move_batch(
+            core._commit_claim_batch(
                 "jobs",
-                "other",
-                "missing-token",
-                [("payload", 1)],
+                "00000000000000000000000000000000",
+                [("first", 10)],
             )
 
-        assert core.recover_stale_batches(max_age_seconds=-1) == 0
-        redis_runner.stale_batch_seconds = -1
-        core._maybe_recover_stale_batches()
-
-        core._resync_timestamp_generator()
-        assert core.get_conflict_metrics()["ts_resync_count"] == 1
+        assert (
+            core.peek_many("jobs", limit=10, with_timestamps=True, include_claimed=True)
+            == before
+        )
+        assert core.count_claimed_messages() == 0
     finally:
         core.close()
 

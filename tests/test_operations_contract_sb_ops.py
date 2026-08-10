@@ -53,7 +53,7 @@ EVIDENCE_MANIFESTS = {
         "tests/test_queue_metadata.py": {
             "test_vacuum_removes_claimed_only_queue_existence"
         },
-        "tests/test_vacuum_compact.py": {"test_vacuum_with_compact_flag"},
+        "tests/test_vacuum_compact.py": {"test_vacuum_compact_database_size_reduction"},
     },
     "SB-OPS-7": {
         "tests/test_cleanup.py": {

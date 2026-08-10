@@ -93,6 +93,11 @@ and SimpleBroker companion file, and the containing directory. POSIX mode,
 ownership, ACL, and umask policy or Windows ACL policy belongs to the operator;
 the full deployment condition is in the
 [`configuration guide`](../guides/configuration.md#general-security-considerations).
+Phase-lock files use ordinary file creation filtered by that policy. Reopening
+the stable lock sidecar does not rewrite its existing mode. Each fallback
+status publication remains an atomic replace through an exclusively created
+temporary file, so that new generation uses the umask active for that
+publication.
 
 ## Related Plans
 

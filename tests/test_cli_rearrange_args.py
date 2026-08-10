@@ -317,15 +317,6 @@ class TestCLIMissingValues:
         assert code == 0
         assert stdout.strip() == "message"
 
-    def test_complex_scenario_from_review(self, workdir: Path):
-        """Post-command global-looking message text is not destructive."""
-        code, stdout, _stderr = run_cli("write", "q", "--cleanup", cwd=workdir)
-        assert code == 0
-
-        code, stdout, _stderr = run_cli("read", "q", cwd=workdir)
-        assert code == 0
-        assert stdout.strip() == "--cleanup"
-
 
 class TestHelpHasNoSideEffects:
     """A help request must never write to the database (evaluation finding #2)."""

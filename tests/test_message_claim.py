@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pytest
 
-from simplebroker._exceptions import OperationalError
 from simplebroker.db import BrokerDB
 
 from .conftest import run_cli
@@ -553,43 +552,6 @@ def test_vacuum_with_no_claimed_messages(workdir: Path):
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM messages")
     assert cursor.fetchone()[0] == 5
-    conn.close()
-
-
-@pytest.mark.sqlite_only
-def test_vacuum_lock_prevents_concurrent_vacuum(workdir: Path):
-    """Test that vacuum lock prevents concurrent vacuum operations."""
-    db_path = workdir / "test.db"
-
-    # Write and claim some messages
-    with BrokerDB(str(db_path)) as db:
-        for i in range(10):
-            db.write("test_queue", f"message{i}")
-        db.claim_many("test_queue", limit=1000, with_timestamps=False)
-
-    # Simulate concurrent vacuum attempts
-    def vacuum_worker(db_path: str) -> bool:
-        """Try to run vacuum, return True if successful."""
-        try:
-            with BrokerDB(db_path) as db:
-                db.vacuum()
-            return True
-        except OperationalError:
-            return False
-
-    # Run multiple vacuum operations concurrently
-    with cf.ThreadPoolExecutor(max_workers=3) as executor:
-        futures = [executor.submit(vacuum_worker, str(db_path)) for _ in range(3)]
-        results = [f.result() for f in cf.as_completed(futures)]
-
-    # At least one should succeed, others might fail due to lock
-    assert any(results), "At least one vacuum should succeed"
-
-    # Verify messages were cleaned up
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages")
-    assert cursor.fetchone()[0] == 0
     conn.close()
 
 

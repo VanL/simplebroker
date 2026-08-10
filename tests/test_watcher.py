@@ -984,7 +984,11 @@ class TestQueueWatcher(WatcherTestBase):
             )
             read_thread = read_watcher.run_in_thread()
 
-            time.sleep(0.1)
+            assert wait_for_condition(
+                lambda: peek_watcher.is_running() and read_watcher.is_running(),
+                timeout=scale_timeout_for_ci(5.0),
+                message="mixed-mode watchers did not reach running state",
+            )
 
             # Write messages after watchers are running
             writer_db = make_broker(broker_target)
@@ -995,8 +999,11 @@ class TestQueueWatcher(WatcherTestBase):
             finally:
                 writer_db.shutdown()
 
-            # Let watchers process
-            time.sleep(0.4)
+            assert wait_for_condition(
+                lambda: len(read_collector.get_messages()) == 3,
+                timeout=scale_timeout_for_ci(5.0),
+                message="consuming watcher did not drain all mixed-mode messages",
+            )
         finally:
             # Stop watchers
             # Ignore errors during cleanup
@@ -1012,17 +1019,20 @@ class TestQueueWatcher(WatcherTestBase):
         peek_messages = [msg for msg, _ in peek_collector.get_messages()]
         read_messages = [msg for msg, _ in read_collector.get_messages()]
 
-        # Read watcher should have consumed some/all messages
-        assert len(read_messages) > 0
-        assert len(read_messages) <= 3
+        expected = {"msg1", "msg2", "msg3"}
+        assert set(read_messages) == expected
+        assert len(read_messages) == len(expected)
+        assert set(peek_messages) <= expected
+        assert len(peek_messages) == len(set(peek_messages))
 
-        # Peek watcher might have seen any subset of messages
-        # (depending on timing with read watcher)
-        assert len(peek_messages) >= 0
-        assert len(peek_messages) <= 3
-
-        # No message should appear twice in read_messages
-        assert len(read_messages) == len(set(read_messages))
+        observer = make_broker(broker_target)
+        try:
+            assert (
+                list(observer.peek_generator("mixed_queue", with_timestamps=False))
+                == []
+            )
+        finally:
+            observer.shutdown()
 
     def test_run_forever_blocking(self, broker_target):
         """Test that run_forever blocks until stopped."""
@@ -2094,24 +2104,15 @@ def test_context_manager_usage(broker_target):
     with QueueWatcher(
         "context_queue", handler, db=broker_target, peek=False
     ) as watcher:
-        # The thread should be started automatically
-        assert hasattr(watcher, "_thread")
-        assert watcher._thread is not None
-        thread = watcher._thread()  # Get strong reference from weak ref
-        assert thread is not None
-        assert thread.is_alive()
+        assert watcher.is_running()
 
         assert all_messages_received.wait(timeout=scale_timeout_for_ci(5.0)), (
             "Timed out waiting for context-manager watcher to process messages: "
             f"received={messages_snapshot()}"
         )
 
-    # After exiting context, thread should be stopped
     assert wait_for_condition(
-        lambda: (
-            (thread := watcher._thread() if watcher._thread else None) is None
-            or not thread.is_alive()
-        ),
+        lambda: not watcher.is_running(),
         timeout=scale_timeout_for_ci(5.0, ci_factor=2.0),
         interval=0.05,
         message="Watcher thread should stop after context-manager exit",
@@ -2137,25 +2138,16 @@ def test_context_manager_with_exception(broker_target):
     def handler(msg: str, ts: int):
         pass
 
-    # Test that cleanup happens even with exception
-    try:
-        with QueueWatcher("error_queue", handler, db=broker_target) as watcher:
-            thread_ref = watcher._thread
-            assert thread_ref is not None
-            thread = thread_ref()  # Get strong reference from weak ref
-            assert thread is not None
-            assert thread.is_alive()
-            msg = "Test exception"
-            raise ValueError(msg)
-    except ValueError:
-        pass  # Expected
+    with (
+        pytest.raises(ValueError, match="Test exception"),
+        QueueWatcher("error_queue", handler, db=broker_target) as watcher,
+    ):
+        assert watcher.is_running()
+        msg = "Test exception"
+        raise ValueError(msg)
 
-    # Thread should still be stopped after exception
     assert wait_for_condition(
-        lambda: (
-            (thread := watcher._thread() if watcher._thread else None) is None
-            or not thread.is_alive()
-        ),
+        lambda: not watcher.is_running(),
         timeout=scale_timeout_for_ci(5.0, ci_factor=2.0),
         interval=0.05,
         message="Watcher thread should stop after context-manager exception",

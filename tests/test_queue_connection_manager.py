@@ -2,6 +2,7 @@
 
 import concurrent.futures
 import gc
+import sqlite3
 import tempfile
 import threading
 import time
@@ -15,8 +16,8 @@ import pytest
 from simplebroker import Queue, _retry_policy
 from simplebroker._exceptions import StopException
 from simplebroker._retry_policy import _execute_connection_retry
-from simplebroker._runner import SetupPhase, SQLiteRunner
-from simplebroker.db import BrokerConnection, BrokerCore, BrokerDB, DBConnection
+from simplebroker._runner import SQLiteRunner
+from simplebroker.db import BrokerConnection, BrokerDB, DBConnection
 from tests.helper_scripts.timing import scale_timeout_for_ci
 
 _THREAD_FUTURE_TIMEOUT = scale_timeout_for_ci(10.0)
@@ -63,67 +64,45 @@ class TestQueueConnectionManager:
     """Test the get_connection context manager behavior."""
 
     def test_persistent_mode_uses_cached_connection(self) -> None:
-        """Test that persistent mode reuses thread-local connections."""
+        """Context exit closes the reused handle without losing committed data."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
-            queue = None
-            try:
-                # Create a persistent queue
-                with Queue("test", db_path=db_path, persistent=True) as queue:
-                    queue = Queue("test", db_path=db_path, persistent=True)
+            with Queue("test", db_path=db_path, persistent=True) as queue:
+                with queue.get_connection() as first:
+                    first.write("test", "one")
+                with queue.get_connection() as second:
+                    second.write("test", "two")
+                with queue.get_connection() as third:
+                    assert list(
+                        third.peek_generator("test", with_timestamps=False)
+                    ) == ["one", "two"]
 
-                    # Get connections multiple times in the same thread
-                    connections = []
-                    for _ in range(3):
-                        with queue.get_connection() as conn:
-                            connections.append(conn)
+                assert first is second is third
+                sqlite_connection = cast(Any, third)._runner.get_connection()
+                assert sqlite_connection.execute("SELECT 1").fetchone() == (1,)
 
-                    # All connections should be BrokerDB instances
-                    assert all(isinstance(c, BrokerDB) for c in connections), (
-                        "Should return BrokerDB instances"
-                    )
-
-                    # In the same thread, we should get the same cached thread-local instance
-                    assert connections[0] is connections[1], (
-                        "Same thread should return the same cached connection"
-                    )
-                    assert connections[1] is connections[2], (
-                        "Same thread should return the same cached connection"
-                    )
-
-                    # The underlying DBConnection should be persistent
-                    assert queue.conn is not None, "Persistent mode should have a conn"
-            finally:
-                if queue:
-                    queue.close()
+            with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+                sqlite_connection.execute("SELECT 1")
+            with Queue("test", db_path=db_path) as observer:
+                assert observer.peek_many(10, with_timestamps=False) == ["one", "two"]
 
     def test_ephemeral_mode_creates_new_connections(self) -> None:
-        """Test that ephemeral mode creates new connections each time."""
+        """Ephemeral leases are distinct and each supports broker operations."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
-
-            # Create an ephemeral queue
             with Queue("test", db_path=db_path, persistent=False) as queue:
-                # Track connection lifecycle
-                connection_ids = []
+                with queue.get_connection() as first:
+                    first.write("test", "one")
+                with queue.get_connection() as second:
+                    second.write("test", "two")
+                with queue.get_connection() as third:
+                    assert list(
+                        third.peek_generator("test", with_timestamps=False)
+                    ) == ["one", "two"]
 
-                # Get connections multiple times
-                for _ in range(3):
-                    with queue.get_connection() as conn:
-                        # Each should be a BrokerDB instance
-                        assert isinstance(conn, BrokerDB), (
-                            "Ephemeral mode should return BrokerDB instances"
-                        )
-                        runner = cast(SQLiteRunner, cast(Any, conn)._runner)
-                        connection_ids.append(runner.instance_id)
-
-                # All connections should be different instances
-                assert len(set(connection_ids)) == 3, (
-                    "Ephemeral mode should create new connections each time"
-                )
-
-                # Queue should not have a persistent connection
-                assert queue.conn is None, "Ephemeral mode should not have a conn"
+                assert first is not second
+                assert second is not third
+                assert first is not third
 
     def test_ephemeral_connection_lifetime(self) -> None:
         """Test that ephemeral connections are properly closed after use."""
@@ -155,31 +134,23 @@ class TestQueueConnectionManager:
                     queue.close()
 
     def test_persistent_connection_lifetime(self) -> None:
-        """Test that persistent connections stay alive across multiple uses."""
+        """A persistent handle remains usable until explicit queue close."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = str(Path(tmpdir) / "test.db")
 
             queue = Queue("test", db_path=db_path, persistent=True)
 
-            # Get the connection multiple times in the same thread
-            first_conn = None
-            for i in range(3):
-                with queue.get_connection() as conn:
-                    if i == 0:
-                        first_conn = conn
-                    # In the same thread, connection should be the same each time
-                    assert conn is first_conn, (
-                        f"Connection {i + 1} should be the same as first in same thread"
-                    )
+            with queue.get_connection() as first:
+                first.write("test", "before-close")
+            with queue.get_connection() as second:
+                assert second is first
+                assert list(second.peek_generator("test", with_timestamps=False)) == [
+                    "before-close"
+                ]
 
-            # The DBConnection should still be alive after multiple uses
-            assert queue.conn is not None
-            # Thread-local storage should have cached the connection
-            with queue.get_connection() as conn:
-                assert conn is first_conn, "Should still have cached connection"
-
-            # Only when we close the queue should it be cleaned up
             queue.close()
+            with Queue("test", db_path=db_path) as observer:
+                assert observer.read_one(with_timestamps=False) == "before-close"
 
     def test_thread_safety_ephemeral_mode(self) -> None:
         """Test that ephemeral mode is thread-safe (each thread gets its own connection)."""
@@ -343,40 +314,6 @@ class TestQueueConnectionManager:
         ]
         assert resource_warnings == []
 
-    def test_connection_type_consistency(self) -> None:
-        """Test that both modes return BrokerDB for consistency."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "test.db")
-            persistent_queue = None
-            ephemeral_queue = None
-            try:
-                # Test persistent mode
-                persistent_queue = Queue("test_p", db_path=db_path, persistent=True)
-                with persistent_queue.get_connection() as conn:
-                    assert isinstance(conn, BrokerDB), (
-                        "Persistent mode should yield BrokerDB"
-                    )
-                    # BrokerDB inherits from BrokerCore, so it's also a BrokerCore
-                    assert isinstance(conn, BrokerCore), (
-                        "BrokerDB should also be a BrokerCore"
-                    )
-
-                # Test ephemeral mode
-                ephemeral_queue = Queue("test_e", db_path=db_path, persistent=False)
-                with ephemeral_queue.get_connection() as conn:
-                    assert isinstance(conn, BrokerDB), (
-                        "Ephemeral mode should yield BrokerDB"
-                    )
-                    # BrokerDB inherits from BrokerCore, so it's also a BrokerCore
-                    assert isinstance(conn, BrokerCore), (
-                        "BrokerDB should also be a BrokerCore"
-                    )
-            finally:
-                if persistent_queue:
-                    persistent_queue.close()
-                if ephemeral_queue:
-                    ephemeral_queue.close()
-
     def test_connection_error_handling(self) -> None:
         """Test that connection errors are properly handled."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -433,157 +370,3 @@ class TestQueueConnectionManager:
                     persistent_q.close()
                 if ephemeral_q:
                     ephemeral_q.close()
-
-    def test_persistent_avoids_reconnection_overhead(self) -> None:
-        """Test that persistent mode avoids reconnecting and re-running PRAGMAs."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "test.db")
-
-            # Track SQLiteRunner setup calls
-            setup_calls = []
-            original_setup = SQLiteRunner.setup_with_stop_event
-
-            def tracked_setup(
-                self: SQLiteRunner, phase: object, stop_event: threading.Event | None
-            ) -> None:
-                setup_calls.append((self.instance_id, phase))
-                return original_setup(self, cast(SetupPhase, phase), stop_event)
-
-            # Test persistent mode first
-            queue1 = None
-            try:
-                with patch.object(
-                    SQLiteRunner,
-                    "setup_with_stop_event",
-                    tracked_setup,
-                ):
-                    # Create a persistent queue
-                    queue1 = Queue("test", db_path=db_path, persistent=True)
-
-                    # First operation should trigger setup
-                    with queue1.get_connection() as conn:
-                        conn.write("test", "initial")
-
-                    # Record initial setup calls
-                    initial_setup_count = len(setup_calls)
-                    assert initial_setup_count > 0, (
-                        "Should have some setup calls after first connection"
-                    )
-
-                    # Perform multiple additional operations
-                    for i in range(5):
-                        with queue1.get_connection() as conn:
-                            conn.write("test", f"msg{i}")
-
-                    # Within the same thread, no new SQLiteRunner instances should be created
-                    # (same runner ID should be used for this thread)
-                    runner_ids_main_thread = {call[0] for call in setup_calls}
-                    assert len(runner_ids_main_thread) == 1, (
-                        "Within same thread, persistent mode should reuse the same SQLiteRunner"
-                    )
-
-                    # No additional setup calls should have been made
-                    assert len(setup_calls) == initial_setup_count, (
-                        f"No new setup calls should be made after initial creation. "
-                        f"Got {len(setup_calls)} calls vs {initial_setup_count} initial"
-                    )
-            finally:
-                if queue1:
-                    queue1.close()
-
-            # Now test ephemeral mode for comparison
-            setup_calls.clear()
-            queue2 = None
-            try:
-                with patch.object(
-                    SQLiteRunner,
-                    "setup_with_stop_event",
-                    tracked_setup,
-                ):
-                    # Create an ephemeral queue
-                    queue2 = Queue("test", db_path=db_path, persistent=False)
-
-                    # Perform multiple operations
-                    for i in range(3):
-                        with queue2.get_connection() as conn:
-                            conn.write("test", f"msg{i}")
-
-                    # Check that new SQLiteRunner instances were created
-                    runner_ids = {call[0] for call in setup_calls}
-                    # Each operation creates a new DBConnection with its own runner
-                    assert len(runner_ids) >= 3, (
-                        f"Ephemeral mode should create new SQLiteRunner instances. "
-                        f"Got {len(runner_ids)} unique runners for 3 operations"
-                    )
-
-                    # Multiple setup calls should have been made
-                    assert len(setup_calls) >= 6, (
-                        f"Ephemeral mode should run setup for each connection. "
-                        f"Got {len(setup_calls)} setup calls for 3 operations"
-                    )
-            finally:
-                if queue2:
-                    queue2.close()
-
-    def test_persistent_connection_reuse(self) -> None:
-        """Test that persistent mode reuses the same database connection."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "test.db")
-
-            # Track SQLiteRunner __init__ calls to detect new connections
-            init_calls = []
-            original_init = SQLiteRunner.__init__
-
-            def tracked_init(self: SQLiteRunner, *args: Any, **kwargs: Any) -> None:
-                result = original_init(self, *args, **kwargs)
-                init_calls.append(self.instance_id)
-                return result
-
-            # Test persistent mode first
-            queue1 = None
-            try:
-                with patch.object(SQLiteRunner, "__init__", tracked_init):
-                    # Test persistent mode
-                    queue1 = Queue("test", db_path=db_path, persistent=True)
-
-                    # First operation creates the connection
-                    with queue1.get_connection() as conn:
-                        conn.write("test", "initial")
-
-                    initial_runners = len(init_calls)
-                    assert initial_runners == 1, "Should create one SQLiteRunner"
-
-                    # Perform multiple operations in the same thread
-                    for i in range(5):
-                        with queue1.get_connection() as conn:
-                            conn.write("test", f"msg{i}")
-
-                    # No new runners should have been created
-                    assert len(init_calls) == initial_runners, (
-                        f"Persistent mode should reuse the same SQLiteRunner. "
-                        f"Got {len(init_calls)} runners vs {initial_runners} initial"
-                    )
-            finally:
-                if queue1:
-                    queue1.close()
-
-            # Now test ephemeral mode for comparison
-            init_calls.clear()
-            queue2 = None
-            try:
-                with patch.object(SQLiteRunner, "__init__", tracked_init):
-                    queue2 = Queue("test_ephemeral", db_path=db_path, persistent=False)
-
-                    # Perform multiple operations
-                    for i in range(3):
-                        with queue2.get_connection() as conn:
-                            conn.write("test_ephemeral", f"msg{i}")
-
-                    # Each operation should create a new runner
-                    assert len(init_calls) >= 3, (
-                        f"Ephemeral mode should create new SQLiteRunner for each operation. "
-                        f"Got {len(init_calls)} runners for 3 operations"
-                    )
-            finally:
-                if queue2:
-                    queue2.close()

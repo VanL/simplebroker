@@ -10,6 +10,7 @@ import pytest
 from simplebroker._constants import _validate_safe_path_components
 from simplebroker.cli import main
 
+from .conftest import run_cli
 from .helper_scripts import create_dangerous_path
 
 
@@ -123,3 +124,17 @@ class TestCliArgumentValidation:
 
             for drive_path in valid_drive_formats:
                 _validate_safe_path_components(drive_path)
+
+
+class TestDatabaseTargetValidation:
+    @pytest.mark.sqlite_only
+    def test_invalid_database_is_clean_cli_error(self, workdir: Path) -> None:
+        (workdir / ".broker.db").write_text("not a sqlite database", encoding="utf-8")
+
+        rc, out, err = run_cli("read", "queue", "--after", "0", cwd=workdir)
+
+        assert rc == 1
+        assert out == ""
+        assert "database" in err.lower()
+        assert "valid" in err.lower()
+        assert "traceback" not in err.lower()

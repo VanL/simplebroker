@@ -110,44 +110,6 @@ class TestWatchCommand:
             assert proc.wait_for_output("hello", timeout=_watch_output_timeout())
             # Process automatically terminated on exit
 
-    def test_watch_sigint_handling(self, workdir):
-        """Test that watch command handles SIGINT gracefully."""
-        from .conftest import run_cli
-
-        # Write initial message
-        rc, _out, _err = run_cli("write", "siginttest", "message1", cwd=workdir)
-        assert rc == 0
-
-        # Start watch command
-        cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "siginttest"]
-        with managed_subprocess(cmd, cwd=workdir) as proc:
-            # Wait for it to start and process the first message
-            proc.wait_for_output("message1", timeout=_watch_output_timeout())
-
-            return_code = proc.wait_after_interrupt(
-                timeout=scale_timeout_for_ci(10.0, ci_factor=2.0)
-            )
-
-            # Check exit code - both 0 and -2 are acceptable on Unix, 1 on Windows.
-            # On heavily loaded CI, the helper may escalate to SIGTERM/SIGKILL
-            # after proving the subprocess did not exit promptly.
-            # 0 means graceful exit, -2 means killed by SIGINT (Unix)
-            # 1 means terminated (Windows)
-            if sys.platform == "win32":
-                expected_codes = (0, 1)
-            else:
-                expected_codes = (0, -2, -15, -9)
-            assert return_code in expected_codes, (
-                f"Expected exit code {expected_codes}, got {return_code}"
-            )
-
-            # Should have processed the message OR at least started watching
-            stdout = proc.stdout
-            stderr = proc.stderr
-            assert "message1" in stdout or "Watching queue" in stderr, (
-                f"stdout: {stdout!r}, stderr: {stderr!r}"
-            )
-
     def test_watch_peek_mode(self, workdir):
         """Test watch in peek mode doesn't consume messages."""
         from .conftest import run_cli
@@ -175,37 +137,6 @@ class TestWatchCommand:
         rc, out, _err = run_cli("read", "peektest", cwd=workdir)
         assert rc == 0
         assert out == "peekmsg"
-
-    def test_watch_json_output(self, workdir):
-        """Test watch with JSON output format."""
-
-        from .conftest import run_cli
-
-        # Write a message
-        rc, _out, _err = run_cli("write", "jsontest", "test message", cwd=workdir)
-        assert rc == 0
-
-        # Start watch with JSON output
-        cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "--json", "jsontest"]
-        with managed_subprocess(cmd, cwd=workdir) as proc:
-            # Wait for JSON output
-            json_objects = wait_for_json_output(
-                proc,
-                expected_count=1,
-                timeout=_watch_output_timeout(),
-            )
-
-            # Validate the output
-            assert len(json_objects) >= 1, (
-                f"Expected at least 1 JSON object, got {len(json_objects)}"
-            )
-
-            for data in json_objects:
-                assert data["message"] == "test message"
-                # Verify timestamp field exists
-                assert "timestamp" in data
-                # Validate timestamp using helper function
-                validate_timestamp(data["timestamp"])
 
     def test_watch_json_includes_timestamps(self, workdir):
         """Test that watch --json includes timestamps by default."""

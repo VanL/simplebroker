@@ -536,8 +536,9 @@ API-only surface because it may require a full queue scan.
 
 **Note:** `BrokerCore` is the shared SQL behavior layer around a supplied
 runner. `BrokerDB` is its distinct SQLite-owning specialization: it resolves a
-database path, creates and owns `SQLiteRunner`, applies file permissions, and
-manages SQLite lifecycle. Most application code should still compose `Queue` or
+database path, creates and owns `SQLiteRunner`, leaves file permissions to the
+filesystem and operator policy, and manages SQLite lifecycle. Most application
+code should still compose `Queue` or
 use `open_broker()`; use `BrokerDB` directly only when that low-level SQLite
 ownership boundary is specifically required. Application code should not import
 underscore-prefixed modules.

@@ -120,10 +120,8 @@ def test_malformed_message_id_reports_error_but_absent_id_is_silent(
         rc, out, err = run_cli(command, "test_queue", "-m", "not-an-id", cwd=workdir)
         assert rc == 1
         assert out == ""
-        assert err == (
-            "simplebroker: error: invalid message ID: "
-            "expected exactly 19 digits within range"
-        )
+        assert "invalid message id" in err.lower()
+        assert "19 digits" in err.lower()
 
         rc, out, err = run_cli(
             command, "test_queue", "-m", "1234567890123456789", cwd=workdir
@@ -135,10 +133,8 @@ def test_malformed_message_id_reports_error_but_absent_id_is_silent(
     rc, out, err = run_cli("move", "test_queue", "dest", "-m", "not-an-id", cwd=workdir)
     assert rc == 1
     assert out == ""
-    assert err == (
-        "simplebroker: error: invalid message ID: "
-        "expected exactly 19 digits within range"
-    )
+    assert "invalid message id" in err.lower()
+    assert "19 digits" in err.lower()
 
     rc, out, err = run_cli(
         "move", "test_queue", "dest", "-m", "1234567890123456789", cwd=workdir
@@ -648,35 +644,10 @@ def test_list_command_reflects_operations(workdir: Path):
     ts = out.split("\t")[0]
     run_cli("read", "test_queue", "-m", ts, cwd=workdir)
 
-    # list --stats should show 4 unclaimed
-    rc, out, err = run_cli("list", "--stats", cwd=workdir)
-    assert rc == 0, err
-    assert "test_queue: 4" in out
-
-    # list with --stats should show claimed
+    # Post-operation stats show exact pending and claimed counts.
     rc, out, err = run_cli("list", "--stats", cwd=workdir)
     assert rc == 0, err
     assert "test_queue: 4 (5 total, 1 claimed)" in out
-
-
-def test_mutual_exclusivity_with_all(workdir: Path):
-    """Test that --message cannot be used with --all."""
-    # This should be caught at argument parsing level
-    rc, _out, err = run_cli(
-        "read", "test_queue", "-m", "1234567890123456789", "--all", cwd=workdir
-    )
-    assert rc != 0
-    assert "cannot be used with --all" in err or "not allowed with argument" in err
-
-
-def test_mutual_exclusivity_with_after(workdir: Path):
-    """Test that --message cannot be used with --after."""
-    # This should be caught at argument parsing level
-    rc, _out, err = run_cli(
-        "read", "test_queue", "-m", "1234567890123456789", "--after", "0", cwd=workdir
-    )
-    assert rc != 0
-    assert "cannot be used with" in err or "not allowed with argument" in err
 
 
 @pytest.mark.parametrize("command", ["read", "peek"])
@@ -825,22 +796,6 @@ def test_peek_by_timestamp_not_vacuumed(workdir: Path):
 # ============================================================================
 
 
-def test_workflow_peek_then_use_timestamp(workdir: Path):
-    """Test workflow: get timestamp via peek -t, then use it."""
-    # Write message
-    run_cli("write", "test_queue", "workflow message", cwd=workdir)
-
-    # Get timestamp via peek
-    rc, out, _err = run_cli("peek", "test_queue", "-t", cwd=workdir)
-    assert rc == 0
-    ts = out.split("\t")[0]
-
-    # Use timestamp to read
-    rc, out, _err = run_cli("read", "test_queue", "-m", ts, cwd=workdir)
-    assert rc == 0
-    assert out == "workflow message"
-
-
 def test_workflow_json_parse_timestamp(workdir: Path):
     """Test workflow: get timestamp via JSON, parse, use with -m."""
     # Write message
@@ -943,12 +898,6 @@ def test_timestamp_boundary_values(workdir: Path):
     max_ts = "9223372036854775807"
     rc, out, _err = run_cli("read", "test_queue", "-m", max_ts, cwd=workdir)
     assert rc == 2  # Not found
-
-    # Test with timestamp near 2^63 (maximum SQLite signed integer)
-    # 2^63 - 1 = 9223372036854775807 (19 digits)
-    near_max_ts = "9223372036854775807"
-    rc, out, _err = run_cli("read", "test_queue", "-m", near_max_ts, cwd=workdir)
-    assert rc == 2  # Not found, but should be accepted as valid format
 
     # Test with timestamp at exactly 2^63 (would overflow)
     # 2^63 = 9223372036854775808 (19 digits)

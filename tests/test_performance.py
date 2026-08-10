@@ -23,7 +23,7 @@ from typing import cast
 import pytest
 
 from simplebroker import Queue
-from simplebroker.db import BrokerDB, _validate_queue_name_cached
+from simplebroker.db import BrokerDB
 from simplebroker.watcher import QueueMoveWatcher
 
 from .conftest import build_cli_env, run_cli
@@ -41,7 +41,7 @@ pytestmark = pytest.mark.xdist_group(name="performance_serial")
 
 # Performance test parameters
 BASIC_WRITE_COUNT = 50
-VALIDATION_ITERATIONS = 5000
+VALIDATION_CONSTRUCTIONS_PER_SAMPLE = 5
 VALIDATION_SAMPLE_COUNT = 10
 BULK_MOVE_MESSAGE_COUNT = 5000
 LARGE_BATCH_CLAIM_COUNT = 5000
@@ -53,9 +53,9 @@ AFTER_BATCH_SIZE = 100
 AFTER_QUERY_SAMPLES = 5
 TIMESTAMP_LOOKUP_COUNT = 1000
 TIMESTAMP_LOOKUP_SAMPLE_COUNT = 5
-CONCURRENT_OPS_BASE_COUNT = 100
-CONCURRENT_OPS_COUNT = 20
-CONCURRENT_OPS_SUBPROCESS_STARTUP_BASELINE = 0.30
+MIXED_CLI_BASE_COUNT = 100
+MIXED_CLI_OPERATION_COUNT = 20
+MIXED_CLI_SUBPROCESS_STARTUP_BASELINE = 0.30
 MOVE_LARGE_BATCH_COUNT = 1000
 CLAIM_PERF_MESSAGE_COUNT = 1000
 VACUUM_LARGE_MESSAGE_COUNT = 10000
@@ -81,7 +81,7 @@ BASELINE_TIMES = {
     "at_least_once_rollback": 0.2,  # Reading 250 of 500 messages (increased for CI reliability)
     "after_query_2000_msgs": 1.0,  # Estimated based on query performance
     "timestamp_lookup": 0.1,  # Estimated based on index lookup
-    "concurrent_mixed_ops": 2.5,  # Estimated for mixed operations
+    "sequential_mixed_cli": 2.5,  # Estimated for mixed CLI operations
     "move_1k_messages": 0.093,  # Moving 1000 messages individually
     "claim_1k_messages": 0.056,  # Claiming 1000 messages
     "batch_delete_5k_messages": 3.0,  # Physical batch delete of 5000 IDs
@@ -119,9 +119,7 @@ def _measure_python_startup_tax(workdir: Path, count: int) -> float:
 
 
 def _subprocess_startup_slack(startup_elapsed: float) -> float:
-    expected_startup = CONCURRENT_OPS_SUBPROCESS_STARTUP_BASELINE * (
-        1 + PERF_BUFFER_PERCENT
-    )
+    expected_startup = MIXED_CLI_SUBPROCESS_STARTUP_BASELINE * (1 + PERF_BUFFER_PERCENT)
     return max(0.0, startup_elapsed - expected_startup)
 
 
@@ -206,43 +204,26 @@ def test_timestamp_performance_basic(workdir: Path) -> None:
 
 
 @pytest.mark.benchmark
-def test_queue_validation_performance() -> None:
-    """Test that cached validation is faster than uncached."""
-    cached_samples: list[float] = []
+def test_public_queue_name_validation_throughput_budget() -> None:
+    """Keep public queue-name admission within the established local budget."""
+    elapsed_samples: list[float] = []
     for _ in range(VALIDATION_SAMPLE_COUNT):
-        _validate_queue_name_cached.cache_clear()
         start = time.perf_counter()
-        for _ in range(VALIDATION_ITERATIONS):
-            _validate_queue_name_cached("test_queue_performance")
-        cached_samples.append(time.perf_counter() - start)
-    cached_time = min(cached_samples)
+        queues = [
+            Queue("test_queue_performance")
+            for _ in range(VALIDATION_CONSTRUCTIONS_PER_SAMPLE)
+        ]
+        elapsed_samples.append(time.perf_counter() - start)
+        for queue in queues:
+            queue.close()
 
-    # Should have 1 miss and VALIDATION_ITERATIONS-1 hits
-    info = _validate_queue_name_cached.cache_info()
-    assert info.misses == 1
-    assert info.hits == VALIDATION_ITERATIONS - 1
+    with pytest.raises(ValueError):
+        Queue("invalid queue name")
 
-    # Clear cache and time without caching benefit
-    _validate_queue_name_cached.cache_clear()
-
-    # Simulate uncached by using different queue names
-    start = time.perf_counter()
-    for i in range(VALIDATION_ITERATIONS):
-        _validate_queue_name_cached(f"test_queue_{i}")
-    uncached_time = time.perf_counter() - start
-
-    # Cached should be significantly faster
-    # Even on fast machines, regex matching VALIDATION_ITERATIONS times should be measurably slower
-    assert cached_time < uncached_time, (
-        f"Cached: {cached_time:.3f}s, Uncached: {uncached_time:.3f}s"
-    )
-
-    # Keep the hard budget, but accept one clean sample for this tiny
-    # microbenchmark. At this scale, scheduler noise can dominate a single run.
     timeout = get_timeout("validation_cached", platform_specific=False)
-    assert any(sample < timeout for sample in cached_samples), (
-        "Cached validation samples all exceeded the budget: "
-        f"samples={[round(sample, 6) for sample in cached_samples]}, "
+    assert any(sample < timeout for sample in elapsed_samples), (
+        "Public Queue construction samples all exceeded the budget: "
+        f"samples={[round(sample, 6) for sample in elapsed_samples]}, "
         f"expected at least one < {timeout:.6f}s"
     )
 
@@ -533,17 +514,17 @@ def test_timestamp_lookup_performance(workdir: Path) -> None:
 
 
 @pytest.mark.benchmark
-def test_concurrent_mixed_operations_performance(workdir: Path) -> None:
-    """Test performance of mixed read/write/peek operations.
+def test_sequential_mixed_cli_throughput(workdir: Path) -> None:
+    """Test sequential throughput of mixed read/write/peek CLI operations.
 
     Note: Some reads exit with EXIT_QUEUE_EMPTY as messages get consumed,
     which is expected."""
     db_path = workdir / "test.db"
-    startup_elapsed = _measure_python_startup_tax(workdir, CONCURRENT_OPS_COUNT)
+    startup_elapsed = _measure_python_startup_tax(workdir, MIXED_CLI_OPERATION_COUNT)
 
     # Write many messages using Queue API
     with Queue("test_queue", db_path=str(db_path), persistent=True) as q:
-        for i in range(100):
+        for i in range(MIXED_CLI_BASE_COUNT):
             q.write(f"message{i}")
 
     # Get some timestamps
@@ -553,12 +534,12 @@ def test_concurrent_mixed_operations_performance(workdir: Path) -> None:
         )
     timestamps = [str(ts) for _msg, ts in messages_with_ts]
 
-    # Perform mixed operations concurrently
+    # Perform mixed operations sequentially.
     operations = []
     start = time.monotonic()
 
     # Mix of different operations
-    for i in range(20):
+    for i in range(MIXED_CLI_OPERATION_COUNT):
         if i % 4 == 0:
             # Timestamp read
             operations.append(
@@ -581,7 +562,7 @@ def test_concurrent_mixed_operations_performance(workdir: Path) -> None:
     elapsed = time.monotonic() - start
 
     # Should complete reasonably quickly (under 2.5 seconds for this workload)
-    timeout = get_timeout("concurrent_mixed_ops") + _subprocess_startup_slack(
+    timeout = get_timeout("sequential_mixed_cli") + _subprocess_startup_slack(
         startup_elapsed
     )
     assert elapsed < timeout, (

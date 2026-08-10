@@ -289,9 +289,10 @@ def test_create_activity_waiter_for_queues_accepts_distinct_plugin_instances(
 
 
 def test_top_level_exports_multi_queue_waiter_api() -> None:
-    assert "ActivityWaiter" in simplebroker.__all__
-    assert "create_activity_waiter_for_queues" in simplebroker.__all__
-    assert simplebroker.ActivityWaiter is not None
+    assert simplebroker.__all__.count("ActivityWaiter") == 1
+    assert simplebroker.__all__.count("create_activity_waiter_for_queues") == 1
+    assert simplebroker.ActivityWaiter is backend_plugins.ActivityWaiter
     assert simplebroker.create_activity_waiter_for_queues is (
         create_activity_waiter_for_queues
     )
+    assert callable(simplebroker.create_activity_waiter_for_queues)

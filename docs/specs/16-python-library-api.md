@@ -322,6 +322,7 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
+- `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
 - `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
 - `docs/plans/2026-08-06-pre-release-review-remediation-plan.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the

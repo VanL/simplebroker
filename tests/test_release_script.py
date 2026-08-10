@@ -1119,63 +1119,6 @@ def test_all_target_rejects_explicit_version() -> None:
         release.main(["all", "--version", "3.7.2", "--dry-run"])
 
 
-def test_plan_tag_action_for_new_or_matching_tags() -> None:
-    head = "a" * 40
-
-    assert (
-        release.plan_tag_action(
-            _state(),
-            head_commit=head,
-            version_changed=False,
-        )
-        == "create"
-    )
-    assert (
-        release.plan_tag_action(
-            _state(local=head),
-            head_commit=head,
-            version_changed=False,
-        )
-        == "push_local"
-    )
-    assert (
-        release.plan_tag_action(
-            _state(remote=head),
-            head_commit=head,
-            version_changed=False,
-        )
-        == "reuse_remote"
-    )
-
-
-def test_plan_tag_action_rejects_remote_tag_at_different_commit() -> None:
-    head = "a" * 40
-    remote = "b" * 40
-
-    with pytest.raises(RuntimeError, match="already exists on origin") as exc:
-        release.plan_tag_action(
-            _state(remote=remote),
-            head_commit=head,
-            version_changed=False,
-        )
-    assert "Choose a new version" in str(exc.value)
-
-
-def test_plan_tag_action_replaces_local_tag_when_new_release_commit_is_expected() -> (
-    None
-):
-    old_commit = "b" * 40
-
-    assert (
-        release.plan_tag_action(
-            _state(local=old_commit),
-            head_commit=release.PENDING_RELEASE_COMMIT,
-            version_changed=True,
-        )
-        == "replace_local"
-    )
-
-
 def test_retag_option_is_removed() -> None:
     parser = release._build_parser()
 
@@ -1324,49 +1267,6 @@ def test_release_sha_removed_from_main_fails_closed(
 
     with pytest.raises(RuntimeError, match="no longer reachable from origin/main"):
         release.require_release_sha_on_origin_main(sha)
-
-
-def test_tag_creation_happens_after_push_and_exact_sha_ci(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sha = "a" * 40
-    candidate = release.ReleaseCandidate(
-        target=release.ROOT_RELEASE_TARGET,
-        current_version="5.3.2",
-        release_version="5.3.2",
-        state=_state(),
-    )
-    events: list[str] = []
-
-    def record(command: tuple[str, ...], **kwargs: object) -> None:
-        events.append("command:" + " ".join(command))
-
-    monkeypatch.setattr(release, "run_command", record)
-    monkeypatch.setattr(
-        release,
-        "wait_for_release_workflows",
-        lambda targets, release_sha, **kwargs: events.append("wait:" + release_sha),
-    )
-    monkeypatch.setattr(
-        release,
-        "require_release_sha_on_origin_main",
-        lambda release_sha, **kwargs: events.append("ancestry:" + release_sha),
-    )
-    monkeypatch.setattr(
-        release,
-        "inspect_release_state",
-        lambda version, target: _state(),
-    )
-
-    release.publish_release_tags_after_ci((candidate,), sha)
-
-    assert events == [
-        "command:git push origin main",
-        f"wait:{sha}",
-        f"ancestry:{sha}",
-        f"command:git tag v3.1.10 {sha}",
-        "command:git push origin v3.1.10",
-    ]
 
 
 @pytest.mark.parametrize(

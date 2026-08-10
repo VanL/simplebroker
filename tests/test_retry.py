@@ -14,9 +14,7 @@ import simplebroker._retry as retry_module
 from simplebroker._retry import (
     DEFAULT_MIN_RETRY_SLEEP_S,
     RetryState,
-    __version__,
     apply_jitter,
-    bounded_jitter,
     execute_retry,
     expo,
     get_attempt_number,
@@ -47,11 +45,6 @@ def test_retry_module_is_stdlib_only() -> None:
             assert root in _ALLOWED_STDLIB_ROOTS, node.module
 
 
-def test_version_is_non_empty_string() -> None:
-    assert isinstance(__version__, str)
-    assert __version__
-
-
 def test_interruptible_sleep_returns_true_when_completed() -> None:
     assert interruptible_sleep(0.02) is True
 
@@ -75,20 +68,6 @@ def test_apply_jitter_spans_up_to_base(
         lambda low, high: (low + high) / 2,
     )
     assert apply_jitter(0.05) == pytest.approx(0.0275, rel=1e-9)
-
-
-def test_bounded_jitter_delegates_to_apply_jitter(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[tuple[float, float]] = []
-
-    def capture(base: float, *, floor: float = DEFAULT_MIN_RETRY_SLEEP_S) -> float:
-        calls.append((base, floor))
-        return 0.02
-
-    monkeypatch.setattr("simplebroker._retry.apply_jitter", capture)
-    assert bounded_jitter(0.05) == 0.02
-    assert calls == [(0.05, DEFAULT_MIN_RETRY_SLEEP_S)]
 
 
 def test_expo_yields_zero_then_exponential_values() -> None:

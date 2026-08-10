@@ -346,8 +346,6 @@ class _AdvisoryLock:
                 continue
 
             try:
-                with contextlib.suppress(OSError):
-                    os.chmod(self.path, 0o600)
                 self._prepare_lock_file(lock_file)
                 self._try_lock(lock_file)
             except OSError as exc:
@@ -940,7 +938,7 @@ class PhaseLockService:
             flags |= os.O_BINARY
         fd: int | None = None
         try:
-            fd = os.open(tmp_path, flags, 0o600)
+            fd = os.open(tmp_path, flags, 0o666)
             with os.fdopen(fd, "wb") as status_file:
                 fd = None
                 status_file.write(data)

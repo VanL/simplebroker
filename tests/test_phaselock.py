@@ -68,6 +68,35 @@ def _read_status_file(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").splitlines()
 
 
+def _run_phaselock_under_umask(
+    target: Path,
+    umask: int,
+    *,
+    phase_name: str = "permission-probe",
+) -> None:
+    probe = textwrap.dedent(
+        """
+        import os
+        import sys
+        from pathlib import Path
+
+        from simplebroker._phaselock import Phase, PhaseLockService
+
+        os.umask(int(sys.argv[2], 8))
+        target = Path(sys.argv[1])
+        service = PhaseLockService(target, use_xattrs=False)
+        service.run_phases((Phase(sys.argv[3], lambda: None),))
+        """
+    )
+    subprocess.run(
+        [sys.executable, "-c", probe, str(target), f"{umask:o}", phase_name],
+        cwd=Path(__file__).resolve().parents[1],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_version_is_1_0() -> None:
     assert __version__ == "1.0"
 
@@ -585,6 +614,48 @@ def test_env_can_force_status_fallback(
     assert result.status_paths == (service.status_base_path,)
     assert calls == ["connection"]
     assert _read_status_file(service.status_base_path) == ["connection-v1"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX umask contract")
+@pytest.mark.parametrize(
+    ("umask", "expected_mode"),
+    ((0o002, 0o664), (0o077, 0o600)),
+)
+def test_phase_lock_and_status_creation_respect_operator_umask(
+    tmp_path: Path,
+    umask: int,
+    expected_mode: int,
+) -> None:
+    """Fresh companion files use ordinary creation modes filtered by umask."""
+    target = tmp_path / f"broker-{umask:o}.db"
+
+    _run_phaselock_under_umask(target, umask)
+
+    service = PhaseLockService(target, use_xattrs=False)
+    assert service.lock_path.stat().st_mode & 0o777 == expected_mode
+    assert service.status_base_path.stat().st_mode & 0o777 == expected_mode
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode preservation contract")
+def test_status_republication_preserves_lock_mode_and_uses_current_umask(
+    tmp_path: Path,
+) -> None:
+    """A stable lock keeps its mode while each status generation is new."""
+    target = tmp_path / "broker.db"
+    service = PhaseLockService(target, use_xattrs=False)
+
+    _run_phaselock_under_umask(target, 0o002, phase_name="first-probe")
+    assert service.lock_path.stat().st_mode & 0o777 == 0o664
+    assert service.status_base_path.stat().st_mode & 0o777 == 0o664
+
+    _run_phaselock_under_umask(target, 0o077, phase_name="second-probe")
+
+    assert service.lock_path.stat().st_mode & 0o777 == 0o664
+    assert service.status_base_path.stat().st_mode & 0o777 == 0o600
+    assert _read_status_file(service.status_base_path) == [
+        "first-probe",
+        "second-probe",
+    ]
 
 
 def test_explicit_xattr_setting_overrides_env_fallback_when_available(

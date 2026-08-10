@@ -11,22 +11,24 @@ or with explicit s/ms/ns suffixes). These properties pin its contract:
 3. Native IDs round-trip through str().
 4. Equivalent representations of the same instant parse equal.
 
-Pure functions only — no broker, no fixtures. The conftest hook will mark
-this module sqlite_only, which is intended: nothing here touches a backend.
+The parser properties are pure except for one SQLite-backed proof that actual
+generated message IDs round-trip. The conftest hook marks this module
+``sqlite_only``.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 from hypothesis import example, given
 from hypothesis import strategies as st
 
+from simplebroker import Queue
 from simplebroker._constants import (
     LOGICAL_COUNTER_MASK,
     SQLITE_MAX_INT64,
-    UNIX_NATIVE_BOUNDARY,
 )
 from simplebroker._exceptions import TimestampError
 from simplebroker._timestamp import TimestampGenerator
@@ -82,28 +84,23 @@ def test_exact_mode_rejects_everything_else(s: str) -> None:
         TimestampGenerator.validate(s, exact=True)
 
 
-@given(st.integers(min_value=UNIX_NATIVE_BOUNDARY, max_value=SQLITE_MAX_INT64 - 1))
-def test_native_ids_round_trip_in_default_mode(ts: int) -> None:
-    """Bare integers at or above 2**44 are treated as native IDs and returned
-    verbatim (the digit-count heuristic only applies below that boundary)."""
-    assert TimestampGenerator.validate(str(ts)) == ts
+def test_native_ids_round_trip_in_default_mode(tmp_path: Path) -> None:
+    """Generated IDs and the documented native example round-trip."""
+    with Queue("native", db_path=str(tmp_path / "native.db")) as queue:
+        generated = [queue.write(f"message-{index}") for index in range(3)]
+
+    documented = 1837025672140161024
+    for message_id in [*generated, documented]:
+        assert TimestampGenerator.validate(str(message_id)) == message_id
 
 
 @given(st.integers(min_value=0, max_value=9_000_000_000))
-def test_unit_suffixes_and_bare_seconds_agree(n: int) -> None:
-    """The same instant expressed as Ns / N*1000ms / N*1e9ns / bare N parses
-    to one identical hybrid timestamp (integer math end-to-end). Bare numbers
-    of <= 11 digits are read as seconds by the documented heuristic; 9e9 stays
-    inside both that heuristic and the 2**63 ns range (~year 2255)."""
+def test_explicit_unit_suffixes_agree(n: int) -> None:
+    """Explicit seconds, milliseconds, and nanoseconds for one instant agree."""
     expected = (n * NS_PER_S) & ~LOGICAL_COUNTER_MASK
     assert TimestampGenerator.validate(f"{n}s") == expected
     assert TimestampGenerator.validate(f"{n * 1000}ms") == expected
     assert TimestampGenerator.validate(f"{n * NS_PER_S}ns") == expected
-    if len(str(n)) != 8:
-        # 8-digit bare numbers that form a valid calendar date are hijacked
-        # by the YYYYMMDD ISO heuristic before the seconds heuristic —
-        # FINDING F7, pinned in the quirk test below.
-        assert TimestampGenerator.validate(str(n)) == expected
 
 
 @given(st.integers(min_value=0, max_value=4_102_444_800))  # 1970 .. 2100-01-01
@@ -150,14 +147,6 @@ def test_pre_epoch_iso_datetimes_clamp_to_epoch() -> None:
     """The clamp covers datetimes too, including the last pre-epoch second."""
     assert TimestampGenerator.validate("1969-12-31T23:59:59Z") == 0
     assert TimestampGenerator.validate("0001-01-01T00:00:00") == 0
-
-
-def test_known_quirk_non_ascii_digits_accepted() -> None:
-    """FINDING F3 (pinned, not endorsed): int() accepts any Unicode decimal
-    digits, so Eastern Arabic numerals parse like ASCII ones."""
-    assert (
-        TimestampGenerator.validate("١٢٣s") == (123 * NS_PER_S) & ~LOGICAL_COUNTER_MASK
-    )
 
 
 def test_non_ascii_digits_are_script_invariant() -> None:

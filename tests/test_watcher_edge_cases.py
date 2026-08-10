@@ -1,7 +1,6 @@
 """Test edge cases in watcher.py to increase coverage."""
 
 import contextlib
-import logging
 import tempfile
 import threading
 import time
@@ -13,7 +12,8 @@ from unittest.mock import Mock, patch
 import pytest
 
 import simplebroker.watcher as watcher_module
-from simplebroker._exceptions import DatabaseError, OperationalError
+from simplebroker import Queue
+from simplebroker._exceptions import OperationalError
 from simplebroker._retry import interruptible_sleep
 from simplebroker.watcher import (
     PollingStrategy,
@@ -24,6 +24,7 @@ from simplebroker.watcher import (
 
 from .helper_scripts.broker_factory import make_broker
 from .helper_scripts.database_errors import DatabaseErrorInjector
+from .helper_scripts.timing import scale_timeout_for_ci
 from .helper_scripts.watcher_base import WatcherTestBase
 
 pytestmark = [pytest.mark.shared]
@@ -67,99 +68,81 @@ class TestWatcherEdgeCases(WatcherTestBase):
                 ),
             )
 
-    def test_environment_variable_parsing(self, broker_target) -> None:
-        """Test parsing of environment variables with invalid values."""
-        # Since the config loading has been centralized and validates at module load time,
-        # we'll test that the watcher uses correct defaults when created normally
-
-        # Create watcher with normal config
-        watcher = QueueWatcher("queue", lambda m, t: None, db=broker_target)
-
-        # Verify defaults are used from config
-        assert watcher._strategy._initial_checks == 100
-        assert watcher._strategy._max_interval == 0.1
-        assert watcher._strategy._burst_sleep == 0.00001  # Default from constants
-
-        # Test that the watcher handles invalid values gracefully at the strategy level
-        # by directly testing the PollingStrategy initialization with mock config
-        import threading
-
-        from simplebroker.watcher import PollingStrategy
-
-        # Create strategy with direct parameters to test error handling
-        stop_event = threading.Event()
-        strategy = PollingStrategy(
-            stop_event,
-            initial_checks=100,  # These are the validated defaults
-            max_interval=0.1,
-            burst_sleep=0.00001,
+    def test_live_watcher_enforces_instance_size_limit(self, broker_target) -> None:
+        """A live watcher enforces its own limit on a pre-existing large row."""
+        writer = Queue(
+            "queue",
+            db_path=broker_target,
+            config={"BROKER_MAX_MESSAGE_SIZE": 100},
         )
-
-        # Verify strategy has correct values
-        assert strategy._initial_checks == 100
-        assert strategy._max_interval == 0.1
-        assert strategy._burst_sleep == 0.00001
-
-    def test_message_size_limit_exceeded(self, broker_target) -> None:
-        """Test handling of messages exceeding 10MB limit."""
-        broker = make_broker(broker_target)
-        try:
-            # Create a message larger than 10MB
-            large_message = "x" * (11 * 1024 * 1024)  # 11MB
-
-            handled = []
-            errors = []
-
-            def handler(msg, ts) -> None:
-                handled.append((msg, ts))
-
-            def error_handler(exc, msg, ts) -> bool:
-                errors.append((exc, msg, ts))
-                return True  # Continue processing
-
-            watcher = QueueWatcher(
-                "queue",
-                handler,
-                db=broker_target,
-                error_handler=error_handler,
-            )
-
-            # Directly test dispatch with oversized message
-            watcher._dispatch(large_message, 12345)
-
-            # Verify handler was not called
-            assert len(handled) == 0
-
-            # Verify error handler was called
-            assert len(errors) == 1
-            assert isinstance(errors[0][0], ValueError)
-            assert "byte limit" in str(errors[0][0])
-            assert errors[0][1].endswith("...")  # Truncated message
-        finally:
-            broker.shutdown()
-
-    def test_oversized_message_without_error_handler_is_logged_and_rejected(
-        self, broker_target, caplog
-    ) -> None:
+        observer = Queue("queue", db_path=broker_target)
         handled: list[tuple[str, int]] = []
+        errors: list[tuple[Exception, str, int]] = []
+        rejected = threading.Event()
+
+        def error_handler(exc: Exception, msg: str, ts: int) -> bool:
+            errors.append((exc, msg, ts))
+            rejected.set()
+            return True
+
         watcher = QueueWatcher(
             "queue",
-            lambda message, timestamp: handled.append((message, timestamp)),
+            lambda msg, ts: handled.append((msg, ts)),
+            db=broker_target,
+            error_handler=error_handler,
+            config={"BROKER_MAX_MESSAGE_SIZE": 3},
+        )
+        try:
+            writer.write("toolong")
+            watcher.run_in_thread()
+            assert rejected.wait(timeout=scale_timeout_for_ci(5.0))
+
+            assert handled == []
+            assert len(errors) == 1
+            assert isinstance(errors[0][0], ValueError)
+            assert "3 byte limit" in str(errors[0][0])
+            assert observer.peek_many(10, with_timestamps=False) == []
+            assert observer.peek_many(
+                10, with_timestamps=False, include_claimed=True
+            ) == ["toolong"]
+        finally:
+            watcher.stop()
+            writer.close()
+            observer.close()
+
+    def test_live_watcher_logs_and_discards_oversized_message(
+        self, broker_target, caplog
+    ) -> None:
+        writer = Queue(
+            "queue",
+            db_path=broker_target,
+            config={"BROKER_MAX_MESSAGE_SIZE": 100},
+        )
+        handled = threading.Event()
+        watcher = QueueWatcher(
+            "queue",
+            lambda _message, _timestamp: handled.set(),
             db=broker_target,
             config={
                 "BROKER_LOGGING_ENABLED": True,
                 "BROKER_MAX_MESSAGE_SIZE": 1,
             },
         )
-        watcher._error_handler = None
         try:
+            writer.write("too large")
             with caplog.at_level("ERROR", logger="simplebroker.watcher"):
-                assert watcher._dispatch("too large", 123) is False
+                watcher.run_in_thread()
+                deadline = time.monotonic() + scale_timeout_for_ci(5.0)
+                while "exceeds 1 byte limit" not in caplog.text:
+                    assert time.monotonic() < deadline
+                    time.sleep(0.01)
         finally:
             watcher.stop()
+            writer.close()
 
-        assert handled == []
+        assert not handled.is_set()
         assert "exceeds 1 byte limit" in caplog.text
+        assert writer.peek_many(10, with_timestamps=False) == []
 
     def test_legacy_dispatch_supports_handler_and_no_handler_states(
         self, broker_target
@@ -249,44 +232,6 @@ class TestWatcherEdgeCases(WatcherTestBase):
         # Verify stop event was set
         assert watcher._stop_event.is_set()
 
-    def test_error_handler_itself_fails(self, broker_target) -> None:
-        """Test handling when error handler itself raises an exception."""
-
-        def handler(msg, ts) -> NoReturn:
-            msg = "Handler error"
-            raise ValueError(msg)
-
-        def error_handler(exc, msg, ts) -> NoReturn:
-            msg = "Error handler failed"
-            raise RuntimeError(msg)
-
-        watcher = QueueWatcher(
-            "queue",
-            handler,
-            db=broker_target,
-            error_handler=error_handler,
-        )
-
-        # Should log but not crash
-        with patch("simplebroker.watcher.logger") as mock_logger:
-            # Import the config loader to get full config with override
-            from simplebroker._constants import load_config
-
-            test_config = load_config().copy()  # Make a copy to avoid modifying global
-            test_config["BROKER_LOGGING_ENABLED"] = True
-            with patch(
-                "simplebroker.watcher._config",
-                test_config,
-            ):
-                watcher._dispatch("test", 12345, config=test_config)
-
-            mock_logger.log.assert_called_once_with(
-                logging.ERROR,
-                "Error handler failed: Error handler failed\n"
-                "Original error: Handler error",
-                exc_info=True,
-            )
-
     def test_type_error_inside_error_handler_is_not_retried(
         self, broker, broker_target, caplog
     ) -> None:
@@ -375,62 +320,22 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
     @pytest.mark.sqlite_only
     def test_polling_strategy_pragma_failures(self) -> None:
-        """Test handling of repeated PRAGMA data_version failures."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = Path(tmpdir) / "test.db"
+        """The polling fallback escalates exactly at its documented threshold."""
+        strategy = PollingStrategy(threading.Event())
+        calls = 0
 
-            # Create a corrupted database that will fail PRAGMA operations
-            DatabaseErrorInjector.create_corrupted_database(str(db_path))
+        def failing_provider() -> int:
+            nonlocal calls
+            calls += 1
+            raise WatcherTestError("PRAGMA failed")
 
-            # Create a real database that will have issues
-            from simplebroker.db import BrokerDB
+        strategy.start(failing_provider)
+        assert [strategy._check_data_version() for _ in range(9)] == [False] * 9
+        assert calls == 9
 
-            try:
-                db = BrokerDB(str(db_path))
-            except (DatabaseError, OSError):
-                # If database is too corrupted to open, use mock for this specific test
-                # after we're testing the retry logic, not the corruption itself
-                stop_event = threading.Event()
-                strategy = PollingStrategy(stop_event)
-
-                # Create a data version provider that always fails
-                def failing_provider():
-                    raise WatcherTestError("PRAGMA failed")
-
-                strategy.start(failing_provider)
-
-                # Call multiple times to trigger failure threshold
-                for _i in range(9):
-                    result = strategy._check_data_version()
-                    assert result is False  # Should fallback to regular polling
-
-                # 10th failure should raise
-                with pytest.raises(
-                    RuntimeError, match="PRAGMA data_version failed 10 times"
-                ):
-                    strategy._check_data_version()
-                return
-
-            # If we got here, database opened despite corruption
-            # Test with real database
-            stop_event = threading.Event()
-            strategy = PollingStrategy(stop_event)
-
-            # Create a data version provider using the database
-            def db_version_provider():
-                return db.get_data_version()
-
-            strategy.start(db_version_provider)
-
-            # The corrupted database may or may not fail PRAGMA
-            # This is still a more realistic test than pure mocking
-            try:
-                for _i in range(10):
-                    strategy._check_data_version()
-            except RuntimeError as e:
-                assert "PRAGMA data_version failed" in str(e)
-            finally:
-                db.close()
+        with pytest.raises(RuntimeError, match="failed 10 times.*PRAGMA failed"):
+            strategy._check_data_version()
+        assert calls == 10
 
     def test_watcher_retry_with_exponential_backoff(
         self, broker_target, monkeypatch
@@ -743,31 +648,6 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
                 assert "retry timeout exceeded" in str(exc_info.value)
                 assert "300s" in str(exc_info.value)  # Default timeout
-
-    def test_check_stop_centralization(self, broker_target) -> None:
-        """Test that _check_stop is used consistently."""
-        check_count = 0
-
-        with self.create_test_watcher(
-            broker_target,
-            "queue",
-            lambda m, t: None,
-        ) as watcher:
-            original_check_stop = watcher._check_stop
-
-            def mock_check_stop() -> None:
-                nonlocal check_count
-                check_count += 1
-                if check_count > 3:
-                    raise _StopLoop
-                # Call original to maintain normal behavior
-                original_check_stop()
-
-            watcher._check_stop = mock_check_stop  # type: ignore[method-assign]  # intentional private stop seam
-
-            # Should exit after a few checks
-            watcher.run_forever()
-            assert check_count > 3  # Called multiple times
 
     def test_interruptible_sleep_responsiveness(self, broker, broker_target) -> None:
         """Test that watcher responds quickly to stop signals."""

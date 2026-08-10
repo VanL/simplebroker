@@ -199,6 +199,9 @@ def test_sb_cli_4_error_inventory_and_public_paths(workdir: Path) -> None:
         assert tuple(payload) == _JSON_ERROR_KEYS
         assert payload["error"] == expected_code
         assert payload["retryable"] is False
+        if expected_code == "INVALID_MESSAGE_ID":
+            message = payload["message"].lower()
+            assert "19" in message and "digit" in message
 
 
 def test_sb_cli_5_exact_evidence_manifest() -> None:

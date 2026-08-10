@@ -72,6 +72,14 @@ def test_move_only_unclaimed(queue_factory):
     # Verify remaining messages in source (should be msg3, msg1 was claimed)
     messages = source.peek_many(limit=10, with_timestamps=False)
     assert messages == ["msg3"]
+    source_stats = source.stats()
+    assert (
+        source_stats.pending,
+        source_stats.claimed,
+        source_stats.total,
+    ) == (1, 1, 2)
+    dest = queue_factory("dest")
+    assert dest.peek_many(limit=10, with_timestamps=False) == ["msg2"]
 
 
 def test_move_invalid_queue_names(queue_factory):
@@ -115,30 +123,6 @@ def test_bulk_move_interfaces_reject_the_same_source_and_destination(
             list(queue.move_generator("queue"))
 
     assert queue.peek() == "msg1"
-
-
-def test_move_atomic(queue_factory):
-    """Test that move is atomic (all-or-nothing)."""
-    source = queue_factory("source")
-    source.write("important_message")
-
-    result1 = source.move_one("dest1", with_timestamps=False)
-    result2 = source.move_one("dest2", with_timestamps=False)
-
-    # Only one move should succeed
-    assert (result1 is None) != (result2 is None)  # XOR
-
-    dest1 = queue_factory("dest1")
-    dest2 = queue_factory("dest2")
-    dest1_msgs = dest1.peek_many(limit=10, with_timestamps=False)
-    dest2_msgs = dest2.peek_many(limit=10, with_timestamps=False)
-
-    if result1:
-        assert dest1_msgs == ["important_message"]
-        assert dest2_msgs == []
-    else:
-        assert dest1_msgs == []
-        assert dest2_msgs == ["important_message"]
 
 
 def test_move_with_existing_dest_messages(queue_factory):

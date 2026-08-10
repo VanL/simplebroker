@@ -1691,8 +1691,8 @@ def test_route_pytest_args_limits_run_to_shared_suite() -> None:
         [
             "-q",
             "-k",
-            "test_metrics_collection_basic",
-            "tests/test_watcher_metrics.py::test_metrics_collection_basic",
+            "test_basic_consuming_mode",
+            "tests/test_watcher.py::TestQueueWatcher::test_basic_consuming_mode",
         ]
     )
 
@@ -1701,10 +1701,10 @@ def test_route_pytest_args_limits_run_to_shared_suite() -> None:
     assert shared_args == [
         "-q",
         "-k",
-        "test_metrics_collection_basic",
-        "tests/test_watcher_metrics.py::test_metrics_collection_basic",
+        "test_basic_consuming_mode",
+        "tests/test_watcher.py::TestQueueWatcher::test_basic_consuming_mode",
     ]
-    assert extension_args == ["-q", "-k", "test_metrics_collection_basic"]
+    assert extension_args == ["-q", "-k", "test_basic_consuming_mode"]
     assert marker_expr is None
     assert numprocesses is None
     assert dist is None

@@ -1,9 +1,12 @@
 """Test security fixes."""
 
-import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+
+from simplebroker import Queue, commands, target_for_directory
+from simplebroker.cli import main
 
 from .conftest import run_cli
 
@@ -25,61 +28,42 @@ def test_stdin_size_limit_streaming(workdir: Path):
 
 
 @pytest.mark.sqlite_only
-def test_path_traversal_protection(workdir: Path):
-    """Test that path traversal attacks are prevented."""
-    # Test relative paths with parent directory references
-    relative_attacks = [
-        ("--file", "../../../etc/passwd"),
-        ("--file", "../../sensitive.db"),
-        ("-f", "../outside.db"),
-        ("--file=../../../tmp/evil.db",),
-    ]
+def test_parent_traversal_rejects_valid_outside_broker(workdir: Path):
+    invocation_dir = workdir / "project"
+    invocation_dir.mkdir()
+    outside = workdir / "outside.db"
+    with Queue("existing", db_path=str(outside)) as queue:
+        queue.write("preserved")
 
-    for attack in relative_attacks:
-        if len(attack) == 1:
-            # Single argument with equals
-            code, _stdout, stderr = run_cli(
-                attack[0], "write", "test_queue", "message", cwd=workdir
-            )
-        else:
-            # Separate flag and value
-            code, _stdout, stderr = run_cli(
-                *attack, "write", "test_queue", "message", cwd=workdir
-            )
+    code, stdout, stderr = run_cli(
+        "--file",
+        f"../{outside.name}",
+        "write",
+        "existing",
+        "mutant",
+        cwd=invocation_dir,
+    )
 
-        # All should fail
-        assert code == 1, f"Attack {attack} should have failed"
-        assert "must not contain parent directory references" in stderr.lower(), (
-            f"Expected security error for {attack}, got: {stderr}"
-        )
+    assert code == 1
+    assert stdout == ""
+    assert "parent directory references" in stderr.lower()
+    with Queue("existing", db_path=str(outside)) as queue:
+        assert list(queue.peek_generator()) == ["preserved"]
 
-    # Test absolute paths (now allowed, but may fail for other reasons)
-    # These tests verify that absolute paths are accepted by the CLI
-    # but may fail due to permissions or invalid file types
-    absolute_paths = [
-        ("--file", "/etc/passwd"),
-        ("--file", "/tmp/test_absolute_" + str(os.getpid()) + ".db"),
-    ]
 
-    for path_args in absolute_paths:
-        code, _stdout, stderr = run_cli(
-            *path_args, "write", "test_queue", "message", cwd=workdir
-        )
-        # /etc/passwd should fail because it's not a valid database
-        # /tmp/test_absolute_*.db might succeed or fail based on permissions
-        if path_args[1] == "/etc/passwd":
-            assert code == 1
-            # Check for various error messages that could occur
-            assert (
-                "parent directory is not writable" in stderr.lower()
-                or "parent directory is not accessible" in stderr.lower()
-                or "database file is not readable" in stderr.lower()
-                or "database file is not writable" in stderr.lower()
-                or "permission denied" in stderr.lower()
-                or "file is not a database" in stderr.lower()
-                or "sqlite" in stderr.lower()
-                or "must be within the working directory" in stderr.lower()
-            ), f"Expected permission/database error for /etc/passwd, got: {stderr}"
+@pytest.mark.sqlite_only
+def test_absolute_file_target_round_trips(workdir: Path):
+    target = (workdir / "absolute.db").resolve()
+
+    code, stdout, stderr = run_cli(
+        "--file", str(target), "write", "queue", "message", cwd=workdir
+    )
+    assert code == 0, stderr
+    assert stdout == ""
+
+    code, stdout, stderr = run_cli("--file", str(target), "read", "queue", cwd=workdir)
+    assert code == 0, stderr
+    assert stdout == "message"
 
 
 @pytest.mark.sqlite_only
@@ -112,25 +96,24 @@ def test_safe_path_within_directory(workdir: Path):
         assert code == 0, f"Safe path {path_args} should have succeeded: {stderr}"
 
 
-def test_message_size_validation_non_stdin(workdir: Path):
-    """Test that message size is validated for direct arguments too."""
-    # Since we can't pass 11MB via command line args (OS limit),
-    # let's test with a smaller size that still exceeds our limit
-    # We'll need to temporarily lower the limit for this test
-    # Actually, let's just test that the validation code path exists
-    # by trying a message that's clearly over 10MB when encoded
+def test_direct_argv_message_size_limit(
+    workdir: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.chdir(workdir)
+    monkeypatch.setitem(commands._config, "BROKER_MAX_MESSAGE_SIZE", 4)
+    with patch(
+        "sys.argv",
+        ["broker", "-d", str(workdir), "write", "test_queue", "abcde"],
+    ):
+        assert main() == 1
 
-    # Instead, test via stdin which is the realistic way to send large data
-    large_message = "x" * (11 * 1024 * 1024)  # 11MB
-
-    # Try to write via stdin
-    code, _stdout, stderr = run_cli(
-        "write", "test_queue", "-", cwd=workdir, stdin=large_message
-    )
-
-    # Should fail with size limit error
-    assert code == 1
-    assert "exceeds maximum size" in stderr.lower()
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "exceeds maximum size" in captured.err.lower()
+    with Queue("test_queue", db_path=target_for_directory(workdir)) as queue:
+        assert queue.peek_one() is None
 
 
 def test_normal_sized_messages_work(workdir: Path):

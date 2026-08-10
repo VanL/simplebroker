@@ -226,8 +226,12 @@ class TestSQLiteRunnerValidation:
             runner = SQLiteRunner(empty_db_path)
 
             # Empty files should be allowed (they get initialized by SQLite)
-            # This should NOT raise an error
             runner.setup(SetupPhase.CONNECTION)
+            runner.run("CREATE TABLE validation_probe (value TEXT NOT NULL)")
+            runner.run("INSERT INTO validation_probe (value) VALUES (?)", ("usable",))
+            assert runner.run("SELECT value FROM validation_probe", fetch=True) == [
+                ("usable",)
+            ]
 
         finally:
             # Clean up
@@ -247,9 +251,13 @@ class TestSQLiteRunnerValidation:
         runner = SQLiteRunner(nonexistent_path)
 
         try:
-            # Nonexistent files should be allowed (they get created by SQLite)
-            # This should NOT raise an error
             runner.setup(SetupPhase.CONNECTION)
+            runner.run("CREATE TABLE validation_probe (value TEXT NOT NULL)")
+            runner.run("INSERT INTO validation_probe (value) VALUES (?)", ("usable",))
+            assert runner.run("SELECT value FROM validation_probe", fetch=True) == [
+                ("usable",)
+            ]
+            assert Path(nonexistent_path).is_file()
         finally:
             # Clean up
             runner.close()

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fresh SQLite databases and SimpleBroker phase-lock/status companion files
+  now retain their ordinary creation modes filtered by the process umask
+  instead of being rewritten or created as `0600`. This preserves
+  operator-owned sharing policy; existing database and stable lock-file modes
+  remain unchanged.
+
 ## [7.0.0] - 2026-08-10
 
 ### Changed

@@ -1,5 +1,7 @@
 """Test message timestamp-based move functionality."""
 
+from collections import Counter
+
 import pytest
 
 pytestmark = [pytest.mark.shared]
@@ -73,13 +75,18 @@ def test_move_claimed_message_with_require_unclaimed(broker):
     assert claimed == "msg1"
 
     # Try to move claimed message with require_unclaimed=True (default)
-    result = broker.move_one("source", "dest", exact_timestamp=msg1_ts)
+    result = broker.move_one(
+        "source", "dest", exact_timestamp=msg1_ts, with_timestamps=False
+    )
     assert result is None
 
     # Move unclaimed message (msg2)
-    result = broker.move_one("source", "dest", exact_timestamp=msg2_ts)
-    assert result is not None
-    assert result == "msg2" or (isinstance(result, tuple) and result[0] == "msg2")
+    result = broker.move_one(
+        "source", "dest", exact_timestamp=msg2_ts, with_timestamps=False
+    )
+    assert result == "msg2"
+    assert broker.peek_many("source", with_timestamps=False) == []
+    assert broker.peek_many("dest", with_timestamps=False) == ["msg2"]
 
 
 def test_move_claimed_message_without_require_unclaimed(broker):
@@ -97,10 +104,13 @@ def test_move_claimed_message_without_require_unclaimed(broker):
 
     # Move claimed message with require_unclaimed=False
     result = broker.move_one(
-        "source", "dest", exact_timestamp=msg1_ts, require_unclaimed=False
+        "source",
+        "dest",
+        exact_timestamp=msg1_ts,
+        require_unclaimed=False,
+        with_timestamps=False,
     )
-    assert result is not None
-    assert result == "msg1" or (isinstance(result, tuple) and result[0] == "msg1")
+    assert result == "msg1"
 
     dest_messages = broker.peek_many("dest", with_timestamps=False)
     assert dest_messages == ["msg1"]
@@ -194,23 +204,27 @@ def test_move_mixed_mode(broker):
 
     # Move specific message by timestamp (msg2)
     msg2_ts = messages[2][1]
-    result = broker.move_one("source", "dest1", exact_timestamp=msg2_ts)
-    assert result == "msg2" or (isinstance(result, tuple) and result[0] == "msg2")
+    result = broker.move_one(
+        "source", "dest1", exact_timestamp=msg2_ts, with_timestamps=False
+    )
+    assert result == "msg2"
 
     # Move oldest unclaimed (should be msg0)
-    result = broker.move_one("source", "dest2")
-    assert result == "msg0" or (isinstance(result, tuple) and result[0] == "msg0")
+    result = broker.move_one("source", "dest2", with_timestamps=False)
+    assert result == "msg0"
 
     # Move by timestamp again (msg4)
     msg4_ts = messages[4][1]
-    result = broker.move_one("source", "dest1", exact_timestamp=msg4_ts)
-    assert result == "msg4" or (isinstance(result, tuple) and result[0] == "msg4")
+    result = broker.move_one(
+        "source", "dest1", exact_timestamp=msg4_ts, with_timestamps=False
+    )
+    assert result == "msg4"
 
     remaining = broker.peek_many("source", with_timestamps=False)
-    assert set(remaining) == {"msg1", "msg3"}
+    assert Counter(remaining) == Counter(["msg1", "msg3"])
 
     dest1_msgs = broker.peek_many("dest1", with_timestamps=False)
-    assert set(dest1_msgs) == {"msg2", "msg4"}
+    assert Counter(dest1_msgs) == Counter(["msg2", "msg4"])
 
     dest2_msgs = broker.peek_many("dest2", with_timestamps=False)
-    assert dest2_msgs == ["msg0"]
+    assert Counter(dest2_msgs) == Counter(["msg0"])

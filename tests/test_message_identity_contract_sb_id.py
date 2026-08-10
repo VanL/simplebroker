@@ -50,7 +50,7 @@ FIRING_TESTS = {
             "test_normalize_message_id_rejects_out_of_range_ints",
         },
         "tests/test_json_message_id_contract.py": {
-            "test_core_identity_dict_fields_are_exhaustively_classified",
+            "test_public_json_identity_producers_preserve_message_ids",
             "test_shared_message_line_formats_id_without_rewriting_body",
             "test_write_and_status_format_only_their_json_boundary",
             "test_dump_formats_header_and_message_identity_fields",

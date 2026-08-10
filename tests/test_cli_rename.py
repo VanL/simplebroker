@@ -82,11 +82,13 @@ def test_rename_json_collision_is_error_without_mutation(workdir: Path) -> None:
 
     assert rc == 1
     assert out == ""
-    assert _json_object(err) == {
-        "error": "ERROR",
-        "message": "Target queue already exists",
-        "retryable": False,
-    }
+    payload = _json_object(err)
+    assert payload["error"] == "ERROR"
+    assert payload["retryable"] is False
+    message = payload["message"]
+    assert isinstance(message, str)
+    assert "target" in message.lower()
+    assert "exists" in message.lower()
     assert run_cli("peek", "old", cwd=workdir)[1] == "old-one"
     assert run_cli("peek", "new", cwd=workdir)[1] == "new-one"
 

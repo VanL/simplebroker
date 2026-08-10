@@ -16,7 +16,7 @@ from simplebroker._constants import __version__ as SIMPLEBROKER_VERSION
 from simplebroker._runner import SetupPhase
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import DBConnection
-from simplebroker.ext import BackendAwareRunner, get_backend_plugin
+from simplebroker.ext import get_backend_plugin
 
 pytestmark = [pytest.mark.shared]
 
@@ -329,18 +329,6 @@ def test_first_party_entry_point_load_failure_mentions_package(
     assert "cannot import name 'BackendPlugin'" in message
     assert "upgrade" in message.lower()
     assert "pin simplebroker" in message
-
-
-@pytest.mark.sqlite_only
-def test_legacy_runner_without_backend_plugin_still_looks_like_sqlite() -> None:
-    """Legacy injected runners should remain backend-compatible without metadata."""
-    from simplebroker._runner import SQLiteRunner
-
-    class LegacyRunner(SQLiteRunner):
-        pass
-
-    runner = LegacyRunner(":memory:")
-    assert not isinstance(runner, BackendAwareRunner)
 
 
 def test_non_aware_runner_with_resolved_target_uses_target_plugin(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-027] exception

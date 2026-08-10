@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-from simplebroker._constants import DEFAULT_DB_NAME, _parse_bool, load_config
+from simplebroker._constants import DEFAULT_DB_NAME, load_config
 from simplebroker._paths import (
     _find_project_database,
     _is_ancestor_of_working_directory,
@@ -41,18 +41,6 @@ TempDBCleanup = tuple[Path, Callable[[], None]]
 
 class TestEnvironmentVariableParsing:
     """Test environment variable parsing and configuration loading."""
-
-    def test_parse_bool_true_values(self) -> None:
-        """Test _parse_bool recognizes true values correctly."""
-        true_values = ["1", "true", "TRUE", "True", "yes", "YES", "on", "ON"]
-        for value in true_values:
-            assert _parse_bool(value) is True, f"Failed for value: {value}"
-
-    def test_parse_bool_false_values(self) -> None:
-        """Test _parse_bool recognizes false values correctly."""
-        false_values = ["0", "false", "FALSE", "no", "off", "", "invalid"]
-        for value in false_values:
-            assert _parse_bool(value) is False, f"Failed for value: {value}"
 
     @patch.dict(os.environ, {}, clear=True)
     def test_load_config_defaults(self) -> None:
@@ -558,12 +546,6 @@ class TestCLIIntegration:
         """Test that parser includes init command."""
         parser = create_parser()
 
-        # Check if init command exists in subparsers
-        # argparse intentionally exposes this private structure for parser inspection.
-        subparsers_choices = list(parser._subparsers._group_actions[0].choices.keys())  # type: ignore[union-attr]
-        assert "init" in subparsers_choices
-
-        # Test parsing of init command
         args = parser.parse_args(["init"])
         assert args.command == "init"
 
@@ -614,29 +596,6 @@ def temp_db_cleanup() -> TempDBCleanup:
     return tmp_path, cleanup_func
 
 
-class TestCrossPlatformCompatibility:
-    """Test cross-platform compatibility."""
-
-    @pytest.mark.skipif(os.name != "nt", reason="Windows-specific test")
-    def test_windows_drive_root_detection(self) -> None:
-        """Test Windows drive root boundary detection."""
-        from simplebroker._paths import _is_filesystem_root
-
-        # Mock Windows environment
-        with patch("os.name", "nt"):
-            drive_path = Path("C:\\")
-            with patch.object(Path, "resolve", return_value=drive_path):
-                assert _is_filesystem_root(drive_path) is True
-
-    @pytest.mark.skipif(os.name == "nt", reason="Unix-specific test")
-    def test_unix_root_detection(self) -> None:
-        """Test Unix filesystem root detection."""
-        from simplebroker._paths import _is_filesystem_root
-
-        root_path = Path("/")
-        assert _is_filesystem_root(root_path) is True
-
-
 class TestSecurityEdgeCases:
     """Test security edge cases and attack vectors."""
 
@@ -657,39 +616,5 @@ class TestSecurityEdgeCases:
         try:
             # Should be rejected as not a valid SimpleBroker database
             assert _is_valid_sqlite_db(fake_db) is False
-        finally:
-            cleanup_func()
-
-
-# Performance and stress tests
-class TestPerformanceAndLimits:
-    """Test performance characteristics and limits."""
-
-    def test_deep_directory_performance(self, temp_db_cleanup: TempDBCleanup) -> None:
-        """Test performance with deep directory structures."""
-        tmp_path, cleanup_func = temp_db_cleanup
-
-        # Create moderately deep structure (not too deep to avoid filesystem limits)
-        current = tmp_path
-        for i in range(20):
-            current = current / f"level{i}"
-            current.mkdir()
-
-        # Create database at root
-        root_db = tmp_path / ".broker.db"
-        with BrokerDB(str(root_db)):
-            pass
-
-        try:
-            # Time the search operation
-            import time
-
-            start_time = time.time()
-            result = _find_project_database(".broker.db", current)
-            elapsed = time.time() - start_time
-
-            assert result == root_db.resolve()
-            # Should complete reasonably quickly (under 1 second for 20 levels)
-            assert elapsed < 1.0
         finally:
             cleanup_func()

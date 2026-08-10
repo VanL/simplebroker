@@ -4,6 +4,7 @@ import datetime
 import json
 import threading
 import time
+from collections import Counter
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1090,13 +1091,17 @@ class TestIntegrationScenarios:
         assert rc == 0
         assert out == "new1\nnew2"
 
-        # Verify destination has all messages in correct order
+        rc, out, _ = run_cli("peek", "source", "--all", cwd=workdir)
+        assert rc == 2
+        assert out == ""
+
+        # Destination preserves every pre-existing and moved body. Cross-backend
+        # ordering is not part of this contract.
         rc, out, _ = run_cli("read", "dest", "--all", cwd=workdir)
         assert rc == 0
-        # Messages should be interleaved by ID (timestamp) order
-        messages = out.strip().split("\n")
-        assert len(messages) == 4
-        # Exact order depends on relative timestamps
+        assert Counter(out.splitlines()) == Counter(
+            ["existing1", "existing2", "new1", "new2"]
+        )
 
 
 class TestAtomicity:

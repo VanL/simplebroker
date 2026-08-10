@@ -17,9 +17,7 @@ from simplebroker._targets import BrokerTarget
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "bin" / "benchmark.py"
 README = ROOT / "README.md"
-CONFIGURATION_GUIDE = ROOT / "docs" / "guides" / "configuration.md"
-BACKENDS_GUIDE = ROOT / "docs" / "guides" / "backends.md"
-ASYNC_README = ROOT / "examples" / "ASYNC_README.md"
+RESULT_ARTIFACT = ROOT / "benchmarks" / "results" / "2026-08-10-m4-matrix.json"
 
 
 def test_matrix_vocabulary_is_complete() -> None:
@@ -30,29 +28,66 @@ def test_matrix_vocabulary_is_complete() -> None:
     assert benchmark.DEFAULT_OPERATIONS == 100
 
 
-def test_published_m4_benchmark_catalog_matches_owner_results() -> None:
+def test_published_benchmark_catalog_matches_result_artifact() -> None:
+    report = json.loads(RESULT_ARTIFACT.read_text(encoding="utf-8"))
+    assert report["command"] == (
+        "uv run --locked --extra pg --extra redis python bin/benchmark.py "
+        "--operations 100 --format json"
+    )
+    assert report["host_cpu"]
+    assert report["generated_at"].startswith("2026-08-10T")
+    assert report["simplebroker_version"]
+    assert report["settings"] == {
+        "backends": ["sqlite", "pg", "redis"],
+        "access_types": ["cli", "api", "optimized-api"],
+        "workloads": ["writes", "reads", "peeks", "mixed"],
+        "operations": 100,
+        "message_size": 100,
+        "command_timeout": 30.0,
+        "best_of": 3,
+        "auto_vacuum": False,
+    }
+
+    results = report["results"]
+    assert len(results) == 36
+    by_case = {
+        (result["backend"], result["access_type"], result["workload"]): result
+        for result in results
+    }
+    assert len(by_case) == len(results)
+    for result in results:
+        assert len(result["trials"]) == 3
+        assert {trial["trial"] for trial in result["trials"]} == {1, 2, 3}
+        assert result["best"] in result["trials"]
+        assert result["best"]["operations_per_second"] == max(
+            trial["operations_per_second"] for trial in result["trials"]
+        )
+
+    expected_rows = tuple(
+        "| `{backend}` | `{access}` | {values} |".format(
+            backend=backend,
+            access=access,
+            values=" | ".join(
+                f"{by_case[(backend, access, workload)]['best']['operations_per_second']:,.1f}"
+                for workload in benchmark.WORKLOADS
+            ),
+        )
+        for backend in benchmark.BACKENDS
+        for access in benchmark.ACCESS_TYPES
+    )
     readme = README.read_text(encoding="utf-8")
     performance = readme.split("## Performance & Tuning", 1)[1].split(
         "### Cross-Backend Benchmarking", 1
     )[0]
-    expected_rows = (
-        "| `sqlite` | `cli` | 18.8 | 18.7 | 18.7 | 18.1 |",
-        "| `sqlite` | `api` | 875.2 | 744.8 | 1,065.0 | 897.1 |",
-        "| `sqlite` | `optimized-api` | 6,940.0 | 7,776.9 | 23,553.0 | 9,206.5 |",
-        "| `pg` | `cli` | 7.6 | 7.2 | 7.2 | 7.3 |",
-        "| `pg` | `api` | 100.0 | 117.1 | 146.9 | 105.7 |",
-        "| `pg` | `optimized-api` | 735.3 | 641.7 | 4,704.6 | 1,061.0 |",
-        "| `redis` | `cli` | 9.8 | 9.3 | 9.5 | 9.4 |",
-        "| `redis` | `api` | 212.0 | 233.0 | 204.5 | 198.9 |",
-        "| `redis` | `optimized-api` | 2,376.4 | 5,207.4 | 4,052.6 | 3,562.0 |",
-    )
-
     catalog_rows = tuple(
         line for line in performance.splitlines() if line.startswith("| `")
     )
     normalized_performance = " ".join(performance.split())
     assert catalog_rows == expected_rows
     assert "[`bin/benchmark.py`](bin/benchmark.py)" in performance
+    assert (
+        "[result artifact](benchmarks/results/2026-08-10-m4-matrix.json)" in performance
+    )
     assert "operations/second" in performance
     assert "M4 MacBook Pro" in normalized_performance
     assert "100 operations" in normalized_performance
@@ -61,28 +96,15 @@ def test_published_m4_benchmark_catalog_matches_owner_results() -> None:
     recommended = readme.split("## Recommended For", 1)[1].split(
         "## Not Recommended For", 1
     )[0]
-    assert "[`bin/benchmark.py`](bin/benchmark.py)" in recommended
-    assert "897.1 mixed ops/second" in recommended
-    assert "9,206.5 through the persistent optimized API" in recommended
-
-    configuration = CONFIGURATION_GUIDE.read_text(encoding="utf-8")
-    backends = BACKENDS_GUIDE.read_text(encoding="utf-8")
-    async_readme = ASYNC_README.read_text(encoding="utf-8")
-    assert "[`bin/benchmark.py`](../../bin/benchmark.py)" in configuration
-    assert "[`README.md`](../../README.md#performance--tuning)" in configuration
-    assert "[`README.md`](../../README.md#performance--tuning)" in backends
-    for stale_claim in (
-        "~1,700 ops/second",
-        "~30,000 ops/second",
-        "<10ms",
-        "5,000-10,000 msgs/sec",
-        "10,000-20,000 msgs/sec",
-        "Scales linearly with pool size",
-        "Sub-millisecond operations",
-    ):
-        assert stale_claim not in readme
-        assert stale_claim not in configuration
-        assert stale_claim not in async_readme
+    default_mixed = by_case[("sqlite", "api", "mixed")]["best"]
+    optimized_mixed = by_case[("sqlite", "optimized-api", "mixed")]["best"]
+    assert (
+        f"{default_mixed['operations_per_second']:,.1f} mixed ops/second" in recommended
+    )
+    assert (
+        f"{optimized_mixed['operations_per_second']:,.1f} through the persistent "
+        "optimized API"
+    ) in recommended
 
 
 def test_case_result_records_three_trials_and_selects_fastest() -> None:

@@ -13,6 +13,16 @@ KERNEL = ROOT / "docs" / "agent-kernel.md"
 LLMS = ROOT / "llms.txt"
 
 
+def _markdown_section(text: str, heading: str) -> str:
+    """Return one exact Markdown section, excluding later peer headings."""
+    level = len(heading) - len(heading.lstrip("#"))
+    assert level > 0 and heading.startswith("#" * level + " ")
+    pattern = rf"^{re.escape(heading)}\n(?P<body>.*?)(?=^#{{1,{level}}} |\Z)"
+    match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+    assert match is not None, f"missing section {heading!r}"
+    return match.group("body")
+
+
 def test_llms_txt_points_at_agent_kernel() -> None:
     text = LLMS.read_text(encoding="utf-8")
     assert "docs/agent-kernel.md" in text
@@ -47,11 +57,13 @@ def test_agent_kernel_cites_delivery_contract() -> None:
 
 def test_agent_kernel_forbids_delete_while_peek_stream() -> None:
     text = KERNEL.read_text(encoding="utf-8")
-    assert "Peek streams and deletes" in text
-    assert "peek_generator" in text
-    assert "offset" in text.lower() or "skip" in text.lower()
-    # Move reservation still named
-    assert "move" in text.lower()
+    section = _markdown_section(text, "### Peek streams and deletes")
+    normalized = " ".join(section.lower().split())
+
+    assert "peek_generator" in section
+    assert "offset" in normalized and "skip" in normalized
+    assert "removing rows during that iteration" in normalized
+    assert "move-then-process" in normalized
 
 
 def test_agent_kernel_does_not_claim_identical_cli_python_packaging() -> None:
