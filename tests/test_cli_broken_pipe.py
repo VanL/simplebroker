@@ -263,11 +263,16 @@ def test_watch_sigterm_is_a_clean_shutdown(workdir: Path) -> None:
     assert process.stdout.readline().strip() == "ready"
 
     process.send_signal(signal.SIGTERM)
-    returncode = process.wait(timeout=10)
-    process.stdout.close()
-    assert process.stderr is not None
-    stderr = process.stderr.read()
-    process.stderr.close()
+    try:
+        returncode = process.wait(timeout=10)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=2)
+        process.stdout.close()
+        assert process.stderr is not None
+        stderr = process.stderr.read()
+        process.stderr.close()
 
     assert returncode == 0
     assert stderr == ""

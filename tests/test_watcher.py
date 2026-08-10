@@ -652,6 +652,8 @@ class TestQueueWatcher(WatcherTestBase):
     ) -> None:
         """Signals must not interrupt an active backend operation mid-call."""
         watcher = object.__new__(QueueWatcher)
+        watcher._stop_event = threading.Event()
+        watcher._signal_stop_requested = None
         join_values: list[bool] = []
 
         monkeypatch.setattr(
@@ -662,7 +664,12 @@ class TestQueueWatcher(WatcherTestBase):
 
         watcher._sigint_handler(signal.SIGTERM, None)
 
-        assert join_values == [False]
+        assert join_values == []
+        assert watcher._signal_stop_requested == signal.SIGTERM
+        assert not watcher._stop_event.is_set()
+        with pytest.raises(StopWatching):
+            watcher._check_stop()
+        assert watcher._stop_event.is_set()
 
     def test_handler_exception_handling(self, broker, broker_target):
         """Test that handler exceptions don't crash the watcher."""

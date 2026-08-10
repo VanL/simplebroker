@@ -28,18 +28,10 @@ file locking is strict. Always use one of these patterns:
         watcher.stop()  # This joins the thread by default, ensuring cleanup
 
 3. Signal Handling (for long-running services):
-    import signal
     from simplebroker import Queue
     queue = Queue("tasks", persistent=True)
     watcher = QueueWatcher(queue, handler)
-
-    def shutdown(signum, frame):
-        watcher.stop()  # Ensures clean shutdown
-        sys.exit(0)
-
-    signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT, shutdown)
-    watcher.run_forever()  # Handles SIGINT/SIGTERM automatically
+    watcher.run_forever()  # Installs safe SIGINT/SIGTERM handlers automatically
 
 WARNING: Not calling stop() can cause:
 - Thread leaks (threads continue running after main program exits)
@@ -337,6 +329,7 @@ class BaseWatcher(ABC):
         # Event to signal the watcher to stop
         self._stop_event = stop_event or threading.Event()
         self._running_event = threading.Event()
+        self._signal_stop_requested: int | None = None
 
         # Ensure underlying queue connections are aware of stop event
         if hasattr(self._queue_obj, "set_stop_event"):
@@ -578,15 +571,23 @@ class BaseWatcher(ABC):
 
     def _check_stop(self) -> None:
         """Check if stop has been requested and raise StopWatching if so."""
+        if self._signal_stop_requested is not None:
+            signum = self._signal_stop_requested
+            self._stop_event.set()
+            logger.info("Received signal %s, stopping watcher...", signum)
+            raise StopWatching
         if self._stop_event.is_set():
             raise StopWatching
 
     def stop(self, *, join: bool = True, timeout: float = 2.0) -> None:
         """Request a graceful shutdown.
 
-        This method is thread-safe and can be called from another thread or
-        a signal handler. The watcher will stop after processing the current
-        message, if any.
+        This method is thread-safe and can be called from another thread. The
+        watcher will stop after processing the current message, if any.
+
+        ``run_forever()`` installs its own SIGINT and SIGTERM handlers. Do not
+        call ``stop()`` from a custom Python signal handler: it uses threading
+        primitives that a signal may interrupt while their locks are held.
 
         If join is True (default), this call also waits until the background
         thread finishes (or timeout seconds, whichever comes first). Calling
@@ -854,8 +855,10 @@ class BaseWatcher(ABC):
 
         Can be overridden by subclasses for custom handling.
         """
-        logger.info("Received signal %s, stopping watcher...", signum)
-        self.stop(join=False)
+        # Python signal handlers can interrupt code while threading primitives
+        # hold their internal locks. Record only plain state here; the normal
+        # watcher loop converts it into a stop request at its next safe point.
+        self._signal_stop_requested = signum
 
     def _safe_call_handler(
         self,
