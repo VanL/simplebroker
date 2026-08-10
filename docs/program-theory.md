@@ -134,7 +134,7 @@ execution.
 Disposition: adopted
 Owner: SimpleBroker product owner
 Governs: [THEORY-2] and [THEORY-5]
-Source record: [ALT-PT20260729-005] in docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md
+Source record: 2026-07-29-program-theory-and-negative-knowledge-plan.md at 5023710 [ALT-PT20260729-005]
 Candidate: State that SimpleBroker is categorically not for distributed systems.
 Why plausible: The local SQLite default and small-tool identity make a host boundary easy to state and initially matched the product's implementation.
 Evidence:
@@ -246,4 +246,5 @@ Evidence:
 
 ## Related plan
 
-- [Program theory and negative knowledge plan](plans/2026-07-29-program-theory-and-negative-knowledge-plan.md)
+- Retired source plan: `2026-07-29-program-theory-and-negative-knowledge-plan.md`
+  at `5023710`; see the [Retired Plans ledger](plans/README.md#retired-plans).

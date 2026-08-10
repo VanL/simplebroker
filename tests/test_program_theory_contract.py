@@ -415,10 +415,17 @@ def _assert_stable_references_resolve(text: str) -> None:
                 )
             )
 
+    reference_lines = []
+    for line in _without_fenced_blocks(text).splitlines():
+        source = line.removeprefix("Source record: ")
+        if source != line and RETIRED_SOURCE.fullmatch(source):
+            continue
+        reference_lines.append(line)
+
     references = set(
         re.findall(
             r"\[((?:DOM|SB|THEORY|ALT|REV)-[A-Z0-9.*-]+)\]",
-            _without_fenced_blocks(text),
+            "\n".join(reference_lines),
         )
     )
     for reference in references:
@@ -567,6 +574,18 @@ def test_retired_source_form_matches_the_ledger_exactly() -> None:
             source,
             retired,
             live_ids={"ALT-TEST-001"},
+        )
+
+
+def test_stable_reference_gate_ignores_only_retired_source_record_line() -> None:
+    retired = _retired_plan_sources(PLAN_INDEX.read_text(encoding="utf-8"))
+    plan = "2026-04-02-env-var-backend-selection.md"
+    source_line = f"Source record: {plan} at {retired[plan]} [ALT-ARCHIVE-001]"
+
+    _assert_stable_references_resolve(source_line)
+    with pytest.raises(AssertionError, match="stable reference has no definition"):
+        _assert_stable_references_resolve(
+            f"{source_line}\nCurrent consequence: [ALT-ARCHIVE-001]"
         )
 
 

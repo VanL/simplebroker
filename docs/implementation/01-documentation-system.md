@@ -63,7 +63,7 @@ does not silently restore an obsolete boundary.
 Disposition: rejected
 Owner: SimpleBroker product owner
 Governs: [DOM-3] and [THEORY-1]
-Source record: [ALT-PT20260729-001] in docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md
+Source record: 2026-07-29-program-theory-and-negative-knowledge-plan.md at 5023710 [ALT-PT20260729-001]
 Candidate: Keep the root README as the only program-theory artifact.
 Why plausible: The README was the founding theory artifact and remains the main human product entry.
 Evidence:
@@ -79,7 +79,7 @@ Promoted to: none
 Disposition: rejected
 Owner: Process-spec owner
 Governs: [DOM-16]
-Source record: [ALT-PT20260729-002] in docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md
+Source record: 2026-07-29-program-theory-and-negative-knowledge-plan.md at 5023710 [ALT-PT20260729-002]
 Candidate: Store program theory as an ordinary canonical product spec.
 Why plausible: Specs already have stable references and own intended behavior.
 Evidence:
@@ -95,7 +95,7 @@ Promoted to: none
 Disposition: rejected
 Owner: Process-spec owner
 Governs: [DOM-16]
-Source record: [ALT-PT20260729-003] in docs/plans/2026-07-29-program-theory-and-negative-knowledge-plan.md
+Source record: 2026-07-29-program-theory-and-negative-knowledge-plan.md at 5023710 [ALT-PT20260729-003]
 Candidate: Add docs/alternatives or a general ADR graveyard.
 Why plausible: Dedicated records are easy to append and preserve.
 Evidence:
