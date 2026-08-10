@@ -36,6 +36,9 @@ EVIDENCE_MANIFESTS = {
     },
     "SB-IO-4": {
         "tests/test_dump_load.py": {
+            "test_load_accepts_exact_string_message_id",
+            "test_load_accepts_legacy_integer_message_id",
+            "test_load_rejects_noncanonical_message_id_tokens_with_line_context",
             "test_reloading_same_dump_fails_loudly",
             "test_load_rejects_bad_input",
             "test_load_rejects_reserved_zero_with_line_context_before_batch_flush",

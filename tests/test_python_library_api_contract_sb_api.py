@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import get_type_hints
 
 import pytest
 
@@ -14,6 +15,7 @@ from simplebroker import (
     commands,
     dump_lines,
     ext,
+    format_message_id,
     load_lines,
     open_broker,
     project,
@@ -79,6 +81,21 @@ def test_api_root_ext_commands_all_are_importable() -> None:
         assert hasattr(ext, name), name
     for name in commands.__all__:
         assert hasattr(commands, name), name
+
+
+def test_api_public_message_id_formatter_contract() -> None:
+    """[SB-API-1] exposes one root formatter and delegates identity semantics."""
+    body = _section("SB-API-1")
+    assert "simplebroker.format_message_id" in body
+    assert "[SB-ID-1]" in body
+    assert "[SB-ID-4]" in body
+    assert "format_message_id" in simplebroker.__all__
+    assert "format_message_id" not in ext.__all__
+    assert simplebroker.format_message_id is format_message_id
+    assert get_type_hints(format_message_id) == {
+        "value": int | str,
+        "return": str,
+    }
 
 
 def test_api_queue_rejects_alias_sigil_before_config_or_target_setup(

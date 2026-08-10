@@ -4,6 +4,7 @@
 from ._backend_plugins import ActivityWaiter
 from ._constants import __version__, resolve_config
 from ._dump import LoadResult, dump_lines, load_lines
+from ._message_id import format_message_id
 from .db import open_broker
 from .metadata import QueueRenameResult, QueueStats
 from .project import (
@@ -32,6 +33,7 @@ __all__ = [
     "create_activity_waiter_for_queues",
     "deserialize_broker_target",
     "dump_lines",
+    "format_message_id",
     "load_lines",
     "open_broker",
     "resolve_broker_target",

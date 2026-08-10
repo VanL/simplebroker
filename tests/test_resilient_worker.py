@@ -174,8 +174,8 @@ def test_concurrent_workers_with_checkpoints(workdir):
 
     # Worker 1 processes even messages
     # Worker 2 processes odd messages
-    worker1_checkpoint = 0
-    worker2_checkpoint = 0
+    worker1_checkpoint = "0000000000000000000"
+    worker2_checkpoint = "0000000000000000000"
 
     # Get all messages
     rc, out, err = run_cli(

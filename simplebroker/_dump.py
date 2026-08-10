@@ -19,7 +19,11 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from ._message_id import INVALID_MESSAGE_ID_MESSAGE, normalize_message_id
+from ._message_id import (
+    INVALID_MESSAGE_ID_MESSAGE,
+    format_message_id,
+    normalize_message_id,
+)
 from ._message_insert import RESERVED_MESSAGE_ID_MESSAGE
 
 if TYPE_CHECKING:
@@ -106,7 +110,7 @@ def dump_lines(
             "format": DUMP_FORMAT,
             "version": DUMP_VERSION,
             "backend": _backend_name(broker),
-            "last_ts": int(meta.get("last_ts", 0)),
+            "last_ts": format_message_id(int(meta.get("last_ts", 0))),
         }
     )
 
@@ -130,7 +134,12 @@ def dump_lines(
         rows.sort(key=lambda item: item[1])
         for body, message_id in rows:
             yield _line(
-                {"type": "message", "queue": queue, "body": body, "id": message_id}
+                {
+                    "type": "message",
+                    "queue": queue,
+                    "body": body,
+                    "id": format_message_id(message_id),
+                }
             )
 
 

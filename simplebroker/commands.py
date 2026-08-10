@@ -32,7 +32,11 @@ from ._constants import (
 )
 from ._dump import dump_lines, load_lines
 from ._exceptions import IntegrityError, TimestampError
-from ._message_id import INVALID_MESSAGE_ID_MESSAGE, normalize_message_id
+from ._message_id import (
+    INVALID_MESSAGE_ID_MESSAGE,
+    format_message_id,
+    normalize_message_id,
+)
 from ._paths import _is_valid_sqlite_db
 from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
@@ -342,7 +346,7 @@ def _output_message(
     """
     if json_output:
         # JSON output includes timestamp by default
-        output = {"message": message, "timestamp": timestamp}
+        output = {"message": message, "timestamp": format_message_id(timestamp)}
         _print_stdout(json.dumps(output, ensure_ascii=False))
     elif show_timestamps:
         # Include timestamp in plain output
@@ -527,7 +531,7 @@ def cmd_write(
         db_path: Path to database file
         queue_name: Name of the queue
         message: Message content, None to read piped stdin, or "-" for stdin
-        json_output: If True, print {"timestamp": <id>} for the new message
+        json_output: If True, print the new message id as a JSON string
         show_timestamps: If True, print the new message's timestamp ID
 
     Returns:
@@ -539,7 +543,7 @@ def cmd_write(
     with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
         timestamp = queue.write(content)
     if json_output:
-        print(json.dumps({"timestamp": timestamp}))
+        print(json.dumps({"timestamp": format_message_id(timestamp)}))
     elif show_timestamps:
         print(timestamp)
     return EXIT_SUCCESS
@@ -811,7 +815,11 @@ def cmd_status(db_path: DBTarget, *, json_output: bool = False) -> int:
         return EXIT_ERROR
 
     if json_output:
-        print(json.dumps(stats, ensure_ascii=False))
+        json_stats: dict[str, int | str] = {
+            **stats,
+            "last_timestamp": format_message_id(stats["last_timestamp"]),
+        }
+        print(json.dumps(json_stats, ensure_ascii=False))
     else:
         print(f"total_messages: {stats['total_messages']}")
         print(f"last_timestamp: {stats['last_timestamp']}")

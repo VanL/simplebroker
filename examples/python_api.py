@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from simplebroker import Queue, QueueWatcher
+from simplebroker import Queue, QueueWatcher, format_message_id
 
 # Configure logging
 logging.basicConfig(
@@ -128,6 +128,8 @@ def error_handling_pattern(db_path: Path) -> None:
                         {
                             "original_message": message,
                             "error": str(e),
+                            # This demo passes an enumerate() index here, not a
+                            # SimpleBroker message ID. Keep application data opaque.
                             "timestamp": timestamp,
                             "retry_count": data["retry_count"],
                         }
@@ -186,7 +188,7 @@ def custom_watcher_example(db_path: Path) -> None:
             # Save failed message for investigation
             error_data = {
                 "message": message,
-                "timestamp": timestamp,
+                "timestamp": format_message_id(timestamp),
                 "error": str(exception),
                 "error_type": type(exception).__name__,
                 "failed_at": int(time.time() * 1000),

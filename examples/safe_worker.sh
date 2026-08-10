@@ -13,18 +13,6 @@ command -v jq >/dev/null || {
     echo "Error: jq is required but not installed" >&2
     exit 1
 }
-jq_version=$(jq --version) || {
-    echo "Error: failed to determine jq version; jq 1.7 or newer is required" >&2
-    exit 1
-}
-if [[ "$jq_version" =~ ^jq-([0-9]+)\.([0-9]+) ]] &&
-    { [ "${BASH_REMATCH[1]}" -gt 1 ] ||
-        { [ "${BASH_REMATCH[1]}" -eq 1 ] && [ "${BASH_REMATCH[2]}" -ge 7 ]; }; }; then
-    :
-else
-    echo "Error: jq 1.7 or newer is required to preserve message IDs exactly" >&2
-    exit 1
-fi
 command -v broker >/dev/null || {
     echo "Error: broker command is required but not found" >&2
     exit 1
@@ -88,7 +76,8 @@ while true; do
     fi
     message=${message_with_sentinel%$'\034'}
     if ! timestamp=$(
-        printf '%s\n' "$message_data" | jq -er '.timestamp | numbers'
+        printf '%s\n' "$message_data" |
+            jq -er '.timestamp | strings | select(test("^[0-9]{19}$"))'
     ); then
         echo "Error: broker peek returned invalid message JSON" >&2
         exit 1

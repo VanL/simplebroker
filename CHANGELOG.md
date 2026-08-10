@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-08-10
+
+### Changed
+
+- **Breaking:** SimpleBroker-owned JSON now emits
+  message IDs and broker high-water values as exact 19-digit ASCII decimal
+  strings instead of JSON numbers. This covers CLI `timestamp` and
+  `last_timestamp`, dump-v1 `id` and `last_ts`, and the public watcher JSON
+  handler. Python queue/connection APIs, callbacks, status dictionaries, and
+  backend/storage protocols remain integer-valued. Dump v1 keeps accepting
+  legacy integer IDs as input, while new dumps use strings. The new public
+  `simplebroker.format_message_id(...)` helper gives embedders the same wire
+  representation without duplicating validation or padding rules.
+- Bumped synchronized patch versions `simplebroker-pg` 3.5.2 and
+  `simplebroker-redis` 3.5.2. Both extensions now require
+  `simplebroker>=7.0.0`; the root `pg` and `redis` extras require those patch
+  versions. Their backend APIs and runtime behavior are unchanged.
+
+### simplebroker-pg 3.5.2
+
+- Synchronized with SimpleBroker 7.0.0. Raises the core package
+  floor to `simplebroker>=7.0.0`; PostgreSQL backend behavior is unchanged.
+
+### simplebroker-redis 3.5.2
+
+- Synchronized with SimpleBroker 7.0.0. Raises the core package
+  floor to `simplebroker>=7.0.0`; Redis/Valkey backend behavior is unchanged.
+
 ## [6.0.2] - 2026-08-06
 
 ### Fixed

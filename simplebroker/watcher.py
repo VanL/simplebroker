@@ -89,6 +89,7 @@ from ._constants import (
     resolve_config,
 )
 from ._exceptions import OperationalError, StopException
+from ._message_id import format_message_id
 from ._retry import interruptible_sleep
 from ._retry_policy import _execute_watcher_operational_retry
 from ._targets import BrokerTarget
@@ -145,9 +146,14 @@ def json_print_handler(msg: str, ts: int) -> None:
 
     Example:
         >>> json_print_handler("Hello\\nWorld", 1837025672140161024)
-        {"message": "Hello\\nWorld", "timestamp": 1837025672140161024}
+        {"message": "Hello\\nWorld", "timestamp": "1837025672140161024"}
     """
-    print(json.dumps({"message": msg, "timestamp": ts}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {"message": msg, "timestamp": format_message_id(ts)},
+            ensure_ascii=False,
+        )
+    )
 
 
 def logger_handler(msg: str, ts: int) -> None:

@@ -29,6 +29,10 @@ CONTROL_IN = "transition.control.in"
 CONTROL_OUT = "transition.control.out"
 
 
+def _json_message_id(value: int) -> str:
+    return f"{value:019d}"
+
+
 def _make_reactor(
     db_path: Path,
     *,
@@ -356,7 +360,7 @@ def _fire_control_transition(
         assert _control_responses(reactor) == [
             {
                 "command": "PING",
-                "input_timestamp": timestamp,
+                "input_timestamp": _json_message_id(timestamp),
                 "message": "PONG",
                 "ok": True,
                 "request_id": None,
@@ -390,7 +394,7 @@ def _fire_control_transition(
         assert response["pending_output_backlog"] == 1
         assert response["output_backlog_blocked"] is True
         assert response["result_status_counts"] == {"output_pending": 1}
-        assert response["checkpoints"][INBOX] == 302
+        assert response["checkpoints"][INBOX] == _json_message_id(302)
         assert (INBOX, input_timestamp) not in reactor._inflight
         _assert_control_recorded(reactor, timestamp=timestamp, detail="STATUS")
     elif mode == "control-stop":
@@ -418,7 +422,7 @@ def _fire_control_transition(
                 [
                     {
                         "command": "STOP",
-                        "input_timestamp": timestamp,
+                        "input_timestamp": _json_message_id(timestamp),
                         "message": "stopping",
                         "ok": True,
                         "request_id": "stop-1",

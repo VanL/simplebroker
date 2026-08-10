@@ -15,10 +15,12 @@ backup protocol.
 `dump` / `dump_lines` emit **versioned NDJSON** (`simplebroker-dump` v1):
 
 1. Exactly one **header** line first (`type: header`, `format`, `version`,
-   informational `backend`, and `last_ts`).
+   informational `backend`, and `last_ts`). `last_ts` is the high-water JSON
+   string from `[SB-ID-3]`.
 2. Then **alias** lines (`type: alias`), sorted by alias name.
 3. Then **message** lines (`type: message` with `queue`, `body`, `id`), queues
-   sorted, messages in ascending message-id order within each queue.
+   sorted, messages in ascending message-id order within each queue. `id` is
+   the message-id JSON string from `[SB-ID-1]`.
 
 Serialization is deterministic for a given logical dump content (stable key
 order in each JSON object).
@@ -55,8 +57,11 @@ fnmatch-style globs against **queue names** (case-sensitive).
   **1-based line number**.
 - Load is intended for a **fresh destination**. Duplicate message ids raise
   loudly (`IntegrityError`) rather than double-inserting.
-- Message records restore exact ids (subject to `[SB-ID-4]`, including
-  rejection of reserved zero). Aliases are re-created from alias lines.
+- Message records restore exact ids (subject to `[SB-ID-4]`, including its
+  integer and exact-19-digit-string input forms and rejection of reserved
+  zero). This preserves loading of legacy numeric v1 records without assigning
+  input-form ownership to this format clause. Aliases are re-created from alias
+  lines.
 - CLI `load` exit codes: `0` success, `1` error (`[SB-CLI-1]`).
 
 Prefer dump/load over copying a live SQLite database directory (WAL/SHM/lock
@@ -88,14 +93,15 @@ claim delivery semantics (`[SB-DELIVERY-1]`).
 
 | Clause | Firing evidence |
 |--------|-----------------|
-| [SB-IO-1] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py::test_dump_format_header_aliases_messages_in_order` |
+| [SB-IO-1] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py::test_dump_format_header_aliases_messages_in_order`; `tests/test_json_message_id_contract.py::test_dump_formats_header_and_message_identity_fields` |
 | [SB-IO-2] | Core firing gate: `tests/test_persistence_io_contract_sb_io.py::test_dump_omits_claimed_messages`. Routine SQLite↔PostgreSQL: `extensions/simplebroker_pg/tests/test_pg_dump_load_pipe.py::test_sqlite_to_postgres_pipe`, `extensions/simplebroker_pg/tests/test_pg_dump_load_pipe.py::test_postgres_to_sqlite_pipe`. Routine SQLite↔Redis: `extensions/simplebroker_redis/tests/test_redis_dump_load_pipe.py::test_sqlite_to_redis_pipe`, `extensions/simplebroker_redis/tests/test_redis_dump_load_pipe.py::test_redis_to_sqlite_pipe`. Opt-in direct PostgreSQL↔Redis: `tests/test_cross_backend_dump_load.py::test_postgres_to_redis_pipe`, `tests/test_cross_backend_dump_load.py::test_redis_to_postgres_pipe`. |
 | [SB-IO-3] | `tests/test_dump_load.py::test_include_exclude_filters`, `test_alias_matches_on_its_own_name`, `test_filters_are_case_sensitive` |
-| [SB-IO-4] | `tests/test_dump_load.py::test_reloading_same_dump_fails_loudly`, `tests/test_dump_load.py::test_load_rejects_bad_input`, `tests/test_dump_load.py::test_load_rejects_reserved_zero_with_line_context_before_batch_flush`, `tests/test_dump_load.py::test_load_rejects_huge_json_integer_with_line_context`; `tests/test_cli_dump_load.py::test_load_rejects_garbage_with_line_number` |
+| [SB-IO-4] | `tests/test_dump_load.py::test_load_accepts_exact_string_message_id`, `tests/test_dump_load.py::test_load_accepts_legacy_integer_message_id`, `tests/test_dump_load.py::test_load_rejects_noncanonical_message_id_tokens_with_line_context`, `tests/test_dump_load.py::test_reloading_same_dump_fails_loudly`, `tests/test_dump_load.py::test_load_rejects_bad_input`, `tests/test_dump_load.py::test_load_rejects_reserved_zero_with_line_context_before_batch_flush`, `tests/test_dump_load.py::test_load_rejects_huge_json_integer_with_line_context`; `tests/test_cli_dump_load.py::test_load_rejects_garbage_with_line_number` |
 | [SB-IO-5] | `tests/test_persistence_io_contract_sb_io.py::test_io_pending_only_and_fresh_load_language`; `tests/test_peek_include_claimed.py::test_include_claimed_returns_superset_in_id_order`, `tests/test_peek_include_claimed.py::test_exact_id_peek_finds_claimed_row_only_with_flag`, `tests/test_peek_include_claimed.py::test_peeking_claimed_rows_mutates_nothing` |
 
 ## Related Plans
 
+- `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;

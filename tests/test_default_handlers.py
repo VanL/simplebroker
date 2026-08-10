@@ -45,13 +45,13 @@ class TestDefaultHandlers:
 
     def test_json_print_handler(self, capsys):
         """Test json_print_handler output format."""
-        json_print_handler("test message", 1234567890)
+        json_print_handler("test message", 1234567890123456789)
 
         captured = capsys.readouterr()
         output_data = json.loads(captured.out.strip())
 
         assert output_data["message"] == "test message"
-        assert output_data["timestamp"] == 1234567890
+        assert output_data["timestamp"] == "1234567890123456789"
         assert captured.err == ""
 
     def test_json_print_handler_with_newlines(self, capsys):
@@ -62,7 +62,7 @@ class TestDefaultHandlers:
         output_data = json.loads(captured.out.strip())
 
         assert output_data["message"] == "line1\nline2\nline3"
-        assert output_data["timestamp"] == 9876543210
+        assert output_data["timestamp"] == "0000000009876543210"
 
     def test_json_print_handler_with_special_chars(self, capsys):
         """Test json_print_handler with special characters and unicode."""
@@ -73,7 +73,7 @@ class TestDefaultHandlers:
         output_data = json.loads(captured.out.strip())
 
         assert output_data["message"] == special_msg
-        assert output_data["timestamp"] == 2222222222
+        assert output_data["timestamp"] == "0000000002222222222"
         # Verify ensure_ascii=False works
         assert "🚀" in captured.out
         assert "中文" in captured.out
@@ -218,7 +218,7 @@ class TestHandlerIntegration:
             # Each line should be valid JSON
             data = json.loads(line)
             assert data["message"] == test_messages[i][0]
-            assert data["timestamp"] == test_messages[i][1]
+            assert data["timestamp"] == f"{test_messages[i][1]:019d}"
 
 
 @pytest.fixture

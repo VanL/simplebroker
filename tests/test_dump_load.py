@@ -8,6 +8,7 @@ dirs; this module pins the format and the library surface.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,8 @@ def test_dump_format_header_aliases_messages_in_order(tmp_path: Path) -> None:
     assert header["format"] == "simplebroker-dump"
     assert header["version"] == 1
     assert header["backend"] == "sqlite"
-    assert isinstance(header["last_ts"], int)
+    assert isinstance(header["last_ts"], str)
+    assert re.fullmatch(r"[0-9]{19}", header["last_ts"])
 
     assert [r["type"] for r in recs] == [
         "header",
@@ -70,9 +72,9 @@ def test_dump_format_header_aliases_messages_in_order(tmp_path: Path) -> None:
         ("beta", "line1\nline2"),
     ]
     ids = [m["id"] for m in msgs]
-    assert all(isinstance(i, int) for i in ids)
-    numeric_ids = [i for i in ids if isinstance(i, int)]
-    assert numeric_ids[0] < numeric_ids[1] and numeric_ids[2] < numeric_ids[3]
+    assert all(isinstance(i, str) and re.fullmatch(r"[0-9]{19}", i) for i in ids)
+    string_ids = [i for i in ids if isinstance(i, str)]
+    assert string_ids[0] < string_ids[1] and string_ids[2] < string_ids[3]
     # deterministic serialization: keys sorted in every line
     for line in lines:
         assert line == json.dumps(json.loads(line), ensure_ascii=False, sort_keys=True)
@@ -101,19 +103,19 @@ def test_round_trip_fixed_point(tmp_path: Path) -> None:
     # an ID above every restored ID (insert_messages advanced last_ts; the
     # HLC's monotonicity does the rest, even under clock skew)
     restored_ids = [
-        message_id
+        int(message_id)
         for record in _records(redump)[1:]
         if record["type"] == "message"
-        if isinstance(message_id := record["id"], int)
+        if isinstance(message_id := record["id"], str)
     ]
     q.write("post-restore")
     with open_broker(dst) as broker:
         rows = _records(list(dump_lines(broker)))[1:]
     new_ids = [
-        message_id
+        int(message_id)
         for record in rows
         if record["type"] == "message" and record["body"] == "post-restore"
-        if isinstance(message_id := record["id"], int)
+        if isinstance(message_id := record["id"], str)
     ]
     assert new_ids and min(new_ids) > max(restored_ids)
 
@@ -137,6 +139,47 @@ def test_load_accepts_exact_string_message_id(tmp_path: Path) -> None:
 
     assert result == LoadResult(messages=1, aliases=0)
     assert Queue("jobs", db_path=db).peek(message_id=1000) == "restored"
+
+
+def test_load_accepts_legacy_integer_message_id(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    lines = [
+        json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1}),
+        '{"type":"message","queue":"jobs","body":"legacy","id":1000}',
+    ]
+
+    with open_broker(db) as broker:
+        result = load_lines(broker, lines)
+
+    assert result == LoadResult(messages=1, aliases=0)
+    assert Queue("jobs", db_path=db).peek(message_id=1000) == "legacy"
+
+
+@pytest.mark.parametrize(
+    "id_token",
+    [
+        '"1"',
+        "-1",
+        "true",
+        "null",
+        "1.0",
+        "1e3",
+        str(2**63),
+        "10000000000000000000",
+    ],
+)
+def test_load_rejects_noncanonical_message_id_tokens_with_line_context(
+    tmp_path: Path,
+    id_token: str,
+) -> None:
+    header = json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1})
+    record = f'{{"type":"message","queue":"q","body":"b","id":{id_token}}}'
+
+    with (
+        open_broker(_db(tmp_path)) as broker,
+        pytest.raises(ValueError, match="line 2: invalid message ID"),
+    ):
+        load_lines(broker, [header, record])
 
 
 def test_load_rejects_malformed_message_id_with_line_context(tmp_path: Path) -> None:
@@ -205,7 +248,9 @@ def test_dump_canonicalizes_shuffled_exact_id_inserts(tmp_path: Path) -> None:
         )
         msgs = _records(list(dump_lines(broker)))[1:]
     assert [m["body"] for m in msgs] == ["m0", "m1", "m2"]
-    assert [m["id"] for m in msgs] == sorted(ids)
+    assert [m["id"] for m in msgs] == [
+        f"{message_id:019d}" for message_id in sorted(ids)
+    ]
 
 
 def test_include_exclude_filters(tmp_path: Path) -> None:

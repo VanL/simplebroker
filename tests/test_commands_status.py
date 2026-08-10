@@ -72,7 +72,9 @@ class TestCmdStatus:
 
         payload = json.loads(captured.out)
         assert payload["total_messages"] == 1
-        assert payload["last_timestamp"] > 0
+        assert isinstance(payload["last_timestamp"], str)
+        assert len(payload["last_timestamp"]) == 19
+        assert int(payload["last_timestamp"]) > 0
         if broker_target.backend_name == "redis":
             assert payload["db_size"] == 0
         else:

@@ -71,15 +71,18 @@ Public CLI `--json` (and dump NDJSON) shapes by command family:
 
 | Commands | Shape |
 |----------|--------|
-| `read`, `peek`, `move` with `--json` | Line-delimited objects with at least `message` and `timestamp` (message id) |
+| `read`, `peek`, `move` with `--json` | Line-delimited objects with at least `message` and `timestamp`; `timestamp` is the message-id JSON string (`[SB-ID-1]`) |
 | `watch` with `--json` | Same message-line objects as they are emitted |
 | `dump` | NDJSON queue/message dump records |
-| `write` with `--json` | `{"timestamp": <id>}` for the new message (body is not echoed) |
-| `write` with `-t` / `--timestamps` | The 19-digit id on stdout |
+| `write` with `--json` | `{"timestamp":"<message-id JSON string>"}` for the new message (body is not echoed) |
+| `write` with `-t` / `--timestamps` | The unchanged bare-decimal id on stdout; this is text, not the JSON padding contract |
+| global `--status --json` | One object with numeric `total_messages` and `db_size`, plus `last_timestamp` as the high-water JSON string (`[SB-ID-3]`) |
 | `list`, `exists`, `stats`, `rename`, and similar metadata commands with `--json` | Command-specific objects (for example `list` uses `queue`; not message-line objects) |
 
-Timestamps are included on message-line JSON (`message` + `timestamp`). Other
-JSON shapes follow the command-specific objects above.
+Dump `id` and `last_ts` types are owned by `[SB-IO-1]`. Timestamps are included
+on message-line JSON (`message` + `timestamp`). Other JSON shapes follow the
+command-specific objects above. A decimal id embedded inside human diagnostic
+text is not an identity scalar and is not rewritten.
 
 When JSON mode is requested and a command reports an error after argument
 parsing, stderr contains one object with `error` (stable code), `message`
@@ -141,6 +144,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
 - `docs/plans/2026-08-06-pre-release-review-remediation-plan.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`
@@ -160,6 +164,11 @@ _Implementation mapping_:
 - `tests/test_documented_exit_codes.py` — [SB-CLI-1] + README link
 - `tests/test_agent_kernel_contract.py` — [SB-CLI-1] + kernel link
 - `tests/test_cli_contract_sb_cli.py` — [SB-CLI-2], [SB-CLI-3], [SB-CLI-4]
+- `[SB-CLI-4]` JSON identity representation:
+  `tests/test_json_message_id_contract.py`,
+  `tests/test_cli_write_output.py::test_write_json_prints_timestamp_only`,
+  `tests/test_status_command.py::test_status_json_output`, and
+  `tests/test_cli_watch.py::TestWatchCommand::test_watch_json_output`
 - `tests/test_timestamp_selection_contract_sb_select.py` — [SB-CLI-5] structural
   bind with `[SB-SELECT-*]`
 - `[SB-CLI-5]` exact executable evidence:

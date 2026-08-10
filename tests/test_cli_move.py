@@ -316,7 +316,7 @@ class TestTimestampFormats:
         # Get a middle timestamp
         rc, out, _ = run_cli("peek", "ts_queue", "--all", "--json", cwd=workdir)
         messages = [json.loads(line) for line in out.strip().split("\n")]
-        middle_ts = messages[2]["timestamp"]
+        middle_ts = int(messages[2]["timestamp"])
 
         # Convert native timestamp to different formats
         # Timestamps are now: microseconds << 12
@@ -388,7 +388,7 @@ class TestTimestampFormats:
         # Get message 5 timestamp
         rc, out, _ = run_cli("peek", "mixed_queue", "--all", "--json", cwd=workdir)
         messages = [json.loads(line) for line in out.strip().split("\n")]
-        native_ts = messages[5]["timestamp"]
+        native_ts = int(messages[5]["timestamp"])
 
         # Convert to different formats
         us_after_epoch = native_ts >> 12
@@ -528,7 +528,7 @@ class TestErrorCases:
         run_cli("write", "boundary_queue", "test_message", cwd=workdir)
         rc, out, _ = run_cli("peek", "boundary_queue", "--json", cwd=workdir)
         assert rc == 0
-        ts = json.loads(out)["timestamp"]
+        ts = int(json.loads(out)["timestamp"])
 
         # Move with --after equal to the message timestamp -> expect empty
         rc, out, _ = run_cli(

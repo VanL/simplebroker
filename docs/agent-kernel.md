@@ -126,7 +126,9 @@ Normative identity, allocation, exact-ID, and preservation contract:
 `docs/specs/13-message-identity.md`
 [SB-ID-1]–[SB-ID-5].
 
-- Public id = hybrid timestamp integer (JSON field `timestamp`).
+- Public id = hybrid timestamp integer in storage and Python. SimpleBroker JSON
+  renders broker identity and high-water values as exact 19-digit ASCII decimal
+  strings (for message lines, field `timestamp`).
 - Generated ids are positive and equal generation time within ~4 µs encoding
   grain. ID `0` is reserved origin; exact selectors retain zero for legacy
   recovery only.
@@ -207,9 +209,9 @@ Normative: `docs/specs/15-persistence-io.md` `[SB-IO-1]`–`[SB-IO-5]`.
 
 ## Minimal use recipes
 
-Always pin the database in automation. The shell recipes below require
-**jq 1.7+**; jq 1.6 rounds 64-bit JSON message IDs and must not be used when an
-extracted `timestamp` is passed back to `broker`.
+Always pin the database in automation. JSON message IDs are strings; use
+`jq -r` to extract the exact digit text before passing a `timestamp` back to
+`broker`.
 
 ```bash
 DB="/path/to/.broker.db"   # or any explicit path
@@ -314,6 +316,10 @@ SimpleBroker will comply; your product will not.
   `peek_many(limit=N)`. Do **not** delete rows while that generator runs.
 - Put domain structure in **JSON bodies** (envelopes, control messages). The
   broker owns **order + id + durability**, not your schema.
+- When application-owned JSON includes a broker message ID or high-water value
+  returned as an integer, use package-root `simplebroker.format_message_id` at
+  that field. Built-in JSON already does this. See the
+  [Python embedding guide](guides/python.md#serializing-message-ids-in-application-json).
 - App state that is not a message stream (bookmarks, membership, monitors):
   prefer **sidecar** via `Queue.sidecar()` / `SidecarSession` from
   `simplebroker.ext` (`RESERVED_TABLE_NAMES` lists names you must not take),

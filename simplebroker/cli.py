@@ -244,7 +244,7 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
     write_parser.add_argument(
         "--json",
         action="store_true",
-        help='print {"timestamp": <id>} for the new message',
+        help='print {"timestamp": "<19-digit-id>"} for the new message',
     )
 
     # Read command

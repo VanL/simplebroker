@@ -1,8 +1,8 @@
-"""Common timestamp validation for tests."""
+"""Common JSON timestamp validation for tests."""
 
 
-def validate_timestamp(ts: int) -> None:
-    """Validate that a timestamp meets SimpleBroker specifications.
+def validate_timestamp(ts: object) -> None:
+    """Validate that a JSON timestamp meets SimpleBroker specifications.
 
     Timestamps are 64-bit hybrid values with:
     - Top 52 bits: nanoseconds after epoch (with bottom 12 bits cleared)
@@ -10,16 +10,15 @@ def validate_timestamp(ts: int) -> None:
 
     This produces 19-digit timestamps.
     """
-    assert isinstance(ts, int), f"Timestamp must be int, got {type(ts)}"
-    # Timestamps should be 19 digits (sometimes 18 for earlier dates)
-    assert 18 <= len(str(ts)) <= 19, (
-        f"Timestamp must be 18-19 digits, got {len(str(ts))} digits: {ts}"
-    )
+    assert isinstance(ts, str), f"Timestamp must be str, got {type(ts)}"
+    assert len(ts) == 19, f"Timestamp must be 19 digits, got {len(ts)}: {ts}"
+    assert ts.isascii() and ts.isdecimal(), f"Timestamp must be ASCII digits: {ts}"
 
     # Check reasonable range
     # Year 2020: ~1577836800 seconds * 1e9 nanoseconds ≈ 1.58e18
     # Year 2100: ~4102444800 seconds * 1e9 nanoseconds ≈ 4.10e18
     # Current time (2025): ~1754687000 seconds * 1e9 nanoseconds ≈ 1.75e18
-    assert 1_000_000_000_000_000_000 < ts < 5_000_000_000_000_000_000, (
-        f"Timestamp {ts} outside reasonable range (2020-2100)"
+    numeric = int(ts)
+    assert 1_000_000_000_000_000_000 < numeric < 5_000_000_000_000_000_000, (
+        f"Timestamp {numeric} outside reasonable range (2020-2100)"
     )

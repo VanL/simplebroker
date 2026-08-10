@@ -16,11 +16,13 @@ from reference_reactor import (
     BaseReactor,
     PendingOutput,
     Reactor,
+    WorkerResult,
     WorkItem,
     _read_json_messages,
     _send_control,
     _wait_for_control_reply,
     _write_json,
+    default_processor,
 )
 
 from simplebroker import Queue
@@ -32,6 +34,10 @@ CONTROL_IN = "reactor.control.in"
 CONTROL_OUT = "reactor.control.out"
 OUTBOX = "reactor.outbox"
 NEW_OUTBOX = "reactor.outbox.new"
+
+
+def _json_message_id(value: int) -> str:
+    return f"{value:019d}"
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +75,59 @@ def _make_reactor(
     )
 
 
+def test_reactor_json_envelopes_format_only_owned_broker_ids(tmp_path: Path) -> None:
+    message_id = 1234567890123456789
+    formatted = _json_message_id(message_id)
+    item = WorkItem(source_queue=INBOX_A, timestamp=message_id, body='{"work":1}')
+
+    processed = default_processor(item)
+    assert processed["input_timestamp"] == formatted
+
+    result_payload = json.loads(
+        Reactor._result_payload(
+            WorkerResult(
+                source_queue=INBOX_A,
+                timestamp=message_id,
+                value={"timestamp": message_id},
+            )
+        )
+    )
+    assert result_payload["input_timestamp"] == formatted
+    assert result_payload["value"]["timestamp"] == message_id
+
+    reactor = _make_reactor(tmp_path / "reactor-json.db", worker_count=1)
+    try:
+        with reactor._metadata_queue.sidecar(transaction=True) as session:
+            session.run(
+                """
+                INSERT INTO reactor_checkpoints
+                    (queue_name, last_processed_ts, updated_at_ns)
+                VALUES (?, ?, ?)
+                """,
+                (INBOX_A, message_id, time.time_ns()),
+            )
+        reactor._inflight.add((INBOX_B, message_id - 1))
+        _write_json(
+            reactor._managed_queue(CONTROL_IN),
+            {"command": "STATUS", "request_id": "json-contract"},
+        )
+
+        assert reactor._process_control_message() is True
+        response = _read_json_messages(
+            CONTROL_OUT,
+            tmp_path / "reactor-json.db",
+        )[0][0]
+
+        assert response["input_timestamp"].isascii()
+        assert len(response["input_timestamp"]) == 19
+        assert response["checkpoints"][INBOX_A] == formatted
+        assert response["live_inflight"] == [
+            {"queue": INBOX_B, "timestamp": _json_message_id(message_id - 1)}
+        ]
+    finally:
+        reactor.stop()
+
+
 def _wait_for_outputs(db_path: Path, count: int, *, timeout: float = 2.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -87,7 +146,7 @@ def _wait_for_control_reply_at_timestamp(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for payload, _timestamp in _read_json_messages(CONTROL_OUT, db_path):
-            if payload.get("input_timestamp") == input_timestamp:
+            if payload.get("input_timestamp") == _json_message_id(input_timestamp):
                 return payload
         time.sleep(0.01)
     raise TimeoutError(
@@ -443,7 +502,7 @@ def test_control_lane_is_peek_checkpointed_not_consumed(tmp_path: Path) -> None:
 
         _send_control(db_path, "STATUS", "status-1")
         status = _wait_for_control_reply(db_path, request_id="status-1")
-        assert status["checkpoints"][CONTROL_IN] >= ping_timestamps[0]
+        assert int(status["checkpoints"][CONTROL_IN]) >= ping_timestamps[0]
     finally:
         _send_control(db_path, "STOP", "stop-control")
         _wait_for_control_reply(db_path, request_id="stop-control")
@@ -1016,7 +1075,7 @@ def test_processor_error_publishes_error_envelope_and_advances_checkpoint(
             """,
             (INBOX_A,),
         )
-        assert rows == [(payload["input_timestamp"],)]
+        assert rows == [(int(payload["input_timestamp"]),)]
 
         time.sleep(0.1)
         assert len(_read_json_messages(OUTBOX, db_path)) == 1
@@ -1027,7 +1086,7 @@ def test_processor_error_publishes_error_envelope_and_advances_checkpoint(
             FROM reactor_seen
             WHERE source_queue = ? AND input_ts = ?
             """,
-            (INBOX_A, payload["input_timestamp"]),
+            (INBOX_A, int(payload["input_timestamp"])),
         )
         assert seen_rows == [("output_written",)]
     finally:
@@ -1062,7 +1121,7 @@ def test_non_json_processor_result_publishes_error_and_advances_checkpoint(
             """,
             (INBOX_A,),
         )
-        assert rows == [(payload["input_timestamp"],)]
+        assert rows == [(int(payload["input_timestamp"]),)]
         time.sleep(0.1)
         assert len(_read_json_messages(OUTBOX, db_path)) == 1
     finally:

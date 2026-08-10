@@ -7,8 +7,9 @@ format) is owned by the vertical specs; this document owns **which names are
 public**, how library failure and packaging differ from the CLI, and how
 surfaces relate.
 
-Document existing public promises only. This is not a redesign and not a
-complete third-party backend SDK.
+This contract began as recovery of existing public promises. Owner-approved
+revisions may add surfaces explicitly. It is not a complete third-party
+backend SDK.
 
 ## Public surfaces [SB-API-1]
 
@@ -16,7 +17,7 @@ Supported import surfaces:
 
 | Surface | Role |
 |---------|------|
-| `simplebroker` (`__all__`) | Primary embedder API: `Queue`, root watchers, targets, dump/load, config and activity waiters |
+| `simplebroker` (`__all__`) | Primary embedder API: `Queue`, root watchers, targets, dump/load, message-id formatting, config and activity waiters |
 | `simplebroker.ext` (`__all__`) | Embedder and shared extension facade: errors, sidecar, watch bases, project-config discovery, plugin types, advanced helpers |
 | `simplebroker.commands` (`__all__`) | CLI-equivalent functions (print + exit codes); second public surface, not package root |
 
@@ -29,8 +30,20 @@ public product surface. They may change in any release. First-party backends
 may import private modules under an exact pin and `backend_api_version`
 handshake; that does not make those modules public for ordinary embedders.
 
+The canonical public import for message-ID formatting is
+`simplebroker.format_message_id(value: int | str) -> str`. This clause owns
+that stable import path and callable shape. `[SB-ID-1]` owns the returned
+message-ID JSON representation; `[SB-ID-4]` owns accepted exact-ID forms and
+validation behavior.
+
+The helper has no storage effect and returns a scalar for use with an ordinary
+JSON encoder, not JSON text. Ordinary Queue and connection methods continue to
+return integer ids. The helper is not duplicated on `simplebroker.ext`, a
+stateful Queue or timestamp-generator method, or another public module.
+
 _Implementation mapping_:
 - `simplebroker/__init__.py`
+- `simplebroker/_message_id.py` (`format_message_id`)
 - `simplebroker/ext.py`
 - `simplebroker/commands.py`
 - `simplebroker/project.py`
@@ -294,7 +307,7 @@ boundary rather than in the storage layer:
 
 | Clause | Firing evidence |
 |--------|-----------------|
-| [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
+| [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
 | [SB-API-2] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_project_config.py`; `tests/test_ext_imports.py` (project-config identity) |
 | [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_python_library_api_contract_sb_api.py` (library-shape language + matrix); delivery/id/select/bcast suites for meaning |
@@ -309,6 +322,7 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
+- `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
 - `docs/plans/2026-08-06-pre-release-review-remediation-plan.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`

@@ -19,7 +19,15 @@ bound string forms are `[SB-CLI-5]`. Claim and delivery remain with
 ## Representation and identity [SB-ID-1]
 
 A stored message exposes one public message ID. JSON surfaces call this field
-`timestamp`. The id is an integer in `0 <= message_id < 2**63`.
+`timestamp`. In storage and ordinary Python APIs, the id is an integer in
+`0 <= message_id < 2**63`.
+
+The **message-id JSON string** is exactly **19 ASCII decimal digits**,
+left-padded with zeroes. Every SimpleBroker-owned JSON output that serializes a
+message id uses this string. JSON numbers are not emitted for message ids
+because generic JSON consumers cannot represent the full range exactly.
+Message bodies remain opaque application payload: SimpleBroker does not
+inspect or rewrite identity-like fields inside them.
 
 Broker-**generated** message ids are strictly positive. ID `0` is reserved as
 the lower-bound / empty high-water origin and is not valid for a newly
@@ -65,6 +73,11 @@ high-water or insert a row.
 Persisted `last_ts` is a database-global allocation high-water mark. It is not
 scoped to one queue, is not the id of the caller’s most recent write, and need
 not identify a current message row.
+
+When SimpleBroker serializes this high-water to JSON, its high-water JSON
+string uses the same representation as the message-id JSON string; the empty
+origin is `"0000000000000000000"`. Sharing the representation does not make
+high-water the identity of a current row.
 
 `Queue.last_ts` is a per-`Queue` cache of that global value and may be stale
 relative to other writers. The cache updates after `queue.write()` and
@@ -130,7 +143,7 @@ message id. It is the same message identity with the queue binding updated.
 | Contract area | Owner |
 |---------------|-------|
 | Hybrid encoding, monotonic allocation, generator cache, persisted high-water interaction | `simplebroker/_timestamp.py::TimestampGenerator` |
-| Exact-ID normalization | `simplebroker/_message_id.py::normalize_message_id` |
+| Exact-ID normalization and JSON formatting | `simplebroker/_message_id.py::normalize_message_id`; `simplebroker/_message_id.py::format_message_id` |
 | Exact-ID batch validation and required high-water computation | `simplebroker/_message_insert.py` |
 | SQL/core write, insertion, cache access, and move orchestration | `simplebroker/db.py::BrokerCore` |
 | Public queue write, `last_ts`, refresh, insert, and move surfaces | `simplebroker/sbqueue.py::Queue` |
@@ -144,14 +157,15 @@ message id. It is the same message identity with the queue binding updated.
 
 | Clause | Firing evidence |
 |--------|-----------------|
-| [SB-ID-1] | `tests/test_message_identity_contract_sb_id.py`; `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`; `tests/test_timestamp_edge_cases.py::TestTimestampEdgeCases::test_timestamp_magnitude_preservation`, `test_clock_regression_keeps_generator_monotonic`, `test_shared_timestamp_generator_serializes_threads`; `tests/test_timestamp_helpers.py::TestTimestampHelpers::test_db_generate_timestamp_monotonic`; `tests/test_write_returns_id.py::test_broker_write_ids_strictly_increase`; `tests/test_insert_messages.py::test_fresh_generated_message_id_is_positive_and_after_zero_visible`; `tests/test_message_id_validation.py::test_normalize_message_id_accepts_ints_and_exact_19_digit_strings`, `test_normalize_message_id_rejects_out_of_range_ints` |
+| [SB-ID-1] | `tests/test_message_identity_contract_sb_id.py`; `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`; `tests/test_timestamp_edge_cases.py::TestTimestampEdgeCases::test_timestamp_magnitude_preservation`, `test_clock_regression_keeps_generator_monotonic`, `test_shared_timestamp_generator_serializes_threads`; `tests/test_timestamp_helpers.py::TestTimestampHelpers::test_db_generate_timestamp_monotonic`; `tests/test_write_returns_id.py::test_broker_write_ids_strictly_increase`; `tests/test_insert_messages.py::test_fresh_generated_message_id_is_positive_and_after_zero_visible`; `tests/test_message_id_validation.py::test_format_message_id_preserves_unsafe_json_integer_exactly`, `test_format_message_id_returns_canonical_ascii_string`, `test_format_message_id_reuses_exact_id_validation`, `test_normalize_message_id_accepts_ints_and_exact_19_digit_strings`, `test_normalize_message_id_rejects_out_of_range_ints`; `tests/test_json_message_id_contract.py::test_core_identity_dict_fields_are_exhaustively_classified`, `test_shared_message_line_formats_id_without_rewriting_body`, `test_write_and_status_format_only_their_json_boundary`, `test_dump_formats_header_and_message_identity_fields`, `test_watcher_helper_formats_message_identity`, `test_adjacent_unsafe_ids_remain_distinct_after_json_parse` |
 | [SB-ID-2] | `tests/test_message_identity_contract_sb_id.py`; `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`; `tests/test_timestamp_helpers.py::TestTimestampHelpers::test_db_generate_timestamp_monotonic`, `test_queue_generate_timestamp_monotonic`; `tests/test_write_returns_id.py::test_broker_write_returns_committed_id`, `test_queue_write_returns_committed_id`, `test_retry_path_returns_surviving_row_id`, `test_retry_exhaustion_raises_without_returning`, `test_concurrent_writers_get_their_own_ids`, `test_write_return_id_remains_row_identity_after_global_last_ts_advances`; `tests/test_write_visibility.py::test_write_allocates_timestamp_inside_the_insert_transaction`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_write_script_rejects_stale_candidate_without_any_mutation`, `test_ordinary_write_retries_stale_local_candidate_above_reader_checkpoint`, `test_resync_cannot_overwrite_concurrent_high_water_backward`, `test_steady_state_ordinary_write_uses_one_data_eval`, `test_single_core_concurrent_writes_preserve_cross_writer_retry_budget`, `test_same_target_cores_serialize_candidate_reservation`; `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py::test_redis_write_fires_transition_table` |
-| [SB-ID-3] | `tests/test_message_identity_contract_sb_id.py`; `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`; `tests/test_queue_api_comprehensive.py::TestQueueLastTimestampCaching::test_last_ts_updates_after_generate_and_write`, `test_refresh_last_ts_detects_external_writes`; `tests/test_insert_messages.py::test_broker_insert_messages_loads_single_fresh_record_and_advances_last_ts`, `test_broker_insert_messages_accepts_current_generated_id`; `tests/test_latest_pending_timestamp.py::test_latest_pending_timestamp_ignores_generated_timestamp_without_row`; `tests/test_write_returns_id.py::test_write_return_id_remains_row_identity_after_global_last_ts_advances`; `extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py::test_resync_cannot_overwrite_concurrent_high_water_backward` |
+| [SB-ID-3] | `tests/test_message_identity_contract_sb_id.py`; `tests/test_core_persistence_transition_tables.py::test_timestamp_generator_fires_transition_table`; `tests/test_queue_api_comprehensive.py::TestQueueLastTimestampCaching::test_last_ts_updates_after_generate_and_write`, `test_refresh_last_ts_detects_external_writes`; `tests/test_insert_messages.py::test_broker_insert_messages_loads_single_fresh_record_and_advances_last_ts`, `test_broker_insert_messages_accepts_current_generated_id`; `tests/test_latest_pending_timestamp.py::test_latest_pending_timestamp_ignores_generated_timestamp_without_row`; `tests/test_write_returns_id.py::test_write_return_id_remains_row_identity_after_global_last_ts_advances`; `tests/test_json_message_id_contract.py::test_write_and_status_format_only_their_json_boundary`, `test_dump_formats_header_and_message_identity_fields`; `extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py::test_resync_cannot_overwrite_concurrent_high_water_backward` |
 | [SB-ID-4] | `tests/test_message_identity_contract_sb_id.py`; `tests/test_message_id_validation.py::test_normalize_message_id_accepts_ints_and_exact_19_digit_strings`, `test_normalize_message_id_rejects_malformed_strings`, `test_normalize_message_id_rejects_out_of_range_ints`, `test_normalize_message_id_rejects_non_id_types`; `tests/test_insert_messages.py::test_broker_insert_messages_loads_many_records_and_preserves_ids`, `test_broker_insert_messages_rejects_mixed_form_duplicate_ids_before_writes`, `test_broker_insert_messages_rolls_back_on_existing_duplicate`, `test_broker_insert_messages_accepts_exact_string_message_id`, `test_exact_insert_preflights_mixed_valid_invalid_batch_without_mutation`, `test_broker_insert_messages_empty_input_is_noop`, `test_broker_insert_messages_does_not_move_high_water_backward`, `test_broker_insert_messages_rejects_unadvanceable_high_water`, `test_far_future_exact_insert_can_stall_later_writes_until_clock_catches_up`, `test_broker_insert_messages_rejects_reserved_zero_before_mutation`, `test_broker_insert_messages_rejects_reserved_zero_in_mixed_batch`, `test_queue_insert_messages_rejects_reserved_zero`, `test_native_legacy_zero_remains_exactly_addressable_movable_and_deletable`; `tests/test_dump_load.py::test_load_rejects_reserved_zero_with_line_context_before_batch_flush` |
 | [SB-ID-5] | `tests/test_message_identity_contract_sb_id.py`; `tests/test_move_by_id.py::test_move_by_id_preserves_timestamp`, `test_move_many_preserves_original_message_ids`, `test_move_generator_preserves_original_message_ids_in_each_delivery_mode`; `tests/test_cli_move.py::TestEdgeCases::test_move_preserves_timestamps` |
 
 ## Related Plans
 
+- `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
 - retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-07-30-reserved-zero-and-redis-write-atomicity-plan — source

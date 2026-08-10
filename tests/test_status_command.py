@@ -62,7 +62,9 @@ class TestStatusCommand:
 
         payload = json.loads(out)
         assert payload["total_messages"] == 0
-        assert payload["last_timestamp"] == 0
+        assert payload["last_timestamp"] == "0000000000000000000"
+        assert type(payload["last_timestamp"]) is str
+        assert type(payload["total_messages"]) is int
         assert payload["db_size"] >= 0
 
     def test_status_mutually_exclusive(self, workdir):

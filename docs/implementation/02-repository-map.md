@@ -23,6 +23,7 @@ Quick pointers to the key guidance documents in this repository.
 |------|---------|
 | `simplebroker/` | The package: CLI (`__main__.py`), broker session, delivery, backends (`_backends/`), constants, maintenance |
 | `simplebroker/_broker_session.py` | Process-session identity, registry/refcount, admission and drain, per-thread core cache |
+| `simplebroker/_message_id.py` | Exact message-ID normalization and canonical JSON-string formatting |
 | `simplebroker/db.py` | Concrete process-session core factory, runner publication and checkout rollback, plus database operations |
 | `extensions/` | Optional extensions (Postgres support etc.) |
 | `examples/` | Runnable usage examples (async wrappers, multi-queue) — examples are claims; keep them working |
@@ -72,6 +73,7 @@ Quick pointers to the key guidance documents in this repository.
 | `docs/implementation/03-agent-inventory.md` | Current observed agent availability and review preference |
 | `docs/implementation/06-process-session-core-ownership.md` | Internal ownership and concurrency boundary between process sessions and concrete backend construction |
 | `docs/implementation/08-message-identity-and-write-visibility.md` | Reserved-zero insertion boundary and SQL/Redis ordinary-write visibility rationale |
+| `docs/implementation/11-json-message-id-boundary.md` | Integer-domain/string-wire boundary for broker identity JSON fields |
 | `docs/lessons.md` | Canonical lessons ledger |
 | `docs/coalescing.md` | Coalescing state: thresholds, watermarks, deferrals, run log |
 

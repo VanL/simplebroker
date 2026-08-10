@@ -43,8 +43,19 @@ FIRING_TESTS = {
             "test_fresh_generated_message_id_is_positive_and_after_zero_visible",
         },
         "tests/test_message_id_validation.py": {
+            "test_format_message_id_preserves_unsafe_json_integer_exactly",
+            "test_format_message_id_returns_canonical_ascii_string",
+            "test_format_message_id_reuses_exact_id_validation",
             "test_normalize_message_id_accepts_ints_and_exact_19_digit_strings",
             "test_normalize_message_id_rejects_out_of_range_ints",
+        },
+        "tests/test_json_message_id_contract.py": {
+            "test_core_identity_dict_fields_are_exhaustively_classified",
+            "test_shared_message_line_formats_id_without_rewriting_body",
+            "test_write_and_status_format_only_their_json_boundary",
+            "test_dump_formats_header_and_message_identity_fields",
+            "test_watcher_helper_formats_message_identity",
+            "test_adjacent_unsafe_ids_remain_distinct_after_json_parse",
         },
     },
     "SB-ID-2": {
@@ -98,6 +109,10 @@ FIRING_TESTS = {
         },
         "extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py": {
             "test_resync_cannot_overwrite_concurrent_high_water_backward",
+        },
+        "tests/test_json_message_id_contract.py": {
+            "test_write_and_status_format_only_their_json_boundary",
+            "test_dump_formats_header_and_message_identity_fields",
         },
     },
     "SB-ID-4": {

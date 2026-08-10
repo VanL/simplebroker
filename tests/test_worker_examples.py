@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from simplebroker import Queue
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SAFE_WORKER = REPO_ROOT / "examples" / "safe_worker.sh"
@@ -69,7 +72,7 @@ printf '%s\n' "$count" > "$BROKER_STATE"
 
 case "$BROKER_SCENARIO:$operation" in
     message:*|delete_failure:watch|delete_failure:peek)
-        printf '{{"message":"do work","timestamp":%s}}\n' "${{BROKER_MESSAGE_ID:-{MESSAGE_ID}}}"
+        printf '{{"message":"do work","timestamp":"%s"}}\n' "${{BROKER_MESSAGE_ID:-{MESSAGE_ID}}}"
         ;;
     delete_failure:delete)
         echo "simulated delete failure" >&2
@@ -96,14 +99,17 @@ case "$BROKER_SCENARIO:$operation" in
     invalid_json:watch|invalid_json:peek)
         printf '%s\n' '{{"message":'
         ;;
+    numeric_timestamp:watch|numeric_timestamp:peek)
+        printf '%s\n' '{{"message":"do work","timestamp":{MESSAGE_ID}}}'
+        ;;
     trailing_newlines:watch|trailing_newlines:peek)
-        printf '%s\n' '{{"message":"line one\\n\\n","timestamp":{MESSAGE_ID}}}'
+        printf '%s\n' '{{"message":"line one\\n\\n","timestamp":"{MESSAGE_ID}"}}'
         ;;
     nul_message:watch|nul_message:peek)
-        printf '%s\n' '{{"message":"before\\u0000after","timestamp":{MESSAGE_ID}}}'
+        printf '%s\n' '{{"message":"before\\u0000after","timestamp":"{MESSAGE_ID}"}}'
         ;;
     large_message:watch|large_message:peek)
-        python3 -c 'import json; print(json.dumps({{"message": "x" * (3 * 1024 * 1024), "timestamp": {MESSAGE_ID}}}))'
+        python3 -c 'import json; print(json.dumps({{"message": "x" * (3 * 1024 * 1024), "timestamp": "{MESSAGE_ID}"}}))'
         ;;
     *)
         echo "unexpected broker call: $*" >&2
@@ -376,8 +382,10 @@ def test_worker_uses_handler_status_when_success_handler_closes_stdin_early(
 
 
 @pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
-@pytest.mark.parametrize("message_id", ["0", "1", MAX_MESSAGE_ID])
-def test_worker_accepts_full_public_id_range_and_uses_canonical_cli_string(
+@pytest.mark.parametrize(
+    "message_id", ["0000000000000000000", "0000000000000000001", MAX_MESSAGE_ID]
+)
+def test_worker_accepts_full_public_id_range_as_canonical_json_string(
     script: Path,
     tmp_path: Path,
     worker_env: dict[str, str],
@@ -392,12 +400,12 @@ def test_worker_accepts_full_public_id_range_and_uses_canonical_cli_string(
 
     assert result.returncode == 1
     delete_argv = _broker_argv(worker_env)[1]
-    assert delete_argv[-1] == message_id.zfill(19)
+    assert delete_argv[-1] == message_id
 
 
 @pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
 @pytest.mark.parametrize("message_id", ["-1", str(2**63), "10000000000000000000"])
-def test_worker_rejects_ids_outside_public_integer_range(
+def test_worker_rejects_strings_outside_public_id_range(
     script: Path,
     tmp_path: Path,
     worker_env: dict[str, str],
@@ -409,41 +417,83 @@ def test_worker_rejects_ids_outside_public_integer_range(
     result = _run_worker(script, tmp_path, worker_env)
 
     assert result.returncode == 1
-    assert "invalid message ID" in result.stderr
+    assert "invalid" in result.stderr
     assert _calls(worker_env) == ["peek"]
     assert not Path(worker_env["HANDLER_CALL_LOG"]).exists()
 
 
 @pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
-def test_worker_rejects_jq_1_6_before_broker_call(
+def test_worker_rejects_numeric_timestamp_token(
     script: Path, tmp_path: Path, worker_env: dict[str, str]
 ) -> None:
-    fake_bin = tmp_path / "old-jq"
+    _set_handler(script, worker_env, "handler-ok")
+    worker_env["BROKER_SCENARIO"] = "numeric_timestamp"
+
+    result = _run_worker(script, tmp_path, worker_env)
+
+    assert result.returncode == 1
+    assert "invalid message JSON" in result.stderr
+    assert _calls(worker_env) == ["peek"]
+
+
+@pytest.mark.parametrize("script", [SAFE_WORKER, RESILIENT_WORKER])
+def test_worker_does_not_require_jq_1_7_for_message_id_precision(
+    script: Path, tmp_path: Path, worker_env: dict[str, str]
+) -> None:
+    real_jq = shutil.which("jq")
+    if real_jq is None:
+        pytest.skip("jq is required to exercise the published worker")
+    fake_bin = tmp_path / "jq-without-version"
     fake_bin.mkdir()
     _write_executable(
         fake_bin / "jq",
-        """#!/bin/bash
+        f"""#!/bin/bash
 if [ "${1:-}" = "--version" ]; then
-    echo jq-1.6
-    exit 0
+    echo "worker must not inspect jq version" >&2
+    exit 99
 fi
-exit 99
+exec "{real_jq}" "$@"
 """,
     )
     _set_handler(script, worker_env, "handler-ok")
+    worker_env["BROKER_SCENARIO"] = "delete_failure"
     worker_env["PATH"] = f"{fake_bin}:{worker_env['PATH']}"
 
     result = _run_worker(script, tmp_path, worker_env)
 
     assert result.returncode == 1
-    assert "jq 1.7" in result.stderr
-    assert _calls(worker_env) == []
+    assert "worker must not inspect jq version" not in result.stderr
+    assert _calls(worker_env) == ["peek", "delete"]
 
 
-def test_worker_docs_state_jq_version_floor() -> None:
+def test_safe_worker_consumes_real_broker_string_id_without_precision_loss(
+    tmp_path: Path,
+    worker_env: dict[str, str],
+) -> None:
+    real_broker = shutil.which("broker")
+    if real_broker is None:
+        pytest.skip("installed broker console script is required")
+    message_id = 1234567890123456789
+    with Queue("tasks", db_path=str(tmp_path / ".broker.db")) as queue:
+        queue.insert_messages([("real broker body", message_id)])
+
+    handler = Path(worker_env["HANDLER_CALL_LOG"]).parent / "bin" / "handler-fail"
+    worker_env["PROCESS_TASK"] = str(handler)
+    worker_env["PATH"] = f"{Path(real_broker).parent}:{os.environ['PATH']}"
+
+    result = _run_worker(SAFE_WORKER, tmp_path, worker_env)
+
+    assert result.returncode == 1
+    assert f"Processing message ID: {message_id}" in result.stdout
+    assert Path(worker_env["HANDLER_CALL_LOG"]).read_text(encoding="utf-8") == (
+        "real broker body"
+    )
+
+
+def test_worker_docs_do_not_state_obsolete_jq_precision_floor() -> None:
     for path in (REPO_ROOT / "README.md", EXAMPLES_README, AGENT_KERNEL):
         text = path.read_text(encoding="utf-8")
-        assert "jq 1.7+" in text
+        assert "jq 1.7+" not in text
 
 
 def test_resilient_worker_preserves_operational_peek_failure(
@@ -521,7 +571,7 @@ def test_resilient_worker_does_not_skip_id_behind_checkpoint(
     Path(worker_env["CHECKPOINT_FILE"]).write_text(MESSAGE_ID, encoding="utf-8")
     worker_env.update(
         {
-            "BROKER_MESSAGE_ID": "1",
+            "BROKER_MESSAGE_ID": "0000000000000000001",
             "BROKER_SCENARIO": "delete_failure",
             "PROCESS_EVENT": "handler-ok",
         }

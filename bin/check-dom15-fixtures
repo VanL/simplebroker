@@ -181,50 +181,64 @@ def self_test() -> int:
     for name, mutated in mutations.items():
         if not check(mutated):
             failures.append(f"mutation not caught: {name}")
-    # Fence probes go through extract_section — the real invocation path
-    # that strips fences; calling check() directly would bypass stripping
-    # and pass or fail vacuously.
-    def full_check(text: str) -> list[str]:
+
+    # Fence probes mirror the production extract/check path. Calling check()
+    # directly would bypass fence stripping and pass or fail vacuously.
+    def check_document(text: str) -> list[str]:
         section = extract_section(text)
         return ["no section"] if section is None else check(section)
 
-    # probe: fenced grammar mimicry must be inert
-    fenced = GOOD_SAMPLE + "\n```\n| bogus | 9 |\n```\n"
-    if full_check(fenced):
-        failures.append("fenced-block fixture text was not ignored")
-    # probe: a longer fence wrapping a shorter one must not leak its
-    # interior — a naive open/close toggle closes at the inner fence
-    nested = GOOD_SAMPLE + (
-        "\n````markdown\n```\n"
-        "| Fixture (trigger facts stated) | Class |\n"
-        "|---------|-------|\n"
-        "| nested-fence example | 9 |\n"
-        "````\n"
-    )
-    if full_check(nested):
-        failures.append("nested-fence interior leaked into the fixture table")
     bogus_table = (
         "| Fixture (trigger facts stated) | Class |\n"
         "|---------|-------|\n"
         "| probe row | 9 |\n"
     )
-    # probe: tilde fences strip like backtick fences
-    tilde = GOOD_SAMPLE + "\n~~~\n" + bogus_table + "~~~\n"
-    if full_check(tilde):
-        failures.append("tilde-fenced fixture text was not ignored")
-    # probe: a fence closes only on its own character
-    mismatch = GOOD_SAMPLE + "\n```\n~~~\n" + bogus_table + "```\n"
-    if full_check(mismatch):
-        failures.append("mismatched-character line closed a fence early")
-    # probe: a closer carrying an info string does not close
-    info_closer = GOOD_SAMPLE + "\n```\n``` markdown\n" + bogus_table + "```\n"
-    if full_check(info_closer):
-        failures.append("info-string line closed a fence early")
-    # probe: a 4-space-indented fence line is not a fence — the text
-    # after it must stay VISIBLE (this probe asserts non-stripping)
-    indented = GOOD_SAMPLE + "\n    ```\n" + bogus_table + "    ```\n"
-    if not full_check(indented):
-        failures.append("4-space-indented line was wrongly treated as a fence")
+    fence_probes = (
+        (
+            GOOD_SAMPLE + "\n```\n| bogus | 9 |\n```\n",
+            False,
+            "fenced-block fixture text was not ignored",
+        ),
+        # A longer outer fence wrapping a shorter one must not leak its
+        # interior. A naive open/close toggle closes at the inner fence.
+        (
+            GOOD_SAMPLE
+            + (
+                "\n````markdown\n```\n"
+                "| Fixture (trigger facts stated) | Class |\n"
+                "|---------|-------|\n"
+                "| nested-fence example | 9 |\n"
+                "````\n"
+            ),
+            False,
+            "nested-fence interior leaked into the fixture table",
+        ),
+        (
+            GOOD_SAMPLE + "\n~~~\n" + bogus_table + "~~~\n",
+            False,
+            "tilde-fenced fixture text was not ignored",
+        ),
+        (
+            GOOD_SAMPLE + "\n```\n~~~\n" + bogus_table + "```\n",
+            False,
+            "mismatched-character line closed a fence early",
+        ),
+        (
+            GOOD_SAMPLE + "\n```\n``` markdown\n" + bogus_table + "```\n",
+            False,
+            "info-string line closed a fence early",
+        ),
+        # A four-space-indented fence line is not a fence, so the bogus table
+        # must remain visible and produce problems.
+        (
+            GOOD_SAMPLE + "\n    ```\n" + bogus_table + "    ```\n",
+            True,
+            "4-space-indented line was wrongly treated as a fence",
+        ),
+    )
+    for document, expect_problems, failure in fence_probes:
+        if bool(check_document(document)) != expect_problems:
+            failures.append(failure)
     # probe: missing target is an invocation error, not a crash
     if run(["--spec", "/nonexistent/dom15-spec.md"]) != 2:
         failures.append("missing spec file did not exit with invocation-error class")

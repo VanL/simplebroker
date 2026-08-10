@@ -49,7 +49,9 @@ def test_write_json_prints_timestamp_only(workdir):
     assert code == 0, stderr
     payload = json.loads(stdout)
     assert set(payload) == {"timestamp"}
-    assert type(payload["timestamp"]) is int
+    assert type(payload["timestamp"]) is str
+    assert re.fullmatch(r"[0-9]{19}", payload["timestamp"])
+    assert re.search(r'"timestamp"\s*:\s*"[0-9]{19}"', stdout)
 
     code, out, _ = run_cli("read", "q", "--json", cwd=workdir)
     assert code == 0

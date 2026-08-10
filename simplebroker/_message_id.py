@@ -1,4 +1,4 @@
-"""Canonical validation for exact broker message IDs."""
+"""Canonical validation and JSON formatting for exact broker message IDs."""
 
 from __future__ import annotations
 
@@ -38,3 +38,8 @@ def normalize_message_id(value: object, *, name: str = "message_id") -> int:
             raise ValueError(INVALID_MESSAGE_ID_MESSAGE) from exc
 
     raise TypeError(f"{name} must be an int message ID or exact 19-digit string")
+
+
+def format_message_id(value: MessageIdInput) -> str:
+    """Return an exact message ID as 19 ASCII decimal digits."""
+    return f"{normalize_message_id(value):019d}"

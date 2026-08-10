@@ -143,6 +143,9 @@ def test_sb_cli_4_message_line_json_fields(workdir: Path) -> None:
     assert "message" in peek_obj
     assert "timestamp" in peek_obj
     assert peek_obj["message"] == "body-one"
+    assert isinstance(peek_obj["timestamp"], str)
+    assert re.fullmatch(r"[0-9]{19}", peek_obj["timestamp"])
+    assert re.search(r'"timestamp"\s*:\s*"[0-9]{19}"', peek_out)
 
     move_rc, move_out, move_err = run_cli(
         "-f", str(db), "move", "src", "dst", "--json", cwd=workdir
@@ -151,6 +154,9 @@ def test_sb_cli_4_message_line_json_fields(workdir: Path) -> None:
     move_obj = json.loads(move_out.splitlines()[0])
     assert "message" in move_obj
     assert "timestamp" in move_obj
+    assert isinstance(move_obj["timestamp"], str)
+    assert re.fullmatch(r"[0-9]{19}", move_obj["timestamp"])
+    assert re.search(r'"timestamp"\s*:\s*"[0-9]{19}"', move_out)
 
     list_rc, list_out, list_err = run_cli("-f", str(db), "list", "--json", cwd=workdir)
     assert list_rc == EXIT_SUCCESS, list_err

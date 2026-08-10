@@ -136,7 +136,10 @@ class TestProcessQueueFetch:
 
         assert rc == EXIT_SUCCESS
         payload = json.loads(capsys.readouterr().out)
-        assert payload == {"message": "hello", "timestamp": 111}
+        assert payload == {
+            "message": "hello",
+            "timestamp": "0000000000000000111",
+        }
 
     def test_all_messages_path(self, capsys):
         def fetch_one(**_kwargs):  # pragma: no cover - unused

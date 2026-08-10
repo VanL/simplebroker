@@ -68,7 +68,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from multi_queue_watcher import MultiQueueWatcher
 
-from simplebroker import Queue
+from simplebroker import Queue, format_message_id
 from simplebroker.ext import (
     IntegrityError,
     OperationalError,
@@ -124,7 +124,7 @@ def default_processor(item: WorkItem) -> JsonMapping:
 
     return {
         "source_queue": item.source_queue,
-        "input_timestamp": item.timestamp,
+        "input_timestamp": format_message_id(item.timestamp),
         "payload": payload,
         "processed_by": threading.current_thread().name,
     }
@@ -999,7 +999,7 @@ class Reactor(BaseReactor):
             response: dict[str, Any] = {
                 "request_id": None,
                 "command": command,
-                "input_timestamp": timestamp,
+                "input_timestamp": format_message_id(timestamp),
                 "ok": False,
                 "error": (
                     "control payload must be a JSON object or plain-text command"
@@ -1010,7 +1010,7 @@ class Reactor(BaseReactor):
             response = {
                 "request_id": payload.get("request_id"),
                 "command": command,
-                "input_timestamp": timestamp,
+                "input_timestamp": format_message_id(timestamp),
             }
 
             if command == "PING":
@@ -1018,9 +1018,15 @@ class Reactor(BaseReactor):
                 response["message"] = "PONG"
             elif command == "STATUS":
                 response["ok"] = True
-                response["checkpoints"] = self._load_checkpoints()
+                response["checkpoints"] = {
+                    queue_name: format_message_id(checkpoint)
+                    for queue_name, checkpoint in self._load_checkpoints().items()
+                }
                 response["live_inflight"] = [
-                    {"queue": queue_name, "timestamp": ts}
+                    {
+                        "queue": queue_name,
+                        "timestamp": format_message_id(ts),
+                    }
                     for queue_name, ts in sorted(self._inflight)
                 ]
                 response["published_outputs_live"] = self._outputs_published
@@ -1082,7 +1088,7 @@ class Reactor(BaseReactor):
     def _result_payload(result: WorkerResult) -> str:
         envelope = {
             "source_queue": result.source_queue,
-            "input_timestamp": result.timestamp,
+            "input_timestamp": format_message_id(result.timestamp),
             "ok": result.error is None,
             "value": result.value,
             "error": result.error,
@@ -1092,7 +1098,7 @@ class Reactor(BaseReactor):
         except (TypeError, ValueError) as exc:
             fallback = {
                 "source_queue": result.source_queue,
-                "input_timestamp": result.timestamp,
+                "input_timestamp": format_message_id(result.timestamp),
                 "ok": False,
                 "value": None,
                 "error": (

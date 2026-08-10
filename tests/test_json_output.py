@@ -369,7 +369,8 @@ def test_plain_text_timestamps_unchanged(workdir):
     assert parts[1] == "test message"
     # Timestamp should be a valid integer
     assert parts[0].isdigit()
-    validate_timestamp(int(parts[0]))
+    assert len(parts[0]) == 19
+    assert parts[0].isascii() and parts[0].isdecimal()
 
 
 def test_json_timestamp_edge_cases(workdir):
@@ -403,18 +404,19 @@ def test_json_timestamp_edge_cases(workdir):
         timestamps.append(ts)
 
         # Additional edge case checks
+        numeric_ts = int(ts)
+
         # Verify it's not at the exact boundaries (would be suspicious)
-        assert ts != 1_650_000_000_000_000_000
-        assert ts != 4_300_000_000_000_000_000
+        assert numeric_ts != 1_650_000_000_000_000_000
+        assert numeric_ts != 4_300_000_000_000_000_000
 
         # Verify string representation is exactly 19 digits
-        ts_str = str(ts)
-        assert len(ts_str) == 19
-        assert ts_str.isdigit()
+        assert len(ts) == 19
+        assert ts.isascii() and ts.isdecimal()
 
         # Verify it can be parsed back from string
-        parsed_ts = int(ts_str)
-        assert parsed_ts == ts
+        parsed_ts = int(ts)
+        assert f"{parsed_ts:019d}" == ts
 
     # Verify timestamps are unique and increasing
     assert len(set(timestamps)) == 5, "All timestamps should be unique"
@@ -422,7 +424,7 @@ def test_json_timestamp_edge_cases(workdir):
 
     # Verify reasonable timestamp differences (microsecond to second range)
     for i in range(1, len(timestamps)):
-        diff = timestamps[i] - timestamps[i - 1]
+        diff = int(timestamps[i]) - int(timestamps[i - 1])
         # Difference should be positive but not too large (< 1 minute)
         assert 0 < diff < (60 * 1_000_000 << 12), (
             f"Unexpected timestamp difference: {diff}"

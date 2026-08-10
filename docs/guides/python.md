@@ -114,6 +114,44 @@ must be between 1 and 1000. By default only pending messages are searched; pass
 can scan every message in the selected queue, so keep it out of hot request
 paths and prefer exact message IDs when possible.
 
+## Serializing message IDs in application JSON
+
+Queue, connection, and watcher callback APIs return broker message IDs and
+high-water values as Python integers. SimpleBroker's built-in JSON output
+already converts those values to the canonical string form. No caller action
+is needed for CLI JSON, dump output, or `json_print_handler`.
+
+When an application-owned JSON object includes one of those Python values,
+format the known identity field before passing the object to an ordinary JSON
+encoder:
+
+```python
+import json
+
+from simplebroker import format_message_id
+
+message_id = 1234567890123456789  # e.g. returned by Queue.write()
+document = json.dumps(
+    {
+        "source_message_id": format_message_id(message_id),
+    }
+)
+```
+
+`format_message_id` returns a scalar string, not quoted JSON text; the JSON
+encoder supplies the quotes. It accepts the exact-ID forms owned by
+[`[SB-ID-4]`](../specs/13-message-identity.md#exact-id-normalization-and-insertion-sb-id-4),
+while the returned JSON representation is owned by
+[`[SB-ID-1]`](../specs/13-message-identity.md#representation-and-identity-sb-id-1).
+Python and backend values remain integers.
+
+Convert explicitly where your code constructs a field known to carry a broker
+message ID or high-water value. Do not install a generic encoder or walk a
+mapping by names such as `timestamp` or `id`: that would also change opaque
+message bodies and unrelated application timestamps. The stable public import
+is `simplebroker.format_message_id`; the private implementation module and
+`simplebroker.ext` are not alternate import surfaces.
+
 ## Latest pending timestamp
 
 Use `Queue.latest_pending_timestamp()` when you need the newest pending

@@ -300,7 +300,7 @@ insert), and watch progress: `docs/specs/14-timestamp-selection.md`
 
 **Write options:**
 - `-t, --timestamps` - Print the new message's 19-digit timestamp ID on stdout
-- `--json` - Print `{"timestamp": <id>}` for the new message (the message body
+- `--json` - Print `{"timestamp": "<19-digit-id>"}` for the new message (the message body
   is not echoed back, unlike read/peek JSON)
 
 Place write output flags before the queue name (`broker write -t tasks "job"`).
@@ -404,19 +404,44 @@ polls one message at a time and acknowledges it by deleting its exact ID only
 after the configured `PROCESS_TASK` command succeeds. It exits on processing,
 acknowledgement, parse, or broker failure, so the current process cannot advance
 past a failed message. The Bash example preserves trailing newlines but rejects
-NUL payloads, which shell variables cannot represent. It requires jq 1.7+ to
-preserve 64-bit JSON message IDs exactly and streams bodies to the handler's
-standard input instead of placing them in process arguments. For concurrent workers, use the
+NUL payloads, which shell variables cannot represent. JSON message IDs are
+exact 19-digit strings, and the script validates that shape before streaming
+bodies to the handler's standard input. For concurrent workers, use the
 move-to-inflight recipe in
 [`docs/agent-kernel.md`](https://github.com/VanL/simplebroker/blob/main/docs/agent-kernel.md).
 
 ## Core Concepts
 
 ### Timestamps as Message IDs
-Every stored message has a public integer message ID, exposed as `timestamp`
-in JSON. Broker-generated IDs include a physical time component, but
-caller-supplied exact IDs need not represent creation time. Timestamps can be
-included in regular output by passing the `-t` / `--timestamps` flag.
+Every stored message has a public integer message ID. Python and storage keep
+that integer domain; SimpleBroker-owned JSON exposes it as an exact 19-digit
+ASCII decimal string (usually in `timestamp`). Broker-generated IDs include a
+physical time component, but caller-supplied exact IDs need not represent
+creation time. Timestamps can be included in regular output by passing the
+`-t` / `--timestamps` flag.
+
+Built-in SimpleBroker JSON already uses the canonical string. When JSON owned
+by your application includes a broker message ID or high-water value returned
+by the Python API, format that field through the public package-root helper:
+
+```python
+import json
+
+from simplebroker import format_message_id
+
+message_id = 1234567890123456789  # e.g. returned by Queue.write()
+document = json.dumps(
+    {
+        "source_message_id": format_message_id(message_id),
+    }
+)
+```
+
+The application-owned `source_message_id` name is illustrative. Convert only
+known broker identity fields in JSON you construct; do not rewrite message
+bodies or unrelated application timestamps. See the
+[Python embedding guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/python.md#serializing-message-ids-in-application-json)
+for the full boundary rules.
 
 Stored message IDs are:
 - **Unique within a backend** - No two stored rows share an ID.
@@ -473,9 +498,9 @@ flags.
 
 ### JSON for Safe Processing
 
-Messages with newlines or special characters can break shell pipelines. Use `--json` to avoid shell issues.
-Recipes that extract a JSON `timestamp` with jq and pass it back to `broker`
-require **jq 1.7+**; jq 1.6 rounds 64-bit message IDs.
+Messages with newlines or special characters can break shell pipelines. Use
+`--json` to avoid shell issues. JSON message IDs are strings, so `jq -r`
+extracts their exact digit text without numeric conversion.
 
 ```bash
 # Problem: newlines break line counting
@@ -486,7 +511,7 @@ $ broker read alerts | wc -l
 # Solution: JSON output (line-delimited)
 $ printf 'ERROR: Database connection failed\nRetrying in 5 seconds...' | broker write alerts -
 $ broker read alerts --json
-{"message": "ERROR: Database connection failed\nRetrying in 5 seconds...", "timestamp": 1837025672140161024}
+{"message": "ERROR: Database connection failed\nRetrying in 5 seconds...", "timestamp": "1837025672140161024"}
 
 # Parse safely with jq
 $ broker read alerts --json | jq -r '.message'
@@ -507,7 +532,7 @@ Normative specifications: `[SB-SELECT-2]` and (`[SB-SELECT-3]`. Full rules:
 ```bash
 # Continue after a previously seen id
 $ result=$(broker read tasks --json)
-$ last=$(echo "$result" | jq '.timestamp')
+$ last=$(echo "$result" | jq -r '.timestamp')
 $ broker read tasks --all --after "$last"
 
 # Human-readable bound (CLI string forms: [SB-CLI-5])
@@ -628,9 +653,9 @@ while true; do
         exit "$rc"                # broker failure is fatal
     fi
 
-    # Python preserves the integer exactly; jq 1.6 rounds 19-digit JSON numbers.
+    # Validate the exact string token before passing it back to the CLI.
     msg_id=$(printf '%s\n' "$msg_json" | python3 -c \
-        'import json, sys; v=json.load(sys.stdin)["timestamp"]; (type(v) is int and 0 <= v < 2**63) or sys.exit("invalid message ID"); print(f"{v:019d}")') || exit 1
+        'import json, sys; v=json.load(sys.stdin)["timestamp"]; (type(v) is str and len(v) == 19 and v.isascii() and v.isdecimal() and int(v) < 2**63) or sys.exit("invalid message ID"); print(v)') || exit 1
 
     if printf '%s\n' "$msg_json" | process_task_json; then
         broker delete tasks -m "$msg_id" >/dev/null || exit 1
@@ -671,7 +696,7 @@ $ broker watch tasks --peek
 
 # Watch with JSON output (timestamps always included)
 $ broker watch tasks --json
-{"message": "task 1", "timestamp": 1837025672140161024}
+{"message": "task 1", "timestamp": "1837025672140161024"}
 
 # Continuously drain one queue to another
 $ broker watch source_queue --move destination_queue

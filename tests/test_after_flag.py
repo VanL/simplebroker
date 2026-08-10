@@ -1289,7 +1289,7 @@ def test_after_with_json_and_timestamps(workdir):
     data = json.loads(lines[0])
     assert data["message"] == "new_message"
     assert "timestamp" in data
-    assert data["timestamp"] > old_ts
+    assert int(data["timestamp"]) > old_ts
 
 
 def test_after_single_message_mode(workdir):

@@ -55,7 +55,7 @@ When working with message queues:
 ### Bash Scripts
 
 - **[safe_worker.sh](safe_worker.sh)** - Single-consumer one-message peek-and-acknowledge loop
-  - Requires jq 1.7+ so 64-bit JSON message IDs are preserved exactly
+  - Validates SimpleBroker JSON message IDs as exact 19-digit strings
   - Set `PROCESS_TASK` to one executable command or path; the message is streamed to its standard input
   - One `broker peek --json` per message; delete by exact ID only after success
   - Exit on processing, acknowledgement, parse, or broker failure; only broker exit `2` means idle
@@ -99,6 +99,7 @@ When working with message queues:
   - Basic queue operations with `Queue` class (write, read, peek, move, delete)
   - Error handling patterns with retry logic
   - Custom watcher implementation with `QueueWatcher`
+  - Uses package-root `format_message_id` for a broker ID in application-owned JSON
   - Checkpoint-based processing
   - Thread-safe cleanup examples
   - **START HERE for Python usage**
@@ -121,6 +122,7 @@ When working with message queues:
   - Uses Python `queue.Queue` to pass broker-free work/results between threads
   - Keeps reactor-owned SimpleBroker handles and sidecar writes on the reactor thread
   - Demonstrates input checkpoints, result replay, audit sidecars, and control lanes
+  - Formats broker IDs at reactor-owned JSON envelope boundaries
   - Treats input, output, and control effects as at-least-once across restart
   - Relies on SimpleBroker for SQLite multi-process contention; reactor transactions stay short
   - Treats control replies as at-least-once and requires retention/compaction for long-running use
