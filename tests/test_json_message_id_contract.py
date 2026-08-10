@@ -79,7 +79,7 @@ def test_core_identity_dict_fields_are_exhaustively_classified() -> None:
 
     for path in sorted((ROOT / "simplebroker").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        _IdentityFieldVisitor(str(path.relative_to(ROOT)), observed).visit(tree)
+        _IdentityFieldVisitor(path.relative_to(ROOT).as_posix(), observed).visit(tree)
 
     expected = Counter(
         {
