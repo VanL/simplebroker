@@ -476,7 +476,8 @@ def test_safe_worker_consumes_real_broker_string_id_without_precision_loss(
     _write_executable(
         real_broker_bin / "broker",
         f"""#!/bin/bash
-exec {shlex.quote(sys.executable)} -m simplebroker "$@"
+exec env PYTHONPATH={shlex.quote(str(REPO_ROOT))} \
+    {shlex.quote(sys.executable)} -m simplebroker "$@"
 """,
     )
     message_id = 1234567890123456789
