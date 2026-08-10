@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -470,16 +471,21 @@ def test_safe_worker_consumes_real_broker_string_id_without_precision_loss(
     tmp_path: Path,
     worker_env: dict[str, str],
 ) -> None:
-    real_broker = shutil.which("broker")
-    if real_broker is None:
-        pytest.skip("installed broker console script is required")
+    real_broker_bin = tmp_path / "real-broker-bin"
+    real_broker_bin.mkdir()
+    _write_executable(
+        real_broker_bin / "broker",
+        f"""#!/bin/bash
+exec {shlex.quote(sys.executable)} -m simplebroker "$@"
+""",
+    )
     message_id = 1234567890123456789
     with Queue("tasks", db_path=str(tmp_path / ".broker.db")) as queue:
         queue.insert_messages([("real broker body", message_id)])
 
     handler = Path(worker_env["HANDLER_CALL_LOG"]).parent / "bin" / "handler-fail"
     worker_env["PROCESS_TASK"] = str(handler)
-    worker_env["PATH"] = f"{Path(real_broker).parent}:{os.environ['PATH']}"
+    worker_env["PATH"] = f"{real_broker_bin}:{os.environ['PATH']}"
 
     result = _run_worker(SAFE_WORKER, tmp_path, worker_env)
 
