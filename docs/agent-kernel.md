@@ -332,6 +332,10 @@ SimpleBroker will comply; your product will not.
   related hooks on `simplebroker.ext` (`ActivityWaiter`,
   `MultiQueueActivityWaiterHook`); Weft’s `MultiQueueWatcher` is a reference
   consumer. Prefer that over one OS process per queue by default.
+- Activity waiters are close-only leaf resources: close live references
+  directly; the first close is terminal and later closes are no-ops, including
+  after cleanup failure. See `[SB-API-6]` in
+  [`docs/specs/16-python-library-api.md`](specs/16-python-library-api.md).
 - Large payloads: respect message size limits; spill to files and store
   references (Weft spillover pattern).
 

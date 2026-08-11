@@ -49,6 +49,27 @@ The factory Protocol is private and owned by its caller in
 Backend packages do not implement it, and it is not exported through
 `simplebroker` or `simplebroker.ext`.
 
+### Lifecycle scope and activity waiters
+
+Lifecycle verbs describe the receiver's ownership scope, not a global type
+hierarchy. `close()` releases resources owned by a handle or runner.
+`shutdown()` is an optional stronger runner operation when that receiver owns
+shared or process-wide substrate; an implementation may alias the operations
+when the scopes coincide. `close_owned_runner()` prefers callable `shutdown()`
+and falls back to `close()`, but only at a SimpleBroker-owned runner boundary.
+An explicitly injected runner remains caller-owned.
+
+An `ActivityWaiter` sits below that boundary. It owns a backend activity
+registration or composite registration, not the runner, pool, listener
+substrate, or process session. It therefore exposes only `close()`. Terminal
+state lives on the waiter itself and is set before cleanup. This keeps direct
+defensive close calls safe without a caller-side identity ledger, including
+after the first close reports cleanup failure. PostgreSQL and Redis registry
+release remains a separate owned cleanup action from listener unregister, so
+both are attempted after an ordinary unregister failure when safe. The exact
+public failure order is owned by `[SB-API-6]`; backend API v6 makes that
+obligation enforceable at plugin resolution.
+
 Transaction-owner progress belongs to the runner, not the process session.
 When several thread-local cores share one runner, their separate core locks do
 not serialize a transaction. The runner must keep a successful transaction
@@ -152,6 +173,10 @@ When changing this area:
 ## Verification
 
 The core lifecycle proof is in `tests/test_process_broker_session.py`.
+Owned-runner verb selection is proved in `tests/test_runner_lifecycle.py`.
+Activity-waiter terminal transitions and cleanup order are proved in
+`extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py` and
+`extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`.
 First-party service-backed allocation proof is in:
 
 - `extensions/simplebroker_pg/tests/test_pg_integration.py`;
@@ -162,6 +187,7 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
+- `docs/plans/2026-08-11-activity-waiter-terminal-close-contract-plan.md`
 - retired: 2026-05-04-process-local-broker-session-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md`

@@ -21,6 +21,11 @@ the complete requested set, intentionally recreating a queue deleted before
 the broadcast lock is acquired. Selection and insertion occur in one
 PostgreSQL transaction.
 
+SimpleBroker 7.1.0 and `simplebroker-pg` 3.6.0 are the first coordinated
+backend API v6 set, which adds terminal activity-waiter close. Package
+dependency floors are minimums; the exact runtime handshake remains
+authoritative for every installed pair.
+
 Timestamp resynchronization uses a guarded compare-and-advance update. If a
 concurrent allocator publishes a higher durable `last_ts` after repair begins,
 the repair preserves that winner and refreshes its local cache from the
@@ -94,7 +99,10 @@ API.
 
 Wakeups are hints. After `wait(timeout)` returns `True`, callers should still
 drain queues through normal SimpleBroker reads or moves. Close the multi-queue
-waiter explicitly when the watcher lifecycle ends.
+waiter explicitly when the watcher lifecycle ends. Its first `close()` is
+terminal before cleanup; every later call is a no-op, including when the first
+call raised. The waiter owns registrations, not the runner or shared listener,
+and does not expose `shutdown()`.
 
 ## CLI Usage
 

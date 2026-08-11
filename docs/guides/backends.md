@@ -64,6 +64,19 @@ object yourself when you want several queues to share an injected backend.
 For `PostgresRunner`, call `runner.close()` or `runner.shutdown()` when you are
 done with the explicitly created runner so its connection pool is closed.
 
+Lifecycle verbs follow ownership scope. `close()` releases resources owned by
+the receiving handle or runner. A runner may also expose `shutdown()` when it
+owns shared or process-wide substrate beyond an ordinary handle release; the
+two methods may delegate when those scopes coincide. SimpleBroker-owned runner
+teardown prefers a callable `shutdown()` and otherwise calls `close()`.
+Explicit injection does not transfer ownership, so SimpleBroker does not tear
+down a caller-injected runner.
+
+An `ActivityWaiter` has the narrower leaf scope: it owns one registration or a
+composite set of registrations. It exposes terminal, idempotent `close()` and
+does not expose `shutdown()`. Backend API v6 requires every waiter hook to meet
+the terminal-close rules in `[SB-API-6]`.
+
 ## Selecting a backend with `.broker.toml`
 
 CLI/project usage is selected through a `.broker.toml` file in the project
@@ -98,6 +111,15 @@ Backend API v2 publicly exports `DeliveryGuarantee`,
 `validate_delivery_guarantee()`, `MaintenanceSchedule`, and
 `vacuum_is_eligible()` from `simplebroker.ext`. Backend packages must use these
 exports instead of importing their underscore-prefixed implementation modules.
+
+Backend API v6 makes activity-waiter lifecycle behavior part of the exact
+handshake. The waiter must become terminal before its first cleanup action,
+attempt every independently safe cleanup action after an ordinary failure,
+raise the first ordinary failure with later failures retained as ordered
+exception notes, and make every later close a no-op even when the first close
+raised. Core 7.1.0 and the first-party PostgreSQL and Redis/Valkey 3.6.0
+packages are the first coordinated v6 set. Older and newer backend API versions
+are rejected rather than run against unverified lifecycle semantics.
 
 There are two backend shapes:
 

@@ -5,6 +5,29 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `ActivityWaiter.close()` is now a terminal, idempotent public contract. The
+  first call marks the waiter closed before cleanup, attempts every
+  independently safe action after an ordinary failure, raises the first
+  failure with later failures retained as ordered exception notes, and makes
+  every later close a no-op even when the first call raised. Activity waiters
+  remain close-only leaf resources; runner `shutdown()` remains the optional
+  stronger verb for owned shared or process-wide substrate.
+- Advanced the exact backend-plugin handshake to API v6. Prepared coordinated
+  package metadata for SimpleBroker 7.1.0, `simplebroker-pg` 3.6.0, and
+  `simplebroker-redis` 3.6.0, with extension and root-extra floors aligned.
+  Tags and publication are not part of this unreleased change.
+
+### Fixed
+
+- PostgreSQL and Redis/Valkey waiters now attempt registry release after an
+  ordinary unregister failure. Redis multi-queue waiters now own a composite
+  terminal guard, attempt every child once on the first close, and retain
+  nested child cleanup failures in execution order.
+
 ## [7.0.1] - 2026-08-10
 
 ### Fixed

@@ -833,7 +833,11 @@ def test_repository_backend_api_v6_handshake_and_floors_match() -> None:
     assert release.BACKEND_API_MIN_CORE_VERSION[5] == "5.6.1"
     assert release.BACKEND_API_MIN_CORE_VERSION[6] == "7.1.0"
 
-    for extension in ("simplebroker_pg", "simplebroker_redis"):
+    extension_versions = {
+        "simplebroker_pg": "`simplebroker-pg` 3.6.0",
+        "simplebroker_redis": "`simplebroker-redis` 3.6.0",
+    }
+    for extension, version_text in extension_versions.items():
         readme = (
             release.PROJECT_ROOT / "extensions" / extension / "README.md"
         ).read_text(encoding="utf-8")
@@ -845,6 +849,11 @@ def test_repository_backend_api_v6_handshake_and_floors_match() -> None:
             in normalized_readme
         )
         assert "package version numbers do not match" in normalized_readme
+        assert "first coordinated backend API v6 set" in normalized_readme
+        assert "Package dependency floors are minimums" in normalized_readme
+        assert "exact runtime handshake remains authoritative" in normalized_readme
+        assert "SimpleBroker 7.1.0" in normalized_readme
+        assert version_text in normalized_readme
 
 
 def test_extension_core_floor_guard_rejects_too_low_floor(tmp_path: Path) -> None:

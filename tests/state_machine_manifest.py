@@ -54,6 +54,7 @@ INVENTORY_STATE_MACHINE_IDS = (
     "SM-SETUP-BUDGET",
     "SM-DELIVERY-POISON",
     "SM-POLLING",
+    "SM-ACTIVITY-WAITER",
     "SM-WATCHER-LIFECYCLE",
     "SM-CLI-WATCH",
     "SM-PG-LISTENER",
@@ -237,6 +238,17 @@ STATE_MACHINE_MANIFEST = (
         ),
         table_name="REDIS_ACTIVITY_LISTENER_TRANSITIONS",
         firing_test_name="test_redis_activity_listener_fires_transition_table",
+        component=ManifestComponent.REDIS,
+    ),
+    StateMachineEntry(
+        machine_id="SM-ACTIVITY-WAITER",
+        owner_module="simplebroker_redis.plugin",
+        owner_name="RedisMultiQueueActivityWaiter",
+        test_module=(
+            "extensions.simplebroker_redis.tests.test_redis_activity_waiter_lifecycle"
+        ),
+        table_name="ACTIVITY_WAITER_TRANSITIONS",
+        firing_test_name="test_activity_waiter_fires_transition_table",
         component=ManifestComponent.REDIS,
     ),
     StateMachineEntry(

@@ -599,6 +599,17 @@ waiter is only a wake hint: `wait(timeout)` means some watched queue may have
 changed, not that a message is guaranteed to be available. Close the returned
 waiter from the caller's watcher lifecycle; it is not owned by any one `Queue`.
 
+An activity waiter is a close-only leaf resource. Keep the live waiter
+reference and call `close()` directly; do not keep a set of Python `id()`
+values or another closed-object ledger. The first close is terminal before
+backend cleanup starts. It attempts every independently safe ordinary cleanup
+action, raises the first failure with later failures retained as exception
+notes, and leaves every later close as a no-op. This remains true when the
+first close raises, so calling `close()` again is not a cleanup retry. The
+strategy or caller must serialize `wait()`, replacement, transfer, and close.
+See `[SB-API-6]` in the
+[Python library contract](../specs/16-python-library-api.md#watchers-and-activity-waiters-sb-api-6).
+
 For watcher subclasses, `BaseWatcher` and `PollingStrategy` are exported from
 `simplebroker.ext`. If a subclass needs a custom native waiter, override
 `BaseWatcher._create_activity_waiter(queue)` instead of copying the watcher retry
@@ -619,7 +630,7 @@ try:
 except Exception:
     # Installation did not complete; the candidate is still caller-owned.
     if candidate is not None:
-        candidate.close()  # Apply the embedder's cleanup-error policy here.
+        candidate.close()  # Terminal even if this cleanup call raises.
     raise
 
 # Installation succeeded. The strategy owns candidate, and the caller owns
@@ -627,6 +638,11 @@ except Exception:
 if displaced is not None:
     displaced.close()
 ```
+
+No identity deduplication is required during handoff. If two owner paths
+defensively call `close()` on the same live waiter, the second call has no
+effect. Keep the live object reference for the handoff itself; Python `id()`
+is unique only during that object's lifetime and can be recycled later.
 
 `None` is a valid candidate and selects polling fallback, as it does for
 SQLite. PostgreSQL and Redis/Valkey return fixed-set waiters, so rebuild them

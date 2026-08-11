@@ -344,12 +344,12 @@ boundary rather than in the storage layer:
 | [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_python_library_api_contract_sb_api.py` (library-shape language + matrix); delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_delivery_contract_sb_delivery.py`; Queue generator / `*_many` suites |
-| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py` watcher contract; watcher suites |
+| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites |
 | [SB-API-7] | `tests/test_python_library_api_contract_sb_api.py`; sidecar suites under tests / examples |
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py` |
 | [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py` |
 | [SB-API-10] | `tests/test_public_surface.py`; `tests/test_python_library_api_contract_sb_api.py` |
-| [SB-API-11] | `tests/test_ext_imports.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_timestamp_bound_grammar.py` (public validator grammar) |
+| [SB-API-11] | `tests/test_python_library_api_contract_sb_api.py::test_api_owned_runner_lifecycle_and_backend_v6_contract`; `tests/test_runner_lifecycle.py`; `tests/test_backend_plugin_resolution.py`; `tests/test_release_script.py::test_repository_backend_api_v6_handshake_and_floors_match`; `tests/test_timestamp_bound_grammar.py` (public validator grammar) |
 | [SB-API-12] | `tests/test_python_library_api_contract_sb_api.py` (matrix present); kernel CLI↔Python map |
 
 ## Related Plans

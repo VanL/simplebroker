@@ -186,7 +186,9 @@ semantics are not interchangeable.
 
 All 30 reviewed seed entries are confirmed machines. `SM-REDIS-WRITE` was
 added by the reserved-zero and Redis write-atomicity plan after the seed
-inventory, bringing the current inventory to 31. None is merged or
+inventory, bringing that inventory to 31. `SM-ACTIVITY-WAITER` was added by
+the terminal activity-waiter lifecycle plan, bringing the current inventory
+to 32. None is merged or
 reclassified as a non-machine. The detailed inventory preserves the baseline
 classification evidence and original table candidates for audit history; its
 candidate column is not the current ownership source. The executable ownership
@@ -201,6 +203,7 @@ table and manifest below are authoritative for the completed implementation.
 | `SM-CONNECTION`, `SM-PROCESS-SESSION`, `SM-DELIVERY-POISON` | `tests/test_connection_transition_tables.py` |
 | `SM-SETUP-BUDGET` | `tests/test_retry_policy_coverage.py` |
 | `SM-POLLING`, `SM-WATCHER-LIFECYCLE`, `SM-CLI-WATCH` | `tests/test_watcher_transition_tables.py` |
+| `SM-ACTIVITY-WAITER` | `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py` |
 | `SM-PG-LISTENER`, `SM-PG-VACUUM` | `extensions/simplebroker_pg/tests/test_pg_state_machine_transitions.py` |
 | `SM-REDIS-BROADCAST`, `SM-REDIS-WRITE`, `SM-REDIS-ACTIVITY-LISTENER`, `SM-REDIS-RUNNER` | `extensions/simplebroker_redis/tests/test_redis_state_machine_transitions.py` |
 | `SM-COVERAGE-SETTLEMENT`, `SM-CLI-COVERAGE` | `tests/test_dev_scripts.py` |
@@ -214,8 +217,8 @@ table and manifest below are authoritative for the completed implementation.
 | `SM-SIGINT-PROBE` | `tests/test_watcher_sigint_probe_transitions.py` |
 
 `tests/state_machine_manifest.py` marks coverage `COMPLETE`.
-`tests/test_state_machine_policy.py` requires exact equality among these 31
-inventory IDs, the 31 manifest entries, and the implementation-map inventory.
+`tests/test_state_machine_policy.py` requires exact equality among these 32
+inventory IDs, the 32 manifest entries, and the implementation-map inventory.
 The example and reusable-protocol slice contains 74 firing rows; this includes
 15 `SM-REACTOR` rows and 7 `SM-REACTOR-OUTPUT` rows. Failure rows inject below
 the real persistent-state owner so the owner's rollback and replay behavior
@@ -233,6 +236,7 @@ remain observable.
 | `SM-SETUP-BUDGET` (confirmed) | `simplebroker/_retry_policy.py::SetupProgressBudget` | `tests/test_retry_policy_coverage.py` | retry-policy coverage and runner setup/error suites | Last-progress time and idle budget persist across setup operations and choose wait, refresh, timeout, or cancellation. |
 | `SM-DELIVERY-POISON` (confirmed) | `simplebroker/db.py` sidecar and transactional-generator ownership | `tests/test_cross_thread_finalization_poisoning.py` | cross-thread poisoning, generator, and released-backend probe suites | Owner identity, suspended transaction, poison, and first cause govern legal `next`, `throw`, `close`, commit, and rollback effects across threads and yields. |
 | `SM-POLLING` (confirmed) | `simplebroker/watcher.py::PollingStrategy` | `tests/test_watcher.py` | watcher, burst-mode, edge-case, stop, and race suites | Waiter identity, burst/backoff phase, activity hints, and stop state persist across waits and callbacks. |
+| `SM-ACTIVITY-WAITER` (confirmed) | First-party concrete waiter `_closed` state; manifest representative `simplebroker_redis.plugin.RedisMultiQueueActivityWaiter` | Redis real-waiter lifecycle transition table | PostgreSQL and Redis real-waiter lifecycle suites; PostgreSQL notify and Redis integration replacement tests | Resource-local open/closed state governs whether cleanup may run. The first close transitions to terminal before cleanup; ordinary failures preserve all independently safe cleanup attempts and ordered failure evidence, while interruptions stop the current attempt. Every later close is a no-op. |
 | `SM-WATCHER-LIFECYCLE` (confirmed) | `simplebroker/watcher.py::BaseWatcher` | watcher lifecycle table beside `tests/test_watcher.py` | watcher lifecycle, cleanup, edge-case, concurrency, stop, and race suites | Thread state, waiter attachment, retry state, terminal exception propagation, and stop state govern legal start, run, stop, join, and cleanup calls. |
 | `SM-CLI-WATCH` (confirmed) | `simplebroker/commands.py::cmd_watch` callback and output lifecycle | `tests/test_cli_watch.py` | `tests/test_cli_watch.py`; watcher subprocess and command-helper suites | Callback results, one-time warning, output health, interrupt state, and watcher cleanup persist across callbacks and shutdown. |
 | `SM-PG-LISTENER` (confirmed) | `extensions/simplebroker_pg/simplebroker_pg/runner.py::_SharedActivityListener` | PostgreSQL notify/lifecycle table | PostgreSQL notify and runner-lifecycle suites | Readiness, registrations, listener-thread failure, notification routing, and closed state persist across callbacks and threads. |
@@ -286,5 +290,6 @@ findings must update source, registry, and policy evidence atomically.
 
 ## Related Plan
 
+- `docs/plans/2026-08-11-activity-waiter-terminal-close-contract-plan.md`
 - `docs/plans/2026-08-04-cmd-watch-locality-plan.md`
 - `docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md`

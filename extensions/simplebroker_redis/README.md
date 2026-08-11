@@ -78,6 +78,11 @@ registry selection is required.
 Exact-target broadcast requires backend API v5: SimpleBroker 5.6.1 or newer
 and `simplebroker-redis` 3.3.1 or newer.
 
+SimpleBroker 7.1.0 and `simplebroker-redis` 3.6.0 are the first coordinated
+backend API v6 set, which adds terminal activity-waiter close. Package
+dependency floors are minimums; the exact runtime handshake remains
+authoritative for every installed pair.
+
 ## Core Compatibility
 
 This first-party extension moves in lockstep with the SimpleBroker backend
@@ -93,3 +98,17 @@ an install-time minimum; the runtime handshake is the authoritative interface
 check. Install the extension through the core release's `redis` extra. See the
 [backend authoring guide](https://github.com/VanL/simplebroker/blob/main/docs/guides/backends.md#backend-authoring)
 for the handshake boundary.
+
+## Multi-Queue Activity Waiters
+
+Redis/Valkey supports
+`simplebroker.create_activity_waiter_for_queues(...)` with queue-scoped
+Pub/Sub registrations. Wakeups are hints; callers still drain queues through
+normal SimpleBroker operations.
+
+Close the waiter explicitly when its watcher lifecycle ends. The first
+`close()` marks the composite terminal before closing its children, attempts
+every independently safe ordinary cleanup, and raises the first failure with
+later failures retained as ordered exception notes. Every later close is a
+no-op, including when the first call raised. The waiter owns registrations,
+not the runner or shared Pub/Sub listener, and does not expose `shutdown()`.
