@@ -95,6 +95,13 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-11: Promoting a discarded Boolean wait to a raising assertion is
+  assertion activation, not a mechanical syntax change. Revalidate the old
+  predicate against the state the test owns. A poll-count threshold can time
+  out on a slower runner even after the recorded schedule proves the intended
+  transition; keep the deadline as a deadlock valve and replace scheduler-turn
+  counts with causal state evidence. (GitHub jobs `93860421794` and
+  `93860422397`.)
 - 2026-08-07: `multiprocessing.Pool`'s context manager terminates workers even
   after successful work. With coverage subprocess tracing and SIGTERM saving,
   that signal can re-enter `coverage.stop()` while its monitoring lock is held,

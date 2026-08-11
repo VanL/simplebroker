@@ -85,6 +85,11 @@ def _polling_diagnostics(
     }
 
 
+def _has_entered_backoff(delays: list[float]) -> bool:
+    """Return whether an idle schedule has left zero-delay burst polling."""
+    return bool(delays) and delays[-1] > 0
+
+
 def make_recorded_watcher(
     queue: str,
     handler,
@@ -111,6 +116,14 @@ def make_recorded_watcher(
         **kwargs,
     )
     return watcher, strategy
+
+
+def test_backoff_evidence_does_not_depend_on_poll_throughput() -> None:
+    """Recognize backoff from state evidence, not scheduler turns."""
+    assert not _has_entered_backoff([])
+    assert not _has_entered_backoff([0.0, 0.0])
+    assert _has_entered_backoff([0.0] * 5 + [0.0001])
+    assert not _has_entered_backoff([0.0001, 0.0])
 
 
 def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
@@ -773,11 +786,7 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:  # noqa
 
         # Phase 2: Wait for backoff (non-zero delays)
         def has_backed_off():
-            if len(strategy.delay_history) < 120:  # Need enough history
-                return False
-            # Check recent delays are non-zero
-            recent = strategy.delay_history[-10:]
-            return all(d > 0 for d in recent)
+            return _has_entered_backoff(strategy.get_delay_history())
 
         drive_until(
             has_backed_off,
