@@ -104,6 +104,9 @@ def _collected_nodes(relative_path: str, marker: str | None = None) -> set[str]:
     if marker is not None:
         command.extend(("-m", marker))
     env = os.environ.copy()
+    # Collection is an owned subprocess operation.  Do not let the parent
+    # suite's runner/verbosity flags change its output protocol.
+    env.pop("PYTEST_ADDOPTS", None)
     source_roots = [
         str(ROOT / "extensions" / "simplebroker_pg"),
         str(ROOT / "extensions" / "simplebroker_redis"),
