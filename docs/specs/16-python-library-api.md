@@ -145,6 +145,24 @@ Public watch embedding surface:
 | Package root | `QueueWatcher`, `QueueMoveWatcher`, `create_activity_waiter_for_queues`, `ActivityWaiter` |
 | `simplebroker.ext` | `BaseWatcher`, `PollingStrategy`, `StopWatching`, `default_error_handler` |
 
+An `ActivityWaiter` is a close-only leaf resource. It owns one backend
+activity registration or one composite set of registrations; it does not own
+the runner or shared process substrate and does not expose `shutdown()`.
+
+The waiter owner must serialize `wait()`, replacement or ownership transfer,
+and `close()`. This contract does not make `wait()` and `close()` safe to run
+concurrently, and it does not define `wait()` behavior after close.
+
+`ActivityWaiter.close()` is terminal and idempotent. The first invocation
+marks the waiter closed before backend cleanup begins. During that invocation
+it attempts every owned cleanup action that remains safe to attempt
+independently after an ordinary `Exception`. It then raises the first such
+exception and retains later cleanup exceptions, in cleanup order, as PEP 678
+exception notes added with `BaseException.add_note()`. Every later invocation
+returns without effect, including when the first invocation raised; it does
+not retry partial cleanup. A `BaseException` outside `Exception` propagates
+immediately, while the waiter remains terminal.
+
 Watch **modes** (consume, peek, move) and claim/progress rules are
 `[SB-DELIVERY-2]` (and related delivery clauses). This clause owns the public
 types used to run and subclass watchers and multi-queue activity waiting.
@@ -248,6 +266,20 @@ a full alternate backend may still require private modules under pin and the
 `backend_api_version` handshake described in the `simplebroker.ext` module
 docstring.
 
+Lifecycle verbs follow ownership scope. `close()` releases resources owned by
+the receiving handle or runner. `shutdown()` is the optional stronger
+operation when that receiver owns shared or process-wide substrate beyond an
+ordinary handle release. An implementation may make one delegate to the other
+when those scopes coincide.
+
+SimpleBroker-owned runner teardown calls callable `shutdown()` when present
+and otherwise calls `close()`. This preference does not transfer ownership of
+an explicitly injected runner from its caller to SimpleBroker.
+
+Backend API v6 requires every waiter returned by a backend activity-waiter hook
+to satisfy `[SB-API-6]` terminal close semantics. Core rejects older or newer
+backend API versions through the existing exact-version handshake.
+
 `TimestampGenerator.validate()` is the public string-parser surface for
 timestamp bounds. Its accepted and rejected spellings are the three grammars in
 `[SB-CLI-5]`; library methods whose `after_timestamp` / `before_timestamp`
@@ -322,6 +354,7 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
+- `docs/plans/2026-08-11-activity-waiter-terminal-close-contract-plan.md`
 - `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
 - `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
 - `docs/plans/2026-08-06-pre-release-review-remediation-plan.md`
