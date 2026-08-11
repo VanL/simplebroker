@@ -308,6 +308,11 @@ def test_polling_strategy_replaces_postgres_waiter_for_dynamic_queue_set(
             1,
             [{"alpha", "charlie"}],
         )
+        displaced.close()
+        assert _listener_fan_in_state(candidate) == (
+            1,
+            [{"alpha", "charlie"}],
+        )
 
         queue_c_writer.write("added")
         strategy.wait_for_activity()
@@ -315,6 +320,8 @@ def test_polling_strategy_replaces_postgres_waiter_for_dynamic_queue_set(
 
         strategy.close()
         assert candidate._closed is True
+        assert _listener_fan_in_state(candidate)[0] == 0
+        candidate.close()
         assert _listener_fan_in_state(candidate)[0] == 0
     finally:
         strategy.close()

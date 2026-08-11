@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .metadata import QueueRenameResult, QueueStats
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
-BACKEND_API_VERSION: Final[int] = 5
+BACKEND_API_VERSION: Final[int] = 6
 DEFAULT_BACKEND_NAME = "sqlite"
 FIRST_PARTY_BACKEND_PACKAGES: Final[dict[str, str]] = {
     "postgres": "simplebroker-pg",
@@ -486,8 +486,13 @@ class BrokerConnection(Protocol):
 class ActivityWaiter(Protocol):
     """Optional backend-native waiter used to wake idle watchers.
 
-    ``close()`` must be idempotent. First-party waiters satisfy this contract;
-    custom backend waiters must also tolerate repeated defensive close calls.
+    ``close()`` is terminal and idempotent. Its first invocation marks the
+    waiter closed before backend cleanup and attempts each independently safe
+    cleanup action, preserving the first ordinary error and noting later ones.
+    Every later invocation is a no-op, even when the first raised; it does not
+    retry partial cleanup. The owner serializes ``wait()`` and ``close()``.
+    Waiters own registrations, not the runner substrate, and do not expose
+    ``shutdown()``. See ``[SB-API-6]`` for the normative contract.
     """
 
     def wait(self, timeout: float) -> bool: ...

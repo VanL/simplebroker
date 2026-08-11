@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote
@@ -39,6 +39,29 @@ from .validation import (
 def _is_stop_event_set(stop_event: Any) -> bool:
     is_set = getattr(stop_event, "is_set", None)
     return bool(callable(is_set) and is_set())
+
+
+def _run_activity_waiter_cleanup(actions: Iterable[Callable[[], None]]) -> None:
+    first_error: Exception | None = None
+    for action in actions:
+        try:
+            action()
+        except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-035] exception
+            if first_error is None:
+                first_error = error
+            else:
+                later_notes = (
+                    ()
+                    if error is first_error
+                    else tuple(getattr(error, "__notes__", ()))
+                )
+                first_error.add_note(
+                    f"cleanup failure: {type(error).__qualname__}: {error}"
+                )
+                for note in later_notes:
+                    first_error.add_note(note)
+    if first_error is not None:
+        raise first_error
 
 
 def _text(value: object, default: str = "") -> str:
@@ -271,14 +294,19 @@ class RedisActivityWaiter:
         if self._closed:
             return
         self._closed = True
-        self._listener.unregister(self._registration.queue_name)
-        _activity_registry.release(self._listener)
+        _run_activity_waiter_cleanup(
+            (
+                lambda: self._listener.unregister(self._registration.queue_name),
+                lambda: _activity_registry.release(self._listener),
+            )
+        )
 
 
 class RedisMultiQueueActivityWaiter:
     def __init__(self, waiters: Sequence[RedisActivityWaiter], stop_event: Any) -> None:
         self._waiters = list(waiters)
         self._stop_event = stop_event
+        self._closed = False
 
     def wait(self, timeout: float) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)
@@ -293,8 +321,10 @@ class RedisMultiQueueActivityWaiter:
         return False
 
     def close(self) -> None:
-        for waiter in self._waiters:
-            waiter.close()
+        if self._closed:
+            return
+        self._closed = True
+        _run_activity_waiter_cleanup(waiter.close for waiter in self._waiters)
 
 
 class _RedisActivityRegistry:
@@ -328,7 +358,7 @@ class RedisBackendPlugin:
     """SimpleBroker backend plugin for Valkey/Redis."""
 
     name = "redis"
-    backend_api_version = 5
+    backend_api_version = 6
     schema_version = REDIS_SCHEMA_VERSION
     sql = None
     is_direct_backend = True

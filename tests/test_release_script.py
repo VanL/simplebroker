@@ -824,13 +824,14 @@ def test_extension_core_floor_guard_accepts_required_floor(tmp_path: Path) -> No
     )
 
 
-def test_repository_backend_api_v5_handshake_and_floors_match() -> None:
+def test_repository_backend_api_v6_handshake_and_floors_match() -> None:
     release.require_backend_api_versions_match()
     release.require_extension_core_floors_for_backend_api()
 
-    assert release.read_core_backend_api_version() == 5
+    assert release.read_core_backend_api_version() == 6
     assert release.BACKEND_API_MIN_CORE_VERSION[4] == "5.6.0"
     assert release.BACKEND_API_MIN_CORE_VERSION[5] == "5.6.1"
+    assert release.BACKEND_API_MIN_CORE_VERSION[6] == "7.1.0"
 
     for extension in ("simplebroker_pg", "simplebroker_redis"):
         readme = (

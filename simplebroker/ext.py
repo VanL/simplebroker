@@ -41,6 +41,13 @@ Direct backends must preserve existing-only selection by default and insert
 into the full requested exact set when creation is enabled. All v4 plugins,
 including SQL-namespace plugins whose SQL hook is otherwise unchanged, are
 rejected by the exact-version handshake.
+
+Backend API v6 requires waiter hooks to return close-only resources whose
+first ``close()`` is terminal before cleanup begins. Later calls are no-ops,
+including after an ordinary cleanup failure. The first call attempts every
+independently safe cleanup action, raises the first ordinary failure, and
+retains later failures as ordered exception notes. All v5 plugins are rejected
+by the exact-version handshake.
 """
 
 from ._backend_plugins import (

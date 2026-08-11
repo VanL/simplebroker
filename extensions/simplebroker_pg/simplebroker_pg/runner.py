@@ -27,6 +27,29 @@ _DEFAULT_MIN_SIZE = 0
 _DEFAULT_MAX_SIZE = 16
 
 
+def _run_activity_waiter_cleanup(actions: Iterable[Callable[[], None]]) -> None:
+    first_error: Exception | None = None
+    for action in actions:
+        try:
+            action()
+        except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-035] exception
+            if first_error is None:
+                first_error = error
+            else:
+                later_notes = (
+                    ()
+                    if error is first_error
+                    else tuple(getattr(error, "__notes__", ()))
+                )
+                first_error.add_note(
+                    f"cleanup failure: {type(error).__qualname__}: {error}"
+                )
+                for note in later_notes:
+                    first_error.add_note(note)
+    if first_error is not None:
+        raise first_error
+
+
 @dataclass(frozen=True, slots=True)
 class RunnerMetaState:
     """Cached broker metadata for one schema-bound runner."""
@@ -439,8 +462,15 @@ class PostgresActivityWaiter:
         if self._closed:
             return
         self._closed = True
-        self._listener.unregister_queue(self._queue_name)
-        _activity_registry.release(self._dsn, schema=self._schema)
+        _run_activity_waiter_cleanup(
+            (
+                lambda: self._listener.unregister_queue(self._queue_name),
+                lambda: _activity_registry.release(
+                    self._dsn,
+                    schema=self._schema,
+                ),
+            )
+        )
 
 
 class PostgresMultiQueueActivityWaiter:
@@ -508,8 +538,15 @@ class PostgresMultiQueueActivityWaiter:
         if self._closed:
             return
         self._closed = True
-        self._listener.unregister_queue_set(self._fan_in_id)
-        _activity_registry.release(self._dsn, schema=self._schema)
+        _run_activity_waiter_cleanup(
+            (
+                lambda: self._listener.unregister_queue_set(self._fan_in_id),
+                lambda: _activity_registry.release(
+                    self._dsn,
+                    schema=self._schema,
+                ),
+            )
+        )
 
 
 class PostgresRunner:

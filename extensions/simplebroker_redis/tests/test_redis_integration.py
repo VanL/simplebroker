@@ -883,6 +883,8 @@ def test_polling_strategy_replaces_redis_waiter_for_dynamic_queue_set(
         displaced = replaced
 
         assert displaced is old_waiter
+        assert old_waiter._closed is False
+        assert candidate._closed is False
         assert all(child._closed is False for child in old_waiter._waiters)
         assert all(child._closed is False for child in candidate._waiters)
 
@@ -892,7 +894,12 @@ def test_polling_strategy_replaces_redis_waiter_for_dynamic_queue_set(
         assert strategy.consume_native_activity_hint() is False
 
         displaced.close()
+        assert displaced._closed is True
         assert all(child._closed is True for child in displaced._waiters)
+        displaced.close()
+        assert displaced._closed is True
+        assert all(child._closed is True for child in displaced._waiters)
+        assert candidate._closed is False
         assert all(child._closed is False for child in candidate._waiters)
 
         queue_c.write("added")
@@ -900,6 +907,10 @@ def test_polling_strategy_replaces_redis_waiter_for_dynamic_queue_set(
         assert strategy.consume_native_activity_hint() is True
 
         strategy.close()
+        assert candidate._closed is True
+        assert all(child._closed is True for child in candidate._waiters)
+        candidate.close()
+        assert candidate._closed is True
         assert all(child._closed is True for child in candidate._waiters)
     finally:
         strategy.close()

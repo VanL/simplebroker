@@ -159,6 +159,21 @@ def test_api_generators_watchers_sidecar_io_errors_language() -> None:
     assert "message text" in errors.lower() or "not a frozen" in errors.lower()
 
 
+def test_api_activity_waiter_terminal_close_contract() -> None:
+    body = _section("SB-API-6")
+    normalized_body = " ".join(body.split()).lower()
+    assert "close-only leaf resource" in normalized_body
+    assert "terminal and idempotent" in normalized_body
+    assert "baseexception.add_note()" in normalized_body
+    assert "does not define `wait()` behavior after close" in normalized_body
+
+    protocol_doc = " ".join((simplebroker.ActivityWaiter.__doc__ or "").split())
+    assert "terminal" in protocol_doc.lower()
+    assert "before backend cleanup" in protocol_doc.lower()
+    assert "does not retry partial cleanup" in protocol_doc.lower()
+    assert not hasattr(simplebroker.ActivityWaiter, "shutdown")
+
+
 def test_api_command_layer_and_advanced_language() -> None:
     commands_section = _section("SB-API-10")
     assert "simplebroker.commands" in commands_section
@@ -167,6 +182,15 @@ def test_api_command_layer_and_advanced_language() -> None:
     advanced = _section("SB-API-11")
     assert "BACKEND_API_VERSION" in advanced or "backend" in advanced.lower()
     assert "SDK" in advanced or "sdk" in advanced.lower()
+
+
+def test_api_owned_runner_lifecycle_and_backend_v6_contract() -> None:
+    advanced = " ".join(_section("SB-API-11").split()).lower()
+    assert "lifecycle verbs follow ownership scope" in advanced
+    assert "simplebroker-owned runner teardown" in advanced
+    assert "explicitly injected runner" in advanced
+    assert "backend api v6" in advanced
+    assert "terminal close semantics" in advanced
 
 
 def test_api_cross_surface_matrix_present() -> None:
