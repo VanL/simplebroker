@@ -16,7 +16,7 @@ import pytest
 from simplebroker.watcher import PollingStrategy, QueueWatcher
 
 from .helper_scripts.broker_factory import make_broker
-from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
+from .helper_scripts.timing import drive_until, scale_timeout_for_ci, wait_for_condition
 
 pytestmark = [pytest.mark.shared]
 
@@ -72,6 +72,19 @@ class InstrumentedPollingStrategy(PollingStrategy):
             return self.delay_history.copy()
 
 
+def _polling_diagnostics(
+    strategy: InstrumentedPollingStrategy,
+) -> dict[str, object]:
+    delays = strategy.get_delay_history()
+    return {
+        "check_version_calls": strategy.check_version_calls,
+        "delay_count": len(delays),
+        "delay_head": delays[:20],
+        "delay_tail": delays[-20:],
+        "notify_count": len(strategy.notify_history),
+    }
+
+
 def make_recorded_watcher(
     queue: str,
     handler,
@@ -124,11 +137,15 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
             # Check that we have non-zero delays indicating backoff
             return all(d > 0 for d in recent_delays)
 
-        wait_for_condition(
+        drive_until(
             has_backed_off,
             timeout=2.0,
             interval=0.01,
             message="Watcher should back off when no messages available",
+            diagnostics=lambda: {
+                "polling": _polling_diagnostics(strategy),
+                "processed": list(processed_messages),
+            },
         )
 
         # Record polling state before message
@@ -137,11 +154,15 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
         broker.write("test_queue", "test message")
 
         # Wait for message processing
-        wait_for_condition(
+        drive_until(
             lambda: len(processed_messages) > 0,
             timeout=1.0,
             interval=0.01,
             message="Message should be processed",
+            diagnostics=lambda: {
+                "polling": _polling_diagnostics(strategy),
+                "processed": list(processed_messages),
+            },
         )
 
         # Verify rapid polling resumed after message (burst mode)
@@ -154,11 +175,16 @@ def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
             zero_count = sum(1 for d in new_delays if d == 0)
             return zero_count >= 5  # At least 5 rapid polls
 
-        wait_for_condition(
+        drive_until(
             burst_mode_resumed,
             timeout=1.0,
             interval=0.01,
             message="Should resume burst mode after finding message",
+            diagnostics=lambda: {
+                "delay_count_before": delay_count_before,
+                "polling": _polling_diagnostics(strategy),
+                "processed": list(processed_messages),
+            },
         )
 
         # The watcher should process the message written for this phase. The
@@ -213,10 +239,16 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
                 d > 0 for d in idle_delays[-5:]
             )
 
-        wait_for_condition(
+        drive_until(
             both_backed_off,
             timeout=2.0,
+            interval=0.1,
             message="Both watchers should back off",
+            diagnostics=lambda: {
+                "active_polling": _polling_diagnostics(active_strategy),
+                "idle_polling": _polling_diagnostics(idle_strategy),
+                "processed": dict(processed_counts),
+            },
         )
 
         # Record delay counts before message
@@ -227,10 +259,16 @@ def test_burst_mode_no_reset_on_empty_wake(no_jitter, broker_target) -> None:
         broker.write("active_queue", "message")
 
         # Wait for active watcher to process
-        wait_for_condition(
+        drive_until(
             lambda: processed_counts["active"] == 1,
             timeout=1.0,
+            interval=0.1,
             message="Active watcher should process message",
+            diagnostics=lambda: {
+                "active_polling": _polling_diagnostics(active_strategy),
+                "idle_polling": _polling_diagnostics(idle_strategy),
+                "processed": dict(processed_counts),
+            },
         )
 
         # Give time for more polling cycles
@@ -377,10 +415,16 @@ def test_burst_mode_with_errors_single_message(no_jitter, broker_target) -> None
             broker.write("test_queue", f"message_{i}")
 
         # Wait for all messages to be processed with a generous timeout for CI
-        wait_for_condition(
+        drive_until(
             lambda: len(attempted_messages) >= 4,
             timeout=10.0,  # Very generous timeout for slow CI
+            interval=0.1,
             message="Failed to process all 4 messages",
+            diagnostics=lambda: {
+                "attempted": list(attempted_messages),
+                "failed": list(failed_messages),
+                "successful": list(successful_messages),
+            },
         )
 
         # Verify all messages were attempted despite errors
@@ -431,10 +475,16 @@ def test_burst_mode_with_errors_batch_processing(no_jitter, broker_target) -> No
             broker.write("test_queue", f"message_{i}")
 
         # Wait for all messages to be processed with a generous timeout for CI
-        wait_for_condition(
+        drive_until(
             lambda: len(attempted_messages) >= 4,
             timeout=10.0,  # Very generous timeout for slow CI
+            interval=0.1,
             message="Failed to process all 4 messages",
+            diagnostics=lambda: {
+                "attempted": list(attempted_messages),
+                "failed": list(failed_messages),
+                "successful": list(successful_messages),
+            },
         )
 
         # Verify all messages were attempted despite errors
@@ -613,10 +663,15 @@ def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
         broker.write("test_queue", "message_1")
 
         # Wait for first peek
-        wait_for_condition(
+        drive_until(
             lambda: len(peeked_messages) == 1,
             timeout=1.0,
+            interval=0.1,
             message="Should peek first message",
+            diagnostics=lambda: {
+                "polling": _polling_diagnostics(strategy),
+                "peeked": list(peeked_messages),
+            },
         )
 
         # In peek mode with after_timestamp, same message won't be peeked again
@@ -626,10 +681,15 @@ def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
             time.sleep(0.01)
 
         # Wait for all peeks
-        wait_for_condition(
+        drive_until(
             lambda: len(peeked_messages) == 4,
             timeout=1.0,
+            interval=0.1,
             message="Should peek all messages",
+            diagnostics=lambda: {
+                "polling": _polling_diagnostics(strategy),
+                "peeked": list(peeked_messages),
+            },
         )
 
         # Verify messages were peeked in order and only once each
@@ -643,12 +703,18 @@ def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:
         # Verify burst mode was maintained after message processing. Native
         # activity backends may reach the assertion immediately after the
         # fourth handler call, before the next burst polls have been recorded.
-        wait_for_condition(
+        drive_until(
             lambda: (
                 sum(1 for d in strategy.delay_history[delays_before:] if d == 0) > 5
             ),
             timeout=1.0,
+            interval=0.1,
             message="Should maintain burst mode while processing messages",
+            diagnostics=lambda: {
+                "delay_count_before": delays_before,
+                "polling": _polling_diagnostics(strategy),
+                "peeked": list(peeked_messages),
+            },
         )
 
         # Verify messages are still in queue (peek doesn't remove them)
@@ -683,17 +749,26 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:  # noqa
 
         watcher.run_in_thread()
 
-        # Phase 1: Verify initial burst mode (zero delays)
-        def initial_burst_mode():
-            if len(strategy.delay_history) < 5:
+        # Phase 1: Verify the backend-owned initial polling schedule. Native
+        # waiters stay on a positive idle schedule until real activity calls
+        # notify_activity(); fallback polling begins with zero-delay checks.
+        def initial_schedule_observed() -> bool:
+            delays = strategy.get_delay_history()
+            if len(delays) < 5:
                 return False
-            # Should see zero delays in burst mode
-            return all(d == 0 for d in strategy.delay_history[:5])
+            if strategy.uses_native_activity():
+                return all(0 < delay <= strategy._max_interval for delay in delays[:5])
+            return all(delay == 0 for delay in delays[:5])
 
-        wait_for_condition(
-            initial_burst_mode,
+        drive_until(
+            initial_schedule_observed,
             timeout=1.0,
-            message="Should start in burst mode with zero delays",
+            interval=0.1,
+            message="Watcher should start in its backend-owned polling schedule",
+            diagnostics=lambda: {
+                "polling": _polling_diagnostics(strategy),
+                "processed": list(processed_messages),
+            },
         )
 
         # Phase 2: Wait for backoff (non-zero delays)
@@ -704,10 +779,15 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:  # noqa
             recent = strategy.delay_history[-10:]
             return all(d > 0 for d in recent)
 
-        wait_for_condition(
+        drive_until(
             has_backed_off,
             timeout=2.0,
+            interval=0.1,
             message="Should back off when no messages",
+            diagnostics=lambda: {
+                "polling": _polling_diagnostics(strategy),
+                "processed": list(processed_messages),
+            },
         )
 
         # Phase 3: Add message and verify burst reset
@@ -715,10 +795,15 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:  # noqa
         broker.write("test_queue", "wake up!")
 
         # Wait for message processing
-        wait_for_condition(
+        drive_until(
             lambda: len(processed_messages) == 1,
             timeout=1.0,
+            interval=0.1,
             message="Message should be processed",
+            diagnostics=lambda: {
+                "polling": _polling_diagnostics(strategy),
+                "processed": list(processed_messages),
+            },
         )
 
         # Verify return to burst mode
@@ -730,10 +815,16 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:  # noqa
             zero_count = sum(1 for d in new_delays if d == 0)
             return zero_count >= 3
 
-        wait_for_condition(
+        drive_until(
             returned_to_burst,
             timeout=1.0,
+            interval=0.1,
             message="Should return to burst mode after message",
+            diagnostics=lambda: {
+                "delay_count_before": delays_before_msg,
+                "polling": _polling_diagnostics(strategy),
+                "processed": list(processed_messages),
+            },
         )
 
         # Phase 4: Continuous activity should maintain burst mode. First add
@@ -743,20 +834,31 @@ def test_burst_mode_state_transitions(no_jitter, broker_target) -> None:  # noqa
         first_activity_delay_count = len(strategy.delay_history)
         broker.write("test_queue", "message_0")
 
-        wait_for_condition(
+        drive_until(
             lambda: len(processed_messages) == 2,
             timeout=2.0,
+            interval=0.1,
             message="First continuous activity message should be processed",
+            diagnostics=lambda: {
+                "polling": _polling_diagnostics(strategy),
+                "processed": list(processed_messages),
+            },
         )
 
         def first_activity_burst_started():
             new_delays = strategy.delay_history[first_activity_delay_count:]
             return sum(1 for d in new_delays if d == 0) >= 3
 
-        wait_for_condition(
+        drive_until(
             first_activity_burst_started,
             timeout=1.0,
+            interval=0.1,
             message="Continuous activity should restart burst mode",
+            diagnostics=lambda: {
+                "first_activity_delay_count": first_activity_delay_count,
+                "polling": _polling_diagnostics(strategy),
+                "processed": list(processed_messages),
+            },
         )
 
         start_count = len(strategy.get_delay_history())

@@ -27,6 +27,7 @@ from reference_reactor import (
 
 from simplebroker import Queue
 from simplebroker.ext import OperationalError
+from tests.helper_scripts import drive_until
 
 INBOX_A = "reactor.inbox.a"
 INBOX_B = "reactor.inbox.b"
@@ -129,12 +130,16 @@ def test_reactor_json_envelopes_format_only_owned_broker_ids(tmp_path: Path) -> 
 
 
 def _wait_for_outputs(db_path: Path, count: int, *, timeout: float = 5.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if len(_read_json_messages(OUTBOX, db_path)) >= count:
-            return
-        time.sleep(0.01)
-    raise TimeoutError(f"timed out waiting for {count} output messages")
+    drive_until(
+        lambda: len(_read_json_messages(OUTBOX, db_path)) >= count,
+        timeout=timeout,
+        interval=0.01,
+        message=f"timed out waiting for {count} output messages",
+        diagnostics=lambda: {
+            "expected_count": count,
+            "observed_count": len(_read_json_messages(OUTBOX, db_path)),
+        },
+    )
 
 
 def _wait_for_control_reply_at_timestamp(
@@ -371,9 +376,18 @@ def test_reactor_turns_have_single_thread_owner(tmp_path: Path) -> None:
     thread = threading.Thread(target=reactor.run_until_stopped, daemon=True)
     thread.start()
     try:
-        deadline = time.monotonic() + 1.0
-        while reactor._drive_owner_ident is None and time.monotonic() < deadline:
-            time.sleep(0.01)
+        drive_until(
+            lambda: reactor._drive_owner_ident is not None,
+            timeout=1.0,
+            interval=0.01,
+            message="reactor drive thread did not publish its owner identity",
+            diagnostics=lambda: {
+                "owner_ident": reactor._drive_owner_ident,
+                "reactor_stop": reactor._reactor_stop_event.is_set(),
+                "resources_closed": reactor._resources_closed,
+                "thread_alive": thread.is_alive(),
+            },
+        )
         assert reactor._drive_owner_ident is not None
 
         with pytest.raises(RuntimeError, match="single-owner"):
@@ -468,9 +482,18 @@ def test_manual_drive_thread_self_closes_after_external_stop_join_false(
 
     thread = threading.Thread(target=reactor.run_until_stopped, daemon=True)
     thread.start()
-    deadline = time.monotonic() + 1.0
-    while reactor._drive_owner_ident is None and time.monotonic() < deadline:
-        time.sleep(0.01)
+    drive_until(
+        lambda: reactor._drive_owner_ident is not None,
+        timeout=1.0,
+        interval=0.01,
+        message="reactor drive thread did not publish its owner identity",
+        diagnostics=lambda: {
+            "owner_ident": reactor._drive_owner_ident,
+            "reactor_stop": reactor._reactor_stop_event.is_set(),
+            "resources_closed": reactor._resources_closed,
+            "thread_alive": thread.is_alive(),
+        },
+    )
     assert reactor._drive_owner_ident is not None
 
     reactor.stop(join=False)
@@ -883,12 +906,26 @@ def test_pending_output_retries_in_process_after_transient_publish_failure(
         worker_count=1,
     )
     try:
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            reactor.process_once()
-            if _read_json_messages(OUTBOX, db_path):
-                break
-            reactor.wait_for_activity(0.01)
+        drive_until(
+            lambda: bool(_read_json_messages(OUTBOX, db_path)),
+            step=reactor.process_once,
+            wait=reactor.wait_for_activity,
+            drains=(
+                reactor._has_pending_reactor_results,
+                reactor._has_pending_reactor_backlog,
+            ),
+            timeout=2.0,
+            interval=0.01,
+            message="transient output publication did not recover",
+            diagnostics=lambda: {
+                "owner_ident": reactor._drive_owner_ident,
+                "pending_output_count": reactor._pending_output_count(),
+                "publish_attempts": reactor.publish_attempts,
+                "reactor_stop": reactor._reactor_stop_event.is_set(),
+                "result_status_counts": reactor._result_status_counts(),
+                "seen_status_counts": reactor._seen_status_counts(),
+            },
+        )
 
         outputs = _read_json_messages(OUTBOX, db_path)
         assert len(outputs) == 1
@@ -932,9 +969,9 @@ def test_output_backlog_blocks_new_input_but_not_control_lane(
     )
     thread = reactor.start()
     try:
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            rows = _sidecar_rows(
+
+        def output_backlog_is_pending() -> bool:
+            return _sidecar_rows(
                 db_path,
                 """
                 SELECT status
@@ -942,12 +979,23 @@ def test_output_backlog_blocks_new_input_but_not_control_lane(
                 WHERE source_queue = ?
                 """,
                 (INBOX_A,),
-            )
-            if rows == [("output_pending",)]:
-                break
-            time.sleep(0.01)
-        else:
-            raise AssertionError("output backlog did not become pending")
+            ) == [("output_pending",)]
+
+        drive_until(
+            output_backlog_is_pending,
+            timeout=2.0,
+            interval=0.01,
+            message="output backlog did not become pending",
+            diagnostics=lambda: {
+                "owner_ident": reactor._drive_owner_ident,
+                "pending_output_count": reactor._pending_output_count(),
+                "publish_attempts": reactor.publish_attempts,
+                "reactor_stop": reactor._reactor_stop_event.is_set(),
+                "result_status_counts": reactor._result_status_counts(),
+                "seen_status_counts": reactor._seen_status_counts(),
+                "thread_alive": thread.is_alive(),
+            },
+        )
         attempts_after_backlog = reactor.publish_attempts
 
         _write_json(Queue(INBOX_B, db_path=str(db_path)), {"id": "second"})

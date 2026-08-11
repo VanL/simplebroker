@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -15,6 +14,7 @@ import simplebroker.watcher as watcher_module
 from simplebroker import Queue
 from simplebroker.commands import EXIT_ERROR, cmd_watch
 from simplebroker.watcher import PollingStrategy, QueueWatcher, StopWatching
+from tests.helper_scripts import drive_until
 from tests.helper_scripts.managed_subprocess import managed_subprocess
 from tests.helpers.state_machine_contracts import TransitionCase, fires_transition_table
 
@@ -408,16 +408,31 @@ def test_watcher_lifecycle_fires_transition_table(
     # The watcher owns its stop event; the strategy must observe the same event.
     watcher._strategy._stop_event = watcher._stop_event
     thread = watcher.start()
-    deadline = time.monotonic() + 2
-    while not watcher.is_running() and time.monotonic() < deadline:
-        time.sleep(0.005)
+    drive_until(
+        watcher.is_running,
+        timeout=2,
+        interval=0.005,
+        message="watcher did not enter the running lifecycle state",
+        diagnostics=lambda: {
+            "seen": list(seen),
+            "thread_alive": thread.is_alive(),
+        },
+    )
     assert watcher.is_running()
 
     if transition_case.payload == "DELIVER_THEN_STOP":
         queue.write("payload")
-        deadline = time.monotonic() + 2
-        while seen != ["payload"] and time.monotonic() < deadline:
-            time.sleep(0.005)
+        drive_until(
+            lambda: seen == ["payload"],
+            timeout=2,
+            interval=0.005,
+            message="watcher did not deliver the transition payload",
+            diagnostics=lambda: {
+                "seen": list(seen),
+                "thread_alive": thread.is_alive(),
+                "watcher_running": watcher.is_running(),
+            },
+        )
         assert seen == ["payload"]
     watcher.stop()
     assert not thread.is_alive()

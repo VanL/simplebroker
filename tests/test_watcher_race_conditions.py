@@ -22,6 +22,7 @@ from simplebroker.watcher import QueueWatcher
 
 from .helper_scripts.broker_factory import active_backend, make_broker
 from .helper_scripts.timing import (
+    drive_until,
     get_performance_threshold,
     scale_timeout_for_ci,
     wait_for_condition,
@@ -502,11 +503,19 @@ def test_multiple_queues_concurrent_activity(broker_target) -> None:  # noqa: C9
             watchers.append(w)
             w.run_in_thread()
 
-        wait_for_condition(
+        drive_until(
             lambda: all(w.drain_count > 0 for w in watchers),
             timeout=scale_timeout_for_ci(5.0),
             interval=0.01,
             message="All watchers should enter their initial drain before writes",
+            diagnostics=lambda: [
+                {
+                    "dispatch_count": watcher.dispatch_count,
+                    "drain_count": watcher.drain_count,
+                    "pre_check_count": watcher.pre_check_count,
+                }
+                for watcher in watchers
+            ],
         )
 
         # Concurrent writer function

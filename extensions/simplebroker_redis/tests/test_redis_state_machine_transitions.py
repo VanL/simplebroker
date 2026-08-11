@@ -25,6 +25,7 @@ from simplebroker_redis.runner import RedisRunner
 
 from simplebroker._exceptions import IntegrityError, OperationalError, QueueNameError
 from simplebroker._timestamp import TimestampError
+from tests.helper_scripts import drive_until
 from tests.helpers.state_machine_contracts import (
     TransitionCase,
     fires_transition_table,
@@ -103,14 +104,6 @@ def _started_listener(
         yield listener, pubsub, client
     finally:
         listener.close()
-
-
-def _wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() >= deadline:
-            pytest.fail("Redis listener transition did not become observable")
-        time.sleep(0.005)
 
 
 def _redis_listener_starts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -214,7 +207,18 @@ def _redis_listener_publishes_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     with _started_listener(monkeypatch) as (listener, pubsub, _client):
         registration = listener.register("jobs")
         pubsub.fail(RuntimeError("pubsub read failed"))
-        _wait_until(lambda: listener._error is not None)
+        drive_until(
+            lambda: listener._error is not None,
+            timeout=1.0,
+            interval=0.005,
+            message="Redis listener transition did not become observable",
+            diagnostics=lambda: {
+                "error": repr(listener._error),
+                "ready": listener._ready.is_set(),
+                "stopped": listener._stop_event.is_set(),
+                "thread_alive": listener._thread.is_alive(),
+            },
+        )
         with pytest.raises(OperationalError, match="pubsub read failed"):
             listener.wait(
                 registration,

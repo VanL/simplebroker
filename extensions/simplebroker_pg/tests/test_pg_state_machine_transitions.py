@@ -19,6 +19,7 @@ from simplebroker_pg.plugin import PostgresBackendPlugin
 from simplebroker_pg.runner import PostgresRunner, _SharedActivityListener
 
 from simplebroker.db import BrokerCore
+from tests.helper_scripts import drive_until
 from tests.helpers.state_machine_contracts import (
     TransitionCase,
     fires_transition_table,
@@ -98,14 +99,6 @@ def _started_listener(
         yield listener, connection
     finally:
         listener.close()
-
-
-def _wait_until(predicate: Callable[[], bool], *, timeout: float = 1.0) -> None:
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        if time.monotonic() >= deadline:
-            pytest.fail("listener transition did not become observable")
-        time.sleep(0.005)
 
 
 def _listener_starts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,7 +198,18 @@ def _listener_publishes_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     with _started_listener(monkeypatch) as (listener, connection):
         listener.register_queue("jobs")
         connection.fail(RuntimeError("notification read failed"))
-        _wait_until(lambda: listener._error is not None)
+        drive_until(
+            lambda: listener._error is not None,
+            timeout=1.0,
+            interval=0.005,
+            message="listener transition did not become observable",
+            diagnostics=lambda: {
+                "error": repr(listener._error),
+                "ready": listener._ready.is_set(),
+                "stopped": listener._stop_event.is_set(),
+                "thread_alive": listener._thread.is_alive(),
+            },
+        )
         with pytest.raises(RuntimeError, match="notification read failed"):
             listener.wait(
                 queue_name="jobs",
@@ -253,7 +257,18 @@ def _listener_fan_in_publishes_failure(monkeypatch: pytest.MonkeyPatch) -> None:
             ("alpha", "beta")
         )
         connection.fail(RuntimeError("fan-in notification read failed"))
-        _wait_until(lambda: listener._error is not None)
+        drive_until(
+            lambda: listener._error is not None,
+            timeout=1.0,
+            interval=0.005,
+            message="listener transition did not become observable",
+            diagnostics=lambda: {
+                "error": repr(listener._error),
+                "ready": listener._ready.is_set(),
+                "stopped": listener._stop_event.is_set(),
+                "thread_alive": listener._thread.is_alive(),
+            },
+        )
         with pytest.raises(RuntimeError, match="fan-in notification read failed"):
             listener.wait_any(
                 fan_in_id=fan_in_id,

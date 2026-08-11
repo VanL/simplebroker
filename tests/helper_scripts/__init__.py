@@ -62,6 +62,7 @@ from .timestamp_validation import validate_timestamp
 
 # Timing utilities
 from .timing import (
+    drive_until,
     get_performance_threshold,
     retry_on_exception,
     scale_timeout_for_calibration,
@@ -106,6 +107,7 @@ __all__ = [
     "create_platform_absolute_path",
     "create_temp_absolute_path",
     "create_windows_absolute_path",
+    "drive_until",
     "get_performance_threshold",
     "get_platform_drive_letter",
     "is_platform_absolute",

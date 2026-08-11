@@ -4,10 +4,122 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import TypeVar
 
 T = TypeVar("T")
+
+
+class _DriveUntilTimeout(AssertionError):
+    """Internal timeout marker for the compatibility Boolean wrapper."""
+
+
+@dataclass
+class _DriveState:
+    predicate: Callable[[], bool]
+    step: Callable[[], None] | None
+    predicate_checks: int = 0
+    step_calls: int = 0
+
+    def condition_met(self) -> bool:
+        self.predicate_checks += 1
+        return self.predicate()
+
+    def call_step(self) -> None:
+        assert self.step is not None
+        self.step()
+        self.step_calls += 1
+
+
+def _render_diagnostics(diagnostics: Callable[[], object] | None) -> str:
+    if diagnostics is None:
+        return "None"
+    try:
+        return repr(diagnostics())
+    except Exception as exc:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-008] exception
+        return f"<diagnostics raised {exc!r}>"
+
+
+def _drive_before_deadline(
+    state: _DriveState,
+    *,
+    wait: Callable[[float], None],
+    deadline: float,
+    interval: float,
+) -> bool:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        if state.step is not None:
+            state.call_step()
+            if state.condition_met():
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+        wait(min(interval, remaining))
+        if state.condition_met():
+            return True
+
+
+def _drive_at_deadline(
+    state: _DriveState,
+    drains: Sequence[Callable[[], bool]],
+) -> bool:
+    if state.condition_met():
+        return True
+    if not any(drain() for drain in drains):
+        return False
+    state.call_step()
+    return state.condition_met()
+
+
+def drive_until(
+    predicate: Callable[[], bool],
+    *,
+    step: Callable[[], None] | None = None,
+    wait: Callable[[float], None] = time.sleep,
+    drains: Sequence[Callable[[], bool]] = (),
+    timeout: float = 5.0,
+    interval: float = 0.01,
+    message: str = "condition did not become true",
+    diagnostics: Callable[[], object] | None = None,
+) -> None:
+    """Drive or observe until a test-owned evidence predicate is true.
+
+    Check before side effects, then use one monotonic deadline for optional
+    step/check/wait turns. At the deadline, recheck once and perform at most
+    one readiness-gated final step plus one recheck, without another wait.
+    Raise the helper's timeout subtype with counts and failure-only diagnostics.
+    """
+    if drains and step is None:
+        raise ValueError("drains require step")
+
+    started_at = time.monotonic()
+    state = _DriveState(predicate=predicate, step=step)
+    if state.condition_met():
+        return
+
+    deadline = started_at + timeout
+    if _drive_before_deadline(
+        state,
+        wait=wait,
+        deadline=deadline,
+        interval=interval,
+    ):
+        return
+    if _drive_at_deadline(state, drains):
+        return
+
+    elapsed = time.monotonic() - started_at
+    raise _DriveUntilTimeout(
+        f"{message}; elapsed={elapsed:.6f}s; "
+        f"predicate_checks={state.predicate_checks}; "
+        f"step_calls={state.step_calls}; "
+        f"diagnostics={_render_diagnostics(diagnostics)}"
+    )
 
 
 def wait_for_condition(
@@ -28,12 +140,19 @@ def wait_for_condition(
         True if condition was met, False if timeout occurred
 
     """
-    start_time = time.monotonic()
-    while time.monotonic() - start_time < timeout:
-        if condition_fn():
-            return True
-        time.sleep(interval)
-    return False
+    try:
+        drive_until(
+            condition_fn,
+            wait=time.sleep,
+            timeout=timeout,
+            interval=interval,
+            message=(
+                message if message is not None else "condition did not become true"
+            ),
+        )
+    except _DriveUntilTimeout:
+        return False
+    return True
 
 
 def wait_for_value(

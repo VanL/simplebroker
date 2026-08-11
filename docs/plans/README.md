@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-11-drive-until-test-helper-adoption-plan.md | completed — Class 3; deterministic test wait helper and bounded core/extension/reference-reactor adoption implemented, fully verified, independently reviewed, and owner-landed |
 | 2026-08-10-7.0.1-ci-repair-and-publication-plan.md | completed — class 4; repaired cross-platform 7.0.1 CI regressions, passed exact-SHA gates, and published immutable v7.0.1 artifacts |
 | 2026-08-10-test-suite-signal-remediation-plan.md | completed — class 4; behavior-first test remediation, database/phase-lock permission-policy corrections, benchmark provenance, and evidence reconciliation implemented and independently reviewed; owner closed the plan with Windows CI and the broken editable sibling Weft import recorded as explicit external follow-ups |
 | 2026-08-08-json-timestamp-string-contract-plan.md | completed — Class 5; exact 19-digit JSON string contract, embedder helper, docs/examples, and 7.0.0/3.5.2 release metadata implemented and reviewed; owner-directed changeset closes implementation while tag and package publication remain separate |
