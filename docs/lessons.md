@@ -226,11 +226,17 @@ Dated moment-tier entries (foldable after age floor and distillation).
   notification as work; narrow same-watcher local hints may support an
   explicitly bounded direct attempt. (Harvested from
   2026-05-05-pg-watcher-followup-review-remediation-plan; source `197629e2`.)
-- 2026-08-04: Best-effort cleanup must remain honest when release fails. Keep
-  the resource tracked, expose the failure, and allow a later retry; dropping
-  bookkeeping after a failed close turns a live resource into an invisible
-  leak. (Harvested from 2026-05-11-sqlite-cross-thread-close-hardening-plan;
-  source `197629e2`.)
+- 2026-08-04 (revised 2026-08-11; was: all failed best-effort cleanup should
+  remain tracked for retry): Cleanup failure policy follows the resource's
+  declared lifecycle. A retry-capable, bookkept resource stays tracked after
+  release failure so a later retry can find it. A one-shot terminal resource
+  such as `ActivityWaiter` becomes closed before cleanup and must not retry;
+  honesty there means attempting every independently safe ordinary cleanup,
+  raising the first failure, and retaining later failures as notes. Do not mix
+  the two policies. (Original lesson harvested from
+  2026-05-11-sqlite-cross-thread-close-hardening-plan, source `197629e2`;
+  terminal exception: `[SB-API-6]` and
+  `docs/plans/2026-08-11-activity-waiter-terminal-close-contract-plan.md`.)
 - 2026-08-04: Pre-parser argument rewriting is a safety boundary. Help must be
   side-effect free, the subcommand inventory must be complete, and destructive
   global flags need explicit command-combination guards; otherwise a missed
