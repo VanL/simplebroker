@@ -52,7 +52,10 @@ class _Registry:
             raise release_error
 
 
-def _waiter(listener: _Listener, queue_name: str):
+def _waiter(
+    listener: _Listener,
+    queue_name: str,
+) -> redis_plugin_module.RedisActivityWaiter:
     registration = redis_plugin_module._QueueWaiterRegistration(
         queue_name=queue_name,
         condition=threading.Condition(),

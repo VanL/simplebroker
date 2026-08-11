@@ -134,6 +134,10 @@ def test_postgres_waiter_successful_close_is_idempotent(
     listener = _Listener(events)
     registry = _Registry(listener, events)
     monkeypatch.setattr(pg_runner_module, "_activity_registry", registry)
+    waiter: (
+        pg_runner_module.PostgresActivityWaiter
+        | pg_runner_module.PostgresMultiQueueActivityWaiter
+    )
     if multi:
         waiter = pg_runner_module.PostgresMultiQueueActivityWaiter(
             "postgresql://example/test",
