@@ -1043,19 +1043,11 @@ class TestSQLiteRunnerErrorHandling:
         runner = SQLiteRunner(str(db_path))
         service = runner._phase_lock_service()
         phase_name = f"schema-v{SCHEMA_VERSION}"
-        lock_held = threading.Event()
-        release_lock = threading.Event()
         contender_started = threading.Event()
         contender_done = threading.Event()
-        marker_published = threading.Event()
         operation_ran = False
         result_holder: dict[str, bool] = {}
         errors: list[BaseException] = []
-
-        def hold_lock() -> None:
-            with service.locked():
-                lock_held.set()
-                release_lock.wait(timeout=2.0)
 
         def operation() -> None:
             nonlocal operation_ran
@@ -1073,44 +1065,30 @@ class TestSQLiteRunnerErrorHandling:
             finally:
                 contender_done.set()
 
-        def publish_marker_after_contender_waits() -> None:
-            assert contender_started.wait(timeout=scale_timeout_for_ci(1.0))
-            if not service.mark_phase(phase_name):
-                _write_status_file(db_path, [phase_name])
-            marker_published.set()
-
-        holder = threading.Thread(target=hold_lock)
         waiter = threading.Thread(target=contender)
-        marker = threading.Thread(target=publish_marker_after_contender_waits)
         waiter_started = False
 
         try:
-            holder.start()
-            assert lock_held.wait(timeout=scale_timeout_for_ci(5.0)), (
-                "Lock holder did not acquire the setup lock in time"
-            )
-            waiter.start()
-            waiter_started = True
-            assert contender_started.wait(timeout=scale_timeout_for_ci(1.0))
-            marker.start()
-            assert marker_published.wait(timeout=scale_timeout_for_ci(1.0))
-            assert not contender_done.wait(timeout=0.2)
-            release_lock.set()
+            # The lock owner publishes the marker. A third helper thread would
+            # make scheduler latency, rather than the held-lock barrier, the
+            # prerequisite for this proof.
+            with service.locked():
+                waiter.start()
+                waiter_started = True
+                assert contender_started.wait(timeout=scale_timeout_for_ci(1.0))
+                if not service.mark_phase(phase_name):
+                    _write_status_file(db_path, [phase_name])
+                assert not contender_done.wait(timeout=0.2)
             assert contender_done.wait(timeout=scale_timeout_for_ci(1.0))
         finally:
-            release_lock.set()
-            holder.join(timeout=scale_timeout_for_ci(1.0))
             if waiter_started:
                 waiter.join(timeout=scale_timeout_for_ci(1.0))
-            marker.join(timeout=scale_timeout_for_ci(1.0))
             runner.close()
 
         assert not errors
         assert result_holder["result"] is False
         assert operation_ran is False
-        assert not holder.is_alive()
         assert not waiter.is_alive()
-        assert not marker.is_alive()
 
     @pytest.mark.sqlite_only
     def test_schema_setup_is_serialized_across_processes(self, tmp_path):

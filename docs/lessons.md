@@ -102,6 +102,12 @@ Dated moment-tier entries (foldable after age floor and distillation).
   transition; keep the deadline as a deadlock valve and replace scheduler-turn
   counts with causal state evidence. (GitHub jobs `93860421794` and
   `93860422397`.)
+- 2026-08-11: In a lock-barrier test, the thread that owns the lock should
+  publish the marker whose visibility is being tested. A third publisher
+  thread weakens the ownership model and makes its scheduling latency a
+  prerequisite for reaching the real assertion. Keep the real contender and
+  marker path, but couple marker publication to the actual lock-owner context.
+  (GitHub job `93868392078`.)
 - 2026-08-07: `multiprocessing.Pool`'s context manager terminates workers even
   after successful work. With coverage subprocess tracing and SIGTERM saving,
   that signal can re-enter `coverage.stop()` while its monitoring lock is held,
