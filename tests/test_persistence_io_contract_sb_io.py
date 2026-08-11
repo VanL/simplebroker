@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 import subprocess
 import sys
@@ -102,9 +103,18 @@ def _collected_nodes(relative_path: str, marker: str | None = None) -> set[str]:
     ]
     if marker is not None:
         command.extend(("-m", marker))
+    env = os.environ.copy()
+    source_roots = [
+        str(ROOT / "extensions" / "simplebroker_pg"),
+        str(ROOT / "extensions" / "simplebroker_redis"),
+    ]
+    if inherited_pythonpath := env.get("PYTHONPATH"):
+        source_roots.append(inherited_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(source_roots)
     result = subprocess.run(
         command,
         cwd=ROOT,
+        env=env,
         capture_output=True,
         check=False,
         text=True,

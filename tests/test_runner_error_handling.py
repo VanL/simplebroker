@@ -336,7 +336,14 @@ class TestSQLiteRunnerErrorHandling:
 
         runner = CoordinatedSQLiteRunner(
             str(tmp_path / "shared-runner-owner-progress.db"),
-            config={"BROKER_BUSY_TIMEOUT": 1500},
+            # The invariant is observed by the non-blocking operation-lock
+            # probe below. Admission must remain open long enough for a
+            # heavily loaded Windows runner to schedule the coordinating
+            # thread after the contender reports readiness.
+            # Keep admission strictly beyond every 10-second coordination
+            # wait (20 seconds under CI) so scheduler delay cannot become the
+            # test oracle.
+            config={"BROKER_BUSY_TIMEOUT": int(scale_timeout_for_ci(30.0) * 1000)},
         )
 
         def capture_error(call: Callable[[], None]) -> None:
