@@ -777,7 +777,7 @@ rg -n 'tests/test_.*::test_' docs .github README.md CHANGELOG.md \
 ```
 
 Windows acceptance uses the existing `.github/workflows/test.yml` matrix,
-including its separate `windows_serial` streaming phase. Signal assertions may
+including its separate `windows_serial` serialization-sensitive phase. Signal assertions may
 remain platform-specific only where the governing CLI contract permits it;
 helper escalation is never a passing correctness result.
 

@@ -663,18 +663,22 @@ def test_matrix_jobs_fail_closed_on_worker_loss() -> None:
         assert "--max-worker-restart=0" in step
 
 
-def test_windows_streaming_proofs_run_outside_xdist() -> None:
+def test_windows_serialization_sensitive_proofs_run_outside_xdist() -> None:
     workflow_text = _workflow_text("test.yml")
     matrix_job = workflow_text.split("  test:", 1)[1].split("  lint:", 1)[0]
     pytest_config = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )["tool"]["pytest"]["ini_options"]
     streaming_tests = (ROOT / "tests/test_streaming.py").read_text(encoding="utf-8")
+    process_session_tests = (ROOT / "tests/test_process_broker_session.py").read_text(
+        encoding="utf-8"
+    )
 
     assert any(
         marker.startswith("windows_serial:") for marker in pytest_config["markers"]
     )
     assert streaming_tests.count("@pytest.mark.windows_serial") == 2
+    assert "pytestmark = pytest.mark.windows_serial" in process_session_tests
 
     for step_name in (
         "Run Windows tests with pytest",
@@ -688,18 +692,22 @@ def test_windows_streaming_proofs_run_outside_xdist() -> None:
         assert "-n auto" not in step
 
     for step_name in (
-        "Run Windows streaming tests serially",
-        "Run Windows streaming tests serially with coverage",
+        "Run Windows serialization-sensitive tests serially",
+        "Run Windows serialization-sensitive tests serially with coverage",
     ):
         step = matrix_job.split(f"    - name: {step_name}", 1)[1].split(
             "    - name:", 1
         )[0]
         assert "-n0" in step
         assert '-m "windows_serial"' in step
+        assert "--timeout=180" in step
+        assert "--timeout-method=thread" in step
         assert "tests/test_streaming.py" in step
+        assert "tests/test_process_broker_session.py" in step
 
     coverage_step = matrix_job.split(
-        "    - name: Run Windows streaming tests serially with coverage", 1
+        "    - name: Run Windows serialization-sensitive tests serially with coverage",
+        1,
     )[1].split("    - name:", 1)[0]
     assert "--cov-append" in coverage_step
 

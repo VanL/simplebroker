@@ -32,6 +32,9 @@ from simplebroker._broker_session import (
 from simplebroker._runner import SQLiteRunner
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore, _build_process_session_core_factory
+from tests.helper_scripts import drive_until
+
+pytestmark = pytest.mark.windows_serial
 
 
 class CountingSQLiteRunner(SQLiteRunner):
@@ -194,17 +197,37 @@ def test_process_session_import_orders_exit_cleanly(
     module_order: tuple[str, str],
 ) -> None:
     script = """
+import atexit
 import importlib
 import sys
 
+def report(stage):
+    print(stage, flush=True)
+
+# Registered before SimpleBroker imports, so LIFO atexit order makes this run
+# after the process-session registry's close handler.
+def report_after_process_session_atexit():
+    assert broker_session_module._registry._entries == {}
+    assert retained_session._closed is True
+    report("process-session-atexit-complete")
+
+atexit.register(report_after_process_session_atexit)
+
 for module_name in sys.argv[2].split(","):
     importlib.import_module(module_name)
+report("imports-complete")
 
 from simplebroker import Queue
 
 queue = Queue("jobs", db_path=sys.argv[1], persistent=True)
 queue.write("payload")
+report("write-complete")
+broker_session_module = importlib.import_module("simplebroker._broker_session")
+retained_session = queue.conn._shared_session
+assert retained_session is not None
+assert len(broker_session_module._registry._entries) == 1
 queue._finalizer.detach()
+report("queue-finalizer-detached")
 """
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
@@ -214,23 +237,46 @@ queue._finalizer.detach()
     env.pop("COVERAGE_PROCESS_START", None)
     env.pop("COVERAGE_PROCESS_CONFIG", None)
     env.pop("COVERAGE_FILE", None)
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            script,
-            str(tmp_path / "atexit.db"),
-            ",".join(module_order),
-        ],
-        cwd=Path(__file__).resolve().parents[1],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=10.0,
-        check=False,
-    )
+    command = [
+        sys.executable,
+        "-c",
+        script,
+        str(tmp_path / "atexit.db"),
+        ",".join(module_order),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[1],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10.0,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = (
+            exc.stdout.decode(errors="replace")
+            if isinstance(exc.stdout, bytes)
+            else exc.stdout
+        )
+        stderr = (
+            exc.stderr.decode(errors="replace")
+            if isinstance(exc.stderr, bytes)
+            else exc.stderr
+        )
+        pytest.fail(
+            "Process-session import-order probe exceeded its deadlock valve; "
+            f"stdout={stdout or ''!r}; stderr={stderr or ''!r}"
+        )
 
     assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "imports-complete",
+        "write-complete",
+        "queue-finalizer-detached",
+        "process-session-atexit-complete",
+    ]
     assert result.stderr == ""
 
 
@@ -321,8 +367,25 @@ def test_concurrent_first_use_publishes_one_shared_runner(
 
         with cf.ThreadPoolExecutor(max_workers=4) as executor:
             futures = [executor.submit(write_once, index) for index in range(4)]
+            drive_until(
+                lambda: all(future.done() for future in futures),
+                timeout=10.0,
+                message="concurrent process-session first use did not settle",
+                diagnostics=lambda: {
+                    "barrier_waiting": start_barrier.n_waiting,
+                    "create_runner_calls": counting_backend.create_runner_calls,
+                    "future_states": [
+                        {
+                            "done": future.done(),
+                            "running": future.running(),
+                            "cancelled": future.cancelled(),
+                        }
+                        for future in futures
+                    ],
+                },
+            )
             for future in futures:
-                future.result(timeout=10.0)
+                future.result()
 
         assert counting_backend.create_runner_calls == 1
 

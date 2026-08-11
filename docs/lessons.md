@@ -108,6 +108,14 @@ Dated moment-tier entries (foldable after age floor and distillation).
   prerequisite for reaching the real assertion. Keep the real contender and
   marker path, but couple marker publication to the actual lock-owner context.
   (GitHub job `93868392078`.)
+- 2026-08-11: Process-global shutdown and thread-lifecycle proofs should not
+  inherit an unrelated xdist concurrency axis on Windows. Keep the real child
+  process and the concurrency the test owns, but run the module in the
+  dedicated serial phase. Register a test sentinel before the library's atexit
+  handler, then assert the registry is empty and its retained session closed so
+  LIFO shutdown produces state-backed evidence after library cleanup. Keep a
+  per-test thread-dump timeout outside internal aggregate deadlines. (GitHub
+  job `93875738386`.)
 - 2026-08-07: `multiprocessing.Pool`'s context manager terminates workers even
   after successful work. With coverage subprocess tracing and SIGTERM saving,
   that signal can re-enter `coverage.stop()` while its monitoring lock is held,
