@@ -7,8 +7,9 @@ import os
 import threading
 import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 
 def _build_backend(
@@ -385,12 +386,19 @@ def _execute_sidecar_probe(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-029] e
 
 def _sidecar_probe_child(
     send_connection: Any,
+    ready_event: Any,
     backend: str,
     target: str,
     scope: str,
     transaction: bool,
     action: str,
+    test_block_stage: Literal["before-readiness", "after-readiness"] | None,
 ) -> None:
+    if test_block_stage == "before-readiness":
+        threading.Event().wait(timeout=30.0)
+    ready_event.set()
+    if test_block_stage == "after-readiness":
+        threading.Event().wait(timeout=30.0)
     try:
         result = _execute_sidecar_probe(
             backend,
@@ -409,6 +417,23 @@ def _sidecar_probe_child(
         send_connection.close()
     finally:
         os._exit(0)
+
+
+def _wait_for_probe_result(
+    ready_event: Any,
+    receive_connection: Any,
+    timeout: float,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[bool, bool]:
+    """Wait for child readiness and one result against one shared deadline."""
+
+    deadline = monotonic() + timeout
+    child_ready = ready_event.wait(timeout=max(0.0, deadline - monotonic()))
+    if not child_ready:
+        return False, False
+    result_available = receive_connection.poll(max(0.0, deadline - monotonic()))
+    return True, bool(result_available)
 
 
 def run_cross_thread_generator_probe(
@@ -470,24 +495,48 @@ def run_cross_thread_sidecar_probe(
     transaction: bool = True,
     action: str = "clean_exit",
     timeout: float = 10.0,
+    _test_block_stage: Literal["before-readiness", "after-readiness"] | None = None,
 ) -> dict[str, Any]:
     """Run one sidecar foreign-resumption probe in a spawned process."""
 
     context = mp.get_context("spawn")
     receive_connection, send_connection = context.Pipe(duplex=False)
+    ready_event = context.Event()
     process = context.Process(
         target=_sidecar_probe_child,
-        args=(send_connection, backend, target, scope, transaction, action),
+        args=(
+            send_connection,
+            ready_event,
+            backend,
+            target,
+            scope,
+            transaction,
+            action,
+            _test_block_stage,
+        ),
     )
     process.start()
     send_connection.close()
     try:
-        if not receive_connection.poll(timeout):
-            process.terminate()
+        child_ready, result_available = _wait_for_probe_result(
+            ready_event,
+            receive_connection,
+            timeout,
+        )
+        if not result_available:
+            process_alive_before_terminate = process.is_alive()
+            if process_alive_before_terminate:
+                process.terminate()
             process.join(timeout=2.0)
             return {
                 "backend": backend,
                 "parent_timeout": True,
+                "timeout_stage": (
+                    "result-publication" if child_ready else "child-readiness"
+                ),
+                "child_ready_before_timeout": child_ready,
+                "process_pid": process.pid,
+                "process_alive_before_terminate": process_alive_before_terminate,
                 "process_exitcode": process.exitcode,
             }
         result = cast(dict[str, Any], receive_connection.recv())

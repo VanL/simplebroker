@@ -121,7 +121,7 @@ jobs:
       if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
       timeout-minutes: 15
       run: |
-        uv run --frozen --no-sync pytest -n0 -vv --tb=short --timeout=180 --timeout-method=thread -m "windows_serial" tests/test_streaming.py tests/test_process_broker_session.py
+        uv run --frozen --no-sync pytest -n0 -vv --tb=short --timeout=180 --timeout-method=thread -m "windows_serial" tests/test_streaming.py tests/test_process_broker_session.py tests/test_cross_thread_probe_transitions.py
 
     - name: Run Windows serialization-sensitive tests serially with coverage
       if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
@@ -130,7 +130,7 @@ jobs:
         COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
-        uv run --frozen --no-sync pytest -n0 -vv --tb=short --timeout=180 --timeout-method=thread -m "windows_serial" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0 tests/test_streaming.py tests/test_process_broker_session.py
+        uv run --frozen --no-sync pytest -n0 -vv --tb=short --timeout=180 --timeout-method=thread -m "windows_serial" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0 tests/test_streaming.py tests/test_process_broker_session.py tests/test_cross_thread_probe_transitions.py
 
     - name: Run phaselock fallback-path gate
       if: matrix.os != 'windows-latest' || matrix.python-version != '3.14'

@@ -673,12 +673,16 @@ def test_windows_serialization_sensitive_proofs_run_outside_xdist() -> None:
     process_session_tests = (ROOT / "tests/test_process_broker_session.py").read_text(
         encoding="utf-8"
     )
+    cross_thread_probe_tests = (
+        ROOT / "tests/test_cross_thread_probe_transitions.py"
+    ).read_text(encoding="utf-8")
 
     assert any(
         marker.startswith("windows_serial:") for marker in pytest_config["markers"]
     )
     assert streaming_tests.count("@pytest.mark.windows_serial") == 2
     assert "pytestmark = pytest.mark.windows_serial" in process_session_tests
+    assert "pytestmark = pytest.mark.windows_serial" in cross_thread_probe_tests
 
     for step_name in (
         "Run Windows tests with pytest",
@@ -704,6 +708,7 @@ def test_windows_serialization_sensitive_proofs_run_outside_xdist() -> None:
         assert "--timeout-method=thread" in step
         assert "tests/test_streaming.py" in step
         assert "tests/test_process_broker_session.py" in step
+        assert "tests/test_cross_thread_probe_transitions.py" in step
 
     coverage_step = matrix_job.split(
         "    - name: Run Windows serialization-sensitive tests serially with coverage",

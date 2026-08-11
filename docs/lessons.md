@@ -116,6 +116,12 @@ Dated moment-tier entries (foldable after age floor and distillation).
   LIFO shutdown produces state-backed evidence after library cleanup. Keep a
   per-test thread-dump timeout outside internal aggregate deadlines. (GitHub
   job `93875738386`.)
+- 2026-08-11: A spawned-child actor probe needs one aggregate deadline split by
+  an explicit child-readiness marker. A bare result-pipe timeout cannot say
+  whether Windows spawn/import or the actor protocol stalled. Preserve the
+  real child and internal threads, remove unrelated xdist concurrency when it
+  is not part of the claim, and report timeout stage, PID, liveness, and exit
+  code before cleanup. (GitHub job `93878833795`.)
 - 2026-08-07: `multiprocessing.Pool`'s context manager terminates workers even
   after successful work. With coverage subprocess tracing and SIGTERM saving,
   that signal can re-enter `coverage.stop()` while its monitoring lock is held,

@@ -6,8 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import pytest
+
 from simplebroker import Queue
 from tests.helper_scripts.cross_thread_generator_probe import (
+    _wait_for_probe_result,
     run_blocked_cross_thread_timeout_probe,
     run_cross_thread_generator_probe,
     run_cross_thread_sidecar_probe,
@@ -18,6 +21,8 @@ from tests.helpers.state_machine_contracts import (
     TransitionCase,
     fires_transition_table,
 )
+
+pytestmark = pytest.mark.windows_serial
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,9 +183,9 @@ def test_cross_thread_probe_fires_transition_table(
             str(tmp_path / "sidecar.db"),
             transaction=True,
             action="clean_exit",
-            timeout=8.0,
+            timeout=scale_timeout_for_ci(8.0),
         )
-        assert result["parent_timeout"] is False
+        assert result["parent_timeout"] is False, result
         assert result["process_exitcode"] == 0
         assert "probe_error" not in result
         assert result["foreign_warning_count"] == 1
@@ -199,14 +204,15 @@ def test_cross_thread_probe_fires_transition_table(
         result = run_cross_thread_generator_probe(
             "unsupported",
             str(tmp_path / "unused.db"),
-            timeout=5.0,
+            timeout=scale_timeout_for_ci(5.0),
         )
-        assert result["parent_timeout"] is False
+        assert result["parent_timeout"] is False, result
         assert result["process_exitcode"] == 0
         assert result["probe_error"].startswith("ValueError: unknown backend")
     elif mode == "parent-timeout":
         result = run_blocked_cross_thread_timeout_probe(
             timeout=0.05,
+            ready_timeout=scale_timeout_for_ci(5.0),
         )
         assert result["parent_timeout"] is True
         assert result["child_ready_before_timeout"] is True
@@ -218,10 +224,67 @@ def test_cross_thread_probe_fires_transition_table(
             str(tmp_path / "queue-close.db"),
             "",
             "ephemeral",
-            timeout=8.0,
+            timeout=scale_timeout_for_ci(8.0),
         )
-        assert result["parent_timeout"] is False
+        assert result["parent_timeout"] is False, result
         assert result["process_exitcode"] == 0
         assert "probe_error" not in result
         assert result["warning_count"] == 1
         assert result["close_errors"] == [None]
+
+
+@pytest.mark.parametrize(
+    ("block_stage", "expected_ready", "expected_timeout_stage"),
+    [
+        ("before-readiness", False, "child-readiness"),
+        ("after-readiness", True, "result-publication"),
+    ],
+)
+def test_sidecar_probe_timeout_reports_owned_stage_and_process_state(
+    tmp_path: Path,
+    block_stage: Literal["before-readiness", "after-readiness"],
+    expected_ready: bool,
+    expected_timeout_stage: str,
+) -> None:
+    result = run_cross_thread_sidecar_probe(
+        "sqlite",
+        str(tmp_path / f"sidecar-timeout-{block_stage}.db"),
+        timeout=scale_timeout_for_ci(1.0),
+        _test_block_stage=block_stage,
+    )
+
+    assert result["parent_timeout"] is True
+    assert result["child_ready_before_timeout"] is expected_ready
+    assert result["timeout_stage"] == expected_timeout_stage
+    assert isinstance(result["process_pid"], int)
+    assert result["process_alive_before_terminate"] is True
+    assert result["process_exitcode"] is not None
+
+
+def test_sidecar_probe_readiness_and_result_share_one_deadline() -> None:
+    clock = {"now": 0.0}
+    readiness_waits: list[float] = []
+    result_waits: list[float] = []
+
+    class FakeReadyEvent:
+        def wait(self, timeout: float) -> bool:
+            readiness_waits.append(timeout)
+            clock["now"] += 0.4
+            return True
+
+    class FakeReceiveConnection:
+        def poll(self, timeout: float) -> bool:
+            result_waits.append(timeout)
+            return False
+
+    child_ready, result_available = _wait_for_probe_result(
+        FakeReadyEvent(),
+        FakeReceiveConnection(),
+        1.0,
+        monotonic=lambda: clock["now"],
+    )
+
+    assert child_ready is True
+    assert result_available is False
+    assert readiness_waits == [pytest.approx(1.0)]
+    assert result_waits == [pytest.approx(0.6)]
