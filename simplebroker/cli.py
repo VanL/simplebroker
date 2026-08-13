@@ -2,6 +2,7 @@
 
 import argparse
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -12,9 +13,10 @@ from ._constants import (
     EXIT_ERROR,
     EXIT_SUCCESS,
     PROG_NAME,
-    load_config,
+    _capture_config,
+    _resolve_config_input,
 )
-from ._exceptions import DatabaseError
+from ._exceptions import DatabaseError, InvalidConfigError
 from ._paths import (
     _find_project_database,
     _resolve_symlinks_safely,
@@ -41,7 +43,7 @@ _TIMESTAMP_BOUND_LIMIT = (
 )
 
 # Get the config
-_config = load_config()
+_config = _capture_config()
 
 
 class ArgumentParserError(Exception):
@@ -145,7 +147,7 @@ def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParser:
+def create_parser(*, config: Mapping[str, Any] = _config) -> argparse.ArgumentParser:
     """Create the main parser with global options and subcommands.
 
     Returns:
@@ -766,7 +768,7 @@ class ArgumentProcessor:
 
 
 def _resolve_database_path(
-    args: argparse.Namespace, *, config: dict[str, Any] = _config
+    args: argparse.Namespace, *, config: Mapping[str, Any] = _config
 ) -> tuple[Path, bool]:
     """Resolve final database path using precedence rules and project scoping.
 
@@ -862,7 +864,7 @@ def _build_sqlite_target(
 
 
 def _resolve_target(
-    args: argparse.Namespace, *, config: dict[str, Any] = _config
+    args: argparse.Namespace, *, config: Mapping[str, Any] = _config
 ) -> BrokerTarget:
     """Resolve the backend target for the current CLI invocation."""
     root = Path(args.dir).expanduser().resolve()
@@ -876,7 +878,7 @@ def _resolve_target(
         )
 
     if config["BROKER_PROJECT_SCOPE"]:
-        discovered_target = resolve_broker_target(root, config=config)
+        discovered_target = resolve_broker_target(root, config=dict(config))
         if discovered_target is not None:
             return discovered_target
     else:
@@ -1248,6 +1250,7 @@ def _dispatch_message_command(
             args.message,
             json_output=args.json,
             show_timestamps=args.timestamps,
+            config=config,
         )
 
     after_str, before_str, message_id_str = _read_peek_filters(args, parser)
@@ -1378,6 +1381,7 @@ def _dispatch_admin_command(
             args.message,
             pattern=getattr(args, "pattern", None),
             queue_names=getattr(args, "queue_names", None),
+            config=config,
         )
     if args.command == "dump":
         return commands.cmd_dump(
@@ -1542,9 +1546,10 @@ def _prepare_dispatch(
     )
 
 
-def main(*, config: dict[str, Any] = _config) -> int:
-    """Run one CLI invocation and return its exit code."""
+def _main(*, config: Mapping[str, Any]) -> int:
+    """Run one CLI invocation after configuration error translation."""
     parser = _get_cli_parser()
+    resolved_config = _resolve_config_input(config)
 
     invocation = _read_invocation(parser)
     if isinstance(invocation, int):
@@ -1561,7 +1566,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
     target_result = _resolve_cli_target(
         args,
         status_json_output=status_json_output,
-        config=config,
+        config=resolved_config,
     )
     if isinstance(target_result, int):
         return target_result
@@ -1572,7 +1577,7 @@ def main(*, config: dict[str, Any] = _config) -> int:
         resolved_target,
         parser,
         status_json_output=status_json_output,
-        config=config,
+        config=resolved_config,
     )
     if action_result is not None:
         return action_result
@@ -1581,14 +1586,16 @@ def main(*, config: dict[str, Any] = _config) -> int:
         args,
         resolved_target,
         status_json_output=status_json_output,
-        config=config,
+        config=resolved_config,
     )
     if preparation_error is not None:
         return preparation_error
 
     try:
-        _validate_command_target(args, resolved_target, config=config)
-        return _dispatch_command(args, resolved_target, parser, config=config)
+        _validate_command_target(args, resolved_target, config=resolved_config)
+        return _dispatch_command(args, resolved_target, parser, config=resolved_config)
+    except InvalidConfigError:
+        raise
     except (ValueError, DatabaseError) as e:
         commands._emit_error(
             e,
@@ -1613,6 +1620,15 @@ def main(*, config: dict[str, Any] = _config) -> int:
                 status_json_output=status_json_output,
             ),
         )
+        return EXIT_ERROR
+
+
+def main(*, config: Mapping[str, Any] = _config) -> int:
+    """Run one CLI invocation and return its exit code."""
+    try:
+        return _main(config=config)
+    except InvalidConfigError as error:
+        print(f"{PROG_NAME}: {error}", file=sys.stderr)
         return EXIT_ERROR
 
 

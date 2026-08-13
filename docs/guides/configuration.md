@@ -16,6 +16,21 @@ catalog. The absolute claimed-row vacuum backstop is normative in
 [`[SB-OPS-6]`](../specs/17-ops.md); this guide explains its configuration
 context.
 
+Recognized settings are strict at the point they are consumed. A value that
+cannot be parsed or validated raises
+`simplebroker.ext.InvalidConfigError` for Python callers. Package import stays
+safe so applications can install their own error boundary, but the first
+operation that needs the invalid ambient configuration fails before opening a
+broker target. The CLI reports the key, a safe rejected-value display, and the
+expected form on stderr, then exits `1`; passwords and full backend targets are
+redacted. It does not substitute defaults after a fatal config error.
+
+`load_config()` and `resolve_config()` remain fresh strict reads of the current
+environment. Long-lived module/handle defaults use one immutable process
+snapshot. `resolve_config(overrides)` still starts from the environment base,
+so an override mapping is not a complete-config bypass for invalid ambient
+state.
+
 ## Environment variables
 
 **Core Settings:**

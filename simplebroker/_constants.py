@@ -27,10 +27,13 @@ import os
 import platform
 import re
 import warnings
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import PurePath
+from types import MappingProxyType
 from typing import Any, Final
+
+from ._exceptions import InvalidConfigError
 
 # ==============================================================================
 # VERSION INFORMATION
@@ -501,49 +504,171 @@ class _ConfigField:
 
     default: str
     normalize: Callable[[Any], Any]
+    expected: str
 
 
 _CONFIG_FIELDS: Final[dict[str, _ConfigField]] = {
-    "BROKER_BUSY_TIMEOUT": _ConfigField("5000", int),
-    "BROKER_CACHE_MB": _ConfigField("10", int),
-    "BROKER_SYNC_MODE": _ConfigField("FULL", lambda value: str(value).upper()),
-    "BROKER_WAL_AUTOCHECKPOINT": _ConfigField("1000", int),
-    "BROKER_MAX_MESSAGE_SIZE": _ConfigField(str(MAX_MESSAGE_SIZE), int),
-    "BROKER_READ_COMMIT_INTERVAL": _ConfigField("1", int),
-    "BROKER_GENERATOR_BATCH_SIZE": _ConfigField("100", int),
-    "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": _ConfigField(
-        str(DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS), _parse_load_max_future_skew
+    "BROKER_BUSY_TIMEOUT": _ConfigField(
+        "5000", int, "an integer number of milliseconds"
     ),
-    "BROKER_AUTO_VACUUM": _ConfigField("1", int),
-    "BROKER_AUTO_VACUUM_INTERVAL": _ConfigField("100", int),
-    "BROKER_VACUUM_THRESHOLD": _ConfigField("10", _parse_vacuum_threshold),
-    "BROKER_VACUUM_BATCH_SIZE": _ConfigField("1000", int),
-    "BROKER_SKIP_IDLE_CHECK": _ConfigField("0", _parse_strict_one_bool),
-    "BROKER_JITTER_FACTOR": _ConfigField("0.15", float),
-    "BROKER_INITIAL_CHECKS": _ConfigField("100", int),
-    "BROKER_MAX_INTERVAL": _ConfigField("0.1", float),
-    "BROKER_BURST_SLEEP": _ConfigField("0.00001", float),
-    "BROKER_DEBUG": _ConfigField("", _parse_debug_flag),
-    "BROKER_LOGGING_ENABLED": _ConfigField("0", _parse_strict_one_bool),
-    "BROKER_DEFAULT_DB_LOCATION": _ConfigField("", str),
-    "BROKER_DEFAULT_DB_NAME": _ConfigField(DEFAULT_DB_NAME, str),
-    "BROKER_PROJECT_CONFIG_PATH": _ConfigField("", str),
-    "BROKER_PROJECT_CONFIG_NAME": _ConfigField(DEFAULT_PROJECT_CONFIG_NAME, str),
-    "BROKER_PROJECT_SCOPE": _ConfigField("0", _parse_project_scope),
-    "BROKER_BACKEND": _ConfigField("sqlite", str),
-    "BROKER_BACKEND_HOST": _ConfigField("localhost", str),
-    "BROKER_BACKEND_PORT": _ConfigField("5432", int),
-    "BROKER_BACKEND_USER": _ConfigField("postgres", str),
-    "BROKER_BACKEND_PASSWORD": _ConfigField("", str),
-    "BROKER_BACKEND_DATABASE": _ConfigField("simplebroker", str),
-    "BROKER_BACKEND_SCHEMA": _ConfigField("simplebroker_pg_v1", str),
-    "BROKER_BACKEND_TARGET": _ConfigField("", str),
+    "BROKER_CACHE_MB": _ConfigField("10", int, "an integer number of megabytes"),
+    "BROKER_SYNC_MODE": _ConfigField(
+        "FULL", lambda value: str(value).upper(), "FULL, NORMAL, or OFF"
+    ),
+    "BROKER_WAL_AUTOCHECKPOINT": _ConfigField("1000", int, "an integer page count"),
+    "BROKER_MAX_MESSAGE_SIZE": _ConfigField(
+        str(MAX_MESSAGE_SIZE), int, "an integer byte count"
+    ),
+    "BROKER_READ_COMMIT_INTERVAL": _ConfigField("1", int, "an integer message count"),
+    "BROKER_GENERATOR_BATCH_SIZE": _ConfigField("100", int, "an integer message count"),
+    "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": _ConfigField(
+        str(DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS),
+        _parse_load_max_future_skew,
+        "a non-negative integer number of seconds",
+    ),
+    "BROKER_AUTO_VACUUM": _ConfigField("1", int, "an integer flag"),
+    "BROKER_AUTO_VACUUM_INTERVAL": _ConfigField(
+        "100", int, "an integer mutation count"
+    ),
+    "BROKER_VACUUM_THRESHOLD": _ConfigField(
+        "10", _parse_vacuum_threshold, "a numeric percentage"
+    ),
+    "BROKER_VACUUM_BATCH_SIZE": _ConfigField("1000", int, "an integer message count"),
+    "BROKER_SKIP_IDLE_CHECK": _ConfigField(
+        "0", _parse_strict_one_bool, "a boolean flag"
+    ),
+    "BROKER_JITTER_FACTOR": _ConfigField("0.15", float, "a numeric ratio"),
+    "BROKER_INITIAL_CHECKS": _ConfigField("100", int, "an integer check count"),
+    "BROKER_MAX_INTERVAL": _ConfigField("0.1", float, "a numeric number of seconds"),
+    "BROKER_BURST_SLEEP": _ConfigField("0.00001", float, "a numeric number of seconds"),
+    "BROKER_DEBUG": _ConfigField("", _parse_debug_flag, "a boolean flag"),
+    "BROKER_LOGGING_ENABLED": _ConfigField(
+        "0", _parse_strict_one_bool, "a boolean flag"
+    ),
+    "BROKER_DEFAULT_DB_LOCATION": _ConfigField(
+        "", str, "an absolute directory path or empty string"
+    ),
+    "BROKER_DEFAULT_DB_NAME": _ConfigField(
+        DEFAULT_DB_NAME, str, "a relative database path with at most one directory"
+    ),
+    "BROKER_PROJECT_CONFIG_PATH": _ConfigField(
+        "", str, "an absolute directory or one relative directory"
+    ),
+    "BROKER_PROJECT_CONFIG_NAME": _ConfigField(
+        DEFAULT_PROJECT_CONFIG_NAME,
+        str,
+        "a relative config path with at most one directory",
+    ),
+    "BROKER_PROJECT_SCOPE": _ConfigField("0", _parse_project_scope, "a boolean flag"),
+    "BROKER_BACKEND": _ConfigField("sqlite", str, "a backend name"),
+    "BROKER_BACKEND_HOST": _ConfigField("localhost", str, "a host name"),
+    "BROKER_BACKEND_PORT": _ConfigField("5432", int, "an integer port"),
+    "BROKER_BACKEND_USER": _ConfigField("postgres", str, "a user name"),
+    "BROKER_BACKEND_PASSWORD": _ConfigField("", str, "a password string"),
+    "BROKER_BACKEND_DATABASE": _ConfigField("simplebroker", str, "a database name"),
+    "BROKER_BACKEND_SCHEMA": _ConfigField("simplebroker_pg_v1", str, "a schema name"),
+    "BROKER_BACKEND_TARGET": _ConfigField("", str, "a backend target string"),
 }
 """Canonical defaults and coercion shared by environment and overrides."""
 
 _CONFIG_NORMALIZERS: Final[dict[str, Callable[[Any], Any]]] = {
     key: field.normalize for key, field in _CONFIG_FIELDS.items()
 }
+
+
+class _CapturedConfig(Mapping[str, Any]):
+    """One immutable process snapshot, successful or failed."""
+
+    __slots__ = ("_error", "_values")
+
+    def __init__(
+        self,
+        values: Mapping[str, Any] | None = None,
+        error: InvalidConfigError | None = None,
+    ) -> None:
+        self._values = MappingProxyType(dict(values or {}))
+        self._error = error
+
+    def _require(self) -> Mapping[str, Any]:
+        if self._error is not None:
+            raise self._error
+        return self._values
+
+    def copy(self) -> dict[str, Any]:
+        return dict(self._require())
+
+    def __getitem__(self, key: str) -> Any:
+        return self._require()[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._require())
+
+    def __len__(self) -> int:
+        return len(self._require())
+
+
+_CAPTURED_CONFIG: _CapturedConfig | None = None
+
+
+def _capture_config() -> _CapturedConfig:
+    """Return the single immutable ambient configuration snapshot."""
+    global _CAPTURED_CONFIG
+    if _CAPTURED_CONFIG is None:
+        try:
+            _CAPTURED_CONFIG = _CapturedConfig(load_config())
+        except InvalidConfigError as error:
+            _CAPTURED_CONFIG = _CapturedConfig(error=error)
+    return _CAPTURED_CONFIG
+
+
+def _resolve_config_input(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Unwrap a trusted process snapshot or resolve ordinary overrides."""
+    if isinstance(value, _CapturedConfig):
+        return value.copy()
+    return resolve_config(value)
+
+
+_SENSITIVE_CONFIG_KEYS: Final = frozenset(
+    {"BROKER_BACKEND_PASSWORD", "BROKER_BACKEND_TARGET"}
+)
+_CONFIG_VALUE_DISPLAY_LIMIT: Final = 160
+
+
+def _safe_config_value_display(key: str, value: Any) -> str:
+    if key in _SENSITIVE_CONFIG_KEYS:
+        return "<redacted>"
+    if type(value) in (str, bytes, int, float, bool, type(None)):
+        display = repr(value)
+    else:
+        display = f"<{type(value).__name__}>"
+    display = "".join(
+        f"\\x{ord(char):02x}" if ord(char) < 32 or ord(char) == 127 else char
+        for char in display
+    )
+    if len(display) > _CONFIG_VALUE_DISPLAY_LIMIT:
+        display = display[: _CONFIG_VALUE_DISPLAY_LIMIT - 3] + "..."
+    return display
+
+
+def _invalid_config_error(key: str, value: Any, *, source: str) -> InvalidConfigError:
+    return InvalidConfigError(
+        key=key,
+        source=source,
+        expected=_CONFIG_FIELDS[key].expected,
+        value_display=_safe_config_value_display(key, value),
+    )
+
+
+def _normalize_config_value(key: str, value: Any, *, source: str) -> Any:
+    normalization_value = value
+    if isinstance(value, str) and type(value) is not str:
+        normalization_value = str.__str__(value)
+    try:
+        return _CONFIG_FIELDS[key].normalize(normalization_value)
+    except (TypeError, ValueError) as exc:
+        raise _invalid_config_error(key, value, source=source) from exc
 
 
 def resolve_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -562,11 +687,16 @@ def resolve_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]
 
     for key, value in overrides.items():
         normalizer = _CONFIG_NORMALIZERS.get(key)
-        config[key] = normalizer(value) if normalizer is not None else value
+        config[key] = (
+            _normalize_config_value(key, value, source="override")
+            if normalizer is not None
+            else value
+        )
 
     if config["BROKER_SYNC_MODE"] not in ("FULL", "NORMAL", "OFF"):
         config["BROKER_SYNC_MODE"] = "FULL"
 
+    _validate_config(config, source="override")
     return config
 
 
@@ -671,6 +801,20 @@ def _validate_project_config_name(config: dict[str, Any]) -> None:
                 "must not combine into nested directories. Only single "
                 "directory level is supported (e.g., 'dir/broker.toml')"
             )
+
+
+def _validate_config(config: dict[str, Any], *, source: str) -> None:
+    validators = (
+        ("BROKER_DEFAULT_DB_LOCATION", _validate_default_database_location),
+        ("BROKER_DEFAULT_DB_NAME", _validate_default_database_name),
+        ("BROKER_PROJECT_CONFIG_PATH", _validate_project_config_location),
+        ("BROKER_PROJECT_CONFIG_NAME", _validate_project_config_name),
+    )
+    for key, validator in validators:
+        try:
+            validator(config)
+        except ValueError as exc:
+            raise _invalid_config_error(key, config[key], source=source) from exc
 
 
 def load_config() -> dict[str, Any]:
@@ -834,7 +978,11 @@ def load_config() -> dict[str, Any]:
 
     """
     config = {
-        key: field.normalize(os.environ.get(key, field.default))
+        key: _normalize_config_value(
+            key,
+            os.environ.get(key, field.default),
+            source="environment",
+        )
         for key, field in _CONFIG_FIELDS.items()
     }
 
@@ -842,10 +990,7 @@ def load_config() -> dict[str, Any]:
     if config["BROKER_SYNC_MODE"] not in ("FULL", "NORMAL", "OFF"):
         config["BROKER_SYNC_MODE"] = "FULL"
 
-    _validate_default_database_location(config)
-    _validate_default_database_name(config)
-    _validate_project_config_location(config)
-    _validate_project_config_name(config)
+    _validate_config(config, source="environment")
     return config
 
 

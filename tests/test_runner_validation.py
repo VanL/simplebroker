@@ -12,7 +12,6 @@ import pytest
 
 from simplebroker import Queue, _retry_policy
 from simplebroker import _phaselock as phaselock_module
-from simplebroker import _runner as runner_module
 from simplebroker._constants import SCHEMA_VERSION
 from simplebroker._exceptions import OperationalError, StopException
 from simplebroker._phaselock import PhaseLockService
@@ -124,7 +123,7 @@ class TestSQLiteRunnerValidation:
             setup_called = True
 
         monkeypatch.setattr(
-            runner_module.db_backend,
+            runner._backend,
             "setup_connection_phase",
             setup_connection_phase,
         )
@@ -150,7 +149,7 @@ class TestSQLiteRunnerValidation:
             setup_called = True
 
         monkeypatch.setattr(
-            runner_module.db_backend,
+            runner._backend,
             "setup_connection_phase",
             setup_connection_phase,
         )
@@ -515,13 +514,12 @@ class TestSQLiteRunnerValidation:
         def fail_validation(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("completion marker check opened SQLite validation")
 
+        runner = SQLiteRunner(str(db_path))
         monkeypatch.setattr(
-            runner_module.db_backend,
+            runner._backend,
             "validate_database",
             fail_validation,
         )
-
-        runner = SQLiteRunner(str(db_path))
         try:
             runner.setup(SetupPhase.CONNECTION)
         finally:

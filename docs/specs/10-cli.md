@@ -49,6 +49,15 @@ payload in full.
 Quiet mode suppresses human commentary on stderr. It never suppresses an error
 diagnostic and never moves payload or errors to a different stream.
 
+A recognized `BROKER_*` environment value that cannot be parsed or validated
+is an invocation error. Before parser-dependent behavior or any broker action,
+the CLI writes one plain-text diagnostic to stderr naming the offending key, a
+safe representation of the rejected value, and the expected form, then exits
+`1`. Stdout remains empty and no traceback is shown. Sensitive values are
+redacted. This pre-parse failure applies to all argv shapes, including help,
+version, and raw `--json`; `[SB-CLI-4]`'s JSON error guarantee begins only
+after argument parsing establishes JSON mode.
+
 `load` warns on stderr when the dump header is physically ahead of local wall
 time. Global quiet mode suppresses that warning, including with `load --force`,
 but does not change whether the skew check or forced load executes. The force
@@ -73,6 +82,10 @@ _Implementation mapping_:
 ## JSON and related output shapes [SB-CLI-4]
 
 Public CLI `--json` (and dump NDJSON) shapes by command family:
+
+Invalid recognized environment configuration is the pre-parse exception to
+structured CLI error output defined by `[SB-CLI-2]`; a raw `--json` token does
+not make that diagnostic JSON.
 
 | Commands | Shape |
 |----------|--------|
@@ -149,6 +162,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-13-invalid-environment-import-lifecycle-plan.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-08-08-json-timestamp-string-contract-plan — source `4cb47bc9`;
@@ -170,6 +184,8 @@ _Implementation mapping_:
 
 ## Verification
 
+- `[SB-CLI-2]` invalid-environment import and pre-parse diagnostics:
+  `tests/test_invalid_config_lifecycle.py::test_cli_reports_invalid_environment_before_parsing`
 - `tests/test_documented_exit_codes.py` — [SB-CLI-1] + README link
 - `tests/test_agent_kernel_contract.py` — [SB-CLI-1] + kernel link
 - `tests/test_cli_contract_sb_cli.py` — [SB-CLI-2], [SB-CLI-3], [SB-CLI-4]

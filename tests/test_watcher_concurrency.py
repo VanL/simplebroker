@@ -10,7 +10,6 @@ import warnings
 
 import pytest
 
-from simplebroker import _runner as runner_module
 from simplebroker._exceptions import OperationalError
 from simplebroker._targets import BrokerTarget
 
@@ -760,8 +759,10 @@ class TestEdgeCases(WatcherTestBase):
             assert release_setup.wait(timeout=scale_timeout_for_ci(2.0))
             raise OperationalError("database is locked")
 
+        from simplebroker._backends import sqlite as sqlite_backend
+
         monkeypatch.setattr(
-            runner_module.db_backend,
+            sqlite_backend,
             "setup_connection_phase",
             locked_connection_setup,
         )

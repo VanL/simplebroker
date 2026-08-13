@@ -36,6 +36,7 @@ def test_ext_all_exports():
         "DatabaseError",
         "OperationalError",
         "IntegrityError",
+        "InvalidConfigError",
         "DataError",
         "TimestampError",
         "QueueNameError",

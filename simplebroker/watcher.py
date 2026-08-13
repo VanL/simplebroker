@@ -77,7 +77,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Self, cast
 
 from ._constants import (
     MAX_TOTAL_RETRY_TIME,
-    load_config,
+    _capture_config,
+    _resolve_config_input,
     resolve_config,
 )
 from ._exceptions import OperationalError, StopException
@@ -104,7 +105,7 @@ __all__ = [
     "simple_print_handler",
 ]
 
-_config = load_config()
+_config = _capture_config()
 
 
 # Default message handlers for common use cases
@@ -285,7 +286,7 @@ class BaseWatcher(ABC):
         db: BrokerDB | str | Path | BrokerTarget | None = None,
         stop_event: threading.Event | None = None,
         polling_strategy: PollingStrategy | None = None,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] = _config,
     ) -> None:
         """Initialize base watcher.
 
@@ -300,8 +301,9 @@ class BaseWatcher(ABC):
         # Handle queue parameter - either Queue object or string name
         if isinstance(queue, Queue):
             self._queue_obj = queue
+            resolved_config = _resolve_config_input(config)
         else:
-            resolved_config = resolve_config(config)
+            resolved_config = _resolve_config_input(config)
             # Create Queue object with persistent=True by default for watchers.
             # ``None`` means Queue should resolve the target from config.
             db_path: str | BrokerTarget | None
@@ -324,7 +326,6 @@ class BaseWatcher(ABC):
             self._queue_obj = Queue(
                 str(queue), db_path=db_path, persistent=True, config=resolved_config
             )
-            config = resolved_config
 
         # Event to signal the watcher to stop
         self._stop_event = stop_event or threading.Event()
@@ -336,7 +337,7 @@ class BaseWatcher(ABC):
             self._queue_obj.set_stop_event(self._stop_event)
 
         # Store configuration
-        self._config = resolve_config(config)
+        self._config = resolved_config
 
         # Weak reference to the thread running this watcher (for cleanup warnings)
         self._thread: weakref.ref[threading.Thread] | None = None
@@ -1506,7 +1507,7 @@ class QueueWatcher(BaseWatcher):
         batch_processing: bool = False,
         polling_strategy: PollingStrategy | None = None,
         error_handler: ErrorHandler = _DEFAULT_ERROR_HANDLER,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] = _config,
     ) -> None:
         """Initialize the QueueWatcher.
 
@@ -1801,7 +1802,7 @@ class QueueMoveWatcher(BaseWatcher):
         max_messages: int | None = None,
         polling_strategy: PollingStrategy | None = None,
         error_handler: ErrorHandler = _DEFAULT_ERROR_HANDLER,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] = _config,
     ) -> None:
         """Initialize a QueueMoveWatcher.
 

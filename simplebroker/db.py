@@ -51,7 +51,8 @@ from ._constants import (
     MAX_QUEUE_NAME_LENGTH,
     PEEK_BATCH_SIZE,
     SIMPLEBROKER_MAGIC,
-    load_config,
+    _capture_config,
+    _resolve_config_input,
     resolve_config,
 )
 from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
@@ -105,7 +106,7 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 # Load configuration once at module level
-_config = load_config()
+_config = _capture_config()
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ def _get_sql_namespace(plugin: BackendPlugin) -> BackendSQLNamespace:
 
 def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
     """Overlay caller-provided config values onto the default config snapshot."""
-    return resolve_config(config)
+    return _resolve_config_input(config)
 
 
 class _ProcessSessionCoreFactory:
@@ -460,7 +461,7 @@ class DBConnection:
         db_path: str | BrokerTarget,
         runner: SQLRunner | None = None,
         *,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] = _config,
         share_in_process: bool = False,
     ):
         """Initialize the connection manager.
@@ -923,7 +924,7 @@ def open_broker(
     db_target: str | BrokerTarget,
     runner: SQLRunner | None = None,
     *,
-    config: dict[str, Any] = _config,
+    config: Mapping[str, Any] = _config,
 ) -> Iterator[BrokerConnection]:
     """Open a backend-agnostic broker connection for the lifetime of a context."""
 
@@ -951,7 +952,7 @@ class BrokerCore:
         self,
         runner: SQLRunner,
         *,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] = _config,
         backend_plugin: BackendPlugin | None = None,
         stop_event: threading.Event | None = None,
     ):
@@ -3576,7 +3577,7 @@ class BrokerDB(BrokerCore):
         self,
         db_path: str,
         *,
-        config: dict[str, Any] = _config,
+        config: Mapping[str, Any] = _config,
         stop_event: threading.Event | None = None,
     ):
         """Initialize database connection and create schema.

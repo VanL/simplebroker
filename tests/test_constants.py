@@ -724,19 +724,31 @@ class TestConfigValidation:
                 {"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "-1"},
                 clear=True,
             ),
-            pytest.raises(ValueError, match="must be a non-negative integer"),
+            pytest.raises(
+                ValueError,
+                match="expected a non-negative integer number of seconds",
+            ),
         ):
             load_config()
-        with pytest.raises(ValueError, match="must be a non-negative integer"):
+        with pytest.raises(
+            ValueError,
+            match="expected a non-negative integer number of seconds",
+        ):
             resolve_config({"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": -1})
 
     @pytest.mark.parametrize("value", [True, 1.0, 1.9])
     def test_load_future_skew_rejects_non_integer_type(self, value: object) -> None:
-        with pytest.raises(TypeError, match="must be a non-negative integer"):
+        with pytest.raises(
+            ValueError,
+            match="expected a non-negative integer number of seconds",
+        ):
             resolve_config({"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": value})
 
     def test_load_future_skew_rejects_non_integer_string(self) -> None:
-        with pytest.raises(ValueError, match="must be a non-negative integer"):
+        with pytest.raises(
+            ValueError,
+            match="expected a non-negative integer number of seconds",
+        ):
             resolve_config({"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "1.9"})
 
     def test_broker_default_db_name_absolute_path_raises_error(self) -> None:
@@ -752,7 +764,7 @@ class TestConfigValidation:
                 patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": test_path}),
                 pytest.raises(
                     ValueError,
-                    match="BROKER_DEFAULT_DB_NAME must be a relative path, not absolute",
+                    match="expected a relative database path with at most one directory",
                 ),
             ):
                 load_config()
@@ -773,7 +785,7 @@ class TestConfigValidation:
             patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": test_path}),
             pytest.raises(
                 ValueError,
-                match="BROKER_DEFAULT_DB_NAME must be a relative path, not absolute",
+                match="expected a relative database path with at most one directory",
             ),
         ):
             load_config()
@@ -783,7 +795,8 @@ class TestConfigValidation:
         with (
             patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": ".config/app/broker.db"}),
             pytest.raises(
-                ValueError, match="Database name must not contain nested directories"
+                ValueError,
+                match="expected a relative database path with at most one directory",
             ),
         ):
             load_config()
@@ -812,7 +825,7 @@ class TestConfigValidation:
                 patch.dict(os.environ, {"BROKER_DEFAULT_DB_LOCATION": test_path}),
                 pytest.raises(
                     ValueError,
-                    match="BROKER_DEFAULT_DB_LOCATION validation failed.*dangerous character",
+                    match="expected an absolute directory path or empty string",
                 ),
             ):
                 load_config()
@@ -838,7 +851,7 @@ class TestConfigValidation:
             patch.dict(os.environ, {"BROKER_DEFAULT_DB_NAME": "test|dir/broker.db"}),
             pytest.raises(
                 ValueError,
-                match="BROKER_DEFAULT_DB_NAME validation failed.*dangerous character",
+                match="expected a relative database path with at most one directory",
             ),
         ):
             load_config()
@@ -863,7 +876,7 @@ class TestConfigValidation:
                 patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_NAME": test_path}),
                 pytest.raises(
                     ValueError,
-                    match="BROKER_PROJECT_CONFIG_NAME must be a relative path",
+                    match="expected a relative config path with at most one directory",
                 ),
             ):
                 load_config()
@@ -881,7 +894,8 @@ class TestConfigValidation:
         with (
             patch.dict(os.environ, {"BROKER_PROJECT_CONFIG_PATH": ".weft/config"}),
             pytest.raises(
-                ValueError, match="BROKER_PROJECT_CONFIG_PATH must be an absolute path"
+                ValueError,
+                match="expected an absolute directory or one relative directory",
             ),
         ):
             load_config()
@@ -898,7 +912,7 @@ class TestConfigValidation:
             ),
             pytest.raises(
                 ValueError,
-                match="must not combine into nested directories",
+                match="expected a relative config path with at most one directory",
             ),
         ):
             load_config()

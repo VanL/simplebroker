@@ -12,11 +12,11 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
-from ._constants import load_config, resolve_config
+from ._constants import _capture_config, _resolve_config_input
 from ._key_material import FrozenValue, freeze_key_material
 from ._targets import BrokerTarget
 
-_config = load_config()
+_config = _capture_config()
 _CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
 
 
@@ -99,7 +99,7 @@ def _session_spec(
     config: Mapping[str, Any],
 ) -> _SessionSpec:
     backend_name, target, backend_options, backend_plugin = _target_parts(db_path)
-    resolved_config = resolve_config(dict(config))
+    resolved_config = _resolve_config_input(config)
     key = _SessionKey(
         pid=os.getpid(),
         backend_name=backend_name,

@@ -29,7 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-08-13-invalid-environment-import-lifecycle-plan.md | active — Class 5 with mandatory hardening; strict typed config failures, one cached import-safe capture without fallback, and one CLI exit-1 diagnostic are planned; independent plan/spec-delta review passed, so Strategy-A spec promotion is next |
+| 2026-08-13-invalid-environment-import-lifecycle-plan.md | active — Class 5 with mandatory hardening; strict typed config failures, one cached import-safe capture without fallback, and one CLI exit-1 diagnostic are implemented and fully verified; independent completed-work remediation review passed, with owner commit and closure pending |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | status-review — class 4; implementation and reviews landed in b01bc3cb and shipped in 5.6.2, but the plan records no evidence for its required five post-commit coverage-diagnostics runs |
 
 ## Retired Plans

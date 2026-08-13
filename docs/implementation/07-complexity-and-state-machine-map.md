@@ -156,7 +156,7 @@ failure or cleanup order.
 | async `stream_read` (19) | `stream_read` (7) | Split peek, exactly-once, at-least-once, and single-message generators; public close propagates to the selected generator. |
 | `MultiQueueWatcher.__init__` (15) | `__init__` (4) | Fixed handler carry-over; named validation and queue-entry construction. |
 | safe path validation (17) | `_validate_safe_path_components` (6) | Named dangerous-character and component checks without changing error order. |
-| `load_config` (19) | `load_config` (2) | One 31-field schema plus named default-path and project-config validation phases. |
+| `load_config` (19) | `load_config` (2) | One 32-field schema plus named default-path and project-config validation phases. |
 | advisory `acquire` (12) | `acquire` (10) | Named the shared lock-retry decision while keeping acquisition ownership local. |
 | `packaging_smoke_main` (12) | `packaging_smoke_main` (5) | Named build, artifact inspection, install, and smoke phases. |
 | `TimestampGenerator.validate` (11) | `validate` (9) | Removed float fallback and made each integral grammar's rejection/precedence explicit. |
@@ -173,6 +173,21 @@ failure or cleanup order.
 | dependency import scan (13) | `test_no_external_imports` (1) | Both dependency gates share parsed-source and absolute-import traversal. |
 | setup idle-budget test (11) | test (6) | Shared setup runner, plugin, and minimal-core fixtures without mocking the budget owner. |
 | managed subprocess context (24) | `managed_subprocess` (7) | `ManagedProcess.close` is the one idempotent escalation and reader-cleanup owner. |
+
+Configuration failure has one deep private seam in `_constants.py`.
+`load_config()` remains the strict fresh environment parser and
+`resolve_config()` remains environment-base plus typed overrides. Module
+defaults share one immutable `_CapturedConfig`: success retains a fixed mapping
+copy; failure retains one `InvalidConfigError` without usable fallback values.
+`_resolve_config_input()` unwraps only that trusted capture and delegates every
+ordinary mapping to public resolution. This prevents import-time tracebacks
+without creating a second parser or allowing work under invented defaults.
+
+The capture itself has no backend side effect. `_paths.py` resolves its built-in
+backend at each validation call, while each `SQLiteRunner` resolves and owns
+its backend after valid config is available. `cli.main()` is the sole process
+translator for `InvalidConfigError`; direct library and command paths retain
+the typed exception when they consume configuration.
 | two diagnostic race tests (19, 11) | deleted | Stronger production-path transition and concurrency tests made the diagnostic-only assertions redundant. |
 
 Redis broadcast also improved from 36 to 28 through named selector, patterned

@@ -27,11 +27,11 @@ from ._constants import (
     EXIT_ERROR,
     EXIT_QUEUE_EMPTY,
     EXIT_SUCCESS,
-    load_config,
-    resolve_config,
+    _capture_config,
+    _resolve_config_input,
 )
 from ._dump import DumpClockSkewWarning, dump_lines, load_lines
-from ._exceptions import IntegrityError, TimestampError
+from ._exceptions import IntegrityError, InvalidConfigError, TimestampError
 from ._message_id import (
     INVALID_MESSAGE_ID_MESSAGE,
     format_message_id,
@@ -46,7 +46,7 @@ from .sbqueue import Queue, _close_iterator
 from .watcher import QueueMoveWatcher, QueueWatcher, StopWatching
 
 DBTarget = str | BrokerTarget
-_config = load_config()
+_config = _capture_config()
 _MOVE_ALL_LIMIT = 1_000_000
 _WINDOWS_CLOSED_PIPE_ERRORS = frozenset({109, 232})
 _JSON_ERROR_CODES = frozenset(
@@ -147,6 +147,12 @@ def _emit_error(
     else:
         print(f"simplebroker: error: {text}", file=sys.stderr)
     sys.stderr.flush()
+
+
+def _reraise_invalid_config(error: BaseException) -> None:
+    """Keep command diagnostics from swallowing configuration initialization."""
+    if isinstance(error, InvalidConfigError):
+        raise error
 
 
 def _target_string(db_target: DBTarget) -> str:
@@ -292,7 +298,7 @@ def _read_from_stdin(max_bytes: int | None = None) -> str:
 
 
 def _get_message_content(
-    message: str | None, *, config: dict[str, Any] = _config
+    message: str | None, *, config: Mapping[str, Any] = _config
 ) -> str:
     """Get message content from argument or stdin, with size validation.
 
@@ -305,7 +311,7 @@ def _get_message_content(
     Raises:
         ValueError: If message exceeds size limit or no interactive message was given
     """
-    resolved_config = resolve_config(config)
+    resolved_config = _resolve_config_input(config)
     max_message_size = int(resolved_config["BROKER_MAX_MESSAGE_SIZE"])
 
     if message == "-":
@@ -523,7 +529,7 @@ def cmd_write(
     *,
     json_output: bool = False,
     show_timestamps: bool = False,
-    config: dict[str, Any] = _config,
+    config: Mapping[str, Any] = _config,
 ) -> int:
     """Write message to queue using Queue API.
 
@@ -537,7 +543,7 @@ def cmd_write(
     Returns:
         Exit code
     """
-    resolved_config = resolve_config(config)
+    resolved_config = _resolve_config_input(config)
     content = _get_message_content(message, config=resolved_config)
     canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
     with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
@@ -559,7 +565,7 @@ def cmd_read(
     after_str: str | None = None,
     message_id_str: str | None = None,
     before_str: str | None = None,
-    config: dict[str, Any] = _config,
+    config: Mapping[str, Any] = _config,
 ) -> int:
     """Read and remove message(s) from queue using Queue API.
 
@@ -587,7 +593,7 @@ def cmd_read(
     if error_code is not None:
         return error_code
 
-    resolved_config = resolve_config(config)
+    resolved_config = _resolve_config_input(config)
 
     # Create queue instance
     canonical_queue, _ = _resolve_alias_name(db_path, queue_name)
@@ -811,6 +817,7 @@ def cmd_status(db_path: DBTarget, *, json_output: bool = False) -> int:
             db = cast(BrokerDB, conn.get_connection())
             stats = db.status()
     except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
+        _reraise_invalid_config(e)
         _emit_error(e, code="ERROR", json_output=json_output)
         return EXIT_ERROR
 
@@ -958,6 +965,7 @@ def _move_all_messages(
     except _StdoutClosed:
         return EXIT_SUCCESS
     except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
+        _reraise_invalid_config(error)
         _emit_error(error, code="ERROR", json_output=json_output)
         return EXIT_ERROR
 
@@ -1089,7 +1097,7 @@ def cmd_broadcast(
     pattern: str | None = None,
     *,
     queue_names: Sequence[str] | None = None,
-    config: dict[str, Any] = _config,
+    config: Mapping[str, Any] = _config,
 ) -> int:
     """Send a message to selected queues.
 
@@ -1105,7 +1113,7 @@ def cmd_broadcast(
     Returns:
         Exit code
     """
-    resolved_config = resolve_config(config)
+    resolved_config = _resolve_config_input(config)
     content = _get_message_content(message, config=resolved_config)
 
     # Broadcast is a cross-queue operation, use DBConnection
@@ -1199,6 +1207,7 @@ def cmd_load(
                 warnings.simplefilter("always", DumpClockSkewWarning)
                 load_lines(broker, sys.stdin, force=force, config=config)
     except ValueError as exc:
+        _reraise_invalid_config(exc)
         print(f"broker load: {exc}", file=sys.stderr)
         return EXIT_ERROR
     except IntegrityError as exc:
@@ -1398,6 +1407,7 @@ def cmd_watch(
     except KeyboardInterrupt:
         return EXIT_SUCCESS
     except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
+        _reraise_invalid_config(error)
         _emit_error(error, code="ERROR", json_output=json_output)
         return EXIT_ERROR
     finally:
@@ -1499,6 +1509,7 @@ def _init_sqlite_path(db_path: str, *, quiet: bool) -> int:
         _status(f"Initialized SimpleBroker database: {db_path}", quiet=quiet)
         return EXIT_SUCCESS
     except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
+        _reraise_invalid_config(error)
         print(f"Error initializing database: {error}", file=sys.stderr)
         return EXIT_ERROR
 

@@ -14,6 +14,44 @@ class BrokerError(Exception):
     """Base exception for all SimpleBroker errors."""
 
 
+class InvalidConfigError(BrokerError, ValueError):
+    """A recognized configuration value could not be parsed or validated."""
+
+    __slots__ = ("_expected", "_key", "_source", "_value_display")
+
+    def __init__(
+        self,
+        *,
+        key: str,
+        source: str,
+        expected: str,
+        value_display: str,
+    ) -> None:
+        self._key = key
+        self._source = source
+        self._expected = expected
+        self._value_display = value_display
+        super().__init__(
+            f"invalid configuration {key}={value_display}: expected {expected}"
+        )
+
+    @property
+    def key(self) -> str:
+        return self._key
+
+    @property
+    def source(self) -> str:
+        return self._source
+
+    @property
+    def expected(self) -> str:
+        return self._expected
+
+    @property
+    def value_display(self) -> str:
+        return self._value_display
+
+
 class DatabaseError(BrokerError, sqlite3.DatabaseError):
     """Base class for package-defined database failures.
 

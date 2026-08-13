@@ -102,12 +102,13 @@ def test_direct_argv_message_size_limit(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.chdir(workdir)
-    monkeypatch.setitem(commands._config, "BROKER_MAX_MESSAGE_SIZE", 4)
+    config = dict(commands._config)
+    config["BROKER_MAX_MESSAGE_SIZE"] = 4
     with patch(
         "sys.argv",
         ["broker", "-d", str(workdir), "write", "test_queue", "abcde"],
     ):
-        assert main() == 1
+        assert main(config=config) == 1
 
     captured = capsys.readouterr()
     assert captured.out == ""

@@ -159,6 +159,9 @@ def test_api_generators_watchers_sidecar_io_errors_language() -> None:
     errors = _section("SB-API-9")
     assert "exception" in errors.lower()
     assert "message text" in errors.lower() or "not a frozen" in errors.lower()
+    assert "InvalidConfigError" in errors
+    assert "ValueError" in errors
+    assert "successful process snapshots remain fixed" in errors.lower()
 
 
 def test_api_activity_waiter_terminal_close_contract() -> None:
@@ -181,6 +184,8 @@ def test_api_command_layer_and_advanced_language() -> None:
     assert "simplebroker.commands" in commands_section
     assert "cmd_" in commands_section
     assert "exit" in commands_section.lower()
+    assert "explicit target" in commands_section.lower()
+    assert "InvalidConfigError" in commands_section
     advanced = _section("SB-API-11")
     assert "BACKEND_API_VERSION" in advanced or "backend" in advanced.lower()
     assert "SDK" in advanced or "sdk" in advanced.lower()

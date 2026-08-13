@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Invalid recognized `BROKER_*` values no longer crash package import before
+  the CLI can report them. Strict config loading now raises public
+  `simplebroker.ext.InvalidConfigError` with safe key/source/expected metadata;
+  the CLI emits one redacted plain-text diagnostic and exits `1` before parser
+  behavior or broker side effects. It never continues with fallback defaults.
+
 ## [7.3.0] - 2026-08-13
 
 ### Changed

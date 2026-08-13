@@ -7,7 +7,7 @@ queues without managing the underlying database connection.
 import logging
 import threading
 import weakref
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -21,7 +21,12 @@ from ._backend_plugins import (
     MultiQueueActivityWaiterHook,
     get_backend_plugin,
 )
-from ._constants import DEFAULT_DB_NAME, PEEK_BATCH_SIZE, load_config, resolve_config
+from ._constants import (
+    DEFAULT_DB_NAME,
+    PEEK_BATCH_SIZE,
+    _capture_config,
+    resolve_config,
+)
 from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
 from ._exceptions import QueueNameError
 from ._key_material import FrozenValue, freeze_key_material
@@ -37,7 +42,7 @@ from .project import target_for_directory
 logger = logging.getLogger(__name__)
 
 # Load configuration once at module level
-_config = load_config()
+_config = _capture_config()
 
 
 def _close_iterator(iterator: object) -> None:
@@ -1433,7 +1438,7 @@ class Queue:
 
         def cleanup(
             conn: DBConnection | None,
-            config: dict[str, Any] | None,
+            config: Mapping[str, Any] | None,
             watcher_conn_attr: str,
         ) -> None:
             """Cleanup function called by finalizer."""
