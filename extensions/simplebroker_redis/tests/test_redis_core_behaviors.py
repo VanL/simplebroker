@@ -9,6 +9,7 @@ from typing import NoReturn
 
 import pytest
 import redis
+from redis.typing import EncodableT, KeyT
 from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys
@@ -30,8 +31,12 @@ def test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval(
     original_eval = core._client.eval
     floor = 1_000
 
-    def eval_then_disconnect(*args: object, **kwargs: object) -> NoReturn:
-        original_eval(*args, **kwargs)
+    def eval_then_disconnect(
+        script: str,
+        numkeys: int,
+        *keys_and_args: KeyT | EncodableT,
+    ) -> NoReturn:
+        original_eval(script, numkeys, *keys_and_args)
         raise redis.ConnectionError("injected disconnect after EVAL")
 
     try:
