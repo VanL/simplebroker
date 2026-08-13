@@ -96,7 +96,7 @@ jobs:
     - name: Run Windows tests with pytest
       if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
       run: |
-        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark and not windows_serial" --override-ini="addopts=-ra -q --strict-markers -n 2 --dist loadgroup --max-worker-restart=0"
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n 2 --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0"
 
     - name: Run SQLite cross-thread finalization probe
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
@@ -115,22 +115,7 @@ jobs:
         COVERAGE_FILE: ${{ github.workspace }}/.coverage
       run: |
         uv run --frozen --no-sync coverage erase
-        uv run --frozen --no-sync pytest --tb=short -m "not benchmark and not windows_serial" --override-ini="addopts=-ra -vv --strict-markers -n 2 --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
-
-    - name: Run Windows serialization-sensitive tests serially
-      if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
-      timeout-minutes: 15
-      run: |
-        uv run --frozen --no-sync pytest -n0 -vv --tb=short --timeout=180 --timeout-method=thread -m "windows_serial" tests/test_streaming.py tests/test_process_broker_session.py tests/test_cross_thread_probe_transitions.py
-
-    - name: Run Windows serialization-sensitive tests serially with coverage
-      if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
-      timeout-minutes: 15
-      env:
-        COVERAGE_PROCESS_START: ${{ github.workspace }}/pyproject.toml
-        COVERAGE_FILE: ${{ github.workspace }}/.coverage
-      run: |
-        uv run --frozen --no-sync pytest -n0 -vv --tb=short --timeout=180 --timeout-method=thread -m "windows_serial" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-append --cov-report= --cov-fail-under=0 tests/test_streaming.py tests/test_process_broker_session.py tests/test_cross_thread_probe_transitions.py
+        uv run --frozen --no-sync pytest --tb=short -m "not benchmark" --override-ini="addopts=-ra -vv --strict-markers -n 2 --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
 
     - name: Run phaselock fallback-path gate
       if: matrix.os != 'windows-latest' || matrix.python-version != '3.14'

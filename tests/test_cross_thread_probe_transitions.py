@@ -22,8 +22,6 @@ from tests.helpers.state_machine_contracts import (
     fires_transition_table,
 )
 
-pytestmark = pytest.mark.windows_serial
-
 
 @dataclass(frozen=True, slots=True)
 class CrossThreadProbePayload:

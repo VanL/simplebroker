@@ -328,8 +328,8 @@ def test_read_all_commit_interval_keeps_uncommitted_batch_on_output_failure(
     workdir, monkeypatch
 ):
     """CLI read --all should honor BROKER_READ_COMMIT_INTERVAL batching."""
-    db_path = workdir / "batch.db"
-    queue = Queue("batch_queue", db_path=str(db_path))
+    target = target_for_directory(workdir)
+    queue = Queue("batch_queue", db_path=target)
     for i in range(20):
         queue.write(f"msg{i:02d}")
 
@@ -354,13 +354,13 @@ def test_read_all_commit_interval_keeps_uncommitted_batch_on_output_failure(
 
     with pytest.raises(RuntimeError, match="output stopped"):
         commands.cmd_read(
-            str(db_path),
+            target,
             "batch_queue",
             all_messages=True,
             config=config,
         )
 
-    remaining = Queue("batch_queue", db_path=str(db_path)).peek_many(
+    remaining = Queue("batch_queue", db_path=target).peek_many(
         limit=100, with_timestamps=False
     )
     assert emitted == [f"msg{i:02d}" for i in range(6)]

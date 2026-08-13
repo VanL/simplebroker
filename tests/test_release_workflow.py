@@ -663,26 +663,21 @@ def test_matrix_jobs_fail_closed_on_worker_loss() -> None:
         assert "--max-worker-restart=0" in step
 
 
-def test_windows_serialization_sensitive_proofs_run_outside_xdist() -> None:
+def test_windows_tests_keep_default_xdist_contention() -> None:
     workflow_text = _workflow_text("test.yml")
     matrix_job = workflow_text.split("  test:", 1)[1].split("  lint:", 1)[0]
     pytest_config = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )["tool"]["pytest"]["ini_options"]
-    streaming_tests = (ROOT / "tests/test_streaming.py").read_text(encoding="utf-8")
-    process_session_tests = (ROOT / "tests/test_process_broker_session.py").read_text(
-        encoding="utf-8"
-    )
-    cross_thread_probe_tests = (
-        ROOT / "tests/test_cross_thread_probe_transitions.py"
-    ).read_text(encoding="utf-8")
 
-    assert any(
+    assert not any(
         marker.startswith("windows_serial:") for marker in pytest_config["markers"]
     )
-    assert streaming_tests.count("@pytest.mark.windows_serial") == 2
-    assert "pytestmark = pytest.mark.windows_serial" in process_session_tests
-    assert "pytestmark = pytest.mark.windows_serial" in cross_thread_probe_tests
+    assert "windows_serial" not in workflow_text
+    this_test = Path(__file__).resolve()
+    for test_path in (ROOT / "tests").rglob("*.py"):
+        if test_path.resolve() != this_test:
+            assert "windows_serial" not in test_path.read_text(encoding="utf-8")
 
     for step_name in (
         "Run Windows tests with pytest",
@@ -691,30 +686,13 @@ def test_windows_serialization_sensitive_proofs_run_outside_xdist() -> None:
         step = matrix_job.split(f"    - name: {step_name}", 1)[1].split(
             "    - name:", 1
         )[0]
-        assert "not windows_serial" in step
+        assert re.findall(r'-m\s+"([^"]+)"', step) == ["not benchmark"]
         assert "-n 2" in step
         assert "-n auto" not in step
-
-    for step_name in (
-        "Run Windows serialization-sensitive tests serially",
-        "Run Windows serialization-sensitive tests serially with coverage",
-    ):
-        step = matrix_job.split(f"    - name: {step_name}", 1)[1].split(
-            "    - name:", 1
-        )[0]
-        assert "-n0" in step
-        assert '-m "windows_serial"' in step
+        assert "--dist loadgroup" in step
         assert "--timeout=180" in step
         assert "--timeout-method=thread" in step
-        assert "tests/test_streaming.py" in step
-        assert "tests/test_process_broker_session.py" in step
-        assert "tests/test_cross_thread_probe_transitions.py" in step
-
-    coverage_step = matrix_job.split(
-        "    - name: Run Windows serialization-sensitive tests serially with coverage",
-        1,
-    )[1].split("    - name:", 1)[0]
-    assert "--cov-append" in coverage_step
+        assert "--max-worker-restart=0" in step
 
 
 def test_coverage_diagnostics_can_run_one_suite_from_gh() -> None:
@@ -816,7 +794,7 @@ def test_windows_314_runner_produces_merged_coverage_data() -> None:
     windows_condition = (
         "matrix.os == 'windows-latest' && matrix.python-version == '3.14'"
     )
-    assert test_job.count(windows_condition) == 5
+    assert test_job.count(windows_condition) == 4
     assert "- name: Run Windows tests with coverage" in test_job
     assert "- name: Run Windows phaselock fallback-path gate with coverage" in test_job
     assert "Path('.coverage').replace('.coverage.windows')" in test_job

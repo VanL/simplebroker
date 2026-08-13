@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from simplebroker import Queue, commands
+from simplebroker import Queue, commands, target_for_directory
 
 from .conftest import run_cli
 from .helper_scripts.timestamp_validation import validate_timestamp
@@ -1193,21 +1193,22 @@ class TestCommandLineValidation:
 
 
 def test_cmd_move_all_warns_when_materialized_cap_is_hit(workdir, monkeypatch, capsys):
-    db_path = workdir / "move-cap.db"
-    source = Queue("source", db_path=str(db_path))
+    target = target_for_directory(workdir)
+    source = Queue("source", db_path=target)
     for index in range(3):
         source.write(f"msg{index}")
     monkeypatch.setattr(commands, "_MOVE_ALL_LIMIT", 2)
 
-    rc = commands.cmd_move(str(db_path), "source", "dest", all_messages=True)
+    rc = commands.cmd_move(target, "source", "dest", all_messages=True)
 
     captured = capsys.readouterr()
     assert rc == 0
     assert "capped at 2" in captured.err
     assert "messages may remain" in captured.err
-    assert Queue("dest", db_path=str(db_path)).peek_many(
-        limit=10, with_timestamps=False
-    ) == ["msg0", "msg1"]
-    assert Queue("source", db_path=str(db_path)).peek_many(
+    assert Queue("dest", db_path=target).peek_many(limit=10, with_timestamps=False) == [
+        "msg0",
+        "msg1",
+    ]
+    assert Queue("source", db_path=target).peek_many(
         limit=10, with_timestamps=False
     ) == ["msg2"]

@@ -34,8 +34,6 @@ from simplebroker._targets import BrokerTarget
 from simplebroker.db import BrokerCore, _build_process_session_core_factory
 from tests.helper_scripts import drive_until
 
-pytestmark = pytest.mark.windows_serial
-
 
 class CountingSQLiteRunner(SQLiteRunner):
     """SQLite-backed runner that records allocation and close behavior."""

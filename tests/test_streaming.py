@@ -33,7 +33,6 @@ def _bulk_write(workdir: Path, queue_name: str, count: int) -> None:
         q.close()
 
 
-@pytest.mark.windows_serial
 @pytest.mark.timeout(360)
 @pytest.mark.sqlite_only
 def test_read_all_emits_before_source_exhaustion(
@@ -71,7 +70,6 @@ def test_read_all_emits_before_source_exhaustion(
     assert sink.getvalue() == "first\nsecond\n"
 
 
-@pytest.mark.windows_serial
 @pytest.mark.timeout(360)
 def test_peek_all_crosses_page_boundary_without_mutation(workdir: Path) -> None:
     """peek --all paginates past one internal page and leaves rows pending."""
