@@ -26,5 +26,7 @@ behavior). Specs: `docs/specs/10-cli.md` … `17-ops.md`.
   `197629e2`; see the ledger in `docs/plans/README.md`
 - retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`
-- `docs/plans/2026-07-30-product-documentation-cutover-plan.md`
-- `docs/plans/2026-08-06-audit-remediation-plan.md`
+- retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
+  see the ledger in `docs/plans/README.md`
+- retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
+  ledger in `docs/plans/README.md`

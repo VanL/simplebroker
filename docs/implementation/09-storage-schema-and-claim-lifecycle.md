@@ -101,5 +101,7 @@ publication.
 
 ## Related Plans
 
-- [`2026-08-06 pre-release review remediation`](../plans/2026-08-06-pre-release-review-remediation-plan.md)
-- [`2026-08-06 audit remediation`](../plans/2026-08-06-audit-remediation-plan.md)
+- retired: 2026-08-06-pre-release-review-remediation-plan — source `84159198`;
+  see the ledger in `docs/plans/README.md`
+- retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
+  ledger in `docs/plans/README.md`

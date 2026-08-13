@@ -276,8 +276,10 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
-- `docs/plans/2026-08-06-pre-release-review-remediation-plan.md`
+- retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
+  see the ledger in `docs/plans/README.md`
+- retired: 2026-08-06-pre-release-review-remediation-plan — source `84159198`;
+  see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;

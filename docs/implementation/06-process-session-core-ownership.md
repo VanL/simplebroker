@@ -187,7 +187,8 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
-- `docs/plans/2026-08-11-activity-waiter-terminal-close-contract-plan.md`
+- retired: 2026-08-11-activity-waiter-terminal-close-contract-plan — source
+  `27f9ae4`; see the ledger in `docs/plans/README.md`
 - retired: 2026-05-04-process-local-broker-session-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`
 - `docs/plans/2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md`

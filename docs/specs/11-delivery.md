@@ -194,14 +194,15 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
+- retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
+  see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the
   ledger in `docs/plans/README.md`
-- `docs/plans/2026-08-04-worker-example-error-handling-plan.md` (published
-  single-consumer workers stop on processing or acknowledgement failure)
-- `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
-  (workers stream bodies to handler stdin and keep peek/delete ordering)
+- retired: 2026-08-04-worker-example-error-handling-plan — source `695dc16a`;
+  see the ledger in `docs/plans/README.md`
+- retired: 2026-08-05-worker-portability-and-example-corrections-plan — source
+  `6481ca08`; see the ledger in `docs/plans/README.md`
 - retired: 2026-07-28-delivery-contract-spec-promotion-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`

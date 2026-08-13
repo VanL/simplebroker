@@ -190,17 +190,17 @@ message id. It is the same message identity with the queue binding updated.
 
 ## Related Plans
 
-- `docs/plans/2026-08-12-bounded-live-dump-plan.md` — makes emitted v1
-  high-water an inclusive message bound and monotone load floor, with a
-  load-only future-skew safety gate.
-- `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
-- `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
+- retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9` (local-only
+  pin); see the ledger in `docs/plans/README.md`
+- retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
+  see the ledger in `docs/plans/README.md`
+- retired: 2026-08-08-json-timestamp-string-contract-plan — source `4cb47bc9`;
+  see the ledger in `docs/plans/README.md`
 - retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-07-30-reserved-zero-and-redis-write-atomicity-plan — source
   `5023710`; see the ledger in `docs/plans/README.md`
-- `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
-  (published workers accept the full stored integer-ID range and canonicalize
-  CLI selector strings)
+- retired: 2026-08-05-worker-portability-and-example-corrections-plan — source
+  `6481ca08`; see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`

@@ -19,8 +19,8 @@ backend protocols.
   package-root import and callable shape; `[SB-ID-1]` and `[SB-ID-4]` retain
   representation and accepted-input ownership.
 
-The source plan is
-`docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`.
+The source plan is retired: 2026-08-08-json-timestamp-string-contract-plan —
+source `4cb47bc9`; see the ledger in `docs/plans/README.md`.
 
 ## Design Rationale
 
@@ -95,4 +95,5 @@ governing specs.
 
 ## Related Plans
 
-- `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
+- retired: 2026-08-08-json-timestamp-string-contract-plan — source `4cb47bc9`;
+  see the ledger in `docs/plans/README.md`

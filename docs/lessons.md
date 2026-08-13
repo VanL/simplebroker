@@ -262,8 +262,9 @@ Dated moment-tier entries (foldable after age floor and distillation).
   raising the first failure, and retaining later failures as notes. Do not mix
   the two policies. (Original lesson harvested from
   2026-05-11-sqlite-cross-thread-close-hardening-plan, source `197629e2`;
-  terminal exception: `[SB-API-6]` and
-  `docs/plans/2026-08-11-activity-waiter-terminal-close-contract-plan.md`.)
+  terminal exception: `[SB-API-6]` and retired
+  2026-08-11-activity-waiter-terminal-close-contract-plan — source `27f9ae4`;
+  see the ledger in `docs/plans/README.md`.)
 - 2026-08-04: Pre-parser argument rewriting is a safety boundary. Help must be
   side-effect free, the subcommand inventory must be complete, and destructive
   global flags need explicit command-combination guards; otherwise a missed
@@ -383,3 +384,91 @@ Dated moment-tier entries (foldable after age floor and distillation).
   executable evidence, not merely accept a checked list or a passing default
   suite. (From Unit I of
   2026-08-06-pre-release-review-remediation-plan.)
+- 2026-08-13: Lint-inventory tests must match the real owner of each fact:
+  Ruff owns `__all__` sort order (membership is the public-surface test); a
+  suppression scanner must tokenize comments and use the tracked-file
+  inventory (string constants and untracked files false-pass); repository
+  path keys must be POSIX, not host-native `Path` display. (Harvested from
+  2026-07-29-ruff-lint-expansion-plan at `6481ca08`.)
+- 2026-08-13: A generated suppression location index should key by enclosing
+  symbol, not source line. Line keys churn on every edit and hide a `# noqa`
+  copied onto a different function. The generator must never create an
+  approval. (Harvested from 2026-07-30-ruff-suppression-index-generator-plan
+  at `6481ca08`.)
+- 2026-08-13: mypy applies a later `--config-file` after earlier CLI flags, so
+  pass `--config-file` before partition overrides. Type-check an
+  ambient-excluded `tests/` tree with an explicit file list, not discovery;
+  scoped `--allow-untyped-defs` is a noise budget, not a reason to drop
+  `check_untyped_defs`. (Harvested from 2026-07-31-core-test-mypy-gate-plan at
+  `946ab93c`.)
+- 2026-08-13: Repository Python subprocesses must use the locked project
+  interpreter (`sys.executable` / `uv run --locked`), not an inherited
+  launcher. Direct `python bin/release.py` can pick Apple system 3.9 and fail
+  before tag creation on a repo that requires `>=3.11`. (Harvested from
+  2026-07-31-ci-release-remediation-plan at `197629e2`.)
+- 2026-08-13: When deleting a public helper module, sweep every import form,
+  including `from simplebroker import Queue, helpers`. An `as helpers` alias
+  that still names the deleted module is the same defect. Do not replace a
+  deleted facade with a same-named package that re-exports split internals —
+  call sites never migrate and the discoverability problem survives.
+  (Harvested from 2026-07-31-python-library-api-contract-plan at `6481ca08`.)
+- 2026-08-13: Measured large-legacy SQLite migrations can exceed the fixed
+  phase-lock waiter (F21: median 29.622s at 10M rows, 273.111s at 50M versus a
+  20s budget). That proves the timeout can expire during a healthy migration;
+  it does not by itself justify a new progress protocol. Reconsider only with
+  new evidence of material concurrent-opener harm, and start a new reviewed
+  plan. Designs A (bounded override), B (progress-aware wait), and C
+  (operator serialization) remain historical input in
+  2026-07-17-schema-migration-aware-waiting-proposal at `88466aff`.
+- 2026-08-13: Packaged project URLs that will be followed from PyPI must be
+  absolute `https://` links. Relative repo paths resolve against the package
+  page and 404. (Harvested from 2026-08-04-docs-information-architecture-plan
+  at `c403c5eb`.)
+- 2026-08-13: A CLI `watch` that claims and prints a body flushes stdout
+  before a shell handler can reject the payload. Peek-ack (or move-ack) is
+  required when the handler may refuse; a claim-then-process shell worker
+  will acknowledge work the handler never accepted. Bash cannot store NUL, so
+  reject NUL before handler/delete rather than passing the body as a quoted
+  argument. (Harvested from 2026-08-04-worker-example-error-handling-plan at
+  `695dc16a`.)
+- 2026-08-13: In a `pipefail` shell worker, SIGPIPE from an early-close
+  consumer can mask a successful handler. Distinguish a successful early
+  close from a failed process. A worker checkpoint records last-processed
+  identity; it is not proof that older pending work is gone and must not be
+  fed to `--after` as a completeness cursor. (Harvested from
+  2026-08-05-worker-portability-and-example-corrections-plan at `6481ca08`.)
+- 2026-08-13: The 6.0.2 pre-release deferred-units register is negative
+  knowledge, not dropped work. (C) A `main()` catch cannot see eager
+  import-time config load. (D) Unconditional stderr provenance contradicts
+  `[SB-CLI-2]`; `status` is not a provenance channel. (F) PostgreSQL alias
+  add/remove (advisory→meta) versus rename (meta→advisory) is a lock-order
+  cycle; SQLite's no-op hook is not "no hook." (H) A non-reentrant Redis
+  `_write_lock` around `insert_messages` self-deadlocks patterned broadcast;
+  the seam is `.eval`. (G) remains `[REV-THEORY-005]`. Reopen each only from
+  the named condition in 2026-08-06-pre-release-review-remediation-plan at
+  `84159198`.
+- 2026-08-13: A harvest-gate block for missing lessons is repaired by
+  extracting dated, source-pinned ledger entries in the same sweep. That is
+  not Golden Rule, runbook, or theory promotion and does not need a separate
+  plan. Leave the plan completed only when the reusable correction cannot be
+  stated faithfully from the closed record.
+- 2026-08-13: A new environment config key is another import-time trigger.
+  Package-level `load_config()` can raise before any CLI `main()` catch; a
+  local command wrapper cannot hide it, and silent fallback defaults are
+  rejected. Until bootstrap is lazy or staged, the generic no-traceback CLI
+  floor cannot be claimed for invalid env values. (Dump-plan IR-1 at
+  `d0d2de9`; same class as pre-release unit C at `84159198`; follow-up
+  draft `2026-08-13-invalid-environment-import-lifecycle-plan.md`.)
+- 2026-08-13: An informational `warnings.warn()` inside a parser-totality or
+  fuzz replay looks like a crash when the harness treats warnings as errors.
+  Suppress or exclude the expected informational category in that replay; do
+  not weaken the production warning. Do not record a warning and replay it
+  later across a mutating command — replay can change exception timing and
+  mask the active error. Translate the category immediately at the command
+  boundary. (Harvested from 2026-08-12-bounded-live-dump-plan N3a/N3b/IR-2 at
+  `d0d2de9`.)
+- 2026-08-13: When converting an exclusive `before` filter to an inclusive
+  identity bound, do not compute unchecked `H + 1` at the signed-ID ceiling.
+  At that ceiling every valid ID is already `<= H` and no extra filter is
+  required. (Harvested from 2026-08-12-bounded-live-dump-plan at `d0d2de9`;
+  rationale also in `docs/implementation/08-message-identity-and-write-visibility.md`.)

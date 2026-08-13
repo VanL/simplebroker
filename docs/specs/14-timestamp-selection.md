@@ -93,12 +93,13 @@ lower bound filter on eligibility; it does not change claim semantics
 
 ## Related Plans
 
-- `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
+- retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
+  see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
   see the ledger in `docs/plans/README.md`
-- `docs/plans/2026-08-05-worker-portability-and-example-corrections-plan.md`
-  (removes checkpoint-as-offset filtering from the resilient worker)
+- retired: 2026-08-05-worker-portability-and-example-corrections-plan — source
+  `6481ca08`; see the ledger in `docs/plans/README.md`

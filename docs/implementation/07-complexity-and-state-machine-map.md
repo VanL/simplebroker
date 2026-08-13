@@ -18,7 +18,7 @@ The audit produced exactly 76 findings: 16 P1, 35 P2, and 25 P3. Line numbers
 below identify that historical baseline. The final reconciliation later in
 this document records current owners and scores. Stable suppression-group IDs
 join local directives to [DOM-10.1.1]'s human-owned reasons and approved
-cardinalities. `bin/ruff_suppression_index.py` derives the line-sensitive
+cardinalities. `bin/ruff_suppression_index.py` derives the symbol-keyed
 location index from Ruff's reported `noqa_row` after C901 activation.
 
 ## Governing Contracts
@@ -290,6 +290,9 @@ findings must update source, registry, and policy evidence atomically.
 
 ## Related Plan
 
-- `docs/plans/2026-08-11-activity-waiter-terminal-close-contract-plan.md`
-- `docs/plans/2026-08-04-cmd-watch-locality-plan.md`
-- `docs/plans/2026-07-29-complexity-and-state-machine-hardening-plan.md`
+- retired: 2026-08-11-activity-waiter-terminal-close-contract-plan — source
+  `27f9ae4`; see the ledger in `docs/plans/README.md`
+- retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the
+  ledger in `docs/plans/README.md`
+- retired: 2026-07-29-complexity-and-state-machine-hardening-plan — source
+  `5023710`; see the ledger in `docs/plans/README.md`

@@ -145,11 +145,12 @@ claim delivery semantics (`[SB-DELIVERY-1]`).
 
 ## Related Plans
 
-- `docs/plans/2026-08-12-bounded-live-dump-plan.md` — makes the v1 header an
-  inclusive export bound, restores it as a monotone allocation floor, and
-  guards load against excessive future clock skew.
-- `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
-- `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
+- retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9` (local-only
+  pin); see the ledger in `docs/plans/README.md`
+- retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
+  see the ledger in `docs/plans/README.md`
+- retired: 2026-08-08-json-timestamp-string-contract-plan — source `4cb47bc9`;
+  see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
   ledger in `docs/plans/README.md`
 - retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;
