@@ -530,6 +530,9 @@ its disposition. Any blocker or material plan revision requires re-review.
   two Postgres context tests were excluded because that environment has the
   stale published API-v6 extension, a pre-existing version mismatch rather
   than a config-lifecycle failure.
+- 2026-08-13 landing: implementation, promoted specs, tests, public docs, and
+  review evidence committed as `990bc94`. Closure is recorded in the immediate
+  follow-up plan/index commit; no runtime or contract delta was added there.
 
 ## Review Log
 
