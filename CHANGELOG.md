@@ -5,16 +5,6 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- Invalid recognized `BROKER_*` values no longer crash package import before
-  the CLI can report them. Strict config loading now raises public
-  `simplebroker.ext.InvalidConfigError` with safe key/source/expected metadata;
-  the CLI emits one redacted plain-text diagnostic and exits `1` before parser
-  behavior or broker side effects. It never continues with fallback defaults.
-
 ## [7.3.0] - 2026-08-13
 
 ### Changed
@@ -37,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Invalid recognized `BROKER_*` values no longer crash package import before
+  the CLI can report them. Strict config loading now raises public
+  `simplebroker.ext.InvalidConfigError` with safe key/source/expected metadata;
+  the CLI emits one redacted plain-text diagnostic and exits `1` before parser
+  behavior or broker side effects. It never continues with fallback defaults.
 - Timestamp-floor restore now fails loudly when durable metadata is missing or
   remains below the requested floor, avoids a redundant initial read, and
   distinguishes known failure from an outcome-ambiguous attempted write/read.
