@@ -53,8 +53,9 @@ Shared semantics does **not** mean identical packaging:
 
 Public package surface is intentionally small: see `simplebroker.__all__`
 (`Queue`, watchers, `BrokerTarget` helpers, `open_broker`, `resolve_config`,
-dump/load), plus `simplebroker.ext` and the command layer. Prefer those over
-private `_` modules.
+`resolve_isolated_config`, `ResolvedConfig`, dump/load), plus
+`simplebroker.ext` and the command layer. Prefer those over private `_`
+modules.
 
 Normative library surfaces: `docs/specs/16-python-library-api.md`
 `[SB-API-1]`–`[SB-API-12]`.
@@ -291,6 +292,10 @@ Normative public surfaces and packaging:
 
 - Resolve a `BrokerTarget` + `BROKER_*` config **once** (or take them from a
   host that already resolved them).
+- If the host owns a separate environment namespace, translate its complete
+  input to `BROKER_*` and use `resolve_isolated_config()`. Preserve the returned
+  `ResolvedConfig`; converting it to an ordinary dict restores ambient
+  SimpleBroker inheritance.
 - Construct all `Queue` / watcher / `open_broker` calls with that target and
   config. Do not re-walk cwd/project discovery on every hot-path call.
 - Shape (language-agnostic): hold `{target, config}` on a context/client

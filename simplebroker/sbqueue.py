@@ -100,7 +100,7 @@ def _canonicalize_queue_target(target: str | BrokerTarget) -> str | BrokerTarget
     return _normalize_sqlite_waiter_target(str(target))
 
 
-def _default_target_from_config(config: dict[str, Any]) -> BrokerTarget:
+def _default_target_from_config(config: Mapping[str, Any]) -> BrokerTarget:
     """Resolve the implicit Queue target from caller-provided configuration."""
 
     root = (
@@ -167,7 +167,7 @@ class Queue:
         db_path: str | BrokerTarget | None = None,
         persistent: bool = False,
         runner: SQLRunner | None = None,
-        config: dict[str, Any] | None = None,
+        config: Mapping[str, Any] | None = None,
     ):
         """Initialize a Queue instance.
 

@@ -805,8 +805,10 @@ covers the rest of the API surface:
 
 For embedded use, put a small project-level client or context object in
 front of SimpleBroker: resolve the broker target once, translate your
-application's settings into `BROKER_*` keys, and hand out queues bound to
-that target. Weft is the reference implementation of this pattern.
+application’s settings into `BROKER_*` keys, and hand out queues bound to
+that target. Use `resolve_isolated_config()` and preserve its immutable
+`ResolvedConfig` result when ambient `BROKER_*` must not affect the embedding
+application. Weft is the reference implementation of the client shape.
 
 The full pattern — client shape, configuration snapshots, redaction rules,
 and the `simplebroker.commands` command layer (`[SB-API-10]`, the

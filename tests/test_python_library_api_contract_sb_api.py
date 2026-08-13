@@ -14,6 +14,7 @@ import simplebroker.sbqueue as sbqueue_module
 from simplebroker import (
     DumpClockSkewWarning,
     Queue,
+    ResolvedConfig,
     commands,
     dump_lines,
     ext,
@@ -129,6 +130,15 @@ def test_api_project_config_helpers_on_ext_and_project() -> None:
     ):
         assert name in ext.__all__
         assert name in project.__all__
+
+
+def test_api_isolated_config_surface_is_root_importable() -> None:
+    body = _section("SB-API-2")
+    assert "resolve_isolated_config" in body
+    assert "ResolvedConfig" in body
+    assert "resolve_isolated_config" in simplebroker.__all__
+    assert "ResolvedConfig" in simplebroker.__all__
+    assert simplebroker.ResolvedConfig is ResolvedConfig
 
 
 def test_api_queue_lifecycle_and_library_shape_language() -> None:

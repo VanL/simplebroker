@@ -76,11 +76,25 @@ parsed or validated raises `InvalidConfigError` with key, source,
 expected-form, and safe rejected-value metadata. Existing documented
 normalization and fallback cases remain unchanged.
 
+`resolve_isolated_config(overrides)` is the explicit embedding boundary. It
+starts from SimpleBroker's canonical defaults without reading ambient
+`BROKER_*`, rejects unknown override keys, applies the same normalization and
+validation schema, and returns an immutable `ResolvedConfig` containing
+exactly the complete canonical key set. `ResolvedConfig` is a public nominal
+mapping marker. Passing it to a SimpleBroker config parameter preserves
+ambient-free resolution through Queue, project discovery, broker, runner,
+watcher, and dump/load layers. Each receipt performs ambient-free schema
+revalidation, so directly constructing a marker cannot launder invalid data.
+Converting it to an ordinary mapping discards this guarantee. Ordinary
+mappings keep `resolve_config()`'s environment-base and unknown-key
+pass-through compatibility.
+
 Environment variable and TOML field catalogs for project scoping remain in the
 README residual where listed; this clause owns the **public callables**, not
 every config key.
 
 _Implementation mapping_:
+- `simplebroker/_constants.py`
 - `simplebroker/project.py`
 - `simplebroker/_project_config.py`
 - `simplebroker/db.py` (`open_broker`)
@@ -378,8 +392,8 @@ boundary rather than in the storage layer:
 
 ## Implementation mapping (summary)
 
-- Package root: `simplebroker/__init__.py`, `sbqueue.py`, `watcher.py`,
-  `project.py`, `_dump.py`, `db.py`
+- Package root: `simplebroker/__init__.py`, `_constants.py`, `sbqueue.py`,
+  `watcher.py`, `project.py`, `_dump.py`, `db.py`
 - Ext facade: `simplebroker/ext.py`
 - Command layer: `simplebroker/commands.py`, `cli.py`
 - Verticals: `docs/specs/10-cli.md` … `15-persistence-io.md`
@@ -389,7 +403,7 @@ boundary rather than in the storage layer:
 | Clause | Firing evidence |
 |--------|-----------------|
 | [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
-| [SB-API-2] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_project_config.py`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_captured_defaults_are_shared_and_public_resolution_stays_fresh` |
+| [SB-API-2] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_project_config.py`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_captured_defaults_are_shared_and_public_resolution_stays_fresh` |
 | [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_python_library_api_contract_sb_api.py` (library-shape language + matrix); delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_delivery_contract_sb_delivery.py`; Queue generator / `*_many` suites |
@@ -403,6 +417,7 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
+- `docs/plans/2026-08-13-isolated-embedding-config-plan.md`
 - `docs/plans/2026-08-13-invalid-environment-import-lifecycle-plan.md`
 - retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9` (local-only
   pin); see the ledger in `docs/plans/README.md`

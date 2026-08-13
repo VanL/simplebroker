@@ -188,6 +188,19 @@ backend at each validation call, while each `SQLiteRunner` resolves and owns
 its backend after valid config is available. `cli.main()` is the sole process
 translator for `InvalidConfigError`; direct library and command paths retain
 the typed exception when they consume configuration.
+
+The additive embedding path stays in that same seam.
+`resolve_isolated_config()` starts from `_CONFIG_FIELDS` defaults, applies the
+same normalizers and validators without reading the environment, rejects
+unknown keys, and returns an immutable public `ResolvedConfig`. The public
+resolver recognizes that nominal marker and revalidates it ambient-free on
+every lower-layer receipt. Queue, project, watcher, runner, broker-session, and
+dump/load paths therefore keep one self-contained configuration snapshot even
+though their established flow resolves config more than once. Ordinary
+mappings remain environment-based for compatibility. Project TOML resolution
+may take a mutable copy only after marker-aware revalidation, and process
+sessions preserve the marker until backend-terminal code no longer resolves
+configuration.
 | two diagnostic race tests (19, 11) | deleted | Stronger production-path transition and concurrency tests made the diagnostic-only assertions redundant. |
 
 Redis broadcast also improved from 36 to 28 through named selector, patterned

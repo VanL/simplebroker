@@ -374,7 +374,7 @@ class SQLiteRunner:
         """Apply per-connection settings that don't require exclusive locks."""
         self._backend.apply_connection_settings(
             conn,
-            config=self._config,
+            config=dict(self._config),
             optimization_complete=SetupPhase.OPTIMIZATION in self._completed_phases,
         )
         if SetupPhase.OPTIMIZATION in self._completed_phases:
@@ -393,7 +393,7 @@ class SQLiteRunner:
         execute_setup_with_retry(
             lambda: self._backend.setup_connection_phase(
                 self._db_path,
-                config=self._config,
+                config=dict(self._config),
                 busy_timeout_ms=setup_busy_timeout_ms(self._config),
             ),
             phase=str(SetupPhase.CONNECTION.value),
@@ -411,7 +411,7 @@ class SQLiteRunner:
 
     def _apply_optimization_settings(self, conn: sqlite3.Connection) -> None:
         """Apply optimization settings to a connection."""
-        self._backend.apply_optimization_settings(conn, config=self._config)
+        self._backend.apply_optimization_settings(conn, config=dict(self._config))
 
     @contextlib.contextmanager
     def _setup_operation_context(self) -> Iterator[None]:

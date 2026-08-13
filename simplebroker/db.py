@@ -51,6 +51,7 @@ from ._constants import (
     MAX_QUEUE_NAME_LENGTH,
     PEEK_BATCH_SIZE,
     SIMPLEBROKER_MAGIC,
+    ResolvedConfig,
     _capture_config,
     _resolve_config_input,
     resolve_config,
@@ -207,7 +208,7 @@ def _get_sql_namespace(plugin: BackendPlugin) -> BackendSQLNamespace:
     return cast("BackendSQLNamespace", plugin.sql)
 
 
-def _merge_config(config: Mapping[str, Any] | None) -> dict[str, Any]:
+def _merge_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     """Overlay caller-provided config values onto the default config snapshot."""
     return _resolve_config_input(config)
 
@@ -219,7 +220,11 @@ class _ProcessSessionCoreFactory:
         self._backend_name = spec.backend_name
         self._target = spec.target
         self._backend_options = dict(spec.backend_options)
-        self._config = dict(spec.config)
+        self._config = (
+            spec.config
+            if isinstance(spec.config, ResolvedConfig)
+            else dict(spec.config)
+        )
         self._backend_plugin = spec.backend_plugin
         self._runner_condition = threading.Condition()
         self._runner_state: Literal["empty", "creating", "ready", "closed"] = "empty"

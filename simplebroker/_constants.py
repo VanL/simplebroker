@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import PurePath
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Any, Final, overload
 
 from ._exceptions import InvalidConfigError
 
@@ -576,6 +576,35 @@ _CONFIG_NORMALIZERS: Final[dict[str, Callable[[Any], Any]]] = {
 }
 
 
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class ResolvedConfig(Mapping[str, Any]):
+    """Immutable, complete configuration resolved without ambient input.
+
+    Construction uses the same canonical defaults, coercion, and validation as
+    :func:`resolve_isolated_config`. Lower layers revalidate this nominal marker
+    without consulting ``BROKER_*`` so direct construction is not a trust
+    bypass. Converting it to an ordinary mapping discards that guarantee.
+    """
+
+    _values: Mapping[str, Any]
+
+    def __init__(self, values: Mapping[str, Any]) -> None:
+        object.__setattr__(
+            self,
+            "_values",
+            MappingProxyType(_resolve_isolated_values(values)),
+        )
+
+    def __getitem__(self, key: str) -> Any:
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+
 class _CapturedConfig(Mapping[str, Any]):
     """One immutable process snapshot, successful or failed."""
 
@@ -623,7 +652,7 @@ def _capture_config() -> _CapturedConfig:
 
 def _resolve_config_input(
     value: Mapping[str, Any] | None,
-) -> dict[str, Any]:
+) -> Mapping[str, Any]:
     """Unwrap a trusted process snapshot or resolve ordinary overrides."""
     if isinstance(value, _CapturedConfig):
         return value.copy()
@@ -671,7 +700,57 @@ def _normalize_config_value(key: str, value: Any, *, source: str) -> Any:
         raise _invalid_config_error(key, value, source=source) from exc
 
 
-def resolve_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def _unknown_config_error(key: object, value: Any) -> InvalidConfigError:
+    display_key = key if isinstance(key, str) else repr(key)
+    return InvalidConfigError(
+        key=display_key,
+        source="override",
+        expected="a recognized canonical BROKER_* configuration key",
+        value_display=_safe_config_value_display(display_key, value),
+    )
+
+
+def _resolve_isolated_values(overrides: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve canonical defaults plus strict overrides without environment reads."""
+    unknown = [key for key in overrides if key not in _CONFIG_FIELDS]
+    if unknown:
+        key = unknown[0]
+        raise _unknown_config_error(key, overrides[key])
+
+    config = {
+        key: _normalize_config_value(key, field.default, source="default")
+        for key, field in _CONFIG_FIELDS.items()
+    }
+    for key, value in overrides.items():
+        config[key] = _normalize_config_value(key, value, source="override")
+
+    if config["BROKER_SYNC_MODE"] not in ("FULL", "NORMAL", "OFF"):
+        config["BROKER_SYNC_MODE"] = "FULL"
+
+    _validate_config(config, source="override")
+    return config
+
+
+def resolve_isolated_config(overrides: Mapping[str, Any]) -> ResolvedConfig:
+    """Resolve strict overrides from canonical defaults without ambient input."""
+    return ResolvedConfig(overrides)
+
+
+@overload
+def resolve_config(  # type: ignore[overload-overlap]
+    overrides: ResolvedConfig,
+) -> ResolvedConfig: ...
+
+
+@overload
+def resolve_config(
+    overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any]: ...
+
+
+def resolve_config(
+    overrides: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | ResolvedConfig:
     """Return a complete typed config with optional caller overrides applied.
 
     This is the public config-contract helper for library callers. It starts
@@ -680,6 +759,9 @@ def resolve_config(overrides: Mapping[str, Any] | None = None) -> dict[str, Any]
     practical. Missing keys inherit the canonical defaults from
     :func:`load_config`.
     """
+
+    if isinstance(overrides, ResolvedConfig):
+        return ResolvedConfig(overrides)
 
     config = load_config()
     if overrides is None:

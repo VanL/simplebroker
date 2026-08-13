@@ -878,7 +878,7 @@ def _resolve_target(
         )
 
     if config["BROKER_PROJECT_SCOPE"]:
-        discovered_target = resolve_broker_target(root, config=dict(config))
+        discovered_target = resolve_broker_target(root, config=config)
         if discovered_target is not None:
             return discovered_target
     else:
@@ -1006,7 +1006,7 @@ def _run_cleanup(
     resolved_target: BrokerTarget,
     *,
     status_json_output: bool,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> int:
     """Clean the resolved target under the CLI diagnostic policy."""
     db_path = resolved_target.target_path
@@ -1104,7 +1104,7 @@ def _run_target_action(
     parser: argparse.ArgumentParser,
     *,
     status_json_output: bool,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> int | None:
     """Run a target-wide action, returning None for command dispatch."""
     if args.command == "init":
@@ -1137,7 +1137,7 @@ def _validate_legacy_sqlite_target(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
     *,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> None:
     """Validate the legacy SQLite path without changing target precedence."""
     if not resolved_target.legacy_sqlite_path_mode:
@@ -1219,7 +1219,7 @@ def _validate_command_target(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
     *,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> None:
     """Validate an initialized non-SQLite target before read-like commands."""
     if (
@@ -1240,7 +1240,7 @@ def _dispatch_message_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> int:
     """Dispatch write, read, or peek."""
     if args.command == "write":
@@ -1364,7 +1364,7 @@ def _dispatch_admin_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> int:
     """Dispatch rename, broadcast, dump/load, alias, or watch."""
     if args.command == "rename":
@@ -1415,7 +1415,7 @@ def _dispatch_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> int:
     """Dispatch the parsed command through its command family."""
     if args.command in {"write", "read", "peek"}:
@@ -1460,7 +1460,7 @@ def _resolve_cli_target(
     args: argparse.Namespace,
     *,
     status_json_output: bool,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> BrokerTarget | int:
     """Resolve the invocation target or emit its user-facing error."""
     try:
@@ -1482,7 +1482,7 @@ def _prepare_command_target(
     resolved_target: BrokerTarget,
     *,
     status_json_output: bool,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> int | None:
     """Validate a command's legacy path or return its error code."""
     try:
@@ -1532,7 +1532,7 @@ def _prepare_dispatch(
     resolved_target: BrokerTarget,
     *,
     status_json_output: bool,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> int | None:
     """Run command-local validation before entering the dispatch boundary."""
     early_error = _validate_early_command_args(args)

@@ -5,6 +5,16 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added public `resolve_isolated_config()` and immutable `ResolvedConfig` for
+  embedders that need a complete configuration independent of ambient
+  `BROKER_*`. The marker remains ambient-free through Queue, project, watcher,
+  runner, broker, and dump/load configuration boundaries. Ordinary mappings
+  retain their existing environment-base and unknown-key compatibility.
+
 ## [7.3.1] - 2026-08-13
 
 ### Changed

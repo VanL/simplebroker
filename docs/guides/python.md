@@ -782,8 +782,9 @@ from typing import Any
 from simplebroker import (
     BrokerTarget,
     Queue,
+    ResolvedConfig,
     open_broker,
-    resolve_config,
+    resolve_isolated_config,
     target_for_directory,
 )
 
@@ -791,13 +792,13 @@ from simplebroker import (
 @dataclass(frozen=True)
 class AppBrokerClient:
     target: BrokerTarget
-    config: dict[str, Any]
+    config: ResolvedConfig
 
     @classmethod
     def from_root(cls, root: str | Path, **overrides: Any) -> "AppBrokerClient":
         root_path = Path(root)
         (root_path / ".myapp").mkdir(parents=True, exist_ok=True)
-        config = resolve_config(
+        config = resolve_isolated_config(
             {
                 "BROKER_PROJECT_CONFIG_PATH": ".myapp",
                 "BROKER_PROJECT_CONFIG_NAME": "broker.toml",
@@ -829,8 +830,12 @@ with client.broker() as broker:
 The stable embedding surface is the public package API exported from
 `simplebroker` plus the extension contracts in `simplebroker.ext`. Treat
 underscore-prefixed modules and raw storage details as implementation. If your
-application needs its own environment namespace, translate those values into a
-config dict and pass it through `resolve_config()`; avoid importing
+application owns a separate environment namespace, translate its complete
+selected values into canonical `BROKER_*` keys and pass them through
+`resolve_isolated_config()`. Preserve the returned `ResolvedConfig` marker
+through every lower-layer call; converting it to an ordinary dict restores the
+normal ambient-base behavior. Use `resolve_config()` when inheriting ambient
+SimpleBroker configuration is intentional. Avoid importing
 `simplebroker._constants` or guessing database paths.
 
 Configuration passed to a Queue, watcher, or broker is normalized and retained

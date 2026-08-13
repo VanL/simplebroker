@@ -18,7 +18,7 @@ from ._project_config import (
 from ._targets import BrokerTarget
 
 
-def _config_dict(config: dict[str, Any] | None) -> dict[str, Any]:
+def _config_dict(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return dict(load_config()) if config is None else resolve_config(config)
 
 
@@ -101,7 +101,7 @@ def _discover_legacy_sqlite_target(
 def resolve_broker_target(
     starting_dir: str | Path | None = None,
     *,
-    config: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> BrokerTarget | None:
     """Discover or synthesize a SimpleBroker target from a directory.
 
@@ -145,7 +145,7 @@ def resolve_broker_target(
 def target_for_directory(
     directory: str | Path,
     *,
-    config: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> BrokerTarget:
     """Return the broker target rooted at an explicit directory.
 
@@ -185,7 +185,7 @@ def target_for_directory(
 def broker_root(
     starting_dir: str | Path | None = None,
     *,
-    config: dict[str, Any] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> Path | None:
     """Return the discovered broker project root, if one exists."""
 

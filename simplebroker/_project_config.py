@@ -104,7 +104,7 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
     }
 
 
-def _config_dict(config: Mapping[str, Any] | None) -> dict[str, Any]:
+def _config_dict(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return dict(load_config()) if config is None else resolve_config(config)
 
 
@@ -188,7 +188,7 @@ def resolve_project_target(
         target = str(resolved_target)
     else:
         config_dict = (
-            dict(load_config()) if config is None else resolve_config(dict(config))
+            dict(load_config()) if config is None else dict(resolve_config(config))
         )
         # Project config owns the target. Backends receive it through the TOML
         # arguments rather than through ambient BROKER_BACKEND_TARGET.

@@ -31,6 +31,14 @@ snapshot. `resolve_config(overrides)` still starts from the environment base,
 so an override mapping is not a complete-config bypass for invalid ambient
 state.
 
+Embedders that own a separate configuration namespace should instead call
+`resolve_isolated_config(overrides)`. It starts from the same 32 canonical
+defaults without reading ambient `BROKER_*`, rejects unknown keys, and returns
+an immutable complete `ResolvedConfig`. Preserve that object when passing
+configuration to Queue, project discovery, watchers, runners, brokers, or
+dump/load. Converting it to `dict` deliberately discards the isolation marker;
+an ordinary mapping keeps the environment-base behavior above.
+
 ## Environment variables
 
 **Core Settings:**
@@ -156,8 +164,10 @@ export BROKER_DEFAULT_DB_NAME=project-queue.db
 **Why so many `BROKER_*` settings?** `load_config()` documents 32 config keys
 because SimpleBroker is also embedded by larger tools. Most users should never
 touch most of them. Embedders such as Weft translate their own namespace into
-those keys and pass the result through `resolve_config()`, which keeps
-configuration mechanical instead of one-off.
+those keys. Use `resolve_isolated_config()` for a complete app-owned mapping,
+or `resolve_config()` when omitted values should deliberately inherit ambient
+SimpleBroker configuration. This keeps translation mechanical instead of
+one-off.
 
 **Why is `BROKER_SYNC_MODE=FULL` the default?** The default favors durability
 over benchmark numbers. `NORMAL` may improve write throughput, but it changes

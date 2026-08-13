@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
-from ._constants import _capture_config, _resolve_config_input
+from ._constants import ResolvedConfig, _capture_config, _resolve_config_input
 from ._key_material import FrozenValue, freeze_key_material
 from ._targets import BrokerTarget
 
@@ -112,7 +112,11 @@ def _session_spec(
         backend_name=backend_name,
         target=target,
         backend_options=dict(backend_options),
-        config=dict(resolved_config),
+        config=(
+            resolved_config
+            if isinstance(resolved_config, ResolvedConfig)
+            else dict(resolved_config)
+        ),
         backend_plugin=backend_plugin,
     )
 

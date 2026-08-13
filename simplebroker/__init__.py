@@ -2,7 +2,12 @@
 
 # Import main components
 from ._backend_plugins import ActivityWaiter
-from ._constants import __version__, resolve_config
+from ._constants import (
+    ResolvedConfig,
+    __version__,
+    resolve_config,
+    resolve_isolated_config,
+)
 from ._dump import DumpClockSkewWarning, LoadResult, dump_lines, load_lines
 from ._message_id import format_message_id
 from .db import open_broker
@@ -29,6 +34,7 @@ __all__ = [
     "QueueRenameResult",
     "QueueStats",
     "QueueWatcher",
+    "ResolvedConfig",
     "__version__",
     "broker_root",
     "create_activity_waiter_for_queues",
@@ -39,6 +45,7 @@ __all__ = [
     "open_broker",
     "resolve_broker_target",
     "resolve_config",
+    "resolve_isolated_config",
     "serialize_broker_target",
     "target_for_directory",
 ]
