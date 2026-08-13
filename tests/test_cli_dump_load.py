@@ -247,7 +247,9 @@ def test_cmd_load_ambiguous_timestamp_failure_gives_recovery_guidance(
     def fail(*_args: object, **_kwargs: object) -> None:
         raise TimestampError("connection reset", outcome_ambiguous=True)
 
-    monkeypatch.setattr(commands, "DBConnection", lambda _target: Connection())
+    monkeypatch.setattr(
+        commands, "DBConnection", lambda _target, **_kwargs: Connection()
+    )
     monkeypatch.setattr(commands, "load_lines", fail)
 
     assert commands.cmd_load("ignored") == 1
@@ -270,7 +272,9 @@ def test_cmd_load_reemits_unrelated_warnings(
     def warn(*_args: object, **_kwargs: object) -> None:
         warnings.warn("unrelated warning", UserWarning, stacklevel=1)
 
-    monkeypatch.setattr(commands, "DBConnection", lambda _target: Connection())
+    monkeypatch.setattr(
+        commands, "DBConnection", lambda _target, **_kwargs: Connection()
+    )
     monkeypatch.setattr(commands, "load_lines", warn)
 
     with pytest.warns(UserWarning, match="unrelated warning"):
@@ -294,7 +298,9 @@ def test_cmd_load_preserves_unrelated_warning_error_timing(
         warnings.warn("dependency warning", DeprecationWarning, stacklevel=1)
         raise ValueError("later load failure")
 
-    monkeypatch.setattr(commands, "DBConnection", lambda _target: Connection())
+    monkeypatch.setattr(
+        commands, "DBConnection", lambda _target, **_kwargs: Connection()
+    )
     monkeypatch.setattr(commands, "load_lines", warn_then_fail)
 
     with warnings.catch_warnings():

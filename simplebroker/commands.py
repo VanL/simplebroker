@@ -1172,6 +1172,7 @@ def cmd_load(
         Exit code (0 on success; 1 with a line-numbered stderr message on
         invalid input or duplicate message IDs at the destination)
     """
+    resolved_config = _resolve_config_input(_config if config is None else config)
     if sys.stdin.isatty():
         print(
             "broker load: reads a dump from stdin into a fresh broker "
@@ -1181,7 +1182,7 @@ def cmd_load(
         return EXIT_ERROR
 
     try:
-        with DBConnection(db_path) as conn:
+        with DBConnection(db_path, config=resolved_config) as conn:
             broker = conn.get_connection()
             with warnings.catch_warnings():
                 default_showwarning = warnings.showwarning
@@ -1205,7 +1206,7 @@ def cmd_load(
 
                 warnings.showwarning = showwarning
                 warnings.simplefilter("always", DumpClockSkewWarning)
-                load_lines(broker, sys.stdin, force=force, config=config)
+                load_lines(broker, sys.stdin, force=force, config=resolved_config)
     except ValueError as exc:
         _reraise_invalid_config(exc)
         print(f"broker load: {exc}", file=sys.stderr)

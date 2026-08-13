@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from simplebroker import commands
 from simplebroker._constants import (
     _CONFIG_FIELDS,
     _ConfigField,
@@ -307,6 +308,22 @@ else:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"{name}\n"
+
+
+def test_cmd_load_consumes_invalid_config_before_interactive_stdin_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InteractiveInput:
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr(commands.sys, "stdin", InteractiveInput())
+
+    with pytest.raises(InvalidConfigError):
+        commands.cmd_load(
+            "unused.db",
+            config={"BROKER_BUSY_TIMEOUT": "not-an-integer"},
+        )
 
 
 def test_direct_command_early_validation_can_remain_config_independent() -> None:
