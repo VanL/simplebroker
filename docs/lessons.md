@@ -105,7 +105,9 @@ Dated moment-tier entries (foldable after age floor and distillation).
   the contended gate or make the test easier to pass. This corrects the
   2026-08-07 and 2026-08-11 conclusions that ambiguous Windows timeouts alone
   justified a dedicated serial platform phase; their failure observations and
-  causal synchronization guidance remain valid.
+  causal synchronization guidance remain valid. Default contention includes
+  the workflow's automatic xdist worker selection; a fixed worker cap is load
+  shedding and needs independent evidence beyond an ambiguous timeout cluster.
 - 2026-08-11: Promoting a discarded Boolean wait to a raising assertion is
   assertion activation, not a mechanical syntax change. Revalidate the old
   predicate against the state the test owns. A poll-count threshold can time

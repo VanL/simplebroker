@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-13-windows-auto-xdist-restoration-plan.md | completed — Class 3+P; restored both Windows full-suite commands from fixed `-n 2` to default `-n auto`, preserved diagnostics and fail-closed controls, and passed independent review |
 | 2026-08-13-windows-xdist-contention-restoration-plan.md | completed — Class 3+P; restored the Windows proofs to the normal `-n 2` xdist phase, retained timeout diagnostics, added a no-isolation regression gate, and passed independent completed-work review |
 | 2026-08-13-invalid-environment-import-lifecycle-plan.md | completed — Class 5 with mandatory hardening; strict typed config failures, one cached import-safe capture without fallback, and one CLI exit-1 diagnostic implemented, fully verified across core/PostgreSQL/Redis, independently reviewed, and landed in `990bc94` |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | status-review — class 4; implementation and reviews landed in b01bc3cb and shipped in 5.6.2, but the plan records no evidence for its required five post-commit coverage-diagnostics runs |

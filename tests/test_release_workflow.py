@@ -687,8 +687,8 @@ def test_windows_tests_keep_default_xdist_contention() -> None:
             "    - name:", 1
         )[0]
         assert re.findall(r'-m\s+"([^"]+)"', step) == ["not benchmark"]
-        assert "-n 2" in step
-        assert "-n auto" not in step
+        assert step.count("-n auto") == 1
+        assert "-n 2" not in step
         assert "--dist loadgroup" in step
         assert "--timeout=180" in step
         assert "--timeout-method=thread" in step
