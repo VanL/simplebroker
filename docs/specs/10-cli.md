@@ -49,6 +49,11 @@ payload in full.
 Quiet mode suppresses human commentary on stderr. It never suppresses an error
 diagnostic and never moves payload or errors to a different stream.
 
+`load` warns on stderr when the dump header is physically ahead of local wall
+time. Global quiet mode suppresses that warning, including with `load --force`,
+but does not change whether the skew check or forced load executes. The force
+flag bypasses only excessive-skew refusal; `[SB-IO-4]` owns the load policy.
+
 _Implementation mapping_:
 - `simplebroker/commands.py`
 - `simplebroker/cli.py`

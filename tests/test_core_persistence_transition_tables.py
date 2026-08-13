@@ -15,7 +15,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from simplebroker import open_broker
+from simplebroker import DumpClockSkewWarning, open_broker
 from simplebroker._backends.sqlite.schema import (
     ensure_schema_v5,
     initialize_database,
@@ -260,8 +260,40 @@ DUMP_LOAD_TRANSITIONS = (
         "awaiting header",
         "valid header then EOF",
         "complete",
+        "advance durable allocation floor",
+        "zero messages and aliases with header floor installed",
+    ),
+    _case(
+        "MISSING_HEADER_LAST_TS",
+        "awaiting header",
+        "header without last_ts",
+        "rejected",
         "perform no mutations",
-        "zero messages and aliases",
+        "line-numbered required-field error",
+    ),
+    _case(
+        "INVALID_HEADER_LAST_TS",
+        "awaiting header",
+        "header with invalid last_ts",
+        "rejected",
+        "perform no mutations",
+        "line-numbered header-value error",
+    ),
+    _case(
+        "EXCESSIVE_HEADER_SKEW",
+        "awaiting header",
+        "header beyond configured clock-skew limit",
+        "rejected",
+        "warn and perform no mutations",
+        "line-numbered skew error",
+    ),
+    _case(
+        "MESSAGE_ABOVE_HEADER",
+        "body after valid header",
+        "message ID above last_ts",
+        "rejected",
+        "do not buffer message or advance floor",
+        "line-numbered header-bound error",
     ),
     _case(
         "DUPLICATE_HEADER",
@@ -394,8 +426,15 @@ DUMP_LOAD_TRANSITIONS = (
 )
 
 
-def _header() -> str:
-    return json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1})
+def _header(last_ts: int = 0) -> str:
+    return json.dumps(
+        {
+            "type": "header",
+            "format": "simplebroker-dump",
+            "version": 1,
+            "last_ts": f"{last_ts:019d}",
+        }
+    )
 
 
 def _message(index: int) -> str:
@@ -452,6 +491,26 @@ def _dump_input(payload: str) -> tuple[list[str], int, int, str | None]:
             ],
             "invalid message ID",
         ),
+        "MISSING_HEADER_LAST_TS": (
+            [
+                json.dumps(
+                    {"type": "header", "format": "simplebroker-dump", "version": 1}
+                )
+            ],
+            "header requires 'last_ts'",
+        ),
+        "INVALID_HEADER_LAST_TS": (
+            [_header(-1)],
+            "invalid header last_ts",
+        ),
+        "EXCESSIVE_HEADER_SKEW": (
+            [_header(2_000_000_000_000_000_000)],
+            "future skew exceeds configured maximum",
+        ),
+        "MESSAGE_ABOVE_HEADER": (
+            [_header(1), _message(1)],
+            "message id exceeds header last_ts",
+        ),
     }
     if payload in invalid_inputs:
         invalid_lines, invalid_pattern = invalid_inputs[payload]
@@ -485,6 +544,10 @@ def _dump_input(payload: str) -> tuple[list[str], int, int, str | None]:
     elif payload == "DESTINATION_INSERT_FAILURE":
         lines.append(_message(0))
         expected_count = 1
+    elif payload == "HEADER_ONLY":
+        lines[0] = _header(1000)
+    if expected_count:
+        lines[0] = _header(expected_count)
     return lines, expected_count, expected_aliases, error_pattern
 
 
@@ -502,8 +565,15 @@ def test_dump_load_fires_transition_table(
             with pytest.raises(IntegrityError):
                 load_lines(broker, lines)
         elif error_pattern is not None:
-            with pytest.raises(ValueError, match=error_pattern):
-                load_lines(broker, lines)
+            if payload == "EXCESSIVE_HEADER_SKEW":
+                with (
+                    pytest.warns(DumpClockSkewWarning),
+                    pytest.raises(ValueError, match=error_pattern),
+                ):
+                    load_lines(broker, lines)
+            else:
+                with pytest.raises(ValueError, match=error_pattern):
+                    load_lines(broker, lines)
         else:
             assert load_lines(broker, lines) == LoadResult(
                 messages=expected_count,
@@ -512,6 +582,10 @@ def test_dump_load_fires_transition_table(
         persisted = list(broker.peek_generator("jobs", with_timestamps=False))
         if payload == "APPLY_ALIAS":
             assert broker.resolve_alias("work") == "jobs"
+        if payload == "HEADER_ONLY":
+            assert broker.refresh_last_timestamp() >= 1000
+        elif error_pattern is not None and expected_count == 0:
+            assert broker.refresh_last_timestamp() == 0
     assert len(persisted) == expected_count
 
 

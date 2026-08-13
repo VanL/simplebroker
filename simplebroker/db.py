@@ -1347,6 +1347,14 @@ class BrokerCore:
         with self._lock:
             return self._timestamp_gen.refresh_last_ts()
 
+    def advance_last_timestamp(self, timestamp: int) -> int:
+        """Monotonically install an allocation floor for persistence restore."""
+
+        self._check_fork_safety()
+        self._assert_no_reentrant_mutation_during_batch("advance_last_timestamp")
+        with self._lock:
+            return self._timestamp_gen.advance_to_at_least(timestamp)
+
     @contextmanager
     def sidecar(self, *, transaction: bool = False) -> Iterator[SidecarSession]:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-015] exception
         """Open a session for caller-owned sidecar tables in this database.

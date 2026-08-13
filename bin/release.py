@@ -114,6 +114,7 @@ BACKEND_API_MIN_CORE_VERSION: Final[dict[int, str]] = {
     4: "5.6.0",
     5: "5.6.1",
     6: "7.1.0",
+    7: "7.3.0",
 }
 
 ROOT_TEST_COMMAND_PREFIX: Final[tuple[str, ...]] = (

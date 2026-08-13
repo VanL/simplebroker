@@ -13,8 +13,38 @@ import pytest
 from simplebroker_pg import PostgresRunner
 
 from simplebroker.db import BrokerCore
+from simplebroker.ext import TimestampError
 
 pytestmark = [pytest.mark.pg_only]
+
+
+def test_missing_meta_row_cannot_silently_drop_timestamp_floor(
+    pg_core: BrokerCore,
+) -> None:
+    original_rows = list(
+        pg_core._runner.run(
+            "SELECT singleton, magic, schema_version, last_ts, alias_version "
+            "FROM meta WHERE singleton = TRUE",
+            fetch=True,
+        )
+    )
+    assert len(original_rows) == 1
+    try:
+        pg_core._runner.run("DELETE FROM meta WHERE singleton = TRUE")
+        pg_core._runner.commit()
+
+        with pytest.raises(TimestampError, match="below requested floor") as caught:
+            pg_core.advance_last_timestamp(100)
+    finally:
+        pg_core._runner.run(
+            "INSERT INTO meta "
+            "(singleton, magic, schema_version, last_ts, alias_version) "
+            "VALUES (?, ?, ?, ?, ?)",
+            tuple(original_rows[0]),
+        )
+        pg_core._runner.commit()
+
+    assert caught.value.outcome_ambiguous is False
 
 
 class _PausingTimestampRepairPlugin:

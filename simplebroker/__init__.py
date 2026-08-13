@@ -3,7 +3,7 @@
 # Import main components
 from ._backend_plugins import ActivityWaiter
 from ._constants import __version__, resolve_config
-from ._dump import LoadResult, dump_lines, load_lines
+from ._dump import DumpClockSkewWarning, LoadResult, dump_lines, load_lines
 from ._message_id import format_message_id
 from .db import open_broker
 from .metadata import QueueRenameResult, QueueStats
@@ -22,6 +22,7 @@ from .watcher import QueueMoveWatcher, QueueWatcher
 __all__ = [
     "ActivityWaiter",
     "BrokerTarget",
+    "DumpClockSkewWarning",
     "LoadResult",
     "Queue",
     "QueueMoveWatcher",

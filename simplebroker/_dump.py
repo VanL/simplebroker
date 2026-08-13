@@ -7,18 +7,28 @@ Output is deterministic for a given broker state.
 
 Everything here composes the public ``BrokerConnection`` surface only —
 ``list_queues``, ``peek_generator``, ``get_meta``, ``list_aliases``,
-``add_alias``, ``insert_messages`` — so dump/load work identically on every
-backend, and a dump from one backend loads into any other.
+``add_alias``, ``insert_messages``, ``advance_last_timestamp`` — so dump/load
+work identically on every backend, and a dump from one backend loads into any
+other.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Iterator, Sequence
+import time
+import warnings
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from ._constants import (
+    LOGICAL_COUNTER_MASK,
+    MAX_LOGICAL_COUNTER,
+    NS_PER_SECOND,
+    SQLITE_MAX_INT64,
+    resolve_config,
+)
 from ._message_id import (
     INVALID_MESSAGE_ID_MESSAGE,
     format_message_id,
@@ -32,6 +42,10 @@ if TYPE_CHECKING:
 DUMP_FORMAT: Final[str] = "simplebroker-dump"
 DUMP_VERSION: Final[int] = 1
 LOAD_BATCH_SIZE: Final[int] = 1000
+
+
+class DumpClockSkewWarning(UserWarning):
+    """A dump watermark is physically ahead of the loading host's clock."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,13 +118,17 @@ def dump_lines(
             either their name or their target matches.
     """
     meta = broker.get_meta()
+    header_last_ts = int(meta.get("last_ts", 0))
+    snapshot_bound = (
+        header_last_ts + 1 if header_last_ts < SQLITE_MAX_INT64 - 1 else None
+    )
     yield _line(
         {
             "type": "header",
             "format": DUMP_FORMAT,
             "version": DUMP_VERSION,
             "backend": _backend_name(broker),
-            "last_ts": format_message_id(int(meta.get("last_ts", 0))),
+            "last_ts": format_message_id(header_last_ts),
         }
     )
 
@@ -129,7 +147,11 @@ def dump_lines(
         # ordering. Memory scales with the largest queue's pending count.
         rows = [
             cast("tuple[str, int]", row)
-            for row in broker.peek_generator(queue, with_timestamps=True)
+            for row in broker.peek_generator(
+                queue,
+                with_timestamps=True,
+                before_timestamp=snapshot_bound,
+            )
         ]
         rows.sort(key=lambda item: item[1])
         for body, message_id in rows:
@@ -162,25 +184,93 @@ def _error(line_number: int, problem: str) -> ValueError:
     return ValueError(f"invalid dump input at line {line_number}: {problem}")
 
 
-def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
+def _check_future_skew(
+    header_last_ts: int,
+    *,
+    now_ns: int,
+    max_future_skew_ns: int,
+    force: bool,
+    line_number: int,
+) -> None:
+    """Warn on a future header and reject excessive skew unless forced."""
+    physical_ns = header_last_ts & ~LOGICAL_COUNTER_MASK
+    future_skew_ns = physical_ns - now_ns
+    if future_skew_ns <= 0:
+        return
+
+    remaining_ids = max(
+        0,
+        (MAX_LOGICAL_COUNTER - 1) - (header_last_ts & LOGICAL_COUNTER_MASK),
+    )
+    skew_seconds = future_skew_ns / NS_PER_SECOND
+    warnings.warn(
+        "dump header last_ts "
+        f"{header_last_ts:019d} is {skew_seconds:.3f} seconds ahead "
+        "of local wall time; apparent clock skew leaves at most "
+        f"{remaining_ids} broker-global generated IDs before writes "
+        "wait for wall time and may raise TimestampError",
+        DumpClockSkewWarning,
+        stacklevel=3,
+    )
+    if future_skew_ns > max_future_skew_ns and not force:
+        raise _error(
+            line_number,
+            "dump header future skew exceeds configured maximum "
+            f"of {max_future_skew_ns / NS_PER_SECOND:g} seconds",
+        )
+
+
+def load_lines(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
+    broker: BrokerConnection,
+    lines: Iterable[str],
+    *,
+    force: bool = False,
+    config: Mapping[str, Any] | None = None,
+) -> LoadResult:
     """Apply simplebroker-dump v1 lines to a broker.
 
-    Streams the input: alias records are applied immediately; message
+    Validates backend capability and the header's future-clock skew before
+    destination mutation. Streams the remaining input: alias records are
+    applied immediately; message
     records are applied in atomic batches of ``LOAD_BATCH_SIZE`` via
     ``insert_messages`` (which restores exact message IDs and advances the
-    broker's ID watermark). Load targets a fresh destination: duplicate
-    message IDs raise ``IntegrityError`` rather than double-inserting, so a
-    failed load should be retried into a clean database.
+    broker's ID watermark). Load is intended for a fresh destination but does
+    not enforce freshness. Duplicate message IDs raise ``IntegrityError``
+    rather than double-inserting. Earlier mutations remain applied on a later
+    error, so retry a failed load into a clean database.
+
+    Args:
+        broker: Current backend-v7 broker connection.
+        lines: Iterable of v1 NDJSON records.
+        force: Bypass only excessive future-skew refusal; warnings still fire.
+        config: Optional typed configuration overrides resolved through the
+            standard SimpleBroker config path.
 
     Raises:
-        ValueError: On a missing/invalid header, malformed JSON, unknown
+        TypeError: If the broker lacks the required timestamp-advance method.
+        ValueError: On a missing/invalid header, excessive future skew without
+            force, a message ID above the header bound, malformed JSON, unknown
             record types, or missing fields (with the 1-based line number).
         IntegrityError: On duplicate message IDs at the destination.
+        TimestampError: If the final monotone header-floor operation cannot
+            confirm durable high-water. Earlier aliases and flushed message
+            batches remain applied; ``outcome_ambiguous`` distinguishes whether
+            the durable floor may already have advanced.
     """
+    advance_last_timestamp = getattr(broker, "advance_last_timestamp", None)
+    if not callable(advance_last_timestamp):
+        raise TypeError(
+            "broker must provide callable advance_last_timestamp() for dump load"
+        )
+    resolved_config = resolve_config(config)
+    max_future_skew_ns = (
+        int(resolved_config["BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS"]) * NS_PER_SECOND
+    )
+
     messages = 0
     aliases = 0
     batch: list[tuple[str, str, int]] = []
-    header_seen = False
+    header_last_ts: int | None = None
 
     def flush() -> None:
         nonlocal messages
@@ -205,7 +295,7 @@ def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:  #
             raise _error(line_number, "record must be a JSON object")
 
         kind = record.get("type")
-        if not header_seen:
+        if header_last_ts is None:
             if kind != "header":
                 raise _error(line_number, "first record must be the dump header")
             if record.get("format") != DUMP_FORMAT:
@@ -216,7 +306,19 @@ def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:  #
                     f"unsupported dump version {record.get('version')!r} "
                     f"(supported: {DUMP_VERSION})",
                 )
-            header_seen = True
+            if "last_ts" not in record:
+                raise _error(line_number, "header requires 'last_ts'")
+            try:
+                header_last_ts = normalize_message_id(record["last_ts"])
+            except (TypeError, ValueError) as exc:
+                raise _error(line_number, "invalid header last_ts") from exc
+            _check_future_skew(
+                header_last_ts,
+                now_ns=time.time_ns(),
+                max_future_skew_ns=max_future_skew_ns,
+                force=force,
+                line_number=line_number,
+            )
             continue
 
         if kind == "alias":
@@ -244,6 +346,8 @@ def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:  #
                 raise _error(line_number, INVALID_MESSAGE_ID_MESSAGE) from exc
             if normalized_id == 0:
                 raise _error(line_number, RESERVED_MESSAGE_ID_MESSAGE)
+            if normalized_id > header_last_ts:
+                raise _error(line_number, "message id exceeds header last_ts")
             batch.append((queue, body, normalized_id))
             if len(batch) >= LOAD_BATCH_SIZE:
                 flush()
@@ -252,11 +356,12 @@ def load_lines(broker: BrokerConnection, lines: Iterable[str]) -> LoadResult:  #
         else:
             raise _error(line_number, f"unknown record type {kind!r}")
 
-    if not header_seen:
+    if header_last_ts is None:
         raise ValueError(
             "invalid dump input: missing header (is this a simplebroker dump?)"
         )
     flush()
+    advance_last_timestamp(header_last_ts)
     return LoadResult(messages=messages, aliases=aliases)
 
 

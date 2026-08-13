@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import uuid
+import warnings
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Literal
@@ -23,7 +24,13 @@ from typing import Literal
 from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 
-from simplebroker import Queue, dump_lines, load_lines, open_broker
+from simplebroker import (
+    DumpClockSkewWarning,
+    Queue,
+    dump_lines,
+    load_lines,
+    open_broker,
+)
 from simplebroker.db import QUEUE_NAME_PATTERN
 
 # Queue names: generated from the broker's own validation pattern, the same
@@ -134,9 +141,21 @@ def test_filter_algebra_property(
         '{"type":"message","queue":"q","body":"b","id":' + "9" * 5000 + "}",
     ]
 )
+@example(
+    lines=[
+        (
+            '{"type":"header","format":"simplebroker-dump","version":1,'
+            '"last_ts":"2000000000000000000"}'
+        )
+    ]
+)
 @given(lines=st.lists(st.text(max_size=6000), max_size=8))
 def test_parser_totality_property(lines: list[str]) -> None:
     """load_lines on junk: documented ValueError or success, nothing else.
+
+    ``DumpClockSkewWarning`` is an informational side channel rather than a
+    parser outcome, so the property and its Atheris replay suppress it even
+    when pytest globally promotes warnings to errors.
 
     _NullBroker is a deliberate, narrow exception to the no-test-doubles
     rule, sanctioned for this test only: the property under test is the
@@ -153,7 +172,13 @@ def test_parser_totality_property(lines: list[str]) -> None:
         def add_alias(self, alias: str, target: str) -> None:
             sink.append((alias, target))
 
-    try:
-        load_lines(_NullBroker(), lines)  # type: ignore[arg-type]
-    except ValueError as exc:
-        assert "line" in str(exc) or "header" in str(exc)
+        def advance_last_timestamp(self, timestamp: int) -> int:
+            sink.append(timestamp)
+            return timestamp
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DumpClockSkewWarning)
+        try:
+            load_lines(_NullBroker(), lines)  # type: ignore[arg-type]
+        except ValueError as exc:
+            assert "line" in str(exc) or "header" in str(exc)

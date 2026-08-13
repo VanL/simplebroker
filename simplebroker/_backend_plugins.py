@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .metadata import QueueRenameResult, QueueStats
 
 BACKEND_ENTRY_POINT_GROUP = "simplebroker.backends"
-BACKEND_API_VERSION: Final[int] = 6
+BACKEND_API_VERSION: Final[int] = 7
 DEFAULT_BACKEND_NAME = "sqlite"
 FIRST_PARTY_BACKEND_PACKAGES: Final[dict[str, str]] = {
     "postgres": "simplebroker-pg",
@@ -263,6 +263,8 @@ class BrokerConnection(Protocol):
     def get_cached_last_timestamp(self) -> int: ...
 
     def refresh_last_timestamp(self) -> int: ...
+
+    def advance_last_timestamp(self, timestamp: int) -> int: ...
 
     def write(self, queue: str, message: str) -> int: ...
 

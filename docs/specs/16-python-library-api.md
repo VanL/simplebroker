@@ -277,8 +277,32 @@ and otherwise calls `close()`. This preference does not transfer ownership of
 an explicitly injected runner from its caller to SimpleBroker.
 
 Backend API v6 requires every waiter returned by a backend activity-waiter hook
-to satisfy `[SB-API-6]` terminal close semantics. Core rejects older or newer
-backend API versions through the existing exact-version handshake.
+to satisfy `[SB-API-6]` terminal close semantics.
+
+Backend API v7 requires
+`BrokerConnection.advance_last_timestamp(timestamp)`. The operation validates
+an integer timestamp (`None`, booleans, and other non-integers raise
+`TypeError`), monotonically advances durable broker-global high-water
+to at least that value regardless of the current process-local cache, then
+reads durable high-water once without a preceding initialization read. The
+final observation must be at least the requested floor. It refreshes the
+connection cache and returns
+the value observed by that final read. That observation may immediately become
+stale under `[SB-ID-3]`; a concurrent higher value is never lowered. If the
+final read fails after the monotone advance was attempted, the operation raises
+`TimestampError(..., outcome_ambiguous=True)`; a non-retryable operational
+failure after an attempted write is ambiguous for the same reason. Exhausted
+retryable lock contention and a final observed value below the requested floor
+raise `TimestampError` with `outcome_ambiguous is False`. All other existing
+`TimestampError` construction defaults that public boolean attribute to false.
+The true case is the typed outcome-ambiguous failure classification.
+Core rejects older or newer backend API versions through the existing
+exact-version handshake.
+
+Persistence helpers are public from the package root. The exact load interface
+is `load_lines(broker, lines, *, force=False, config=None)`; its policy and
+failure order are `[SB-IO-4]`. `DumpClockSkewWarning` is a public `UserWarning`
+subclass importable from `simplebroker` so embedders can filter it.
 
 `TimestampGenerator.validate()` is the public string-parser surface for
 timestamp bounds. Its accepted and rejected spellings are the three grammars in
@@ -349,11 +373,12 @@ boundary rather than in the storage layer:
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py` |
 | [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py` |
 | [SB-API-10] | `tests/test_public_surface.py`; `tests/test_python_library_api_contract_sb_api.py` |
-| [SB-API-11] | `tests/test_python_library_api_contract_sb_api.py::test_api_owned_runner_lifecycle_and_backend_v6_contract`; `tests/test_runner_lifecycle.py`; `tests/test_backend_plugin_resolution.py`; `tests/test_release_script.py::test_repository_backend_api_v6_handshake_and_floors_match`; `tests/test_timestamp_bound_grammar.py` (public validator grammar) |
+| [SB-API-11] | `tests/test_python_library_api_contract_sb_api.py::test_api_owned_runner_lifecycle_and_backend_v7_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_load_future_skew_surface_is_root_importable_and_keyword_only`; `tests/test_runner_lifecycle.py`; `tests/test_backend_plugin_resolution.py`; `tests/test_release_script.py::test_repository_backend_api_v7_handshake_and_floors_match`; `tests/test_dump_load.py::test_load_header_floor_persists_when_local_cache_is_ahead`, `tests/test_dump_load.py::test_load_header_floor_observes_concurrent_durable_winner`, `tests/test_dump_load.py::test_load_header_floor_final_read_failure_is_outcome_ambiguous`; `tests/test_timestamp_advance.py`; `extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py::test_postgres_missing_last_ts_row_fails_loudly`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval`; `tests/test_timestamp_bound_grammar.py` (public validator grammar) |
 | [SB-API-12] | `tests/test_python_library_api_contract_sb_api.py` (matrix present); kernel CLI↔Python map |
 
 ## Related Plans
 
+- `docs/plans/2026-08-12-bounded-live-dump-plan.md`
 - `docs/plans/2026-08-11-activity-waiter-terminal-close-contract-plan.md`
 - `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
 - `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`

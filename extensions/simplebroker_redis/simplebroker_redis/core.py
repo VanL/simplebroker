@@ -271,6 +271,14 @@ class RedisBrokerCore:
     def refresh_last_timestamp(self) -> int:
         return self._timestamp_gen.refresh_last_ts()
 
+    def advance_last_timestamp(self, timestamp: int) -> int:
+        """Monotonically install an allocation floor for persistence restore."""
+
+        self._check_fork_safety()
+        self._assert_no_reentrant_mutation_during_batch("advance_last_timestamp")
+        with self._lock:
+            return self._timestamp_gen.advance_to_at_least(timestamp)
+
     def write(self, queue: str, message: str) -> int:
         self._check_fork_safety()
         self._validate_queue_name(queue)

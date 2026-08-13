@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-12-bounded-live-dump-plan.md | completed — Class 5 with mandatory hardening; bounded export, future-skew refusal/force policy, F2-F10 and attached-review remediation, coordinated API v7, versions 7.3.0/3.8.0, real-backend verification, and independent review completed; CLI-wide invalid-environment import hardening remains a separately scoped follow-up |
 | 2026-08-11-7.1.0-ci-repair-and-publication-plan.md | completed — Class 4; repaired exact-SHA cross-platform test defects and published immutable core 7.1.0 and extension 3.6.0 artifacts |
 | 2026-08-11-drive-until-test-helper-adoption-plan.md | completed — Class 3; deterministic test wait helper and bounded core/extension/reference-reactor adoption implemented, fully verified, independently reviewed, and owner-landed |
 | 2026-08-11-activity-waiter-terminal-close-contract-plan.md | completed — Class 5; terminal post-error `ActivityWaiter.close()`, ownership-scoped close/shutdown vocabulary, backend API v6, coordinated first-party conformance and version metadata implemented, fully verified, and independently reviewed; publication remains separate |

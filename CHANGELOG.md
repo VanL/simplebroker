@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.3.0] - 2026-08-13
+
+### Changed
+
+- Dump v1 load now requires its existing `last_ts` header field and restores
+  it as a monotone broker-global allocation floor after message replay. Dump
+  now samples that value once and excludes messages above it, making the header
+  an inclusive live-export bound. Current dumps emit the canonical 19-digit
+  string; load accepts the documented integer and exact-string forms. Dumps
+  produced by older versions while writes were active may need to be recreated
+  with 7.3.0 before loading if their rows exceed the recorded header bound.
+- Load now warns when a dump watermark is physically ahead of local wall time.
+  It refuses skew beyond the configurable 300-second default before mutation;
+  `load --force` warns and bypasses only that refusal. The matching Python
+  surface exposes `DumpClockSkewWarning` and keyword-only `force`/`config`.
+- Advanced the exact backend-plugin handshake to API v7 with required
+  `BrokerConnection.advance_last_timestamp()`. Coordinated package versions
+  are SimpleBroker 7.3.0, `simplebroker-pg` 3.8.0, and
+  `simplebroker-redis` 3.8.0.
+
+### Fixed
+
+- Timestamp-floor restore now fails loudly when durable metadata is missing or
+  remains below the requested floor, avoids a redundant initial read, and
+  distinguishes known failure from an outcome-ambiguous attempted write/read.
+
+## [7.1.0] - 2026-08-11
+
 ### Changed
 
 - `ActivityWaiter.close()` is now a terminal, idempotent public contract. The
@@ -16,10 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every later close a no-op even when the first call raised. Activity waiters
   remain close-only leaf resources; runner `shutdown()` remains the optional
   stronger verb for owned shared or process-wide substrate.
-- Advanced the exact backend-plugin handshake to API v6. Prepared coordinated
-  package metadata for SimpleBroker 7.1.0, `simplebroker-pg` 3.6.0, and
-  `simplebroker-redis` 3.6.0, with extension and root-extra floors aligned.
-  Tags and publication are not part of this unreleased change.
+- Advanced the exact backend-plugin handshake to API v6. Published coordinated
+  SimpleBroker 7.1.0, `simplebroker-pg` 3.6.0, and `simplebroker-redis` 3.6.0
+  artifacts with extension and root-extra floors aligned.
 
 ### Fixed
 

@@ -26,7 +26,7 @@ from ._constants import (
     WAIT_FOR_NEXT_INCREMENT,
 )
 from ._exceptions import IntegrityError, OperationalError, TimestampError
-from ._retry_policy import _execute_with_retry
+from ._retry_policy import _execute_with_retry, _is_locked_operational_error
 
 if TYPE_CHECKING:
     from ._runner import SQLRunner
@@ -209,6 +209,36 @@ class TimestampGenerator:
             self._initialized = True
             return self._last_ts
 
+    def advance_to_at_least(self, timestamp: int) -> int:
+        """Monotonically install an allocation floor and return the stored value."""
+
+        normalized = validate_timestamp_bound("timestamp", timestamp)
+        if normalized is None:
+            raise TypeError("timestamp must be an int")
+        with self._lock:
+            self._ensure_pid()
+            # The process-local cache may be ahead of durable state after a
+            # direct-backend candidate reservation or a rolled-back write.
+            # Always issue the backend's monotone compare-and-advance; the
+            # durable state, not this cache, decides whether work is needed.
+            self._store_if_greater(normalized)
+            try:
+                latest = self._peek_last_ts()
+            except OperationalError as exc:
+                raise TimestampError(
+                    "database error after timestamp advance; durable outcome is unknown",
+                    outcome_ambiguous=True,
+                ) from exc
+            if latest is None:
+                raise TimestampError("meta.last_ts missing after timestamp advance")
+            if latest < normalized:
+                raise TimestampError(
+                    f"stored timestamp {latest} is below requested floor {normalized}"
+                )
+            self._last_ts = latest
+            self._initialized = True
+            return latest
+
     def _ensure_pid(self) -> None:
         """
         Handle fork() transparently – cheap check, no DB access.
@@ -296,7 +326,15 @@ class TimestampGenerator:
                 max_retry_delay=TS_RETRY_MAX_DELAY,
             )
         except OperationalError as e:  # pragma busy_timeout etc.
-            raise TimestampError(f"database busy while writing timestamp: {e}") from e
+            if _is_locked_operational_error(e):
+                raise TimestampError(
+                    f"database busy while writing timestamp: {e}"
+                ) from e
+            raise TimestampError(
+                "database error while writing timestamp; durable outcome is unknown: "
+                f"{e}",
+                outcome_ambiguous=True,
+            ) from e
 
     # -----------------------------------------------------------------
     # 3. lightweight read helper when we lost the race

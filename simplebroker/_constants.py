@@ -36,7 +36,7 @@ from typing import Any, Final
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "7.1.0"
+__version__: Final[str] = "7.3.0"
 """Current version of SimpleBroker."""
 
 # ==============================================================================
@@ -147,6 +147,9 @@ WAIT_FOR_NEXT_INCREMENT: Final[float] = 0.000_001
 
 MAX_ITERATIONS: Final[int] = 100_000
 """Maximum iterations waiting for time to advance before concluding clock is broken."""
+
+DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS: Final[int] = 300
+"""Default allowed future dump-header skew before load refuses mutation."""
 
 # ==============================================================================
 # BATCH SIZE SETTINGS
@@ -473,6 +476,25 @@ def _parse_project_scope(value: Any) -> bool:
     return value if isinstance(value, bool) else _parse_bool(str(value))
 
 
+def _parse_load_max_future_skew(value: Any) -> int:
+    """Accept only integer values, while allowing integer environment strings."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise TypeError(
+            "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS must be a non-negative integer"
+        )
+    try:
+        normalized = int(value)
+    except ValueError as exc:
+        raise ValueError(
+            "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS must be a non-negative integer"
+        ) from exc
+    if normalized < 0:
+        raise ValueError(
+            "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS must be a non-negative integer"
+        )
+    return normalized
+
+
 @dataclass(frozen=True, slots=True)
 class _ConfigField:
     """One configuration key's environment default and shared coercion."""
@@ -489,6 +511,9 @@ _CONFIG_FIELDS: Final[dict[str, _ConfigField]] = {
     "BROKER_MAX_MESSAGE_SIZE": _ConfigField(str(MAX_MESSAGE_SIZE), int),
     "BROKER_READ_COMMIT_INTERVAL": _ConfigField("1", int),
     "BROKER_GENERATOR_BATCH_SIZE": _ConfigField("100", int),
+    "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": _ConfigField(
+        str(DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS), _parse_load_max_future_skew
+    ),
     "BROKER_AUTO_VACUUM": _ConfigField("1", int),
     "BROKER_AUTO_VACUUM_INTERVAL": _ConfigField("100", int),
     "BROKER_VACUUM_THRESHOLD": _ConfigField("10", _parse_vacuum_threshold),
@@ -693,6 +718,10 @@ def load_config() -> dict[str, Any]:
                 Controls how many messages are fetched at once by claim/move generators.
                 Higher values reduce query overhead but use more memory.
 
+            BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS (int): Maximum physical seconds
+                a dump header may lead local wall time before load refuses by
+                default. Default: 300. Must be non-negative.
+
         Vacuum Settings:
             BROKER_AUTO_VACUUM (int): Enable automatic vacuum of claimed messages.
                 Default: 1 (enabled)
@@ -817,7 +846,6 @@ def load_config() -> dict[str, Any]:
     _validate_default_database_name(config)
     _validate_project_config_location(config)
     _validate_project_config_name(config)
-
     return config
 
 

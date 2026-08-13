@@ -20,7 +20,8 @@ LLMS = ROOT / "llms.txt"
 EVIDENCE_MANIFESTS = {
     "SB-IO-2": {
         "tests/test_dump_load.py": {
-            "test_dump_format_header_aliases_messages_in_order"
+            "test_dump_format_header_aliases_messages_in_order",
+            "test_dump_header_is_inclusive_message_id_bound",
         },
         "extensions/simplebroker_pg/tests/test_pg_dump_load_pipe.py": {
             "test_sqlite_to_postgres_pipe",
@@ -39,13 +40,41 @@ EVIDENCE_MANIFESTS = {
         "tests/test_dump_load.py": {
             "test_load_accepts_exact_string_message_id",
             "test_load_accepts_legacy_integer_message_id",
+            "test_load_accepts_legacy_integer_header_last_ts",
+            "test_header_only_load_restores_last_timestamp_floor",
+            "test_claimed_future_exact_ids_survive_as_header_floor",
+            "test_load_rejects_records_newer_than_header_bound",
+            "test_load_rejects_incompatible_broker_before_consuming_input",
+            "test_load_warns_and_proceeds_at_future_skew_limit",
+            "test_load_clock_skew_uses_physical_grain_boundary",
+            "test_load_rejects_excessive_future_skew_before_mutation",
+            "test_load_force_warns_and_accepts_excessive_future_skew",
+            "test_load_typed_config_override_changes_skew_limit",
+            "test_load_header_floor_persists_when_local_cache_is_ahead",
+            "test_load_header_floor_observes_concurrent_durable_winner",
+            "test_load_header_floor_final_read_failure_is_outcome_ambiguous",
+            "test_load_rejects_header_without_last_ts",
+            "test_load_rejects_invalid_header_last_ts_with_line_context",
             "test_load_rejects_noncanonical_message_id_tokens_with_line_context",
             "test_reloading_same_dump_fails_loudly",
             "test_load_rejects_bad_input",
             "test_load_rejects_reserved_zero_with_line_context_before_batch_flush",
             "test_load_rejects_huge_json_integer_with_line_context",
         },
-        "tests/test_cli_dump_load.py": {"test_load_rejects_garbage_with_line_number"},
+        "tests/test_cli_dump_load.py": {
+            "test_load_rejects_garbage_with_line_number",
+            "test_load_future_skew_warns_once_and_quiet_suppresses_display",
+            "test_load_excessive_future_skew_requires_force",
+            "test_load_timestamp_floor_failure_uses_command_diagnostic",
+            "test_load_force_does_not_bypass_format_validation",
+            "test_cmd_load_ambiguous_timestamp_failure_gives_recovery_guidance",
+        },
+        "extensions/simplebroker_pg/tests/test_pg_dump_load_pipe.py": {
+            "test_postgres_header_only_load_restores_last_timestamp_floor"
+        },
+        "extensions/simplebroker_redis/tests/test_redis_dump_load_pipe.py": {
+            "test_redis_header_only_load_restores_last_timestamp_floor"
+        },
     },
     "SB-IO-5": {
         "tests/test_peek_include_claimed.py": {
@@ -196,10 +225,12 @@ def test_io_cross_backend_evidence_labels_routine_and_opt_in_suites_truthfully()
     assert _collected_nodes(pg_path, "pg_only") == {
         "test_sqlite_to_postgres_pipe",
         "test_postgres_to_sqlite_pipe",
+        "test_postgres_header_only_load_restores_last_timestamp_floor",
     }
     assert _collected_nodes(redis_path, "redis_only") == {
         "test_sqlite_to_redis_pipe",
         "test_redis_to_sqlite_pipe",
+        "test_redis_header_only_load_restores_last_timestamp_floor",
     }
     assert _collected_nodes(direct_path) == {
         "test_postgres_to_redis_pipe",

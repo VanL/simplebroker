@@ -9,12 +9,22 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
-from simplebroker import LoadResult, Queue, dump_lines, load_lines, open_broker
+from simplebroker import (
+    DumpClockSkewWarning,
+    LoadResult,
+    Queue,
+    dump_lines,
+    load_lines,
+    open_broker,
+)
+from simplebroker._constants import LOGICAL_COUNTER_MASK, NS_PER_SECOND
+from simplebroker.ext import OperationalError, TimestampError
 
 
 def _db(tmp_path: Path, name: str = "src.db") -> str:
@@ -36,6 +46,31 @@ def _seed(db: str) -> None:
 
 def _records(lines: list[str]) -> list[dict[str, object]]:
     return [json.loads(line) for line in lines]
+
+
+def _load_header(last_ts: int = 0) -> str:
+    return json.dumps(
+        {
+            "type": "header",
+            "format": "simplebroker-dump",
+            "version": 1,
+            "last_ts": f"{last_ts:019d}",
+        }
+    )
+
+
+def test_load_rejects_incompatible_broker_before_consuming_input() -> None:
+    consumed = False
+
+    def lines() -> Any:
+        nonlocal consumed
+        consumed = True
+        yield _load_header()
+
+    with pytest.raises(TypeError, match="advance_last_timestamp"):
+        load_lines(object(), lines())  # type: ignore[arg-type]
+
+    assert consumed is False
 
 
 def test_dump_format_header_aliases_messages_in_order(tmp_path: Path) -> None:
@@ -78,6 +113,22 @@ def test_dump_format_header_aliases_messages_in_order(tmp_path: Path) -> None:
     # deterministic serialization: keys sorted in every line
     for line in lines:
         assert line == json.dumps(json.loads(line), ensure_ascii=False, sort_keys=True)
+
+
+@pytest.mark.shared
+def test_dump_header_is_inclusive_message_id_bound(broker: Any) -> None:
+    at_header = broker.write("jobs", "at header")
+    lines = dump_lines(broker)
+    header = json.loads(next(lines))
+    assert int(header["last_ts"]) == at_header
+
+    after_header = broker.write("jobs", "after header")
+    assert after_header > at_header
+    records = _records(list(lines))
+
+    assert [(record["body"], int(cast(str, record["id"]))) for record in records] == [
+        ("at header", at_header)
+    ]
 
 
 def test_round_trip_fixed_point(tmp_path: Path) -> None:
@@ -123,7 +174,7 @@ def test_round_trip_fixed_point(tmp_path: Path) -> None:
 def test_load_accepts_exact_string_message_id(tmp_path: Path) -> None:
     db = _db(tmp_path)
     lines = [
-        json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1}),
+        _load_header(1000),
         json.dumps(
             {
                 "type": "message",
@@ -141,10 +192,112 @@ def test_load_accepts_exact_string_message_id(tmp_path: Path) -> None:
     assert Queue("jobs", db_path=db).peek(message_id=1000) == "restored"
 
 
+def test_load_warns_and_proceeds_at_future_skew_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    now_ns = header - 300 * NS_PER_SECOND
+    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+
+    with (
+        open_broker(_db(tmp_path)) as broker,
+        pytest.warns(DumpClockSkewWarning, match="300") as caught,
+    ):
+        result = load_lines(broker, [_load_header(header)])
+
+    assert result == LoadResult(messages=0, aliases=0)
+    warning = str(caught[0].message)
+    assert f"{header:019d}" in warning
+    assert "at most 4095 broker-global generated IDs" in warning
+
+
+def test_load_clock_skew_uses_physical_grain_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now_ns = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+
+    with open_broker(_db(tmp_path, "current.db")) as broker:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            load_lines(broker, [_load_header(now_ns | LOGICAL_COUNTER_MASK)])
+        assert caught == []
+
+    with open_broker(_db(tmp_path, "past.db")) as broker:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            load_lines(broker, [_load_header(now_ns - LOGICAL_COUNTER_MASK - 1)])
+        assert caught == []
+
+    with (
+        open_broker(_db(tmp_path, "future.db")) as broker,
+        pytest.warns(DumpClockSkewWarning, match="0.000"),
+    ):
+        load_lines(broker, [_load_header(now_ns + LOGICAL_COUNTER_MASK + 1)])
+
+
+def test_load_rejects_excessive_future_skew_before_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    now_ns = header - 301 * NS_PER_SECOND
+    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+    lines = [
+        _load_header(header),
+        json.dumps({"type": "alias", "alias": "work", "target": "jobs"}),
+    ]
+
+    with open_broker(_db(tmp_path)) as broker:
+        with (
+            pytest.warns(DumpClockSkewWarning),
+            pytest.raises(ValueError, match="exceeds configured maximum"),
+        ):
+            load_lines(broker, lines)
+        assert broker.list_aliases() == []
+        assert broker.refresh_last_timestamp() == 0
+
+
+def test_load_force_warns_and_accepts_excessive_future_skew(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    now_ns = header - 301 * NS_PER_SECOND
+    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+
+    with (
+        open_broker(_db(tmp_path)) as broker,
+        pytest.warns(DumpClockSkewWarning),
+    ):
+        result = load_lines(broker, [_load_header(header)], force=True)
+
+    assert result == LoadResult(messages=0, aliases=0)
+    with open_broker(_db(tmp_path)) as broker:
+        assert broker.refresh_last_timestamp() >= header
+
+
+def test_load_typed_config_override_changes_skew_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    now_ns = header - NS_PER_SECOND
+    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+
+    with (
+        open_broker(_db(tmp_path)) as broker,
+        pytest.warns(DumpClockSkewWarning),
+        pytest.raises(ValueError, match="configured maximum of 0 seconds"),
+    ):
+        load_lines(
+            broker,
+            [_load_header(header)],
+            config={"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": 0},
+        )
+
+
 def test_load_accepts_legacy_integer_message_id(tmp_path: Path) -> None:
     db = _db(tmp_path)
     lines = [
-        json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1}),
+        _load_header(1000),
         '{"type":"message","queue":"jobs","body":"legacy","id":1000}',
     ]
 
@@ -153,6 +306,200 @@ def test_load_accepts_legacy_integer_message_id(tmp_path: Path) -> None:
 
     assert result == LoadResult(messages=1, aliases=0)
     assert Queue("jobs", db_path=db).peek(message_id=1000) == "legacy"
+
+
+def test_load_accepts_legacy_integer_header_last_ts(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    header_floor = 1000
+    header = json.dumps(
+        {
+            "type": "header",
+            "format": "simplebroker-dump",
+            "version": 1,
+            "last_ts": header_floor,
+        }
+    )
+
+    with open_broker(db) as broker:
+        assert load_lines(broker, [header]) == LoadResult(messages=0, aliases=0)
+        assert broker.refresh_last_timestamp() == header_floor
+
+
+def test_header_only_load_restores_last_timestamp_floor(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    high_water = 1_700_000_000_000_000_000
+    lines = [
+        json.dumps(
+            {
+                "type": "header",
+                "format": "simplebroker-dump",
+                "version": 1,
+                "last_ts": f"{high_water:019d}",
+            }
+        )
+    ]
+
+    with open_broker(db) as broker:
+        result = load_lines(broker, lines)
+        assert result == LoadResult(messages=0, aliases=0)
+        assert broker.refresh_last_timestamp() >= high_water
+        assert broker.write("jobs", "after restore") > high_water
+
+
+def test_load_header_floor_persists_when_local_cache_is_ahead(tmp_path: Path) -> None:
+    db = _db(tmp_path)
+    with open_broker(db) as broker:
+        internal_broker = cast(Any, broker)
+        cached_candidate = internal_broker._timestamp_gen._reserve_candidates(1)[0]
+        header_floor = cached_candidate - 1
+        assert broker.refresh_last_timestamp() == 0
+        internal_broker._timestamp_gen._last_ts = cached_candidate
+        internal_broker._timestamp_gen._initialized = True
+
+        assert load_lines(broker, [_load_header(header_floor)]) == LoadResult(
+            messages=0,
+            aliases=0,
+        )
+        assert broker.refresh_last_timestamp() >= header_floor
+
+
+def test_load_header_floor_observes_concurrent_durable_winner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _db(tmp_path)
+    header_floor = 1000
+    competing_floor = 2000
+    with open_broker(db) as broker:
+        internal_broker = cast(Any, broker)
+        plugin = internal_broker._timestamp_gen._backend_plugin
+        original_advance = plugin.advance_last_ts
+
+        def advance_then_compete(runner: Any, *, new_ts: int) -> bool:
+            advanced = original_advance(runner, new_ts=new_ts)
+            internal_broker._runner.run(
+                "UPDATE meta SET value = ? WHERE key = 'last_ts'",
+                (competing_floor,),
+            )
+            internal_broker._runner.commit()
+            return bool(advanced)
+
+        monkeypatch.setattr(plugin, "advance_last_ts", advance_then_compete)
+
+        assert load_lines(broker, [_load_header(header_floor)]) == LoadResult(
+            messages=0,
+            aliases=0,
+        )
+        assert broker.get_cached_last_timestamp() == competing_floor
+        assert broker.refresh_last_timestamp() == competing_floor
+
+
+def test_load_header_floor_final_read_failure_is_outcome_ambiguous(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _db(tmp_path)
+    header_floor = 1000
+    with open_broker(db) as broker:
+        assert broker.refresh_last_timestamp() == 0
+        plugin = cast(Any, broker)._timestamp_gen._backend_plugin
+
+        def fail_final_read(_runner: Any) -> int:
+            raise OperationalError("forced final read failure")
+
+        with monkeypatch.context() as patcher:
+            patcher.setattr(plugin, "read_last_ts", fail_final_read)
+            with pytest.raises(
+                TimestampError,
+                match="durable outcome is unknown",
+            ):
+                load_lines(broker, [_load_header(header_floor)])
+
+        assert broker.refresh_last_timestamp() == header_floor
+
+
+def test_claimed_future_exact_ids_survive_as_header_floor(tmp_path: Path) -> None:
+    src = _db(tmp_path, "src.db")
+    dst = _db(tmp_path, "dst.db")
+    future_base = 2_000_000_000_000_000_000
+    inserted_ids = [future_base + offset for offset in range(10)]
+    with open_broker(src) as broker:
+        broker.insert_messages(
+            ("jobs", f"future-{offset}", message_id)
+            for offset, message_id in enumerate(inserted_ids)
+        )
+        assert len(broker.claim_many("jobs", limit=10)) == 10
+        lines = list(dump_lines(broker))
+        header_floor = int(json.loads(lines[0])["last_ts"])
+
+    assert len(lines) == 1
+    assert header_floor > max(inserted_ids)
+    with open_broker(dst) as broker:
+        with pytest.warns(DumpClockSkewWarning):
+            assert load_lines(broker, lines, force=True) == LoadResult(
+                messages=0, aliases=0
+            )
+        assert broker.refresh_last_timestamp() >= header_floor
+        assert broker.write("jobs", "after restore") > header_floor
+
+
+@pytest.mark.shared
+def test_load_rejects_records_newer_than_header_bound(broker: Any) -> None:
+    header_floor = 1000
+    newer_id = 2000
+    lines = [
+        json.dumps(
+            {
+                "type": "header",
+                "format": "simplebroker-dump",
+                "version": 1,
+                "last_ts": f"{header_floor:019d}",
+            }
+        ),
+        json.dumps(
+            {
+                "type": "message",
+                "queue": "jobs",
+                "body": "newer than header sample",
+                "id": f"{newer_id:019d}",
+            }
+        ),
+    ]
+
+    with pytest.raises(ValueError, match=r"line 2: message id exceeds header"):
+        load_lines(broker, lines)
+    assert broker.peek_one("jobs", exact_timestamp=newer_id) is None
+
+
+@pytest.mark.parametrize("last_ts", ["1", -1, True, None, 1.0, 2**63])
+def test_load_rejects_invalid_header_last_ts_with_line_context(
+    tmp_path: Path,
+    last_ts: object,
+) -> None:
+    header = json.dumps(
+        {
+            "type": "header",
+            "format": "simplebroker-dump",
+            "version": 1,
+            "last_ts": last_ts,
+        }
+    )
+
+    with (
+        open_broker(_db(tmp_path)) as broker,
+        pytest.raises(ValueError, match="line 1: invalid header last_ts"),
+    ):
+        load_lines(broker, [header])
+
+
+def test_load_rejects_header_without_last_ts(tmp_path: Path) -> None:
+    header = json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1})
+
+    with (
+        open_broker(_db(tmp_path)) as broker,
+        pytest.raises(ValueError, match="line 1: header requires 'last_ts'"),
+    ):
+        load_lines(broker, [header])
 
 
 @pytest.mark.parametrize(
@@ -172,7 +519,7 @@ def test_load_rejects_noncanonical_message_id_tokens_with_line_context(
     tmp_path: Path,
     id_token: str,
 ) -> None:
-    header = json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1})
+    header = _load_header()
     record = f'{{"type":"message","queue":"q","body":"b","id":{id_token}}}'
 
     with (
@@ -185,7 +532,7 @@ def test_load_rejects_noncanonical_message_id_tokens_with_line_context(
 def test_load_rejects_malformed_message_id_with_line_context(tmp_path: Path) -> None:
     db = _db(tmp_path)
     lines = [
-        json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1}),
+        _load_header(1000),
         json.dumps(
             {"type": "message", "queue": "jobs", "body": "bad", "id": "not-an-id"}
         ),
@@ -201,7 +548,7 @@ def test_load_rejects_malformed_message_id_with_line_context(tmp_path: Path) -> 
 
 
 def test_load_rejects_huge_json_integer_with_line_context(tmp_path: Path) -> None:
-    header = json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1})
+    header = _load_header()
     huge_integer = "9" * 5000
     target = tmp_path / "huge-integer.db"
     with (
@@ -222,7 +569,7 @@ def test_load_rejects_reserved_zero_with_line_context_before_batch_flush(
     broker: Any,
 ) -> None:
     lines = [
-        json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1}),
+        _load_header(1000),
         json.dumps({"type": "message", "queue": "jobs", "body": "valid", "id": 1000}),
         json.dumps({"type": "message", "queue": "jobs", "body": "legacy", "id": 0}),
     ]
@@ -319,10 +666,7 @@ def test_empty_broker_dumps_header_only_and_loads(tmp_path: Path) -> None:
 
 def test_load_rejects_bad_input(tmp_path: Path) -> None:
     db = _db(tmp_path)
-    header = json.dumps(
-        {"type": "header", "format": "simplebroker-dump", "version": 1},
-        sort_keys=True,
-    )
+    header = _load_header()
 
     with open_broker(db) as broker:
         with pytest.raises(ValueError, match="header"):

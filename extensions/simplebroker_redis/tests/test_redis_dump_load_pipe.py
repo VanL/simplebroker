@@ -148,3 +148,37 @@ def test_redis_to_sqlite_pipe(tmp_path: Path) -> None:
         assert (code, out.strip()) == (0, "a0")
     finally:
         _cleanup_namespace(namespace)
+
+
+def test_redis_header_only_load_restores_last_timestamp_floor(
+    tmp_path: Path,
+) -> None:
+    namespace = f"dumpfloor_{uuid.uuid4().hex[:12]}"
+    redis_env = _redis_env(namespace)
+    redis_dir = tmp_path / "redis-floor"
+    redis_dir.mkdir()
+    floor = 2_000_000_000_000_000_000
+    dump_input = json.dumps(
+        {
+            "type": "header",
+            "format": "simplebroker-dump",
+            "version": 1,
+            "backend": "sqlite",
+            "last_ts": f"{floor:019d}",
+        }
+    )
+    try:
+        code, _out, err = _run_cli(
+            "load", "--force", cwd=redis_dir, env=redis_env, stdin=dump_input
+        )
+        assert code == 0, err
+        code, redump, err = _run_cli("dump", cwd=redis_dir, env=redis_env)
+        assert code == 0, err
+        assert int(json.loads(redump.splitlines()[0])["last_ts"]) >= floor
+        code, out, err = _run_cli(
+            "write", "jobs", "after floor", "--json", cwd=redis_dir, env=redis_env
+        )
+        assert code == 0, err
+        assert int(json.loads(out)["timestamp"]) > floor
+    finally:
+        _cleanup_namespace(namespace)

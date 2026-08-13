@@ -498,6 +498,7 @@ def test_load_project_config_ignores_unknown_top_level_fields(
             'backend = "sqlite"\n'
             'target = "queue.db"\n'
             'description = "ignored"\n'
+            "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS = 0\n"
         ),
         encoding="utf-8",
     )

@@ -403,7 +403,14 @@ def create_parser(*, config: dict[str, Any] = _config) -> argparse.ArgumentParse
         help="omit queues matching this fnmatch-style glob (repeatable)",
     )
 
-    subparsers.add_parser("load", help="restore a dump from stdin into this broker")
+    load_parser = subparsers.add_parser(
+        "load", help="restore a dump from stdin into this broker"
+    )
+    load_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="load even when the dump watermark exceeds allowed future skew",
+    )
 
     alias_parser = subparsers.add_parser("alias", help="manage queue aliases")
     alias_subparsers = alias_parser.add_subparsers(dest="alias_command")
@@ -1353,6 +1360,8 @@ def _dispatch_admin_command(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
+    *,
+    config: dict[str, Any],
 ) -> int:
     """Dispatch rename, broadcast, dump/load, alias, or watch."""
     if args.command == "rename":
@@ -1377,7 +1386,12 @@ def _dispatch_admin_command(
             exclude=args.exclude,
         )
     if args.command == "load":
-        return commands.cmd_load(resolved_target)
+        return commands.cmd_load(
+            resolved_target,
+            force=getattr(args, "force", False),
+            quiet=getattr(args, "quiet", False),
+            config=config,
+        )
     if args.command == "alias":
         return _dispatch_alias_command(args, resolved_target, parser)
     return commands.cmd_watch(
@@ -1417,7 +1431,7 @@ def _dispatch_command(
         "alias",
         "watch",
     }:
-        return _dispatch_admin_command(args, resolved_target, parser)
+        return _dispatch_admin_command(args, resolved_target, parser, config=config)
     return EXIT_SUCCESS
 
 

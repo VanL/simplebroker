@@ -48,6 +48,14 @@ including after an ordinary cleanup failure. The first call attempts every
 independently safe cleanup action, raises the first ordinary failure, and
 retains later failures as ordered exception notes. All v5 plugins are rejected
 by the exact-version handshake.
+
+Backend API v7 requires
+``BrokerConnection.advance_last_timestamp(timestamp)``. The operation
+monotonically installs a durable broker-global allocation floor regardless of
+the process-local timestamp cache, then refreshes that cache from one final
+durable read. A failed final read raises ``TimestampError`` with an
+outcome-ambiguous durable result. All v6 plugins are rejected by the
+exact-version handshake.
 """
 
 from ._backend_plugins import (

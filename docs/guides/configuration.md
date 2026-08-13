@@ -3,8 +3,8 @@
 This guide is the home for SimpleBroker configuration: every `BROKER_*`
 environment variable, database scoping and discovery, project
 configuration files, security notes, and performance tuning. The README
-carries only the most-used settings. `load_config()` documents 31 keys;
-all 31 appear in this guide — most in the catalog below, with
+carries only the most-used settings. `load_config()` documents 32 keys;
+all 32 appear in this guide — most in the catalog below, with
 `BROKER_PROJECT_SCOPE`, `BROKER_DEFAULT_DB_LOCATION`, and
 `BROKER_MAX_MESSAGE_SIZE` documented in the Project scoping and Security
 sections where they belong.
@@ -81,6 +81,13 @@ pass. They share scheduling and eligibility, not per-pass deletion volume.
 **Generator Batching:**
 - `BROKER_GENERATOR_BATCH_SIZE` - Rows fetched per batch by generator methods such as `read_generator()` (default: 100)
 
+**Persistence load safety:**
+- `BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS` - Maximum physical time by which a
+  dump header may lead local wall time before load refuses by default
+  (default: 300). Any positive skew warns; `load --force` bypasses only the
+  refusal. This setting is available through environment configuration and
+  typed `resolve_config()` overrides. It is not a `.broker.toml` field.
+
 **Diagnostics:**
 - `BROKER_DEBUG` - Enable debug output (default: off)
 - `BROKER_LOGGING_ENABLED` - Enable logging output, including the watcher's default error handler (default: off)
@@ -131,7 +138,7 @@ export BROKER_PROJECT_SCOPE=true
 export BROKER_DEFAULT_DB_NAME=project-queue.db
 ```
 
-**Why so many `BROKER_*` settings?** `load_config()` documents 31 config keys
+**Why so many `BROKER_*` settings?** `load_config()` documents 32 config keys
 because SimpleBroker is also embedded by larger tools. Most users should never
 touch most of them. Embedders such as Weft translate their own namespace into
 those keys and pass the result through `resolve_config()`, which keeps

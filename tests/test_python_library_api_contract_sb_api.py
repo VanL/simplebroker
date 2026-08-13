@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 from typing import get_type_hints
@@ -11,6 +12,7 @@ import pytest
 import simplebroker
 import simplebroker.sbqueue as sbqueue_module
 from simplebroker import (
+    DumpClockSkewWarning,
     Queue,
     commands,
     dump_lines,
@@ -184,13 +186,18 @@ def test_api_command_layer_and_advanced_language() -> None:
     assert "SDK" in advanced or "sdk" in advanced.lower()
 
 
-def test_api_owned_runner_lifecycle_and_backend_v6_contract() -> None:
+def test_api_owned_runner_lifecycle_and_backend_v7_contract() -> None:
     advanced = " ".join(_section("SB-API-11").split()).lower()
     assert "lifecycle verbs follow ownership scope" in advanced
     assert "simplebroker-owned runner teardown" in advanced
     assert "explicitly injected runner" in advanced
     assert "backend api v6" in advanced
     assert "terminal close semantics" in advanced
+    assert "backend api v7" in advanced
+    assert "advance_last_timestamp(timestamp)" in advanced
+    assert "process-local cache" in advanced
+    assert "final read" in advanced
+    assert "outcome-ambiguous" in advanced
 
 
 def test_api_cross_surface_matrix_present() -> None:
@@ -227,6 +234,20 @@ def test_api_dump_load_library_entrypoints(tmp_path: Path) -> None:
         load_lines(broker, lines)
     with Queue("q", db_path=str(dst)) as q:
         assert q.peek_one() == "payload"
+
+
+def test_api_load_future_skew_surface_is_root_importable_and_keyword_only() -> None:
+    assert simplebroker.DumpClockSkewWarning is DumpClockSkewWarning
+    assert issubclass(DumpClockSkewWarning, UserWarning)
+    parameters = inspect.signature(load_lines).parameters
+    assert parameters["force"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["force"].default is False
+    assert parameters["config"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameters["config"].default is None
+    command_parameters = inspect.signature(commands.cmd_load).parameters
+    for name, default in (("force", False), ("quiet", False), ("config", None)):
+        assert command_parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        assert command_parameters[name].default is default
 
 
 def test_api_commands_exit_code_shape(tmp_path: Path) -> None:

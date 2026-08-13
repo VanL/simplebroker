@@ -134,3 +134,36 @@ def test_postgres_to_sqlite_pipe(tmp_path: Path) -> None:
     code, redump, err = _run_cli("dump", cwd=dst, env=_sqlite_env())
     assert code == 0, err
     assert _nonheader(redump) == _nonheader(dump_out)
+
+
+def test_postgres_header_only_load_restores_last_timestamp_floor(
+    tmp_path: Path,
+) -> None:
+    schema = f"dumpfloor_{uuid.uuid4().hex[:12]}"
+    pg_dir = tmp_path / "pg-floor"
+    pg_dir.mkdir()
+    floor = 2_000_000_000_000_000_000
+    dump_input = json.dumps(
+        {
+            "type": "header",
+            "format": "simplebroker-dump",
+            "version": 1,
+            "backend": "sqlite",
+            "last_ts": f"{floor:019d}",
+        }
+    )
+    try:
+        code, _out, err = _run_cli(
+            "load", "--force", cwd=pg_dir, env=_pg_env(schema), stdin=dump_input
+        )
+        assert code == 0, err
+        code, redump, err = _run_cli("dump", cwd=pg_dir, env=_pg_env(schema))
+        assert code == 0, err
+        assert int(json.loads(redump.splitlines()[0])["last_ts"]) >= floor
+        code, out, err = _run_cli(
+            "write", "jobs", "after floor", "--json", cwd=pg_dir, env=_pg_env(schema)
+        )
+        assert code == 0, err
+        assert int(json.loads(out)["timestamp"]) > floor
+    finally:
+        _cleanup_schema(schema)

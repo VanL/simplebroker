@@ -13,9 +13,37 @@ from simplebroker_redis import RedisRunner, get_backend_plugin
 from simplebroker_redis.core import RedisBrokerCore
 from simplebroker_redis.keys import RedisKeys
 
-from simplebroker._exceptions import IntegrityError, MessageError, OperationalError
+from simplebroker._exceptions import (
+    IntegrityError,
+    MessageError,
+    OperationalError,
+    TimestampError,
+)
 
 pytestmark = [pytest.mark.redis_only]
+
+
+def test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval(
+    redis_runner: RedisRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = RedisBrokerCore(redis_runner)
+    original_eval = core._client.eval
+    floor = 1_000
+
+    def eval_then_disconnect(*args: object, **kwargs: object) -> NoReturn:
+        original_eval(*args, **kwargs)
+        raise redis.ConnectionError("injected disconnect after EVAL")
+
+    try:
+        monkeypatch.setattr(core._client, "eval", eval_then_disconnect)
+        with pytest.raises(TimestampError, match="outcome is unknown") as exc_info:
+            core.advance_last_timestamp(floor)
+        assert exc_info.value.outcome_ambiguous is True
+
+        monkeypatch.setattr(core._client, "eval", original_eval)
+        assert core.refresh_last_timestamp() >= floor
+    finally:
+        core.close()
 
 
 def test_redis_manual_vacuum_translates_client_errors(

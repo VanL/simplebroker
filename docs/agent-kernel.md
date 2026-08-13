@@ -203,8 +203,15 @@ Normative: `docs/specs/15-persistence-io.md` `[SB-IO-1]`–`[SB-IO-5]`.
 
 - **`dump` is pending-only** (claimed/deletion-pending rows omitted); not a
   full physical image of claimed work.
-- **`load` targets a fresh broker**; duplicate message ids fail loudly.
+- **`load` is mutating and targets a fresh broker**, but freshness is
+  caller-owned rather than enforced; duplicate message ids fail loudly and a
+  later failure can leave earlier aliases or batches applied.
 - Prefer dump/load over copying live SQLite files for backup/migration.
+- Dump is a pending-message logical export bounded inclusively by its mandatory
+  `last_ts` header. Load restores that header as a broker-global allocation
+  floor, including for an empty selected result. A future header warns; skew
+  beyond the configured 300-second default refuses before mutation unless
+  `load --force` is explicit. See `[SB-IO-4]`.
 - **`include_claimed` / `--include-claimed`** on peek is inspection only.
 
 ## Minimal use recipes

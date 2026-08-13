@@ -8,7 +8,8 @@ publication in `extensions/simplebroker_redis/simplebroker_redis/core.py` and
 Boundary: realizes `[SB-ID-1]` through `[SB-ID-4]` from
 `docs/specs/13-message-identity.md`. It does not own strict timestamp
 selection, watcher lifecycle, move identity, patterned-broadcast atomicity, or
-dump format.
+dump record ordering. Persistence load delegates its header-floor meaning to
+`[SB-IO-4]` while using the same high-water machinery described here.
 
 Verification: shared reserved-zero and SQL transaction-ordering tests, a real
 two-connection PostgreSQL monotone-resync test, plus real-Valkey stale-fence,
@@ -108,6 +109,44 @@ Redis conflict repair reads current high-water and the maximum stored ID, calls 
 backend's compare-and-advance operation, then refreshes the local generator.
 It never performs an unconditional high-water write, so a concurrent later
 advance cannot be overwritten backward.
+
+## Persistence-load high-water restoration
+
+Dump v1 samples broker-global `last_ts=H` before traversal even when no pending
+message carries that ID. It passes the exclusive query equivalent of the
+inclusive H bound to each backend peek, so concurrent messages above H are not
+part of this dump. At the signed-ID ceiling no `H + 1` is representable and no
+filter is needed because every valid ID is already `<= H`. Load validates the
+bound inline as defense against legacy or hand-built input; this preserves streaming and
+does not promise rollback of earlier batches.
+
+Before destination mutation, `load_lines()` decodes H's physical component and
+compares it with one local wall-clock sample. Any positive lead emits the
+public `DumpClockSkewWarning`. A lead beyond the configured 300-second default
+is rejected unless force is explicit. This makes a header-only check sufficient
+without reading or spooling the complete input. Five minutes is SimpleBroker's
+availability/safety tolerance, informed by MIT Kerberos's conventional
+300-second default, not a general claim about clock correctness.
+
+After replay, load calls backend API v7 `advance_last_timestamp()` with H.
+
+The operation must always issue the backend's atomic compare-and-advance. A
+direct backend can reserve candidates in the process-local generator cache
+without persisting them, and a rolled-back SQL write can likewise leave the
+cache ahead. Comparing the header only with that cache would incorrectly skip
+the durable restore. After the monotone attempt, the generator reads persisted
+high-water once, rejects an observation below H, installs a valid observation
+in its cache, and returns it. There is no discarded initialization read. A
+later writer may make the cache stale immediately, which is the ordinary
+`[SB-ID-3]` contract.
+
+`TimestampError.outcome_ambiguous` makes recovery explicit. A non-retryable
+write/transport failure or final-read failure after the attempt sets it true
+because the monotone update may have committed. Exhausted retryable lock
+contention and a final observation below H are known failures and leave it
+false. Load is intended for fresh state but does not enforce it; it is
+merge-like for disjoint data and may be partially applied. Recovery guidance
+therefore depends on the marker and still accounts for earlier replayed state.
 
 Pub/Sub notification remains a post-commit hint. Maintenance accounting
 remains best-effort after `_write_message` returns. Neither participates in

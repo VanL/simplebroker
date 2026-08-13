@@ -550,10 +550,14 @@ Claimed rows are deletion-pending — vacuum may remove them at any time;
 
 ```bash
 # Back up, restore, or migrate between backends (normative: [SB-IO-*]).
-# Pending-only dump; load into a FRESH broker (duplicate ids fail loudly).
+# Pending-only bounded dump; load is mutating and intended for a FRESH broker.
+# The header bounds message IDs and restores broker-global allocation high-water.
+# Future clock skew warns; excessive skew refuses before mutation unless forced.
 $ broker dump > backup.ndjson
 $ broker dump --include 'tasks*' --exclude 'tasks_tmp' | (cd /fresh/dir && broker load)
 $ broker dump | BROKER_BACKEND=postgres BROKER_BACKEND_TARGET="$DSN" broker load
+# Explicit recovery escape hatch; still warns and may impair writes until catch-up.
+$ broker load --force < future-watermark-backup.ndjson
 ```
 
 Full dump/load and claimed-row inspection rules:

@@ -9,6 +9,7 @@ import pytest
 from simplebroker._constants import (
     # Database
     DEFAULT_DB_NAME,
+    DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS,
     DEFAULT_PROJECT_CONFIG_NAME,
     EXIT_QUEUE_EMPTY,
     # Exit codes
@@ -184,6 +185,10 @@ class TestLoadConfig:
             # Message processing
             assert config["BROKER_MAX_MESSAGE_SIZE"] == MAX_MESSAGE_SIZE
             assert config["BROKER_READ_COMMIT_INTERVAL"] == 1
+            assert (
+                config["BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS"]
+                == DEFAULT_LOAD_MAX_FUTURE_SKEW_SECONDS
+            )
 
             # Vacuum settings
             assert config["BROKER_AUTO_VACUUM"] == 1
@@ -492,6 +497,7 @@ class TestLoadConfig:
             "BROKER_MAX_MESSAGE_SIZE",
             "BROKER_READ_COMMIT_INTERVAL",
             "BROKER_GENERATOR_BATCH_SIZE",
+            "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS",
             "BROKER_AUTO_VACUUM",
             "BROKER_AUTO_VACUUM_INTERVAL",
             "BROKER_VACUUM_THRESHOLD",
@@ -537,6 +543,7 @@ class TestLoadConfig:
             "BROKER_MAX_MESSAGE_SIZE",
             "BROKER_READ_COMMIT_INTERVAL",
             "BROKER_GENERATOR_BATCH_SIZE",
+            "BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS",
             # Vacuum settings
             "BROKER_AUTO_VACUUM",
             "BROKER_AUTO_VACUUM_INTERVAL",
@@ -701,6 +708,36 @@ class TestParseBool:
 
 class TestConfigValidation:
     """Test config validation in load_config."""
+
+    def test_load_future_skew_reads_non_negative_env_value(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "42"},
+            clear=True,
+        ):
+            assert load_config()["BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS"] == 42
+
+    def test_load_future_skew_rejects_negative_value(self) -> None:
+        with (
+            patch.dict(
+                os.environ,
+                {"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "-1"},
+                clear=True,
+            ),
+            pytest.raises(ValueError, match="must be a non-negative integer"),
+        ):
+            load_config()
+        with pytest.raises(ValueError, match="must be a non-negative integer"):
+            resolve_config({"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": -1})
+
+    @pytest.mark.parametrize("value", [True, 1.0, 1.9])
+    def test_load_future_skew_rejects_non_integer_type(self, value: object) -> None:
+        with pytest.raises(TypeError, match="must be a non-negative integer"):
+            resolve_config({"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": value})
+
+    def test_load_future_skew_rejects_non_integer_string(self) -> None:
+        with pytest.raises(ValueError, match="must be a non-negative integer"):
+            resolve_config({"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "1.9"})
 
     def test_broker_default_db_name_absolute_path_raises_error(self) -> None:
         """Test that absolute paths in BROKER_DEFAULT_DB_NAME raise an error."""

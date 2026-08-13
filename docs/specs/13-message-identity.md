@@ -95,6 +95,27 @@ Repair and resynchronization are monotone compare-and-advance operations:
 they never replace persisted `last_ts` with a lower value, including when a
 concurrent allocator advances high-water after the repair reads its input.
 
+Persistence load treats a valid dump-header high-water as an allocation floor.
+After replay it monotonically advances persisted `last_ts` to at least that
+floor, including when the dump contains no messages and when the connection's
+process-local cache is already higher. The durable compare-and-advance is never
+skipped because of that cache. The connection then reads persisted high-water
+once, refreshes its cache, and returns that observation; another process may
+advance it immediately afterward under the ordinary cache-staleness contract.
+A higher message-derived or concurrently advanced watermark is never lowered.
+A final-read exception raises `TimestampError` with
+`outcome_ambiguous=True`; because the monotone advance may already have
+committed, durable outcome is unknown but can never be lower than it was before
+the attempt. A successful final read below the requested floor is instead a
+known contract failure (`outcome_ambiguous=False`). Non-retryable operational
+failure during the attempted advance is ambiguous; exhausted retryable lock
+contention is known failure.
+
+The dump producer also uses that sampled header value as the inclusive upper
+bound for exported message IDs (`[SB-IO-1]`). This is a persistence-I/O bound,
+not a change to ordinary exact insertion. Load's future-skew refusal is likewise
+load-only; direct `insert_messages()` retains the behavior below.
+
 ## Exact-ID normalization and insertion [SB-ID-4]
 
 Public exact-id operations accept either:
@@ -122,6 +143,10 @@ normalization, advances `last_ts` above the largest supplied id when the
 operation succeeds, and inserts pending messages with their exact ids. Invalid
 input or an id already present aborts with no partial insert and no high-water
 change. An empty input is a no-op.
+
+The dump-header floor applied by `load_lines()` does not change this ordinary
+exact-insert contract. It is a loader-owned monotone advance after replay, not
+an alternate `insert_messages()` mode.
 
 An id at the very top of the range cannot be inserted: high-water must be able
 to advance above every supplied id, so an id with no room above it is
@@ -165,6 +190,9 @@ message id. It is the same message identity with the queue binding updated.
 
 ## Related Plans
 
+- `docs/plans/2026-08-12-bounded-live-dump-plan.md` — makes emitted v1
+  high-water an inclusive message bound and monotone load floor, with a
+  load-only future-skew safety gate.
 - `docs/plans/2026-08-10-test-suite-signal-remediation-plan.md`
 - `docs/plans/2026-08-08-json-timestamp-string-contract-plan.md`
 - retired: 2026-07-30-product-documentation-cutover-plan — source `5023710`;

@@ -68,7 +68,18 @@ class TimestampError(BrokerError):
     """Timestamp validation or generation error.
 
     This is SimpleBroker-specific and doesn't map to sqlite3.
+    ``outcome_ambiguous`` is true only when an attempted durable operation may
+    already have committed despite the reported failure.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        outcome_ambiguous: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.outcome_ambiguous = bool(outcome_ambiguous)
 
 
 class QueueNameError(BrokerError, ValueError):

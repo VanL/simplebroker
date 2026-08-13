@@ -121,6 +121,14 @@ raised. Core 7.1.0 and the first-party PostgreSQL and Redis/Valkey 3.6.0
 packages are the first coordinated v6 set. Older and newer backend API versions
 are rejected rather than run against unverified lifecycle semantics.
 
+Backend API v7 adds the required
+`BrokerConnection.advance_last_timestamp(timestamp)` operation used by
+persistence restore. It installs a durable monotone allocation floor even when
+the connection cache is already higher, then refreshes that cache from one
+final durable read. Core 7.3.0 and the first-party PostgreSQL and Redis/Valkey
+3.8.0 packages are the first coordinated v7 set. Exact-version rejection keeps
+v6 plugins from failing later during load.
+
 There are two backend shapes:
 
 1. **SQL-runner-shaped backends** reuse SimpleBroker's shared `BrokerCore`.

@@ -16,7 +16,7 @@ import os
 import sys
 import time
 import warnings
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
 from pathlib import Path
 from typing import Any, cast
@@ -30,7 +30,7 @@ from ._constants import (
     load_config,
     resolve_config,
 )
-from ._dump import dump_lines, load_lines
+from ._dump import DumpClockSkewWarning, dump_lines, load_lines
 from ._exceptions import IntegrityError, TimestampError
 from ._message_id import (
     INVALID_MESSAGE_ID_MESSAGE,
@@ -1151,7 +1151,13 @@ def cmd_dump(
     return EXIT_SUCCESS
 
 
-def cmd_load(db_path: DBTarget) -> int:
+def cmd_load(
+    db_path: DBTarget,
+    *,
+    force: bool = False,
+    quiet: bool = False,
+    config: Mapping[str, Any] | None = None,
+) -> int:
     """Apply a simplebroker-dump from stdin to the broker.
 
     Returns:
@@ -1169,7 +1175,29 @@ def cmd_load(db_path: DBTarget) -> int:
     try:
         with DBConnection(db_path) as conn:
             broker = conn.get_connection()
-            load_lines(broker, sys.stdin)
+            with warnings.catch_warnings():
+                default_showwarning = warnings.showwarning
+
+                def showwarning(
+                    message: Warning | str,
+                    category: type[Warning],
+                    filename: str,
+                    lineno: int,
+                    file: Any = None,
+                    line: str | None = None,
+                ) -> None:
+                    if issubclass(category, DumpClockSkewWarning):
+                        if not quiet:
+                            print(
+                                f"broker load: warning: {message}",
+                                file=sys.stderr,
+                            )
+                        return
+                    default_showwarning(message, category, filename, lineno, file, line)
+
+                warnings.showwarning = showwarning
+                warnings.simplefilter("always", DumpClockSkewWarning)
+                load_lines(broker, sys.stdin, force=force, config=config)
     except ValueError as exc:
         print(f"broker load: {exc}", file=sys.stderr)
         return EXIT_ERROR
@@ -1179,6 +1207,15 @@ def cmd_load(db_path: DBTarget) -> int:
             "duplicate message IDs are never overwritten)",
             file=sys.stderr,
         )
+        return EXIT_ERROR
+    except TimestampError as exc:
+        recovery = (
+            "durable outcome may be ambiguous; inspect or recreate the "
+            "destination before retrying"
+            if exc.outcome_ambiguous
+            else "correct the failure and retry into a clean destination"
+        )
+        print(f"broker load: {exc} ({recovery})", file=sys.stderr)
         return EXIT_ERROR
     return EXIT_SUCCESS
 

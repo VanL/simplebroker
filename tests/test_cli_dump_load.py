@@ -8,9 +8,17 @@ bin/pytest-redis. Cross-backend directions live in the extension test dirs.
 from __future__ import annotations
 
 import json
+import sqlite3
+import time
+import warnings
 from pathlib import Path
+from typing import Self
 
 import pytest
+
+from simplebroker import commands
+from simplebroker._constants import LOGICAL_COUNTER_MASK, NS_PER_SECOND
+from simplebroker.ext import TimestampError
 
 from .conftest import run_cli
 
@@ -119,7 +127,14 @@ def test_load_rejects_garbage_with_line_number(workdir: Path) -> None:
     assert code == 1
     assert "line 1" in err
 
-    header = json.dumps({"type": "header", "format": "simplebroker-dump", "version": 1})
+    header = json.dumps(
+        {
+            "type": "header",
+            "format": "simplebroker-dump",
+            "version": 1,
+            "last_ts": "0000000000000000000",
+        }
+    )
     code, _out, err = run_cli(
         "load", cwd=workdir, stdin=header + "\n" + '{"type": "mystery"}\n'
     )
@@ -131,3 +146,158 @@ def test_load_empty_stdin_errors(workdir: Path) -> None:
     code, _out, err = run_cli("load", cwd=workdir, stdin="")
     assert code == 1
     assert "header" in err
+
+
+def _future_header(seconds: int) -> str:
+    last_ts = (time.time_ns() & ~LOGICAL_COUNTER_MASK) + seconds * NS_PER_SECOND
+    return json.dumps(
+        {
+            "type": "header",
+            "format": "simplebroker-dump",
+            "version": 1,
+            "last_ts": f"{last_ts:019d}",
+        }
+    )
+
+
+def test_load_future_skew_warns_once_and_quiet_suppresses_display(
+    workdir: Path, tmp_path: Path
+) -> None:
+    header = _future_header(250)
+    code, _out, err = run_cli("load", cwd=workdir, stdin=header)
+    assert code == 0
+    assert err.count("broker load: warning:") == 1
+
+    assert "DumpClockSkewWarning" not in err
+
+    quiet_dir = tmp_path / "quiet"
+    quiet_dir.mkdir()
+    code, _out, err = run_cli("-q", "load", cwd=quiet_dir, stdin=header)
+    assert code == 0
+    assert err == ""
+
+
+def test_load_excessive_future_skew_requires_force(
+    workdir: Path, tmp_path: Path
+) -> None:
+    header = _future_header(3600)
+    env = {"BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS": "0"}
+    code, _out, err = run_cli("load", cwd=workdir, stdin=header, env=env)
+    assert code == 1
+    assert "broker load: warning:" in err
+    assert "exceeds configured maximum" in err
+
+    forced_dir = tmp_path / "forced"
+    forced_dir.mkdir()
+    code, _out, err = run_cli("load", "--force", cwd=forced_dir, stdin=header, env=env)
+    assert code == 0
+    assert err.count("broker load: warning:") == 1
+
+    quiet_forced_dir = tmp_path / "quiet-forced"
+    quiet_forced_dir.mkdir()
+    code, _out, err = run_cli(
+        "-q",
+        "load",
+        "--force",
+        cwd=quiet_forced_dir,
+        stdin=header,
+        env=env,
+    )
+    assert code == 0
+    assert err == ""
+
+
+@pytest.mark.sqlite_only
+def test_load_timestamp_floor_failure_uses_command_diagnostic(workdir: Path) -> None:
+    assert run_cli("init", cwd=workdir)[0] == 0
+    connection = sqlite3.connect(workdir / ".broker.db")
+    try:
+        connection.execute("DELETE FROM meta WHERE key = 'last_ts'")
+        connection.commit()
+    finally:
+        connection.close()
+
+    code, _out, err = run_cli("load", cwd=workdir, stdin=_future_header(-10))
+    assert code == 1
+    assert "broker load:" in err
+    assert "below requested floor" in err
+    assert "clean destination" in err
+    assert "simplebroker: error:" not in err
+
+
+def test_load_force_does_not_bypass_format_validation(workdir: Path) -> None:
+    code, _out, err = run_cli("load", "--force", cwd=workdir, stdin="not json")
+    assert code == 1
+    assert "line 1" in err
+
+
+def test_cmd_load_ambiguous_timestamp_failure_gives_recovery_guidance(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Connection:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get_connection(self) -> object:
+            return object()
+
+    def fail(*_args: object, **_kwargs: object) -> None:
+        raise TimestampError("connection reset", outcome_ambiguous=True)
+
+    monkeypatch.setattr(commands, "DBConnection", lambda _target: Connection())
+    monkeypatch.setattr(commands, "load_lines", fail)
+
+    assert commands.cmd_load("ignored") == 1
+    assert "durable outcome may be ambiguous" in capsys.readouterr().err
+
+
+def test_cmd_load_reemits_unrelated_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Connection:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get_connection(self) -> object:
+            return object()
+
+    def warn(*_args: object, **_kwargs: object) -> None:
+        warnings.warn("unrelated warning", UserWarning, stacklevel=1)
+
+    monkeypatch.setattr(commands, "DBConnection", lambda _target: Connection())
+    monkeypatch.setattr(commands, "load_lines", warn)
+
+    with pytest.warns(UserWarning, match="unrelated warning"):
+        assert commands.cmd_load("ignored", quiet=True) == 0
+
+
+def test_cmd_load_preserves_unrelated_warning_error_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Connection:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get_connection(self) -> object:
+            return object()
+
+    def warn_then_fail(*_args: object, **_kwargs: object) -> None:
+        warnings.warn("dependency warning", DeprecationWarning, stacklevel=1)
+        raise ValueError("later load failure")
+
+    monkeypatch.setattr(commands, "DBConnection", lambda _target: Connection())
+    monkeypatch.setattr(commands, "load_lines", warn_then_fail)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        with pytest.raises(DeprecationWarning, match="dependency warning"):
+            commands.cmd_load("ignored")
