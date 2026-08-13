@@ -824,6 +824,21 @@ def test_extension_core_floor_guard_accepts_required_floor(tmp_path: Path) -> No
     )
 
 
+def test_extension_core_floor_guard_accepts_higher_floors(tmp_path: Path) -> None:
+    core = tmp_path / "_backend_plugins.py"
+    pg_pyproject = tmp_path / "pg.toml"
+    redis_pyproject = tmp_path / "redis.toml"
+    core.write_text("BACKEND_API_VERSION: Final[int] = 1\n", encoding="utf-8")
+    pg_pyproject.write_text('"simplebroker>=5.0.1",\n', encoding="utf-8")
+    redis_pyproject.write_text('"simplebroker>=5.1.0",\n', encoding="utf-8")
+
+    release.require_extension_core_floors_for_backend_api(
+        core_path=core,
+        pg_pyproject_path=pg_pyproject,
+        redis_pyproject_path=redis_pyproject,
+    )
+
+
 def test_repository_backend_api_v7_handshake_and_floors_match() -> None:
     release.require_backend_api_versions_match()
     release.require_extension_core_floors_for_backend_api()
@@ -833,36 +848,49 @@ def test_repository_backend_api_v7_handshake_and_floors_match() -> None:
     assert release.version_tuple(
         release.read_current_version()
     ) >= release.version_tuple(required_core_floor)
-    assert release.read_pg_extension_version() == "3.8.0"
-    assert release.read_redis_extension_version() == "3.8.0"
-    assert release.sync_root_pg_extra_dependency() is None
-    assert release.sync_root_redis_extra_dependency() is None
-    assert (
-        release.read_extension_core_floor(
+
+    extension_core_floors = {
+        "simplebroker-pg": release.read_extension_core_floor(
             release.PG_EXTENSION_PYPROJECT_PATH,
             release.PG_CORE_DEPENDENCY_PATTERN,
             "simplebroker-pg pyproject.toml",
-        )
-        == "7.3.0"
-    )
-    assert (
-        release.read_extension_core_floor(
+        ),
+        "simplebroker-redis": release.read_extension_core_floor(
             release.REDIS_EXTENSION_PYPROJECT_PATH,
             release.REDIS_CORE_DEPENDENCY_PATTERN,
             "simplebroker-redis pyproject.toml",
+        ),
+    }
+    for floor in extension_core_floors.values():
+        assert release.version_tuple(floor) >= release.version_tuple(
+            required_core_floor
         )
-        == "7.3.0"
-    )
+
+    current_extension_versions = {
+        "simplebroker-pg": release.read_pg_extension_version(),
+        "simplebroker-redis": release.read_redis_extension_version(),
+    }
+    root_pyproject = release.PYPROJECT_PATH.read_text(encoding="utf-8")
+    root_extra_floors = {
+        "simplebroker-pg": release.PG_EXTRA_DEPENDENCY_PATTERN.search(root_pyproject),
+        "simplebroker-redis": release.REDIS_EXTRA_DEPENDENCY_PATTERN.search(
+            root_pyproject
+        ),
+    }
+    for package, match in root_extra_floors.items():
+        assert match is not None
+        assert match.group(2) == current_extension_versions[package]
+
     assert release.BACKEND_API_MIN_CORE_VERSION[4] == "5.6.0"
     assert release.BACKEND_API_MIN_CORE_VERSION[5] == "5.6.1"
     assert release.BACKEND_API_MIN_CORE_VERSION[6] == "7.1.0"
     assert release.BACKEND_API_MIN_CORE_VERSION[7] == "7.3.0"
 
-    extension_versions = {
+    first_api_v7_extension_versions = {
         "simplebroker_pg": "`simplebroker-pg` 3.8.0",
         "simplebroker_redis": "`simplebroker-redis` 3.8.0",
     }
-    for extension, version_text in extension_versions.items():
+    for extension, version_text in first_api_v7_extension_versions.items():
         readme = (
             release.PROJECT_ROOT / "extensions" / extension / "README.md"
         ).read_text(encoding="utf-8")
