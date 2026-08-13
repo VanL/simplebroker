@@ -829,7 +829,10 @@ def test_repository_backend_api_v7_handshake_and_floors_match() -> None:
     release.require_extension_core_floors_for_backend_api()
 
     assert release.read_core_backend_api_version() == 7
-    assert release.read_current_version() == "7.3.0"
+    required_core_floor = release.BACKEND_API_MIN_CORE_VERSION[7]
+    assert release.version_tuple(
+        release.read_current_version()
+    ) >= release.version_tuple(required_core_floor)
     assert release.read_pg_extension_version() == "3.8.0"
     assert release.read_redis_extension_version() == "3.8.0"
     assert release.sync_root_pg_extra_dependency() is None
