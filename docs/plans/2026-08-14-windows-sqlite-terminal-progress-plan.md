@@ -7,7 +7,7 @@ transaction and connection cleanup, Windows-only execution, downstream Taut,
 and an eventual package publication. Storage cleanup and publication are
 mandatory hardening boundaries.
 
-Status: active.
+Status: completed.
 
 Plan type: diagnosis first, then implementation against the winning lifecycle
 contract if a SimpleBroker-only reproduction proves the internal owner. No
@@ -21,6 +21,25 @@ increasing timeouts, retrying CI blindly, reducing xdist parallelism, weakening
 assertions, or moving cleanup responsibility downstream. Release the complete
 current tree as the next patch through `bin/release.py`, then update Taut's
 floor and lock and require fresh hosted Windows evidence.
+
+## Outcome
+
+Two changed-code hosted Windows probes did not reproduce a stuck SimpleBroker
+terminal transition. A 2,000-cycle public ephemeral transaction/read/close
+probe completed every exact phase, then the same workload completed while a
+second public connection stayed event-confirmed idle on the same database and
+a distinct runner. These bounded greens do not prove that a rare SimpleBroker
+or CPython race cannot exist, but they falsify either tested state as a
+deterministically sufficient precondition.
+
+The downstream samples remain compatible with pytest's 15-second aggregate
+timeout catching ordinary SQLite progress. The exact Taut setup uses sequential
+ephemeral runners and has no same-runner parked operation, so inventing that
+state upstream would no longer be a faithful reduction. The stop gate applies:
+no SimpleBroker production change, spec delta, dependency-floor change, or
+patch release is justified from this evidence. Temporary probes and workflow
+narrowing remain diagnostic-branch-only; downstream Taut owns the next exact
+phase/aggregate-progress measurement.
 
 ## Source Documents and Baseline
 
@@ -348,10 +367,10 @@ whether any publication claim outruns exact artifact evidence.
   `0e23a24d62c6a202ea82012b8973d6a6f90fb606`; Windows job `94892438787`
   passed all three probe tests on CPython 3.13.15 in 52.95s. The 2,000-cycle
   workload therefore completed all 16,020 exact acknowledged records with no
-  open terminal call or hard-cap path. This falsifies single-threaded public
-  ephemeral sidecar churn as sufficient for the observed stall. It is not a
-  production fix and does not exclude file-level interaction with another
-  live connection.
+  open terminal call or hard-cap path. In this bounded run, single-threaded
+  public ephemeral sidecar churn was not sufficient for the observed stall.
+  This is not a production fix and does not exclude a rare race or file-level
+  interaction with another live connection.
 - 2026-08-14: the next bounded discriminator holds one public ephemeral
   connection open and idle on a distinct runner after an event-confirmed read
   from the same database, while the original transaction/read/close workload
@@ -361,3 +380,26 @@ whether any publication claim outruns exact artifact evidence.
   incorrect expected setup grammar: an already initialized database needs no
   extra setup transaction. The corrected `24 + 8*N` grammar passes locally;
   fresh changed-SHA Windows evidence remains required.
+- 2026-08-14: hosted run `31839980458` executed exact SHA
+  `06aadd2dacde93713d439c4bbca25f1a732973a7`; Windows job `94894527760`
+  passed the 2,000-cycle same-file idle-peer discriminator on CPython 3.13.15
+  in 32.59s. Its exact `24 + 8*N` grammar proves 16,024 acknowledged records,
+  one distinct idle runner/thread with no transaction owner or admitted
+  operation, all workload commit/close returns, and exact idle close/release.
+  A generic second connection is therefore not a sufficient deterministic
+  precondition in this bounded run. This still does not exclude a rarer race.
+- 2026-08-14: the diagnostic use of the general `test.yml` also started
+  unrelated coverage producers; run `31839280773` then failed only because its
+  coverage combiner correctly required the intentionally absent Windows
+  coverage artifact. That is a diagnostic-workflow topology defect, not a
+  product or test failure. The target Windows job remained green; redundant
+  producers in `31839980458` were cancelled after its target job completed.
+  Any future platform probe must use a dedicated diagnostic workflow rather
+  than enqueue the full producer graph.
+- 2026-08-14: the bounded upstream stop gate is now active. The observed Taut
+  setup uses sequential ephemeral runners and supplies no same-runner parked
+  operation, so adding synthetic same-runner contention would not minimize the
+  downstream failure. No SimpleBroker code, public contract, timeout, retry,
+  dependency floor, or release changed. Investigation returns to Taut to
+  distinguish aggregate progress from a missing terminal transition in its
+  exact operation sequence.
