@@ -91,10 +91,11 @@ jobs:
     - name: Run Windows tests with pytest
       if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
       env:
-        # Diagnostic amplification only; not a retained test or product remedy.
+        # Diagnostic amplification only; event-confirmed same-file idle runner.
+        # This temporary branch narrowing is not a retained test or remedy.
         SIMPLEBROKER_TERMINAL_PROBE_ITERATIONS: "2000"
       run: |
-        uv run --frozen --no-sync pytest -s -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" tests/test_sqlite_terminal_progress_probe.py
+        uv run --frozen --no-sync pytest -s -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" tests/test_sqlite_terminal_progress_probe.py::test_ephemeral_sidecar_progress_with_idle_same_database_connection
 
     - name: Run SQLite cross-thread finalization probe
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
