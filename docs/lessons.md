@@ -95,6 +95,17 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-14: A timeout stack is a sample of where work was executing, not
+  proof that the sampled terminal call is stuck. Before assigning a storage
+  deadlock, publish and acknowledge exact entered/returned phases from a
+  spawn-isolated real-backend child, start terminal clocks only after explicit
+  readiness, and distinguish a fixed aggregate observation threshold from a
+  missing-progress cap that resets on every phase. If phases keep advancing
+  beyond the downstream timeout and the exact workload completes, investigate
+  redundant setup or aggregate test ownership instead of increasing the
+  timeout or patching the sampled close/commit call. Use a dedicated diagnostic
+  workflow; modifying a general producer workflow can enqueue unrelated jobs
+  and make required artifact combiners fail by construction.
 - 2026-08-13: Determinism in concurrency tests comes from controlling and
   observing the actors the test owns, not from removing default runner
   contention. A timeout under xdist proves load sensitivity, not xdist

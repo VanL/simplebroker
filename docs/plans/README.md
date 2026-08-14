@@ -29,7 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-08-14-windows-sqlite-terminal-progress-plan.md | active — Class 5; minimize two downstream Windows SQLite terminal stalls, fix only the proven owner, release a patch, and verify downstream Taut |
+| 2026-08-14-windows-sqlite-terminal-progress-plan.md | completed — Class 5 diagnosis; two event-observed hosted Windows reductions did not reproduce a stuck terminal transition, so no SimpleBroker change or release was justified and ownership returned downstream |
 | 2026-08-13-isolated-embedding-config-plan.md | active — Class 5; additive public isolated-config resolver and immutable marker for embedders, with ordinary environment-based resolution preserved |
 | 2026-08-13-windows-auto-xdist-restoration-plan.md | completed — Class 3+P; restored both Windows full-suite commands from fixed `-n 2` to default `-n auto`, preserved diagnostics and fail-closed controls, and passed independent review |
 | 2026-08-13-windows-xdist-contention-restoration-plan.md | completed — Class 3+P; restored the Windows proofs to the normal `-n 2` xdist phase, retained timeout diagnostics, added a no-isolation regression gate, and passed independent completed-work review |
