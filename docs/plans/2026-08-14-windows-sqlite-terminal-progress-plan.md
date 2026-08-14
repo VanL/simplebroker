@@ -303,6 +303,7 @@ whether any publication claim outruns exact artifact evidence.
 | 1 | Spawn transport could lose the decisive phase; the slow-progress hypothesis lacked separate observation and hard caps; the idle-connection probe did not test same-runner ownership | independent plan review against Windows `spawn`, multiprocessing transport, and the five hypotheses | Required child-installed transparent wrappers, an acknowledged duplex Pipe, unique operation/iteration/runner records, monotonic phase timing, distinct 15s observation and 60s hard caps, and separate-runner versus retained same-runner discriminators | resolved; re-review found no P1/P2 blocker |
 | 2 | Initial probe assertions allowed partial/reordered observations, and parent protocol exceptions could mask themselves while leaving a child alive | independent slice review plus the observed fresh-file schema transaction grammar | Added exact `19 + 8*N` phase/state assertions, distinct ephemeral-runner proof, an injected pre-ACK parent failure, initialized cleanup state, and forced reap on abnormal collection | resolved; three focused tests, Ruff, mypy, and re-review passed |
 | 3 | The first hosted run let Windows spawn consume a 0.25s harness cap and let a 10,000-cycle diagnostic collide with pytest's unchanged 180s outer cap, so neither failure identified a terminal phase | exact-SHA run `31837787050` plus independent correction review | Added acknowledged readiness before SQLite work, separate startup and terminal clocks, flushed progress records, and reduced temporary amplification to 2,000 cycles without changing the outer timeout or any retained test | resolved; exact grammar is now `20 + 8*N`, local 2,000-cycle control and focused/static gates passed, and re-review found no P1/P2 blocker |
+| 4 | The same-file discriminator must prove the idle resource remains on one distinct worker thread and runner for the whole workload | independent review of the separate-runner probe | Kept the public connection/session/SQLite boundary real; added exact process/thread identity across idle readiness, close, and release, plus a distinct main-workload thread assertion | resolved; no P1/P2 finding, local 2,000-cycle probe and focused/static gates passed |
 
 ## Execution Log
 
@@ -343,3 +344,20 @@ whether any publication claim outruns exact artifact evidence.
   probe tests passed, repository Ruff/format, focused mypy, document gates, and
   diff checks passed, and independent re-review found no P1/P2 blocker. A fresh
   changed-SHA hosted run remains required before drawing a production conclusion.
+- 2026-08-14: corrected hosted run `31839280773` executed exact SHA
+  `0e23a24d62c6a202ea82012b8973d6a6f90fb606`; Windows job `94892438787`
+  passed all three probe tests on CPython 3.13.15 in 52.95s. The 2,000-cycle
+  workload therefore completed all 16,020 exact acknowledged records with no
+  open terminal call or hard-cap path. This falsifies single-threaded public
+  ephemeral sidecar churn as sufficient for the observed stall. It is not a
+  production fix and does not exclude file-level interaction with another
+  live connection.
+- 2026-08-14: the next bounded discriminator holds one public ephemeral
+  connection open and idle on a distinct runner after an event-confirmed read
+  from the same database, while the original transaction/read/close workload
+  proceeds. Exact records require distinct runner identity, one tracked idle
+  connection, no transaction owner or admitted operation, then an exact close
+  and release after the workload. A local 32-cycle red first exposed an
+  incorrect expected setup grammar: an already initialized database needs no
+  extra setup transaction. The corrected `24 + 8*N` grammar passes locally;
+  fresh changed-SHA Windows evidence remains required.

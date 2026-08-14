@@ -10,14 +10,17 @@ import os
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, cast
 
 if TYPE_CHECKING:
     from simplebroker import Queue
+    from simplebroker._runner import SQLiteRunner
 
 TerminalPhase = Literal[
     "begin-entered",
@@ -26,9 +29,12 @@ TerminalPhase = Literal[
     "commit-returned",
     "close-entered",
     "close-returned",
+    "probe-idle-ready",
+    "probe-idle-released",
     "probe-ready",
     "probe-complete",
 ]
+ProbeMode = Literal["single-thread", "separate-runner-idle"]
 
 
 class PhaseRecord(TypedDict):
@@ -66,6 +72,17 @@ class _OperationContext(TypedDict):
     iteration: int
 
 
+class _PhasePublisher(Protocol):
+    def __call__(
+        self,
+        phase: TerminalPhase,
+        *,
+        runner: SQLiteRunner | None,
+        call_id: int,
+        connection: sqlite3.Connection | None = None,
+    ) -> None: ...
+
+
 _ENTERED_TO_RETURNED: dict[TerminalPhase, TerminalPhase] = {
     "begin-entered": "begin-returned",
     "commit-entered": "commit-returned",
@@ -83,9 +100,8 @@ def _connection_in_transaction(connection: sqlite3.Connection | None) -> bool | 
         return None
 
 
-def _run_public_sidecar_workload(
+def _create_probe_table(
     queue: Queue,
-    iterations: int,
     operation_context: _OperationContext,
 ) -> None:
     operation_context["operation"] = "create-table"
@@ -96,6 +112,12 @@ def _run_public_sidecar_workload(
             "(k INTEGER PRIMARY KEY, v TEXT NOT NULL)"
         )
 
+
+def _run_public_sidecar_iterations(
+    queue: Queue,
+    iterations: int,
+    operation_context: _OperationContext,
+) -> None:
     for iteration in range(iterations):
         operation_context["operation"] = "insert"
         operation_context["iteration"] = iteration
@@ -120,10 +142,92 @@ def _run_public_sidecar_workload(
             raise AssertionError(f"unexpected probe rows: {rows!r} != {expected!r}")
 
 
+def _hold_idle_same_database_connection(
+    target: str,
+    operation_context: _OperationContext,
+    publish: _PhasePublisher,
+    call_ids: Iterator[int],
+    idle_ready: Future[None],
+    idle_release: threading.Event,
+) -> None:
+    from simplebroker import Queue
+    from simplebroker._runner import SQLiteRunner
+
+    operation_context["operation"] = "idle-open"
+    operation_context["iteration"] = -1
+    idle_queue = Queue("idle", db_path=str(Path(target)), persistent=False)
+    runner: SQLiteRunner
+    with idle_queue.get_connection() as broker_connection:
+        with broker_connection.sidecar() as session:
+            rows = list(session.run("SELECT COUNT(*) FROM app_probe", fetch=True))
+        if rows != [(0,)]:
+            raise AssertionError(f"unexpected idle probe rows: {rows!r}")
+        runner = cast(SQLiteRunner, cast(Any, broker_connection)._runner)
+        connection = cast(
+            sqlite3.Connection | None,
+            getattr(runner._thread_local, "conn", None),
+        )
+        operation_context["operation"] = "idle-ready"
+        publish(
+            "probe-idle-ready",
+            runner=runner,
+            call_id=next(call_ids),
+            connection=connection,
+        )
+        idle_ready.set_result(None)
+        idle_release.wait()
+        operation_context["operation"] = "idle-close"
+        operation_context["iteration"] = -1
+    operation_context["operation"] = "idle-released"
+    operation_context["iteration"] = -1
+    publish(
+        "probe-idle-released",
+        runner=runner,
+        call_id=next(call_ids),
+    )
+
+
+def _run_with_idle_same_database_connection(
+    queue: Queue,
+    target: str,
+    iterations: int,
+    operation_context: _OperationContext,
+    publish: _PhasePublisher,
+    call_ids: Iterator[int],
+) -> None:
+    idle_ready: Future[None] = Future()
+    idle_release = threading.Event()
+    with ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="sqlite-terminal-idle-connection",
+    ) as executor:
+        idle_task = executor.submit(
+            _hold_idle_same_database_connection,
+            target,
+            operation_context,
+            publish,
+            call_ids,
+            idle_ready,
+            idle_release,
+        )
+        completed, _ = wait(
+            {idle_task, idle_ready},
+            return_when=FIRST_COMPLETED,
+        )
+        if idle_task in completed:
+            idle_task.result()
+        try:
+            _run_public_sidecar_iterations(queue, iterations, operation_context)
+        finally:
+            idle_release.set()
+        idle_task.result()
+
+
 def _terminal_probe_child(
     channel: Connection,
     target: str,
     iterations: int,
+    probe_mode: ProbeMode,
     block_after_phase: TerminalPhase | None,
 ) -> None:
     """Run the public sidecar workload and synchronously publish each phase."""
@@ -265,7 +369,18 @@ def _terminal_probe_child(
             call_id=next(call_ids),
         )
         queue = Queue("jobs", db_path=str(Path(target)), persistent=False)
-        _run_public_sidecar_workload(queue, iterations, operation_context)
+        _create_probe_table(queue, operation_context)
+        if probe_mode == "separate-runner-idle":
+            _run_with_idle_same_database_connection(
+                queue,
+                target,
+                iterations,
+                operation_context,
+                publish,
+                call_ids,
+            )
+        else:
+            _run_public_sidecar_iterations(queue, iterations, operation_context)
         operation_context["operation"] = "complete"
         operation_context["iteration"] = iterations - 1
         publish(
@@ -473,6 +588,7 @@ def run_sqlite_terminal_progress_probe(
     target: str,
     *,
     iterations: int,
+    probe_mode: ProbeMode = "single-thread",
     observation_threshold: float = 15.0,
     startup_cap: float = 30.0,
     hard_cap: float = 60.0,
@@ -482,6 +598,8 @@ def run_sqlite_terminal_progress_probe(
     """Run the terminal probe with parent-owned observation and hard deadlines."""
     if iterations < 1:
         raise ValueError("iterations must be positive")
+    if probe_mode not in {"single-thread", "separate-runner-idle"}:
+        raise ValueError(f"unsupported probe mode: {probe_mode!r}")
     if startup_cap <= 0:
         raise ValueError("startup_cap must be positive")
     if observation_threshold <= 0 or hard_cap <= observation_threshold:
@@ -491,7 +609,13 @@ def run_sqlite_terminal_progress_probe(
     parent_channel, child_channel = context.Pipe(duplex=True)
     process = context.Process(
         target=_terminal_probe_child,
-        args=(child_channel, target, iterations, _test_block_after_phase),
+        args=(
+            child_channel,
+            target,
+            iterations,
+            probe_mode,
+            _test_block_after_phase,
+        ),
     )
     started = time.monotonic()
     process.start()
