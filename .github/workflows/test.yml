@@ -92,7 +92,7 @@ jobs:
       if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
       env:
         # Diagnostic amplification only; not a retained test or product remedy.
-        SIMPLEBROKER_TERMINAL_PROBE_ITERATIONS: "10000"
+        SIMPLEBROKER_TERMINAL_PROBE_ITERATIONS: "2000"
       run: |
         uv run --frozen --no-sync pytest -s -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" tests/test_sqlite_terminal_progress_probe.py
 

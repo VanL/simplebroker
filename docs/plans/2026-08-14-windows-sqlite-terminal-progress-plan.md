@@ -143,6 +143,13 @@ Wrong or incomplete answers stop implementation.
     15 seconds support slow aggregate progress; one entered phase still open
     for 60 seconds supports a stuck terminal transition. Neither duration is
     changed in product code or retained as a success assertion.
+13. The spawned child publishes and receives acknowledgement for `probe-ready`
+    after imports and observer installation but before Queue construction or any
+    SQLite work. Spawn/import setup has a separate 30-second missing-progress
+    cap. The 15-second observation threshold and 60-second terminal-progress cap
+    start only after readiness, so process startup cannot consume the terminal
+    budget while every real schema, sidecar, transaction, and close operation
+    remains measured.
 
 ## Falsifiable Hypotheses
 
@@ -198,12 +205,14 @@ versions/artifacts.
    execute a caller-created table, transactional insert, and non-transactional
    select. The spawned child installs transparent observers around the real
    runner methods and sends
-   `transaction-entered`, `commit-entered`, `commit-returned`, `close-entered`,
-   and `close-returned` through an acknowledged duplex Pipe. Each record has a
-   unique operation/iteration, monotonic timing, process/thread and runner
-   identity, transaction state and owner, admitted-operation count, and tracked
-   connection count. The parent checks exact phase order and acknowledges every
-   entered record before the child calls the real terminal method. The
+   `probe-ready`, `begin-entered`, `begin-returned`, `commit-entered`,
+   `commit-returned`, `close-entered`, and `close-returned` through an
+   acknowledged duplex Pipe. Each record has a unique operation/iteration,
+   monotonic timing, process/thread and runner identity, transaction state and
+   owner, admitted-operation count, and tracked-connection count. The parent
+   checks exact phase order and acknowledges every entered record before the
+   child calls the real terminal method. Readiness starts the terminal clocks;
+   a separate 30-second startup watchdog detects missing readiness. The
    15-second threshold records downstream-budget progress without terminating;
    the distinct 60-second missing-progress watchdog resets on each acknowledged
    phase, identifies a missing transition, captures faulthandler output, and
@@ -293,6 +302,7 @@ whether any publication claim outruns exact artifact evidence.
 |---|---|---|---|---|
 | 1 | Spawn transport could lose the decisive phase; the slow-progress hypothesis lacked separate observation and hard caps; the idle-connection probe did not test same-runner ownership | independent plan review against Windows `spawn`, multiprocessing transport, and the five hypotheses | Required child-installed transparent wrappers, an acknowledged duplex Pipe, unique operation/iteration/runner records, monotonic phase timing, distinct 15s observation and 60s hard caps, and separate-runner versus retained same-runner discriminators | resolved; re-review found no P1/P2 blocker |
 | 2 | Initial probe assertions allowed partial/reordered observations, and parent protocol exceptions could mask themselves while leaving a child alive | independent slice review plus the observed fresh-file schema transaction grammar | Added exact `19 + 8*N` phase/state assertions, distinct ephemeral-runner proof, an injected pre-ACK parent failure, initialized cleanup state, and forced reap on abnormal collection | resolved; three focused tests, Ruff, mypy, and re-review passed |
+| 3 | The first hosted run let Windows spawn consume a 0.25s harness cap and let a 10,000-cycle diagnostic collide with pytest's unchanged 180s outer cap, so neither failure identified a terminal phase | exact-SHA run `31837787050` plus independent correction review | Added acknowledged readiness before SQLite work, separate startup and terminal clocks, flushed progress records, and reduced temporary amplification to 2,000 cycles without changing the outer timeout or any retained test | resolved; exact grammar is now `20 + 8*N`, local 2,000-cycle control and focused/static gates passed, and re-review found no P1/P2 blocker |
 
 ## Execution Log
 
@@ -307,10 +317,29 @@ whether any publication claim outruns exact artifact evidence.
   acknowledged child-to-parent phases, two-purpose diagnostic timing, and a
   real same-runner discriminator. The reviewed plan is implementation-ready.
 - 2026-08-14: the diagnostic-only single-threaded probe completed 10,000 real
-  ephemeral transaction/read/close cycles locally in 21.6s. It crossed the
-  downstream 15s observation threshold while acknowledged phases continued,
-  then completed with 80,019 exact records. This is diagnostic amplification
-  and slow-progress control evidence, not a production remedy or Windows fix.
+  ephemeral transaction/read/close cycles locally in 21.6s before the explicit
+  readiness record was added. It crossed the downstream 15s observation
+  threshold while acknowledged phases continued, then completed with 80,019
+  exact records. This is diagnostic amplification and slow-progress control
+  evidence, not a production remedy or Windows fix.
 - 2026-08-14: the probe's exact fresh-file grammar, forced missing-phase child
   termination, and injected parent-protocol failure all pass locally. Slice
   review found no remaining P1/P2 blocker before the first hosted Windows run.
+- 2026-08-14: first hosted diagnostic run `31837787050` executed exact SHA
+  `84c47c470451bc1434450459b44e1f6b914fb762` on Windows Server 2025 with
+  CPython 3.13.15. The forced-block harness test expired before Windows spawn
+  became ready, and the 10,000-cycle job reached pytest's unchanged 180-second
+  outer timeout without a decisive last-phase report. The same startup race
+  also failed under loaded Linux coverage. These are diagnostic-harness and
+  observability failures; they neither prove nor falsify a SimpleBroker SQLite
+  terminal defect.
+- 2026-08-14: the correction adds acknowledged readiness after spawn/import and
+  observer installation, starts terminal clocks only after readiness, retains a
+  distinct 30-second startup watchdog, and flushes readiness, 5-second missing
+  progress, and 15-second observation records. Temporary Windows amplification
+  is 2,000 cycles so normal work fits below the unchanged 180-second pytest
+  cap; this still observes 16,020 exact records and 4,001 fresh ephemeral
+  runners. The local 2,000-cycle control completed in 4.67s, all three focused
+  probe tests passed, repository Ruff/format, focused mypy, document gates, and
+  diff checks passed, and independent re-review found no P1/P2 blocker. A fresh
+  changed-SHA hosted run remains required before drawing a production conclusion.

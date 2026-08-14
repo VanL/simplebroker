@@ -85,12 +85,18 @@ def _assert_exact_terminal_grammar(
     *,
     iterations: int,
 ) -> None:
-    assert len(records) == 19 + 8 * iterations
+    assert len(records) == 20 + 8 * iterations
     assert [record["sequence"] for record in records] == list(
         range(1, len(records) + 1)
     )
 
-    create_table = records[:18]
+    ready = records[0]
+    assert ready["phase"] == "probe-ready"
+    assert ready["operation"] == "ready"
+    assert ready["iteration"] == -1
+    assert ready["runner_id"] == -1
+
+    create_table = records[1:19]
     _assert_record_identity(create_table, operation="create-table", iteration=-1)
     for offset in range(0, 16, 4):
         _assert_transaction(create_table[offset : offset + 4])
@@ -100,7 +106,7 @@ def _assert_exact_terminal_grammar(
 
     runner_ids = {create_table[0]["runner_id"]}
     for iteration in range(iterations):
-        offset = 18 + iteration * 8
+        offset = 19 + iteration * 8
         insert = records[offset : offset + 6]
         select = records[offset + 6 : offset + 8]
         _assert_record_identity(insert, operation="insert", iteration=iteration)
