@@ -7,7 +7,7 @@ transaction and connection cleanup, Windows-only execution, downstream Taut,
 and an eventual package publication. Storage cleanup and publication are
 mandatory hardening boundaries.
 
-Status: completed.
+Status: active.
 
 Plan type: diagnosis first, then implementation against the winning lifecycle
 contract if a SimpleBroker-only reproduction proves the internal owner. No
@@ -21,25 +21,6 @@ increasing timeouts, retrying CI blindly, reducing xdist parallelism, weakening
 assertions, or moving cleanup responsibility downstream. Release the complete
 current tree as the next patch through `bin/release.py`, then update Taut's
 floor and lock and require fresh hosted Windows evidence.
-
-## Outcome
-
-Two changed-code hosted Windows probes did not reproduce a stuck SimpleBroker
-terminal transition. A 2,000-cycle public ephemeral transaction/read/close
-probe completed every exact phase, then the same workload completed while a
-second public connection stayed event-confirmed idle on the same database and
-a distinct runner. These bounded greens do not prove that a rare SimpleBroker
-or CPython race cannot exist, but they falsify either tested state as a
-deterministically sufficient precondition.
-
-The downstream samples remain compatible with pytest's 15-second aggregate
-timeout catching ordinary SQLite progress. The exact Taut setup uses sequential
-ephemeral runners and has no same-runner parked operation, so inventing that
-state upstream would no longer be a faithful reduction. The stop gate applies:
-no SimpleBroker production change, spec delta, dependency-floor change, or
-patch release is justified from this evidence. Temporary probes and workflow
-narrowing remain diagnostic-branch-only; downstream Taut owns the next exact
-phase/aggregate-progress measurement.
 
 ## Source Documents and Baseline
 
@@ -156,19 +137,11 @@ Wrong or incomplete answers stop implementation.
     stall.
 12. The parent records crossing the downstream 15-second observation threshold
     but does not terminate or pass the child at that point. A separate 60-second
-    missing-progress cap is reset by each acknowledged phase; it collects the
-    last acknowledged phase and terminates the diagnostic child only when no
-    further phase arrives. Completion and continuing acknowledged phases after
-    15 seconds support slow aggregate progress; one entered phase still open
-    for 60 seconds supports a stuck terminal transition. Neither duration is
-    changed in product code or retained as a success assertion.
-13. The spawned child publishes and receives acknowledgement for `probe-ready`
-    after imports and observer installation but before Queue construction or any
-    SQLite work. Spawn/import setup has a separate 30-second missing-progress
-    cap. The 15-second observation threshold and 60-second terminal-progress cap
-    start only after readiness, so process startup cannot consume the terminal
-    budget while every real schema, sidecar, transaction, and close operation
-    remains measured.
+    hard deadlock cap collects the last acknowledged phase and terminates the
+    diagnostic child. Completion and continuing acknowledged phases after 15
+    seconds support slow aggregate progress; one entered phase still open at 60
+    seconds supports a stuck terminal transition. Neither duration is changed
+    in product code or retained as a success assertion.
 
 ## Falsifiable Hypotheses
 
@@ -193,7 +166,7 @@ Wrong or incomplete answers stop implementation.
    a stuck terminal transition. Monotonic, parent-acknowledged phase records
    continue advancing after the 15-second observation threshold and the child
    completes before the separate hard cap. One entered phase still open at the
-   60-second missing-progress cap falsifies normal progress.
+   60-second hard cap falsifies normal progress.
 
 Each hosted run records which prediction it tests. Evidence that does not
 distinguish at least one hypothesis does not justify a new run.
@@ -224,19 +197,16 @@ versions/artifacts.
    execute a caller-created table, transactional insert, and non-transactional
    select. The spawned child installs transparent observers around the real
    runner methods and sends
-   `probe-ready`, `begin-entered`, `begin-returned`, `commit-entered`,
-   `commit-returned`, `close-entered`, and `close-returned` through an
-   acknowledged duplex Pipe. Each record has a unique operation/iteration,
-   monotonic timing, process/thread and runner identity, transaction state and
-   owner, admitted-operation count, and tracked-connection count. The parent
-   checks exact phase order and acknowledges every entered record before the
-   child calls the real terminal method. Readiness starts the terminal clocks;
-   a separate 30-second startup watchdog detects missing readiness. The
+   `transaction-entered`, `commit-entered`, `commit-returned`, `close-entered`,
+   and `close-returned` through an acknowledged duplex Pipe. Each record has a
+   unique operation/iteration, monotonic timing, process/thread and runner
+   identity, transaction state and owner, admitted-operation count, and tracked
+   connection count. The parent checks exact phase order and acknowledges every
+   entered record before the child calls the real terminal method. The
    15-second threshold records downstream-budget progress without terminating;
-   the distinct 60-second missing-progress watchdog resets on each acknowledged
-   phase, identifies a missing transition, captures faulthandler output, and
-   terminates only the spawned child. First run the single-threaded probe as a
-   local control.
+   the distinct 60-second watchdog identifies a missing phase, captures
+   faulthandler output, and terminates only the spawned child. First run the
+   single-threaded probe as a local control.
 2. Push the diagnostic branch and dispatch the existing `test.yml` at that
    exact ref with a temporary Windows-3.13-only matrix. Do not rerun an
    unchanged attempt. The bounded probe sequence is: single-threaded public
@@ -320,9 +290,6 @@ whether any publication claim outruns exact artifact evidence.
 | Round | Finding | Evidence | Disposition | Result |
 |---|---|---|---|---|
 | 1 | Spawn transport could lose the decisive phase; the slow-progress hypothesis lacked separate observation and hard caps; the idle-connection probe did not test same-runner ownership | independent plan review against Windows `spawn`, multiprocessing transport, and the five hypotheses | Required child-installed transparent wrappers, an acknowledged duplex Pipe, unique operation/iteration/runner records, monotonic phase timing, distinct 15s observation and 60s hard caps, and separate-runner versus retained same-runner discriminators | resolved; re-review found no P1/P2 blocker |
-| 2 | Initial probe assertions allowed partial/reordered observations, and parent protocol exceptions could mask themselves while leaving a child alive | independent slice review plus the observed fresh-file schema transaction grammar | Added exact `19 + 8*N` phase/state assertions, distinct ephemeral-runner proof, an injected pre-ACK parent failure, initialized cleanup state, and forced reap on abnormal collection | resolved; three focused tests, Ruff, mypy, and re-review passed |
-| 3 | The first hosted run let Windows spawn consume a 0.25s harness cap and let a 10,000-cycle diagnostic collide with pytest's unchanged 180s outer cap, so neither failure identified a terminal phase | exact-SHA run `31837787050` plus independent correction review | Added acknowledged readiness before SQLite work, separate startup and terminal clocks, flushed progress records, and reduced temporary amplification to 2,000 cycles without changing the outer timeout or any retained test | resolved; exact grammar is now `20 + 8*N`, local 2,000-cycle control and focused/static gates passed, and re-review found no P1/P2 blocker |
-| 4 | The same-file discriminator must prove the idle resource remains on one distinct worker thread and runner for the whole workload | independent review of the separate-runner probe | Kept the public connection/session/SQLite boundary real; added exact process/thread identity across idle readiness, close, and release, plus a distinct main-workload thread assertion | resolved; no P1/P2 finding, local 2,000-cycle probe and focused/static gates passed |
 
 ## Execution Log
 
@@ -336,70 +303,3 @@ whether any publication claim outruns exact artifact evidence.
 - 2026-08-14: independent plan review closed three protocol gaps before code:
   acknowledged child-to-parent phases, two-purpose diagnostic timing, and a
   real same-runner discriminator. The reviewed plan is implementation-ready.
-- 2026-08-14: the diagnostic-only single-threaded probe completed 10,000 real
-  ephemeral transaction/read/close cycles locally in 21.6s before the explicit
-  readiness record was added. It crossed the downstream 15s observation
-  threshold while acknowledged phases continued, then completed with 80,019
-  exact records. This is diagnostic amplification and slow-progress control
-  evidence, not a production remedy or Windows fix.
-- 2026-08-14: the probe's exact fresh-file grammar, forced missing-phase child
-  termination, and injected parent-protocol failure all pass locally. Slice
-  review found no remaining P1/P2 blocker before the first hosted Windows run.
-- 2026-08-14: first hosted diagnostic run `31837787050` executed exact SHA
-  `84c47c470451bc1434450459b44e1f6b914fb762` on Windows Server 2025 with
-  CPython 3.13.15. The forced-block harness test expired before Windows spawn
-  became ready, and the 10,000-cycle job reached pytest's unchanged 180-second
-  outer timeout without a decisive last-phase report. The same startup race
-  also failed under loaded Linux coverage. These are diagnostic-harness and
-  observability failures; they neither prove nor falsify a SimpleBroker SQLite
-  terminal defect.
-- 2026-08-14: the correction adds acknowledged readiness after spawn/import and
-  observer installation, starts terminal clocks only after readiness, retains a
-  distinct 30-second startup watchdog, and flushes readiness, 5-second missing
-  progress, and 15-second observation records. Temporary Windows amplification
-  is 2,000 cycles so normal work fits below the unchanged 180-second pytest
-  cap; this still observes 16,020 exact records and 4,001 fresh ephemeral
-  runners. The local 2,000-cycle control completed in 4.67s, all three focused
-  probe tests passed, repository Ruff/format, focused mypy, document gates, and
-  diff checks passed, and independent re-review found no P1/P2 blocker. A fresh
-  changed-SHA hosted run remains required before drawing a production conclusion.
-- 2026-08-14: corrected hosted run `31839280773` executed exact SHA
-  `0e23a24d62c6a202ea82012b8973d6a6f90fb606`; Windows job `94892438787`
-  passed all three probe tests on CPython 3.13.15 in 52.95s. The 2,000-cycle
-  workload therefore completed all 16,020 exact acknowledged records with no
-  open terminal call or hard-cap path. In this bounded run, single-threaded
-  public ephemeral sidecar churn was not sufficient for the observed stall.
-  This is not a production fix and does not exclude a rare race or file-level
-  interaction with another live connection.
-- 2026-08-14: the next bounded discriminator holds one public ephemeral
-  connection open and idle on a distinct runner after an event-confirmed read
-  from the same database, while the original transaction/read/close workload
-  proceeds. Exact records require distinct runner identity, one tracked idle
-  connection, no transaction owner or admitted operation, then an exact close
-  and release after the workload. A local 32-cycle red first exposed an
-  incorrect expected setup grammar: an already initialized database needs no
-  extra setup transaction. The corrected `24 + 8*N` grammar passes locally;
-  fresh changed-SHA Windows evidence remains required.
-- 2026-08-14: hosted run `31839980458` executed exact SHA
-  `06aadd2dacde93713d439c4bbca25f1a732973a7`; Windows job `94894527760`
-  passed the 2,000-cycle same-file idle-peer discriminator on CPython 3.13.15
-  in 32.59s. Its exact `24 + 8*N` grammar proves 16,024 acknowledged records,
-  one distinct idle runner/thread with no transaction owner or admitted
-  operation, all workload commit/close returns, and exact idle close/release.
-  A generic second connection is therefore not a sufficient deterministic
-  precondition in this bounded run. This still does not exclude a rarer race.
-- 2026-08-14: the diagnostic use of the general `test.yml` also started
-  unrelated coverage producers; run `31839280773` then failed only because its
-  coverage combiner correctly required the intentionally absent Windows
-  coverage artifact. That is a diagnostic-workflow topology defect, not a
-  product or test failure. The target Windows job remained green; redundant
-  producers in `31839980458` were cancelled after its target job completed.
-  Any future platform probe must use a dedicated diagnostic workflow rather
-  than enqueue the full producer graph.
-- 2026-08-14: the bounded upstream stop gate is now active. The observed Taut
-  setup uses sequential ephemeral runners and supplies no same-runner parked
-  operation, so adding synthetic same-runner contention would not minimize the
-  downstream failure. No SimpleBroker code, public contract, timeout, retry,
-  dependency floor, or release changed. Investigation returns to Taut to
-  distinguish aggregate progress from a missing terminal transition in its
-  exact operation sequence.
