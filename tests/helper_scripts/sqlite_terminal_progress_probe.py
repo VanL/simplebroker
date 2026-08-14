@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import faulthandler
 import itertools
+import json
 import multiprocessing as mp
 import os
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass, field
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from pathlib import Path
@@ -24,6 +26,7 @@ TerminalPhase = Literal[
     "commit-returned",
     "close-entered",
     "close-returned",
+    "probe-ready",
     "probe-complete",
 ]
 
@@ -49,6 +52,7 @@ class ProbeResult(TypedDict):
     completed: bool
     crossed_observation_threshold: bool
     hard_cap_reached: bool
+    timeout_stage: Literal["startup", "terminal-progress"] | None
     process_exitcode: int | None
     error: str | None
     open_terminal_calls: list[PhaseRecord]
@@ -253,6 +257,13 @@ def _terminal_probe_child(
     runner_type._close_tracked_connection = observed_close
 
     try:
+        operation_context["operation"] = "ready"
+        operation_context["iteration"] = -1
+        publish(
+            "probe-ready",
+            runner=None,
+            call_id=next(call_ids),
+        )
         queue = Queue("jobs", db_path=str(Path(target)), persistent=False)
         _run_public_sidecar_workload(queue, iterations, operation_context)
         operation_context["operation"] = "complete"
@@ -290,30 +301,138 @@ def _raise_injected_parent_failure(
         raise RuntimeError("injected parent protocol failure before acknowledgement")
 
 
+def _print_probe_progress(
+    event: str,
+    *,
+    elapsed: float,
+    last_record: PhaseRecord | None,
+) -> None:
+    print(
+        "[sqlite-terminal-probe] "
+        + json.dumps(
+            {
+                "event": event,
+                "elapsed": elapsed,
+                "last_record": last_record,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+
+
+@dataclass
+class _CollectionState:
+    started: float
+    records: list[PhaseRecord] = field(default_factory=list)
+    completed: bool = False
+    crossed_observation_threshold: bool = False
+    hard_cap_reached: bool = False
+    timeout_stage: Literal["startup", "terminal-progress"] | None = None
+    records_after_observation: int = 0
+    workload_started_at: float | None = None
+    missing_progress_reported: bool = False
+    last_progress_at: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.last_progress_at = self.started
+
+    def observe_time(
+        self,
+        now: float,
+        *,
+        observation_threshold: float,
+        startup_cap: float,
+        hard_cap: float,
+    ) -> tuple[float, float]:
+        workload_elapsed = (
+            0.0 if self.workload_started_at is None else now - self.workload_started_at
+        )
+        if (
+            self.workload_started_at is not None
+            and workload_elapsed >= observation_threshold
+        ):
+            if not self.crossed_observation_threshold:
+                _print_probe_progress(
+                    "observation-threshold-crossed",
+                    elapsed=workload_elapsed,
+                    last_record=self.records[-1] if self.records else None,
+                )
+            self.crossed_observation_threshold = True
+
+        missing_progress = now - self.last_progress_at
+        active_cap = startup_cap if self.workload_started_at is None else hard_cap
+        return missing_progress, active_cap
+
+    def acknowledge(
+        self,
+        record: PhaseRecord,
+        *,
+        received_at: float,
+        observation_threshold: float,
+    ) -> None:
+        self.last_progress_at = received_at
+        self.missing_progress_reported = False
+        if record["phase"] == "probe-ready":
+            if self.workload_started_at is not None:
+                raise RuntimeError("probe child published duplicate readiness")
+            self.workload_started_at = received_at
+            _print_probe_progress("ready", elapsed=0.0, last_record=record)
+            return
+        if self.workload_started_at is None:
+            raise RuntimeError("probe child published work before readiness")
+        if received_at - self.workload_started_at >= observation_threshold:
+            self.crossed_observation_threshold = True
+        if self.crossed_observation_threshold:
+            self.records_after_observation += 1
+        if record["phase"] == "probe-complete":
+            self.completed = True
+
+
 def _collect_phase_records(
     parent_channel: Connection,
     process: BaseProcess,
     *,
     started: float,
     observation_threshold: float,
+    startup_cap: float,
     hard_cap: float,
     test_parent_failure_after_sequence: int | None,
-) -> tuple[list[PhaseRecord], bool, bool, bool, int]:
-    records: list[PhaseRecord] = []
-    completed = False
-    crossed_observation_threshold = False
-    hard_cap_reached = False
-    records_after_observation = 0
-    last_progress_at = started
+) -> tuple[
+    list[PhaseRecord],
+    bool,
+    bool,
+    bool,
+    Literal["startup", "terminal-progress"] | None,
+    int,
+]:
+    state = _CollectionState(started=started)
     while True:
         now = time.monotonic()
-        if now - started >= observation_threshold:
-            crossed_observation_threshold = True
-        missing_progress = now - last_progress_at
-        if missing_progress >= hard_cap:
-            hard_cap_reached = True
+        missing_progress, active_cap = state.observe_time(
+            now,
+            observation_threshold=observation_threshold,
+            startup_cap=startup_cap,
+            hard_cap=hard_cap,
+        )
+        if missing_progress >= active_cap:
+            state.hard_cap_reached = True
+            state.timeout_stage = (
+                "startup" if state.workload_started_at is None else "terminal-progress"
+            )
             break
-        if not parent_channel.poll(min(0.1, hard_cap - missing_progress)):
+        if (
+            not state.missing_progress_reported
+            and state.workload_started_at is not None
+            and missing_progress >= 5.0
+        ):
+            _print_probe_progress(
+                "missing-progress",
+                elapsed=missing_progress,
+                last_record=state.records[-1] if state.records else None,
+            )
+            state.missing_progress_reported = True
+        if not parent_channel.poll(min(0.1, active_cap - missing_progress)):
             if not process.is_alive():
                 break
             continue
@@ -321,23 +440,23 @@ def _collect_phase_records(
             record = cast(PhaseRecord, parent_channel.recv())
         except EOFError:
             break
-        records.append(record)
+        state.records.append(record)
         _raise_injected_parent_failure(record, test_parent_failure_after_sequence)
         parent_channel.send(("ack", record["sequence"]))
-        last_progress_at = time.monotonic()
-        if last_progress_at - started >= observation_threshold:
-            crossed_observation_threshold = True
-        if crossed_observation_threshold:
-            records_after_observation += 1
-        if record["phase"] == "probe-complete":
-            completed = True
+        state.acknowledge(
+            record,
+            received_at=time.monotonic(),
+            observation_threshold=observation_threshold,
+        )
+        if state.completed:
             break
     return (
-        records,
-        completed,
-        crossed_observation_threshold,
-        hard_cap_reached,
-        records_after_observation,
+        state.records,
+        state.completed,
+        state.crossed_observation_threshold,
+        state.hard_cap_reached,
+        state.timeout_stage,
+        state.records_after_observation,
     )
 
 
@@ -355,6 +474,7 @@ def run_sqlite_terminal_progress_probe(
     *,
     iterations: int,
     observation_threshold: float = 15.0,
+    startup_cap: float = 30.0,
     hard_cap: float = 60.0,
     _test_block_after_phase: TerminalPhase | None = None,
     _test_parent_failure_after_sequence: int | None = None,
@@ -362,6 +482,8 @@ def run_sqlite_terminal_progress_probe(
     """Run the terminal probe with parent-owned observation and hard deadlines."""
     if iterations < 1:
         raise ValueError("iterations must be positive")
+    if startup_cap <= 0:
+        raise ValueError("startup_cap must be positive")
     if observation_threshold <= 0 or hard_cap <= observation_threshold:
         raise ValueError("hard_cap must be greater than observation_threshold > 0")
 
@@ -382,12 +504,14 @@ def run_sqlite_terminal_progress_probe(
             completed,
             crossed_observation_threshold,
             hard_cap_reached,
+            timeout_stage,
             records_after_observation,
         ) = _collect_phase_records(
             parent_channel,
             process,
             started=started,
             observation_threshold=observation_threshold,
+            startup_cap=startup_cap,
             hard_cap=hard_cap,
             test_parent_failure_after_sequence=_test_parent_failure_after_sequence,
         )
@@ -407,6 +531,7 @@ def run_sqlite_terminal_progress_probe(
         "completed": completed,
         "crossed_observation_threshold": crossed_observation_threshold,
         "hard_cap_reached": hard_cap_reached,
+        "timeout_stage": timeout_stage,
         "process_exitcode": process.exitcode,
         "error": error,
         "open_terminal_calls": _open_terminal_calls(records),
