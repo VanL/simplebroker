@@ -137,11 +137,12 @@ Wrong or incomplete answers stop implementation.
     stall.
 12. The parent records crossing the downstream 15-second observation threshold
     but does not terminate or pass the child at that point. A separate 60-second
-    hard deadlock cap collects the last acknowledged phase and terminates the
-    diagnostic child. Completion and continuing acknowledged phases after 15
-    seconds support slow aggregate progress; one entered phase still open at 60
-    seconds supports a stuck terminal transition. Neither duration is changed
-    in product code or retained as a success assertion.
+    missing-progress cap is reset by each acknowledged phase; it collects the
+    last acknowledged phase and terminates the diagnostic child only when no
+    further phase arrives. Completion and continuing acknowledged phases after
+    15 seconds support slow aggregate progress; one entered phase still open
+    for 60 seconds supports a stuck terminal transition. Neither duration is
+    changed in product code or retained as a success assertion.
 
 ## Falsifiable Hypotheses
 
@@ -166,7 +167,7 @@ Wrong or incomplete answers stop implementation.
    a stuck terminal transition. Monotonic, parent-acknowledged phase records
    continue advancing after the 15-second observation threshold and the child
    completes before the separate hard cap. One entered phase still open at the
-   60-second hard cap falsifies normal progress.
+   60-second missing-progress cap falsifies normal progress.
 
 Each hosted run records which prediction it tests. Evidence that does not
 distinguish at least one hypothesis does not justify a new run.
@@ -204,9 +205,10 @@ versions/artifacts.
    connection count. The parent checks exact phase order and acknowledges every
    entered record before the child calls the real terminal method. The
    15-second threshold records downstream-budget progress without terminating;
-   the distinct 60-second watchdog identifies a missing phase, captures
-   faulthandler output, and terminates only the spawned child. First run the
-   single-threaded probe as a local control.
+   the distinct 60-second missing-progress watchdog resets on each acknowledged
+   phase, identifies a missing transition, captures faulthandler output, and
+   terminates only the spawned child. First run the single-threaded probe as a
+   local control.
 2. Push the diagnostic branch and dispatch the existing `test.yml` at that
    exact ref with a temporary Windows-3.13-only matrix. Do not rerun an
    unchanged attempt. The bounded probe sequence is: single-threaded public
@@ -290,6 +292,7 @@ whether any publication claim outruns exact artifact evidence.
 | Round | Finding | Evidence | Disposition | Result |
 |---|---|---|---|---|
 | 1 | Spawn transport could lose the decisive phase; the slow-progress hypothesis lacked separate observation and hard caps; the idle-connection probe did not test same-runner ownership | independent plan review against Windows `spawn`, multiprocessing transport, and the five hypotheses | Required child-installed transparent wrappers, an acknowledged duplex Pipe, unique operation/iteration/runner records, monotonic phase timing, distinct 15s observation and 60s hard caps, and separate-runner versus retained same-runner discriminators | resolved; re-review found no P1/P2 blocker |
+| 2 | Initial probe assertions allowed partial/reordered observations, and parent protocol exceptions could mask themselves while leaving a child alive | independent slice review plus the observed fresh-file schema transaction grammar | Added exact `19 + 8*N` phase/state assertions, distinct ephemeral-runner proof, an injected pre-ACK parent failure, initialized cleanup state, and forced reap on abnormal collection | resolved; three focused tests, Ruff, mypy, and re-review passed |
 
 ## Execution Log
 
@@ -303,3 +306,11 @@ whether any publication claim outruns exact artifact evidence.
 - 2026-08-14: independent plan review closed three protocol gaps before code:
   acknowledged child-to-parent phases, two-purpose diagnostic timing, and a
   real same-runner discriminator. The reviewed plan is implementation-ready.
+- 2026-08-14: the diagnostic-only single-threaded probe completed 10,000 real
+  ephemeral transaction/read/close cycles locally in 21.6s. It crossed the
+  downstream 15s observation threshold while acknowledged phases continued,
+  then completed with 80,019 exact records. This is diagnostic amplification
+  and slow-progress control evidence, not a production remedy or Windows fix.
+- 2026-08-14: the probe's exact fresh-file grammar, forced missing-phase child
+  termination, and injected parent-protocol failure all pass locally. Slice
+  review found no remaining P1/P2 blocker before the first hosted Windows run.

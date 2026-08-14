@@ -49,14 +49,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
-        exclude:
-          # macOS runners are expensive, so only test on latest Python
-          - os: macos-latest
-            python-version: "3.11"
-          - os: macos-latest
-            python-version: "3.12"
+        # Diagnostic branch only. Restore the canonical matrix before landing.
+        os: [windows-latest]
+        python-version: ["3.13"]
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -95,8 +90,11 @@ jobs:
 
     - name: Run Windows tests with pytest
       if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
+      env:
+        # Diagnostic amplification only; not a retained test or product remedy.
+        SIMPLEBROKER_TERMINAL_PROBE_ITERATIONS: "10000"
       run: |
-        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0"
+        uv run --frozen --no-sync pytest -s -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" tests/test_sqlite_terminal_progress_probe.py
 
     - name: Run SQLite cross-thread finalization probe
       if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'
@@ -118,7 +116,7 @@ jobs:
         uv run --frozen --no-sync pytest --tb=short -m "not benchmark" --override-ini="addopts=-ra -vv --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" --cov=simplebroker --cov=extensions/simplebroker_pg/simplebroker_pg --cov=extensions/simplebroker_redis/simplebroker_redis --cov-report= --cov-fail-under=0
 
     - name: Run phaselock fallback-path gate
-      if: matrix.os != 'windows-latest' || matrix.python-version != '3.14'
+      if: matrix.os != 'windows-latest' || matrix.python-version == '3.14'
       env:
         PHASELOCK_ENABLE_XATTRS: "0"
       run: |
