@@ -67,6 +67,7 @@ and preserve JSON error output through every post-parse validation path.
   docs/specs/17-ops.md`. `check-dom15-fixtures`, `check-plan-context`,
   `check-doc-paths`, and `git diff --check` passed at promotion. Code work is
   judged against this exact worktree delta until the owner lands it.
+- Landing baseline: `204ef5c` (`feat: harden public API and CLI contracts`).
 
 ## Context and Key Files
 
@@ -643,9 +644,9 @@ post-parse JSON global conflicts; plain quiet-mode error; and the preserved
 load-specific dialect. The published default CLI smoke invocation must still
 work.
 
-Completion also requires an owner landing commit. The final gate is rerun from
-that identifier before any later publication authorization; this plan itself
-does not publish a release.
+Completion also requires an owner landing commit. Commit `204ef5c` satisfies
+that gate. The final gate is rerun from that identifier before any later
+publication authorization; this plan itself does not publish a release.
 
 ## Independent Review Loop
 
@@ -747,6 +748,13 @@ relevant section is rewritten.
 
 ## Execution Log
 
+- 2026-08-23 closure: the implementation, promoted specs, public guidance,
+  tests, and plan landed in `204ef5c`. The closure change marks the Status
+  Index row `completed`; it does not publish a release. The concurrent
+  configuration snapshot work remains outside this commit series. From a clean
+  detached worktree at `204ef5c`, the full pytest suite, strict 63-source mypy,
+  Ruff, DOM-15, plan-context, and doc-path gates passed; pytest reported only
+  the expected platform, optional-backend, and opt-in diagnostic skips.
 - 2026-08-23 final verification: the full `uv run pytest -q` SimpleBroker
   suite passed with only the expected platform/backend skips. All three focused
   runtime groups passed on the final code; the positive overload fixture,
@@ -755,8 +763,8 @@ relevant section is rewritten.
   coalescing cues, and `git diff --check` passed. Independent completed-work
   review returned no blocker, and its only accepted command-gate nit passed a
   separate round-2 review. The interface-review walk found no actionable
-  defect. The candidate remains uncommitted, so the Status Index row remains
-  `draft` under the owner-commit closure rule.
+  defect. The implementation subsequently landed in `204ef5c`, satisfying the
+  owner-commit closure rule.
 - 2026-08-23 Task 5 downstream compatibility note: Weft production delete calls pass
   concrete IDs or narrow optionals before calling, and runtime pytest advanced
   through 4,209 passing tests without an API-shape failure. One subprocess test
