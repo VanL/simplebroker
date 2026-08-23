@@ -93,6 +93,7 @@ def test_cmd_alias_add_remove_direct(workdir: Path) -> None:
 
     rc, _, err = run_cli("alias", "remove", "queue", cwd=workdir)
     assert rc != 0
+    assert err.startswith("simplebroker: error:")
     assert "alias 'queue' does not exist" in err
 
 

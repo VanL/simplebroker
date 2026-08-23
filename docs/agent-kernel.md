@@ -44,7 +44,7 @@ Shared semantics does **not** mean identical packaging:
 
 | Surface | Behavior |
 |---------|----------|
-| CLI | Exit codes `0` / `1` / `2`; stdout data, stderr diagnostics |
+| CLI | Ordinary exit codes `0` / `1` / `2`; an unhandled interrupt reaching the outer wrapper exits `130`; stdout data, stderr diagnostics |
 | `Queue` | Returns values / raises exceptions — not CLI exit codes |
 | Plain `broker write Q "msg"` | Does **not** print the message id unless `-t` / `--timestamps` or `--json` |
 | `Queue.write(...)` | **Returns** the committed message id |
@@ -53,7 +53,7 @@ Shared semantics does **not** mean identical packaging:
 
 Public package surface is intentionally small: see `simplebroker.__all__`
 (`Queue`, watchers, `BrokerTarget` helpers, `open_broker`, `resolve_config`,
-`resolve_isolated_config`, `ResolvedConfig`, dump/load), plus
+`resolve_isolated_config`, `ResolvedConfig`, `MovedMessage`, dump/load), plus
 `simplebroker.ext` and the command layer. Prefer those over private `_`
 modules.
 
@@ -71,7 +71,7 @@ Normative library surfaces: `docs/specs/16-python-library-api.md`
 | `broker read Q` | `q.read()` / `q.read_one()` (claims) |
 | `broker peek Q` | `q.peek()` / `q.peek_one()` (no claim) |
 | `broker move SRC DST` | `q.move(...)` / `move_one` / `move_many` |
-| `broker delete` / `-m ID` | `q.delete` / `delete_many` — physical delete (`[SB-OPS-3]`) |
+| `broker delete` / `-m ID` | bare `q.delete()` deletes the queue; `q.delete(message_id=ID)` and `delete_many` target IDs — physical delete (`[SB-OPS-3]`) |
 | `broker list` / `exists` / `stats` | `exists`, `stats`, metadata helpers (`[SB-OPS-1]`–`[SB-OPS-2]`) |
 | `broker rename` / `alias` | rename + aliases (`[SB-OPS-4]`–`[SB-OPS-5]`) |
 | `broker watch Q` | `QueueWatcher` / `QueueMoveWatcher` |
@@ -88,11 +88,15 @@ Normative residual ops: `docs/specs/17-ops.md` `[SB-OPS-1]`–`[SB-OPS-7]`.
 | `0` | Success |
 | `1` | General error (for example invalid arguments, database access) |
 | `2` | Queue empty or no matching messages |
+| `130` | An unhandled `KeyboardInterrupt` reached the outer CLI wrapper |
 
 Normative: `docs/specs/10-cli.md` [SB-CLI-1]–[SB-CLI-4].
 
 - **stdout = command output**, stderr = errors, diagnostics, and commentary
   (ordinary Unix stream roles).
+- Normal `watch` SIGINT/SIGTERM handling and closed-pipe shutdown remain
+  success `0`. Other interrupts that escape to the process wrapper return
+  `130`; completed effects are not rolled back.
 - Prefer **`--json`** for any automation (bodies may contain newlines and
   shell metacharacters).
 - **Global options before the command:**  

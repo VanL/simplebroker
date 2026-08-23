@@ -3,7 +3,12 @@
 import re
 from pathlib import Path
 
-from simplebroker._constants import EXIT_ERROR, EXIT_QUEUE_EMPTY, EXIT_SUCCESS
+from simplebroker._constants import (
+    EXIT_ERROR,
+    EXIT_INTERRUPTED,
+    EXIT_QUEUE_EMPTY,
+    EXIT_SUCCESS,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI_CONTRACT = ROOT / "docs" / "specs" / "10-cli.md"
@@ -16,7 +21,12 @@ def test_readme_exit_code_section_is_complete() -> None:
         int(code) for code in re.findall(r"^- `(\d+)`", section, re.MULTILINE)
     }
 
-    assert documented == {EXIT_SUCCESS, EXIT_ERROR, EXIT_QUEUE_EMPTY}
+    assert documented == {
+        EXIT_SUCCESS,
+        EXIT_ERROR,
+        EXIT_QUEUE_EMPTY,
+        EXIT_INTERRUPTED,
+    }
 
 
 def test_cli_contract_sb_cli_1_codes_match_constants() -> None:
@@ -25,7 +35,12 @@ def test_cli_contract_sb_cli_1_codes_match_constants() -> None:
     documented = {
         int(code) for code in re.findall(r"^\| `(\d+)` \|", section, re.MULTILINE)
     }
-    assert documented == {EXIT_SUCCESS, EXIT_ERROR, EXIT_QUEUE_EMPTY}
+    assert documented == {
+        EXIT_SUCCESS,
+        EXIT_ERROR,
+        EXIT_QUEUE_EMPTY,
+        EXIT_INTERRUPTED,
+    }
 
 
 def test_readme_exit_codes_link_cli_contract() -> None:

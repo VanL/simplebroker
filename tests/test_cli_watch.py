@@ -3,6 +3,8 @@
 import sys
 import time
 
+import pytest
+
 from .conftest import managed_subprocess
 from .helper_scripts.timestamp_validation import validate_timestamp
 from .helper_scripts.timing import scale_timeout_for_ci
@@ -109,6 +111,21 @@ class TestWatchCommand:
             # Wait for the message to appear in output
             assert proc.wait_for_output("hello", timeout=_watch_output_timeout())
             # Process automatically terminated on exit
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="managed subprocess termination is not a console SIGINT on Windows",
+    )
+    def test_watch_sigint_remains_success(self, workdir):
+        """Command-owned watch interruption stays a normal exit, not 130."""
+        cmd = [sys.executable, "-m", "simplebroker.cli", "watch", "watchtest"]
+        with managed_subprocess(cmd, cwd=workdir) as proc:
+            assert proc.wait_for_output(
+                "Watching queue",
+                timeout=_watch_output_timeout(),
+                stream="stderr",
+            )
+            assert proc.wait_after_interrupt(timeout=_watch_output_timeout()) == 0
 
     def test_watch_peek_mode(self, workdir):
         """Test watch in peek mode doesn't consume messages."""

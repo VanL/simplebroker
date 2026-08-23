@@ -155,7 +155,7 @@ class TestInitCommand:
             # Should fail
             assert result == 1
 
-    def test_init_permission_error_database_creation(self, tmp_path):
+    def test_init_permission_error_database_creation(self, tmp_path, capsys):
         """Test init handles permission errors during database creation."""
         db_path = tmp_path / ".broker.db"
 
@@ -168,8 +168,11 @@ class TestInitCommand:
 
             # Should fail
             assert result == 1
+        error = capsys.readouterr().err
+        assert error.startswith("simplebroker: error:")
+        assert "Cannot create database" in error
 
-    def test_init_other_exception_handling(self, tmp_path):
+    def test_init_other_exception_handling(self, tmp_path, capsys):
         """Test init handles unexpected exceptions gracefully."""
         db_path = tmp_path / ".broker.db"
 
@@ -182,6 +185,9 @@ class TestInitCommand:
 
             # Should fail
             assert result == 1
+        error = capsys.readouterr().err
+        assert error.startswith("simplebroker: error:")
+        assert "Unexpected error" in error
 
     def test_init_quiet_mode_suppresses_output(self, tmp_path, capsys):
         """Test that quiet mode suppresses informational output."""
@@ -228,7 +234,8 @@ class TestInitCommand:
 
         # Error should go to stderr (captured by capsys)
         captured = capsys.readouterr()
-        assert "Error: File exists but is not a SimpleBroker database" in captured.err
+        assert captured.err.startswith("simplebroker: error:")
+        assert "file exists but is not a SimpleBroker database" in captured.err
         assert "Please remove the file manually" in captured.err
         assert str(db_path) in captured.err
 

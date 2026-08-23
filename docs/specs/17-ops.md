@@ -61,6 +61,15 @@ and does not leave deletion-pending claimed rows for the deleted content.
 | Delete queue (by name) | Removes all rows for that queue name |
 | Delete all queues | Removes all message rows in the broker |
 
+On the library surface, argument omission is the explicit queue-wide form:
+`Queue.delete()` removes all rows for that Queue and returns `True` only when
+at least one row was removed. `Queue.delete(message_id=<id>)` targets one
+exact message and returns whether that row was removed. Passing
+`message_id=None` explicitly is invalid and raises `TypeError` before a
+backend mutation. `Queue.delete_many(message_ids)` remains the collection
+operation and returns the number of rows removed. These return values do not
+change the atomicity or immediate physical-delete rules below.
+
 Successful delete is atomic per queue. Delete-all is not promised to be
 failure-atomic across every selected queue on every backend: Redis performs a
 start-of-operation selection followed by per-queue atomic deletion, so a later
@@ -268,7 +277,7 @@ _Implementation mapping_:
 |--------|-----------------|
 | [SB-OPS-1] | `tests/test_operations_contract_sb_ops.py`; `tests/test_queue_metadata.py::test_vacuum_removes_claimed_only_queue_existence` |
 | [SB-OPS-2] | `tests/test_operations_contract_sb_ops.py`; `tests/test_cli_queue_metadata.py`; `tests/test_queue_metadata.py` |
-| [SB-OPS-3] | `tests/test_operations_contract_sb_ops.py::test_ops_delete_removes_row_immediately`; `tests/test_queue_api_additions.py::test_queue_delete_all`; `tests/test_batch_delete.py::test_queue_delete_many_uses_physical_batch_delete`; `tests/test_safety_fixes.py::test_delete_with_all_flag`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_delete_queue_script_rechecks_reservation_without_partial_mutation`, `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_delete_all_reports_real_partial_completion_when_later_queue_reserved` |
+| [SB-OPS-3] | `tests/test_operations_contract_sb_ops.py::test_ops_delete_removes_row_immediately`; `tests/test_queue_api_additions.py::test_queue_delete_all`; `tests/test_queue_api_additions.py::test_queue_delete_explicit_none_is_rejected_without_mutation`; `tests/test_batch_delete.py::test_queue_delete_many_uses_physical_batch_delete`; `tests/test_safety_fixes.py::test_delete_with_all_flag`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_delete_queue_script_rechecks_reservation_without_partial_mutation`, `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_delete_all_reports_real_partial_completion_when_later_queue_reserved` |
 | [SB-OPS-4] | `tests/test_queue_rename.py`; `tests/test_cli_rename.py`; `tests/test_operations_contract_sb_ops.py` |
 | [SB-OPS-5] | `tests/test_aliases_db.py::test_alias_and_target_use_queue_name_grammar`, `tests/test_aliases_db.py::test_alias_rejects_chain_in_creation_order_without_mutation`, `tests/test_aliases_db.py::test_alias_add_revalidates_against_live_state`, `tests/test_aliases_db.py::test_legacy_alias_chain_remains_one_hop_visible_and_removable`; `tests/test_alias_cli.py::test_alias_add_help_calls_target_a_canonical_queue_name`; `extensions/simplebroker_redis/tests/test_redis_atomicity.py::test_concurrent_alias_adds_have_one_winner_and_flat_live_state` |
 | [SB-OPS-6] | `tests/test_operations_contract_sb_ops.py::test_ops_language_core_promises`; `tests/test_maintenance_policy.py::test_vacuum_eligibility_preserves_ratio_and_absolute_rules`; `tests/test_queue_metadata.py::test_vacuum_removes_claimed_only_queue_existence`; `tests/test_vacuum_compact.py::test_vacuum_compact_database_size_reduction` |
@@ -276,6 +285,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-23-public-api-and-cli-review-remediation-plan.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-pre-release-review-remediation-plan — source `84159198`;

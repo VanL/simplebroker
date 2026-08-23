@@ -88,10 +88,24 @@ with open_broker("src.db") as src, open_broker("dst.db") as dst:
 
 ## Finding and deleting messages by ID or content
 
+`Queue.delete()` with no arguments deliberately removes every row in that
+Queue and returns whether it removed anything. For one row, pass a concrete
+integer or exact 19-digit string as `message_id`. Explicit
+`Queue.delete(message_id=None)` is rejected as ambiguous before a backend
+mutation; narrow optional IDs before calling.
+
 For cleanup paths that already know many exact message IDs, use
 `Queue.delete_many(message_ids)` to physically delete them in one backend-level
 batch. IDs may be integers or exact 19-digit strings; duplicate IDs are counted
 once after normalization.
+
+High-level `Queue.move()` returns an ordinary mutable dictionary with
+`message: str` and `timestamp: int`, described by the package-root
+`MovedMessage` `TypedDict`. With `all_messages=True`, it returns an iterator of
+those dictionaries. Granular `move_one`, `move_many`, and `move_generator`
+retain their string and `(message, timestamp)` tuple shapes. Literal flag
+values on read, peek, and move narrow through `@overload`; a runtime `bool`
+keeps the safe union and does not change runtime dispatch.
 
 For diagnostic or administrative paths that need to locate messages by body
 content, use `Queue.find_message_ids(...)` and then pass the returned IDs to
@@ -868,6 +882,11 @@ cmd_write(db, "jobs", "render invoice")  # -> 0
 rc = cmd_read(db, "jobs")  # prints the message, returns 0 (or 2 if empty)
 cmd_list(db)  # prints queue names, returns 0
 ```
+
+Process-signal translation belongs to the CLI wrapper, not ordinary direct
+`cmd_*` calls. The wrapper returns `130` when an unhandled
+`KeyboardInterrupt` reaches it; `cmd_watch` retains its own normal-stop
+handling and returns `0`.
 
 The names in `simplebroker.commands.__all__` are stable under the same
 compatibility policy as the package's other public exports.

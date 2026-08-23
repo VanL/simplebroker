@@ -21,7 +21,10 @@ EVIDENCE_MANIFESTS = {
         "tests/test_operations_contract_sb_ops.py": {
             "test_ops_delete_removes_row_immediately"
         },
-        "tests/test_queue_api_additions.py": {"test_queue_delete_all"},
+        "tests/test_queue_api_additions.py": {
+            "test_queue_delete_all",
+            "test_queue_delete_explicit_none_is_rejected_without_mutation",
+        },
         "tests/test_batch_delete.py": {
             "test_queue_delete_many_uses_physical_batch_delete"
         },

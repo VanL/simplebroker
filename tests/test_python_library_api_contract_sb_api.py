@@ -94,6 +94,11 @@ def test_api_public_message_id_formatter_contract() -> None:
     assert "[SB-ID-4]" in body
     assert "format_message_id" in simplebroker.__all__
     assert "format_message_id" not in ext.__all__
+
+
+def test_api_moved_message_is_package_root_public() -> None:
+    assert "MovedMessage" in simplebroker.__all__
+    assert simplebroker.MovedMessage.__required_keys__ == {"message", "timestamp"}
     assert simplebroker.format_message_id is format_message_id
     assert get_type_hints(format_message_id) == {
         "value": int | str,

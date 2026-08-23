@@ -14,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BROKER_*`. The marker remains ambient-free through Queue, project, watcher,
   runner, broker, and dump/load configuration boundaries. Ordinary mappings
   retain their existing environment-base and unknown-key compatibility.
+- Added package-root `MovedMessage`, a `TypedDict` for the existing ordinary
+  dictionaries returned by high-level `Queue.move()`. Literal-sensitive
+  overloads now narrow read, peek, and move results without changing runtime
+  dispatch or record shapes.
+
+### Changed
+
+- Bare `Queue.delete()` remains the intentional queue-wide physical delete,
+  while explicit `Queue.delete(message_id=None)` now raises `TypeError` before
+  mutation. An unhandled `KeyboardInterrupt` reaching the outer CLI wrapper
+  now returns `130`; normal watch stop and closed-pipe handling remain success.
+
+### Fixed
+
+- Recognized JSON mode is now preserved through post-parse global validation,
+  including cleanup, vacuum, and compact conflicts. Ordinary alias-removal and
+  initialization failures now use the shared `simplebroker: error:` prefix;
+  the command-specific `broker load:` dialect is unchanged.
 
 ## [7.3.1] - 2026-08-13
 

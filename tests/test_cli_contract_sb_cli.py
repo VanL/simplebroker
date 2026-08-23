@@ -6,11 +6,17 @@ import ast
 import json
 import re
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
-from simplebroker.commands import _JSON_ERROR_CODES, _JSON_ERROR_KEYS
+from simplebroker.commands import (
+    _JSON_ERROR_CODES,
+    _JSON_ERROR_KEYS,
+    _emit_error,
+    _JSONErrorCode,
+)
 
 from .conftest import run_cli
 
@@ -28,6 +34,48 @@ SB_CLI_5_EVIDENCE = {
     "test_cli_json_scientific_notation_error_has_actionable_guidance",
     "test_cli_bound_help_teaches_integral_limit_and_alternatives",
 }
+
+
+def _emit_error_code_nodes(tree: ast.AST) -> list[ast.expr]:
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Attribute) and node.func.attr == "_emit_error")
+            or (isinstance(node.func, ast.Name) and node.func.id == "_emit_error")
+        )
+    ]
+    code_nodes = [
+        keyword.value
+        for call in calls
+        for keyword in call.keywords
+        if keyword.arg == "code"
+    ]
+    assert len(code_nodes) == len(calls)
+    return code_nodes
+
+
+def _conditional_string_assignments(tree: ast.AST) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AnnAssign):
+            continue
+        if not isinstance(node.target, ast.Name) or not isinstance(
+            node.value, ast.IfExp
+        ):
+            continue
+        body = node.value.body
+        fallback = node.value.orelse
+        if not (
+            isinstance(body, ast.Constant)
+            and isinstance(body.value, str)
+            and isinstance(fallback, ast.Constant)
+            and isinstance(fallback.value, str)
+        ):
+            continue
+        result[node.target.id] = {body.value, fallback.value}
+    return result
 
 
 def test_sb_cli_1_closed_pipe_command_inventory_is_exact() -> None:
@@ -174,7 +222,7 @@ def test_sb_cli_4_error_inventory_and_public_paths(workdir: Path) -> None:
         .split("## JSON and related output shapes [SB-CLI-4]", 1)[1]
         .split("## Non-exact bound string forms", 1)[0]
     )
-    error_contract = section.split("When JSON mode is requested", 1)[1].split(
+    error_contract = section.split("Once argument parsing has established", 1)[1].split(
         "_Implementation mapping_", 1
     )[0]
     documented_codes = frozenset(re.findall(r"`([A-Z][A-Z_]*)`", error_contract))
@@ -202,6 +250,66 @@ def test_sb_cli_4_error_inventory_and_public_paths(workdir: Path) -> None:
         if expected_code == "INVALID_MESSAGE_ID":
             message = payload["message"].lower()
             assert "19" in message and "digit" in message
+
+
+@pytest.mark.parametrize(
+    "args",
+    (
+        ("--status", "--json", "list"),
+        ("--cleanup", "--json", "list"),
+        ("--vacuum", "list", "--json"),
+        ("--cleanup", "--compact", "--json"),
+        ("--cleanup", "--json", "-f", "custom.db", "init"),
+    ),
+)
+def test_sb_cli_4_post_parse_global_errors_preserve_json(
+    workdir: Path, args: tuple[str, ...]
+) -> None:
+    rc, out, err = run_cli(*args, cwd=workdir)
+
+    assert rc == EXIT_ERROR
+    assert out == ""
+    payload = json.loads(err)
+    assert tuple(payload) == _JSON_ERROR_KEYS
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert payload["retryable"] is False
+    assert "Traceback" not in err
+    assert not (workdir / ".broker.db").exists()
+    assert not (workdir / "custom.db").exists()
+
+
+def test_sb_cli_4_emit_error_codes_are_closed_at_callsites() -> None:
+    literal_codes: set[str] = set()
+    conditional_codes: set[str] = set()
+    root = SPEC.parents[2]
+
+    for relative_path in ("simplebroker/commands.py", "simplebroker/cli.py"):
+        tree = ast.parse((root / relative_path).read_text(encoding="utf-8"))
+        named_code_assignments = _conditional_string_assignments(tree)
+        for code_keyword in _emit_error_code_nodes(tree):
+            if isinstance(code_keyword, ast.Constant) and isinstance(
+                code_keyword.value, str
+            ):
+                literal_codes.add(code_keyword.value)
+                continue
+            if isinstance(code_keyword, ast.Name):
+                assert relative_path == "simplebroker/cli.py"
+                assert code_keyword.id == "code"
+                conditional_codes.update(named_code_assignments[code_keyword.id])
+                continue
+            pytest.fail(f"unreviewed _emit_error code expression in {relative_path}")
+
+    assert literal_codes <= _JSON_ERROR_CODES
+    assert conditional_codes == {"INVALID_ARGUMENT", "ERROR"}
+
+
+def test_sb_cli_4_unknown_internal_error_code_fails_loudly() -> None:
+    with pytest.raises(ValueError, match="unsupported JSON error code"):
+        _emit_error(
+            "programmer error",
+            code=cast(_JSONErrorCode, "UNKNOWN"),
+            json_output=True,
+        )
 
 
 def test_sb_cli_5_exact_evidence_manifest() -> None:

@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from simplebroker._constants import EXIT_INTERRUPTED
 from simplebroker.cli import main
 
 
@@ -65,7 +66,7 @@ class TestCLIEdgeCases:
                 assert "Database error" in output
 
     def test_keyboard_interrupt_handling(self):
-        """Test graceful handling of Ctrl-C."""
+        """An interrupt escaping command dispatch is a clean non-success."""
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch("sys.argv", ["simplebroker", "-d", tmpdir, "list"]),
@@ -76,10 +77,24 @@ class TestCLIEdgeCases:
             captured_output = StringIO()
             with patch("sys.stderr", captured_output):
                 result = main()
-                assert result == 0  # Ctrl-C returns 0
+                assert result == EXIT_INTERRUPTED
                 output = captured_output.getvalue()
-                # Check for the interrupted message
                 assert "interrupted" in output.lower()
+                assert "Traceback" not in output
+
+    def test_pre_dispatch_keyboard_interrupt_handling(self):
+        """The outer process wrapper also owns interrupts before dispatch."""
+        with patch("simplebroker.cli._get_cli_parser", side_effect=KeyboardInterrupt()):
+            from io import StringIO
+
+            captured_output = StringIO()
+            with patch("sys.stderr", captured_output):
+                result = main()
+
+        output = captured_output.getvalue()
+        assert result == EXIT_INTERRUPTED
+        assert "interrupted" in output.lower()
+        assert "Traceback" not in output
 
     def test_invalid_message_id_formats(self):
         """Test various invalid message ID formats return correct exit code."""

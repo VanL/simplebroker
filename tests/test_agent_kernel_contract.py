@@ -6,7 +6,12 @@ import re
 from pathlib import Path
 
 from simplebroker import __all__ as package_all
-from simplebroker._constants import EXIT_ERROR, EXIT_QUEUE_EMPTY, EXIT_SUCCESS
+from simplebroker._constants import (
+    EXIT_ERROR,
+    EXIT_INTERRUPTED,
+    EXIT_QUEUE_EMPTY,
+    EXIT_SUCCESS,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 KERNEL = ROOT / "docs" / "agent-kernel.md"
@@ -38,7 +43,12 @@ def test_agent_kernel_exit_codes_match_cli_constants() -> None:
     documented = {
         int(code) for code in re.findall(r"^\| `(\d+)` \|", section, re.MULTILINE)
     }
-    assert documented == {EXIT_SUCCESS, EXIT_ERROR, EXIT_QUEUE_EMPTY}
+    assert documented == {
+        EXIT_SUCCESS,
+        EXIT_ERROR,
+        EXIT_QUEUE_EMPTY,
+        EXIT_INTERRUPTED,
+    }
 
 
 def test_agent_kernel_cites_cli_contract() -> None:
@@ -82,6 +92,7 @@ def test_agent_kernel_public_surface_symbols_exist() -> None:
     # against renames (no "mentioned in doc" fallback).
     required = (
         "Queue",
+        "MovedMessage",
         "QueueWatcher",
         "open_broker",
         "dump_lines",

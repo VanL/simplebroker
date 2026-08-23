@@ -11,7 +11,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Union, cast
+from typing import Any, Literal, TypedDict, Union, cast, overload
 
 from ._backend_plugins import (
     ActivityWaiter,
@@ -45,11 +45,35 @@ logger = logging.getLogger(__name__)
 _config = _capture_config()
 
 
+class MovedMessage(TypedDict):
+    """Public shape returned by the high-level :meth:`Queue.move` method."""
+
+    message: str
+    timestamp: int
+
+
+class _DeleteAllSentinel:
+    """Private marker that distinguishes omission from an explicit value."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<argument omitted>"
+
+
+_DELETE_ALL = _DeleteAllSentinel()
+
+
 def _close_iterator(iterator: object) -> None:
     """Close a generator-like iterator when it exposes explicit cleanup."""
     close = getattr(iterator, "close", None)
     if callable(close):
         close()
+
+
+def _moved_message(message: str, timestamp: int) -> MovedMessage:
+    """Build the existing ordinary dictionary with its public static shape."""
+    return {"message": message, "timestamp": timestamp}
 
 
 @dataclass(frozen=True)
@@ -392,6 +416,61 @@ class Queue:
     # Convenience alias
     get_ts = generate_timestamp
 
+    @overload
+    def read(
+        self,
+        *,
+        all_messages: Literal[False] = False,
+        with_timestamps: Literal[False] = False,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+    ) -> str | None: ...
+
+    @overload
+    def read(
+        self,
+        *,
+        all_messages: Literal[False] = False,
+        with_timestamps: Literal[True],
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+    ) -> tuple[str, int] | None: ...
+
+    @overload
+    def read(
+        self,
+        *,
+        all_messages: Literal[True],
+        with_timestamps: Literal[False] = False,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+    ) -> Iterator[str]: ...
+
+    @overload
+    def read(
+        self,
+        *,
+        all_messages: Literal[True],
+        with_timestamps: Literal[True],
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+    ) -> Iterator[tuple[str, int]]: ...
+
+    @overload
+    def read(
+        self,
+        *,
+        all_messages: bool = False,
+        with_timestamps: bool = False,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+    ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None: ...
+
     def read(
         self,
         *,
@@ -462,6 +541,30 @@ class Queue:
 
     # ========== Granular Read API (maps to internal claim methods) ==========
 
+    @overload
+    def read_one(
+        self,
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        with_timestamps: Literal[False] = False,
+    ) -> str | None: ...
+
+    @overload
+    def read_one(
+        self,
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        with_timestamps: Literal[True],
+    ) -> tuple[str, int] | None: ...
+
+    @overload
+    def read_one(
+        self,
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        with_timestamps: bool,
+    ) -> str | tuple[str, int] | None: ...
+
     def read_one(
         self,
         *,
@@ -491,6 +594,39 @@ class Queue:
                 exact_timestamp=exact_timestamp,
                 with_timestamps=with_timestamps,
             )
+
+    @overload
+    def read_many(
+        self,
+        limit: int,
+        *,
+        with_timestamps: Literal[False] = False,
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+    ) -> list[str]: ...
+
+    @overload
+    def read_many(
+        self,
+        limit: int,
+        *,
+        with_timestamps: Literal[True],
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+    ) -> list[tuple[str, int]]: ...
+
+    @overload
+    def read_many(
+        self,
+        limit: int,
+        *,
+        with_timestamps: bool,
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+    ) -> list[str] | list[tuple[str, int]]: ...
 
     def read_many(
         self,
@@ -532,6 +668,39 @@ class Queue:
                 after_timestamp=after_timestamp,
                 before_timestamp=before_timestamp,
             )
+
+    @overload
+    def read_generator(
+        self,
+        *,
+        with_timestamps: Literal[False] = False,
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
+    ) -> Iterator[str]: ...
+
+    @overload
+    def read_generator(
+        self,
+        *,
+        with_timestamps: Literal[True],
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
+    ) -> Iterator[tuple[str, int]]: ...
+
+    @overload
+    def read_generator(
+        self,
+        *,
+        with_timestamps: bool,
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
+    ) -> Iterator[str | tuple[str, int]]: ...
 
     def read_generator(
         self,
@@ -578,6 +747,66 @@ class Queue:
                 before_timestamp=before_timestamp,
                 exact_timestamp=exact_timestamp,
             )
+
+    @overload
+    def peek(
+        self,
+        *,
+        all_messages: Literal[False] = False,
+        with_timestamps: Literal[False] = False,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+        include_claimed: bool = False,
+    ) -> str | None: ...
+
+    @overload
+    def peek(
+        self,
+        *,
+        all_messages: Literal[False] = False,
+        with_timestamps: Literal[True],
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+        include_claimed: bool = False,
+    ) -> tuple[str, int] | None: ...
+
+    @overload
+    def peek(
+        self,
+        *,
+        all_messages: Literal[True],
+        with_timestamps: Literal[False] = False,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+        include_claimed: bool = False,
+    ) -> Iterator[str]: ...
+
+    @overload
+    def peek(
+        self,
+        *,
+        all_messages: Literal[True],
+        with_timestamps: Literal[True],
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+        include_claimed: bool = False,
+    ) -> Iterator[tuple[str, int]]: ...
+
+    @overload
+    def peek(
+        self,
+        *,
+        all_messages: bool = False,
+        with_timestamps: bool = False,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        message_id: MessageIdInput | None = None,
+        include_claimed: bool = False,
+    ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None: ...
 
     def peek(
         self,
@@ -662,6 +891,33 @@ class Queue:
 
     # ========== Granular Peek API ==========
 
+    @overload
+    def peek_one(
+        self,
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        with_timestamps: Literal[False] = False,
+        include_claimed: bool = False,
+    ) -> str | None: ...
+
+    @overload
+    def peek_one(
+        self,
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        with_timestamps: Literal[True],
+        include_claimed: bool = False,
+    ) -> tuple[str, int] | None: ...
+
+    @overload
+    def peek_one(
+        self,
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        with_timestamps: bool,
+        include_claimed: bool = False,
+    ) -> str | tuple[str, int] | None: ...
+
     def peek_one(
         self,
         *,
@@ -695,6 +951,39 @@ class Queue:
                 with_timestamps=with_timestamps,
                 include_claimed=include_claimed,
             )
+
+    @overload
+    def peek_many(
+        self,
+        limit: int = PEEK_BATCH_SIZE,
+        *,
+        with_timestamps: Literal[False] = False,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[str]: ...
+
+    @overload
+    def peek_many(
+        self,
+        limit: int = PEEK_BATCH_SIZE,
+        *,
+        with_timestamps: Literal[True],
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[tuple[str, int]]: ...
+
+    @overload
+    def peek_many(
+        self,
+        limit: int = PEEK_BATCH_SIZE,
+        *,
+        with_timestamps: bool,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        include_claimed: bool = False,
+    ) -> list[str] | list[tuple[str, int]]: ...
 
     def peek_many(
         self,
@@ -735,6 +1024,39 @@ class Queue:
                 before_timestamp=before_timestamp,
                 include_claimed=include_claimed,
             )
+
+    @overload
+    def peek_generator(
+        self,
+        *,
+        with_timestamps: Literal[False] = False,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
+        include_claimed: bool = False,
+    ) -> Iterator[str]: ...
+
+    @overload
+    def peek_generator(
+        self,
+        *,
+        with_timestamps: Literal[True],
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
+        include_claimed: bool = False,
+    ) -> Iterator[tuple[str, int]]: ...
+
+    @overload
+    def peek_generator(
+        self,
+        *,
+        with_timestamps: bool,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
+        include_claimed: bool = False,
+    ) -> Iterator[str | tuple[str, int]]: ...
 
     def peek_generator(
         self,
@@ -777,6 +1099,39 @@ class Queue:
                 include_claimed=include_claimed,
             )
 
+    @overload
+    def move(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        message_id: MessageIdInput | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        all_messages: Literal[False] = False,
+    ) -> MovedMessage | None: ...
+
+    @overload
+    def move(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        message_id: MessageIdInput | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        all_messages: Literal[True],
+    ) -> Iterator[MovedMessage]: ...
+
+    @overload
+    def move(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        message_id: MessageIdInput | None = None,
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        all_messages: bool,
+    ) -> MovedMessage | None | Iterator[MovedMessage]: ...
+
     def move(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-016] exception
         self,
         destination: Union[str, "Queue"],
@@ -785,7 +1140,7 @@ class Queue:
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
         all_messages: bool = False,
-    ) -> dict[str, Any] | None | Iterator[dict[str, Any]]:
+    ) -> MovedMessage | None | Iterator[MovedMessage]:
         """Move messages from this queue to another (CLI-mirroring method).
 
         This is the high-level method that mirrors CLI behavior. For more precise
@@ -834,19 +1189,19 @@ class Queue:
                 with_timestamps=True,
             )
             if result:
-                return {"message": result[0], "timestamp": result[1]}
+                return _moved_message(result[0], result[1])
             return None
         elif all_messages:
             # Return generator for all messages
-            def dict_generator() -> Iterator[dict[str, Any]]:
+            def dict_generator() -> Iterator[MovedMessage]:
                 for result in self.move_generator(
                     dest_name,
                     with_timestamps=True,
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
                 ):
-                    msg, ts = cast(tuple[str, int], result)
-                    yield {"message": msg, "timestamp": ts}
+                    msg, ts = result
+                    yield _moved_message(msg, ts)
 
             return dict_generator()
         else:
@@ -861,8 +1216,8 @@ class Queue:
                 )
                 try:
                     result = next(gen)
-                    msg, ts = cast(tuple[str, int], result)
-                    return {"message": msg, "timestamp": ts}
+                    msg, ts = result
+                    return _moved_message(msg, ts)
                 except StopIteration:
                     return None
                 finally:
@@ -870,10 +1225,40 @@ class Queue:
             else:
                 result = self.move_one(dest_name, with_timestamps=True)
                 if result:
-                    return {"message": result[0], "timestamp": result[1]}
+                    return _moved_message(result[0], result[1])
                 return None
 
     # ========== Granular Move API ==========
+
+    @overload
+    def move_one(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        require_unclaimed: bool = True,
+        with_timestamps: Literal[False] = False,
+    ) -> str | None: ...
+
+    @overload
+    def move_one(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        require_unclaimed: bool = True,
+        with_timestamps: Literal[True],
+    ) -> tuple[str, int] | None: ...
+
+    @overload
+    def move_one(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        exact_timestamp: MessageIdInput | None = None,
+        require_unclaimed: bool = True,
+        with_timestamps: bool,
+    ) -> str | tuple[str, int] | None: ...
 
     def move_one(
         self,
@@ -915,6 +1300,45 @@ class Queue:
                 require_unclaimed=require_unclaimed,
                 with_timestamps=with_timestamps,
             )
+
+    @overload
+    def move_many(
+        self,
+        destination: Union[str, "Queue"],
+        limit: int,
+        *,
+        with_timestamps: Literal[False] = False,
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        require_unclaimed: bool = True,
+    ) -> list[str]: ...
+
+    @overload
+    def move_many(
+        self,
+        destination: Union[str, "Queue"],
+        limit: int,
+        *,
+        with_timestamps: Literal[True],
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        require_unclaimed: bool = True,
+    ) -> list[tuple[str, int]]: ...
+
+    @overload
+    def move_many(
+        self,
+        destination: Union[str, "Queue"],
+        limit: int,
+        *,
+        with_timestamps: bool,
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        require_unclaimed: bool = True,
+    ) -> list[str] | list[tuple[str, int]]: ...
 
     def move_many(
         self,
@@ -969,6 +1393,42 @@ class Queue:
                 require_unclaimed=require_unclaimed,
             )
 
+    @overload
+    def move_generator(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        with_timestamps: Literal[False] = False,
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
+    ) -> Iterator[str]: ...
+
+    @overload
+    def move_generator(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        with_timestamps: Literal[True],
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
+    ) -> Iterator[tuple[str, int]]: ...
+
+    @overload
+    def move_generator(
+        self,
+        destination: Union[str, "Queue"],
+        *,
+        with_timestamps: bool,
+        delivery_guarantee: DeliveryGuarantee = "exactly_once",
+        after_timestamp: int | None = None,
+        before_timestamp: int | None = None,
+        exact_timestamp: MessageIdInput | None = None,
+    ) -> Iterator[str | tuple[str, int]]: ...
+
     def move_generator(
         self,
         destination: Union[str, "Queue"],
@@ -1021,28 +1481,45 @@ class Queue:
                 exact_timestamp=exact_timestamp,
             )
 
-    def delete(self, *, message_id: MessageIdInput | None = None) -> bool:
+    @overload
+    def delete(self) -> bool: ...
+
+    @overload
+    def delete(self, *, message_id: MessageIdInput) -> bool: ...
+
+    def delete(
+        self,
+        *,
+        message_id: MessageIdInput | None | _DeleteAllSentinel = _DELETE_ALL,
+    ) -> bool:
         """Delete messages from this queue.
 
         Args:
             message_id: If provided, delete only the message with this specific
-                       int ID or exact 19-digit string ID.
-                       If None, delete all messages in the queue.
+                int ID or exact 19-digit string ID. Omit the argument to delete
+                all messages in the queue; explicit ``None`` is ambiguous and
+                rejected.
 
         Returns:
             True if any messages were deleted, False otherwise.
             When message_id is provided, returns True only if that specific message was found and deleted.
 
         Raises:
+            TypeError: If ``message_id=None`` is passed explicitly.
             QueueNameError: If the queue name is invalid
             OperationalError: If the database is locked/busy
         """
+        if message_id is None:
+            raise TypeError(
+                "message_id=None is ambiguous; pass an ID or call delete() "
+                "without arguments to delete the queue"
+            )
+
         with self.get_connection() as connection:
-            if message_id is not None:
-                return connection.delete_message_ids(self.name, [message_id]) > 0
-            else:
-                # Delete all messages in the queue
+            if message_id is _DELETE_ALL:
                 return connection.delete(self.name) > 0
+            target_id = cast(MessageIdInput, message_id)
+            return connection.delete_message_ids(self.name, [target_id]) > 0
 
     def delete_many(self, message_ids: Sequence[MessageIdInput]) -> int:
         """Physically delete exact message IDs from this queue.

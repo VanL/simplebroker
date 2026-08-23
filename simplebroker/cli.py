@@ -11,6 +11,7 @@ from . import commands
 from ._constants import (
     DEFAULT_DB_NAME,
     EXIT_ERROR,
+    EXIT_INTERRUPTED,
     EXIT_SUCCESS,
     PROG_NAME,
     _capture_config,
@@ -959,7 +960,7 @@ def _system_exit_code(error: SystemExit) -> int:
 def _validate_global_flags(
     args: argparse.Namespace,
     *,
-    status_json_output: bool,
+    json_output: bool,
 ) -> int | None:
     """Reject invalid combinations of global actions and commands."""
     if args.command == "init":
@@ -971,7 +972,7 @@ def _validate_global_flags(
                 commands._emit_error(
                     f"init does not accept {flag}; run it from the directory to initialize",
                     code="INVALID_ARGUMENT",
-                    json_output=status_json_output,
+                    json_output=json_output,
                 )
                 return EXIT_ERROR
 
@@ -979,22 +980,24 @@ def _validate_global_flags(
         commands._emit_error(
             "--status cannot be used with commands",
             code="INVALID_ARGUMENT",
-            json_output=status_json_output,
+            json_output=json_output,
         )
         return EXIT_ERROR
 
     if getattr(args, "compact", False) and not getattr(args, "vacuum", False):
-        print(
-            f"{PROG_NAME}: error: --compact can only be used with --vacuum",
-            file=sys.stderr,
+        commands._emit_error(
+            "--compact can only be used with --vacuum",
+            code="INVALID_ARGUMENT",
+            json_output=json_output,
         )
         return EXIT_ERROR
 
     for flag in ("vacuum", "cleanup"):
         if getattr(args, flag, False) and args.command:
-            print(
-                f"{PROG_NAME}: error: --{flag} cannot be used with commands",
-                file=sys.stderr,
+            commands._emit_error(
+                f"--{flag} cannot be used with commands",
+                code="INVALID_ARGUMENT",
+                json_output=json_output,
             )
             return EXIT_ERROR
 
@@ -1019,18 +1022,11 @@ def _run_cleanup(
             if not resolved_target.used_project_scope:
                 _validate_path_traversal_prevention(args.file)
 
-            try:
-                file_existed = resolved_target.plugin.cleanup_target(
-                    str(db_path),
-                    backend_options=resolved_target.backend_options,
-                    config=config,
-                )
-            except PermissionError:
-                print(
-                    f"{PROG_NAME}: error: Permission denied: {db_path}",
-                    file=sys.stderr,
-                )
-                return EXIT_ERROR
+            file_existed = resolved_target.plugin.cleanup_target(
+                str(db_path),
+                backend_options=resolved_target.backend_options,
+                config=config,
+            )
 
             if file_existed and not args.quiet:
                 commands._status(f"Database cleaned up: {db_path}")
@@ -1517,7 +1513,10 @@ def _run_pre_target_action(
     """Validate global flags and run actions that need no target."""
     global_error = _validate_global_flags(
         args,
-        status_json_output=status_json_output,
+        json_output=_json_output_requested(
+            args,
+            status_json_output=status_json_output,
+        ),
     )
     if global_error is not None:
         return global_error
@@ -1606,12 +1605,10 @@ def _main(*, config: Mapping[str, Any]) -> int:
             ),
         )
         return EXIT_ERROR
-    except KeyboardInterrupt:
-        # Handle Ctrl-C gracefully
-        print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
-        return EXIT_SUCCESS
     except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        code = "INVALID_ARGUMENT" if isinstance(e, ArgumentParserError) else "ERROR"
+        code: commands._JSONErrorCode = (
+            "INVALID_ARGUMENT" if isinstance(e, ArgumentParserError) else "ERROR"
+        )
         commands._emit_error(
             e,
             code=code,
@@ -1630,6 +1627,9 @@ def main(*, config: Mapping[str, Any] = _config) -> int:
     except InvalidConfigError as error:
         print(f"{PROG_NAME}: {error}", file=sys.stderr)
         return EXIT_ERROR
+    except KeyboardInterrupt:
+        print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
+        return EXIT_INTERRUPTED
 
 
 if __name__ == "__main__":

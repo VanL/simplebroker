@@ -3,7 +3,7 @@
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import Any
 
 import pytest
 
@@ -11,17 +11,6 @@ from simplebroker import Queue
 from simplebroker._targets import BrokerTarget
 
 pytestmark = [pytest.mark.shared]
-
-
-def test_queue_move_return_type_matches_runtime_paths() -> None:
-    """The public annotation must describe dict, iterator, and empty results."""
-
-    return_type = get_type_hints(Queue.move)["return"]
-    return_origins = {get_origin(member) for member in get_args(return_type)}
-
-    assert list not in return_origins
-    assert dict in return_origins
-    assert Iterator in return_origins
 
 
 def test_queue_filtered_move_closes_bounded_generator(
@@ -101,6 +90,21 @@ def test_queue_delete_by_id(queue_factory):
     assert result is False
 
     assert q.read() == "message2"
+
+
+def test_queue_delete_explicit_none_is_rejected_without_mutation(queue_factory):
+    """An ambiguous targeted delete must fail before touching stored rows."""
+    q = queue_factory("test")
+    first_id = q.write("message1")
+    second_id = q.write("message2")
+
+    with pytest.raises(TypeError, match=r"message_id=None.*ambiguous"):
+        q.delete(message_id=None)
+
+    assert list(q.peek_generator(with_timestamps=True)) == [
+        ("message1", first_id),
+        ("message2", second_id),
+    ]
 
 
 def test_queue_delete_many(queue_factory):
@@ -195,6 +199,18 @@ def test_queue_move_single_message(queue_factory):
     # Verify messages still in source
     messages = list(src.read(all_messages=True))
     assert len(messages) == 2
+
+
+def test_queue_move_returns_plain_dictionary_with_typed_fields(queue_factory):
+    """MovedMessage describes the existing dict without wrapping it."""
+    src = queue_factory("source")
+    message_id = src.write("message1")
+
+    moved = src.move("destination")
+
+    assert type(moved) is dict
+    assert moved == {"message": "message1", "timestamp": message_id}
+    assert set(moved) == {"message", "timestamp"}
 
 
 def test_queue_move_after_timestamp(queue_factory):

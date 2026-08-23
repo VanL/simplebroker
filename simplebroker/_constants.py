@@ -81,6 +81,9 @@ EXIT_ERROR: Final[int] = 1
 EXIT_QUEUE_EMPTY: Final[int] = 2
 """Exit code when queue is empty or no messages match criteria."""
 
+EXIT_INTERRUPTED: Final[int] = 130
+"""Exit code when an unhandled keyboard interrupt reaches the CLI wrapper."""
+
 # ==============================================================================
 # MESSAGE AND QUEUE CONSTRAINTS
 # ==============================================================================

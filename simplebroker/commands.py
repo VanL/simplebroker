@@ -19,7 +19,7 @@ import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from ._aliases import resolve_queue_operand
 from ._constants import (
@@ -27,6 +27,7 @@ from ._constants import (
     EXIT_ERROR,
     EXIT_QUEUE_EMPTY,
     EXIT_SUCCESS,
+    PROG_NAME,
     _capture_config,
     _resolve_config_input,
 )
@@ -49,7 +50,10 @@ DBTarget = str | BrokerTarget
 _config = _capture_config()
 _MOVE_ALL_LIMIT = 1_000_000
 _WINDOWS_CLOSED_PIPE_ERRORS = frozenset({109, 232})
-_JSON_ERROR_CODES = frozenset(
+_JSONErrorCode = Literal[
+    "INVALID_ARGUMENT", "INVALID_MESSAGE_ID", "INVALID_TIMESTAMP", "ERROR"
+]
+_JSON_ERROR_CODES: frozenset[_JSONErrorCode] = frozenset(
     {"INVALID_ARGUMENT", "INVALID_MESSAGE_ID", "INVALID_TIMESTAMP", "ERROR"}
 )
 _JSON_ERROR_KEYS = ("error", "message", "retryable")
@@ -125,7 +129,7 @@ def _status(message: str, *, quiet: bool = False) -> None:
 def _emit_error(
     error: BaseException | str,
     *,
-    code: str,
+    code: _JSONErrorCode,
     json_output: bool,
 ) -> None:
     """Emit an error to stderr, honoring command-local JSON mode."""
@@ -145,7 +149,7 @@ def _emit_error(
             file=sys.stderr,
         )
     else:
-        print(f"simplebroker: error: {text}", file=sys.stderr)
+        print(f"{PROG_NAME}: error: {text}", file=sys.stderr)
     sys.stderr.flush()
 
 
@@ -207,7 +211,11 @@ def cmd_alias_remove(db_path: DBTarget, alias: str) -> int:
         db = cast(BrokerDB, conn.get_connection())
 
         if not db.has_alias(alias):
-            print(f"simplebroker: alias '{alias}' does not exist", file=sys.stderr)
+            _emit_error(
+                f"alias '{alias}' does not exist",
+                code="ERROR",
+                json_output=False,
+            )
             return EXIT_ERROR
 
         db.remove_alias(alias)
@@ -945,7 +953,7 @@ def _move_all_messages(
 
         warned_newlines = False
         for result in results:
-            message, timestamp = cast(tuple[str, int], result)
+            message, timestamp = result
             warned_newlines = _output_message(
                 message,
                 timestamp,
@@ -983,7 +991,7 @@ def _move_next_message(
     if after_timestamp is None and before_timestamp is None:
         result = queue.move_one(destination, with_timestamps=True)
         return _print_moved_message(
-            cast(tuple[str, int] | None, result),
+            result,
             json_output=json_output,
             show_timestamps=show_timestamps,
         )
@@ -997,7 +1005,7 @@ def _move_next_message(
     try:
         result = next(generator)
         return _print_moved_message(
-            cast(tuple[str, int], result),
+            result,
             json_output=json_output,
             show_timestamps=show_timestamps,
         )
@@ -1068,7 +1076,7 @@ def cmd_move(
                 with_timestamps=True,
             )
             return _print_moved_message(
-                cast(tuple[str, int] | None, result),
+                result,
                 json_output=json_output,
                 show_timestamps=show_timestamps,
             )
@@ -1440,11 +1448,12 @@ def _reject_invalid_existing_database(
             quiet=quiet,
         )
         return EXIT_SUCCESS
-    print(
-        "Error: File exists but is not a SimpleBroker database: "
-        f"{display_target}\n"
-        f"Please remove the file manually and run 'broker init' again.",
-        file=sys.stderr,
+    _emit_error(
+        "file exists but is not a SimpleBroker database: "
+        f"{display_target}. Please remove the file manually and run "
+        "'broker init' again.",
+        code="ERROR",
+        json_output=False,
     )
     return EXIT_ERROR
 
@@ -1488,7 +1497,7 @@ def _init_broker_target(db_target: BrokerTarget, *, quiet: bool) -> int:
         )
         return EXIT_SUCCESS
     except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        print(f"Error initializing database: {error}", file=sys.stderr)
+        _emit_error(error, code="ERROR", json_output=False)
         return EXIT_ERROR
 
 
@@ -1511,7 +1520,7 @@ def _init_sqlite_path(db_path: str, *, quiet: bool) -> int:
         return EXIT_SUCCESS
     except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         _reraise_invalid_config(error)
-        print(f"Error initializing database: {error}", file=sys.stderr)
+        _emit_error(error, code="ERROR", json_output=False)
         return EXIT_ERROR
 
 

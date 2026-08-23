@@ -98,6 +98,15 @@ registry.
 | `simplebroker/sbqueue.py:1271` | `Queue.stream_messages` (14) | P2 | Name delivery-mode operations without creating parallel stream implementations. |
 | `simplebroker/watcher.py:1179` | `PollingStrategy.wait_for_activity` (12) | P3 | Retain native waiter, hints, burst/backoff, replacement, and stop logic together. |
 
+The Queue return-shaping branches remain one cohesive runtime path per method.
+`@overload` declarations describe literal flag selections to static checkers;
+they add no dispatch registry or alternate implementation. High-level
+`Queue.move` keeps validation, bounded generator closure, and conversion to
+the existing ordinary `{message, timestamp}` dictionary in the same owner.
+The public `MovedMessage` `TypedDict` names that shape without changing the
+runtime value. The registered `Queue.move` and `Queue.stream_messages`
+complexity dispositions therefore remain unchanged.
+
 ### Tests and reusable test infrastructure
 
 | Baseline location | Function and score | Disposition | Planned outcome |

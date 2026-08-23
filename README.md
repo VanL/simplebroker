@@ -361,11 +361,14 @@ recommended). Bounds are strict open intervals after parse
 - `0` - Success
 - `1` - General error (e.g., database access error, invalid arguments)
 - `2` - Queue empty or no matching messages
+- `130` - An unhandled keyboard interrupt reached the outer CLI wrapper
 
 Normative specifications: `docs/specs/10-cli.md` ([SB-CLI-1]–[SB-CLI-5]).
 
 `watch` exits `0` when stopped by SIGINT/SIGTERM or when its stdout consumer
-closes the pipe (see [Pipe behavior](#pipe-behavior)).
+closes the pipe (see [Pipe behavior](#pipe-behavior)). Other commands return
+`130` when a `KeyboardInterrupt` escapes to the process wrapper; effects
+completed before the interrupt are not rolled back.
 
 **Note:** `delete <queue>`, `delete --all`, and `delete <queue> -m <id>` remove
 matching rows immediately (`[SB-OPS-3]`). Reads still use claimed-row semantics
@@ -479,6 +482,15 @@ Python APIs that target one exact message ID, such as
 `Queue.delete_many(...)`, and exact-ID granular methods, accept either an
 integer ID or an exact 19-digit string ID. Malformed string IDs raise
 `ValueError`; unsupported types, including `bool`, raise `TypeError`.
+`Queue.delete()` with no argument is the intentional queue-wide delete and
+returns whether it removed anything. `Queue.delete(message_id=None)` is
+ambiguous and raises `TypeError` before storage mutation; pass a concrete ID
+for targeted deletion.
+
+High-level `Queue.move()` returns an ordinary dictionary described by the
+package-root `MovedMessage` `TypedDict`, with `message: str` and
+`timestamp: int`. `all_messages=True` returns an iterator of the same
+dictionaries. The granular move methods retain their string/tuple shapes.
 
 ID representation, allocation, write returns, high-water/cache meaning,
 exact-ID forms, and ID-preserving move are normative in the

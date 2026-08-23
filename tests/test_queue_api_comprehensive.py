@@ -866,6 +866,10 @@ class TestQueueMessageIdValidation:
             q.move("dest", message_id="not-an-id")
         with pytest.raises(ValueError, match="invalid message ID"):
             q.delete(message_id="not-an-id")
+        with pytest.raises(TypeError, match="message_id must be an int"):
+            q.delete(message_id=True)
+        with pytest.raises(TypeError, match="message_id must be an int"):
+            q.delete(message_id=object())
         with pytest.raises(ValueError, match="invalid message ID"):
             q.delete_many(["not-an-id"])
 

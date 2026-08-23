@@ -6,19 +6,25 @@ exceptions instead of these exit codes (see `docs/agent-kernel.md`).
 
 ## Exit code set [SB-CLI-1]
 
-The CLI uses three process exit codes with the meanings below.
+The CLI uses three ordinary result codes plus the conventional interrupt
+status below.
 
 | Code | Constant | Meaning |
 |------|----------|---------|
 | `0` | `EXIT_SUCCESS` | Success |
 | `1` | `EXIT_ERROR` | General error (for example database access error, invalid arguments) |
 | `2` | `EXIT_QUEUE_EMPTY` | Queue empty or no matching messages |
+| `130` | `EXIT_INTERRUPTED` | An unhandled `KeyboardInterrupt` reached the outer CLI process wrapper |
 
-Command-local uses of these codes (for example `exists` exits `0` when the
-queue has any row and `2` when it has none; a well-formed `-m` id with no
-match is silent and exits `2`; `watch` exits `0` when stopped by
-SIGINT/SIGTERM or when its stdout consumer closes the pipe) follow the same
-meanings.
+Command-local uses of `0`, `1`, and `2` (for example `exists` exits `0`
+when the queue has any row and `2` when it has none; a well-formed `-m` id
+with no match is silent and exits `2`) follow the same meanings. Invalid
+invocation and operational failure remain general error `1`; JSON error
+codes provide finer post-parse classification under `[SB-CLI-4]`.
+`watch` exits `0` when stopped by its normal SIGINT/SIGTERM handling or when
+its stdout consumer closes the pipe. A `KeyboardInterrupt` not handled by a
+command and caught by the CLI process wrapper emits the interruption
+diagnostic and exits `130`; effects already completed are not rolled back.
 
 For `read`, `peek`, `move`, `dump`, and `watch`, a stdout consumer that closes its
 pipe is a clean stop: the command detects closure at the stdout write or flush
@@ -48,6 +54,13 @@ payload in full.
 
 Quiet mode suppresses human commentary on stderr. It never suppresses an error
 diagnostic and never moves payload or errors to a different stream.
+
+Ordinary plain-text errors use the shared
+`simplebroker: error: <message>` dialect derived from `PROG_NAME`. A winning
+command-specific contract may define a narrower dialect; notably,
+`[SB-IO-4]` continues to own `broker load:` errors and
+`broker load: warning:` diagnostics. Error text may include an actionable
+recovery sentence and is not otherwise frozen.
 
 A recognized `BROKER_*` environment value that cannot be parsed or validated
 is an invocation error. Before parser-dependent behavior or any broker action,
@@ -102,13 +115,16 @@ on message-line JSON (`message` + `timestamp`). Other JSON shapes follow the
 command-specific objects above. A decimal id embedded inside human diagnostic
 text is not an identity scalar and is not rewritten.
 
-When JSON mode is requested and a command reports an error after argument
-parsing, stderr contains one object with `error` (stable code), `message`
-(human diagnostic), and `retryable` (boolean). The stable codes are
-`INVALID_ARGUMENT`, `INVALID_MESSAGE_ID`, `INVALID_TIMESTAMP`, and `ERROR`.
-`retryable` is true only when the underlying exception explicitly carries
-`retryable is True`; validation errors, strings, unclassified failures, and
-explicitly non-retryable failures emit false.
+Once argument parsing has established JSON mode, every later ordinary
+validation, global-option, preparation, and dispatch error writes exactly one
+object to stderr and never falls back to a plain diagnostic. The object has
+`error` (stable code), `message` (human diagnostic), and `retryable`
+(boolean). The stable codes are `INVALID_ARGUMENT`, `INVALID_MESSAGE_ID`,
+`INVALID_TIMESTAMP`, and `ERROR`. `retryable` is true only when the underlying
+exception explicitly carries `retryable is True`; validation errors, strings,
+unclassified failures, and explicitly non-retryable failures emit false. The
+pre-parse invalid configuration exception remains the `[SB-CLI-2]` plain-text
+boundary.
 
 _Implementation mapping_:
 - `simplebroker/commands.py`
@@ -162,6 +178,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-23-public-api-and-cli-review-remediation-plan.md`
 - `docs/plans/2026-08-13-invalid-environment-import-lifecycle-plan.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
   see the ledger in `docs/plans/README.md`
@@ -188,7 +205,18 @@ _Implementation mapping_:
   `tests/test_invalid_config_lifecycle.py::test_cli_reports_invalid_environment_before_parsing`
 - `tests/test_documented_exit_codes.py` — [SB-CLI-1] + README link
 - `tests/test_agent_kernel_contract.py` — [SB-CLI-1] + kernel link
+- `[SB-CLI-1]` interrupt split:
+  `tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_keyboard_interrupt_handling`,
+  `tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_pre_dispatch_keyboard_interrupt_handling`,
+  `tests/test_cli_watch.py::TestWatchCommand::test_watch_sigint_remains_success`
 - `tests/test_cli_contract_sb_cli.py` — [SB-CLI-2], [SB-CLI-3], [SB-CLI-4]
+- `[SB-CLI-2]` ordinary diagnostic dialect:
+  `tests/test_alias_cli.py::test_cmd_alias_add_remove_direct`,
+  `tests/test_commands_init.py::TestInitCommand::test_init_permission_error_database_creation`
+- `[SB-CLI-4]` post-parse JSON and closed vocabulary:
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_post_parse_global_errors_preserve_json`,
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_emit_error_codes_are_closed_at_callsites`,
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_unknown_internal_error_code_fails_loudly`
 - `[SB-CLI-4]` JSON identity representation:
   `tests/test_json_message_id_contract.py`,
   `tests/test_cli_write_output.py::test_write_json_prints_timestamp_only`,
