@@ -6,7 +6,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -512,9 +512,8 @@ def test_control_lane_is_peek_checkpointed_not_consumed(tmp_path: Path) -> None:
         assert ping_reply["ok"] is True
         assert ping_reply["message"] == "PONG"
 
-        control_rows = cast(
-            list[tuple[str, int]],
-            Queue(CONTROL_IN, db_path=str(db_path)).peek_many(with_timestamps=True),
+        control_rows = Queue(CONTROL_IN, db_path=str(db_path)).peek_many(
+            with_timestamps=True
         )
         ping_timestamps = [
             timestamp
