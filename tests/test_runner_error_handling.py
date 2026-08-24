@@ -1119,6 +1119,79 @@ class TestSQLiteRunnerErrorHandling:
         assert enter_count == 1
         assert max_active == 1
 
+    @pytest.mark.sqlite_only
+    def test_fresh_marker_cleanup_waits_for_phase_lock(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A fresh-target contender must not delete an owner's status temp file."""
+        db_path = tmp_path / "test.db"
+        owner = SQLiteRunner(str(db_path))
+        contender = SQLiteRunner(str(db_path))
+        owner_entered = threading.Event()
+        release_owner = threading.Event()
+        contender_cleanup = threading.Event()
+        contender_entered_run_phases = threading.Event()
+        real_discard = PhaseLockService.discard_status_markers
+        real_run_phases = PhaseLockService.run_phases
+
+        def observed_discard(service: PhaseLockService) -> None:
+            if threading.current_thread().name.startswith("marker-cleanup-contender"):
+                contender_cleanup.set()
+            real_discard(service)
+
+        monkeypatch.setattr(
+            PhaseLockService, "discard_status_markers", observed_discard
+        )
+
+        def observed_run_phases(
+            service: PhaseLockService, *args: Any, **kwargs: Any
+        ) -> Any:
+            if threading.current_thread().name.startswith("marker-cleanup-contender"):
+                contender_entered_run_phases.set()
+            return real_run_phases(service, *args, **kwargs)
+
+        monkeypatch.setattr(PhaseLockService, "run_phases", observed_run_phases)
+
+        def owner_operation() -> None:
+            owner_entered.set()
+            if not release_owner.wait(timeout=scale_timeout_for_ci(2.0)):
+                raise TimeoutError("owner was not released")
+            db_path.write_bytes(b"SQLite format 3\x00")
+
+        try:
+            with (
+                cf.ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="marker-cleanup-owner",
+                ) as owner_executor,
+                cf.ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="marker-cleanup-contender",
+                ) as contender_executor,
+            ):
+                owner_future = owner_executor.submit(
+                    owner.run_exclusive_setup,
+                    SetupPhase.CONNECTION,
+                    owner_operation,
+                )
+                assert owner_entered.wait(timeout=scale_timeout_for_ci(1.0))
+                contender_future = contender_executor.submit(
+                    contender.run_exclusive_setup,
+                    SetupPhase.CONNECTION,
+                    lambda: None,
+                )
+                assert contender_entered_run_phases.wait(
+                    timeout=scale_timeout_for_ci(1.0)
+                )
+                assert not contender_cleanup.wait(timeout=0.2)
+                release_owner.set()
+                owner_future.result(timeout=scale_timeout_for_ci(2.0))
+                contender_future.result(timeout=scale_timeout_for_ci(2.0))
+        finally:
+            release_owner.set()
+            owner.close()
+            contender.close()
+
     def test_database_lock_timeout(self) -> None:
         """Test that SQLiteRunner respects timeout under lock contention."""
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -631,6 +631,7 @@ class PhaseLockService:
         phases: Iterable[Phase],
         *,
         should_cancel: Callable[[], bool] | None = None,
+        discard_status_if: Callable[[], bool] | None = None,
     ) -> PhaseRunResult:
         """Run missing phases in order under the setup lock.
 
@@ -642,6 +643,12 @@ class PhaseLockService:
         On POSIX, markers remain completion hints that can bypass lock
         acquisition. POSIX file-handle semantics do not need the Windows barrier,
         and preserving the fast path avoids changing non-Windows setup behavior.
+
+        When ``discard_status_if`` is provided, its fallback-status decision is
+        evaluated only after lock acquisition. A true result invalidates the
+        existing fallback entries even when best-effort unlink cannot remove the
+        stale file. Fallback publication replaces it atomically; xattr mode first
+        replaces any surviving stable status file with an empty one.
         """
 
         phase_list = tuple(phases)
@@ -655,8 +662,10 @@ class PhaseLockService:
             )
 
         using_xattrs = self._should_use_xattrs()
-        if not self.strict_marker_locking and self._all_marked(
-            phase_list, using_xattrs=using_xattrs
+        if (
+            discard_status_if is None
+            and not self.strict_marker_locking
+            and self._all_marked(phase_list, using_xattrs=using_xattrs)
         ):
             return PhaseRunResult(
                 completed=(),
@@ -682,9 +691,13 @@ class PhaseLockService:
         def should_stop_lock_wait() -> bool:
             if cancellation_requested():
                 return True
-            return not self.strict_marker_locking and self._all_marked(
-                phase_list,
-                using_xattrs=self._should_use_xattrs(),
+            return (
+                discard_status_if is None
+                and not self.strict_marker_locking
+                and self._all_marked(
+                    phase_list,
+                    using_xattrs=self._should_use_xattrs(),
+                )
             )
 
         lock = _AdvisoryLock(
@@ -720,10 +733,22 @@ class PhaseLockService:
                     f"Cancelled while waiting for phase lock: {self.lock_path}"
                 )
             using_xattrs = self._should_use_xattrs()
+            discard_required = bool(
+                discard_status_if is not None and discard_status_if()
+            )
+            if discard_required:
+                self.discard_status_markers()
+                if using_xattrs and self.status_base_path.exists():
+                    self._write_status_phases([])
             if using_xattrs:
                 self._run_xattr_phases(phase_list, completed, skipped)
             else:
-                self._run_status_phases(phase_list, completed, skipped)
+                self._run_status_phases(
+                    phase_list,
+                    completed,
+                    skipped,
+                    ignore_existing=discard_required,
+                )
         finally:
             lock.release()
 
@@ -762,8 +787,12 @@ class PhaseLockService:
         phases: tuple[Phase, ...],
         completed: list[str],
         skipped: list[str],
+        *,
+        ignore_existing: bool = False,
     ) -> None:
-        status_order, _diagnostic = self._read_status_entries()
+        status_order, _diagnostic = (
+            ([], None) if ignore_existing else self._read_status_entries()
+        )
         status_phases = set(status_order)
         for phase in phases:
             _validate_phase_name(phase.name)

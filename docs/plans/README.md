@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-24-phaselock-status-temp-ownership-plan.md | completed — stale fallback-marker cleanup is lock-owned across status and xattr backends; ordering, unlink-failure, fallback-transition, stress, and independent-review gates passed |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | status-review — class 4; implementation and reviews landed in b01bc3cb and shipped in 5.6.2, but the plan records no evidence for its required five post-commit coverage-diagnostics runs |
 
 ## Retired Plans

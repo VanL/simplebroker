@@ -95,6 +95,14 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-24: A unique temp filename does not establish cleanup ownership.
+  If one process publishes by temp-write plus atomic replace while another
+  process glob-cleans the temp namespace, both operations must share the same
+  lock and the stale-state predicate must be rechecked after acquisition.
+  Otherwise a fresh-target contender can delete the active owner's temp file
+  and make `os.replace()` fail even though publication itself is atomic.
+  Read-only validity checks should report stale state, not perform unlocked
+  cleanup.
 - 2026-08-23: A durable timestamp CAS protects persisted monotonicity, not a
   shared generator's process-local cache. Keep candidate calculation, durable
   compare-and-advance, conflict refresh, and cache publication under one

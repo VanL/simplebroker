@@ -839,9 +839,6 @@ class SQLiteRunner:
         service = self._phase_lock_service()
         phase_name = self._phase_marker_name(phase)
 
-        if phase == SetupPhase.CONNECTION and self._target_needs_fresh_setup_markers():
-            self._discard_stale_completion_markers()
-
         ran = False
 
         def guarded_operation() -> None:
@@ -854,6 +851,11 @@ class SQLiteRunner:
             result = service.run_phases(
                 (Phase(phase_name, guarded_operation),),
                 should_cancel=stop_event.is_set if stop_event is not None else None,
+                discard_status_if=(
+                    self._target_needs_fresh_setup_markers
+                    if phase == SetupPhase.CONNECTION
+                    else None
+                ),
             )
         except PhaseLockCancelled as exc:
             raise StopException("Retry interrupted by stop event") from exc
@@ -923,15 +925,9 @@ class SQLiteRunner:
             return service.has_phase(phase_name)
 
         if self._target_needs_fresh_setup_markers():
-            self._discard_stale_completion_markers()
             return False
 
         return service.has_phase(phase_name)
-
-    def _discard_stale_completion_markers(self) -> None:
-        """Remove fallback completion markers left behind after database deletion."""
-        with contextlib.suppress(ValueError, OSError, TypeError):
-            self._phase_lock_service().discard_status_markers()
 
     def is_setup_complete(self, phase: SetupPhase) -> bool:
         """Check if a setup phase has been completed.

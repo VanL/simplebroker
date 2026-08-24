@@ -111,6 +111,20 @@ the exact storage, coordination, and client outcomes are undefined. This is why
 cleanup is specified as a destructive operator action, not a quiescence or
 maintenance protocol. See [`[SB-OPS-7]`](../specs/17-ops.md).
 
+Fallback status cleanup follows the same ownership boundary as publication.
+When a missing or undersized SQLite target makes completion markers stale,
+the runner rechecks that condition only after the phase lock is acquired and
+then discards the stable status file and abandoned temp files before reading
+markers. A waiter never performs ordinary stale-marker cleanup before locking:
+that could delete the current owner's exclusively created temp file between
+flush and atomic replace. Read-only completion checks report a fresh target as
+incomplete without mutating marker state; the subsequent locked setup owns any
+required cleanup. The invalidation applies even while xattrs are the active
+marker backend. If best-effort deletion leaves the stable fallback file in
+place, xattr mode atomically replaces it with an empty status generation before
+publishing xattrs, so a later fallback opener cannot trust state from the
+deleted database.
+
 ## Filesystem permission boundary
 
 SimpleBroker does not impose one cross-platform sharing mode on SQLite state.

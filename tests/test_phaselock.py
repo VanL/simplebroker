@@ -1340,6 +1340,134 @@ def test_discard_status_markers_removes_current_markers(tmp_path: Path) -> None:
     assert service.lock_path.exists()
 
 
+def test_required_status_discard_ignores_stale_entries_when_unlink_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "broker.db"
+    service = PhaseLockService(
+        target,
+        use_xattrs=False,
+        strict_marker_locking=True,
+    )
+    service.status_base_path.write_text("connection-v1\n", encoding="utf-8")
+    calls: list[str] = []
+    real_unlink = Path.unlink
+
+    def fail_stale_status_unlink(path: Path, missing_ok: bool = False) -> None:
+        if path == service.status_base_path:
+            raise PermissionError("injected stale-status unlink failure")
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_stale_status_unlink)
+
+    result = service.run_phases(
+        (Phase("connection-v1", lambda: calls.append("ran")),),
+        discard_status_if=lambda: True,
+    )
+
+    assert calls == ["ran"]
+    assert result.completed == ("connection-v1",)
+    assert result.skipped == ()
+    assert _read_status_file(service.status_base_path) == ["connection-v1"]
+
+
+def test_required_status_discard_removes_fallback_markers_in_xattr_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    missing_errno = 8765
+    values: dict[tuple[Path, str], bytes] = {}
+
+    def get_value(path: Path, key: str) -> bytes:
+        try:
+            return values[(path, key)]
+        except KeyError:
+            raise OSError(missing_errno, "missing") from None
+
+    def set_value(path: Path, key: str, value: bytes) -> None:
+        values[(path, key)] = value
+
+    provider = phaselock_module._XattrProvider(
+        get_value=get_value,
+        set_value=set_value,
+    )
+    monkeypatch.setattr(phaselock_module, "_MISSING_XATTR_ERRNOS", {missing_errno})
+    monkeypatch.setattr(phaselock_module, "_xattr_provider", lambda: provider)
+
+    service = PhaseLockService(target, use_xattrs=True)
+    stale_temp = tmp_path / "broker.db.status.tmp.stale"
+    service.status_base_path.write_text("schema-v999\n", encoding="utf-8")
+    stale_temp.touch()
+    calls: list[str] = []
+
+    result = service.run_phases(
+        (Phase("connection-v1", lambda: calls.append("ran")),),
+        discard_status_if=lambda: True,
+    )
+
+    assert calls == ["ran"]
+    assert result.completed == ("connection-v1",)
+    assert result.xattrs_available is True
+    assert result.status_paths == ()
+    assert not service.status_base_path.exists()
+    assert not stale_temp.exists()
+
+
+def test_required_status_discard_neutralizes_undeletable_marker_in_xattr_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "broker.db"
+    target.touch()
+    missing_errno = 8765
+    values: dict[tuple[Path, str], bytes] = {}
+
+    def get_value(path: Path, key: str) -> bytes:
+        try:
+            return values[(path, key)]
+        except KeyError:
+            raise OSError(missing_errno, "missing") from None
+
+    def set_value(path: Path, key: str, value: bytes) -> None:
+        values[(path, key)] = value
+
+    provider = phaselock_module._XattrProvider(
+        get_value=get_value,
+        set_value=set_value,
+    )
+    monkeypatch.setattr(phaselock_module, "_MISSING_XATTR_ERRNOS", {missing_errno})
+    monkeypatch.setattr(phaselock_module, "_xattr_provider", lambda: provider)
+
+    service = PhaseLockService(target, use_xattrs=True)
+    service.status_base_path.write_text("schema-v999\n", encoding="utf-8")
+    real_unlink = Path.unlink
+
+    def fail_stale_status_unlink(path: Path, missing_ok: bool = False) -> None:
+        if path == service.status_base_path:
+            raise PermissionError("injected stale-status unlink failure")
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_stale_status_unlink)
+
+    xattr_result = service.run_phases(
+        (Phase("connection-v1", lambda: None),),
+        discard_status_if=lambda: True,
+    )
+    fallback_calls: list[str] = []
+    fallback_result = PhaseLockService(target, use_xattrs=False).run_phases(
+        (Phase("schema-v999", lambda: fallback_calls.append("ran")),)
+    )
+
+    assert xattr_result.completed == ("connection-v1",)
+    assert fallback_calls == ["ran"]
+    assert fallback_result.completed == ("schema-v999",)
+    assert fallback_result.skipped == ()
+    assert _read_status_file(service.status_base_path) == ["schema-v999"]
+
+
 def test_no_xattr_existing_status_marker_does_not_bypass_held_lock(
     tmp_path: Path,
 ) -> None:

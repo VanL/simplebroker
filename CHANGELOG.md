@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fresh SQLite setup now rechecks and removes stale fallback phase markers
+  while holding the setup lock. Concurrent first openers can no longer delete
+  the active owner's status temporary file between write and atomic replace,
+  and xattr mode durably neutralizes an undeletable stale fallback marker.
 - `BaseWatcher.stop()` and watcher startup now serialize cleanup ownership, so
   a stop racing `run_forever()` cannot close strategy and Queue resources in
   both threads. A live run retains cleanup ownership even when a joining stop
