@@ -4,4 +4,4 @@ from simplebroker import Queue
 
 
 def delete_optional_id(queue: Queue) -> bool:
-    return queue.delete(message_id=None)
+    return queue.delete(message_id=None)  # type: ignore[no-any-return]

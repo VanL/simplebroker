@@ -1,5 +1,7 @@
 """Comprehensive tests for Queue API to ensure all methods are covered."""
 
+from types import GeneratorType
+
 import pytest
 
 from simplebroker import Queue
@@ -779,10 +781,11 @@ class TestQueueHighLevelMethods:
             q.write("message1")
             q.write("message2")
             original_read_generator = q.read_generator
-            created_generators = []
+            created_generators: list[GeneratorType] = []
 
             def capture_generator(**kwargs):
                 generator = original_read_generator(**kwargs)
+                assert isinstance(generator, GeneratorType)
                 created_generators.append(generator)
                 return generator
 
@@ -803,10 +806,11 @@ class TestQueueHighLevelMethods:
             q.write("message1")
             q.write("message2")
             original_peek_generator = q.peek_generator
-            created_generators = []
+            created_generators: list[GeneratorType] = []
 
             def capture_generator(**kwargs):
                 generator = original_peek_generator(**kwargs)
+                assert isinstance(generator, GeneratorType)
                 created_generators.append(generator)
                 return generator
 
@@ -826,10 +830,11 @@ class TestQueueHighLevelMethods:
         try:
             cutoff = q.write("message1")
             original_read_generator = q.read_generator
-            created_generators = []
+            created_generators: list[GeneratorType] = []
 
             def capture_generator(**kwargs):
                 generator = original_read_generator(**kwargs)
+                assert isinstance(generator, GeneratorType)
                 created_generators.append(generator)
                 return generator
 
@@ -849,10 +854,11 @@ class TestQueueHighLevelMethods:
         try:
             cutoff = q.write("message1")
             original_peek_generator = q.peek_generator
-            created_generators = []
+            created_generators: list[GeneratorType] = []
 
             def capture_generator(**kwargs):
                 generator = original_peek_generator(**kwargs)
+                assert isinstance(generator, GeneratorType)
                 created_generators.append(generator)
                 return generator
 

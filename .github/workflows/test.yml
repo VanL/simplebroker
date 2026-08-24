@@ -208,7 +208,7 @@ jobs:
 
     - name: Type check with mypy
       run: |
-        mapfile -t core_test_files < <(find tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
+        mapfile -t core_test_files < <(find tests -type f -name '*.py' -not -path '*/__pycache__/*' -not -path 'tests/typecheck_fixtures/*' | sort)
         mapfile -t pg_test_files < <(find extensions/simplebroker_pg/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
         mapfile -t redis_test_files < <(find extensions/simplebroker_redis/tests -type f -name '*.py' -not -path '*/__pycache__/*' | sort)
         uv run --frozen --no-sync mypy simplebroker bin/release.py bin/ruff_suppression_index.py extensions/simplebroker_pg/simplebroker_pg extensions/simplebroker_redis/simplebroker_redis --config-file pyproject.toml

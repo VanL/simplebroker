@@ -322,6 +322,7 @@ def test_ci_uses_comprehensive_lint_and_explicit_formatter_paths() -> None:
     assert lint_job.index(ruff_check) < lint_job.index(suppression_check)
     assert "mypy simplebroker bin/release.py bin/ruff_suppression_index.py" in lint_job
     assert "mapfile -t core_test_files" in lint_job
+    assert "-not -path 'tests/typecheck_fixtures/*'" in lint_job
     assert '"${core_test_files[@]}"' in lint_job
     assert "--preview" not in lint_job
     assert expected_formatter in " ".join(lint_job.split())

@@ -385,10 +385,7 @@ def test_after_large_queue_performance(workdir: Path) -> None:
     # timing so this measures the indexed query path, not one-shot setup cost or
     # xdist scheduling noise around connection creation.
     with Queue(queue_name, db_path=str(db_path), persistent=True) as q:
-        messages_with_ts = cast(
-            list[tuple[str, int]],
-            q.peek_many(limit=message_count, with_timestamps=True),
-        )
+        messages_with_ts = q.peek_many(limit=message_count, with_timestamps=True)
 
         # Test queries at different points using Queue API instead of CLI to
         # avoid timestamp validation issues. Since uses > comparison, so we get
@@ -461,10 +458,7 @@ def test_timestamp_lookup_performance(workdir: Path) -> None:
             q.write(f"msg_{i}")
 
     with Queue("perf_queue", db_path=str(db_path), persistent=True) as q:
-        messages_with_ts = cast(
-            list[tuple[str, int]],
-            q.peek_many(limit=num_messages, with_timestamps=True),
-        )
+        messages_with_ts = q.peek_many(limit=num_messages, with_timestamps=True)
         sample_start = num_messages // 2
         sample_indices = range(
             sample_start,
@@ -529,9 +523,7 @@ def test_sequential_mixed_cli_throughput(workdir: Path) -> None:
 
     # Get some timestamps
     with Queue("test_queue", db_path=str(db_path)) as q:
-        messages_with_ts = cast(
-            list[tuple[str, int]], q.peek_many(limit=10, with_timestamps=True)
-        )
+        messages_with_ts = q.peek_many(limit=10, with_timestamps=True)
     timestamps = [str(ts) for _msg, ts in messages_with_ts]
 
     # Perform mixed operations sequentially.
@@ -696,10 +688,7 @@ def test_batch_delete_many_performance(workdir: Path) -> None:
         for i in range(message_count):
             q.write(f"msg{i:05d}")
         timestamps = [
-            timestamp
-            for _body, timestamp in cast(
-                Iterator[tuple[str, int]], q.peek_generator(with_timestamps=True)
-            )
+            timestamp for _body, timestamp in q.peek_generator(with_timestamps=True)
         ][:delete_count]
 
         start_time = time.monotonic()

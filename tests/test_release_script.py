@@ -405,9 +405,13 @@ def test_core_test_mypy_paths_discover_python_tests(
     tests = project_root / "tests"
     (tests / "nested").mkdir(parents=True)
     (tests / "__pycache__").mkdir()
+    (tests / "typecheck_fixtures").mkdir()
     (tests / "alpha.py").write_text("", encoding="utf-8")
     (tests / "nested" / "beta.py").write_text("", encoding="utf-8")
     (tests / "__pycache__" / "ignored.py").write_text("", encoding="utf-8")
+    (tests / "typecheck_fixtures" / "expected_failure.py").write_text(
+        "", encoding="utf-8"
+    )
     (tests / "notes.md").write_text("", encoding="utf-8")
     monkeypatch.setattr(release, "PROJECT_ROOT", project_root)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import types
 
@@ -243,7 +244,7 @@ def test_compound_default_is_finalized_before_canonical_containment(tmp_path):
     except (OSError, NotImplementedError):
         pytest.skip("Cannot create symlinks on this system")
 
-    args = types.SimpleNamespace(
+    args = argparse.Namespace(
         dir=tmp_path,
         file=cli.DEFAULT_DB_NAME,
         command="write",

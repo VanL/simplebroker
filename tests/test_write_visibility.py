@@ -18,10 +18,10 @@ Two tests pin the fix from opposite directions:
 import multiprocessing
 import threading
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from multiprocessing.process import BaseProcess
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -124,11 +124,8 @@ def test_checkpoint_reader_sees_every_message(tmp_path: Path) -> None:
 
     def drain() -> None:
         nonlocal checkpoint
-        rows = cast(
-            Iterator[tuple[str, int]],
-            reader.peek(
-                all_messages=True, with_timestamps=True, after_timestamp=checkpoint
-            ),
+        rows = reader.peek(
+            all_messages=True, with_timestamps=True, after_timestamp=checkpoint
         )
         for body, ts in rows:
             seen.add(body)

@@ -8,7 +8,6 @@ No mocks: assert returned rows, ordering, and state — never internal calls.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
 
 from simplebroker import Queue
 
@@ -22,7 +21,7 @@ def _seed(q: Queue, n: int) -> list[int]:
     ids: list[int] = []
     for i in range(n):
         q.write(f"m{i}")
-    rows = cast(list[tuple[str, int]], q.peek_many(n, with_timestamps=True))
+    rows = q.peek_many(n, with_timestamps=True)
     assert len(rows) == n
     ids = [ts for _body, ts in rows]
     return ids
@@ -43,10 +42,7 @@ def test_include_claimed_returns_superset_in_id_order(tmp_path: Path) -> None:
     assert q.read() == "m0"
     assert q.read() == "m1"  # two claimed, two pending
 
-    rows = cast(
-        list[tuple[str, int]],
-        q.peek_many(10, with_timestamps=True, include_claimed=True),
-    )
+    rows = q.peek_many(10, with_timestamps=True, include_claimed=True)
     assert [body for body, _ in rows] == ["m0", "m1", "m2", "m3"]
     assert [ts for _, ts in rows] == ids  # strict message-ID order
 
@@ -57,18 +53,12 @@ def test_limit_and_bounds_apply_to_merged_stream(tmp_path: Path) -> None:
     assert q.read() == "m0"
 
     # limit counts claimed rows too
-    rows = cast(
-        list[tuple[str, int]],
-        q.peek_many(2, with_timestamps=True, include_claimed=True),
-    )
+    rows = q.peek_many(2, with_timestamps=True, include_claimed=True)
     assert [body for body, _ in rows] == ["m0", "m1"]
 
     # after_timestamp applies to the merged stream
-    rows = cast(
-        list[tuple[str, int]],
-        q.peek_many(
-            10, with_timestamps=True, include_claimed=True, after_timestamp=ids[0]
-        ),
+    rows = q.peek_many(
+        10, with_timestamps=True, include_claimed=True, after_timestamp=ids[0]
     )
     assert [body for body, _ in rows] == ["m1", "m2", "m3"]
 
@@ -135,4 +125,4 @@ def test_queue_peek_high_level_mirrors_flag(tmp_path: Path) -> None:
     assert q.peek() == "m1"
     assert q.peek(include_claimed=True) == "m0"
     all_rows = q.peek(all_messages=True, include_claimed=True)
-    assert list(all_rows) == ["m0", "m1"]  # type: ignore[arg-type]
+    assert list(all_rows) == ["m0", "m1"]

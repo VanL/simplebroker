@@ -864,9 +864,13 @@ def _examples_mypy_command(*, frozen: bool = False) -> tuple[str, ...]:
 
 
 def _core_test_mypy_paths() -> tuple[str, ...]:
-    """Return concrete Python files under the root test suite for mypy."""
+    """Return green-gate Python tests, excluding expected-failure fixtures."""
 
-    return _required_python_file_paths(PROJECT_ROOT / "tests", label="tests")
+    return tuple(
+        path
+        for path in _required_python_file_paths(PROJECT_ROOT / "tests", label="tests")
+        if not path.startswith("tests/typecheck_fixtures/")
+    )
 
 
 def _core_test_mypy_command() -> tuple[str, ...]:

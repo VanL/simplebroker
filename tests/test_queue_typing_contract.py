@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections.abc import Iterator
+from pathlib import Path
 from typing import assert_type
 
 from simplebroker import MovedMessage, Queue
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def assert_high_level_queue_types(queue: Queue, runtime_bool: bool) -> None:
@@ -110,3 +115,28 @@ def assert_granular_queue_types(queue: Queue, runtime_bool: bool) -> None:
 def assert_delete_types(queue: Queue, message_id: int) -> None:
     assert_type(queue.delete(), bool)
     assert_type(queue.delete(message_id=message_id), bool)
+
+
+def test_delete_none_fixture_is_rejected_by_mypy() -> None:
+    fixture = ROOT / "tests" / "typecheck_fixtures" / "queue_delete_none.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy",
+            "--config-file",
+            str(ROOT / "pyproject.toml"),
+            "--show-error-codes",
+            str(fixture),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == ""
+    assert result.stdout.count("error:") == 1
+    assert "[call-overload]" in result.stdout
+    assert "message_id" in result.stdout

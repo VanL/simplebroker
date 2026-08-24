@@ -252,18 +252,18 @@ def test_invalid_queue_delivery_does_not_create_sqlite_target(
     try:
         with pytest.raises(ValueError, match="typo"):
             if lazy:
-                generator = queue.read_generator(
-                    delivery_guarantee="typo"  # type: ignore[arg-type]
+                generator = queue.read_generator(  # type: ignore[call-overload]
+                    delivery_guarantee="typo"
                 )
                 next(generator)
             else:
-                queue.read_many(
+                queue.read_many(  # type: ignore[call-overload]
                     1,
-                    delivery_guarantee="typo",  # type: ignore[arg-type]
+                    delivery_guarantee="typo",
                 )
     finally:
         if generator is not None:
-            generator.close()  # type: ignore[attr-defined]
+            generator.close()
         queue.close()
 
     assert not db_path.exists()
