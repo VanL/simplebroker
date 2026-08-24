@@ -2,6 +2,9 @@ import re
 import tomllib
 from pathlib import Path
 
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
+
 ROOT = Path(__file__).resolve().parents[1]
 UV_WORKFLOWS = (
     "coverage-diagnostics.yml",
@@ -298,13 +301,25 @@ def test_build_frontend_is_bounded_and_locked() -> None:
     )
     for path in projects:
         pyproject = tomllib.loads(path.read_text(encoding="utf-8"))
-        assert pyproject["build-system"]["requires"] == ["hatchling>=1.31,<2"]
+        build_requirements = pyproject["build-system"]["requires"]
+        assert len(build_requirements) == 1
+        hatchling = Requirement(build_requirements[0])
+        assert hatchling.name == "hatchling"
+        assert hatchling.specifier == SpecifierSet(">=1.31,<2")
 
     root_pyproject = tomllib.loads(projects[0].read_text(encoding="utf-8"))
-    assert root_pyproject["dependency-groups"]["release"] == [
-        "build==1.5.0",
-        "hatchling==1.31.0",
-    ]
+    release_requirements = {
+        requirement.name: requirement
+        for raw_requirement in root_pyproject["dependency-groups"]["release"]
+        for requirement in (Requirement(raw_requirement),)
+    }
+    assert set(release_requirements) == {"build", "hatchling"}
+    assert release_requirements["build"].specifier == SpecifierSet("==1.5.0")
+
+    pinned_hatchling = list(release_requirements["hatchling"].specifier)
+    assert len(pinned_hatchling) == 1
+    assert pinned_hatchling[0].operator == "=="
+    assert pinned_hatchling[0].version in SpecifierSet(">=1.31,<2")
 
 
 def test_packaging_workflow_has_no_redundant_pip_install() -> None:
