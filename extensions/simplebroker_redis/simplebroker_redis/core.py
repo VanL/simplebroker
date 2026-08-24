@@ -24,7 +24,8 @@ from simplebroker._aliases import resolve_queue_operand
 from simplebroker._constants import (
     ALIAS_PREFIX,
     PEEK_BATCH_SIZE,
-    resolve_config,
+    _overlay_config,
+    snapshot_config,
 )
 from simplebroker._exceptions import (
     IntegrityError,
@@ -145,7 +146,7 @@ class RedisBrokerCore:
         stop_event: threading.Event | None = None,
     ) -> None:
         self._runner = runner
-        self._config = resolve_config(config)
+        self._config = snapshot_config(config)
         self._stop_event = stop_event or threading.Event()
         self._lock = threading.RLock()
         self._write_lock = _write_lock_registry.get(runner.target, runner.namespace)
@@ -708,7 +709,7 @@ class RedisBrokerCore:
                 row = rows[0]
                 yield row if with_timestamps else row[0]
             return
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
         effective_batch_size = (
             batch_size
             if batch_size is not None
@@ -1083,7 +1084,7 @@ class RedisBrokerCore:
                 row = rows[0]
                 yield row if with_timestamps else row[0]
             return
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
         effective_batch_size = (
             batch_size
             if batch_size is not None

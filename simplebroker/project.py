@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from ._backend_plugins import BackendPlugin, get_backend_plugin
-from ._constants import load_config, resolve_config
+from ._constants import ResolvedConfig, snapshot_config
 from ._paths import _find_project_database
 from ._project_config import (
     find_project_config,
@@ -18,8 +18,8 @@ from ._project_config import (
 from ._targets import BrokerTarget
 
 
-def _config_dict(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    return dict(load_config()) if config is None else resolve_config(config)
+def _config_snapshot(config: Mapping[str, Any] | None) -> ResolvedConfig:
+    return snapshot_config(config)
 
 
 def _root_from_relative_target(target_path: Path, relative_target: Path) -> Path:
@@ -117,7 +117,7 @@ def resolve_broker_target(
     is selected.
     """
 
-    config_dict = _config_dict(config)
+    config_dict = _config_snapshot(config)
     start_dir = (
         Path.cwd().resolve()
         if starting_dir is None
@@ -154,7 +154,7 @@ def target_for_directory(
     configured default sqlite target path is resolved relative to `directory`.
     """
 
-    config_dict = _config_dict(config)
+    config_dict = _config_snapshot(config)
     root = Path(directory).expanduser().resolve()
 
     config_path = project_config_path_for_directory(root, config=config_dict)

@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from simplebroker import commands
+from simplebroker import BrokerTarget, commands
 from simplebroker._constants import (
     _CONFIG_FIELDS,
     _ConfigField,
@@ -210,17 +210,17 @@ def test_cli_invalid_config_matrix_fails_before_target_creation(
     assert not target.exists()
 
 
-def test_captured_defaults_are_shared_and_public_resolution_stays_fresh() -> None:
+def test_public_snapshots_are_explicit_and_fresh_across_calls() -> None:
     code = """
 import os
-import simplebroker.commands as commands
-import simplebroker.db as db
-from simplebroker._constants import _resolve_config_input, resolve_config
-print(commands._config is db._config)
-print(_resolve_config_input(commands._config)["BROKER_BUSY_TIMEOUT"])
+from simplebroker import snapshot_config
+first = snapshot_config()
+print(first["BROKER_BUSY_TIMEOUT"])
 os.environ["BROKER_BUSY_TIMEOUT"] = "37"
-print(_resolve_config_input(commands._config)["BROKER_BUSY_TIMEOUT"])
-print(resolve_config()["BROKER_BUSY_TIMEOUT"])
+print(first["BROKER_BUSY_TIMEOUT"])
+second = snapshot_config()
+print(second["BROKER_BUSY_TIMEOUT"])
+print(first is second)
 """
     env = os.environ.copy()
     env["BROKER_BUSY_TIMEOUT"] = "19"
@@ -233,10 +233,39 @@ print(resolve_config()["BROKER_BUSY_TIMEOUT"])
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.splitlines() == ["True", "19", "19", "37"]
+    assert result.stdout.splitlines() == ["19", "19", "37", "False"]
 
 
-def test_module_scope_uses_capture_instead_of_strict_load() -> None:
+def test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from simplebroker import snapshot_config
+
+    monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "not-an-integer")
+    errors: list[InvalidConfigError] = []
+    traceback_shapes: list[list[str]] = []
+
+    for _ in range(2):
+        try:
+            snapshot_config()
+        except InvalidConfigError as error:
+            errors.append(error)
+            frames: list[str] = []
+            traceback = error.__traceback__
+            while traceback is not None:
+                frames.append(traceback.tb_frame.f_code.co_name)
+                traceback = traceback.tb_next
+            traceback_shapes.append(frames)
+
+    assert len(errors) == 2
+    assert errors[0] is not errors[1]
+    assert traceback_shapes[0] == traceback_shapes[1]
+
+    monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "23")
+    assert snapshot_config()["BROKER_BUSY_TIMEOUT"] == 23
+
+
+def test_config_consumers_do_not_resolve_ambient_config_at_module_scope() -> None:
     module_paths = [
         "simplebroker/_broker_session.py",
         "simplebroker/_paths.py",
@@ -244,8 +273,17 @@ def test_module_scope_uses_capture_instead_of_strict_load() -> None:
         "simplebroker/cli.py",
         "simplebroker/commands.py",
         "simplebroker/db.py",
+        "simplebroker/project.py",
         "simplebroker/sbqueue.py",
         "simplebroker/watcher.py",
+        "simplebroker/_dump.py",
+        "simplebroker/_project_config.py",
+        "simplebroker/_backends/sqlite/plugin.py",
+        "extensions/simplebroker_pg/simplebroker_pg/plugin.py",
+        "extensions/simplebroker_redis/simplebroker_redis/core.py",
+        "extensions/simplebroker_redis/simplebroker_redis/plugin.py",
+        "extensions/simplebroker_redis/simplebroker_redis/pool.py",
+        "extensions/simplebroker_redis/simplebroker_redis/runner.py",
     ]
     offenders: list[str] = []
     for relative_path in module_paths:
@@ -257,7 +295,7 @@ def test_module_scope_uses_capture_instead_of_strict_load() -> None:
             if (
                 isinstance(value, ast.Call)
                 and isinstance(value.func, ast.Name)
-                and value.func.id == "load_config"
+                and value.func.id in {"load_config", "snapshot_config"}
             ):
                 offenders.append(relative_path)
 
@@ -337,3 +375,34 @@ print(result)
     assert result.returncode == 0
     assert result.stdout == "1\n"
     assert "invalid message ID" in result.stderr
+
+
+def test_direct_target_init_does_not_translate_invalid_config_to_exit_code(
+    tmp_path: Path,
+) -> None:
+    target = BrokerTarget(
+        backend_name="sqlite",
+        target=str(tmp_path / "target-init.db"),
+        backend_options={},
+    )
+
+    with pytest.raises(InvalidConfigError):
+        commands.cmd_init(
+            target,
+            quiet=True,
+            config={"BROKER_BUSY_TIMEOUT": "not-an-integer"},
+        )
+
+
+def test_repeated_direct_command_calls_sample_current_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = str(tmp_path / "commands-snapshot.db")
+    monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "5")
+
+    with pytest.raises(ValueError, match="maximum size of 5 bytes"):
+        commands.cmd_write(target, "jobs", "123456")
+
+    monkeypatch.setenv("BROKER_MAX_MESSAGE_SIZE", "6")
+    assert commands.cmd_write(target, "jobs", "123456") == 0

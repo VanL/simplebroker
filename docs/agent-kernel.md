@@ -300,6 +300,11 @@ Normative public surfaces and packaging:
   input to `BROKER_*` and use `resolve_isolated_config()`. Preserve the returned
   `ResolvedConfig`; converting it to an ordinary dict restores ambient
   SimpleBroker inheritance.
+- If several handles should intentionally share the current ambient
+  SimpleBroker configuration, call `snapshot_config()` once and stamp that
+  receipt onto each handle. Without explicit reuse, each new public handle or
+  invocation samples at its own documented boundary; existing handles stay
+  fixed.
 - Construct all `Queue` / watcher / `open_broker` calls with that target and
   config. Do not re-walk cwd/project discovery on every hot-path call.
 - Shape (language-agnostic): hold `{target, config}` on a context/client

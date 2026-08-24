@@ -19,7 +19,7 @@ from typing import Any, cast
 import pytest
 
 import simplebroker._broker_session as broker_session_module
-from simplebroker import Queue
+from simplebroker import Queue, resolve_isolated_config
 from simplebroker._backend_plugins import BACKEND_ENTRY_POINT_GROUP
 from simplebroker._backends.sqlite.plugin import sqlite_backend_plugin
 from simplebroker._broker_session import (
@@ -324,7 +324,10 @@ def build_process_session(
     *,
     config: dict[str, Any] | None = None,
 ) -> _ProcessBrokerSession:
-    spec = _session_spec(db_path, {} if config is None else config)
+    spec = _session_spec(
+        db_path,
+        resolve_isolated_config({} if config is None else config),
+    )
     return _ProcessBrokerSession(_build_process_session_core_factory(spec))
 
 
@@ -444,6 +447,33 @@ def test_persistent_queues_different_config_do_not_share_backend_runner(
                 persistent=True,
                 config={"BROKER_BUSY_TIMEOUT": 2000},
             )
+        )
+        queue_a.write("one")
+        queue_b.write("two")
+
+    assert counting_backend.create_runner_calls == 2
+
+
+def test_opaque_extra_participates_in_process_session_identity(
+    tmp_path: Path,
+    counting_backend: CountingBackendPlugin,
+) -> None:
+    target = counting_target(tmp_path, schema="same")
+    config_a = resolve_isolated_config(
+        {"BROKER_EMBEDDER_METADATA": "a"},
+        preserve_unknown=True,
+    )
+    config_b = resolve_isolated_config(
+        {"BROKER_EMBEDDER_METADATA": "b"},
+        preserve_unknown=True,
+    )
+
+    with contextlib.ExitStack() as stack:
+        queue_a = stack.enter_context(
+            Queue("a", db_path=target, persistent=True, config=config_a)
+        )
+        queue_b = stack.enter_context(
+            Queue("b", db_path=target, persistent=True, config=config_b)
         )
         queue_a.write("one")
         queue_b.write("two")
@@ -838,9 +868,9 @@ def test_process_session_key_includes_pid(
     target = counting_target(tmp_path, schema="same")
 
     monkeypatch.setattr("simplebroker._broker_session.os.getpid", lambda: 1000)
-    parent_key = _session_key(target, {})
+    parent_key = _session_key(target, resolve_isolated_config({}))
     monkeypatch.setattr("simplebroker._broker_session.os.getpid", lambda: 1001)
-    child_key = _session_key(target, {})
+    child_key = _session_key(target, resolve_isolated_config({}))
 
     assert parent_key != child_key
 
@@ -977,6 +1007,7 @@ def test_registry_shutdown_closes_live_sessions_and_tolerates_late_release(
     registry = _ProcessBrokerSessionRegistry()
     key, session = registry.acquire(
         str(tmp_path / "registry.db"),
+        config=resolve_isolated_config({}),
         factory_builder=_build_process_session_core_factory,
     )
 
@@ -997,10 +1028,12 @@ def test_registry_builds_factory_only_for_new_session_key(tmp_path: Path) -> Non
 
     key_a, session_a = registry.acquire(
         str(tmp_path / "registry.db"),
+        config=resolve_isolated_config({}),
         factory_builder=build_factory,
     )
     key_b, session_b = registry.acquire(
         str(tmp_path / "registry.db"),
+        config=resolve_isolated_config({}),
         factory_builder=build_factory,
     )
 
@@ -1259,7 +1292,9 @@ def test_closed_factory_rejects_runner_creation(
         "simplebroker._broker_session._target_parts",
         lambda db_path: ("closed-factory", str(db_path), {}, plugin),
     )
-    factory = _build_process_session_core_factory(_session_spec("target", {}))
+    factory = _build_process_session_core_factory(
+        _session_spec("target", resolve_isolated_config({}))
+    )
     factory.close()
     factory.close()
 

@@ -12,6 +12,7 @@ from urllib.parse import quote
 from psycopg import ProgrammingError, conninfo
 
 from simplebroker._backend_plugins import ActivityWaiter, BackendPlugin
+from simplebroker._constants import snapshot_config
 from simplebroker._exceptions import DatabaseError
 from simplebroker._runner import (
     SQLRunner,
@@ -396,7 +397,7 @@ class PostgresBackendPlugin:
         backend_options: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> None:
-        del config
+        resolved_config = snapshot_config(config)
         inspection = inspect_schema(target, backend_options=backend_options)
         if inspection.state not in {SchemaState.ABSENT, SchemaState.OWNED}:
             raise DatabaseError(
@@ -404,12 +405,20 @@ class PostgresBackendPlugin:
                 f"{inspection.state.value}"
             )
 
-        runner = self.create_runner(target, backend_options=backend_options)
+        runner = self.create_runner(
+            target,
+            backend_options=backend_options,
+            config=resolved_config,
+        )
         core: Any | None = None
         try:
             from simplebroker.db import BrokerCore
 
-            core = BrokerCore(runner, backend_plugin=cast(BackendPlugin, self))
+            core = BrokerCore(
+                runner,
+                backend_plugin=cast(BackendPlugin, self),
+                config=resolved_config,
+            )
         finally:
             if core is not None:
                 core.shutdown()

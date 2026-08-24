@@ -19,12 +19,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Literal, Protocol, Self, cast
 
-from ._backends import get_configured_backend
+from ._backends import get_backend
 from ._constants import (
     SCHEMA_VERSION,
     ConnectionPhase,
-    _capture_config,
-    resolve_config,
+    snapshot_config,
 )
 from ._exceptions import (
     BrokerError,
@@ -47,8 +46,6 @@ from ._retry_policy import (
     setup_busy_timeout_ms,
 )
 
-# Load config once at module level
-_config = _capture_config()
 logger = logging.getLogger(__name__)
 
 # Connections inherited across a fork are abandoned here (never closed): see
@@ -217,8 +214,8 @@ class SQLiteRunner:
     ) -> None:
         self.instance_id = next(self._instance_counter)
         self._db_path = db_path
-        self._config = resolve_config(config)
-        self._backend = get_configured_backend(self._config)
+        self._config = snapshot_config(config)
+        self._backend = get_backend()
         self._thread_local = threading.local()
         # Store PID to detect fork
         self._pid = os.getpid()
@@ -374,7 +371,7 @@ class SQLiteRunner:
         """Apply per-connection settings that don't require exclusive locks."""
         self._backend.apply_connection_settings(
             conn,
-            config=dict(self._config),
+            config=self._config,
             optimization_complete=SetupPhase.OPTIMIZATION in self._completed_phases,
         )
         if SetupPhase.OPTIMIZATION in self._completed_phases:
@@ -393,7 +390,7 @@ class SQLiteRunner:
         execute_setup_with_retry(
             lambda: self._backend.setup_connection_phase(
                 self._db_path,
-                config=dict(self._config),
+                config=self._config,
                 busy_timeout_ms=setup_busy_timeout_ms(self._config),
             ),
             phase=str(SetupPhase.CONNECTION.value),
@@ -411,7 +408,7 @@ class SQLiteRunner:
 
     def _apply_optimization_settings(self, conn: sqlite3.Connection) -> None:
         """Apply optimization settings to a connection."""
-        self._backend.apply_optimization_settings(conn, config=dict(self._config))
+        self._backend.apply_optimization_settings(conn, config=self._config)
 
     @contextlib.contextmanager
     def _setup_operation_context(self) -> Iterator[None]:

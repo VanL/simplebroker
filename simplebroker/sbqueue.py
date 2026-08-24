@@ -24,8 +24,8 @@ from ._backend_plugins import (
 from ._constants import (
     DEFAULT_DB_NAME,
     PEEK_BATCH_SIZE,
-    _capture_config,
-    resolve_config,
+    ResolvedConfig,
+    snapshot_config,
 )
 from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
 from ._exceptions import QueueNameError
@@ -40,9 +40,6 @@ from .metadata import QueueStats
 from .project import target_for_directory
 
 logger = logging.getLogger(__name__)
-
-# Load configuration once at module level
-_config = _capture_config()
 
 
 class MovedMessage(TypedDict):
@@ -211,7 +208,7 @@ class Queue:
         self.name = name
         self._persistent = persistent
         self._runner = runner
-        self._config = resolve_config(config)
+        self._config = snapshot_config(config)
         self._uses_config_default_target = db_path is None or db_path == ""
         if self._uses_config_default_target:
             resolved_db_path: str | BrokerTarget = _default_target_from_config(
@@ -1915,12 +1912,10 @@ class Queue:
 
         def cleanup(
             conn: DBConnection | None,
-            config: Mapping[str, Any] | None,
+            config: ResolvedConfig,
             watcher_conn_attr: str,
         ) -> None:
             """Cleanup function called by finalizer."""
-            if config is None:
-                config = _config
             try:
                 if conn:
                     conn.close()

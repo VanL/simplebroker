@@ -12,8 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added public `resolve_isolated_config()` and immutable `ResolvedConfig` for
   embedders that need a complete configuration independent of ambient
   `BROKER_*`. The marker remains ambient-free through Queue, project, watcher,
-  runner, broker, and dump/load configuration boundaries. Ordinary mappings
-  retain their existing environment-base and unknown-key compatibility.
+  runner, broker, and dump/load configuration boundaries. `ResolvedConfig`
+  guarantees all canonical keys and can carry opaque extra keys;
+  `resolve_isolated_config()` remains strict by default and adds
+  `preserve_unknown=True` as an explicit extension-key opt-in.
+- Added package-root `snapshot_config()` so applications can capture the
+  current ambient configuration once and reuse the same `ResolvedConfig`
+  across handles.
 - Added package-root `MovedMessage`, a `TypedDict` for the existing ordinary
   dictionaries returned by high-level `Queue.move()`. Literal-sensitive
   overloads now narrow read, peek, and move results without changing runtime
@@ -21,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Configuration now snapshots at each public handle or invocation boundary
+  instead of package import. New Queue, watcher, broker, discovery, load,
+  command, CLI, and direct-runner calls can observe intentional environment
+  changes between calls; existing handles and active operations retain their
+  original snapshot through lazy session and backend creation. This timing
+  change is compatibility-relevant for long-running API users.
 - Bare `Queue.delete()` remains the intentional queue-wide physical delete,
   while explicit `Queue.delete(message_id=None)` now raises `TypeError` before
   mutation. An unhandled `KeyboardInterrupt` reaching the outer CLI wrapper

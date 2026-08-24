@@ -22,6 +22,7 @@ from simplebroker import (
     load_lines,
     open_broker,
     project,
+    snapshot_config,
 )
 from simplebroker._exceptions import QueueNameError
 
@@ -96,6 +97,12 @@ def test_api_public_message_id_formatter_contract() -> None:
     assert "format_message_id" not in ext.__all__
 
 
+def test_api_snapshot_factory_is_package_root_public() -> None:
+    assert "snapshot_config" in simplebroker.__all__
+    assert simplebroker.snapshot_config is snapshot_config
+    assert "snapshot_config" not in ext.__all__
+
+
 def test_api_moved_message_is_package_root_public() -> None:
     assert "MovedMessage" in simplebroker.__all__
     assert simplebroker.MovedMessage.__required_keys__ == {"message", "timestamp"}
@@ -112,7 +119,7 @@ def test_api_queue_rejects_alias_sigil_before_config_or_target_setup(
     def config_setup_must_not_run(_config: object) -> object:
         raise AssertionError("invalid queue reached config/target setup")
 
-    monkeypatch.setattr(sbqueue_module, "resolve_config", config_setup_must_not_run)
+    monkeypatch.setattr(sbqueue_module, "snapshot_config", config_setup_must_not_run)
     with pytest.raises(QueueNameError):
         Queue("@alias", persistent=True)
 
@@ -159,11 +166,14 @@ def test_api_queue_lifecycle_and_library_shape_language() -> None:
 
 
 def test_api_generators_watchers_sidecar_io_errors_language() -> None:
-    assert "generator" in _section("SB-API-5").lower()
+    generators = _section("SB-API-5")
+    assert "generator" in generators.lower()
+    assert "first iterated" in generators.lower()
     watch = _section("SB-API-6")
     assert "QueueWatcher" in watch
     assert "BaseWatcher" in watch
     assert "PollingStrategy" in watch
+    assert "existing `Queue`" in watch
     sidecar = _section("SB-API-7")
     assert "SidecarSession" in sidecar
     assert "RESERVED_TABLE_NAMES" in sidecar
@@ -176,7 +186,8 @@ def test_api_generators_watchers_sidecar_io_errors_language() -> None:
     assert "message text" in errors.lower() or "not a frozen" in errors.lower()
     assert "InvalidConfigError" in errors
     assert "ValueError" in errors
-    assert "successful process snapshots remain fixed" in errors.lower()
+    config = _section("SB-API-2")
+    assert "lower layers and later lazy resource" in config.lower()
 
 
 def test_api_activity_waiter_terminal_close_contract() -> None:

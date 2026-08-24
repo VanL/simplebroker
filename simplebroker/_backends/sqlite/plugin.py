@@ -202,10 +202,10 @@ class SQLiteBackendPlugin:
         backend_options: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> None:
-        del backend_options, config
+        del backend_options
         from ...db import BrokerDB
 
-        with BrokerDB(target):
+        with BrokerDB(target, config=config):
             pass
 
     def validate_target(
@@ -268,14 +268,14 @@ class SQLiteBackendPlugin:
     ) -> None:
         apply_connection_settings(
             conn,
-            config=dict(config),
+            config=config,
             optimization_complete=optimization_complete,
         )
 
     def apply_optimization_settings(
         self, conn: Any, *, config: Mapping[str, Any]
     ) -> None:
-        apply_optimization_settings(conn, config=dict(config))
+        apply_optimization_settings(conn, config=config)
 
     def setup_connection_phase(
         self,
@@ -285,7 +285,7 @@ class SQLiteBackendPlugin:
         config: Mapping[str, Any],
     ) -> None:
         del backend_options
-        setup_connection_phase(target, config=dict(config))
+        setup_connection_phase(target, config=config)
 
     def initialize_database(
         self,
@@ -483,7 +483,7 @@ class SQLiteBackendPlugin:
         compact: bool,
         config: Mapping[str, Any],
     ) -> None:
-        vacuum(runner, compact=compact, config=dict(config))
+        vacuum(runner, compact=compact, config=config)
 
     def create_activity_waiter(
         self,

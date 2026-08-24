@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import warnings
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -50,7 +51,7 @@ def check_version() -> None:
 def apply_connection_settings(
     conn: sqlite3.Connection,
     *,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
     optimization_complete: bool = False,
 ) -> None:
     """Apply per-connection SQLite settings that do not require exclusive locks."""
@@ -72,7 +73,7 @@ def apply_connection_settings(
 
 
 def apply_optimization_settings(
-    conn: sqlite3.Connection, *, config: dict[str, Any]
+    conn: sqlite3.Connection, *, config: Mapping[str, Any]
 ) -> None:
     """Apply SQLite performance tuning settings to a connection."""
     cache_mb = config["BROKER_CACHE_MB"]
@@ -92,7 +93,7 @@ def apply_optimization_settings(
 def setup_connection_phase(
     db_path: str,
     *,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
     busy_timeout_ms: int | None = None,
 ) -> None:
     """Validate and initialize SQLite connection-wide setup such as WAL mode."""

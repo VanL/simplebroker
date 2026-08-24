@@ -2,7 +2,6 @@
 
 import json
 import logging
-from unittest.mock import patch
 
 import pytest
 
@@ -149,13 +148,9 @@ class TestDefaultErrorHandler:
         for i, record in enumerate(caplog.records):
             assert f"Handler error: {exceptions[i]}" in record.getMessage()
 
-    def test_default_error_handler_ignores_broker_config(self, caplog):
-        """Test that default_error_handler always logs regardless of config."""
-        # Test with BROKER_LOGGING_ENABLED = False
-        with (
-            patch("simplebroker.watcher._config", {"BROKER_LOGGING_ENABLED": False}),
-            caplog.at_level(logging.ERROR, logger="simplebroker.watcher"),
-        ):
+    def test_default_error_handler_has_no_broker_config_dependency(self, caplog):
+        """Test that default_error_handler always logs without broker config."""
+        with caplog.at_level(logging.ERROR, logger="simplebroker.watcher"):
             exc = ValueError("Should still be logged")
             result = default_error_handler(exc, "test", 7777777777)
 

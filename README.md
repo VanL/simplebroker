@@ -820,7 +820,11 @@ front of SimpleBroker: resolve the broker target once, translate your
 application’s settings into `BROKER_*` keys, and hand out queues bound to
 that target. Use `resolve_isolated_config()` and preserve its immutable
 `ResolvedConfig` result when ambient `BROKER_*` must not affect the embedding
-application. Weft is the reference implementation of the client shape.
+application. Use `snapshot_config()` when several handles should deliberately
+share one ambient-derived configuration receipt. New handles otherwise sample
+current ambient configuration at their documented construction or invocation
+boundary; existing handles remain fixed. Weft is the reference implementation
+of the client shape.
 
 The full pattern — client shape, configuration snapshots, redaction rules,
 and the `simplebroker.commands` command layer (`[SB-API-10]`, the

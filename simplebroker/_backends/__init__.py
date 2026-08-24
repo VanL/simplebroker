@@ -10,7 +10,6 @@ from typing import Any, Protocol, cast
 from . import sqlite
 
 DEFAULT_BACKEND = "sqlite"
-_INTERNAL_BACKEND_KEY = "_BROKER_INTERNAL_BACKEND"
 
 
 class BuiltinBackend(Protocol):
@@ -26,19 +25,19 @@ class BuiltinBackend(Protocol):
         self,
         conn: sqlite3.Connection,
         *,
-        config: dict[str, Any],
+        config: Mapping[str, Any],
         optimization_complete: bool = False,
     ) -> None: ...
 
     def apply_optimization_settings(
-        self, conn: sqlite3.Connection, *, config: dict[str, Any]
+        self, conn: sqlite3.Connection, *, config: Mapping[str, Any]
     ) -> None: ...
 
     def setup_connection_phase(
         self,
         db_path: str,
         *,
-        config: dict[str, Any],
+        config: Mapping[str, Any],
         busy_timeout_ms: int | None = None,
     ) -> None: ...
 
@@ -56,16 +55,9 @@ def get_backend(name: str = DEFAULT_BACKEND) -> BuiltinBackend:
         raise RuntimeError(f"Unsupported built-in backend: {name}") from exc
 
 
-def get_configured_backend(config: Mapping[str, object]) -> BuiltinBackend:
-    """Return the configured built-in backend, defaulting to SQLite."""
-    name = str(config.get(_INTERNAL_BACKEND_KEY, DEFAULT_BACKEND))
-    return get_backend(name)
-
-
 __all__ = [
     "DEFAULT_BACKEND",
     "BuiltinBackend",
     "get_backend",
-    "get_configured_backend",
     "sqlite",
 ]

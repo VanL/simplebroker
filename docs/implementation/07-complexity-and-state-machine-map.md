@@ -183,33 +183,37 @@ failure or cleanup order.
 | setup idle-budget test (11) | test (6) | Shared setup runner, plugin, and minimal-core fixtures without mocking the budget owner. |
 | managed subprocess context (24) | `managed_subprocess` (7) | `ManagedProcess.close` is the one idempotent escalation and reader-cleanup owner. |
 
-Configuration failure has one deep private seam in `_constants.py`.
-`load_config()` remains the strict fresh environment parser and
-`resolve_config()` remains environment-base plus typed overrides. Module
-defaults share one immutable `_CapturedConfig`: success retains a fixed mapping
-copy; failure retains one `InvalidConfigError` without usable fallback values.
-`_resolve_config_input()` unwraps only that trusted capture and delegates every
-ordinary mapping to public resolution. This prevents import-time tracebacks
-without creating a second parser or allowing work under invented defaults.
+Configuration has one deep resolution seam in `_constants.py`.
+`load_config()` is the strict fresh environment parser; `resolve_config()` is
+the compatible environment-base resolver for ordinary mappings. Public
+ownership boundaries convert those results to the sole lower-layer carrier,
+`ResolvedConfig`, through `snapshot_config()`. There is no import-time config
+object or cached exception. Each invalid fresh sample therefore raises a new
+`InvalidConfigError`, while import remains safe and `cli.main()` remains the
+sole process-level translator to the one-line exit-1 diagnostic.
 
-The capture itself has no backend side effect. `_paths.py` resolves its built-in
-backend at each validation call, while each `SQLiteRunner` resolves and owns
-its backend after valid config is available. `cli.main()` is the sole process
-translator for `InvalidConfigError`; direct library and command paths retain
-the typed exception when they consume configuration.
+`ResolvedConfig` guarantees every canonical key with the existing
+normalization and validation. It also preserves additional keys as opaque
+extension data. Its top-level bindings are copied and read-only; nested opaque
+values remain extension-owned. Exact marker receipts preserve identity.
+`resolve_isolated_config()` uses the same canonical schema without ambient
+input and rejects extras by default for fail-closed embedders; its explicit
+`preserve_unknown=True` mode opts into opaque pass-through. `_overlay_config()`
+is the ambient-free operation-local overlay for a handle that already owns a
+marker.
 
-The additive embedding path stays in that same seam.
-`resolve_isolated_config()` starts from `_CONFIG_FIELDS` defaults, applies the
-same normalizers and validators without reading the environment, rejects
-unknown keys, and returns an immutable public `ResolvedConfig`. The public
-resolver recognizes that nominal marker and revalidates it ambient-free on
-every lower-layer receipt. Queue, project, watcher, runner, broker-session, and
-dump/load paths therefore keep one self-contained configuration snapshot even
-though their established flow resolves config more than once. Ordinary
-mappings remain environment-based for compatibility. Project TOML resolution
-may take a mutable copy only after marker-aware revalidation, and process
-sessions preserve the marker until backend-terminal code no longer resolves
-configuration.
+Queue, discovery, command, CLI, watcher, load, broker-context, and direct
+runner seams sample once at their published ownership event. They pass the
+same marker through target selection, `DBConnection`, process-session keys and
+factories, `BrokerCore`, first-party backend plugins, runners, and cleanup.
+Lazy resource acquisition is not a second configuration time. A watcher given
+an existing Queue adopts the Queue marker unless explicit watcher config
+overlays or replaces watcher-local policy; the Queue still operates under its
+own marker. Transactional generator overrides are frozen when the
+configuration-consuming generator body first runs. `_paths.py` resolves its
+fixed built-in backend at validation time; opaque extras cannot select a core
+backend. Process sessions include the complete marker in identity, so opaque
+extras can separate resource sessions without becoming canonical core options.
 | two diagnostic race tests (19, 11) | deleted | Stronger production-path transition and concurrency tests made the diagnostic-only assertions redundant. |
 
 Redis broadcast also improved from 36 to 28 through named selector, patterned

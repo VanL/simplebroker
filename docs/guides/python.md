@@ -849,12 +849,23 @@ selected values into canonical `BROKER_*` keys and pass them through
 `resolve_isolated_config()`. Preserve the returned `ResolvedConfig` marker
 through every lower-layer call; converting it to an ordinary dict restores the
 normal ambient-base behavior. Use `resolve_config()` when inheriting ambient
-SimpleBroker configuration is intentional. Avoid importing
+SimpleBroker configuration is intentional. Use `snapshot_config()` when
+several handles should share one explicit ambient-derived receipt. The isolated
+factory rejects unknown keys by default; `preserve_unknown=True` opts into
+opaque extension keys while keeping every canonical key normalized and
+validated. Avoid importing
 `simplebroker._constants` or guessing database paths.
 
 Configuration passed to a Queue, watcher, or broker is normalized and retained
 as that instance's snapshot. Operational methods use the snapshot unless an
-existing explicit per-call generator config is supplied. Target and Queue
+existing explicit per-call generator config is supplied. An ordinary
+transactional-generator override is frozen when the `at_least_once` generator
+is first iterated. A watcher given an existing Queue inherits that Queue's
+snapshot unless explicit watcher config overlays or replaces it. New handles
+may observe later environment changes; existing handles do not. Explicit
+watcher config changes watcher-local policy, not the supplied Queue's retained
+operation config. Do not mutate
+`os.environ` concurrently as a reconfiguration mechanism. Target and Queue
 representations, plus cross-target errors, redact connection passwords and all
 backend-option values. `serialize_broker_target()` is different: it is a
 lossless process-transport payload, may contain credentials, and must not be

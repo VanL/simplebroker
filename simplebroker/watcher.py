@@ -77,9 +77,8 @@ from typing import TYPE_CHECKING, Any, NamedTuple, Self, cast
 
 from ._constants import (
     MAX_TOTAL_RETRY_TIME,
-    _capture_config,
-    _resolve_config_input,
-    resolve_config,
+    _overlay_config,
+    snapshot_config,
 )
 from ._exceptions import OperationalError, StopException
 from ._message_id import format_message_id
@@ -104,8 +103,6 @@ __all__ = [
     "logger_handler",
     "simple_print_handler",
 ]
-
-_config = _capture_config()
 
 
 # Default message handlers for common use cases
@@ -286,7 +283,7 @@ class BaseWatcher(ABC):
         db: BrokerDB | str | Path | BrokerTarget | None = None,
         stop_event: threading.Event | None = None,
         polling_strategy: PollingStrategy | None = None,
-        config: Mapping[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
     ) -> None:
         """Initialize base watcher.
 
@@ -301,9 +298,9 @@ class BaseWatcher(ABC):
         # Handle queue parameter - either Queue object or string name
         if isinstance(queue, Queue):
             self._queue_obj = queue
-            resolved_config = _resolve_config_input(config)
+            resolved_config = _overlay_config(queue._config, config)
         else:
-            resolved_config = _resolve_config_input(config)
+            resolved_config = snapshot_config(config)
             # Create Queue object with persistent=True by default for watchers.
             # ``None`` means Queue should resolve the target from config.
             db_path: str | BrokerTarget | None
@@ -380,9 +377,10 @@ class BaseWatcher(ABC):
         """Create the default polling strategy for this watcher.
 
         This method provides the default PollingStrategy configuration
-        using environment-based settings. Subclasses can override this
-        method to customize default behavior while preserving the ability
-        to inject custom strategies via the polling_strategy parameter.
+        using the watcher's retained configuration snapshot. Subclasses can
+        override this method to customize default behavior while preserving
+        the ability to inject custom strategies via the polling_strategy
+        parameter.
 
         Override Examples:
             class HighVolumeWatcher(QueueWatcher):
@@ -397,7 +395,7 @@ class BaseWatcher(ABC):
                     )
 
         Returns:
-            PollingStrategy: Configured with environment settings from:
+            PollingStrategy: Configured with retained settings for:
                 - BROKER_INITIAL_CHECKS (default: 100)
                 - BROKER_MAX_INTERVAL (default: 0.1)
                 - BROKER_BURST_SLEEP (default: 0.0002)
@@ -405,9 +403,9 @@ class BaseWatcher(ABC):
 
         See Also:
             PollingStrategy: For parameter details
-            load_config(): For environment variable handling
+            snapshot_config(): For configuration snapshot ownership
         """
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
         return PollingStrategy(
             stop_event=self._stop_event,
             initial_checks=effective_config["BROKER_INITIAL_CHECKS"],
@@ -485,7 +483,7 @@ class BaseWatcher(ABC):
             StopWatching: If stop requested during retry
 
         """
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
         max_retries = 5
 
         def _attempt() -> Any:
@@ -543,7 +541,7 @@ class BaseWatcher(ABC):
         if isinstance(e, (StopWatching, StopException)):
             raise StopWatching from e
 
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
         stop_requested = False
         try:
             result = error_handler(e, message, timestamp)
@@ -879,7 +877,7 @@ class BaseWatcher(ABC):
         Returns:
             True only when the message handler returns normally.
         """
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
         if not hasattr(self, "_handler") or self._handler is None:
             return False
         try:
@@ -938,7 +936,7 @@ class BaseWatcher(ABC):
             If the message exceeds the size limit, it will be truncated for error reporting
             but the original oversized message will be discarded.
         """
-        resolved_config = self._config if config is None else resolve_config(config)
+        resolved_config = _overlay_config(self._config, config)
         max_message_size = int(resolved_config["BROKER_MAX_MESSAGE_SIZE"])
 
         # Validate message size.
@@ -1058,7 +1056,7 @@ class BaseWatcher(ABC):
         config: Mapping[str, Any] | None = None,
     ) -> None:
         """Exit context manager - stop and clean up."""
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
         try:
             self.stop()
         except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
@@ -1507,7 +1505,7 @@ class QueueWatcher(BaseWatcher):
         batch_processing: bool = False,
         polling_strategy: PollingStrategy | None = None,
         error_handler: ErrorHandler = _DEFAULT_ERROR_HANDLER,
-        config: Mapping[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
     ) -> None:
         """Initialize the QueueWatcher.
 
@@ -1802,7 +1800,7 @@ class QueueMoveWatcher(BaseWatcher):
         max_messages: int | None = None,
         polling_strategy: PollingStrategy | None = None,
         error_handler: ErrorHandler = _DEFAULT_ERROR_HANDLER,
-        config: Mapping[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
     ) -> None:
         """Initialize a QueueMoveWatcher.
 

@@ -173,6 +173,54 @@ def test_initialize_target_closes_runner_when_core_construction_fails(
     assert close_runner.close_calls == 1
 
 
+def test_initialize_target_passes_one_config_snapshot_to_runner_and_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from simplebroker import snapshot_config
+
+    class Runner:
+        pass
+
+    marker = snapshot_config({"EXTENSION_RECEIPT": "kept"})
+    runner = Runner()
+    runner_config: list[object] = []
+    core_config: list[object] = []
+
+    monkeypatch.setattr(
+        pg_plugin_module,
+        "inspect_schema",
+        lambda *args, **kwargs: SchemaInspection(
+            schema="broker_data",
+            state=SchemaState.ABSENT,
+            objects=frozenset(),
+        ),
+    )
+    plugin = PostgresBackendPlugin()
+
+    def create_runner(*args: object, **kwargs: object) -> object:
+        runner_config.append(kwargs.get("config"))
+        return runner
+
+    class Core:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            core_config.append(kwargs.get("config"))
+
+        def shutdown(self) -> None:
+            return None
+
+    monkeypatch.setattr(plugin, "create_runner", create_runner)
+    monkeypatch.setattr(db_module, "BrokerCore", Core)
+
+    plugin.initialize_target(
+        "postgresql://example/test",
+        backend_options={"schema": "broker_data"},
+        config=marker,
+    )
+
+    assert runner_config == [marker]
+    assert core_config == [marker]
+
+
 def test_prepare_queue_operation_locks_unknown_operation_by_queue() -> None:
     runner = RecordingRunner()
 

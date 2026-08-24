@@ -12,11 +12,10 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 from ._backend_plugins import BackendPlugin, BrokerConnection, get_backend_plugin
-from ._constants import ResolvedConfig, _capture_config, _resolve_config_input
+from ._constants import ResolvedConfig
 from ._key_material import FrozenValue, freeze_key_material
 from ._targets import BrokerTarget
 
-_config = _capture_config()
 _CLOSE_ACTIVE_OPERATION_TIMEOUT = 5.0
 
 
@@ -35,7 +34,7 @@ class _SessionSpec:
     backend_name: str
     target: str
     backend_options: Mapping[str, Any]
-    config: Mapping[str, Any]
+    config: ResolvedConfig
     backend_plugin: BackendPlugin
 
 
@@ -90,33 +89,28 @@ def _target_parts(
     )
 
 
-def _session_key(db_path: str | BrokerTarget, config: Mapping[str, Any]) -> _SessionKey:
+def _session_key(db_path: str | BrokerTarget, config: ResolvedConfig) -> _SessionKey:
     return _session_spec(db_path, config).key
 
 
 def _session_spec(
     db_path: str | BrokerTarget,
-    config: Mapping[str, Any],
+    config: ResolvedConfig,
 ) -> _SessionSpec:
     backend_name, target, backend_options, backend_plugin = _target_parts(db_path)
-    resolved_config = _resolve_config_input(config)
     key = _SessionKey(
         pid=os.getpid(),
         backend_name=backend_name,
         target=target,
         backend_options=freeze_key_material(backend_options),
-        config=freeze_key_material(resolved_config),
+        config=freeze_key_material(config),
     )
     return _SessionSpec(
         key=key,
         backend_name=backend_name,
         target=target,
         backend_options=dict(backend_options),
-        config=(
-            resolved_config
-            if isinstance(resolved_config, ResolvedConfig)
-            else dict(resolved_config)
-        ),
+        config=config,
         backend_plugin=backend_plugin,
     )
 
@@ -280,7 +274,7 @@ class _ProcessBrokerSessionRegistry:
         self,
         db_path: str | BrokerTarget,
         *,
-        config: Mapping[str, Any] = _config,
+        config: ResolvedConfig,
         factory_builder: _SessionCoreFactoryBuilder,
     ) -> tuple[_SessionKey, _ProcessBrokerSession]:
         spec = _session_spec(db_path, config)
@@ -324,7 +318,7 @@ _registry = _ProcessBrokerSessionRegistry()
 def acquire_process_broker_session(
     db_path: str | BrokerTarget,
     *,
-    config: Mapping[str, Any] = _config,
+    config: ResolvedConfig,
     factory_builder: _SessionCoreFactoryBuilder,
 ) -> tuple[_SessionKey, _ProcessBrokerSession]:
     return _registry.acquire(

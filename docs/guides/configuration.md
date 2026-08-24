@@ -25,19 +25,32 @@ broker target. The CLI reports the key, a safe rejected-value display, and the
 expected form on stderr, then exits `1`; passwords and full backend targets are
 redacted. It does not substitute defaults after a fatal config error.
 
-`load_config()` and `resolve_config()` remain fresh strict reads of the current
-environment. Long-lived module/handle defaults use one immutable process
-snapshot. `resolve_config(overrides)` still starts from the environment base,
-so an override mapping is not a complete-config bypass for invalid ambient
-state.
+`load_config()` and `resolve_config()` are fresh strict reads of the current
+environment. Public handles and operations take one immutable `ResolvedConfig`
+snapshot at their documented construction or invocation boundary. A later new
+Queue or command can therefore observe an intentional environment change; an
+existing Queue, watcher, broker, runner, or active operation stays fixed.
+`resolve_config(overrides)` still starts from the current environment base, so
+an ordinary override mapping is not a bypass for invalid ambient state.
 
-Embedders that own a separate configuration namespace should instead call
-`resolve_isolated_config(overrides)`. It starts from the same 32 canonical
-defaults without reading ambient `BROKER_*`, rejects unknown keys, and returns
-an immutable complete `ResolvedConfig`. Preserve that object when passing
-configuration to Queue, project discovery, watchers, runners, brokers, or
-dump/load. Converting it to `dict` deliberately discards the isolation marker;
-an ordinary mapping keeps the environment-base behavior above.
+Call `snapshot_config()` to capture the current ambient configuration once and
+reuse the same receipt across several handles. This is the explicit way to get
+process-wide consistency. Do not use concurrent `os.environ` mutation as a
+dynamic control plane; construct and pass a snapshot instead.
+
+Embedders that own a separate configuration namespace should call
+`resolve_isolated_config(overrides)`. It starts from the 32 canonical defaults
+without reading ambient `BROKER_*`, rejects unknown keys by default, and returns
+a complete `ResolvedConfig`. Set `preserve_unknown=True` only when extension
+keys must pass through opaquely. Every `ResolvedConfig` has all canonical keys;
+known values are normalized and validated, and extra top-level bindings are
+copied and read-only. Values stored under extra keys are extension-owned and
+are not recursively copied or frozen. On permissive paths, a misspelled
+canonical-looking key is preserved but has no canonical effect; use the
+isolated factory's strict default when typo detection matters. Preserve the
+marker when passing config to Queue, discovery, watchers, runners, brokers, or
+load. Converting it to
+`dict` discards the no-ambient-reread guarantee at the next public seam.
 
 ## Environment variables
 
@@ -166,8 +179,9 @@ because SimpleBroker is also embedded by larger tools. Most users should never
 touch most of them. Embedders such as Weft translate their own namespace into
 those keys. Use `resolve_isolated_config()` for a complete app-owned mapping,
 or `resolve_config()` when omitted values should deliberately inherit ambient
-SimpleBroker configuration. This keeps translation mechanical instead of
-one-off.
+SimpleBroker configuration. Use `snapshot_config()` when several handles
+should share one ambient-derived receipt. This keeps translation mechanical
+instead of one-off.
 
 **Why is `BROKER_SYNC_MODE=FULL` the default?** The default favors durability
 over benchmark numbers. `NORMAL` may improve write throughput, but it changes

@@ -13,9 +13,10 @@ from ._backend_plugins import get_backend_plugin
 from ._constants import (
     DEFAULT_PROJECT_CONFIG_NAME,
     MAX_PROJECT_TRAVERSAL_DEPTH,
+    ResolvedConfig,
+    _overlay_config,
     _validate_safe_path_components,
-    load_config,
-    resolve_config,
+    snapshot_config,
 )
 from ._targets import BrokerTarget, _backend_target_has_password
 
@@ -104,8 +105,8 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
     }
 
 
-def _config_dict(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    return dict(load_config()) if config is None else resolve_config(config)
+def _config_snapshot(config: Mapping[str, Any] | None) -> ResolvedConfig:
+    return snapshot_config(config)
 
 
 def project_config_path_for_directory(
@@ -115,7 +116,7 @@ def project_config_path_for_directory(
 ) -> Path:
     """Return the configured project config path rooted at a directory."""
 
-    config_dict = _config_dict(config)
+    config_dict = _config_snapshot(config)
     config_path_prefix = str(config_dict.get("BROKER_PROJECT_CONFIG_PATH", ""))
     config_name = str(
         config_dict.get("BROKER_PROJECT_CONFIG_NAME", PROJECT_CONFIG_FILENAME)
@@ -138,7 +139,7 @@ def find_project_config(
     max_depth: int = MAX_PROJECT_TRAVERSAL_DEPTH,
 ) -> Path | None:
     """Search upward for the configured project TOML file."""
-    config_dict = _config_dict(config)
+    config_dict = _config_snapshot(config)
     config_path_prefix = str(config_dict.get("BROKER_PROJECT_CONFIG_PATH", ""))
 
     if config_path_prefix and Path(config_path_prefix).expanduser().is_absolute():
@@ -187,12 +188,12 @@ def resolve_project_target(
         )
         target = str(resolved_target)
     else:
-        config_dict = (
-            dict(load_config()) if config is None else dict(resolve_config(config))
+        config_dict = _overlay_config(
+            snapshot_config(config),
+            {"BROKER_BACKEND_TARGET": ""},
         )
         # Project config owns the target. Backends receive it through the TOML
         # arguments rather than through ambient BROKER_BACKEND_TARGET.
-        config_dict["BROKER_BACKEND_TARGET"] = ""
         resolved = plugin.init_backend(
             config_dict,
             toml_target=target,

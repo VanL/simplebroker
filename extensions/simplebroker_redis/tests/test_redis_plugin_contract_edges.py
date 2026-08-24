@@ -11,8 +11,10 @@ from typing import Any
 import pytest
 import simplebroker_redis.plugin as redis_plugin_module
 from simplebroker_redis.plugin import RedisBackendPlugin
+from simplebroker_redis.runner import RedisRunner
 from simplebroker_redis.validation import NamespaceInspection, NamespaceState
 
+from simplebroker import snapshot_config
 from simplebroker._exceptions import DatabaseError, OperationalError
 
 pytestmark = [pytest.mark.redis_only]
@@ -85,6 +87,98 @@ def test_database_and_namespace_defaults_keep_legacy_config_compatible() -> None
         )
         == "tenant"
     )
+
+
+def test_plugin_runner_receipt_keeps_marker_out_of_redundant_config_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class RecordingRunner:
+        def __init__(self, target: str, **kwargs: Any) -> None:
+            captured["target"] = target
+            captured.update(kwargs)
+
+    monkeypatch.setattr(redis_plugin_module, "RedisRunner", RecordingRunner)
+    config = snapshot_config({"BROKER_BUSY_TIMEOUT": 1250})
+
+    RedisBackendPlugin().create_runner(
+        "redis://example/0",
+        backend_options={"namespace": "tenant"},
+        config=config,
+    )
+
+    assert captured["pool_options"].timeout == 1.25
+    assert "config" not in captured
+
+
+def test_direct_runner_snapshots_environment_when_pool_options_are_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "1250")
+    runner = RedisRunner("redis://example/0", namespace="tenant")
+    monkeypatch.setenv("BROKER_BUSY_TIMEOUT", "9750")
+
+    assert runner.pool_options.timeout == 1.25
+
+
+def test_cleanup_reuses_one_snapshot_for_runner_and_core(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = snapshot_config({"EXTENSION_RECEIPT": "kept"})
+    runner_config: list[object] = []
+    core_config: list[object] = []
+
+    monkeypatch.setattr(
+        redis_plugin_module,
+        "inspect_namespace",
+        lambda *args, **kwargs: NamespaceInspection(
+            "tenant",
+            NamespaceState.OWNED,
+            1,
+        ),
+    )
+
+    class Client:
+        def scan_iter(self, pattern: str) -> list[str]:
+            return []
+
+        def close(self) -> None:
+            return None
+
+    class Runner:
+        stale_batch_seconds = 30
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            runner_config.append(kwargs.get("config"))
+
+        def close(self) -> None:
+            return None
+
+    class Core:
+        def __init__(self, runner: object, *, config: object) -> None:
+            core_config.append(config)
+
+        def recover_stale_batches(self, *, max_age_seconds: int) -> None:
+            return None
+
+    monkeypatch.setattr(
+        redis_plugin_module.redis.Redis,
+        "from_url",
+        lambda *args, **kwargs: Client(),
+    )
+    monkeypatch.setattr(redis_plugin_module, "RedisRunner", Runner)
+    monkeypatch.setattr(redis_plugin_module, "RedisBrokerCore", Core)
+
+    result = RedisBackendPlugin().cleanup_target(
+        "redis://example/0",
+        backend_options={"namespace": "tenant"},
+        config=marker,
+    )
+
+    assert result is False
+    assert runner_config == [marker]
+    assert core_config == [marker]
 
 
 def test_listener_channel_and_wait_state_transitions() -> None:

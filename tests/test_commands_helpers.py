@@ -331,7 +331,9 @@ class TestProcessQueueFetch:
             raise OSError(errno.EPIPE, "backend dump failed")
             yield "unreachable"
 
-        monkeypatch.setattr(commands, "DBConnection", lambda _target: Connection())
+        monkeypatch.setattr(
+            commands, "DBConnection", lambda _target, **_kwargs: Connection()
+        )
         monkeypatch.setattr(commands, "dump_lines", failing_dump_lines)
         monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
 

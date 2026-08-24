@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -77,6 +77,33 @@ def test_builtin_sqlite_backend_plugin_resolves() -> None:
     assert plugin.backend_api_version == BACKEND_API_VERSION
     assert plugin.sql is not None
     assert isinstance(plugin.create_runner(":memory:"), SQLiteRunner)
+
+
+@pytest.mark.sqlite_only
+def test_sqlite_initialize_target_passes_config_snapshot_to_broker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import simplebroker.db as db_module
+    from simplebroker import snapshot_config
+
+    marker = snapshot_config({"EXTENSION_RECEIPT": "kept"})
+    received: list[object] = []
+
+    class Broker:
+        def __init__(self, target: str, *, config: object) -> None:
+            received.append(config)
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    monkeypatch.setattr(db_module, "BrokerDB", Broker)
+
+    get_backend_plugin("sqlite").initialize_target(":memory:", config=marker)
+
+    assert received == [marker]
 
 
 def test_unknown_builtin_backend_fails_with_the_requested_name() -> None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -154,7 +154,7 @@ def vacuum(
     runner: SQLRunner,
     *,
     compact: bool,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> None:
     """Delete claimed rows and compact the SQLite database when requested.
 
@@ -197,7 +197,7 @@ def _vacuum_without_lock(
     runner: SQLRunner,
     *,
     compact: bool,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> None:
     batch_size = int(config["BROKER_VACUUM_BATCH_SIZE"])
     had_claimed_messages = False

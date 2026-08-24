@@ -84,7 +84,7 @@ class TestCLIEdgeCases:
 
     def test_pre_dispatch_keyboard_interrupt_handling(self):
         """The outer process wrapper also owns interrupts before dispatch."""
-        with patch("simplebroker.cli._get_cli_parser", side_effect=KeyboardInterrupt()):
+        with patch("simplebroker.cli.create_parser", side_effect=KeyboardInterrupt()):
             from io import StringIO
 
             captured_output = StringIO()

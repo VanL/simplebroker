@@ -16,11 +16,11 @@ from simplebroker._backend_plugins import (
     ActivityWaiter,
     _ensure_backend_api_version,
 )
-from simplebroker._constants import SIMPLEBROKER_MAGIC
+from simplebroker._constants import SIMPLEBROKER_MAGIC, ResolvedConfig, snapshot_config
 from simplebroker._exceptions import DatabaseError, OperationalError
 
 from . import scripts
-from ._constants import DEFAULT_NAMESPACE, DEFAULT_TARGET, REDIS_SCHEMA_VERSION
+from ._constants import DEFAULT_NAMESPACE, REDIS_SCHEMA_VERSION
 from .core import RedisBrokerCore
 from .keys import RedisKeys, encode_id
 from .pool import POOL_OPTION_KEYS, pool_options_from_config
@@ -111,12 +111,11 @@ def _namespace_from_options(
 
 
 def _normalize_backend_options(
-    config: Mapping[str, Any] | None,
+    config: ResolvedConfig,
     backend_options: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    resolved_config = config or {}
     options = dict(backend_options or {})
-    namespace = _namespace_from_options(resolved_config, options)
+    namespace = _namespace_from_options(config, options)
     allowed = {"namespace", "schema", *POOL_OPTION_KEYS}
     unknown = sorted(str(key) for key in options if key not in allowed)
     if unknown:
@@ -125,7 +124,7 @@ def _normalize_backend_options(
     normalized = dict(options)
     normalized["namespace"] = namespace
     normalized.pop("schema", None)
-    pool_options_from_config(resolved_config, normalized)
+    pool_options_from_config(config, normalized)
     return normalized
 
 
@@ -370,10 +369,13 @@ class RedisBackendPlugin:
         toml_target: str = "",
         toml_options: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        target = _text(toml_target) or _text(config.get("BROKER_BACKEND_TARGET"))
+        resolved_config = snapshot_config(config)
+        target = _text(toml_target) or _text(
+            resolved_config.get("BROKER_BACKEND_TARGET")
+        )
         if not target:
-            target = _target_from_parts(config) if config else DEFAULT_TARGET
-        backend_options = _normalize_backend_options(config, toml_options)
+            target = _target_from_parts(resolved_config)
+        backend_options = _normalize_backend_options(resolved_config, toml_options)
         return {
             "target": target,
             "backend_options": backend_options,
@@ -386,12 +388,12 @@ class RedisBackendPlugin:
         backend_options: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> RedisRunner:
-        normalized = _normalize_backend_options(config, backend_options)
-        pool_options = pool_options_from_config(config, normalized)
+        resolved_config = snapshot_config(config)
+        normalized = _normalize_backend_options(resolved_config, backend_options)
+        pool_options = pool_options_from_config(resolved_config, normalized)
         return RedisRunner(
             target,
             backend_options=normalized,
-            config=dict(config or {}),
             pool_options=pool_options,
         )
 
@@ -409,10 +411,17 @@ class RedisBackendPlugin:
         # generator setup. A hand-instantiated or subclassed plugin must fail
         # the backend API check before any connection is attempted.
         _ensure_backend_api_version(self)
+        resolved_config = snapshot_config(config)
         runner = self.create_runner(
-            target, backend_options=backend_options, config=config
+            target,
+            backend_options=backend_options,
+            config=resolved_config,
         )
-        return RedisBrokerCore(runner, config=config, stop_event=stop_event)
+        return RedisBrokerCore(
+            runner,
+            config=resolved_config,
+            stop_event=stop_event,
+        )
 
     def create_core_from_runner(
         self,
@@ -423,7 +432,11 @@ class RedisBackendPlugin:
     ) -> RedisBrokerCore:
         # See create_core: validate before the core opens its connection.
         _ensure_backend_api_version(self)
-        return RedisBrokerCore(runner, config=config, stop_event=stop_event)
+        return RedisBrokerCore(
+            runner,
+            config=snapshot_config(config),
+            stop_event=stop_event,
+        )
 
     def initialize_target(
         self,
@@ -481,7 +494,7 @@ class RedisBackendPlugin:
         backend_options: Mapping[str, Any] | None = None,
         config: Mapping[str, Any] | None = None,
     ) -> bool:
-        del config
+        resolved_config = snapshot_config(config)
         namespace = require_namespace(backend_options)
         inspection = inspect_namespace(target, backend_options={"namespace": namespace})
         if inspection.state is NamespaceState.ABSENT:
@@ -493,8 +506,8 @@ class RedisBackendPlugin:
             )
         client = redis.Redis.from_url(target, decode_responses=True)
         try:
-            runner = RedisRunner(target, namespace=namespace)
-            core = RedisBrokerCore(runner)
+            runner = RedisRunner(target, namespace=namespace, config=resolved_config)
+            core = RedisBrokerCore(runner, config=resolved_config)
             core.recover_stale_batches(max_age_seconds=runner.stale_batch_seconds)
             redis_keys = RedisKeys(namespace)
             prefix = redis_keys.prefix

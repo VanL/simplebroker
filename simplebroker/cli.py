@@ -14,8 +14,8 @@ from ._constants import (
     EXIT_INTERRUPTED,
     EXIT_SUCCESS,
     PROG_NAME,
-    _capture_config,
-    _resolve_config_input,
+    ResolvedConfig,
+    snapshot_config,
 )
 from ._exceptions import DatabaseError, InvalidConfigError
 from ._paths import (
@@ -36,15 +36,9 @@ from ._project_config import (
 from ._targets import BrokerTarget
 from .project import _configured_backend_target, resolve_broker_target
 
-# Cache the parser for better startup performance
-_PARSER_CACHE = None
-
 _TIMESTAMP_BOUND_LIMIT = (
     "fractional seconds unsupported; use integer ms, integer ns, or a native hybrid ID"
 )
-
-# Get the config
-_config = _capture_config()
 
 
 class ArgumentParserError(Exception):
@@ -148,12 +142,16 @@ def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def create_parser(*, config: Mapping[str, Any] = _config) -> argparse.ArgumentParser:
+def create_parser(
+    *,
+    config: Mapping[str, Any] | None = None,
+) -> argparse.ArgumentParser:
     """Create the main parser with global options and subcommands.
 
     Returns:
         ArgumentParser configured with global options and subcommands
     """
+    resolved_config = snapshot_config(config)
     parser = CustomArgumentParser(
         prog=PROG_NAME,
         description="Simple message broker with pluggable backends",
@@ -162,12 +160,12 @@ def create_parser(*, config: Mapping[str, Any] = _config) -> argparse.ArgumentPa
 
     # Add global arguments with environment-aware defaults
     default_dir = (
-        Path(config["BROKER_DEFAULT_DB_LOCATION"])
-        if config["BROKER_DEFAULT_DB_LOCATION"]
-        and config.get("BROKER_BACKEND", "sqlite") == "sqlite"
+        Path(resolved_config["BROKER_DEFAULT_DB_LOCATION"])
+        if resolved_config["BROKER_DEFAULT_DB_LOCATION"]
+        and resolved_config.get("BROKER_BACKEND", "sqlite") == "sqlite"
         else Path.cwd()
     )
-    default_file = config["BROKER_DEFAULT_DB_NAME"]
+    default_file = resolved_config["BROKER_DEFAULT_DB_NAME"]
 
     # Custom action to track when -d was explicitly provided
     class DirectoryAction(argparse.Action):
@@ -769,7 +767,7 @@ class ArgumentProcessor:
 
 
 def _resolve_database_path(
-    args: argparse.Namespace, *, config: Mapping[str, Any] = _config
+    args: argparse.Namespace, *, config: Mapping[str, Any]
 ) -> tuple[Path, bool]:
     """Resolve final database path using precedence rules and project scoping.
 
@@ -865,7 +863,7 @@ def _build_sqlite_target(
 
 
 def _resolve_target(
-    args: argparse.Namespace, *, config: Mapping[str, Any] = _config
+    args: argparse.Namespace, *, config: Mapping[str, Any]
 ) -> BrokerTarget:
     """Resolve the backend target for the current CLI invocation."""
     root = Path(args.dir).expanduser().resolve()
@@ -1064,6 +1062,7 @@ def _run_vacuum(
     resolved_target: BrokerTarget,
     *,
     status_json_output: bool,
+    config: ResolvedConfig,
 ) -> int:
     """Vacuum the resolved target under the CLI diagnostic policy."""
     db_path = resolved_target.target_path
@@ -1081,6 +1080,7 @@ def _run_vacuum(
             resolved_target,
             compact=args.compact,
             quiet=args.quiet,
+            config=config,
         )
     except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
         commands._emit_error(
@@ -1100,11 +1100,11 @@ def _run_target_action(
     parser: argparse.ArgumentParser,
     *,
     status_json_output: bool,
-    config: Mapping[str, Any],
+    config: ResolvedConfig,
 ) -> int | None:
     """Run a target-wide action, returning None for command dispatch."""
     if args.command == "init":
-        return commands.cmd_init(resolved_target, args.quiet)
+        return commands.cmd_init(resolved_target, args.quiet, config=config)
     if args.cleanup:
         return _run_cleanup(
             args,
@@ -1117,11 +1117,13 @@ def _run_target_action(
             args,
             resolved_target,
             status_json_output=status_json_output,
+            config=config,
         )
     if args.status:
         return commands.cmd_status(
             resolved_target,
             json_output=status_json_output,
+            config=config,
         )
     if not args.command:
         parser.print_help()
@@ -1272,6 +1274,7 @@ def _dispatch_message_command(
         message_id_str=message_id_str,
         before_str=before_str,
         include_claimed=args.include_claimed,
+        config=config,
     )
 
 
@@ -1279,6 +1282,8 @@ def _dispatch_queue_command(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
+    *,
+    config: ResolvedConfig,
 ) -> int:
     """Dispatch queue inspection and mutation commands."""
     if args.command == "list":
@@ -1288,25 +1293,33 @@ def _dispatch_queue_command(
             pattern=getattr(args, "pattern", None),
             prefix=getattr(args, "prefix", None),
             json_output=getattr(args, "json", False),
+            config=config,
         )
     if args.command == "exists":
         return commands.cmd_exists(
             resolved_target,
             args.queue,
             json_output=getattr(args, "json", False),
+            config=config,
         )
     if args.command == "stats":
         return commands.cmd_stats(
             resolved_target,
             args.queue,
             json_output=getattr(args, "json", False),
+            config=config,
         )
     if args.command == "delete":
         queue = None if args.all else args.queue
         message_id_str = getattr(args, "message_id", None)
         if message_id_str is not None and queue is None:
             parser.error("--message requires a queue name")
-        return commands.cmd_delete(resolved_target, queue, message_id_str)
+        return commands.cmd_delete(
+            resolved_target,
+            queue,
+            message_id_str,
+            config=config,
+        )
 
     all_messages = getattr(args, "all", False)
     json_output = getattr(args, "json", False)
@@ -1326,6 +1339,7 @@ def _dispatch_queue_command(
         message_id_str=message_id_str,
         after_str=after_str,
         before_str=before_str,
+        config=config,
     )
 
 
@@ -1333,6 +1347,8 @@ def _dispatch_alias_command(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
+    *,
+    config: ResolvedConfig,
 ) -> int:
     """Dispatch one alias subcommand."""
     subcommand = getattr(args, "alias_command", None)
@@ -1344,13 +1360,19 @@ def _dispatch_alias_command(
             args.alias,
             args.target,
             quiet=getattr(args, "quiet", False),
+            config=config,
         )
     if subcommand == "remove":
-        return commands.cmd_alias_remove(resolved_target, args.alias)
+        return commands.cmd_alias_remove(
+            resolved_target,
+            args.alias,
+            config=config,
+        )
     if subcommand == "list":
         return commands.cmd_alias_list(
             resolved_target,
             target=getattr(args, "target", None),
+            config=config,
         )
     parser.error("unknown alias subcommand")
 
@@ -1360,7 +1382,7 @@ def _dispatch_admin_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: Mapping[str, Any],
+    config: ResolvedConfig,
 ) -> int:
     """Dispatch rename, broadcast, dump/load, alias, or watch."""
     if args.command == "rename":
@@ -1370,6 +1392,7 @@ def _dispatch_admin_command(
             args.new_queue,
             json_output=getattr(args, "json", False),
             retarget_aliases=not getattr(args, "no_retarget_aliases", False),
+            config=config,
         )
     if args.command == "broadcast":
         return commands.cmd_broadcast(
@@ -1384,6 +1407,7 @@ def _dispatch_admin_command(
             resolved_target,
             include=args.include,
             exclude=args.exclude,
+            config=config,
         )
     if args.command == "load":
         return commands.cmd_load(
@@ -1393,7 +1417,12 @@ def _dispatch_admin_command(
             config=config,
         )
     if args.command == "alias":
-        return _dispatch_alias_command(args, resolved_target, parser)
+        return _dispatch_alias_command(
+            args,
+            resolved_target,
+            parser,
+            config=config,
+        )
     return commands.cmd_watch(
         resolved_target,
         args.queue,
@@ -1403,6 +1432,7 @@ def _dispatch_admin_command(
         after_str=getattr(args, "after", None),
         quiet=args.quiet,
         move_to=getattr(args, "move", None),
+        config=config,
     )
 
 
@@ -1411,7 +1441,7 @@ def _dispatch_command(
     resolved_target: BrokerTarget,
     parser: argparse.ArgumentParser,
     *,
-    config: Mapping[str, Any],
+    config: ResolvedConfig,
 ) -> int:
     """Dispatch the parsed command through its command family."""
     if args.command in {"write", "read", "peek"}:
@@ -1422,7 +1452,12 @@ def _dispatch_command(
             config=config,
         )
     if args.command in {"list", "exists", "stats", "delete", "move"}:
-        return _dispatch_queue_command(args, resolved_target, parser)
+        return _dispatch_queue_command(
+            args,
+            resolved_target,
+            parser,
+            config=config,
+        )
     if args.command in {
         "rename",
         "broadcast",
@@ -1496,15 +1531,6 @@ def _prepare_command_target(
     return None
 
 
-def _get_cli_parser() -> argparse.ArgumentParser:
-    """Return the process-cached CLI parser."""
-    global _PARSER_CACHE
-
-    if _PARSER_CACHE is None:
-        _PARSER_CACHE = create_parser()
-    return _PARSER_CACHE
-
-
 def _run_pre_target_action(
     args: argparse.Namespace,
     *,
@@ -1545,10 +1571,9 @@ def _prepare_dispatch(
     )
 
 
-def _main(*, config: Mapping[str, Any]) -> int:
+def _main(*, config: ResolvedConfig) -> int:
     """Run one CLI invocation after configuration error translation."""
-    parser = _get_cli_parser()
-    resolved_config = _resolve_config_input(config)
+    parser = create_parser(config=config)
 
     invocation = _read_invocation(parser)
     if isinstance(invocation, int):
@@ -1565,7 +1590,7 @@ def _main(*, config: Mapping[str, Any]) -> int:
     target_result = _resolve_cli_target(
         args,
         status_json_output=status_json_output,
-        config=resolved_config,
+        config=config,
     )
     if isinstance(target_result, int):
         return target_result
@@ -1576,7 +1601,7 @@ def _main(*, config: Mapping[str, Any]) -> int:
         resolved_target,
         parser,
         status_json_output=status_json_output,
-        config=resolved_config,
+        config=config,
     )
     if action_result is not None:
         return action_result
@@ -1585,14 +1610,14 @@ def _main(*, config: Mapping[str, Any]) -> int:
         args,
         resolved_target,
         status_json_output=status_json_output,
-        config=resolved_config,
+        config=config,
     )
     if preparation_error is not None:
         return preparation_error
 
     try:
-        _validate_command_target(args, resolved_target, config=resolved_config)
-        return _dispatch_command(args, resolved_target, parser, config=resolved_config)
+        _validate_command_target(args, resolved_target, config=config)
+        return _dispatch_command(args, resolved_target, parser, config=config)
     except InvalidConfigError:
         raise
     except (ValueError, DatabaseError) as e:
@@ -1620,10 +1645,10 @@ def _main(*, config: Mapping[str, Any]) -> int:
         return EXIT_ERROR
 
 
-def main(*, config: Mapping[str, Any] = _config) -> int:
+def main(*, config: Mapping[str, Any] | None = None) -> int:
     """Run one CLI invocation and return its exit code."""
     try:
-        return _main(config=config)
+        return _main(config=snapshot_config(config))
     except InvalidConfigError as error:
         print(f"{PROG_NAME}: {error}", file=sys.stderr)
         return EXIT_ERROR

@@ -27,7 +27,7 @@ from ._constants import (
     MAX_LOGICAL_COUNTER,
     NS_PER_SECOND,
     SQLITE_MAX_INT64,
-    resolve_config,
+    snapshot_config,
 )
 from ._message_id import (
     INVALID_MESSAGE_ID_MESSAGE,
@@ -262,7 +262,7 @@ def load_lines(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
         raise TypeError(
             "broker must provide callable advance_last_timestamp() for dump load"
         )
-    resolved_config = resolve_config(config)
+    resolved_config = snapshot_config(config)
     max_future_skew_ns = (
         int(resolved_config["BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS"]) * NS_PER_SECOND
     )

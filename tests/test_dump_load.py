@@ -294,6 +294,29 @@ def test_load_typed_config_override_changes_skew_limit(
         )
 
 
+def test_load_samples_environment_for_each_invocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    header = 1_700_000_000_000_000_000 & ~LOGICAL_COUNTER_MASK
+    now_ns = header - NS_PER_SECOND
+    monkeypatch.setattr("simplebroker._dump.time.time_ns", lambda: now_ns)
+
+    with open_broker(_db(tmp_path)) as broker:
+        monkeypatch.setenv("BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS", "0")
+        with (
+            pytest.warns(DumpClockSkewWarning),
+            pytest.raises(ValueError, match="configured maximum of 0 seconds"),
+        ):
+            load_lines(broker, [_load_header(header)])
+
+        monkeypatch.setenv("BROKER_LOAD_MAX_FUTURE_SKEW_SECONDS", "2")
+        with pytest.warns(DumpClockSkewWarning):
+            result = load_lines(broker, [_load_header(header)])
+
+    assert result == LoadResult(messages=0, aliases=0)
+
+
 def test_load_accepts_legacy_integer_message_id(tmp_path: Path) -> None:
     db = _db(tmp_path)
     lines = [

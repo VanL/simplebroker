@@ -166,6 +166,10 @@ and either fixed or rejected with evidence.
 
 ## Execution Log
 
+- 2026-08-13 landing and release: implementation/spec/docs/tests landed in
+  `0f88b2a`; SimpleBroker 7.3.2 release bookkeeping landed in `284059c`.
+  The 2026-08-23 successor planning change repaired the stale active index row;
+  it does not alter this plan's completed implementation record.
 - 2026-08-13 comprehension gate: a complete ordinary mapping is insufficient
   because ambient parsing precedes overrides and repeats downstream; ordinary
   mappings must retain ambient-base and unknown-key pass-through behavior;

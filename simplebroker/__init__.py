@@ -7,6 +7,7 @@ from ._constants import (
     __version__,
     resolve_config,
     resolve_isolated_config,
+    snapshot_config,
 )
 from ._dump import DumpClockSkewWarning, LoadResult, dump_lines, load_lines
 from ._message_id import format_message_id
@@ -48,6 +49,7 @@ __all__ = [
     "resolve_config",
     "resolve_isolated_config",
     "serialize_broker_target",
+    "snapshot_config",
     "target_for_directory",
 ]
 

@@ -9,18 +9,15 @@ Environment Variables:
     variables and their default values.
 
 Usage:
-    from simplebroker._constants import MAX_MESSAGE_SIZE, load_config
+    from simplebroker._constants import MAX_MESSAGE_SIZE, snapshot_config
 
     # Use constants directly
     if len(message) > MAX_MESSAGE_SIZE:
         raise ValueError("Message too large")
 
-    # Load configuration once at module level
-    _config = load_config()
-    timeout = _config["BROKER_BUSY_TIMEOUT"]
-
-    Note that functions that use _config values all take a config parameter,
-    which defaults to _config if not provided.
+    # Resolve one immutable receipt at an ownership boundary.
+    config = snapshot_config()
+    timeout = config["BROKER_BUSY_TIMEOUT"]
 """
 
 import os
@@ -581,12 +578,12 @@ _CONFIG_NORMALIZERS: Final[dict[str, Callable[[Any], Any]]] = {
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
 class ResolvedConfig(Mapping[str, Any]):
-    """Immutable, complete configuration resolved without ambient input.
+    """Read-only, complete configuration resolved without ambient input.
 
     Construction uses the same canonical defaults, coercion, and validation as
-    :func:`resolve_isolated_config`. Lower layers revalidate this nominal marker
-    without consulting ``BROKER_*`` so direct construction is not a trust
-    bypass. Converting it to an ordinary mapping discards that guarantee.
+    :func:`resolve_isolated_config` for recognized keys and preserves additional
+    keys as opaque extension data. Converting it to an ordinary mapping discards
+    its ambient-free marker guarantee.
     """
 
     _values: Mapping[str, Any]
@@ -595,7 +592,7 @@ class ResolvedConfig(Mapping[str, Any]):
         object.__setattr__(
             self,
             "_values",
-            MappingProxyType(_resolve_isolated_values(values)),
+            MappingProxyType(_resolve_isolated_values(values, preserve_unknown=True)),
         )
 
     def __getitem__(self, key: str) -> Any:
@@ -606,60 +603,6 @@ class ResolvedConfig(Mapping[str, Any]):
 
     def __len__(self) -> int:
         return len(self._values)
-
-
-class _CapturedConfig(Mapping[str, Any]):
-    """One immutable process snapshot, successful or failed."""
-
-    __slots__ = ("_error", "_values")
-
-    def __init__(
-        self,
-        values: Mapping[str, Any] | None = None,
-        error: InvalidConfigError | None = None,
-    ) -> None:
-        self._values = MappingProxyType(dict(values or {}))
-        self._error = error
-
-    def _require(self) -> Mapping[str, Any]:
-        if self._error is not None:
-            raise self._error
-        return self._values
-
-    def copy(self) -> dict[str, Any]:
-        return dict(self._require())
-
-    def __getitem__(self, key: str) -> Any:
-        return self._require()[key]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._require())
-
-    def __len__(self) -> int:
-        return len(self._require())
-
-
-_CAPTURED_CONFIG: _CapturedConfig | None = None
-
-
-def _capture_config() -> _CapturedConfig:
-    """Return the single immutable ambient configuration snapshot."""
-    global _CAPTURED_CONFIG
-    if _CAPTURED_CONFIG is None:
-        try:
-            _CAPTURED_CONFIG = _CapturedConfig(load_config())
-        except InvalidConfigError as error:
-            _CAPTURED_CONFIG = _CapturedConfig(error=error)
-    return _CAPTURED_CONFIG
-
-
-def _resolve_config_input(
-    value: Mapping[str, Any] | None,
-) -> Mapping[str, Any]:
-    """Unwrap a trusted process snapshot or resolve ordinary overrides."""
-    if isinstance(value, _CapturedConfig):
-        return value.copy()
-    return resolve_config(value)
 
 
 _SENSITIVE_CONFIG_KEYS: Final = frozenset(
@@ -713,19 +656,33 @@ def _unknown_config_error(key: object, value: Any) -> InvalidConfigError:
     )
 
 
-def _resolve_isolated_values(overrides: Mapping[str, Any]) -> dict[str, Any]:
-    """Resolve canonical defaults plus strict overrides without environment reads."""
+def _reject_unknown_config_keys(overrides: Mapping[str, Any]) -> None:
+    """Reject the first non-canonical override key."""
     unknown = [key for key in overrides if key not in _CONFIG_FIELDS]
     if unknown:
         key = unknown[0]
         raise _unknown_config_error(key, overrides[key])
+
+
+def _resolve_isolated_values(
+    overrides: Mapping[str, Any],
+    *,
+    preserve_unknown: bool,
+) -> dict[str, Any]:
+    """Resolve canonical defaults plus ambient-free explicit values."""
+    if not preserve_unknown:
+        _reject_unknown_config_keys(overrides)
 
     config = {
         key: _normalize_config_value(key, field.default, source="default")
         for key, field in _CONFIG_FIELDS.items()
     }
     for key, value in overrides.items():
-        config[key] = _normalize_config_value(key, value, source="override")
+        config[key] = (
+            _normalize_config_value(key, value, source="override")
+            if key in _CONFIG_FIELDS
+            else value
+        )
 
     if config["BROKER_SYNC_MODE"] not in ("FULL", "NORMAL", "OFF"):
         config["BROKER_SYNC_MODE"] = "FULL"
@@ -734,8 +691,14 @@ def _resolve_isolated_values(overrides: Mapping[str, Any]) -> dict[str, Any]:
     return config
 
 
-def resolve_isolated_config(overrides: Mapping[str, Any]) -> ResolvedConfig:
-    """Resolve strict overrides from canonical defaults without ambient input."""
+def resolve_isolated_config(
+    overrides: Mapping[str, Any],
+    *,
+    preserve_unknown: bool = False,
+) -> ResolvedConfig:
+    """Resolve explicit overrides from canonical defaults without ambient input."""
+    if not preserve_unknown:
+        _reject_unknown_config_keys(overrides)
     return ResolvedConfig(overrides)
 
 
@@ -754,15 +717,17 @@ def resolve_config(
 def resolve_config(
     overrides: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | ResolvedConfig:
-    """Return a complete typed config with optional caller overrides applied.
+    """Resolve fresh ambient config or reuse an exact config snapshot.
 
-    This is the public config-contract helper for library callers. It starts
-    from the environment-derived configuration and then applies any provided
-    overrides using the same coercion rules as environment parsing wherever
-    practical. Missing keys inherit the canonical defaults from
-    :func:`load_config`.
+    ``None`` and ordinary mappings start from the current environment, then
+    apply caller overrides with the canonical normalization and validation
+    rules. An exact :class:`ResolvedConfig` is already complete, so it is
+    returned unchanged without reading the environment. Subclasses are
+    reconstructed and revalidated without an ambient read.
     """
 
+    if type(overrides) is ResolvedConfig:
+        return overrides
     if isinstance(overrides, ResolvedConfig):
         return ResolvedConfig(overrides)
 
@@ -783,6 +748,31 @@ def resolve_config(
 
     _validate_config(config, source="override")
     return config
+
+
+def snapshot_config(
+    config: Mapping[str, Any] | None = None,
+) -> ResolvedConfig:
+    """Resolve and retain one complete configuration snapshot."""
+    if type(config) is ResolvedConfig:
+        return config
+    return ResolvedConfig(resolve_config(config))
+
+
+def _overlay_config(
+    base: ResolvedConfig,
+    overrides: Mapping[str, Any] | None,
+) -> ResolvedConfig:
+    """Apply ambient-free per-call overrides to an owned snapshot."""
+    if overrides is None:
+        return base
+    if type(overrides) is ResolvedConfig:
+        return overrides
+    if isinstance(overrides, ResolvedConfig):
+        return ResolvedConfig(overrides)
+    values = dict(base)
+    values.update(overrides)
+    return ResolvedConfig(values)
 
 
 def _validate_default_database_location(config: dict[str, Any]) -> None:
@@ -906,8 +896,10 @@ def load_config() -> dict[str, Any]:
     """Load configuration from environment variables.
 
     This function reads all SimpleBroker environment variables and returns
-    a configuration dictionary with validated values. It's designed to be
-    called once at module initialization to avoid repeated environment lookups.
+    a configuration dictionary with validated values. Each call is a fresh
+    read for an explicit resolution boundary. Library handles that need stable
+    process behavior should retain and reuse :func:`snapshot_config` instead
+    of caching this result at module import.
 
     Returns:
         dict: Configuration dictionary with the following keys:

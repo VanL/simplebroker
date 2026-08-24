@@ -52,9 +52,8 @@ from ._constants import (
     PEEK_BATCH_SIZE,
     SIMPLEBROKER_MAGIC,
     ResolvedConfig,
-    _capture_config,
-    _resolve_config_input,
-    resolve_config,
+    _overlay_config,
+    snapshot_config,
 )
 from ._delivery import DeliveryGuarantee, validate_delivery_guarantee
 from ._exceptions import (
@@ -105,9 +104,6 @@ if TYPE_CHECKING:
 
 # Type variable for generic return types
 T = TypeVar("T")
-
-# Load configuration once at module level
-_config = _capture_config()
 
 logger = logging.getLogger(__name__)
 
@@ -208,9 +204,9 @@ def _get_sql_namespace(plugin: BackendPlugin) -> BackendSQLNamespace:
     return cast("BackendSQLNamespace", plugin.sql)
 
 
-def _merge_config(config: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    """Overlay caller-provided config values onto the default config snapshot."""
-    return _resolve_config_input(config)
+def _merge_config(config: Mapping[str, Any] | None) -> ResolvedConfig:
+    """Return the snapshot owned by a public constructor seam."""
+    return snapshot_config(config)
 
 
 class _ProcessSessionCoreFactory:
@@ -220,11 +216,7 @@ class _ProcessSessionCoreFactory:
         self._backend_name = spec.backend_name
         self._target = spec.target
         self._backend_options = dict(spec.backend_options)
-        self._config = (
-            spec.config
-            if isinstance(spec.config, ResolvedConfig)
-            else dict(spec.config)
-        )
+        self._config = spec.config
         self._backend_plugin = spec.backend_plugin
         self._runner_condition = threading.Condition()
         self._runner_state: Literal["empty", "creating", "ready", "closed"] = "empty"
@@ -466,7 +458,7 @@ class DBConnection:
         db_path: str | BrokerTarget,
         runner: SQLRunner | None = None,
         *,
-        config: Mapping[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
         share_in_process: bool = False,
     ):
         """Initialize the connection manager.
@@ -635,7 +627,7 @@ class DBConnection:
         if self._stop_event.is_set():
             raise StopException("Connection interrupted")
 
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
 
         if self._share_in_process:
             return self._get_shared_connection(config=effective_config)
@@ -680,7 +672,7 @@ class DBConnection:
         if self._stop_event.is_set():
             raise StopException("Connection interrupted")
 
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
 
         def open_connection() -> BrokerConnection:
             session = self._ensure_shared_session()
@@ -827,7 +819,7 @@ class DBConnection:
         connections this only recycles the current thread's active handle; close()
         releases the queue/session lease.
         """
-        effective_config = self._config if config is None else resolve_config(config)
+        effective_config = _overlay_config(self._config, config)
 
         if self._share_in_process:
             if self._shared_session is not None and not self._shared_released:
@@ -929,11 +921,12 @@ def open_broker(
     db_target: str | BrokerTarget,
     runner: SQLRunner | None = None,
     *,
-    config: Mapping[str, Any] = _config,
+    config: Mapping[str, Any] | None = None,
 ) -> Iterator[BrokerConnection]:
     """Open a backend-agnostic broker connection for the lifetime of a context."""
 
-    with DBConnection(db_target, runner, config=config) as connection:
+    resolved_config = snapshot_config(config)
+    with DBConnection(db_target, runner, config=resolved_config) as connection:
         yield connection.get_connection()
 
 
@@ -957,7 +950,7 @@ class BrokerCore:
         self,
         runner: SQLRunner,
         *,
-        config: Mapping[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
         backend_plugin: BackendPlugin | None = None,
         stop_event: threading.Event | None = None,
     ):
@@ -2191,9 +2184,7 @@ class BrokerCore:
                 else:
                     yield result[0][0]
         else:
-            effective_config = (
-                self._config if config is None else resolve_config(config)
-            )
+            effective_config = _overlay_config(self._config, config)
             effective_batch_size = (
                 batch_size
                 if batch_size is not None
@@ -2547,9 +2538,7 @@ class BrokerCore:
                 else:
                     yield result[0][0]
         else:
-            effective_config = (
-                self._config if config is None else resolve_config(config)
-            )
+            effective_config = _overlay_config(self._config, config)
             effective_batch_size = (
                 batch_size
                 if batch_size is not None
@@ -3582,7 +3571,7 @@ class BrokerDB(BrokerCore):
         self,
         db_path: str,
         *,
-        config: Mapping[str, Any] = _config,
+        config: Mapping[str, Any] | None = None,
         stop_event: threading.Event | None = None,
     ):
         """Initialize database connection and create schema.
@@ -3590,6 +3579,8 @@ class BrokerDB(BrokerCore):
         Args:
             db_path: Path to SQLite database file
         """
+        resolved_config = snapshot_config(config)
+
         # Handle Path.resolve() edge cases on exotic filesystems
         try:
             self.db_path = Path(db_path).expanduser().resolve()
@@ -3603,12 +3594,16 @@ class BrokerDB(BrokerCore):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Create SQLite runner
-        self._runner = SQLiteRunner(str(self.db_path), config=config)
+        self._runner = SQLiteRunner(str(self.db_path), config=resolved_config)
 
         # Initialize parent (will create schema). If startup is interrupted,
         # close the runner because the BrokerDB instance will not reach close().
         try:
-            super().__init__(self._runner, config=config, stop_event=stop_event)
+            super().__init__(
+                self._runner,
+                config=resolved_config,
+                stop_event=stop_event,
+            )
         except Exception:
             self._runner.close()
             raise

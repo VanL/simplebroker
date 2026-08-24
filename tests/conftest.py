@@ -1025,10 +1025,9 @@ def pytest_configure(config: pytest.Config) -> None:
     spurious machine-dependent failures.  BROKER_TEST_BACKEND is the
     channel bin/pytest-pg / bin/pytest-redis use to select the backend and
     must survive.  Per-test monkeypatch.setenv("BROKER_...") is unaffected
-    (it runs long after this hook).  Known limitation: module-level
-    ``_config = load_config()`` snapshots in THIS process were taken at
-    import, before this hook -- same as the production CLI, and not the
-    subprocess failure mode this scrub exists to prevent.
+    (it runs long after this hook). Package import does not resolve ambient
+    broker configuration; later public handles and invocations sample the
+    scrubbed or test-provided environment at their ownership boundary.
     """
     for key in [k for k in os.environ if k.startswith("BROKER_")]:
         if key not in _AMBIENT_BROKER_ENV_ALLOWLIST:
