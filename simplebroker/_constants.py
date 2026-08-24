@@ -1007,8 +1007,8 @@ def load_config() -> dict[str, Any]:
             BROKER_DEFAULT_DB_NAME (str): Default database filename.
                 Default: ".broker.db"
                 Used for both project scoping search and fallback creation.
-                Can be a compound path (e.g. "subdir/.broker.db"), but
-                SimpleBroker will
+                Can be a compound path (e.g. "subdir/.broker.db"), but it
+                must remain relative and contain at most one directory level.
 
             BROKER_PROJECT_CONFIG_PATH (str): Optional directory prefix for
                 project config discovery.

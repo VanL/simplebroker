@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ast
+import contextvars
 import logging
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -27,8 +29,32 @@ from simplebroker._retry import (
     stop_never,
     stop_when_event_set,
 )
+from simplebroker._retry import test_config as retry_test_config
 
 _ALLOWED_STDLIB_ROOTS = frozenset(sys.stdlib_module_names) | {"__future__"}
+_THREAD_TEST_TIMEOUT = 5.0
+
+
+def _capture_retry_sleeps() -> list[float]:
+    sleeps: list[float] = []
+
+    def capture(seconds: float, _event: threading.Event | None) -> bool:
+        sleeps.append(seconds)
+        return True
+
+    def fail() -> None:
+        raise RuntimeError("retry once")
+
+    with pytest.raises(RuntimeError, match="retry once"):
+        execute_retry(
+            fail,
+            retry_on=lambda exc: isinstance(exc, RuntimeError),
+            wait_gen_kwargs={"factor": 1.0},
+            jitter=None,
+            stop=stop_after_attempt(2),
+            sleep=capture,
+        )
+    return sleeps
 
 
 def test_retry_module_is_stdlib_only() -> None:
@@ -302,6 +328,104 @@ def test_remove_backoff_zeroes_sleep() -> None:
             sleep=fake_sleep,
         )
     assert sleeps == []
+
+
+def test_nested_retry_config_restores_outer_multiplier() -> None:
+    assert _capture_retry_sleeps() == [1.0]
+    with retry_test_config(sleep_multiplier=0.25):
+        assert _capture_retry_sleeps() == [0.25]
+        with retry_test_config(sleep_multiplier=0.5):
+            assert _capture_retry_sleeps() == [0.5]
+        assert _capture_retry_sleeps() == [0.25]
+    assert _capture_retry_sleeps() == [1.0]
+
+
+def test_retry_config_restores_multiplier_after_exception() -> None:
+    with (
+        pytest.raises(LookupError, match="leave scope"),
+        retry_test_config(sleep_multiplier=0.25),
+    ):
+        assert _capture_retry_sleeps() == [0.25]
+        raise LookupError("leave scope")
+
+    assert _capture_retry_sleeps() == [1.0]
+
+
+def test_fresh_context_uses_default_retry_multiplier() -> None:
+    with retry_test_config(sleep_multiplier=0.25):
+        assert _capture_retry_sleeps() == [0.25]
+        assert contextvars.Context().run(_capture_retry_sleeps) == [1.0]
+        assert _capture_retry_sleeps() == [0.25]
+
+
+def test_copied_context_inherits_without_mutating_parent() -> None:
+    worker_override_active = threading.Event()
+    parent_observed = threading.Event()
+    worker_observations: list[list[float]] = []
+
+    def worker() -> None:
+        worker_observations.append(_capture_retry_sleeps())
+        with retry_test_config(sleep_multiplier=0.5):
+            worker_observations.append(_capture_retry_sleeps())
+            worker_override_active.set()
+            assert parent_observed.wait(timeout=_THREAD_TEST_TIMEOUT)
+        worker_observations.append(_capture_retry_sleeps())
+
+    with retry_test_config(sleep_multiplier=0.25):
+        copied_context = contextvars.copy_context()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            worker_future = executor.submit(copied_context.run, worker)
+            assert worker_override_active.wait(timeout=_THREAD_TEST_TIMEOUT)
+            parent_sleep = _capture_retry_sleeps()
+            parent_observed.set()
+            worker_future.result(timeout=_THREAD_TEST_TIMEOUT)
+
+        assert parent_sleep == [0.25]
+        assert _capture_retry_sleeps() == [0.25]
+
+    assert worker_observations == [[0.25], [0.5], [0.25]]
+    assert _capture_retry_sleeps() == [1.0]
+
+
+def test_retry_config_isolated_across_overlapping_fresh_contexts() -> None:
+    first_entered = threading.Event()
+    both_entered = threading.Barrier(2)
+    both_observed = threading.Barrier(2)
+    first_exited = threading.Event()
+    observations: dict[str, list[list[float]]] = {"first": [], "second": []}
+
+    def first_worker() -> None:
+        with retry_test_config(sleep_multiplier=0.25):
+            first_entered.set()
+            both_entered.wait(timeout=_THREAD_TEST_TIMEOUT)
+            observations["first"].append(_capture_retry_sleeps())
+            both_observed.wait(timeout=_THREAD_TEST_TIMEOUT)
+        first_exited.set()
+
+    def second_worker() -> None:
+        assert first_entered.wait(timeout=_THREAD_TEST_TIMEOUT)
+        with retry_test_config(sleep_multiplier=0.5):
+            both_entered.wait(timeout=_THREAD_TEST_TIMEOUT)
+            observations["second"].append(_capture_retry_sleeps())
+            both_observed.wait(timeout=_THREAD_TEST_TIMEOUT)
+            assert first_exited.wait(timeout=_THREAD_TEST_TIMEOUT)
+            observations["second"].append(_capture_retry_sleeps())
+
+    first_context = contextvars.Context()
+    second_context = contextvars.Context()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(first_context.run, first_worker)
+        second_future = executor.submit(second_context.run, second_worker)
+        first_future.result(timeout=_THREAD_TEST_TIMEOUT)
+        second_future.result(timeout=_THREAD_TEST_TIMEOUT)
+
+    assert observations == {
+        "first": [[0.25]],
+        "second": [[0.5], [0.5]],
+    }
+    assert first_context.run(_capture_retry_sleeps) == [1.0]
+    assert second_context.run(_capture_retry_sleeps) == [1.0]
+    assert _capture_retry_sleeps() == [1.0]
 
 
 def test_hot_loop_warning_logs_after_rapid_retries(

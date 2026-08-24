@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-23-maintainability-and-isolation-remediation-plan.md | completed — Class 4; single-owned CLI preparse grammar, state-based SQLite migration outcomes, context-isolated retry test overrides, bounded vestige cleanup, full tests and changed-surface gates green, independently reviewed |
 | 2026-08-23-configuration-snapshot-consistency-plan.md | completed — Class 5; construction/invocation-scoped ambient resolution and lower-layer `ResolvedConfig` reuse implemented, fully verified across core and live first-party extensions, downstream Weft compatibility checked, and independently reviewed; Factor 1.1 runner-capability work remains excluded |
 | 2026-08-23-public-api-and-cli-review-remediation-plan.md | completed — Class 5 with mandatory hardening; omission-aware delete safety, precise Queue typing, truthful finite-interrupt status, post-parse JSON preservation, downstream Weft compatibility verified, full verification, and independent completed-work review landed in `204ef5c` |
 | 2026-08-14-windows-sqlite-terminal-progress-plan.md | completed — Class 5 diagnosis; two event-observed hosted Windows reductions did not reproduce a stuck terminal transition, so no SimpleBroker change or release was justified and ownership returned downstream |

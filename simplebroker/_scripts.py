@@ -338,7 +338,11 @@ def _verify_postgres_test_dsn_from_env() -> None:
                 conn.cursor() as cur,
             ):
                 cur.execute("SELECT 1")
-                assert cur.fetchone() == (1,)
+                row = cur.fetchone()
+                if row != (1,):
+                    raise RuntimeError(
+                        f"Postgres verification query returned unexpected row: {row!r}"
+                    )
             return
         except psycopg.OperationalError as exc:
             last_error = f"{type(exc).__name__}: {exc}"
@@ -989,13 +993,21 @@ def _smoke_install_artifacts(
                 str(venv_python),
                 "-c",
                 (
-                    "import simplebroker_pg; "
-                    "import simplebroker_redis; "
-                    "from simplebroker.ext import get_backend_plugin; "
-                    "pg_plugin = get_backend_plugin('postgres'); "
-                    "redis_plugin = get_backend_plugin('redis'); "
-                    "assert pg_plugin.name == 'postgres'; "
-                    "assert redis_plugin.name == 'redis'"
+                    "import simplebroker_pg\n"
+                    "import simplebroker_redis\n"
+                    "from simplebroker.ext import get_backend_plugin\n"
+                    "pg_plugin = get_backend_plugin('postgres')\n"
+                    "redis_plugin = get_backend_plugin('redis')\n"
+                    "if pg_plugin.name != 'postgres':\n"
+                    "    raise RuntimeError(\n"
+                    "        f\"Packaging smoke expected backend 'postgres', "
+                    'got {pg_plugin.name!r}"\n'
+                    "    )\n"
+                    "if redis_plugin.name != 'redis':\n"
+                    "    raise RuntimeError(\n"
+                    "        f\"Packaging smoke expected backend 'redis', "
+                    'got {redis_plugin.name!r}"\n'
+                    "    )\n"
                 ),
             ]
         )

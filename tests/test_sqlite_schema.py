@@ -56,6 +56,24 @@ class _FailOnceRunner:
         return getattr(self._runner, name)
 
 
+class _IgnoreOnceRunner:
+    """Delegate to a real runner while ignoring one named SQL operation."""
+
+    def __init__(self, runner: SQLiteRunner, marker: str) -> None:
+        self._runner = runner
+        self._marker = marker
+        self._ignored = False
+
+    def run(self, sql, *args, **kwargs):
+        if not self._ignored and self._marker in sql:
+            self._ignored = True
+            return []
+        return self._runner.run(sql, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._runner, name)
+
+
 class _FailCommitRunner:
     """Delegate to a real/race runner while injecting one commit failure."""
 
@@ -69,26 +87,23 @@ class _FailCommitRunner:
         return getattr(self._runner, name)
 
 
-class _BarrierAfterFirstRun:
-    """Synchronize two real runners after one named read operation."""
+class _BarrierBeforeFirstBegin:
+    """Synchronize two real runners immediately before their first write lock."""
 
     def __init__(
         self,
         runner: SQLiteRunner,
-        marker: str,
         barrier: threading.Barrier,
     ) -> None:
         self._runner = runner
-        self._marker = marker
         self._barrier = barrier
         self._waited = False
 
-    def run(self, sql, *args, **kwargs):
-        rows = self._runner.run(sql, *args, **kwargs)
-        if not self._waited and self._marker in sql:
+    def begin_immediate(self) -> None:
+        if not self._waited:
             self._waited = True
             self._barrier.wait(timeout=5.0)
-        return rows
+        self._runner.begin_immediate()
 
     def __getattr__(self, name):
         return getattr(self._runner, name)
@@ -109,26 +124,6 @@ class _CreateTsIndexBeforeFirstBegin:
                 "CREATE UNIQUE INDEX idx_messages_ts_unique ON messages(ts)"
             )
         self._runner.begin_immediate()
-
-    def __getattr__(self, name):
-        return getattr(self._runner, name)
-
-
-class _CreateTsIndexBeforeCreate:
-    """Model another connection winning the v3 repair race."""
-
-    def __init__(self, runner: SQLiteRunner, competitor: SQLiteRunner) -> None:
-        self._runner = runner
-        self._competitor = competitor
-        self._prepared = False
-
-    def run(self, sql, *args, **kwargs):
-        if not self._prepared and "CREATE UNIQUE INDEX idx_messages_ts_unique" in sql:
-            self._prepared = True
-            self._competitor.run(
-                "CREATE UNIQUE INDEX idx_messages_ts_unique ON messages(ts)"
-            )
-        return self._runner.run(sql, *args, **kwargs)
 
     def __getattr__(self, name):
         return getattr(self._runner, name)
@@ -399,6 +394,80 @@ def test_ensure_schema_v2_rolls_back_when_alter_fails(tmp_path: Path) -> None:
         runner.close()
 
 
+def test_ensure_schema_v2_rolls_back_schema_and_durable_version_on_commit_failure(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v2-commit-failure.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    versions: list[int] = []
+    try:
+        runner.run("INSERT INTO meta (key, value) VALUES ('schema_version', 1)")
+
+        def record_schema_version(version: int) -> None:
+            versions.append(version)
+            runner.run(
+                "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+                (version,),
+            )
+
+        with pytest.raises(OperationalError, match="migration commit failure"):
+            ensure_schema_v2(
+                _FailCommitRunner(runner),
+                current_version=1,
+                write_schema_version=record_schema_version,
+            )
+
+        assert runner.get_connection().in_transaction is False
+        assert versions == [2]
+        assert messages_has_claimed_column(runner) is False
+        assert (
+            list(
+                runner.run(
+                    "SELECT name FROM sqlite_master WHERE type='index' "
+                    "AND name='idx_messages_unclaimed'",
+                    fetch=True,
+                )
+            )
+            == []
+        )
+        assert list(
+            runner.run(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                fetch=True,
+            )
+        ) == [(1,)]
+    finally:
+        runner.close()
+
+
+def test_ensure_schema_v2_propagates_non_operational_duplicate_column_error(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v1-misleading-duplicate-column.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    failing_runner = _FailOnceRunner(
+        runner,
+        "ALTER TABLE messages ADD COLUMN claimed",
+        ValueError("misleading duplicate column name"),
+    )
+    versions: list[int] = []
+    try:
+        with pytest.raises(ValueError, match="misleading duplicate column name"):
+            ensure_schema_v2(
+                failing_runner,
+                current_version=1,
+                write_schema_version=versions.append,
+            )
+
+        assert runner.get_connection().in_transaction is False
+        assert messages_has_claimed_column(runner) is False
+        assert versions == []
+    finally:
+        runner.close()
+
+
 def test_ensure_schema_v2_handles_concurrent_column_migration(
     tmp_path: Path,
 ) -> None:
@@ -406,14 +475,7 @@ def test_ensure_schema_v2_handles_concurrent_column_migration(
     _create_v1_messages_table(db_path)
     barrier = threading.Barrier(2)
     runners = [_runner(db_path), _runner(db_path)]
-    wrapped = [
-        _BarrierAfterFirstRun(
-            runner,
-            "pragma_table_info('messages')",
-            barrier,
-        )
-        for runner in runners
-    ]
+    wrapped = [_BarrierBeforeFirstBegin(runner, barrier) for runner in runners]
     versions: list[list[int]] = [[], []]
 
     def migrate(index: int) -> None:
@@ -545,6 +607,97 @@ def test_ensure_schema_v3_rolls_back_other_integrity_errors(tmp_path: Path) -> N
         runner.close()
 
 
+def test_ensure_schema_v3_does_not_relabel_misleading_integrity_error(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v2-misleading-integrity-error.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    versions: list[int] = []
+    try:
+        ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
+        failing_runner = _FailOnceRunner(
+            runner,
+            "CREATE UNIQUE INDEX idx_messages_ts_unique",
+            IntegrityError("UNIQUE constraint failed: unrelated injected constraint"),
+        )
+
+        with pytest.raises(
+            IntegrityError,
+            match="unrelated injected constraint",
+        ):
+            ensure_schema_v3(
+                failing_runner,
+                current_version=2,
+                write_schema_version=versions.append,
+            )
+
+        assert runner.get_connection().in_transaction is False
+        assert ts_unique_index_exists(runner) is False
+        assert versions == []
+    finally:
+        runner.close()
+
+
+def test_ensure_schema_v3_does_not_publish_version_from_already_exists_prose(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v2-misleading-already-exists.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    versions: list[int] = []
+    try:
+        ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
+        failing_runner = _FailOnceRunner(
+            runner,
+            "CREATE UNIQUE INDEX idx_messages_ts_unique",
+            OperationalError("misleading already exists"),
+        )
+
+        with pytest.raises(OperationalError, match="misleading already exists"):
+            ensure_schema_v3(
+                failing_runner,
+                current_version=2,
+                write_schema_version=versions.append,
+            )
+
+        assert runner.get_connection().in_transaction is False
+        assert ts_unique_index_exists(runner) is False
+        assert versions == []
+    finally:
+        runner.close()
+
+
+def test_ensure_schema_v3_requires_named_index_postcondition_before_version(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v2-missing-index-postcondition.db"
+    _create_v1_messages_table(db_path)
+    runner = _runner(db_path)
+    versions: list[int] = []
+    try:
+        ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
+
+        with pytest.raises(
+            RuntimeError,
+            match="Failed to ensure the timestamp unique index",
+        ):
+            ensure_schema_v3(
+                _IgnoreOnceRunner(
+                    runner,
+                    "CREATE UNIQUE INDEX idx_messages_ts_unique",
+                ),
+                current_version=2,
+                write_schema_version=versions.append,
+            )
+
+        assert runner.get_connection().in_transaction is False
+        assert ts_unique_index_exists(runner) is False
+        assert versions == []
+    finally:
+        runner.close()
+
+
 def test_ensure_schema_v3_handles_index_created_after_preflight(
     tmp_path: Path,
 ) -> None:
@@ -570,33 +723,45 @@ def test_ensure_schema_v3_handles_index_created_after_preflight(
         runner.close()
 
 
-def test_ensure_schema_v3_repair_rolls_back_when_commit_fails(
+def test_ensure_schema_v3_rolls_back_schema_and_durable_version_on_commit_failure(
     tmp_path: Path,
 ) -> None:
-    db_path = tmp_path / "v3-index-race-commit-failure.db"
+    db_path = tmp_path / "v3-commit-failure.db"
     _create_v1_messages_table(db_path)
     runner = _runner(db_path)
-    competitor = _runner(db_path)
     versions: list[int] = []
     try:
         ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
-        race_runner = _CreateTsIndexBeforeFirstBegin(runner, competitor)
+        runner.run("INSERT INTO meta (key, value) VALUES ('schema_version', 2)")
+
+        def record_schema_version(version: int) -> None:
+            versions.append(version)
+            runner.run(
+                "UPDATE meta SET value = ? WHERE key = 'schema_version'",
+                (version,),
+            )
 
         with pytest.raises(OperationalError, match="migration commit failure"):
             ensure_schema_v3(
-                _FailCommitRunner(race_runner),
+                _FailCommitRunner(runner),
                 current_version=2,
-                write_schema_version=versions.append,
+                write_schema_version=record_schema_version,
             )
 
         assert runner.get_connection().in_transaction is False
         assert versions == [3]
+        assert list(
+            runner.run(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                fetch=True,
+            )
+        ) == [(2,)]
+        assert ts_unique_index_exists(runner) is False
     finally:
-        competitor.close()
         runner.close()
 
 
-def test_ensure_schema_v3_repair_handles_concurrent_index_creation(
+def test_ensure_schema_v3_repair_handles_index_created_before_write_lock(
     tmp_path: Path,
 ) -> None:
     db_path = tmp_path / "v3-repair-race.db"
@@ -608,7 +773,7 @@ def test_ensure_schema_v3_repair_handles_concurrent_index_creation(
         ensure_schema_v2(runner, current_version=1, write_schema_version=lambda _: None)
 
         ensure_schema_v3(
-            _CreateTsIndexBeforeCreate(runner, competitor),
+            _CreateTsIndexBeforeFirstBegin(runner, competitor),
             current_version=3,
             write_schema_version=versions.append,
         )

@@ -332,20 +332,4 @@ def _validate_path_containment(
         )
 
 
-def _validate_path_traversal_prevention(filename: str) -> None:
-    """Validate that filename doesn't contain path traversal attempts.
-
-    Args:
-        filename: Database filename to validate
-
-    Raises:
-        ValueError: If path traversal attempt is detected
-
-    Note:
-        This function is deprecated in favor of _validate_safe_path_components
-        but maintained for backward compatibility.
-    """
-    _validate_safe_path_components(filename, "Database filename")
-
-
 # ~

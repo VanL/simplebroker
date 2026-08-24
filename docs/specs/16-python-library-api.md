@@ -513,6 +513,7 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
+- `docs/plans/2026-08-23-maintainability-and-isolation-remediation-plan.md`
 - `docs/plans/2026-08-23-configuration-snapshot-consistency-plan.md`
 - `docs/plans/2026-08-23-public-api-and-cli-review-remediation-plan.md`
 - `docs/plans/2026-08-13-isolated-embedding-config-plan.md`

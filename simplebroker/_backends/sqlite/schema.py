@@ -7,10 +7,10 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..._constants import SCHEMA_VERSION, SIMPLEBROKER_MAGIC
-from ..._exceptions import IntegrityError
 from ..._sql import (
     ALTER_MESSAGES_ADD_CLAIMED,
     CHECK_CLAIMED_COLUMN,
+    CHECK_DUPLICATE_TIMESTAMPS,
     CHECK_PENDING_QUEUE_TS_INDEX,
     CHECK_TS_UNIQUE_INDEX,
     CREATE_ALIAS_TARGET_INDEX,
@@ -93,27 +93,28 @@ def migrate_schema(
     write_schema_version: Callable[[int], None],
 ) -> None:
     """Apply any missing SQLite schema migrations in order."""
+    effective_version = current_version
     ensure_schema_v2(
         runner,
-        current_version=current_version,
+        current_version=effective_version,
         write_schema_version=write_schema_version,
     )
-    version_after_v2 = max(current_version, 2) if current_version >= 2 else 2
+    effective_version = max(effective_version, 2)
     ensure_schema_v3(
         runner,
-        current_version=version_after_v2,
+        current_version=effective_version,
         write_schema_version=write_schema_version,
     )
-    version_after_v3 = max(current_version, 3) if current_version >= 3 else 3
+    effective_version = max(effective_version, 3)
     ensure_schema_v4(
         runner,
-        current_version=version_after_v3,
+        current_version=effective_version,
         write_schema_version=write_schema_version,
     )
-    version_after_v4 = max(current_version, 4) if current_version >= 4 else 4
+    effective_version = max(effective_version, 4)
     ensure_schema_v5(
         runner,
-        current_version=version_after_v4,
+        current_version=effective_version,
         write_schema_version=write_schema_version,
     )
 
@@ -130,6 +131,12 @@ def ts_unique_index_exists(runner: SQLRunner) -> bool:
     return bool(rows and rows[0][0])
 
 
+def duplicate_timestamps_exist(runner: SQLRunner) -> bool:
+    """Return whether ``messages.ts`` contains duplicate values."""
+    rows = list(runner.run(CHECK_DUPLICATE_TIMESTAMPS, fetch=True))
+    return bool(rows and rows[0][0])
+
+
 def pending_queue_ts_index_exists(runner: SQLRunner) -> bool:
     """Return whether the SQLite pending queue/timestamp index exists."""
     rows = list(runner.run(CHECK_PENDING_QUEUE_TS_INDEX, fetch=True))
@@ -143,20 +150,11 @@ def ensure_schema_v2(
     write_schema_version: Callable[[int], None],
 ) -> None:
     """Ensure SQLite schema v2 (claimed column + partial index)."""
-    has_claimed_column = messages_has_claimed_column(runner)
-
-    if current_version >= 2 and has_claimed_column:
-        runner.run(CREATE_UNCLAIMED_INDEX)
-        return
-
     runner.begin_immediate()
     try:
+        has_claimed_column = messages_has_claimed_column(runner)
         if not has_claimed_column:
-            try:
-                runner.run(ALTER_MESSAGES_ADD_CLAIMED)
-            except Exception as exc:
-                if "duplicate column name" not in str(exc):
-                    raise
+            runner.run(ALTER_MESSAGES_ADD_CLAIMED)
 
         # Defensive adapter check: real SQLite either adds the column or raises,
         # but a custom SQLite runner could report success without applying it.
@@ -171,59 +169,49 @@ def ensure_schema_v2(
             write_schema_version(2)
 
         runner.commit()
-    except Exception:
-        runner.rollback()
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            runner.rollback()
         raise
 
 
-def ensure_schema_v3(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-009] exception
+def ensure_schema_v3(
     runner: SQLRunner,
     *,
     current_version: int,
     write_schema_version: Callable[[int], None],
 ) -> None:
     """Ensure SQLite schema v3 (timestamp unique index)."""
-    has_unique_index = ts_unique_index_exists(runner)
-
-    if current_version >= 3:
-        if not has_unique_index:
-            try:
-                runner.run(CREATE_TS_UNIQUE_INDEX)
-            except Exception as exc:
-                if "already exists" not in str(exc):
-                    raise
-        return
-
     if current_version < 2:
         return
 
+    has_unique_index = ts_unique_index_exists(runner)
+    if current_version >= 3 and has_unique_index:
+        return
+
+    runner.begin_immediate()
     try:
-        runner.begin_immediate()
+        has_unique_index = ts_unique_index_exists(runner)
         if not has_unique_index:
+            if duplicate_timestamps_exist(runner):
+                raise RuntimeError(
+                    "Cannot add unique constraint on timestamp column: "
+                    "duplicate timestamps exist in the database."
+                )
             runner.run(CREATE_TS_UNIQUE_INDEX)
-        write_schema_version(3)
-        runner.commit()
-    except IntegrityError as exc:
-        runner.rollback()
-        if "UNIQUE constraint failed" in str(exc):
+
+        if not ts_unique_index_exists(runner):
             raise RuntimeError(
-                "Cannot add unique constraint on timestamp column: "
-                "duplicate timestamps exist in the database."
-            ) from exc
-        raise
-    except Exception as exc:
-        runner.rollback()
-        if "already exists" in str(exc):
-            runner.begin_immediate()
+                "Failed to ensure the timestamp unique index during schema migration"
+            )
+
+        if current_version < 3:
             write_schema_version(3)
-            try:
-                runner.commit()
-            except BaseException:
-                with contextlib.suppress(BaseException):
-                    runner.rollback()
-                raise
-        else:
-            raise
+        runner.commit()
+    except BaseException:
+        with contextlib.suppress(BaseException):
+            runner.rollback()
+        raise
 
 
 def ensure_schema_v4(

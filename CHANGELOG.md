@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   initialization failures now use the shared `simplebroker: error:` prefix;
   the command-specific `broker load:` dialect is unchanged.
 
+### Removed
+
+- Removed the unused `Message` tuple from `simplebroker.watcher`. Direct
+  `simplebroker.watcher` imports are outside [SB-API-1]'s supported import
+  surfaces; package-root and `simplebroker.ext` watcher APIs are unchanged.
+
 ## [7.3.1] - 2026-08-13
 
 ### Changed

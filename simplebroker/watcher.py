@@ -73,7 +73,7 @@ from collections.abc import Callable, Mapping
 from functools import partial
 from pathlib import Path
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, NamedTuple, Self, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 
 from ._constants import (
     MAX_TOTAL_RETRY_TIME,
@@ -93,7 +93,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BaseWatcher",
-    "Message",
     "PollingStrategy",
     "QueueMoveWatcher",
     "QueueWatcher",
@@ -235,15 +234,6 @@ def _bind_error_handler(
     if error_handler is _DEFAULT_ERROR_HANDLER:
         return partial(config_aware_default_error_handler, config=config)
     return error_handler
-
-
-class Message(NamedTuple):
-    """Message with metadata from the queue."""
-
-    id: int
-    body: str
-    timestamp: int
-    queue: str
 
 
 # Create logger for this module
@@ -1052,15 +1042,12 @@ class BaseWatcher(ABC):
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
         exc_tb: Any,  # noqa: PYI036 approved [DOM-10.1.1] [RUFF-SUP-001] exception
-        *,
-        config: Mapping[str, Any] | None = None,
     ) -> None:
         """Exit context manager - stop and clean up."""
-        effective_config = _overlay_config(self._config, config)
         try:
             self.stop()
         except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
-            if effective_config["BROKER_LOGGING_ENABLED"]:
+            if self._config["BROKER_LOGGING_ENABLED"]:
                 logger.warning(f"Error during stop in __exit__: {e}")
 
     def _setup_finalizer(self) -> None:

@@ -1,6 +1,7 @@
 """Test edge cases in watcher.py to increase coverage."""
 
 import contextlib
+import inspect
 import tempfile
 import threading
 import time
@@ -36,6 +37,14 @@ class WatcherTestError(Exception):
 
 class TestWatcherEdgeCases(WatcherTestBase):
     """Test edge cases in QueueWatcher."""
+
+    def test_unsupported_message_type_is_not_exported(self) -> None:
+        assert "Message" not in watcher_module.__all__
+        assert not hasattr(watcher_module, "Message")
+
+    def test_watcher_exit_has_context_manager_protocol_signature(self) -> None:
+        parameters = inspect.signature(watcher_module.BaseWatcher.__exit__).parameters
+        assert list(parameters) == ["self", "exc_type", "exc_val", "exc_tb"]
 
     def test_invalid_database_owner_type_is_rejected(self) -> None:
         with pytest.raises(TypeError, match="Watcher db= must be a path"):
@@ -517,65 +526,42 @@ class TestWatcherEdgeCases(WatcherTestBase):
             monkeypatch.undo()
             watcher.stop()
 
-    def test_context_manager_error_handling(self, broker_target) -> None:
-        """Test context manager handles errors during exit."""
+    @pytest.mark.parametrize(
+        ("logging_enabled", "warning_expected"),
+        [(False, False), (True, True)],
+    )
+    def test_context_manager_stop_warning_uses_instance_config(
+        self,
+        broker_target,
+        logging_enabled: bool,
+        warning_expected: bool,
+    ) -> None:
         watcher = QueueWatcher(
             "queue",
             lambda m, t: None,
             db=broker_target,
-            config={"BROKER_LOGGING_ENABLED": 1},
+            config={"BROKER_LOGGING_ENABLED": logging_enabled},
         )
-        thread = None
         try:
-            # Start the watcher manually so we can control cleanup
-            thread = watcher.run_in_thread()
-
-            # Wait a moment to ensure thread is running
-            time.sleep(0.1)
-
-            # Mock stop to raise AFTER actually stopping the thread
-            original_stop = watcher.stop
-            stop_called = False
-
-            def failing_stop(*args, **kwargs) -> None:
-                nonlocal stop_called
-                if not stop_called:
-                    # First call - actually stop the thread
-                    stop_called = True
-                    original_stop(*args, **kwargs)
-                    # Then raise the exception for testing
-                    msg = "Stop failed"
-                    raise WatcherTestError(msg)
-                # Subsequent calls - just call original
-                original_stop(*args, **kwargs)
-
-            watcher.stop = failing_stop  # type: ignore[method-assign]  # intentional private cleanup seam
-
-            with patch("simplebroker.watcher.logger") as mock_logger:
+            with (
+                patch.object(
+                    watcher,
+                    "stop",
+                    side_effect=WatcherTestError("Stop failed"),
+                ) as stop,
+                patch.object(watcher_module.logger, "warning") as warning,
+            ):
                 watcher.__exit__(None, None, None)
+                stop.assert_called_once_with()
 
-                # Wait a moment for thread to finish
-                thread.join(timeout=2.0)
-
-                # Ensure thread is really stopped
-                assert not thread.is_alive()
-
-                # Should have logged warning for stop failure
-                assert mock_logger.warning.call_count >= 1
-                # Verify the warning message was logged
-                warning_calls = [
-                    str(call) for call in mock_logger.warning.call_args_list
-                ]
-                assert any(
-                    "Error during stop in __exit__: Stop failed" in call
-                    for call in warning_calls
+            if warning_expected:
+                warning.assert_called_once_with(
+                    "Error during stop in __exit__: Stop failed"
                 )
+            else:
+                warning.assert_not_called()
         finally:
-            # Ensure thread cleanup even if test fails
-            if thread and thread.is_alive():
-                with contextlib.suppress(Exception):
-                    watcher.stop()
-                    thread.join(timeout=1.0)
+            watcher.stop()
 
     def test_signal_handler_not_main_thread(self, broker_target) -> None:
         """Test that signal handler is not installed in non-main threads."""

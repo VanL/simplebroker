@@ -29,6 +29,33 @@ CREATE TABLE messages (
 - Claim-based deletion separates the consume commit from later physical cleanup,
   avoiding deletion work on the read handoff path
 
+## Schema migration serialization and publication
+
+SQLite v2 and v3 upgrades use `BEGIN IMMEDIATE` before the schema state that
+controls a migration is read. The v2 claimed-column check and the v3 timestamp
+index check are repeated under that write transaction, so another connection
+that wins before lock acquisition becomes observed state rather than an
+exception-message race. Repair of a missing v3 index uses the same transaction;
+an initial no-lock check may only skip work when an already-current database has
+the named index.
+
+Before creating the v3 unique index, the migration queries for duplicate
+`messages.ts` values inside the owned transaction. Only that observed data
+state produces the actionable duplicate-timestamp diagnostic. An unrelated
+`IntegrityError` from index creation propagates unchanged. Migration success
+does not depend on native exception prose.
+
+The claimed column and the named `idx_messages_ts_unique` index are checked
+again before their schema versions are written. The version callback writes on
+the same runner transaction in production, so neither its update nor the DDL is
+durable until commit succeeds. A callback used by a test may record that it was
+invoked even when the database transaction later rolls back; invocation is not
+publication.
+
+The v3 postcondition deliberately checks only the established index name. It
+does not validate the index definition or repair a same-named index with a
+different shape.
+
 ## Concurrency and delivery realization
 
 **Consume claim boundary:** Read and move operations use atomic backend

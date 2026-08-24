@@ -126,6 +126,17 @@ SELECT COUNT(*) FROM sqlite_master
 WHERE type='index' AND name='idx_messages_ts_unique'
 """
 
+# Check whether duplicate timestamp values would prevent the v3 unique index.
+CHECK_DUPLICATE_TIMESTAMPS = """
+SELECT EXISTS (
+    SELECT 1
+    FROM messages
+    GROUP BY ts
+    HAVING COUNT(*) > 1
+    LIMIT 1
+)
+"""
+
 # Check for pending queue/timestamp index
 CHECK_PENDING_QUEUE_TS_INDEX = """
 SELECT COUNT(*) FROM sqlite_master

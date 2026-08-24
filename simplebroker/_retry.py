@@ -204,18 +204,22 @@ def get_attempt_number() -> int | None:
     return _retry_context.get()
 
 
-_TEST_CONFIG: dict[str, float] = {"sleep_multiplier": 1.0}
+_sleep_multiplier: contextvars.ContextVar[float] = contextvars.ContextVar(
+    "_sleep_multiplier", default=1.0
+)
 
 
 @contextlib.contextmanager
 def test_config(*, sleep_multiplier: float | None = None) -> Iterator[None]:
-    old = _TEST_CONFIG["sleep_multiplier"]
-    if sleep_multiplier is not None:
-        _TEST_CONFIG["sleep_multiplier"] = sleep_multiplier
+    if sleep_multiplier is None:
+        yield
+        return
+
+    token = _sleep_multiplier.set(sleep_multiplier)
     try:
         yield
     finally:
-        _TEST_CONFIG["sleep_multiplier"] = old
+        _sleep_multiplier.reset(token)
 
 
 @contextlib.contextmanager
@@ -293,7 +297,7 @@ def execute_retry(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-011] exception
                     if remaining <= 0:
                         raise
                     sleep_seconds = min(sleep_seconds, remaining)
-                sleep_seconds *= _TEST_CONFIG["sleep_multiplier"]
+                sleep_seconds *= _sleep_multiplier.get()
                 if sleep_seconds > 0:
                     if before_sleep is not None:
                         before_sleep(state, exc, sleep_seconds)

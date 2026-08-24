@@ -2369,6 +2369,74 @@ def connect(dsn, connect_timeout):
     assert attempts_path.read_text(encoding="utf-8").splitlines() == ["1", "2"]
 
 
+@pytest.mark.parametrize("optimized", [False, True], ids=["normal", "python-O"])
+def test_verify_postgres_test_dsn_rejects_wrong_probe_row_under_optimization(
+    tmp_path: Path,
+    optimized: bool,
+) -> None:
+    fake_psycopg = tmp_path / "psycopg.py"
+    fake_psycopg.write_text(
+        """
+class OperationalError(Exception):
+    pass
+
+
+class _Cursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, query):
+        pass
+
+    def fetchone(self):
+        return (2,)
+
+
+class _Connection:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self):
+        return _Cursor()
+
+
+def connect(dsn, connect_timeout):
+    return _Connection()
+""",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONPATH": str(tmp_path),
+            "SIMPLEBROKER_PG_TEST_DSN": "postgresql://example/test",
+            "SIMPLEBROKER_PG_TEST_DSN_READY_TIMEOUT": "0",
+        }
+    )
+    command = [sys.executable]
+    if optimized:
+        command.append("-O")
+    command.extend(["-c", _scripts._POSTGRES_DSN_VERIFY_COMMAND])
+
+    result = subprocess.run(
+        command,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert result.returncode != 0
+    assert "Postgres verification query returned unexpected row: (2,)" in result.stderr
+
+
 def test_pytest_pg_main_preflights_dsn_before_pytest(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -2623,6 +2691,70 @@ def test_pytest_redis_routes_compact_overrides_to_explicit_extension(
     assert env["SIMPLEBROKER_VALKEY_TEST_URL"] == "redis://127.0.0.1:6379/15"
     assert "BROKER_TEST_BACKEND" not in env
     assert cleanup_calls == ["redis-container"]
+
+
+@pytest.mark.parametrize("optimized", [False, True], ids=["normal", "python-O"])
+@pytest.mark.parametrize("wrong_backend", ["postgres", "redis"])
+def test_packaging_backend_discovery_rejects_wrong_plugin_under_optimization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    optimized: bool,
+    wrong_backend: str,
+) -> None:
+    artifacts = _scripts._PackagingArtifacts(
+        root_wheel=tmp_path / "simplebroker.whl",
+        root_sdist=tmp_path / "simplebroker.tar.gz",
+        pg_wheel=tmp_path / "simplebroker_pg.whl",
+        pg_sdist=tmp_path / "simplebroker_pg.tar.gz",
+        redis_wheel=tmp_path / "simplebroker_redis.whl",
+        redis_sdist=tmp_path / "simplebroker_redis.tar.gz",
+    )
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        _scripts,
+        "_run",
+        lambda command, **kwargs: commands.append(command),
+    )
+    _scripts._smoke_install_artifacts(artifacts, python=sys.executable)
+    verification_source = commands[-1][2]
+
+    package_dir = tmp_path / "simplebroker"
+    package_dir.mkdir()
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    (package_dir / "ext.py").write_text(
+        f"""
+from types import SimpleNamespace
+
+
+def get_backend_plugin(name):
+    if name == {wrong_backend!r}:
+        return SimpleNamespace(name="wrong")
+    return SimpleNamespace(name=name)
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "simplebroker_pg.py").write_text("", encoding="utf-8")
+    (tmp_path / "simplebroker_redis.py").write_text("", encoding="utf-8")
+    command = [sys.executable]
+    if optimized:
+        command.append("-O")
+    command.extend(["-c", verification_source])
+
+    result = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(tmp_path)},
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert result.returncode != 0
+    assert (
+        f"Packaging smoke expected backend '{wrong_backend}', got 'wrong'"
+        in result.stderr
+    )
 
 
 def test_packaging_smoke_main_builds_and_smoke_installs(

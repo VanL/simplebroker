@@ -358,19 +358,3 @@ class TestValidateSafePathComponents:
         for name in edge_cases:
             # Should not raise any exception
             _validate_safe_path_components(name, "Database name")
-
-
-class TestBackwardCompatibilityPathTraversal:
-    """Test backward compatibility of the old path traversal function."""
-
-    def test_path_traversal_function_compatibility(self) -> None:
-        """Test that the old function still works as expected."""
-        from simplebroker._paths import _validate_path_traversal_prevention
-
-        # Should not raise for valid paths
-        _validate_path_traversal_prevention("valid.db")
-        _validate_path_traversal_prevention("subdir/valid.db")
-
-        # Should raise for dangerous paths
-        with pytest.raises(ValueError):
-            _validate_path_traversal_prevention("../dangerous.db")

@@ -63,6 +63,20 @@ def test_connection_stop_during_sleep_raises_stop_exception(
 class TestQueueConnectionManager:
     """Test the get_connection context manager behavior."""
 
+    def test_cleanup_connections_releases_watcher_connection(
+        self, tmp_path: Path
+    ) -> None:
+        queue = Queue("test", db_path=str(tmp_path / "test.db"))
+        watcher_connection = Mock(spec=DBConnection)
+        queue._watcher_conn = watcher_connection  # type: ignore[attr-defined]  # intentional dormant cleanup seam
+
+        try:
+            queue.cleanup_connections()
+            watcher_connection.cleanup.assert_called_once_with()
+            assert not hasattr(queue, "_watcher_conn")
+        finally:
+            queue.close()
+
     def test_persistent_mode_uses_cached_connection(self) -> None:
         """Context exit closes the reused handle without losing committed data."""
         with tempfile.TemporaryDirectory() as tmpdir:

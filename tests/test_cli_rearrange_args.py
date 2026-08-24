@@ -1,12 +1,112 @@
 """Test the rearrange_args function and argument parsing edge cases."""
 
+import argparse
 from pathlib import Path
 
 import pytest
 
-from simplebroker.cli import ArgumentParserError, rearrange_args
+from simplebroker.cli import (
+    ArgumentParserError,
+    _build_cli_parser,
+    _CliParserBundle,
+    rearrange_args,
+)
 
 from .conftest import run_cli
+
+
+def _assert_preparse_grammar_matches_parser(bundle: _CliParserBundle) -> None:
+    """Assert that every preparse-sensitive parser registration was captured."""
+    parser = bundle.parser
+    grammar = bundle.grammar
+
+    subparsers_action = next(
+        action
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    root_actions = [
+        action
+        for action in parser._actions
+        if action is not subparsers_action and action.dest != "help"
+    ]
+    root_options = {
+        option for action in root_actions for option in action.option_strings
+    }
+    value_options = {
+        option
+        for action in root_actions
+        if action.nargs != 0
+        for option in action.option_strings
+    }
+
+    write_parser = subparsers_action.choices["write"]
+    write_output_actions = [
+        action
+        for action in write_parser._actions
+        if action.option_strings and action.dest != "help"
+    ]
+    write_output_options = {
+        option for action in write_output_actions for option in action.option_strings
+    }
+    broadcast_parser = subparsers_action.choices["broadcast"]
+    [broadcast_selector_group] = broadcast_parser._mutually_exclusive_groups
+    broadcast_selector_actions = list(broadcast_selector_group._group_actions)
+    broadcast_selector_options = {
+        option
+        for action in broadcast_selector_actions
+        for option in action.option_strings
+    }
+
+    assert grammar.root_options == root_options
+    assert grammar.value_options == value_options
+    assert grammar.subcommands == set(subparsers_action.choices)
+    assert grammar.write_output_options == write_output_options
+    assert grammar.broadcast_selector_options == broadcast_selector_options
+    assert grammar.broadcast_attached_options == {
+        option
+        for action in broadcast_selector_actions
+        if action.nargs != 0
+        for option in action.option_strings
+        if option.startswith("-") and not option.startswith("--")
+    }
+    assert grammar.action_options == {"--cleanup", "--status"}
+    assert grammar.action_json_option == "--json"
+
+
+def test_preparse_grammar_matches_constructed_parser() -> None:
+    """Every preparse-sensitive parser registration reaches the sidecar grammar."""
+    _assert_preparse_grammar_matches_parser(_build_cli_parser())
+
+
+def test_preparse_conservation_rejects_uncaptured_write_option() -> None:
+    bundle = _build_cli_parser()
+    subparsers_action = next(
+        action
+        for action in bundle.parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    subparsers_action.choices["write"].add_argument(
+        "--uncaptured-output", action="store_true"
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_preparse_grammar_matches_parser(bundle)
+
+
+def test_preparse_conservation_rejects_uncaptured_broadcast_selector() -> None:
+    bundle = _build_cli_parser()
+    subparsers_action = next(
+        action
+        for action in bundle.parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    broadcast_parser = subparsers_action.choices["broadcast"]
+    [selector_group] = broadcast_parser._mutually_exclusive_groups
+    selector_group.add_argument("--uncaptured-selector")
+
+    with pytest.raises(AssertionError):
+        _assert_preparse_grammar_matches_parser(bundle)
 
 
 class TestRearrangeArgs:
@@ -241,6 +341,32 @@ class TestRearrangeArgs:
             "-q",
         ]
 
+    @pytest.mark.parametrize(
+        "command",
+        (
+            "alias",
+            "broadcast",
+            "delete",
+            "dump",
+            "exists",
+            "init",
+            "list",
+            "load",
+            "move",
+            "peek",
+            "read",
+            "rename",
+            "stats",
+            "watch",
+            "write",
+        ),
+    )
+    def test_every_top_level_command_stops_global_hoisting(self, command: str):
+        normalized = rearrange_args([command, "--cleanup"])
+
+        assert normalized[0] == command
+        assert normalized.index("--cleanup") > normalized.index(command)
+
 
 class TestCLIMissingValues:
     """Test CLI behavior with missing option values."""
@@ -387,6 +513,19 @@ class TestDestructiveGlobalFlagHoisting:
         # The message must have survived: pre-fix, --cleanup was hoisted
         # and executed, destroying the broker state (rc 0, read fails).
         rc, stdout, _ = run_cli("read", "tasks", cwd=workdir)
+        assert rc == 0
+        assert stdout == "hello"
+
+    def test_nested_alias_remove_keeps_cleanup_command_local(
+        self, workdir: Path
+    ) -> None:
+        assert run_cli("write", "tasks", "hello", cwd=workdir)[0] == 0
+        assert run_cli("alias", "add", "foo", "tasks", cwd=workdir)[0] == 0
+
+        rc, _, _ = run_cli("alias", "remove", "foo", "--cleanup", cwd=workdir)
+
+        assert rc != 0
+        rc, stdout, _ = run_cli("read", "@foo", cwd=workdir)
         assert rc == 0
         assert stdout == "hello"
 

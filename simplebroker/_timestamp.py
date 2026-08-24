@@ -351,7 +351,7 @@ class TimestampGenerator:
 
         Args:
             timestamp_str: String representation of timestamp. Accepts:
-                - Native 64-bit hybrid timestamp (e.g., "1837025672140161024", interchangeable with Unix nanoseconds)")
+                - Native 64-bit hybrid timestamp (e.g., "1837025672140161024", interchangeable with Unix nanoseconds)
                 - ISO 8601 date/datetime (e.g., "2024-01-15", "2024-01-15T14:30:00")
                 - Unix timestamp in seconds, milliseconds, or nanoseconds (e.g., "1705329000")
                 - Explicit units: "1705329000s" (seconds), "1705329000000ms" (milliseconds),
@@ -513,9 +513,9 @@ class TimestampGenerator:
             if val < 0:
                 raise TimestampError("Invalid timestamp: cannot be negative")
 
-            # Use improved heuristic - tighten boundary to avoid edge cases
-            # Native timestamps are (ms << LOGICAL_COUNTER_BITS), so for year 2025:
-            # ms ≈ 1.7e12, native ≈ 1.8e18
+            # Native timestamps preserve epoch-nanosecond magnitude, replacing
+            # the low LOGICAL_COUNTER_BITS with the logical counter. Around
+            # 2025, native values are approximately 1.7e18.
             # Use 2^44 as boundary (≈ 1.76e13 ms ≈ year 2527)
             boundary = UNIX_NATIVE_BOUNDARY  # About 17.6 trillion
 

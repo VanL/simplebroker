@@ -178,6 +178,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-23-maintainability-and-isolation-remediation-plan.md`
 - `docs/plans/2026-08-23-public-api-and-cli-review-remediation-plan.md`
 - `docs/plans/2026-08-13-invalid-environment-import-lifecycle-plan.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;

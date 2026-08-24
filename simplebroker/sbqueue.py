@@ -1913,21 +1913,17 @@ class Queue:
         def cleanup(
             conn: DBConnection | None,
             config: ResolvedConfig,
-            watcher_conn_attr: str,
         ) -> None:
             """Cleanup function called by finalizer."""
             try:
                 if conn:
                     conn.close()
-                # Note: watcher_conn cleanup happens in cleanup_connections
             except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-005] exception
                 if config.get("BROKER_LOGGING_ENABLED", True):
                     logger.warning(f"Error during Queue finalizer cleanup: {e}")
 
         # Install finalizer with reference to connection
-        self._finalizer = weakref.finalize(
-            self, cleanup, self.conn, self._config, "_watcher_conn"
-        )
+        self._finalizer = weakref.finalize(self, cleanup, self.conn, self._config)
 
 
 def create_activity_waiter_for_queues(
