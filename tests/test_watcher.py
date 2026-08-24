@@ -2202,6 +2202,51 @@ class TestErrorScenarios(WatcherTestBase):
         assert handler_after_run == original_handler
 
 
+def test_context_manager_waits_for_background_run_ownership(broker_target) -> None:
+    worker_entered = threading.Event()
+    ownership_wait_entered = threading.Event()
+    allow_start = threading.Event()
+    context_entered = threading.Event()
+
+    class ObservedRunningEvent(threading.Event):
+        def wait(self, timeout: float | None = None) -> bool:
+            ownership_wait_entered.set()
+            return super().wait(timeout)
+
+    class DelayedStartWatcher(QueueWatcher):
+        def run_forever(self) -> None:
+            worker_entered.set()
+            assert allow_start.wait(timeout=scale_timeout_for_ci(2.0))
+            super().run_forever()
+
+    watcher = DelayedStartWatcher(
+        "context_startup_queue",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+    )
+    watcher._running_event = ObservedRunningEvent()
+
+    def enter_context() -> None:
+        watcher.__enter__()
+        context_entered.set()
+
+    enter_thread = threading.Thread(target=enter_context)
+    enter_thread.start()
+    try:
+        assert worker_entered.wait(timeout=scale_timeout_for_ci(2.0))
+        assert ownership_wait_entered.wait(timeout=scale_timeout_for_ci(2.0))
+        assert not context_entered.is_set()
+        allow_start.set()
+        assert context_entered.wait(timeout=scale_timeout_for_ci(2.0))
+        assert watcher.is_running()
+    finally:
+        allow_start.set()
+        watcher.__exit__(None, None, None)
+        enter_thread.join(timeout=scale_timeout_for_ci(2.0))
+
+    assert not enter_thread.is_alive()
+
+
 def test_context_manager_usage(broker_target):
     """Test that QueueWatcher works properly as a context manager."""
     messages_received = []

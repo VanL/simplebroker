@@ -1157,8 +1157,10 @@ class BaseWatcher(ABC):
         self.run_forever()
 
     def __enter__(self) -> Self:
-        """Enter context manager - start watcher in background thread."""
-        self.run_in_thread()
+        """Enter after the background thread claims watcher run ownership."""
+        thread = self.run_in_thread()
+        while thread.is_alive() and not self._running_event.wait(timeout=0.01):
+            pass
         return self
 
     def __exit__(

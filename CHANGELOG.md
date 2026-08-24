@@ -60,7 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callback exception after cleanup, background watchers report it through
   `threading.excepthook`, and consume, peek, and move modes stop before a later
   dispatch. An ordinary cleanup failure remains secondary note evidence and
-  retryable.
+  retryable. Entering a watcher context now waits for the background thread to
+  claim run ownership, without waiting for backend setup or the initial drain.
 - Finite CLI and direct command-layer output now handles a closed stdout
   consumer with controlled exit `1` instead of leaking interpreter exit `120`
   and final-flush noise. Streaming commands retain clean stop `0`; completed

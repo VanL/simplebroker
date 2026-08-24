@@ -313,6 +313,9 @@ exception from the `with` body, and leaves failed cleanup retryable under the
 lifecycle rules above. A `BaseException` outside `Exception` propagates.
 Context exit does not replay a background-thread failure into the exiting
 thread; background failures use `threading.excepthook` as described above.
+`BaseWatcher.__enter__()` does not expose the context body until its background
+thread has claimed run ownership or has already exited. This is a scheduler
+handshake only: it does not wait for backend setup or the initial queue drain.
 
 Watch **modes** (consume, peek, move) and claim/progress rules are
 `[SB-DELIVERY-2]` (and related delivery clauses). This clause owns the public
