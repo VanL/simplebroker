@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.4.0] - 2026-08-24
+
 ### Added
 
 - Added public `resolve_isolated_config()` and immutable `ResolvedConfig` for
@@ -39,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Direct `PollingStrategy(stop_event)` construction now uses the canonical
   10-microsecond `BROKER_BURST_SLEEP` default. Explicit constructor values and
   configured watcher values remain unchanged.
+- Advanced the coordinated first-party extensions to `simplebroker-pg` 3.9.0
+  and `simplebroker-redis` 3.9.0. Both extensions now require
+  `simplebroker>=7.4.0`, and the root `pg` and `redis` extras require the new
+  extension versions.
 
 ### Fixed
 
@@ -67,6 +73,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed the unused `Message` tuple from `simplebroker.watcher`. Direct
   `simplebroker.watcher` imports are outside [SB-API-1]'s supported import
   surfaces; package-root and `simplebroker.ext` watcher APIs are unchanged.
+
+### simplebroker-pg 3.9.0
+
+- Synchronized with SimpleBroker 7.4.0 and raised the core dependency floor to
+  `simplebroker>=7.4.0`. Backend creation now preserves the core-owned
+  configuration snapshot instead of re-reading ambient configuration.
+
+### simplebroker-redis 3.9.0
+
+- Synchronized with SimpleBroker 7.4.0 and raised the core dependency floor to
+  `simplebroker>=7.4.0`. Backend, pool, and runner creation now preserve the
+  core-owned configuration snapshot instead of re-reading ambient
+  configuration.
 
 ## [7.3.1] - 2026-08-13
 
