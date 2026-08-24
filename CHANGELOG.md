@@ -9,10 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Structured CLI errors now classify established caller-input causes as
-  `INVALID_ARGUMENT` regardless of resolution, preparation, or dispatch
-  phase. Exact message IDs and timestamps keep their specialized codes;
-  database, access, generic `ValueError`, and unknown failures remain `ERROR`.
+- Structured CLI errors now classify by failure cause instead of pipeline
+  phase. Established caller-input causes are `INVALID_ARGUMENT` regardless of
+  resolution, preparation, or dispatch phase, while a malformed or corrupt
+  project configuration (for example an invalid `.broker.toml` version or
+  target) now reports `ERROR` where resolution-phase handling previously
+  reported `INVALID_ARGUMENT`. Exact message IDs and timestamps keep their
+  specialized codes; database, access, generic `ValueError`, and unknown
+  failures remain `ERROR`.
+- One-item and multi-item `peek` now retry a busy database like every sibling
+  operation, waiting up to the shared operation retry window (default 30
+  seconds) under contention instead of failing on the first busy error.
 - Global `--quiet` now suppresses the owned plain-message newline warning
   across read, peek, move, and watch output without hiding unrelated runtime
   warnings. Warning suppression is invocation-local for concurrent callers.
@@ -29,9 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer with controlled exit `1` instead of leaking interpreter exit `120`
   and final-flush noise. Streaming commands retain clean stop `0`; completed
   write and rename mutations are reported as durable-but-undelivered results.
-- Explicit SQLite targets now validate their immediate parent directory.
+- Explicit SQLite CLI targets now validate their immediate parent directory.
   Missing selected parents fail as `INVALID_ARGUMENT` instead of reaching a
-  later backend open or being implicitly created.
+  later backend open or being implicitly created. This is a CLI-only check;
+  the Python `Queue` API keeps creating missing parent directories for an
+  explicit `db_path`.
+- Queue-wide physical delete now runs in one explicit transaction and rolls
+  back on failure, so an interrupted delete can no longer leave partially
+  deleted rows behind on multi-statement backends.
 
 ## [7.4.0] - 2026-08-24
 
