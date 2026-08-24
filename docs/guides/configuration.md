@@ -287,7 +287,10 @@ export BROKER_DEFAULT_DB_LOCATION=/var/lib/myapp
   the Postgres or Redis backend extensions instead.
 - **Privilege separation**: Store databases in controlled system directories
 
-**Note:** `BROKER_DEFAULT_DB_LOCATION` corresponds to the `-d/--dir` command line argument and is ignored when `BROKER_PROJECT_SCOPE=true`.
+**Note:** `BROKER_DEFAULT_DB_LOCATION` is the environment default for the
+`-d/--dir` command line argument: an explicit `-d/--dir` takes precedence for
+every target computation, including `--cleanup` and `init`. The variable is
+ignored when `BROKER_PROJECT_SCOPE=true`.
 
 ### Project database names
 

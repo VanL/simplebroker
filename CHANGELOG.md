@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while explicit `Queue.delete(message_id=None)` now raises `TypeError` before
   mutation. An unhandled `KeyboardInterrupt` reaching the outer CLI wrapper
   now returns `130`; normal watch stop and closed-pipe handling remain success.
+- An explicit `-d/--dir` now takes precedence over `BROKER_DEFAULT_DB_LOCATION`
+  for every default-name target computation, including command dispatch,
+  `--cleanup`, and `init`. Previously the environment default silently
+  overrode an explicit directory; the conventional flag-over-environment
+  precedence now applies uniformly, so one flag set always addresses one
+  database. Without `-d`, `BROKER_DEFAULT_DB_LOCATION` keeps its existing
+  authority.
 - Direct `PollingStrategy(stop_event)` construction now uses the canonical
   10-microsecond `BROKER_BURST_SLEEP` default. Explicit constructor values and
   configured watcher values remain unchanged.

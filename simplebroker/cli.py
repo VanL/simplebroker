@@ -968,8 +968,13 @@ def _resolve_database_path(
                 f"Run 'broker init' in the project root directory to create one."
             )
 
-    # 3. Fallback to environment defaults / built-in defaults
-    if config["BROKER_DEFAULT_DB_LOCATION"]:
+    # 3. Fallback to environment defaults / built-in defaults. An explicit
+    # -d/--dir wins over BROKER_DEFAULT_DB_LOCATION; the parser already
+    # defaults args.dir to that location when -d is absent, so this override
+    # only applies when the directory was not explicitly chosen.
+    if config["BROKER_DEFAULT_DB_LOCATION"] and not getattr(
+        args, "_dir_explicitly_provided", False
+    ):
         working_dir = Path(config["BROKER_DEFAULT_DB_LOCATION"])
     return working_dir / db_filename, False
 

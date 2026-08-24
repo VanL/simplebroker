@@ -291,3 +291,67 @@ def test_repeated_main_calls_rebuild_defaults_from_invocation_snapshot(
 
     assert (tmp_path / "first.db").is_file()
     assert (tmp_path / "second.db").is_file()
+
+
+def _run_main_with_argv(monkeypatch, argv: list[str]) -> int:
+    dummy_sys = types.SimpleNamespace(
+        argv=argv,
+        stderr=cli.sys.stderr,
+        stdout=cli.sys.stdout,
+    )
+    monkeypatch.setattr(cli, "sys", dummy_sys)
+    return cli.main()
+
+
+def test_explicit_dir_overrides_default_db_location_for_dispatch_and_cleanup(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """Explicit -d wins over BROKER_DEFAULT_DB_LOCATION on one shared target."""
+    location_dir = tmp_path / "location"
+    explicit_dir = tmp_path / "explicit"
+    location_dir.mkdir()
+    explicit_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("BROKER_DEFAULT_DB_LOCATION", str(location_dir.resolve()))
+
+    argv = ["broker", "-d", str(explicit_dir), "write", "jobs", "payload"]
+    assert _run_main_with_argv(monkeypatch, argv) == cli.EXIT_SUCCESS
+    capsys.readouterr()
+
+    assert (explicit_dir / cli.DEFAULT_DB_NAME).is_file()
+    assert not (location_dir / cli.DEFAULT_DB_NAME).exists()
+
+    argv = ["broker", "-d", str(explicit_dir), "--cleanup"]
+    assert _run_main_with_argv(monkeypatch, argv) == cli.EXIT_SUCCESS
+    capsys.readouterr()
+
+    assert not (explicit_dir / cli.DEFAULT_DB_NAME).exists()
+
+
+def test_default_db_location_owns_target_without_explicit_dir(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """Without -d, BROKER_DEFAULT_DB_LOCATION owns dispatch and cleanup."""
+    location_dir = tmp_path / "location"
+    work_dir = tmp_path / "work"
+    location_dir.mkdir()
+    work_dir.mkdir()
+    monkeypatch.chdir(work_dir)
+    monkeypatch.setenv("BROKER_DEFAULT_DB_LOCATION", str(location_dir.resolve()))
+
+    argv = ["broker", "write", "jobs", "payload"]
+    assert _run_main_with_argv(monkeypatch, argv) == cli.EXIT_SUCCESS
+    capsys.readouterr()
+
+    assert (location_dir / cli.DEFAULT_DB_NAME).is_file()
+    assert not (work_dir / cli.DEFAULT_DB_NAME).exists()
+
+    argv = ["broker", "--cleanup"]
+    assert _run_main_with_argv(monkeypatch, argv) == cli.EXIT_SUCCESS
+    capsys.readouterr()
+
+    assert not (location_dir / cli.DEFAULT_DB_NAME).exists()
