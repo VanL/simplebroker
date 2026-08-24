@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.31,<2"]
+requires = ["hatchling<2,>=1.31"]
 build-backend = "hatchling.build"
 
 [project]
@@ -61,7 +61,7 @@ fuzz = [
 ]
 release = [
     "build==1.5.0",
-    "hatchling==1.31.0",
+    "hatchling==1.32.0",
 ]
 
 [project.scripts]
