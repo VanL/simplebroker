@@ -36,7 +36,7 @@ from ._exceptions import InvalidConfigError
 # VERSION INFORMATION
 # ==============================================================================
 
-__version__: Final[str] = "7.4.0"
+__version__: Final[str] = "7.4.1"
 """Current version of SimpleBroker."""
 
 # ==============================================================================

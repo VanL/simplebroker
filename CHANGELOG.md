@@ -5,7 +5,7 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [7.4.1] - 2026-08-24
 
 ### Changed
 
@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Global `--quiet` now suppresses the owned plain-message newline warning
   across read, peek, move, and watch output without hiding unrelated runtime
   warnings. Warning suppression is invocation-local for concurrent callers.
+- Advanced the coordinated first-party extensions to `simplebroker-pg` 3.9.1
+  and `simplebroker-redis` 3.9.1. Both extensions now require
+  `simplebroker>=7.4.1`, and the root `pg` and `redis` extras require the new
+  extension patch versions.
 
 ### Fixed
 
@@ -44,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Queue-wide physical delete now runs in one explicit transaction and rolls
   back on failure, so an interrupted delete can no longer leave partially
   deleted rows behind on multi-statement backends.
+
+### simplebroker-pg 3.9.1
+
+- Synchronized the package and core dependency floor with SimpleBroker 7.4.1.
+
+### simplebroker-redis 3.9.1
+
+- Synchronized the package and core dependency floor with SimpleBroker 7.4.1.
 
 ## [7.4.0] - 2026-08-24
 
