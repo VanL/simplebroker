@@ -793,6 +793,18 @@ class ArgumentProcessor:
         if not self.grammar.action_options.intersection(self.observed_root_options):
             return command_args, False
 
+        # argparse disagrees across supported Python versions about a leading
+        # end-of-options marker when no subcommand owns the remaining tokens.
+        # Root actions have no positional operands, so resolve that grammar
+        # here instead of letting the runtime version choose the diagnostic.
+        if command_args and command_args[0] == "--":
+            escaped_operands = command_args[1:]
+            if escaped_operands:
+                raise ArgumentParserError(
+                    f"unrecognized arguments: {' '.join(escaped_operands)}"
+                )
+            return [], False
+
         processed: list[str] = []
         options_ended = False
         json_requested = False

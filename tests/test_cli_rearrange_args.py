@@ -152,6 +152,17 @@ class TestArgumentProcessor:
         args = ["write", "queue", "message"]
         assert _normalize_args(args) == ["write", "queue", "message"]
 
+    @pytest.mark.parametrize("action", ["--status", "--cleanup", "--vacuum"])
+    def test_root_action_rejects_operands_after_explicit_marker(
+        self, action: str
+    ) -> None:
+        with pytest.raises(ArgumentParserError, match=r"--json"):
+            _normalize_args([action, "--", "--json"])
+
+    @pytest.mark.parametrize("action", ["--status", "--cleanup", "--vacuum"])
+    def test_root_action_accepts_terminal_explicit_marker(self, action: str) -> None:
+        assert _normalize_args([action, "--"]) == [action]
+
     def test_global_options_before_subcommand(self):
         """Test with global options already in correct position."""
         args = ["-d", "/tmp", "-f", "test.db", "write", "queue", "message"]
