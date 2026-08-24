@@ -51,6 +51,8 @@ def test_ext_all_exports():
     ]
 
     assert set(ext.__all__) == set(expected)
+    assert "UnknownBackendPluginError" not in ext.__all__
+    assert not hasattr(ext, "UnknownBackendPluginError")
 
 
 def test_watcher_contract_exports():

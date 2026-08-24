@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-24-cli-grammar-validation-and-example-reliability-plan.md | completed — CLI grammar bug correction, pre-target validation, action JSON, typed plugin/default derivation, shell examples, parser fuzzing, and CI timeout/ShellCheck hardening landed after full local, extension, downstream, possession, and independent-review gates; owner directed targeted closure with hosted Windows/POSIX/Atheris retained as post-commit evidence |
 | 2026-08-24-cli-output-and-error-contract-remediation-plan.md | active — class 5 risky public CLI/command-layer contract remediation; local full/static/docs/downstream/review gates pass, landing and exact-SHA Windows pending |
 | 2026-08-24-failure-path-and-contract-findings-resolution-plan.md | completed — watcher callback failures surface terminally; CLI/context contracts, peek/delete reliability, private cleanup, and the durable no-index vacuum disposition are implemented and verified |
 | 2026-08-24-phaselock-status-temp-ownership-plan.md | completed — stale fallback-marker cleanup is lock-owned across status and xattr backends; ordering, unlink-failure, fallback-transition, stress, and independent-review gates passed |

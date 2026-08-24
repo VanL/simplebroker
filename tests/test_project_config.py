@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from simplebroker._constants import load_config
+from simplebroker._exceptions import UnknownBackendPluginError
 from simplebroker._project_config import (
     _same_filesystem,
     find_project_config,
@@ -805,7 +806,8 @@ def test_resolve_target_missing_postgres_plugin_has_install_hint(
     config = load_config()
 
     def raise_unknown(name: str) -> None:
-        raise RuntimeError(f"Unknown backend plugin: {name}")
+        del name
+        raise UnknownBackendPluginError("wording intentionally does not identify it")
 
     monkeypatch.setattr("simplebroker.project.get_backend_plugin", raise_unknown)
 
@@ -817,6 +819,30 @@ def test_resolve_target_missing_postgres_plugin_has_install_hint(
         ),
     ):
         target_for_directory(tmp_path, config=config)
+
+
+def test_resolve_target_does_not_prose_match_other_plugin_runtime_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the typed unknown-plugin failure should receive install guidance."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("BROKER_BACKEND", "postgres")
+    config = load_config()
+    failure = RuntimeError("Unknown backend plugin: postgres")
+
+    def raise_other_runtime_error(name: str) -> None:
+        del name
+        raise failure
+
+    monkeypatch.setattr(
+        "simplebroker.project.get_backend_plugin",
+        raise_other_runtime_error,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        target_for_directory(tmp_path, config=config)
+
+    assert exc_info.value is failure
 
 
 def test_resolve_project_target_prefers_project_values_over_env_target(

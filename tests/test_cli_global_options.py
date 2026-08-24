@@ -7,32 +7,42 @@ import pytest
 from .conftest import run_cli
 
 
-def test_free_form_message_can_look_like_global_option(workdir: Path):
-    """Global-looking message text after write is treated as data."""
-    code, stdout, _stderr = run_cli("write", "q1", "--cleanup", cwd=workdir)
-    assert code == 0
+def test_registered_write_message_requires_explicit_escape(workdir: Path):
+    code, stdout, stderr = run_cli("write", "q1", "--cleanup", cwd=workdir)
+    assert code == 1
+    assert stdout == ""
+    assert "use --" in stderr.lower()
 
-    # Verify message was written
-    code, stdout, _stderr = run_cli("read", "q1", cwd=workdir)
-    assert code == 0
-    assert stdout.strip() == "--cleanup"
+    code, stdout, stderr = run_cli("write", "q1", "--", "--cleanup", cwd=workdir)
+    assert code == 0, stderr
+    assert run_cli("read", "q1", cwd=workdir)[1] == "--cleanup"
 
 
-def test_broadcast_message_can_look_like_global_option(workdir: Path):
-    """Global-looking message text after broadcast is treated as data."""
+@pytest.mark.parametrize(
+    "token",
+    ["--cleanup", "--json", "--after=1s", "--target=other", "-m123", "-d/tmp"],
+)
+def test_registered_broadcast_message_requires_explicit_escape(
+    workdir: Path, token: str
+):
     code, stdout, _stderr = run_cli("write", "q1", "seed", cwd=workdir)
     assert code == 0
 
-    code, stdout, _stderr = run_cli("broadcast", "--cleanup", cwd=workdir)
-    assert code == 0
+    code, stdout, stderr = run_cli("broadcast", token, cwd=workdir)
+    assert code == 1
+    assert stdout == ""
+    assert "use --" in stderr.lower()
 
     code, stdout, _stderr = run_cli("read", "q1", cwd=workdir)
     assert code == 0
     assert stdout.strip() == "seed"
 
+    code, stdout, stderr = run_cli("broadcast", "--", token, cwd=workdir)
+    assert code == 0, stderr
+
     code, stdout, _stderr = run_cli("read", "q1", cwd=workdir)
     assert code == 0
-    assert stdout.strip() == "--cleanup"
+    assert stdout.strip() == token
 
 
 def test_global_options_before_subcommand(workdir: Path):

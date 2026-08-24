@@ -1456,11 +1456,18 @@ class TestQueueWatcher(WatcherTestBase):
 class TestPollingStrategy:
     """Test polling strategy behavior."""
 
-    def test_default_burst_sleep_uses_ambient_free_canonical_config_default(
+    def test_defaults_use_ambient_free_canonical_config_snapshot(
         self,
         monkeypatch,
     ):
-        monkeypatch.setenv("BROKER_BURST_SLEEP", "0.5")
+        poisoned = {
+            "BROKER_INITIAL_CHECKS": "701",
+            "BROKER_MAX_INTERVAL": "8.25",
+            "BROKER_BURST_SLEEP": "0.5",
+            "BROKER_JITTER_FACTOR": "0.875",
+        }
+        for key, value in poisoned.items():
+            monkeypatch.setenv(key, value)
         result = subprocess.run(
             [
                 sys.executable,
@@ -1472,11 +1479,92 @@ import threading
 from simplebroker import resolve_isolated_config
 from simplebroker.ext import PollingStrategy
 
-default = inspect.signature(PollingStrategy).parameters["burst_sleep"].default
-assert default == resolve_isolated_config({})["BROKER_BURST_SLEEP"]
-assert type(default) is float
-assert PollingStrategy(threading.Event())._burst_sleep == default
-assert PollingStrategy(threading.Event(), burst_sleep=0.25)._burst_sleep == 0.25
+config = resolve_isolated_config({})
+parameter_keys = {
+    "initial_checks": "BROKER_INITIAL_CHECKS",
+    "max_interval": "BROKER_MAX_INTERVAL",
+    "burst_sleep": "BROKER_BURST_SLEEP",
+    "jitter_factor": "BROKER_JITTER_FACTOR",
+}
+parameters = inspect.signature(PollingStrategy).parameters
+for parameter, key in parameter_keys.items():
+    default = parameters[parameter].default
+    assert default == config[key]
+    assert type(default) is type(config[key])
+
+strategy = PollingStrategy(threading.Event())
+assert strategy._initial_checks == config["BROKER_INITIAL_CHECKS"]
+assert strategy._max_interval == config["BROKER_MAX_INTERVAL"]
+assert strategy._burst_sleep == config["BROKER_BURST_SLEEP"]
+assert strategy._jitter_factor == config["BROKER_JITTER_FACTOR"]
+
+explicit = PollingStrategy(
+    threading.Event(),
+    initial_checks=13,
+    max_interval=0.625,
+    burst_sleep=0.25,
+    jitter_factor=0.375,
+)
+assert explicit._initial_checks == 13
+assert explicit._max_interval == 0.625
+assert explicit._burst_sleep == 0.25
+assert explicit._jitter_factor == 0.375
+""",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+
+    def test_all_defaults_derive_from_one_isolated_canonical_snapshot(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import importlib
+import inspect
+import threading
+
+import simplebroker._constants as constants
+import simplebroker.watcher as watcher
+
+real_resolve_isolated_config = constants.resolve_isolated_config
+calls = []
+injected = {
+    "BROKER_INITIAL_CHECKS": 7,
+    "BROKER_MAX_INTERVAL": 0.625,
+    "BROKER_BURST_SLEEP": 0.0125,
+    "BROKER_JITTER_FACTOR": 0.375,
+}
+
+def resolve_injected(overrides):
+    calls.append(dict(overrides))
+    return real_resolve_isolated_config(injected | dict(overrides))
+
+constants.resolve_isolated_config = resolve_injected
+watcher = importlib.reload(watcher)
+
+parameters = inspect.signature(watcher.PollingStrategy).parameters
+parameter_keys = {
+    "initial_checks": "BROKER_INITIAL_CHECKS",
+    "max_interval": "BROKER_MAX_INTERVAL",
+    "burst_sleep": "BROKER_BURST_SLEEP",
+    "jitter_factor": "BROKER_JITTER_FACTOR",
+}
+assert calls == [{}]
+for parameter, key in parameter_keys.items():
+    default = parameters[parameter].default
+    assert default == injected[key]
+    assert type(default) is type(injected[key])
+
+strategy = watcher.PollingStrategy(threading.Event())
+assert strategy._initial_checks == injected["BROKER_INITIAL_CHECKS"]
+assert strategy._max_interval == injected["BROKER_MAX_INTERVAL"]
+assert strategy._burst_sleep == injected["BROKER_BURST_SLEEP"]
+assert strategy._jitter_factor == injected["BROKER_JITTER_FACTOR"]
 """,
             ],
             text=True,

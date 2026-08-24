@@ -190,6 +190,26 @@ def test_api_generators_watchers_sidecar_io_errors_language() -> None:
     assert "lower layers and later lazy resource" in config.lower()
 
 
+def test_api_polling_strategy_defaults_match_canonical_config() -> None:
+    """[SB-API-6] binds all public constructor defaults to canonical config."""
+    watch = _section("SB-API-6")
+    parameter_keys = {
+        "initial_checks": "BROKER_INITIAL_CHECKS",
+        "max_interval": "BROKER_MAX_INTERVAL",
+        "burst_sleep": "BROKER_BURST_SLEEP",
+        "jitter_factor": "BROKER_JITTER_FACTOR",
+    }
+    config = simplebroker.resolve_isolated_config({})
+    parameters = inspect.signature(ext.PollingStrategy).parameters
+
+    assert list(parameters) == ["stop_event", *parameter_keys]
+    for parameter, key in parameter_keys.items():
+        assert key in watch
+        default = parameters[parameter].default
+        assert default == config[key]
+        assert type(default) is type(config[key])
+
+
 def test_api_activity_waiter_terminal_close_contract() -> None:
     body = _section("SB-API-6")
     normalized_body = " ".join(body.split()).lower()

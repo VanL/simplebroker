@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from ._backend_plugins import BackendPlugin, get_backend_plugin
 from ._constants import ResolvedConfig, snapshot_config
+from ._exceptions import UnknownBackendPluginError
 from ._paths import _find_project_database
 from ._project_config import (
     find_project_config,
@@ -32,9 +33,7 @@ def _root_from_relative_target(target_path: Path, relative_target: Path) -> Path
 def _requested_backend_plugin(name: str) -> BackendPlugin:
     try:
         return get_backend_plugin(name)
-    except RuntimeError as exc:
-        if str(exc) != f"Unknown backend plugin: {name}":
-            raise
+    except UnknownBackendPluginError as exc:
         if name == "postgres":
             raise RuntimeError(
                 "Requested backend 'postgres' is not available. "

@@ -146,6 +146,15 @@ def test_fuzz_workflow_uses_frozen_uv_environment() -> None:
     )
 
 
+def test_fuzz_workflow_registers_every_harness() -> None:
+    workflow_text = _workflow_text("fuzz.yml")
+    harnesses = ("timestamp_validate", "dump_load", "cli_args")
+
+    assert f"harness: [{', '.join(harnesses)}]" in workflow_text
+    for harness in harnesses:
+        assert (ROOT / "fuzz" / f"fuzz_{harness}.py").is_file()
+
+
 def test_fuzz_dependency_group_is_opt_in() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
@@ -344,6 +353,22 @@ def test_python_examples_run_in_the_frozen_lint_environment() -> None:
     assert mypy_command in lint_section
     assert lint_section.index("uv sync --frozen") < lint_section.index(pytest_command)
     assert lint_section.index(pytest_command) < lint_section.index(mypy_command)
+
+
+def test_shell_examples_are_checked_in_the_linux_lint_job() -> None:
+    workflow_text = _workflow_text("test.yml")
+    lint_section = workflow_text.split("  lint:", 1)[1].split("  packaging:", 1)[0]
+
+    install_command = "sudo apt-get install --yes shellcheck"
+    version_command = "shellcheck --version"
+    check_command = (
+        "uv run --frozen --no-sync python bin/release.py --check-shell-examples"
+    )
+    assert install_command in lint_section
+    assert version_command in lint_section
+    assert check_command in lint_section
+    assert lint_section.index(install_command) < lint_section.index(version_command)
+    assert lint_section.index(version_command) < lint_section.index(check_command)
 
 
 def test_lint_workflow_type_checks_every_green_core_test_file() -> None:
@@ -661,22 +686,41 @@ def test_coverage_jobs_bound_hangs_and_report_the_active_test() -> None:
         assert "--max-worker-restart=0" in step
 
 
-def test_matrix_jobs_fail_closed_on_worker_loss() -> None:
+def test_every_matrix_pytest_path_bounds_hangs_and_worker_loss() -> None:
+    """Derive every matrix pytest step; a new unbounded step must fail here."""
     workflow_text = _workflow_text("test.yml")
     matrix_job = workflow_text.split("  test:", 1)[1].split("  lint:", 1)[0]
     job_header = matrix_job.split("    steps:", 1)[0]
 
     assert "    timeout-minutes: 45" in job_header
 
-    for step_name in (
+    pytest_steps: dict[str, str] = {}
+    for raw_step in matrix_job.split("    - name: ")[1:]:
+        step_name = raw_step.split("\n", 1)[0].strip()
+        if " pytest " in raw_step or raw_step.rstrip().endswith("pytest"):
+            pytest_steps[step_name] = raw_step
+
+    # The derivation itself is load-bearing: these known steps must be found,
+    # or the parser is matching nothing and the gate is vacuous.
+    for known_step in (
         "Run tests with pytest",
         "Run Windows tests with pytest",
+        "Run Windows tests with coverage",
+        "Run SQLite cross-thread finalization probe",
         "Run phaselock fallback-path gate",
+        "Run Windows phaselock fallback-path gate with coverage",
     ):
-        step = matrix_job.split(f"    - name: {step_name}", 1)[1].split(
-            "    - name:", 1
-        )[0]
-        assert "--max-worker-restart=0" in step
+        assert known_step in pytest_steps, known_step
+
+    for step_name, step in pytest_steps.items():
+        assert "--timeout=180" in step, step_name
+        assert "--timeout-method=thread" in step, step_name
+        if "-n auto" in step:
+            assert "--dist loadgroup" in step, step_name
+            assert "--max-worker-restart=0" in step, step_name
+        else:
+            # A deliberately serial pytest step must say so explicitly.
+            assert "-n0" in step, step_name
 
 
 def test_windows_tests_keep_default_xdist_contention() -> None:
@@ -842,7 +886,7 @@ def test_finalization_probes_run_once_in_their_owning_linux_workflows() -> None:
             "${{ matrix.os }}",
             "matrix.os == 'ubuntu-latest' && matrix.python-version == '3.13'",
             "tests/test_cross_thread_generator_probe.py",
-            "uv run --frozen --no-sync pytest -n0 -q",
+            "uv run --frozen --no-sync pytest -n0 -q --timeout=180 --timeout-method=thread",
         ),
         "test-pg-extension.yml": (
             "test-pg",

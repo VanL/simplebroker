@@ -13,6 +13,7 @@ from simplebroker import Queue
 from simplebroker._backend_plugins import BACKEND_API_VERSION
 from simplebroker._backends import get_backend
 from simplebroker._constants import __version__ as SIMPLEBROKER_VERSION
+from simplebroker._exceptions import UnknownBackendPluginError
 from simplebroker._runner import SetupPhase
 from simplebroker._targets import BrokerTarget
 from simplebroker.db import DBConnection
@@ -128,9 +129,14 @@ def test_sqlite_plugin_reports_missing_magic_metadata() -> None:
 
 
 def test_unknown_backend_plugin_raises_clear_error() -> None:
-    """Unknown backends should fail with a readable exception."""
-    with pytest.raises(RuntimeError, match="Unknown backend plugin: missing"):
+    """Unknown backends use the internal typed RuntimeError-compatible seam."""
+    with pytest.raises(
+        UnknownBackendPluginError,
+        match="Unknown backend plugin: missing",
+    ) as exc_info:
         get_backend_plugin("missing")
+
+    assert isinstance(exc_info.value, RuntimeError)
 
 
 def test_external_backend_plugin_resolves_via_entry_point(

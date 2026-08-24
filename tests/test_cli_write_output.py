@@ -1,10 +1,9 @@
 """CLI contract: `broker write -t` / `--json` print the committed message ID.
 
-Default `broker write` output stays empty (silent success). The new flags
-are recognized before the queue name, after a non-dash literal message, or
-after the explicit stdin marker `-`. A dash-leading operand after the queue
-is still a LITERAL message (backward compatibility with the operand
-protection in cli.py).
+Default `broker write` output stays empty (silent success). Output flags are
+recognized before the queue name, after a non-dash literal message, or after
+the explicit stdin marker `-`. Registered option spellings require an explicit
+`--` when used as message data; unknown dash-leading operands remain literal.
 """
 
 import json
@@ -117,16 +116,59 @@ def test_dash_leading_queue_operand_still_fails_validation(workdir):
     assert "unrecognized arguments" not in stderr
 
 
-def test_dash_leading_operand_after_queue_stays_literal(workdir):
-    """Backward compatibility: `write q -t` writes the LITERAL message -t."""
-    code, stdout, stderr = run_cli("write", "q", "-t", cwd=workdir)
+def test_output_option_after_queue_uses_omitted_message_stdin(workdir):
+    code, stdout, stderr = run_cli("write", "q", "-t", cwd=workdir, stdin="piped body")
 
     assert code == 0, stderr
-    assert stdout == ""
+    assert _ID_RE.match(stdout), stdout
 
     code, out, _ = run_cli("read", "q", cwd=workdir)
     assert code == 0
-    assert out == "-t"
+    assert out == "piped body"
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "--cleanup",
+        "--cleanup=yes",
+        "--force",
+        "--after=1s",
+        "--target=other",
+        "-m123",
+        "-pqueue*",
+        "-d/tmp",
+    ],
+)
+def test_registered_non_write_option_rejects_without_target_mutation(workdir, token):
+    code, stdout, stderr = run_cli("write", "q", token, cwd=workdir)
+
+    assert code == 1
+    assert stdout == ""
+    assert token in stderr
+    assert "use --" in stderr.lower()
+    assert "traceback" not in stderr.lower()
+    assert not (workdir / ".broker.db").exists()
+
+
+@pytest.mark.parametrize("message", ["--not-registered", "-t-prefixed"])
+def test_unknown_dash_leading_write_message_remains_literal(workdir, message):
+    code, stdout, stderr = run_cli("write", "q", message, cwd=workdir)
+
+    assert code == 0, stderr
+    assert stdout == ""
+    assert run_cli("read", "q", cwd=workdir)[1] == message
+
+
+def test_raw_json_does_not_establish_mode_for_registered_token_conflict(workdir):
+    code, stdout, stderr = run_cli("write", "q", "--json", "--cleanup", cwd=workdir)
+
+    assert code == 1
+    assert stdout == ""
+    assert not stderr.startswith("{")
+    assert "--cleanup" in stderr
+    assert "use --" in stderr.lower()
+    assert not (workdir / ".broker.db").exists()
 
 
 def test_flag_plus_literal_dash_message_via_escape(workdir):

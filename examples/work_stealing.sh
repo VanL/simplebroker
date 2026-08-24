@@ -311,6 +311,8 @@ run_workers() {
 
 # Main menu
 main() {
+    local choice="${1:-}"
+
     echo "SimpleBroker Work Stealing Examples"
     echo "==================================="
     echo
@@ -324,7 +326,9 @@ main() {
     echo "8. Setup demo workload"
     echo
     
-    read -r -p "Select an example (1-8): " choice
+    if [ -z "$choice" ]; then
+        read -r -p "Select an example (1-8): " choice
+    fi
     
     case $choice in
         1) round_robin_distribution ;;
@@ -335,7 +339,10 @@ main() {
         6) monitor_queues ;;
         7) run_workers ;;
         8) setup_demo ;;
-        *) echo "Invalid choice" ;;
+        *)
+            echo "Invalid choice: $choice" >&2
+            return 1
+            ;;
     esac
 }
 

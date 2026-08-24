@@ -270,6 +270,18 @@ def test_broadcast_queue_prefix_can_be_literal_after_double_dash(workdir):
     ]
 
 
+def test_broadcast_empty_long_option_prefix_remains_literal(workdir):
+    assert run_cli("write", "alpha", "seed", cwd=workdir)[0] == 0
+
+    rc, _, stderr = run_cli("broadcast", "--=x", cwd=workdir)
+
+    assert rc == 0, stderr
+    assert run_cli("peek", "alpha", "--all", cwd=workdir)[1].splitlines() == [
+        "seed",
+        "--=x",
+    ]
+
+
 def test_broadcast_with_attached_short_pattern(workdir):
     run_cli("write", "queue-one", "original", cwd=workdir)
     run_cli("write", "other", "original", cwd=workdir)

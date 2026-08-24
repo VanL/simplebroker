@@ -91,7 +91,7 @@ jobs:
     - name: Run tests with pytest
       if: matrix.os != 'windows-latest'
       run: |
-        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --max-worker-restart=0"
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0"
 
     - name: Run Windows tests with pytest
       if: matrix.os == 'windows-latest' && matrix.python-version != '3.14'
@@ -105,7 +105,7 @@ jobs:
         PYTEST_ADDOPTS: ""
       run: |
         test "${SIMPLEBROKER_RUN_FINALIZATION_PROBE}" = "1"
-        uv run --frozen --no-sync pytest -n0 -q tests/test_cross_thread_generator_probe.py
+        uv run --frozen --no-sync pytest -n0 -q --timeout=180 --timeout-method=thread tests/test_cross_thread_generator_probe.py
 
     - name: Run Windows tests with coverage
       if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
@@ -122,7 +122,7 @@ jobs:
       env:
         PHASELOCK_ENABLE_XATTRS: "0"
       run: |
-        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --max-worker-restart=0" tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
+        uv run --frozen --no-sync pytest -v --tb=short -m "not benchmark" --override-ini="addopts=-ra -q --strict-markers -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0" tests/test_phaselock.py tests/test_runner_validation.py tests/test_runner_error_handling.py tests/test_queue_config_defaults.py tests/test_sqlite_setup_contention.py
 
     - name: Run Windows phaselock fallback-path gate with coverage
       if: matrix.os == 'windows-latest' && matrix.python-version == '3.14'
@@ -185,6 +185,16 @@ jobs:
     - name: Install dependencies
       run: |
         uv sync --frozen --extra dev --extra pg --extra redis --python "${{ steps.sync-python.outputs.python-path }}"
+
+    - name: Install ShellCheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes shellcheck
+
+    - name: Check shell examples
+      run: |
+        shellcheck --version
+        uv run --frozen --no-sync python bin/release.py --check-shell-examples
 
     - name: Test Python examples
       run: uv run --frozen --no-sync pytest -n auto examples

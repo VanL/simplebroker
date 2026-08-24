@@ -125,20 +125,39 @@ _Implementation mapping_:
 Global options (for example `-f` / `--file`, `-d` / `--dir`) must appear
 **before** the subcommand.
 
-`write` has a free-form message operand and therefore preserves a narrower
-option-position compatibility rule. Its output options (`-t`,
-`--timestamps`, and `--json`) are recognized before the queue name, after a
-non-dash literal message, after the stdin marker `-`, or before an explicit
-`--` whose following token supplies the literal message. Otherwise, the first
-dash-leading token after the queue name is message content even when it spells
-a recognized write or root option such as `--cleanup`. Unescaped `-h` /
-`--help` remains the help request; place it after `--` to write it literally.
+`write` and `broadcast` have free-form operands and therefore preserve a
+narrower option-position compatibility rule. Before an explicit `--`, a token
+that exactly spells any option registered by the complete CLI grammar is never
+silently converted into message data. A command-local option is interpreted as
+that option. An option owned by the root or another command is rejected before
+target resolution or mutation, and the diagnostic tells the caller to place
+`--` before the token to send it literally. The same rule applies to a
+registered long option in `--name=value` form and to supported attached values
+for registered value-taking short options; a shared prefix alone does not make
+an otherwise unknown token registered. Command-specific contracts may still
+reject option abbreviations before mutation, as broadcast does in `[SB-BCAST-5]`.
 
-`--` ends option interpretation. For example,
-`broker write -t tasks -- "-literal"` requests timestamp output and writes
-`-literal`. Root options and root actions appearing after a subcommand are
-never hoisted back to the root parser. These rules preserve dash-leading data
-and prevent a message such as `--cleanup` from becoming a destructive action.
+`write` output options (`-t`, `--timestamps`, and `--json`) are recognized in
+every currently supported option position before `--`: before the queue,
+after a non-dash literal message, after the stdin marker `-`, or before the
+explicit marker whose following token supplies literal data. An unescaped
+output option with no message follows the ordinary omitted-message stdin
+contract; it is not the message. `broadcast` selectors retain their current
+command-local forms. Unescaped `-h` / `--help` remains a side-effect-free help
+request.
+
+`--` ends option interpretation and is the required escape for a literal
+registered spelling. For example, `broker write -t tasks -- "--cleanup"`
+requests timestamp output and writes `--cleanup`; `broker broadcast --
+"--help"` broadcasts that literal body. Root options and root actions after a
+subcommand are never hoisted or executed at the root. Rejection of an
+unescaped registered root token therefore cannot trigger the root action.
+
+Registered-token conflicts are detected during argv normalization, before
+argparse has established an output mode. Such a conflict therefore uses the
+plain pre-parse error dialect even when another raw token spells `--json`.
+Once a command-local `--json` is parsed successfully, later failures follow
+`[SB-CLI-4]`.
 
 `init` is current-directory initialization and rejects an explicitly supplied
 `-d` / `--dir` or `-f` / `--file` with exit `1`; it never silently discards an
@@ -146,6 +165,13 @@ explicit target.
 
 _Implementation mapping_:
 - `simplebroker/cli.py`
+
+_Verification_:
+- `tests/test_cli_rearrange_args.py::test_preparse_grammar_matches_constructed_parser`
+- `tests/test_cli_contract_sb_cli.py::test_sb_cli_3_write_token_matrix`
+- `tests/test_cli_contract_sb_cli.py::test_sb_cli_3_registered_write_tokens_reject_before_mutation`
+- `tests/test_cli_write_output.py::test_registered_non_write_option_rejects_without_target_mutation`
+- `tests/test_cli_global_options.py::test_registered_broadcast_message_requires_explicit_escape`
 
 ## JSON and related output shapes [SB-CLI-4]
 
@@ -163,7 +189,14 @@ not make that diagnostic JSON.
 | `write` with `--json` | `{"timestamp":"<message-id JSON string>"}` for the new message (body is not echoed) |
 | `write` with `-t` / `--timestamps` | The unchanged bare-decimal id on stdout; this is text, not the JSON padding contract |
 | global `--status --json` | One object with numeric `total_messages` and `db_size`, plus `last_timestamp` as the high-water JSON string (`[SB-ID-3]`) |
+| global `--cleanup --json` or `--vacuum --json` | No success document on stdout; JSON mode governs post-parse error diagnostics. Existing human success commentary remains on stderr and is suppressed only by `--quiet`. |
 | `list`, `exists`, `stats`, `rename`, and similar metadata commands with `--json` | Command-specific objects (for example `list` uses `queue`; not message-line objects) |
+
+For the global status, cleanup, and vacuum action families, an unescaped
+`--json` before an explicit `--` establishes JSON mode even though the action
+is root-position only. Vacuum follows the same post-parse structured-error
+boundary as status and cleanup; it does not fall back to bare argparse
+diagnostics after that mode is established.
 
 Dump `id` and `last_ts` types are owned by `[SB-IO-1]`. Timestamps are included
 on message-line JSON (`message` + `timestamp`). Other JSON shapes follow the
@@ -208,6 +241,13 @@ _Implementation mapping_:
 - `simplebroker/commands.py`
 - `simplebroker/cli.py`
 
+_Verification_:
+- `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_error_inventory_and_public_paths`
+- `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_post_parse_global_errors_preserve_json`
+- `tests/test_vacuum_compact.py::test_cli_vacuum_json_establishes_error_mode_without_success_payload`
+- `tests/test_vacuum_compact.py::test_cli_vacuum_json_structures_post_parse_target_error`
+- `tests/test_vacuum_compact.py::test_cli_vacuum_json_structures_corrupt_target_error`
+
 ## Non-exact bound string forms [SB-CLI-5]
 
 CLI `--after` and `--before` accept string forms that parse to integer message
@@ -248,17 +288,41 @@ accepts only an exact 19-digit broker message id and is owned by `[SB-ID-4]`.
 A malformed `-m` value errors on stderr and exits `1`; a well-formed id with
 no match is silent and exits `2` (`[SB-CLI-1]`).
 
+After argument parsing establishes the output dialect, every supplied bound is
+validated before broker-target resolution: `read`, `peek`, and `move` validate
+both `--after` and `--before`; `watch` validates its supported `--after` bound.
+A malformed bound therefore
+performs no project discovery, plugin load, filesystem or database inspection,
+target initialization, or network operation. It exits `1` with the ordinary
+timestamp diagnostic, or with `[SB-CLI-4]` code `INVALID_TIMESTAMP` when JSON
+mode has been established. Valid bounds are still normalized by the
+command-layer owner before execution so direct Python command callers retain
+the same validation.
+
 Integer predicates and filter meaning after parsing are `[SB-SELECT-*]`.
 
 _Implementation mapping_:
 - `simplebroker/_timestamp.py` (`TimestampGenerator.validate`)
 - `simplebroker/cli.py` (`--after` / `--before` presentation)
 
+_Verification_:
+- `tests/test_cli_contract_sb_cli.py::test_sb_cli_5_invalid_bounds_win_before_corrupt_target_inspection`
+- `tests/test_cli_main.py::test_invalid_timestamp_never_observes_target`
+- `tests/test_cli_contract_sb_cli.py::test_sb_cli_5_exact_evidence_manifest`
+
 ## Related Plans
 
 - completed: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
-  strategy-D [SB-CLI-3] clarification and executable write-token matrix;
-  implemented and verified from baseline `1b8ecfa0`
+  historical Strategy-D [SB-CLI-3] clarification and write-token matrix from
+  baseline `1b8ecfa0`; its registered-token-as-data judgment is superseded by
+  the corrected option grammar in
+  2026-08-24-cli-grammar-validation-and-example-reliability-plan, while its
+  unrelated completed findings remain authoritative
+- completed: 2026-08-24-cli-grammar-validation-and-example-reliability-plan —
+  corrected [SB-CLI-3] option recognition and implemented the linked parser,
+  validation, action JSON, example, fuzz, and CI reliability slices; owner
+  directed targeted closure with hosted Windows/POSIX/Atheris retained as
+  post-commit evidence
 - active: 2026-08-24-cli-output-and-error-contract-remediation-plan — reviewed
   Strategy-A spec promotion at baseline `0901c7cd`; local runtime, contract,
   static, documentation, downstream Weft, and independent-review evidence
@@ -308,11 +372,16 @@ _Implementation mapping_:
   (exact direct-command inventory, write-versus-flush failures, mutation
   durability, and the bare-stdout static gate)
 - `tests/test_cli_contract_sb_cli.py` — [SB-CLI-2], [SB-CLI-3], [SB-CLI-4],
-  including the canonical free-form `write` operand rule and its enumerable
-  token matrix
+  [SB-CLI-5], including the complete-grammar registered-token matrix and the
+  pre-target timestamp matrix
 - `tests/test_cli_write_output.py`; `tests/test_cli_rearrange_args.py` —
-  [SB-CLI-3] write-output placement, dash-leading literals, help, and explicit
-  `--` behavior
+  [SB-CLI-3] write-output placement, registered-token rejection, unknown
+  dash-leading literals, help, explicit `--`, and grammar conservation
+- `tests/test_property_cli_args.py` — parser totality, no-hoisting, explicit
+  marker, registered-token, and unknown dash-leading properties; scheduled
+  Atheris execution is wired through `fuzz/fuzz_cli_args.py`
+- `tests/test_vacuum_compact.py` — [SB-CLI-4] vacuum JSON-mode establishment,
+  no-success-document behavior, quiet commentary, and structured errors
 - `[SB-CLI-2]` ordinary diagnostic dialect:
   `tests/test_alias_cli.py::test_cmd_alias_add_remove_direct`,
   `tests/test_commands_init.py::TestInitCommand::test_init_permission_error_database_creation`

@@ -187,9 +187,11 @@ def test_sb_cli_3_write_free_form_operand_rule_is_canonical() -> None:
     ):
         assert token in section
     assert (
-        "first dash-leading token after the queue name is message content" in normalized
+        "exactly spells any option registered by the complete CLI grammar" in normalized
     )
-    assert "Root options and root actions appearing after a subcommand" in normalized
+    assert "otherwise unknown token registered" in normalized
+    assert "required escape for a literal registered spelling" in normalized
+    assert "never hoisted or executed at the root" in normalized
 
 
 @pytest.mark.parametrize(
@@ -199,10 +201,14 @@ def test_sb_cli_3_write_free_form_operand_rule_is_canonical() -> None:
         (("write", "q", "body", "--timestamps"), None, "body", "id"),
         (("write", "q", "-", "--json"), "piped", "piped", "json"),
         (("write", "q", "--json", "--", "--cleanup"), None, "--cleanup", "json"),
-        (("write", "q", "-t"), None, "-t", "silent"),
-        (("write", "q", "--timestamps"), None, "--timestamps", "silent"),
-        (("write", "q", "--json"), None, "--json", "silent"),
-        (("write", "q", "--cleanup"), None, "--cleanup", "silent"),
+        (("write", "q", "-t"), "short-body", "short-body", "id"),
+        (
+            ("write", "q", "--timestamps"),
+            "long-body",
+            "long-body",
+            "id",
+        ),
+        (("write", "q", "--json"), "json-body", "json-body", "json"),
         (("write", "q", "-h"), None, None, "help"),
         (("write", "q", "--help"), None, None, "help"),
         (("write", "q", "--", "-h"), None, "-h", "silent"),
@@ -213,10 +219,9 @@ def test_sb_cli_3_write_free_form_operand_rule_is_canonical() -> None:
         "long-output-after-message",
         "json-after-stdin",
         "json-before-marker-root-token-literal",
-        "short-output-token-literal",
-        "long-output-token-literal",
-        "json-token-literal",
-        "root-action-token-literal",
+        "short-output-after-queue",
+        "long-output-after-queue",
+        "json-output-after-queue",
         "short-help",
         "long-help",
         "marker-escapes-short-help",
@@ -247,6 +252,23 @@ def test_sb_cli_3_write_token_matrix(
     read_rc, read_out, read_err = run_cli("read", "q", cwd=workdir)
     assert read_rc == EXIT_SUCCESS, read_err
     assert read_out == expected_message
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["--cleanup", "--force", "--after=1s", "--target=queue", "-pqueue*"],
+)
+def test_sb_cli_3_registered_write_tokens_reject_before_mutation(
+    workdir: Path, token: str
+) -> None:
+    rc, out, err = run_cli("write", "q", token, cwd=workdir)
+
+    assert rc == EXIT_ERROR
+    assert out == ""
+    assert token in err
+    assert "use --" in err.lower()
+    assert "traceback" not in err.lower()
+    assert not (workdir / ".broker.db").exists()
 
 
 def test_sb_cli_3_init_rejects_explicit_targets(workdir: Path) -> None:
@@ -344,6 +366,46 @@ def test_sb_cli_4_error_inventory_and_public_paths(workdir: Path) -> None:
         if expected_code == "INVALID_MESSAGE_ID":
             message = payload["message"].lower()
             assert "19" in message and "digit" in message
+
+
+@pytest.mark.parametrize(
+    "command_args",
+    [
+        ("read", "q", "--after", "bad"),
+        ("read", "q", "--before", "bad"),
+        ("peek", "q", "--after", "bad"),
+        ("peek", "q", "--before", "bad"),
+        ("move", "src", "dst", "--after", "bad"),
+        ("move", "src", "dst", "--before", "bad"),
+        ("watch", "q", "--after", "bad"),
+    ],
+)
+@pytest.mark.parametrize("json_output", [False, True], ids=["plain", "json"])
+def test_sb_cli_5_invalid_bounds_win_before_corrupt_target_inspection(
+    workdir: Path,
+    command_args: tuple[str, ...],
+    json_output: bool,
+) -> None:
+    corrupt_target = workdir / "corrupt.db"
+    corrupt_target.write_text("not a SQLite database", encoding="utf-8")
+    args = ["-f", str(corrupt_target), *command_args]
+    if json_output:
+        args.append("--json")
+
+    rc, out, err = run_cli(*args, cwd=workdir)
+
+    assert rc == EXIT_ERROR
+    assert out == ""
+    assert "Traceback" not in err
+    if json_output:
+        payload = json.loads(err)
+        assert tuple(payload) == _JSON_ERROR_KEYS
+        assert payload["error"] == "INVALID_TIMESTAMP"
+        assert payload["retryable"] is False
+    else:
+        assert not err.startswith("{")
+        assert "invalid timestamp" in err.lower()
+    assert "database" not in err.lower()
 
 
 @pytest.mark.parametrize(

@@ -109,7 +109,7 @@ migrate_by_time() {
     fi
     
     # Move messages older than cutoff
-    broker move "$source" "$dest" --all --after "${cutoff_ts}s"
+    broker move "$source" "$dest" --all --before "${cutoff_ts}s"
     
     echo "Migration complete"
 }
@@ -376,6 +376,8 @@ setup_demo() {
 
 # Main menu
 main() {
+    local choice="${1:-}"
+
     echo "SimpleBroker Queue Migration Examples"
     echo "===================================="
     echo
@@ -390,7 +392,9 @@ main() {
     echo "9. Setup demo"
     echo
     
-    read -r -p "Select an example (1-9): " choice
+    if [ -z "$choice" ]; then
+        read -r -p "Select an example (1-9): " choice
+    fi
     
     case $choice in
         1) 
@@ -458,7 +462,8 @@ main() {
             setup_demo
             ;;
         *)
-            echo "Invalid choice"
+            echo "Invalid choice: $choice" >&2
+            return 1
             ;;
     esac
 }

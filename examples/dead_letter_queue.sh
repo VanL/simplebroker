@@ -39,8 +39,10 @@ simple_dlq_pattern() {
         
         printf "Processing: %s\n" "$msg"
         
-        # Simulate processing (fails if message contains "error")
-        if echo "$msg" | grep -qi "error"; then
+        # Simulate processing (fails if message contains "error").
+        # Herestring input avoids a pipefail SIGPIPE misclassification when
+        # grep -q exits before a large message finishes writing.
+        if grep -qi "error" <<<"$msg"; then
             printf "Failed to process: %s\n" "$msg"
             # Move to DLQ atomically
             if broker move tasks "$DLQ_NAME" -m "$timestamp" 2>/dev/null; then
@@ -127,8 +129,9 @@ dlq_with_retry_count() {
 process_message() {
     local msg="$1"
     
-    # Simulate processing - fails if message contains "fail"
-    if echo "$msg" | grep -qi "fail"; then
+    # Simulate processing - fails if message contains "fail". Herestring
+    # input avoids a pipefail SIGPIPE misclassification on large messages.
+    if grep -qi "fail" <<<"$msg"; then
         printf "Processing failed for: %s\n" "$msg"
         return 1
     else
@@ -149,11 +152,14 @@ dlq_with_retry_delays() {
     process_retry_queue &
     local retry_pid=$!
     
-    # Handle interrupts gracefully
+    # Handle interrupts gracefully, and kill both workers on any exit so a
+    # fail-closed retry error under errexit cannot orphan the sibling worker.
     trap 'kill "$main_pid" "$retry_pid" 2>/dev/null; exit 0' INT TERM
-    
+    trap 'kill "$main_pid" "$retry_pid" 2>/dev/null' EXIT
+
     # Wait for both processes
-    wait $main_pid $retry_pid
+    wait "$main_pid" "$retry_pid"
+    trap - EXIT
 }
 
 process_with_delays() {
@@ -180,7 +186,7 @@ process_with_delays() {
             local retry_msg
             retry_msg=$(jq -n \
                 --arg msg "$msg" \
-                --arg next "$next_retry" \
+                --argjson next "$next_retry" \
                 '{original: $msg, next_retry: $next, attempts: 1}')
             
             # Write to retry queue and delete from main queue
@@ -194,60 +200,110 @@ process_with_delays() {
     done
 }
 
+process_retry_queue_once() (
+    # `peek --all` uses offset pagination. Finish a bounded snapshot before
+    # exact-ID mutation so deleting one row cannot shift a later page.
+    local snapshot
+    snapshot=$(mktemp "${TMPDIR:-/tmp}/simplebroker-retry.XXXXXX")
+    trap 'rm -f -- "$snapshot"' EXIT
+    trap 'rm -f -- "$snapshot"; trap - EXIT; exit 130' HUP INT TERM
+
+    local peek_status=0
+    broker peek retry_queue --all --json > "$snapshot" || peek_status=$?
+    if [ "$peek_status" -ne 0 ]; then
+        if [ "$peek_status" -ne 2 ]; then
+            echo "Failed to snapshot retry_queue; no retry messages were changed" >&2
+            return "$peek_status"
+        fi
+    fi
+
+    # Validate the complete outer envelope and nested retry payload before the
+    # first broker mutation. Numeric equality to floor accepts 1.0, not 1.5.
+    local line
+    local timestamp
+    while IFS= read -r line || [ -n "$line" ]; do
+        if ! jq -ce '
+            (.timestamp | type == "string" and test("^[0-9]{19}$")) and
+            (.message | type == "string") and
+            ((.message | fromjson) as $retry |
+                ($retry | type == "object") and
+                ($retry.original | type == "string") and
+                ($retry.next_retry | type == "number") and
+                ($retry.next_retry >= 0) and
+                ($retry.next_retry == ($retry.next_retry | floor)) and
+                ($retry.attempts | type == "number") and
+                ($retry.attempts >= 1) and
+                ($retry.attempts == ($retry.attempts | floor)))
+        ' >/dev/null 2>&1 <<< "$line"; then
+            timestamp=$(jq -r '
+                if type == "object" and has("timestamp") and .timestamp != null
+                then (.timestamp | tostring)
+                else "unknown"
+                end
+            ' 2>/dev/null <<< "$line" || printf 'unknown')
+            echo "Malformed retry record at message ID $timestamp; snapshot left unmodified" >&2
+            return 1
+        fi
+    done < "$snapshot"
+
+    local current_time
+    current_time=$(date +%s)
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        local retry_payload
+        local attempts
+        local msg
+        timestamp=$(jq -r '.timestamp' <<< "$line")
+        retry_payload=$(jq -c '.message | fromjson' <<< "$line")
+        attempts=$(jq -r '.attempts' <<< "$retry_payload")
+        msg=$(jq -r '.original' <<< "$retry_payload")
+
+        if ! jq -e --argjson current "$current_time" \
+            '.next_retry <= $current' >/dev/null <<< "$retry_payload"; then
+            continue
+        fi
+
+        if process_message "$msg"; then
+            echo "Retry successful for: $msg"
+            if ! broker delete retry_queue -m "$timestamp"; then
+                echo "Failed to delete successful retry $timestamp; it may be processed again" >&2
+                return 1
+            fi
+        elif jq -e --argjson max "$MAX_RETRIES" \
+            '.attempts < $max' >/dev/null <<< "$retry_payload"; then
+            local attempts_int
+            local delay
+            local new_next_retry
+            local updated_msg
+            attempts_int=$(jq -r '.attempts | floor' <<< "$retry_payload")
+            delay=$((60 * (2 ** attempts_int)))  # 2min, 4min...
+            new_next_retry=$(($(date +%s) + delay))
+            updated_msg=$(jq -c \
+                --argjson next "$new_next_retry" \
+                '.next_retry = $next | .attempts += 1' \
+                <<< "$retry_payload")
+
+            if ! printf '%s\n' "$updated_msg" | broker write retry_queue -; then
+                echo "Failed to write updated retry $timestamp; original left in place" >&2
+                return 1
+            fi
+            if ! broker delete retry_queue -m "$timestamp"; then
+                echo "Failed to delete old retry $timestamp after writing its replacement; duplicate/retry risk" >&2
+                return 1
+            fi
+        else
+            if ! broker move retry_queue "$FAILED_NAME" -m "$timestamp"; then
+                echo "Failed to move exhausted retry $timestamp to $FAILED_NAME" >&2
+                return 1
+            fi
+            printf "Permanently failed after %s attempts: %s\n" "$attempts" "$msg"
+        fi
+    done < "$snapshot"
+)
+
 process_retry_queue() {
     while true; do
-        # Check retry queue for messages ready to retry
-        local current_time
-        current_time=$(date +%s)
-        
-        # Peek at all messages in retry queue
-        while IFS= read -r line; do
-            # Parse JSON data
-            local msg_data
-            local next_retry
-            local timestamp
-            msg_data=$(echo "$line" | jq -c '.')
-            next_retry=$(echo "$msg_data" | jq -r '.next_retry')
-            timestamp=$(echo "$line" | jq -r '.timestamp')
-            
-            if [ "$next_retry" -le "$current_time" ]; then
-                # Time to retry this message
-                local msg
-                local attempts
-                msg=$(echo "$msg_data" | jq -r '.message.original')
-                attempts=$(echo "$msg_data" | jq -r '.message.attempts')
-                
-                # Try processing again
-                if process_message "$msg"; then
-                    echo "Retry successful for: $msg"
-                    # Delete from retry queue
-                    broker delete retry_queue -m "$timestamp" 2>/dev/null || true
-                else
-                    if [ "$attempts" -lt "$MAX_RETRIES" ]; then
-                        # Schedule another retry with exponential backoff
-                        local delay=$((60 * (2 ** attempts)))  # 1min, 2min, 4min...
-                        local new_next_retry=$(($(date +%s) + delay))
-                        
-                        # Update the retry message
-                        local updated_msg
-                        updated_msg=$(echo "$msg_data" | jq -r '.message' | jq \
-                            --arg next "$new_next_retry" \
-                            ".next_retry = \$next | .attempts = $((attempts + 1))")
-                        
-                        # Write updated message and delete old one
-                        if echo "$updated_msg" | broker write retry_queue - 2>/dev/null; then
-                            broker delete retry_queue -m "$timestamp" 2>/dev/null || true
-                        fi
-                    else
-                        # Final failure - move to permanent DLQ
-                        if broker move retry_queue "$FAILED_NAME" -m "$timestamp" 2>/dev/null; then
-                            printf "Permanently failed after %d attempts: %s\n" "$attempts" "$msg"
-                        fi
-                    fi
-                fi
-            fi
-        done < <(broker peek retry_queue --all --json 2>/dev/null || true)
-        
+        process_retry_queue_once
         sleep 5  # Check every 5 seconds
     done
 }
@@ -306,6 +362,8 @@ setup_demo() {
 
 # Main menu
 main() {
+    local choice="${1:-}"
+
     echo "SimpleBroker Dead Letter Queue Examples"
     echo "======================================"
     echo
@@ -317,7 +375,9 @@ main() {
     echo "6. Setup demo data"
     echo
     
-    read -r -p "Select an example (1-6): " choice
+    if [ -z "$choice" ]; then
+        read -r -p "Select an example (1-6): " choice
+    fi
     
     case $choice in
         1) simple_dlq_pattern ;;
@@ -326,7 +386,10 @@ main() {
         4) batch_retry_dlq ;;
         5) monitor_dlq ;;
         6) setup_demo ;;
-        *) echo "Invalid choice" ;;
+        *)
+            echo "Invalid choice: $choice" >&2
+            return 1
+            ;;
     esac
 }
 

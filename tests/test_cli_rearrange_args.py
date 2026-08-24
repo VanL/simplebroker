@@ -1,24 +1,49 @@
-"""Test the rearrange_args function and argument parsing edge cases."""
+"""Test production argument normalization and parsing edge cases."""
 
 import argparse
+import re
 from pathlib import Path
 
 import pytest
 
+from simplebroker._constants import resolve_isolated_config
 from simplebroker.cli import (
     ArgumentParserError,
+    ArgumentProcessor,
     _build_cli_parser,
     _CliParserBundle,
-    rearrange_args,
 )
 
 from .conftest import run_cli
 
 
 def _assert_preparse_grammar_matches_parser(bundle: _CliParserBundle) -> None:
-    """Assert that every preparse-sensitive parser registration was captured."""
+    """Assert every parser option registration was captured in the sidecar."""
     parser = bundle.parser
     grammar = bundle.grammar
+
+    def option_actions(
+        current: argparse.ArgumentParser,
+    ) -> list[argparse.Action]:
+        actions: list[argparse.Action] = []
+        for action in current._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for child in action.choices.values():
+                    actions.extend(option_actions(child))
+            elif action.option_strings:
+                actions.append(action)
+        return actions
+
+    all_option_actions = option_actions(parser)
+    assert grammar.registered_options == {
+        option for action in all_option_actions for option in action.option_strings
+    }
+    assert grammar.registered_value_options == {
+        option
+        for action in all_option_actions
+        if action.nargs != 0
+        for option in action.option_strings
+    }
 
     subparsers_action = next(
         action
@@ -70,8 +95,14 @@ def _assert_preparse_grammar_matches_parser(bundle: _CliParserBundle) -> None:
         for option in action.option_strings
         if option.startswith("-") and not option.startswith("--")
     }
-    assert grammar.action_options == {"--cleanup", "--status"}
+    assert grammar.action_options == {"--cleanup", "--status", "--vacuum"}
     assert grammar.action_json_option == "--json"
+
+
+def _normalize_args(argv: list[str]) -> list[str]:
+    """Run the exact production normalizer with ambient-free defaults."""
+    bundle = _build_cli_parser(config=resolve_isolated_config({}))
+    return list(ArgumentProcessor(bundle.grammar).process(argv).normalized_argv)
 
 
 def test_preparse_grammar_matches_constructed_parser() -> None:
@@ -109,22 +140,22 @@ def test_preparse_conservation_rejects_uncaptured_broadcast_selector() -> None:
         _assert_preparse_grammar_matches_parser(bundle)
 
 
-class TestRearrangeArgs:
-    """Test the rearrange_args function directly."""
+class TestArgumentProcessor:
+    """Test the production ArgumentProcessor directly."""
 
     def test_empty_args(self):
         """Test with empty argument list."""
-        assert rearrange_args([]) == []
+        assert _normalize_args([]) == []
 
     def test_no_global_options(self):
         """Test with only subcommand and args."""
         args = ["write", "queue", "message"]
-        assert rearrange_args(args) == ["write", "queue", "message"]
+        assert _normalize_args(args) == ["write", "queue", "message"]
 
     def test_global_options_before_subcommand(self):
         """Test with global options already in correct position."""
         args = ["-d", "/tmp", "-f", "test.db", "write", "queue", "message"]
-        assert rearrange_args(args) == [
+        assert _normalize_args(args) == [
             "-d",
             "/tmp",
             "-f",
@@ -137,59 +168,69 @@ class TestRearrangeArgs:
     def test_global_options_after_subcommand_stay_with_command(self):
         """Global options after a subcommand are not hoisted."""
         args = ["list", "--cleanup"]
-        assert rearrange_args(args) == ["list", "--cleanup"]
+        assert _normalize_args(args) == ["list", "--cleanup"]
 
-    def test_free_form_global_looking_message_is_protected(self):
-        """write message text that looks like a global flag is treated as data."""
+    def test_registered_write_operand_is_rejected(self):
         args = ["-f", "test.db", "write", "queue", "--cleanup"]
-        assert rearrange_args(args) == [
-            "-f",
-            "test.db",
+        with pytest.raises(ArgumentParserError, match=r"use --.*--cleanup"):
+            _normalize_args(args)
+
+    def test_registered_broadcast_operand_is_rejected(self):
+        args = ["broadcast", "--cleanup"]
+        with pytest.raises(ArgumentParserError, match=r"use --.*--cleanup"):
+            _normalize_args(args)
+
+    def test_write_output_option_after_queue_is_not_protected(self):
+        assert _normalize_args(["write", "queue", "--json"]) == [
             "write",
             "queue",
-            "--",
-            "--cleanup",
+            "--json",
         ]
 
-    def test_broadcast_global_looking_message_is_protected(self):
-        """broadcast message text that looks like a global flag is treated as data."""
-        args = ["broadcast", "--cleanup"]
-        assert rearrange_args(args) == ["broadcast", "--", "--cleanup"]
-
     def test_broadcast_attached_short_pattern_is_preserved(self):
-        assert rearrange_args(["broadcast", "-pqueue*", "notice"]) == [
+        assert _normalize_args(["broadcast", "-pqueue*", "notice"]) == [
             "broadcast",
             "-pqueue*",
             "notice",
         ]
 
     def test_broadcast_queue_selectors_are_preserved(self):
-        assert rearrange_args(
+        assert _normalize_args(
             ["broadcast", "--queue", "alpha", "--queue=beta", "notice"]
         ) == ["broadcast", "--queue", "alpha", "--queue=beta", "notice"]
+
+    def test_broadcast_selector_after_unknown_message_is_canonicalized(self):
+        assert _normalize_args(["broadcast", "--unknown", "-pqueue*"]) == [
+            "broadcast",
+            "-pqueue*",
+            "--",
+            "--unknown",
+        ]
+
+    def test_broadcast_registered_token_after_unknown_message_is_rejected(self):
+        with pytest.raises(ArgumentParserError, match=r"use --.*--cleanup"):
+            _normalize_args(["broadcast", "--unknown", "--cleanup"])
 
     @pytest.mark.parametrize(
         "abbreviation",
         ["--q", "--qu", "--que", "--queu", "--p", "--pa", "--pat"],
     )
-    def test_broadcast_selector_abbreviations_are_not_protected(
-        self, abbreviation: str
-    ):
-        assert rearrange_args(["broadcast", abbreviation, "notice"]) == [
-            "broadcast",
-            abbreviation,
-            "notice",
-        ]
+    def test_broadcast_selector_prefixes_are_rejected(self, abbreviation: str):
+        with pytest.raises(
+            ArgumentParserError,
+            match=rf"unrecognized arguments: {re.escape(abbreviation)}",
+        ):
+            _normalize_args(["broadcast", abbreviation, "notice"])
 
     def test_broadcast_dash_escape_keeps_attached_pattern_literal(self):
-        assert rearrange_args(["broadcast", "--", "-pqueue*"]) == [
+        assert _normalize_args(["broadcast", "--", "-pqueue*"]) == [
             "broadcast",
             "--",
             "-pqueue*",
         ]
 
     def test_broadcast_dash_escape_keeps_queue_prefix_literal(self):
-        assert rearrange_args(["broadcast", "--", "--qu"]) == [
+        assert _normalize_args(["broadcast", "--", "--qu"]) == [
             "broadcast",
             "--",
             "--qu",
@@ -198,7 +239,7 @@ class TestRearrangeArgs:
     def test_equals_form(self):
         """Test --option=value form."""
         args = ["--dir=/tmp", "--file=test.db", "write", "queue", "message"]
-        assert rearrange_args(args) == [
+        assert _normalize_args(args) == [
             "--dir=/tmp",
             "--file=test.db",
             "write",
@@ -212,7 +253,7 @@ class TestRearrangeArgs:
         with pytest.raises(
             ArgumentParserError, match="option --dir requires an argument"
         ):
-            rearrange_args(args)
+            _normalize_args(args)
 
     def test_missing_value_before_another_flag(self):
         """Test missing value when followed by another flag."""
@@ -220,13 +261,13 @@ class TestRearrangeArgs:
         with pytest.raises(
             ArgumentParserError, match="option --dir requires an argument"
         ):
-            rearrange_args(args)
+            _normalize_args(args)
 
     def test_missing_value_before_subcommand(self):
         """Test missing value when followed by subcommand."""
         args = ["-f", "write", "queue", "message"]
         # This should work - "write" is the value for -f
-        assert rearrange_args(args) == ["-f", "write", "queue", "message"]
+        assert _normalize_args(args) == ["-f", "write", "queue", "message"]
 
     def test_equals_without_value(self):
         """Test --option= without value."""
@@ -234,7 +275,7 @@ class TestRearrangeArgs:
         with pytest.raises(
             ArgumentParserError, match="option --dir requires an argument"
         ):
-            rearrange_args(args)
+            _normalize_args(args)
 
     def test_boolean_flags(self):
         """Test flags that don't take values."""
@@ -247,7 +288,7 @@ class TestRearrangeArgs:
             "queue",
             "message",
         ]
-        assert rearrange_args(args) == [
+        assert _normalize_args(args) == [
             "--quiet",
             "--version",
             "--cleanup",
@@ -261,18 +302,18 @@ class TestRearrangeArgs:
         """Test subcommand names used as values."""
         # "read" is used as the database filename
         args = ["-f", "read", "write", "queue", "message"]
-        assert rearrange_args(args) == ["-f", "read", "write", "queue", "message"]
+        assert _normalize_args(args) == ["-f", "read", "write", "queue", "message"]
 
     def test_multiple_missing_values(self):
         """Test multiple options with missing values."""
         args = ["-d", "-f", "write", "queue"]
         with pytest.raises(ArgumentParserError, match="option -d requires an argument"):
-            rearrange_args(args)
+            _normalize_args(args)
 
     def test_short_and_long_options(self):
         """Test mixing short and long option forms."""
         args = ["-d", "/tmp", "--file", "test.db", "write", "queue", "message"]
-        assert rearrange_args(args) == [
+        assert _normalize_args(args) == [
             "-d",
             "/tmp",
             "--file",
@@ -284,17 +325,17 @@ class TestRearrangeArgs:
 
     def test_write_help_flag_is_not_protected(self):
         """--help/-h must reach argparse so help is shown, not enqueued."""
-        assert rearrange_args(["write", "--help"]) == ["write", "--help"]
-        assert rearrange_args(["write", "-h"]) == ["write", "-h"]
-        assert rearrange_args(["write", "q", "--help"]) == ["write", "q", "--help"]
+        assert _normalize_args(["write", "--help"]) == ["write", "--help"]
+        assert _normalize_args(["write", "-h"]) == ["write", "-h"]
+        assert _normalize_args(["write", "q", "--help"]) == ["write", "q", "--help"]
 
     def test_broadcast_help_flag_is_not_protected(self):
-        assert rearrange_args(["broadcast", "--help"]) == ["broadcast", "--help"]
-        assert rearrange_args(["broadcast", "-h"]) == ["broadcast", "-h"]
+        assert _normalize_args(["broadcast", "--help"]) == ["broadcast", "--help"]
+        assert _normalize_args(["broadcast", "-h"]) == ["broadcast", "-h"]
 
     def test_explicit_double_dash_still_writes_literal_help(self):
         """An explicit -- keeps the escape hatch for literal '--help' messages."""
-        assert rearrange_args(["write", "q", "--", "--help"]) == [
+        assert _normalize_args(["write", "q", "--", "--help"]) == [
             "write",
             "q",
             "--",
@@ -303,7 +344,7 @@ class TestRearrangeArgs:
 
     def test_write_output_flag_is_canonicalized_before_explicit_escape(self):
         """Keep explicit escaped operands compatible with Python 3.11 argparse."""
-        assert rearrange_args(["write", "q", "--json", "--", "--status"]) == [
+        assert _normalize_args(["write", "q", "--json", "--", "--status"]) == [
             "write",
             "--json",
             "q",
@@ -312,7 +353,7 @@ class TestRearrangeArgs:
         ]
 
     def test_escaped_help_is_data_during_write_canonicalization(self):
-        assert rearrange_args(["write", "q", "--json", "--", "--help"]) == [
+        assert _normalize_args(["write", "q", "--json", "--", "--help"]) == [
             "write",
             "--json",
             "q",
@@ -327,14 +368,14 @@ class TestRearrangeArgs:
         global-looking flag was hoisted in front of the command:
         'broker alias add a b --cleanup' deleted the database.
         """
-        assert rearrange_args(["alias", "add", "a", "b", "--cleanup"]) == [
+        assert _normalize_args(["alias", "add", "a", "b", "--cleanup"]) == [
             "alias",
             "add",
             "a",
             "b",
             "--cleanup",
         ]
-        assert rearrange_args(["alias", "remove", "a", "-q"]) == [
+        assert _normalize_args(["alias", "remove", "a", "-q"]) == [
             "alias",
             "remove",
             "a",
@@ -345,7 +386,6 @@ class TestRearrangeArgs:
         "command",
         (
             "alias",
-            "broadcast",
             "delete",
             "dump",
             "exists",
@@ -358,14 +398,18 @@ class TestRearrangeArgs:
             "rename",
             "stats",
             "watch",
-            "write",
         ),
     )
     def test_every_top_level_command_stops_global_hoisting(self, command: str):
-        normalized = rearrange_args([command, "--cleanup"])
+        normalized = _normalize_args([command, "--cleanup"])
 
         assert normalized[0] == command
         assert normalized.index("--cleanup") > normalized.index(command)
+
+    @pytest.mark.parametrize("command", ["write", "broadcast"])
+    def test_free_form_commands_reject_without_hoisting(self, command: str):
+        with pytest.raises(ArgumentParserError, match=r"use --.*--cleanup"):
+            _normalize_args([command, "--cleanup"])
 
 
 class TestCLIMissingValues:
@@ -485,9 +529,13 @@ class TestHelpHasNoSideEffects:
         rc, stdout, _ = run_cli("read", "tasks", cwd=workdir)
         assert stdout == "--help"
 
-    def test_dash_messages_are_still_protected(self, workdir: Path):
-        """Regression guard: the original protection must keep working."""
-        rc, _, _ = run_cli("write", "tasks", "--cleanup", cwd=workdir)
+    def test_registered_dash_messages_require_explicit_escape(self, workdir: Path):
+        rc, stdout, stderr = run_cli("write", "tasks", "--cleanup", cwd=workdir)
+        assert rc == 1
+        assert stdout == ""
+        assert "use --" in stderr.lower()
+
+        rc, _, _ = run_cli("write", "tasks", "--", "--cleanup", cwd=workdir)
         assert rc == 0
         rc, stdout, _ = run_cli("read", "tasks", cwd=workdir)
         assert stdout == "--cleanup"

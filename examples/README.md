@@ -54,6 +54,18 @@ When working with message queues:
 
 ### Bash Scripts
 
+The three menu demonstrations accept an optional numeric menu selector as
+their first argument and prompt for it only when omitted. For example:
+
+```bash
+./dead_letter_queue.sh 3
+./queue_migration.sh 3
+./work_stealing.sh 8
+```
+
+Queue-migration choices still prompt for their source, destination, and other
+choice-specific values. An invalid selector exits nonzero.
+
 - **[safe_worker.sh](safe_worker.sh)** - Single-consumer one-message peek-and-acknowledge loop
   - Validates SimpleBroker JSON message IDs as exact 19-digit strings
   - Set `PROCESS_TASK` to one executable command or path; the message is streamed to its standard input
@@ -75,12 +87,14 @@ When working with message queues:
   - Simple DLQ with retry mechanisms
   - Retry tracking with configurable limits
   - Time-based retry delays with exponential backoff
+  - Snapshots and validates the complete retry scan before exact-ID mutation
+  - Treats replacement-write then old-delete failure as an at-least-once duplicate risk
   - Queue monitoring and alerting patterns
 
 - **[queue_migration.sh](queue_migration.sh)** - Message migration between queues
   - Simple queue renaming
   - Filtered migrations based on content
-  - Time-based migrations
+  - Time-based migration of messages strictly older than the selected cutoff
   - Safe transformation during migration (no eval)
   - Queue splitting and merging patterns
 

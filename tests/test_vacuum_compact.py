@@ -1,5 +1,6 @@
 """Tests for the vacuum compact functionality."""
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -41,6 +42,102 @@ def test_cli_vacuum_status_goes_to_stderr(workdir: Path):
     assert returncode == 0
     assert stdout == ""
     assert "Vacuumed 1 claimed messages" in stderr
+
+
+def test_cli_vacuum_json_establishes_error_mode_without_success_payload(
+    workdir: Path,
+):
+    db_path = workdir / "test.db"
+    _seed_cli_vacuum_target(db_path, claimed=True)
+
+    returncode, stdout, stderr = run_cli(
+        "-f", str(db_path), "--vacuum", "--json", cwd=workdir
+    )
+
+    assert returncode == 0
+    assert stdout == ""
+    assert "Vacuumed 1 claimed messages" in stderr
+
+
+def test_cli_vacuum_json_quiet_success_is_silent(workdir: Path):
+    db_path = workdir / "test.db"
+    _seed_cli_vacuum_target(db_path, claimed=True)
+
+    returncode, stdout, stderr = run_cli(
+        "-f",
+        str(db_path),
+        "--quiet",
+        "--vacuum",
+        "--json",
+        cwd=workdir,
+    )
+
+    assert returncode == 0
+    assert stdout == ""
+    assert stderr == ""
+
+
+def test_cli_vacuum_compact_json_keeps_success_output_unchanged(workdir: Path):
+    db_path = workdir / "test.db"
+    _seed_cli_vacuum_target(db_path, claimed=True)
+
+    returncode, stdout, stderr = run_cli(
+        "-f",
+        str(db_path),
+        "--vacuum",
+        "--compact",
+        "--json",
+        cwd=workdir,
+    )
+
+    assert returncode == 0
+    assert stdout == ""
+    assert "compacted" in stderr.lower()
+
+
+def test_cli_vacuum_json_structures_post_parse_target_error(workdir: Path):
+    db_path = workdir / "missing" / "broker.db"
+
+    returncode, stdout, stderr = run_cli(
+        "-f", str(db_path), "--vacuum", "--json", cwd=workdir
+    )
+
+    assert returncode == 1
+    assert stdout == ""
+    payload = json.loads(stderr)
+    assert tuple(payload) == ("error", "message", "retryable")
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert payload["retryable"] is False
+    assert "Traceback" not in stderr
+
+
+def test_cli_vacuum_json_structures_corrupt_target_error(workdir: Path):
+    db_path = workdir / "corrupt.db"
+    db_path.write_bytes(b"this is not a sqlite database\n")
+
+    returncode, stdout, stderr = run_cli(
+        "-f", str(db_path), "--vacuum", "--json", cwd=workdir
+    )
+
+    assert returncode == 1
+    assert stdout == ""
+    payload = json.loads(stderr)
+    assert tuple(payload) == ("error", "message", "retryable")
+    assert payload["error"] == "ERROR"
+    assert payload["retryable"] is False
+    assert "Traceback" not in stderr
+
+
+def test_cli_vacuum_json_after_explicit_marker_does_not_establish_mode(
+    workdir: Path,
+):
+    returncode, stdout, stderr = run_cli("--vacuum", "--", "--json", cwd=workdir)
+
+    assert returncode == 1
+    assert stdout == ""
+    assert not stderr.startswith("{")
+    assert "--json" in stderr
+    assert "error" in stderr.lower()
 
 
 def test_cli_vacuum_quiet_suppresses_status(workdir: Path):

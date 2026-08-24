@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 
 from ._constants import __version__ as SIMPLEBROKER_VERSION
 from ._delivery import DeliveryGuarantee
-from ._exceptions import DatabaseError
+from ._exceptions import DatabaseError, UnknownBackendPluginError
 from ._sql import BackendSQLNamespace, ensure_backend_sql_namespace
 
 if TYPE_CHECKING:
@@ -619,7 +619,7 @@ def _load_entry_point_plugin(name: str) -> BackendPlugin:
         _ensure_backend_plugin_capabilities(cast(BackendPlugin, plugin))
         return cast(BackendPlugin, plugin)
 
-    raise RuntimeError(f"Unknown backend plugin: {name}")
+    raise UnknownBackendPluginError(f"Unknown backend plugin: {name}")
 
 
 def get_backend_plugin(name: str = DEFAULT_BACKEND_NAME) -> BackendPlugin:

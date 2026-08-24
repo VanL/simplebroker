@@ -2,10 +2,10 @@
 
 import argparse
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 from . import __version__ as VERSION
 from . import commands
@@ -16,7 +16,6 @@ from ._constants import (
     EXIT_SUCCESS,
     PROG_NAME,
     ResolvedConfig,
-    resolve_isolated_config,
     snapshot_config,
 )
 from ._exceptions import (
@@ -68,11 +67,12 @@ class CustomArgumentParser(argparse.ArgumentParser):
         raise ArgumentParserError(message)
 
 
-def _validate_early_command_args(args: argparse.Namespace) -> int | None:
-    """Validate command arguments that should fail before backend inspection."""
-    if getattr(args, "command", None) not in {"read", "peek"}:
+def _validate_timestamp_bounds_before_target(args: argparse.Namespace) -> int | None:
+    """Reject malformed CLI timestamp bounds before target resolution."""
+    if getattr(args, "command", None) not in {"read", "peek", "move", "watch"}:
         return None
 
+    # ``watch`` registers no --before; getattr covers it with None.
     timestamp_filters = [
         getattr(args, "after", None),
         getattr(args, "before", None),
@@ -148,22 +148,32 @@ def _read_peek_filters(
     return after_str, before_str, message_id_str
 
 
-def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
+_AddArgument = Callable[..., argparse.Action]
+
+
+def add_read_peek_args(
+    parser: argparse.ArgumentParser,
+    *,
+    add_argument: _AddArgument,
+) -> None:
     """Add shared arguments for read and peek commands."""
-    parser.add_argument("queue", help="queue name")
-    parser.add_argument("--all", action="store_true", help="read/peek all messages")
-    parser.add_argument(
+    add_argument(parser, "queue", help="queue name")
+    add_argument(parser, "--all", action="store_true", help="read/peek all messages")
+    add_argument(
+        parser,
         "--json",
         action="store_true",
         help="output in line-delimited JSON (ndjson) format",
     )
-    parser.add_argument(
+    add_argument(
+        parser,
         "-t",
         "--timestamps",
         action="store_true",
         help="include timestamps in output",
     )
-    parser.add_argument(
+    add_argument(
+        parser,
         "-m",
         "--message",
         type=str,
@@ -171,7 +181,8 @@ def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
         dest="message_id",
         help="operate on specific message by timestamp/ID",
     )
-    parser.add_argument(
+    add_argument(
+        parser,
         "--after",
         type=str,
         metavar="TIMESTAMP",
@@ -179,7 +190,8 @@ def add_read_peek_args(parser: argparse.ArgumentParser) -> None:
         "Unix time '1705329000' or '1705329000s', milliseconds '1705329000000ms', "
         f"or native hybrid timestamp; {_TIMESTAMP_BOUND_LIMIT})",
     )
-    parser.add_argument(
+    add_argument(
+        parser,
         "--before",
         type=str,
         metavar="TIMESTAMP",
@@ -194,6 +206,8 @@ class _PreparseGrammar:
 
     root_options: frozenset[str]
     value_options: frozenset[str]
+    registered_options: frozenset[str]
+    registered_value_options: frozenset[str]
     subcommands: frozenset[str]
     write_output_options: frozenset[str]
     broadcast_selector_options: frozenset[str]
@@ -225,6 +239,8 @@ class _PreparseGrammarBuilder:
     def __init__(self) -> None:
         self.root_options: set[str] = set()
         self.value_options: set[str] = set()
+        self.registered_options: set[str] = set()
+        self.registered_value_options: set[str] = set()
         self.subcommands: set[str] = set()
         self.write_output_options: set[str] = set()
         self.broadcast_selector_options: set[str] = set()
@@ -243,6 +259,13 @@ class _PreparseGrammarBuilder:
             self.value_options.update(options)
         if action_mode:
             self.action_options.update(options)
+
+    def add_action(self, action: argparse.Action) -> None:
+        """Record every option action registered in the complete CLI grammar."""
+        options = set(action.option_strings)
+        self.registered_options.update(options)
+        if action.nargs != 0:
+            self.registered_value_options.update(options)
 
     def add_subcommand(self, name: str) -> None:
         self.subcommands.add(name)
@@ -264,6 +287,8 @@ class _PreparseGrammarBuilder:
         return _PreparseGrammar(
             root_options=frozenset(self.root_options),
             value_options=frozenset(self.value_options),
+            registered_options=frozenset(self.registered_options),
+            registered_value_options=frozenset(self.registered_value_options),
             subcommands=frozenset(self.subcommands),
             write_output_options=frozenset(self.write_output_options),
             broadcast_selector_options=broadcast_options,
@@ -288,7 +313,33 @@ def _build_cli_parser(
         prog=PROG_NAME,
         description="Simple message broker with pluggable backends",
         allow_abbrev=False,  # Prevent ambiguous abbreviations
+        add_help=False,
     )
+
+    def add_argument(
+        container: Any,
+        *argument_names: str,
+        **kwargs: Any,
+    ) -> argparse.Action:
+        """Register one argument and capture its option metadata."""
+        action = cast(
+            argparse.Action,
+            container.add_argument(*argument_names, **kwargs),
+        )
+        grammar_builder.add_action(action)
+        return action
+
+    def add_help_argument(container: Any) -> None:
+        add_argument(
+            container,
+            "-h",
+            "--help",
+            action="help",
+            default=argparse.SUPPRESS,
+            help="show this help message and exit",
+        )
+
+    add_help_argument(parser)
 
     # Add global arguments with environment-aware defaults
     default_dir = (
@@ -327,7 +378,7 @@ def _build_cli_parser(
         action_mode: bool = False,
         **kwargs: Any,
     ) -> argparse.Action:
-        action = parser.add_argument(*option_strings, **kwargs)
+        action = add_argument(parser, *option_strings, **kwargs)
         grammar_builder.add_root_action(action, action_mode=action_mode)
         return action
 
@@ -356,7 +407,10 @@ def _build_cli_parser(
         help="destructively delete configured backend target state and exit",
     )
     add_root_argument(
-        "--vacuum", action="store_true", help="remove claimed messages and exit"
+        "--vacuum",
+        action="store_true",
+        action_mode=True,
+        help="remove claimed messages and exit",
     )
     add_root_argument(
         "--compact",
@@ -374,14 +428,16 @@ def _build_cli_parser(
     subparsers = parser.add_subparsers(title="commands", dest="command", help=None)
 
     def add_command(name: str, **kwargs: Any) -> argparse.ArgumentParser:
-        command_parser = subparsers.add_parser(name, **kwargs)
+        command_parser = subparsers.add_parser(name, add_help=False, **kwargs)
+        add_help_argument(command_parser)
         grammar_builder.add_subcommand(name)
         return command_parser
 
     # Write command
     write_parser = add_command("write", help="write message to queue")
-    write_parser.add_argument("queue", help="queue name")
-    write_parser.add_argument(
+    add_argument(write_parser, "queue", help="queue name")
+    add_argument(
+        write_parser,
         "message",
         nargs="?",
         help="message content (omit or use '-' for stdin)",
@@ -390,7 +446,7 @@ def _build_cli_parser(
     def add_write_output_argument(
         *option_strings: str, **kwargs: Any
     ) -> argparse.Action:
-        action = write_parser.add_argument(*option_strings, **kwargs)
+        action = add_argument(write_parser, *option_strings, **kwargs)
         grammar_builder.add_write_output_action(action)
         return action
 
@@ -408,12 +464,13 @@ def _build_cli_parser(
 
     # Read command
     read_parser = add_command("read", help="read and remove message")
-    add_read_peek_args(read_parser)
+    add_read_peek_args(read_parser, add_argument=add_argument)
 
     # Peek command
     peek_parser = add_command("peek", help="read without removing")
-    add_read_peek_args(peek_parser)
-    peek_parser.add_argument(
+    add_read_peek_args(peek_parser, add_argument=add_argument)
+    add_argument(
+        peek_parser,
         "--include-claimed",
         action="store_true",
         help=(
@@ -424,41 +481,46 @@ def _build_cli_parser(
 
     # list command
     list_parser = add_command("list", help="list all queues")
-    list_parser.add_argument(
+    add_argument(
+        list_parser,
         "--stats",
         action="store_true",
         help="show counts including claimed messages",
     )
     list_filter_group = list_parser.add_mutually_exclusive_group()
-    list_filter_group.add_argument(
+    add_argument(
+        list_filter_group,
         "--prefix",
         help="only show queues starting with this literal prefix",
     )
-    list_filter_group.add_argument(
+    add_argument(
+        list_filter_group,
         "-p",
         "--pattern",
         help="only show queues matching this fnmatch-style glob",
     )
-    list_parser.add_argument(
+    add_argument(
+        list_parser,
         "--json",
         action="store_true",
         help="output in line-delimited JSON (ndjson) format",
     )
 
     exists_parser = add_command("exists", help="check whether a queue exists")
-    exists_parser.add_argument("queue", help="queue name")
-    exists_parser.add_argument("--json", action="store_true", help="output JSON")
+    add_argument(exists_parser, "queue", help="queue name")
+    add_argument(exists_parser, "--json", action="store_true", help="output JSON")
 
     stats_parser = add_command("stats", help="show counts for one queue")
-    stats_parser.add_argument("queue", help="queue name")
-    stats_parser.add_argument("--json", action="store_true", help="output JSON")
+    add_argument(stats_parser, "queue", help="queue name")
+    add_argument(stats_parser, "--json", action="store_true", help="output JSON")
 
     # Purge command
     delete_parser = add_command("delete", help="remove messages")
     group = delete_parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("queue", nargs="?", help="queue name to delete")
-    group.add_argument("--all", action="store_true", help="delete all queues")
-    delete_parser.add_argument(
+    add_argument(group, "queue", nargs="?", help="queue name to delete")
+    add_argument(group, "--all", action="store_true", help="delete all queues")
+    add_argument(
+        delete_parser,
         "-m",
         "--message",
         type=str,
@@ -471,12 +533,13 @@ def _build_cli_parser(
     move_parser = add_command(
         "move", help="atomically transfer messages between queues"
     )
-    move_parser.add_argument("source_queue", help="source queue name")
-    move_parser.add_argument("dest_queue", help="destination queue name")
+    add_argument(move_parser, "source_queue", help="source queue name")
+    add_argument(move_parser, "dest_queue", help="destination queue name")
 
     # Create mutually exclusive group for -m and --all
     move_exclusive = move_parser.add_mutually_exclusive_group()
-    move_exclusive.add_argument(
+    add_argument(
+        move_exclusive,
         "-m",
         "--message",
         type=str,
@@ -484,31 +547,36 @@ def _build_cli_parser(
         dest="message_id",
         help="move specific message by timestamp/ID",
     )
-    move_exclusive.add_argument(
+    add_argument(
+        move_exclusive,
         "--all",
         action="store_true",
         help="move all messages from source to destination",
     )
 
     # --after can be used with or without --all
-    move_parser.add_argument(
+    add_argument(
+        move_parser,
         "--after",
         type=str,
         metavar="TIMESTAMP",
         help=f"only move messages newer than timestamp ({_TIMESTAMP_BOUND_LIMIT})",
     )
-    move_parser.add_argument(
+    add_argument(
+        move_parser,
         "--before",
         type=str,
         metavar="TIMESTAMP",
         help=f"only move messages older than timestamp ({_TIMESTAMP_BOUND_LIMIT})",
     )
-    move_parser.add_argument(
+    add_argument(
+        move_parser,
         "--json",
         action="store_true",
         help="output in line-delimited JSON (ndjson) format",
     )
-    move_parser.add_argument(
+    add_argument(
+        move_parser,
         "-t",
         "--timestamps",
         action="store_true",
@@ -516,10 +584,11 @@ def _build_cli_parser(
     )
 
     rename_parser = add_command("rename", help="rename a queue")
-    rename_parser.add_argument("old_queue", help="queue name to rename")
-    rename_parser.add_argument("new_queue", help="new queue name")
-    rename_parser.add_argument("--json", action="store_true", help="output JSON")
-    rename_parser.add_argument(
+    add_argument(rename_parser, "old_queue", help="queue name to rename")
+    add_argument(rename_parser, "new_queue", help="new queue name")
+    add_argument(rename_parser, "--json", action="store_true", help="output JSON")
+    add_argument(
+        rename_parser,
         "--no-retarget-aliases",
         action="store_true",
         help="leave aliases pointing at the old queue name",
@@ -531,11 +600,11 @@ def _build_cli_parser(
         help="send message to selected existing queues",
         allow_abbrev=False,
     )
-    broadcast_parser.add_argument("message", help="message content ('-' for stdin)")
+    add_argument(broadcast_parser, "message", help="message content ('-' for stdin)")
     broadcast_selectors = broadcast_parser.add_mutually_exclusive_group()
 
     def add_broadcast_selector(*option_strings: str, **kwargs: Any) -> argparse.Action:
-        action = broadcast_selectors.add_argument(*option_strings, **kwargs)
+        action = add_argument(broadcast_selectors, *option_strings, **kwargs)
         grammar_builder.add_broadcast_selector_action(action)
         return action
 
@@ -553,13 +622,15 @@ def _build_cli_parser(
     )
 
     dump_parser = add_command("dump", help="write all queues to stdout as ndjson")
-    dump_parser.add_argument(
+    add_argument(
+        dump_parser,
         "--include",
         action="append",
         metavar="GLOB",
         help="only dump queues matching this fnmatch-style glob (repeatable)",
     )
-    dump_parser.add_argument(
+    add_argument(
+        dump_parser,
         "--exclude",
         action="append",
         metavar="GLOB",
@@ -567,7 +638,8 @@ def _build_cli_parser(
     )
 
     load_parser = add_command("load", help="restore a dump from stdin into this broker")
-    load_parser.add_argument(
+    add_argument(
+        load_parser,
         "--force",
         action="store_true",
         help="load even when the dump watermark exceeds allowed future skew",
@@ -577,13 +649,15 @@ def _build_cli_parser(
     alias_subparsers = alias_parser.add_subparsers(dest="alias_command")
 
     alias_add = alias_subparsers.add_parser(
-        "add", help="create a new alias for a target queue"
+        "add", help="create a new alias for a target queue", add_help=False
     )
-    alias_add.add_argument(
-        "alias", help="alias name (must be prefixed with @ when used)"
+    add_help_argument(alias_add)
+    add_argument(
+        alias_add, "alias", help="alias name (must be prefixed with @ when used)"
     )
-    alias_add.add_argument("target", help="canonical queue name for the alias")
-    alias_add.add_argument(
+    add_argument(alias_add, "target", help="canonical queue name for the alias")
+    add_argument(
+        alias_add,
         "-q",
         "--quiet",
         action="store_true",
@@ -591,12 +665,17 @@ def _build_cli_parser(
     )
 
     alias_remove = alias_subparsers.add_parser(
-        "remove", help="remove an existing alias"
+        "remove", help="remove an existing alias", add_help=False
     )
-    alias_remove.add_argument("alias", help="alias name to remove")
+    add_help_argument(alias_remove)
+    add_argument(alias_remove, "alias", help="alias name to remove")
 
-    alias_list = alias_subparsers.add_parser("list", help="list configured aliases")
-    alias_list.add_argument(
+    alias_list = alias_subparsers.add_parser(
+        "list", help="list configured aliases", add_help=False
+    )
+    add_help_argument(alias_list)
+    add_argument(
+        alias_list,
         "--target",
         metavar="QUEUE",
         help="show only aliases that point to the specified queue",
@@ -606,34 +685,39 @@ def _build_cli_parser(
     watch_parser = add_command(
         "watch", help="watch queue and consume, peek, or move messages"
     )
-    watch_parser.add_argument("queue", help="queue name")
+    add_argument(watch_parser, "queue", help="queue name")
 
     # Create mutually exclusive group for --peek and --move
     watch_mode_group = watch_parser.add_mutually_exclusive_group()
-    watch_mode_group.add_argument(
+    add_argument(
+        watch_mode_group,
         "--peek",
         action="store_true",
         help="monitor without consuming messages",
     )
-    watch_mode_group.add_argument(
+    add_argument(
+        watch_mode_group,
         "--move",
         type=str,
         metavar="QUEUE",
         help="drain ALL messages to another queue (incompatible with --after)",
     )
 
-    watch_parser.add_argument(
+    add_argument(
+        watch_parser,
         "--json",
         action="store_true",
         help="output in line-delimited JSON (ndjson) format",
     )
-    watch_parser.add_argument(
+    add_argument(
+        watch_parser,
         "-t",
         "--timestamps",
         action="store_true",
         help="include timestamps in output",
     )
-    watch_parser.add_argument(
+    add_argument(
+        watch_parser,
         "--after",
         type=str,
         metavar="TIMESTAMP",
@@ -658,31 +742,6 @@ def create_parser(
 _HELP_TOKENS = frozenset({"-h", "--help"})
 
 
-def rearrange_args(argv: list[str]) -> list[str]:
-    """Normalize CLI arguments before argparse handles them.
-
-    Global options are only recognized before the subcommand.  After a
-    subcommand is found, arguments belong to that command.  For commands with
-    free-form message operands, insert an end-of-options marker so message text
-    that looks like a global flag is still treated as data.
-
-    Args:
-        argv: list of command line arguments (without program name)
-
-    Returns:
-        list of rearranged arguments
-
-    Raises:
-        ArgumentParserError: If a global option that requires a value is missing its value
-    """
-    if not argv:
-        return argv
-
-    bundle = _build_cli_parser(config=resolve_isolated_config({}))
-    processor = ArgumentProcessor(bundle.grammar)
-    return list(processor.process(argv).normalized_argv)
-
-
 class ArgumentProcessor:
     """Helper class to process and rearrange command line arguments."""
 
@@ -690,6 +749,8 @@ class ArgumentProcessor:
         self.grammar = grammar
         self.global_options = grammar.root_options
         self.options_with_values = grammar.value_options
+        self.registered_options = grammar.registered_options
+        self.registered_value_options = grammar.registered_value_options
         self.subcommands = grammar.subcommands
         self.broadcast_long_options = frozenset(
             option
@@ -800,9 +861,10 @@ class ArgumentProcessor:
         """Protect free-form message operands that start with '-'.
 
         argparse does not treat unknown option-looking tokens as positional
-        values when parent parser options share the same spelling.  Inserting
-        '--' at the start of the free-form operand preserves literal messages
-        such as '--cleanup' without letting them trigger global behavior.
+        values when parent parser options share a prefix.  Inserting '--' at
+        the start of the free-form operand preserves unknown literal messages
+        such as '--not-registered'.  Registered spellings are rejected unless
+        the caller supplies the explicit '--' escape.
 
         Help flags are exempt: protecting them would turn a help request into
         a state-mutating command ('broadcast --help' used to enqueue the
@@ -833,17 +895,12 @@ class ArgumentProcessor:
 
         if "--" in command_args[1:]:
             marker = command_args.index("--", 1)
-            before_marker = command_args[1:marker]
-            output_options = [
-                arg for arg in before_marker if arg in self.grammar.write_output_options
-            ]
+            partitioned = self._partition_write_arguments(command_args[1:marker])
+            if partitioned is None:
+                return command_args
+            output_options, operands = partitioned
             if not output_options:
                 return command_args
-            operands = [
-                arg
-                for arg in before_marker
-                if arg not in self.grammar.write_output_options
-            ]
             # Python 3.11 argparse rejects an option interleaved between the
             # write positionals and their explicit end-of-options marker.
             # Canonicalizing recognized output flags before the operands keeps
@@ -856,20 +913,14 @@ class ArgumentProcessor:
                 *command_args[marker + 1 :],
             ]
 
-        protected = [command_args[0]]
-        i = 1
-        # Output flags may precede the queue name; pass them through so a
-        # dash-leading operand after them still gets literal protection.
-        while (
-            i < len(command_args)
-            and command_args[i] in self.grammar.write_output_options
-        ):
-            protected.append(command_args[i])
-            i += 1
-
-        rest = command_args[i:]
-        if not rest:
+        partitioned = self._partition_write_arguments(command_args[1:])
+        if partitioned is None:
             return command_args
+        output_options, rest = partitioned
+
+        protected = [command_args[0], *output_options]
+        if not rest:
+            return protected
 
         # Queue names that start with '-' are invalid, but protecting the token
         # prevents it from being interpreted as a global option before
@@ -884,20 +935,42 @@ class ArgumentProcessor:
 
         return command_args
 
+    def _partition_write_arguments(
+        self, arguments: list[str]
+    ) -> tuple[list[str], list[str]] | None:
+        """Separate valid write output flags from operands.
+
+        ``None`` leaves a malformed command-local option form for argparse.
+        """
+        output_options: list[str] = []
+        operands: list[str] = []
+        for arg in arguments:
+            if arg in self.grammar.write_output_options:
+                output_options.append(arg)
+                continue
+            registered_option = self._registered_option_name(arg)
+            if registered_option is not None:
+                if registered_option in self.grammar.write_output_options:
+                    return None
+                self._raise_registered_operand(arg, registered_option)
+            operands.append(arg)
+        return output_options, operands
+
     def _protect_broadcast_operands(self, command_args: list[str]) -> list[str]:
         """Protect the broadcast message while preserving selector options."""
-        if "--" in command_args[1:]:
-            return command_args
+        marker = command_args.index("--", 1) if "--" in command_args[1:] else None
+        scan_end = marker if marker is not None else len(command_args)
 
-        protected = [command_args[0]]
+        selector_args: list[str] = []
+        operands: list[str] = []
         i = 1
-        while i < len(command_args):
+        while i < scan_end:
             arg = command_args[i]
 
             if arg in self.grammar.broadcast_selector_options:
-                protected.append(arg)
-                if i + 1 < len(command_args):
-                    protected.append(command_args[i + 1])
+                selector_args.append(arg)
+                if i + 1 < scan_end:
+                    selector_args.append(command_args[i + 1])
                     i += 2
                 else:
                     i += 1
@@ -906,23 +979,9 @@ class ArgumentProcessor:
             if any(
                 arg.startswith(f"{option}=") for option in self.broadcast_long_options
             ):
-                protected.append(arg)
+                selector_args.append(arg)
                 i += 1
                 continue
-
-            # Do not turn abbreviated selector options into message data.
-            # The broadcast parser has abbreviation disabled, so leaving the
-            # token unprotected makes argparse reject it before any mutation.
-            option_name = arg.partition("=")[0]
-            if (
-                len(option_name) > 2
-                and option_name.startswith("--")
-                and any(
-                    option.startswith(option_name)
-                    for option in self.broadcast_long_options
-                )
-            ):
-                return command_args
 
             # argparse accepts the short option with its value attached
             # (``-pqueue*``).  Preserve that form as an option; callers can
@@ -931,16 +990,79 @@ class ArgumentProcessor:
                 arg.startswith(option) and len(arg) > len(option)
                 for option in self.grammar.broadcast_attached_options
             ):
-                protected.append(arg)
+                selector_args.append(arg)
                 i += 1
                 continue
 
-            if arg.startswith("-"):
-                protected.append("--")
-            protected.extend(command_args[i:])
+            if self._is_broadcast_long_option_abbreviation(arg):
+                raise ArgumentParserError(f"unrecognized arguments: {arg}")
+
+            registered_option = self._registered_option_name(arg)
+            if registered_option is not None:
+                self._raise_registered_operand(arg, registered_option)
+            operands.append(arg)
+            i += 1
+
+        protected = [command_args[0], *selector_args, *operands]
+        if marker is not None:
+            protected.extend(command_args[marker:])
             return protected
 
-        return command_args
+        if operands and operands[0].startswith("-"):
+            return [command_args[0], *selector_args, "--", *operands]
+
+        return protected
+
+    def _is_broadcast_long_option_abbreviation(self, token: str) -> bool:
+        """Return whether token abbreviates a broadcast long selector."""
+        option_name = token.partition("=")[0]
+        return (
+            len(option_name) > 2
+            and option_name.startswith("--")
+            and option_name not in self.broadcast_long_options
+            and any(
+                option.startswith(option_name) for option in self.broadcast_long_options
+            )
+        )
+
+    def _registered_option_name(self, token: str) -> str | None:
+        """Return the complete-grammar option spelling represented by token."""
+        if token in self.registered_options:
+            return token
+
+        if token.startswith("--") and "=" in token:
+            option_name = token.partition("=")[0]
+            if option_name in self.registered_options:
+                return option_name
+
+        if token.startswith("-") and not token.startswith("--"):
+            for option_name in sorted(
+                self.registered_value_options,
+                key=len,
+                reverse=True,
+            ):
+                if (
+                    option_name.startswith("-")
+                    and not option_name.startswith("--")
+                    and token.startswith(option_name)
+                    and len(token) > len(option_name)
+                ):
+                    return option_name
+        return None
+
+    @staticmethod
+    def _raise_registered_operand(token: str, option_name: str) -> NoReturn:
+        """Reject an unescaped registered spelling before target resolution."""
+        if option_name == token:
+            raise ArgumentParserError(
+                f"registered option {token!r} cannot be used as unescaped message "
+                f"data; use -- before {token!r} to send it literally"
+            )
+        raise ArgumentParserError(
+            f"{token!r} is read as registered option {option_name!r} and cannot "
+            f"be used as unescaped message data; use -- before {token!r} to send "
+            f"it literally"
+        )
 
 
 def _resolve_database_path(
@@ -1350,15 +1472,20 @@ def _validate_legacy_sqlite_target(
     )
 
     _validate_database_parent_directory(db_path)
-    if db_path.exists() and args.command in {
-        "read",
-        "peek",
-        "exists",
-        "move",
-        "list",
-        "stats",
-        "vacuum",
-    }:
+    # ``--vacuum`` is a root action, not a subcommand: it arrives here with
+    # ``args.command`` unset and gets the same existing-file validation.
+    if db_path.exists() and (
+        args.command
+        in {
+            "read",
+            "peek",
+            "exists",
+            "move",
+            "list",
+            "stats",
+        }
+        or getattr(args, "vacuum", False)
+    ):
         _validate_sqlite_database(db_path, verify_magic=False)
 
     if not containment_required:
@@ -1742,6 +1869,10 @@ def _main(*, config: ResolvedConfig) -> int:
         if pre_target_result is not None:
             return pre_target_result
 
+        timestamp_error = _validate_timestamp_bounds_before_target(args)
+        if timestamp_error is not None:
+            return timestamp_error
+
         resolved_target = _resolve_target(args, config=config)
 
         action_result = _run_preparation_exempt_target_action(
@@ -1754,9 +1885,6 @@ def _main(*, config: ResolvedConfig) -> int:
         if action_result is not None:
             return action_result
 
-        early_error = _validate_early_command_args(args)
-        if early_error is not None:
-            return early_error
         resolved_target = _validate_legacy_sqlite_target(
             args,
             resolved_target,

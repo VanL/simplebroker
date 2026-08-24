@@ -218,11 +218,28 @@ extras can separate resource sessions without becoming canonical core options.
 
 CLI argument normalization remains a preparse pass because root options and
 the destructive global actions must be recognized before subcommand dispatch.
-The parser-construction helpers capture the exact metadata needed by that pass
-at the same time they register each argparse action. This keeps one grammar
-owner without making production code traverse argparse's private action tree;
-structural tests may inspect that tree only to prove conservation and to fail
-when a new sensitive registration is not captured.
+One parser-construction helper captures every option action, including explicit
+help actions and nested alias options, at the same time it registers argparse.
+The immutable sidecar keeps complete option and value-taking sets beside the
+narrow root, write-output, broadcast-selector, and global-action subsets.
+`ArgumentProcessor` uses those derived sets to parse command-local forms,
+reject other registered spellings before target resolution with an explicit
+`--` escape action, and protect only unknown dash-leading message data. Root
+tokens after a subcommand never move back to the root. Production code never
+traverses argparse's private action tree; recursive structural tests do so only
+to prove conservation and fail on an uncaptured registration.
+
+Malformed read, peek, move, and watch timestamp bounds are validated after the
+parser establishes the output dialect and after local global-flag decisions,
+but before `_resolve_target()`. Command-layer helpers still normalize valid
+bounds for execution and defend direct Python callers. Global cleanup, status,
+and vacuum actions share the same preparse JSON-mode owner; vacuum adds no
+success payload or action-specific serializer.
+
+Unknown backend entry-point lookup raises the private
+`UnknownBackendPluginError`, which remains a `RuntimeError` for compatible
+callers. Project resolution catches that type to add install guidance; other
+plugin runtime failures propagate without depending on exception prose.
 
 Post-parse CLI failure mapping is cause-owned rather than phase-owned.
 `_classify_cli_error()` checks `DatabaseError` first because `DataError` also
@@ -305,7 +322,7 @@ that seven-module slice, so adding rows to those tables does not change 74.
 | `SM-PROCESS-SESSION` (confirmed) | `simplebroker/_broker_session.py::_ProcessBrokerSession` | `tests/test_process_broker_session.py` | `tests/test_process_broker_session.py` | Session lifecycle and runner leases constrain connection creation, reuse, release, and post-close calls across threads. |
 | `SM-SETUP-BUDGET` (confirmed) | `simplebroker/_retry_policy.py::SetupProgressBudget` | `tests/test_retry_policy_coverage.py` | retry-policy coverage and runner setup/error suites | Last-progress time and idle budget persist across setup operations and choose wait, refresh, timeout, or cancellation. |
 | `SM-DELIVERY-POISON` (confirmed) | `simplebroker/db.py` sidecar and transactional-generator ownership | `tests/test_cross_thread_finalization_poisoning.py` | cross-thread poisoning, generator, and released-backend probe suites | Owner identity, suspended transaction, poison, and first cause govern legal `next`, `throw`, `close`, commit, and rollback effects across threads and yields. |
-| `SM-POLLING` (confirmed) | `simplebroker/watcher.py::PollingStrategy` | `tests/test_watcher.py` | watcher, burst-mode, edge-case, stop, and race suites | Waiter identity, burst/backoff phase, activity hints, and stop state persist across waits and callbacks. As required by `[SB-API-6]`, the direct `burst_sleep` default comes from the ambient-free canonical config schema; `BaseWatcher` passes its retained resolved value explicitly. |
+| `SM-POLLING` (confirmed) | `simplebroker/watcher.py::PollingStrategy` | `tests/test_watcher.py` | watcher, burst-mode, edge-case, stop, and race suites | Waiter identity, burst/backoff phase, activity hints, and stop state persist across waits and callbacks. As required by `[SB-API-6]`, all four direct constructor defaults come from one ambient-free canonical config snapshot; `BaseWatcher` passes its retained resolved values explicitly. |
 | `SM-ACTIVITY-WAITER` (confirmed) | First-party concrete waiter `_closed` state; manifest representative `simplebroker_redis.plugin.RedisMultiQueueActivityWaiter` | Redis real-waiter lifecycle transition table | PostgreSQL and Redis real-waiter lifecycle suites; PostgreSQL notify and Redis integration replacement tests | Resource-local open/closed state governs whether cleanup may run. The first close transitions to terminal before cleanup; ordinary failures preserve all independently safe cleanup attempts and ordered failure evidence, while interruptions stop the current attempt. Every later close is a no-op. |
 | `SM-WATCHER-LIFECYCLE` (confirmed) | `simplebroker/watcher.py::BaseWatcher` | `WATCHER_LIFECYCLE_TRANSITIONS` in `tests/test_watcher_transition_tables.py` | watcher lifecycle, cleanup, edge-case, concurrency, stop, and race suites, including `STOP_RACES_START` and `ERROR_HANDLER_FAILURE` | Thread state, waiter attachment, retry state, terminal exception propagation, stop state, and the lock-protected cleanup owner govern legal start, run, stop, join, and cleanup calls. Run or stop-before-run claims cleanup before blocking work; join timeout does not transfer ownership, and cleanup failure reopens a retry/finalizer path. Generic `TERMINAL_ERROR` remains retry exhaustion. `ERROR_HANDLER_FAILURE` bypasses retry, cleans runtime resources, and propagates the original error-handler exception once with the handler exception as cause; ordinary cleanup failure is secondary note evidence and leaves cleanup retryable. The state is encoded in the established `_run_thread` ownership slot so pinned downstream subclass snapshots do not gain a new shared instance field. |
 | `SM-CLI-WATCH` (confirmed) | `simplebroker/commands.py::cmd_watch` callback and output lifecycle | `tests/test_cli_watch.py` | `tests/test_cli_watch.py`; watcher subprocess and command-helper suites | Callback results, one-time warning, output health, interrupt state, and watcher cleanup persist across callbacks and shutdown. `CALLBACK_ERROR_CONTINUES` remains the distinct path where the error handler elects to continue; it is not terminal `ERROR_HANDLER_FAILURE`. |

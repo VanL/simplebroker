@@ -9,6 +9,14 @@ formatter/linter-owned presentation. See the README "Command layer" subsection.
 from __future__ import annotations
 
 
+def test_internal_unknown_backend_plugin_error_is_not_package_root_public() -> None:
+    """The typed resolver seam must not widen the root API."""
+    import simplebroker
+
+    assert "UnknownBackendPluginError" not in simplebroker.__all__
+    assert not hasattr(simplebroker, "UnknownBackendPluginError")
+
+
 def test_commands_all_exact_public_surface() -> None:
     """`simplebroker.commands.__all__` exposes exactly the supported names."""
     from simplebroker import commands

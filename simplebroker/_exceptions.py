@@ -14,6 +14,10 @@ class BrokerError(Exception):
     """Base exception for all SimpleBroker errors."""
 
 
+class UnknownBackendPluginError(RuntimeError):
+    """Internal failure when backend entry-point lookup finds no plugin."""
+
+
 class InvalidConfigError(BrokerError, ValueError):
     """A recognized configuration value could not be parsed or validated."""
 

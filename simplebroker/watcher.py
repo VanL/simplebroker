@@ -1265,16 +1265,31 @@ class SignalHandlerContext:
             signal.signal(self.signum, self.original_handler)
 
 
+# These public signature defaults must move together with the canonical
+# ambient-free configuration contract in [SB-API-6].
+_POLLING_CANONICAL_DEFAULTS = resolve_isolated_config({})
+_POLLING_INITIAL_CHECKS_DEFAULT: int = _POLLING_CANONICAL_DEFAULTS[
+    "BROKER_INITIAL_CHECKS"
+]
+_POLLING_MAX_INTERVAL_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS[
+    "BROKER_MAX_INTERVAL"
+]
+_POLLING_BURST_SLEEP_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS["BROKER_BURST_SLEEP"]
+_POLLING_JITTER_FACTOR_DEFAULT: float = _POLLING_CANONICAL_DEFAULTS[
+    "BROKER_JITTER_FACTOR"
+]
+
+
 class PollingStrategy:
     """High-performance polling strategy with burst handling and PRAGMA data_version."""
 
     def __init__(
         self,
         stop_event: threading.Event,
-        initial_checks: int = 100,
-        max_interval: float = 0.1,
-        burst_sleep: float = resolve_isolated_config({})["BROKER_BURST_SLEEP"],
-        jitter_factor: float = 0.15,
+        initial_checks: int = _POLLING_INITIAL_CHECKS_DEFAULT,
+        max_interval: float = _POLLING_MAX_INTERVAL_DEFAULT,
+        burst_sleep: float = _POLLING_BURST_SLEEP_DEFAULT,
+        jitter_factor: float = _POLLING_JITTER_FACTOR_DEFAULT,
     ) -> None:
         self._initial_checks = initial_checks
         self._max_interval = max_interval

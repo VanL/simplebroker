@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- All four direct `PollingStrategy` constructor defaults now derive from one
+  ambient-free canonical configuration snapshot. Values, types, parameter
+  order, explicit overrides, and watcher instance configuration are unchanged.
+- The ordinary POSIX and phaselock-fallback pytest jobs now use the same
+  180-second per-test thread timeout as the Windows matrix. Scheduled fuzzing
+  now includes the production CLI argument normalizer and parser.
 - Structured CLI errors now classify by failure cause instead of pipeline
   phase. Established caller-input causes are `INVALID_ARGUMENT` regardless of
   resolution, preparation, or dispatch phase, while a malformed or corrupt
@@ -29,7 +35,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension patch versions.
 
 ### Fixed
-
+- `write` and `broadcast` no longer turn registered option spellings such as
+  `--json` or `--cleanup` into successful message mutations. Command-local
+  options keep their grammar meaning — `broker write q --json` now follows
+  the omitted-message stdin contract instead of writing the literal token.
+  Other registered spellings, including `--name=value` forms and attached
+  values of registered value-taking short options such as `-file`, fail
+  before target resolution and tell callers to use `--` for literal data,
+  for example `broker write q -- --json`. Unknown dash-leading messages that
+  neither spell nor attach a registered option remain supported; abbreviated
+  broadcast selector spellings remain rejected before mutation.
+- Invalid `--after` and `--before` bounds for read, peek, move, and watch now
+  fail before project, plugin, filesystem, database, or network target
+  inspection. `--vacuum --json` now uses the established structured-error
+  dialect without adding a success payload.
+- Backend install hints now depend on a private typed unknown-plugin exception
+  instead of another module's exact error prose.
+- The queue-migration example now selects older rows with `--before`; the
+  delayed-retry example snapshots and validates every nested record before
+  mutation; and all three menu examples honor an optional positional selector.
+  Ordinary Linux CI now ShellChecks all five Bash examples.
 - A watcher error handler raising an ordinary exception is now terminal and
   observable instead of being swallowed. Synchronous watchers re-raise that
   callback exception after cleanup, background watchers report it through

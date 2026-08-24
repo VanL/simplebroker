@@ -82,7 +82,7 @@ def test_global_option_value_not_mistaken_for_subcommand(workdir: Path):
 
 
 def test_global_options_after_subcommand_are_not_global(workdir: Path):
-    """Test that global options after subcommand are command arguments."""
+    """Global options stay global; recognized command tokens stay grammar."""
     subdir = workdir / "after_cmd"
     subdir.mkdir()
 
@@ -92,7 +92,13 @@ def test_global_options_after_subcommand_are_not_global(workdir: Path):
     assert code != 0
     assert not (subdir / ".broker.db").exists()
 
-    code, stdout, _stderr = run_cli("write", "test_queue", "--cleanup", cwd=workdir)
+    code, _stdout, stderr = run_cli("write", "test_queue", "--cleanup", cwd=workdir)
+    assert code != 0
+    assert "registered option '--cleanup'" in stderr
+
+    code, _stdout, _stderr = run_cli(
+        "write", "test_queue", "--", "--cleanup", cwd=workdir
+    )
     assert code == 0
 
     code, stdout, _stderr = run_cli("read", "test_queue", cwd=workdir)

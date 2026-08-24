@@ -307,9 +307,11 @@ insert), and watch progress: `docs/specs/14-timestamp-selection.md`
 
 Place write output flags before the queue name (`broker write -t tasks "job"`).
 They are also recognized after a literal message or after the stdin marker
-`-`. A dash-leading operand after the queue name is still treated as literal
-message content, so use `broker write -t tasks -- "-literal"` to combine a
-flag with a message that starts with `-`.
+`-`. Before an explicit `--`, any spelling registered as a CLI option remains
+an option or is rejected when it belongs to another command; it is never
+silently written as message data. Use `broker write tasks -- --json` to write
+the literal body `--json`. Unknown dash-leading bodies remain compatible as
+literal data, though an explicit `--` is the clearest form for scripts.
 
 **Watch options:**
 - `--peek` - Monitor without consuming

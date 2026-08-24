@@ -20,6 +20,41 @@ class _ForeignBackendError(Exception):
     """Synthetic third-party failure outside SimpleBroker's hierarchy."""
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["broker", "read", "q", "--after", "bad"],
+        ["broker", "read", "q", "--before", "bad"],
+        ["broker", "peek", "q", "--after", "bad"],
+        ["broker", "peek", "q", "--before", "bad"],
+        ["broker", "move", "src", "dst", "--after", "bad"],
+        ["broker", "move", "src", "dst", "--before", "bad"],
+        ["broker", "watch", "q", "--after", "bad"],
+    ],
+)
+def test_invalid_timestamp_never_observes_target(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    argv,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli.sys, "argv", argv)
+    target_observations: list[argparse.Namespace] = []
+
+    def observe_target(args, *, config):
+        target_observations.append(args)
+        raise AssertionError("invalid timestamp must fail before target resolution")
+
+    monkeypatch.setattr(cli, "_resolve_target", observe_target)
+
+    assert cli.main() == cli.EXIT_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "invalid timestamp" in captured.err.lower()
+    assert target_observations == []
+
+
 def test_quiet_suppresses_only_owned_runtime_warnings(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
