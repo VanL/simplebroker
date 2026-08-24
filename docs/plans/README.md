@@ -29,17 +29,6 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
-| 2026-08-23-correctness-and-concurrency-review-remediation-plan.md | retired-pending — soft-retired 2026-08-23 after five-gate harvest; physical deletion is a separate pass |
-| 2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan.md | retired-pending — soft-retired 2026-08-23 after five-gate harvest; physical deletion is a separate pass |
-| 2026-08-23-polling-strategy-burst-sleep-default-plan.md | retired-pending — soft-retired 2026-08-23 after five-gate harvest; physical deletion is a separate pass |
-| 2026-08-23-maintainability-and-isolation-remediation-plan.md | retired-pending — soft-retired 2026-08-23 after rationale and lesson extraction; follow-up all-test-tree mypy repair is `eef0a1e6`; physical deletion is a separate pass |
-| 2026-08-23-configuration-snapshot-consistency-plan.md | retired-pending — soft-retired 2026-08-23 after five-gate harvest; physical deletion is a separate pass |
-| 2026-08-23-public-api-and-cli-review-remediation-plan.md | retired-pending — soft-retired 2026-08-23 after lesson extraction and follow-up mypy repair `eef0a1e6`; physical deletion is a separate pass |
-| 2026-08-14-windows-sqlite-terminal-progress-plan.md | retired-pending — soft-retired 2026-08-23 after five-gate diagnosis-plan harvest; physical deletion is a separate pass |
-| 2026-08-13-isolated-embedding-config-plan.md | retired-pending — soft-retired 2026-08-23 after successor-aware five-gate harvest; physical deletion is a separate pass |
-| 2026-08-13-windows-auto-xdist-restoration-plan.md | retired-pending — soft-retired 2026-08-23 after five-gate harvest; physical deletion is a separate pass |
-| 2026-08-13-windows-xdist-contention-restoration-plan.md | retired-pending — soft-retired 2026-08-23 after five-gate harvest; physical deletion is a separate pass |
-| 2026-08-13-invalid-environment-import-lifecycle-plan.md | retired-pending — soft-retired 2026-08-23 after successor-aware rationale and lesson repair; physical deletion is a separate pass |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | status-review — class 4; implementation and reviews landed in b01bc3cb and shipped in 5.6.2, but the plan records no evidence for its required five post-commit coverage-diagnostics runs |
 
 ## Retired Plans
