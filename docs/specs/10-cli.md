@@ -71,6 +71,26 @@ redacted. This pre-parse failure applies to all argv shapes, including help,
 version, and raw `--json`; `[SB-CLI-4]`'s JSON error guarantee begins only
 after argument parsing establishes JSON mode.
 
+For an ordinary relative legacy-SQLite target, the CLI must establish the
+target's physical containment within the selected working directory before
+backend command dispatch or a target-opening `--status`, `--vacuum`, or
+`--compact` action. If path or symlink resolution cannot establish that
+containment, the invocation emits one actionable error and exits `1`; it does
+not open a lexical fallback. The backend receives the same canonical target
+string that passed containment. Once argument parsing has established JSON
+mode, this failure uses `[SB-CLI-4]`'s JSON error object; otherwise it is a
+plain stderr error. Stdout remains empty and no traceback is shown.
+
+An explicitly supplied absolute `-f` target and a trusted project-config target
+are intentionally outside working-directory containment. Project targets may
+leave the project and traverse symlinks. These pathname checks assume the
+selected path and its directories are protected by the operating-system
+permissions and ACLs chosen by the operator; they do not claim protection
+against concurrent replacement in a directory another principal may modify.
+
+`init` and `[SB-OPS-7]` cleanup retain their separately specified preparation
+and path behavior.
+
 `load` warns on stderr when the dump header is physically ahead of local wall
 time. Global quiet mode suppresses that warning, including with `load --force`,
 but does not change whether the skew check or forced load executes. The force
@@ -79,6 +99,7 @@ flag bypasses only excessive-skew refusal; `[SB-IO-4]` owns the load policy.
 _Implementation mapping_:
 - `simplebroker/commands.py`
 - `simplebroker/cli.py`
+- `simplebroker/_paths.py`
 
 ## Global options position [SB-CLI-3]
 
@@ -178,6 +199,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan.md`
 - `docs/plans/2026-08-23-maintainability-and-isolation-remediation-plan.md`
 - `docs/plans/2026-08-23-public-api-and-cli-review-remediation-plan.md`
 - `docs/plans/2026-08-13-invalid-environment-import-lifecycle-plan.md`
@@ -214,6 +236,23 @@ _Implementation mapping_:
 - `[SB-CLI-2]` ordinary diagnostic dialect:
   `tests/test_alias_cli.py::test_cmd_alias_add_remove_direct`,
   `tests/test_commands_init.py::TestInitCommand::test_init_permission_error_database_creation`
+- `[SB-CLI-2]` relative SQLite containment and prepared-target behavior:
+  `tests/test_symlink_security.py::test_legitimate_symlink_within_directory`,
+  `tests/test_symlink_security.py::test_symlink_path_traversal_attack`,
+  `tests/test_symlink_security.py::test_relative_symlink_loop_fails_closed_before_dispatch`,
+  `tests/test_symlink_security.py::test_relative_symlink_loop_status_fails_before_target_open`,
+  `tests/test_symlink_security.py::test_relative_symlink_loop_vacuum_fails_before_target_open`,
+  `tests/test_symlink_security.py::test_relative_symlink_loop_compact_fails_before_target_open`,
+  `tests/test_symlink_security.py::test_relative_symlink_loop_json_failure_is_one_error_object`,
+  `tests/test_symlink_security.py::test_quiet_does_not_suppress_relative_resolution_failure`,
+  `tests/test_symlink_security.py::test_absolute_path_with_symlink`,
+  `tests/test_cli_main.py::test_main_dispatches_validated_canonical_relative_target`,
+  `tests/test_cli_main.py::test_main_status_uses_validated_canonical_relative_target`,
+  `tests/test_cli_main.py::test_main_vacuum_uses_validated_canonical_relative_target`,
+  `tests/test_cli_main.py::test_relative_target_resolution_error_has_no_lexical_fallback`,
+  `tests/test_cli_main.py::test_compound_default_is_finalized_before_canonical_containment`,
+  `tests/test_project_config.py::test_project_config_trust_anchor_allows_parent_target`, and
+  `tests/test_project_config.py::test_project_config_trust_anchor_follows_target_symlink`
 - `[SB-CLI-4]` post-parse JSON and closed vocabulary:
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_post_parse_global_errors_preserve_json`,
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_emit_error_codes_are_closed_at_callsites`,

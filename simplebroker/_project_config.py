@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sys
 import tomllib
 from collections.abc import Mapping
@@ -32,24 +31,12 @@ def _same_filesystem(current: Path, parent: Path) -> bool:
         return False
 
 
-def _warn_for_insecure_project_config(config_path: Path, target: str) -> None:
-    """Emit best-effort credential-at-rest warnings without exposing secrets."""
+def _warn_for_inline_project_config_password(config_path: Path, target: str) -> None:
+    """Warn about a recognized inline password without exposing its value."""
     if _backend_target_has_password(target):
         print(
             f"simplebroker: warning: {config_path} embeds a backend password; "
             "store secrets in BROKER_BACKEND_PASSWORD or another environment variable",
-            file=sys.stderr,
-        )
-    if os.name != "posix":
-        return
-    try:
-        group_or_other_bits = config_path.stat().st_mode & 0o077
-    except OSError:
-        return
-    if group_or_other_bits:
-        print(
-            f"simplebroker: warning: {config_path} is group/other-readable; "
-            "restrict permissions when it contains sensitive configuration",
             file=sys.stderr,
         )
 
@@ -95,7 +82,7 @@ def load_project_config(config_path: Path) -> dict[str, Any]:
     if not isinstance(target, str) or not target:
         raise ValueError(".broker.toml requires a non-empty string 'target'")
 
-    _warn_for_insecure_project_config(config_path, target)
+    _warn_for_inline_project_config_password(config_path, target)
 
     return {
         "version": version,

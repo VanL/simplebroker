@@ -266,38 +266,34 @@ def _validate_database_parent_directory(db_path: Path) -> None:
 
 
 def _resolve_symlinks_safely(path: Path, max_depth: int = 40) -> Path:
-    """Safely resolve symlinks with protection against infinite loops.
+    """Resolve symlinks without requiring the final path to exist.
 
     Args:
         path: Path to resolve
         max_depth: Maximum symlink resolution depth to prevent infinite loops
 
     Returns:
-        Resolved path with all symlinks followed
+        Resolved path with all symlinks followed. A missing final path is valid.
 
     Raises:
         RuntimeError: If symlink resolution fails
     """
     try:
-        resolved_path = path.resolve()
+        resolved_path = path.resolve(strict=False)
 
-        # On Windows, resolve() might not fully resolve symlink chains
-        # Keep resolving until we reach a non-symlink or hit an error
+        # On Windows, resolve() might not fully resolve symlink chains.
+        # Keep resolving until we reach a non-symlink or fail closed.
         depth = 0
-        while resolved_path.is_symlink() and depth < max_depth:
-            try:
-                # Read the symlink target and resolve it
-                target = resolved_path.readlink()
+        while resolved_path.is_symlink():
+            if depth >= max_depth:
+                raise RuntimeError("maximum depth exceeded")
 
-                if target.is_absolute():
-                    resolved_path = target.resolve()
-                else:
-                    # Relative symlink - resolve relative to parent
-                    resolved_path = (resolved_path.parent / target).resolve()
-                depth += 1
-            except (OSError, RuntimeError):
-                # If we can't read/resolve the symlink, use what we have
-                break
+            target = resolved_path.readlink()
+            next_path = (
+                target if target.is_absolute() else resolved_path.parent / target
+            )
+            resolved_path = next_path.resolve(strict=False)
+            depth += 1
 
         return resolved_path
     except (RuntimeError, OSError) as e:

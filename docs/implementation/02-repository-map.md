@@ -26,7 +26,7 @@ Quick pointers to the key guidance documents in this repository.
 | `simplebroker/_message_id.py` | Exact message-ID normalization and canonical JSON-string formatting |
 | `simplebroker/db.py` | Concrete process-session core factory, runner publication and checkout rollback, plus database operations |
 | `simplebroker/_retry_policy.py` | Retry and setup policy; pairs with `_retry.py`, which owns the retry mechanism |
-| `simplebroker/_paths.py` | Filesystem path security and project-database discovery |
+| `simplebroker/_paths.py` | Filesystem path validation and project-database discovery |
 | `extensions/` | Optional extensions (Postgres support etc.) |
 | `examples/` | Runnable usage examples (async wrappers, multi-queue) — examples are claims; keep them working |
 | `tests/` | Pytest suite (~148 files), `uv run pytest` |

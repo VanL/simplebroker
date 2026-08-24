@@ -74,6 +74,14 @@ Public ways to bind a broker for library use:
 - **`resolve_config`** / **`snapshot_config`** — resolve ordinary configuration
   or retain one complete snapshot for handles and discovery.
 
+Project configuration is a trusted developer input. When the configured target
+string contains a recognized inline password, project-config loading emits a
+redacted advisory warning that does not include the password. SimpleBroker does
+not inspect, warn on, or enforce project-config file mode, ownership,
+parent-directory permissions, or ACLs. Confidentiality and integrity of the
+config path are governed by the effective operating-system permissions across
+the file and its containing directories.
+
 `load_config()` remains the strict complete environment parser.
 `resolve_config(None|ordinary_mapping)` performs a fresh strict read of the
 current environment/default base, applies ordinary overrides, preserves
@@ -505,7 +513,7 @@ boundary rather than in the storage layer:
 | Clause | Firing evidence |
 |--------|-----------------|
 | [SB-API-1] | `tests/test_python_library_api_contract_sb_api.py::test_api_public_message_id_formatter_contract`; `tests/test_python_library_api_contract_sb_api.py::test_api_moved_message_is_package_root_public`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_public_surface.py` |
-| [SB-API-2] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_target_discovery_samples_environment_for_each_call`; `tests/test_project_config.py`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
+| [SB-API-2] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_isolated_config.py`; `tests/test_connection_config.py::test_target_discovery_samples_environment_for_each_call`; `tests/test_project_config.py::test_project_config_warns_for_inline_url_password`, `tests/test_project_config.py::test_project_config_warns_for_inline_conninfo_password`, `tests/test_project_config.py::test_project_config_does_not_judge_group_or_other_mode_bits`; `tests/test_ext_imports.py` (project-config identity); `tests/test_invalid_config_lifecycle.py::test_load_config_reports_invalid_environment_field`, `tests/test_invalid_config_lifecycle.py::test_public_snapshots_are_explicit_and_fresh_across_calls`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
 | [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_connection_config.py::test_ephemeral_queue_keeps_constructor_snapshot_after_invalid_env_change`, `tests/test_connection_config.py::test_new_queue_observes_later_environment_while_existing_queue_stays_fixed`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_queue_typing_contract.py`; `tests/test_queue_api_additions.py::test_queue_delete_explicit_none_is_rejected_without_mutation`; `tests/test_queue_api_additions.py::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py` (library-shape language + matrix); delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_reads_ordinary_override_on_first_iteration`; Queue generator / `*_many` suites |
@@ -519,6 +527,7 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
+- `docs/plans/2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan.md`
 - `docs/plans/2026-08-23-polling-strategy-burst-sleep-default-plan.md`
 - `docs/plans/2026-08-23-maintainability-and-isolation-remediation-plan.md`
 - `docs/plans/2026-08-23-configuration-snapshot-consistency-plan.md`

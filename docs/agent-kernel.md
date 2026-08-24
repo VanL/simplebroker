@@ -188,6 +188,10 @@ Public targets and discovery packaging: `docs/specs/16-python-library-api.md`
   companions while open).
 - For agents: prefer an **explicit** `-f PATH` / `db_path=` on **every**
   command in a recipe so the storage address is never ambient-only.
+- The CLI canonicalizes ordinary relative SQLite `-f` targets and confines
+  them to the selected working directory. An explicit absolute `-f` and a
+  target selected by trusted `.broker.toml` are intentional authority grants
+  outside that containment rule.
 - Project scope, env (`BROKER_*`), and `.broker.toml` can change discovery;
   when in doubt, pass the path/target explicitly.
 - Optional backends (`simplebroker[pg]`, `simplebroker[redis]`): same *use*

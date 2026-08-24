@@ -1,5 +1,6 @@
 """Test symlink-based security vulnerabilities."""
 
+import json
 import tempfile
 from pathlib import Path
 
@@ -153,6 +154,140 @@ def test_symlink_chain_attack(workdir: Path):
         finally:
             link1.unlink()
             link2.unlink()
+
+
+def test_relative_symlink_loop_fails_closed_before_dispatch(workdir: Path) -> None:
+    """A relative loop should fail at containment, not in SQLite open."""
+    loop = workdir / "loop.db"
+    try:
+        loop.symlink_to(loop.name)
+    except (OSError, NotImplementedError):
+        pytest.skip("Cannot create symlinks on this system")
+
+    try:
+        code, stdout, stderr = run_cli(
+            "-f", "loop.db", "write", "test_queue", "message", cwd=workdir
+        )
+
+        assert code == 1
+        assert stdout == ""
+        assert len(stderr.splitlines()) == 1
+        assert "could not safely resolve relative database target" in stderr.lower()
+        assert "resolvable path within the working directory" in stderr.lower()
+        assert "traceback" not in stderr.lower()
+    finally:
+        loop.unlink(missing_ok=True)
+
+
+def test_relative_symlink_loop_status_fails_before_target_open(workdir: Path) -> None:
+    """Global status should prepare a relative target before opening it."""
+    loop = workdir / "loop.db"
+    try:
+        loop.symlink_to(loop.name)
+    except (OSError, NotImplementedError):
+        pytest.skip("Cannot create symlinks on this system")
+
+    try:
+        code, stdout, stderr = run_cli("-f", "loop.db", "--status", cwd=workdir)
+
+        assert code == 1
+        assert stdout == ""
+        assert "could not safely resolve relative database target" in stderr.lower()
+        assert "traceback" not in stderr.lower()
+    finally:
+        loop.unlink(missing_ok=True)
+
+
+def test_relative_symlink_loop_vacuum_fails_before_target_open(workdir: Path) -> None:
+    """Vacuum should prepare a relative target before opening it."""
+    loop = workdir / "loop.db"
+    try:
+        loop.symlink_to(loop.name)
+    except (OSError, NotImplementedError):
+        pytest.skip("Cannot create symlinks on this system")
+
+    try:
+        code, stdout, stderr = run_cli("-f", "loop.db", "--vacuum", cwd=workdir)
+
+        assert code == 1
+        assert stdout == ""
+        assert "could not safely resolve relative database target" in stderr.lower()
+        assert "traceback" not in stderr.lower()
+    finally:
+        loop.unlink(missing_ok=True)
+
+
+def test_relative_symlink_loop_compact_fails_before_target_open(workdir: Path) -> None:
+    """Compact should prepare a relative target before opening it."""
+    loop = workdir / "loop.db"
+    try:
+        loop.symlink_to(loop.name)
+    except (OSError, NotImplementedError):
+        pytest.skip("Cannot create symlinks on this system")
+
+    try:
+        code, stdout, stderr = run_cli(
+            "-f", "loop.db", "--vacuum", "--compact", cwd=workdir
+        )
+
+        assert code == 1
+        assert stdout == ""
+        assert "could not safely resolve relative database target" in stderr.lower()
+        assert "traceback" not in stderr.lower()
+    finally:
+        loop.unlink(missing_ok=True)
+
+
+def test_relative_symlink_loop_json_failure_is_one_error_object(
+    workdir: Path,
+) -> None:
+    """Recognized JSON mode should preserve the shared error wire shape."""
+    loop = workdir / "loop.db"
+    try:
+        loop.symlink_to(loop.name)
+    except (OSError, NotImplementedError):
+        pytest.skip("Cannot create symlinks on this system")
+
+    try:
+        code, stdout, stderr = run_cli(
+            "-f", "loop.db", "--json", "--status", cwd=workdir
+        )
+
+        assert code == 1
+        assert stdout == ""
+        assert len(stderr.splitlines()) == 1
+        payload = json.loads(stderr)
+        assert tuple(payload) == ("error", "message", "retryable")
+        assert payload["error"] == "ERROR"
+        assert payload["retryable"] is False
+        assert (
+            "could not safely resolve relative database target"
+            in payload["message"].lower()
+        )
+        assert "traceback" not in stderr.lower()
+    finally:
+        loop.unlink(missing_ok=True)
+
+
+def test_quiet_does_not_suppress_relative_resolution_failure(workdir: Path) -> None:
+    """Quiet mode suppresses commentary, not target-preparation errors."""
+    loop = workdir / "loop.db"
+    try:
+        loop.symlink_to(loop.name)
+    except (OSError, NotImplementedError):
+        pytest.skip("Cannot create symlinks on this system")
+
+    try:
+        code, stdout, stderr = run_cli(
+            "-q", "-f", "loop.db", "write", "test_queue", "message", cwd=workdir
+        )
+
+        assert code == 1
+        assert stdout == ""
+        assert "could not safely resolve relative database target" in stderr.lower()
+        assert "traceback" not in stderr.lower()
+    finally:
+        loop.unlink(missing_ok=True)
 
 
 def test_absolute_path_with_symlink(workdir: Path):

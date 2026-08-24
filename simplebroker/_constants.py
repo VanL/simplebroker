@@ -345,11 +345,10 @@ def _validate_path_component(
 
 
 def _validate_safe_path_components(path: str, context: str = "path") -> None:
-    """Validate that path components don't contain dangerous characters or reserved names.
+    """Validate lexical path components and platform-reserved names.
 
-    This function provides comprehensive security validation for user-supplied paths,
-    preventing various attack vectors including path traversal, shell injection,
-    and Windows reserved names.
+    This check rejects lexical ``.`` / ``..`` components and disallowed
+    characters. It does not resolve symlinks or establish physical containment.
 
     Args:
         path: Path string to validate (can be filename or compound path)
@@ -358,13 +357,12 @@ def _validate_safe_path_components(path: str, context: str = "path") -> None:
     Raises:
         ValueError: If path contains dangerous characters or reserved names
 
-    Security Features:
-        - Prevents path traversal attacks (..)
+    Validation checks:
+        - Rejects lexical traversal components (..)
         - Blocks null bytes and control characters
-        - Prevents shell injection on Unix/Mac
+        - Blocks the configured punctuation set
         - Blocks Windows reserved names (CON, PRN, AUX, etc.)
         - Validates each path component separately
-        - Uses pre-compiled regex for maximum performance
         - Allows Windows drive letters (e.g., C:, D:)
     """
     if not isinstance(path, str) or not path:

@@ -151,7 +151,8 @@ def test_validate_path_containment_rejects_outside_db_and_bad_project_scope(
 def test_resolve_symlinks_safely_wraps_resolution_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def raise_os_error(self: Path) -> Path:
+    def raise_os_error(self: Path, *, strict: bool = False) -> Path:
+        assert strict is False
         raise OSError("boom")
 
     monkeypatch.setattr(Path, "resolve", raise_os_error)
@@ -168,7 +169,8 @@ def test_resolve_symlinks_safely_resolves_absolute_unfinished_symlink(
     class FakeSymlink:
         parent = tmp_path
 
-        def resolve(self):
+        def resolve(self, *, strict: bool = False):
+            assert strict is False
             return self
 
         def is_symlink(self) -> bool:
@@ -195,7 +197,8 @@ def test_resolve_symlinks_safely_resolves_relative_unfinished_symlink(
     class FakeSymlink:
         parent = FakeParent()
 
-        def resolve(self):
+        def resolve(self, *, strict: bool = False):
+            assert strict is False
             return self
 
         def is_symlink(self) -> bool:
@@ -209,11 +212,12 @@ def test_resolve_symlinks_safely_resolves_relative_unfinished_symlink(
     assert resolved == target.resolve()
 
 
-def test_resolve_symlinks_safely_returns_partial_path_on_inner_read_error() -> None:
+def test_resolve_symlinks_safely_rejects_inner_read_error() -> None:
     class BrokenSymlink:
         parent = Path(".")
 
-        def resolve(self):
+        def resolve(self, *, strict: bool = False):
+            assert strict is False
             return self
 
         def is_symlink(self) -> bool:
@@ -224,4 +228,32 @@ def test_resolve_symlinks_safely_returns_partial_path_on_inner_read_error() -> N
 
     link = BrokenSymlink()
 
-    assert _resolve_symlinks_safely(link) is link  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="Failed to resolve symlinks"):
+        _resolve_symlinks_safely(link)  # type: ignore[arg-type]
+
+
+def test_resolve_symlinks_safely_rejects_depth_exhaustion() -> None:
+    class LoopingSymlink:
+        parent = None
+
+        def __init__(self) -> None:
+            self.parent = self
+
+        def __truediv__(self, child: Path):
+            assert child == Path("loop.db")
+            return self
+
+        def resolve(self, *, strict: bool = False):
+            assert strict is False
+            return self
+
+        def is_symlink(self) -> bool:
+            return True
+
+        def readlink(self) -> Path:
+            return Path("loop.db")
+
+    link = LoopingSymlink()
+
+    with pytest.raises(RuntimeError, match="maximum depth exceeded"):
+        _resolve_symlinks_safely(link, max_depth=1)  # type: ignore[arg-type]

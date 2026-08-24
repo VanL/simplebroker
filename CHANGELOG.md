@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ordinary relative SQLite CLI targets now fail closed when their physical
+  containment cannot be established. Command dispatch, status, and vacuum use
+  the same canonical target that passed containment; explicit absolute and
+  trusted project-config targets retain their existing authority.
 - Recognized JSON mode is now preserved through post-parse global validation,
   including cleanup, vacuum, and compact conflicts. Ordinary alias-removal and
   initialization failures now use the shared `simplebroker: error:` prefix;
@@ -49,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removed the POSIX group/other-readable `.broker.toml` warning. SimpleBroker
+  still warns, without exposing the value, for recognized inline passwords;
+  effective file and directory permissions and ACLs remain operator-owned.
 - Removed the unused `Message` tuple from `simplebroker.watcher`. Direct
   `simplebroker.watcher` imports are outside [SB-API-1]'s supported import
   surfaces; package-root and `simplebroker.ext` watcher APIs are unchanged.

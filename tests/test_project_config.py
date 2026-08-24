@@ -140,7 +140,7 @@ def test_project_config_warns_for_inline_conninfo_password(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
-def test_project_config_warns_when_group_or_other_readable(
+def test_project_config_does_not_judge_group_or_other_mode_bits(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     config_path = tmp_path / ".broker.toml"
@@ -149,9 +149,7 @@ def test_project_config_warns_when_group_or_other_readable(
 
     load_project_config(config_path)
 
-    warning = capsys.readouterr().err
-    assert "group/other-readable" in warning
-    assert str(config_path) in warning
+    assert capsys.readouterr().err == ""
 
 
 def test_project_config_env_password_does_not_trigger_inline_warning(

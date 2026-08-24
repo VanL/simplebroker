@@ -566,8 +566,10 @@ fi
   secret that warrants silently overriding an operator's sharing policy.
 - **Project config secrets**: Prefer `BROKER_BACKEND_PASSWORD` or another
   environment variable over embedding passwords in `.broker.toml`. SimpleBroker
-  warns without printing the secret when a target embeds a password, and on
-  POSIX it also warns when the config is group- or other-readable.
+  warns without printing the secret when a target embeds a password. It does
+  not infer confidentiality or integrity from the config file's mode,
+  ownership, parent-directory permissions, or ACLs. Operators own the effective
+  operating-system permissions across the file and its containing directories.
 - **SQL injection**: Prevented via parameterized queries
 - **Message content**: Not validated - can contain any text including shell metacharacters
 

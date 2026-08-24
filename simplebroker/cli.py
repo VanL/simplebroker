@@ -3,7 +3,7 @@
 import argparse
 import sys
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -1262,37 +1262,39 @@ def _validate_legacy_sqlite_target(
     resolved_target: BrokerTarget,
     *,
     config: Mapping[str, Any],
-) -> None:
+) -> BrokerTarget:
     """Validate the legacy SQLite path without changing target precedence."""
     if not resolved_target.legacy_sqlite_path_mode:
-        return
+        return resolved_target
 
     db_path = _require_legacy_sqlite_path(resolved_target)
     working_dir = args.dir
     used_project_scope = resolved_target.used_project_scope
-    absolute_path_provided = Path(args.file).is_absolute() or used_project_scope
+    containment_required = not (Path(args.file).is_absolute() or used_project_scope)
 
     _validate_safe_path_components(str(working_dir), "Directory argument (-d/--dir)")
     _validate_working_directory(working_dir)
 
-    if not absolute_path_provided and not used_project_scope:
-        db_path = working_dir / args.file
+    if containment_required:
+        if (
+            not getattr(args, "_file_explicitly_provided", False)
+            and args.file == DEFAULT_DB_NAME
+            and config["BROKER_DEFAULT_DB_NAME"]
+        ):
+            db_path = ensure_compound_db_path(
+                working_dir,
+                config["BROKER_DEFAULT_DB_NAME"],
+            )
+        else:
+            db_path = working_dir / args.file
     if not used_project_scope:
         _validate_safe_path_components(args.file, "Database filename")
 
     db_path = _resolve_legacy_sqlite_path(
         db_path,
         working_dir=working_dir,
-        file_name=args.file,
-        absolute_path_provided=absolute_path_provided,
-        used_project_scope=used_project_scope,
+        containment_required=containment_required,
     )
-
-    if args.file == DEFAULT_DB_NAME and config["BROKER_DEFAULT_DB_NAME"]:
-        db_path = ensure_compound_db_path(
-            working_dir,
-            config["BROKER_DEFAULT_DB_NAME"],
-        )
 
     _validate_database_parent_directory(db_path.parent)
     if db_path.exists() and args.command in {
@@ -1306,36 +1308,37 @@ def _validate_legacy_sqlite_target(
     }:
         _validate_sqlite_database(db_path, verify_magic=False)
 
+    if not containment_required:
+        return resolved_target
+    return replace(resolved_target, target=str(db_path))
+
 
 def _resolve_legacy_sqlite_path(
     db_path: Path,
     *,
     working_dir: Path,
-    file_name: str,
-    absolute_path_provided: bool,
-    used_project_scope: bool,
+    containment_required: bool,
 ) -> Path:
-    """Resolve symlinks for legacy validation, retaining its fallback path."""
+    """Resolve a legacy path and fail closed when containment is required."""
     try:
         resolved_db_path = _resolve_symlinks_safely(db_path)
-        resolved_working_dir = _resolve_symlinks_safely(working_dir)
-        if not absolute_path_provided:
+        if containment_required:
+            resolved_working_dir = _resolve_symlinks_safely(working_dir)
             _validate_path_containment(
                 resolved_db_path,
                 resolved_working_dir,
-                used_project_scope,
+                used_project_scope=False,
             )
-        db_path = resolved_db_path
-    except (RuntimeError, OSError):
-        if not absolute_path_provided:
-            try:
-                resolved_working_dir = working_dir.resolve()
-                if not used_project_scope:
-                    db_path = resolved_working_dir / file_name
-            except (RuntimeError, OSError):
-                pass
+    except (RuntimeError, OSError) as error:
+        if containment_required:
+            raise ValueError(
+                "Could not safely resolve relative database target; use a "
+                "resolvable path within the working directory or supply an "
+                "intentional absolute -f/--file target"
+            ) from error
+        return db_path
 
-    return db_path
+    return resolved_db_path
 
 
 def _validate_command_target(
@@ -1639,10 +1642,10 @@ def _prepare_command_target(
     *,
     status_json_output: bool,
     config: Mapping[str, Any],
-) -> int | None:
-    """Validate a command's legacy path or return its error code."""
+) -> BrokerTarget | int:
+    """Return a prepared command target or its emitted error code."""
     try:
-        _validate_legacy_sqlite_target(args, resolved_target, config=config)
+        return _validate_legacy_sqlite_target(args, resolved_target, config=config)
     except (ValueError, DatabaseError) as error:
         commands._emit_error(
             error,
@@ -1653,7 +1656,6 @@ def _prepare_command_target(
             ),
         )
         return EXIT_ERROR
-    return None
 
 
 def _run_pre_target_action(
@@ -1683,14 +1685,39 @@ def _prepare_dispatch(
     *,
     status_json_output: bool,
     config: Mapping[str, Any],
-) -> int | None:
-    """Run command-local validation before entering the dispatch boundary."""
+) -> BrokerTarget | int:
+    """Return the prepared target after command-local validation."""
     early_error = _validate_early_command_args(args)
     if early_error is not None:
         return early_error
     return _prepare_command_target(
         args,
         resolved_target,
+        status_json_output=status_json_output,
+        config=config,
+    )
+
+
+def _run_preparation_exempt_target_action(
+    args: argparse.Namespace,
+    resolved_target: BrokerTarget,
+    parser: argparse.ArgumentParser,
+    *,
+    status_json_output: bool,
+    config: ResolvedConfig,
+) -> int | None:
+    """Run target actions that keep their separate preparation path."""
+    action_is_exempt = (
+        args.command == "init"
+        or args.cleanup
+        or (not args.command and not args.status and not args.vacuum)
+    )
+    if not action_is_exempt:
+        return None
+    return _run_target_action(
+        args,
+        resolved_target,
+        parser,
         status_json_output=status_json_output,
         config=config,
     )
@@ -1722,7 +1749,7 @@ def _main(*, config: ResolvedConfig) -> int:
         return target_result
     resolved_target = target_result
 
-    action_result = _run_target_action(
+    action_result = _run_preparation_exempt_target_action(
         args,
         resolved_target,
         parser,
@@ -1732,14 +1759,25 @@ def _main(*, config: ResolvedConfig) -> int:
     if action_result is not None:
         return action_result
 
-    preparation_error = _prepare_dispatch(
+    preparation_result = _prepare_dispatch(
         args,
         resolved_target,
         status_json_output=status_json_output,
         config=config,
     )
-    if preparation_error is not None:
-        return preparation_error
+    if isinstance(preparation_result, int):
+        return preparation_result
+    resolved_target = preparation_result
+
+    action_result = _run_target_action(
+        args,
+        resolved_target,
+        parser,
+        status_json_output=status_json_output,
+        config=config,
+    )
+    if action_result is not None:
+        return action_result
 
     try:
         _validate_command_target(args, resolved_target, config=config)
