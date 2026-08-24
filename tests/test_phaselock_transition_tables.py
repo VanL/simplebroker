@@ -136,8 +136,6 @@ def _assert_marked_while_waiting(
         retry_delay=0.001,
     )
     holder = PhaseLockService(target, use_xattrs=False, timeout=1)
-    held = threading.Event()
-    release = threading.Event()
     waiting = threading.Event()
     result_holder: list[Any] = []
     real_acquire = phaselock._AdvisoryLock._acquire_process_lock
@@ -153,24 +151,15 @@ def _assert_marked_while_waiting(
         observe_wait,
     )
 
-    def hold() -> None:
-        with holder.locked():
-            held.set()
-            release.wait(1)
-
     def contend() -> None:
         result_holder.append(service.run_phases([phase]))
 
-    holder_thread = threading.Thread(target=hold)
     contender_thread = threading.Thread(target=contend, name="phase-contender")
-    holder_thread.start()
-    assert held.wait(1)
-    contender_thread.start()
-    assert waiting.wait(1)
-    service._write_status_phases(["schema"])
-    contender_thread.join(1)
-    release.set()
-    holder_thread.join(1)
+    with holder.locked():
+        contender_thread.start()
+        assert waiting.wait(1)
+        service._write_status_phases(["schema"])
+        contender_thread.join(1)
     assert not contender_thread.is_alive()
     assert result_holder[0].skipped == ("schema",)
     assert calls == []
