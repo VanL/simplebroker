@@ -182,6 +182,7 @@ failure or cleanup order.
 | dependency import scan (13) | `test_no_external_imports` (1) | Both dependency gates share parsed-source and absolute-import traversal. |
 | setup idle-budget test (11) | test (6) | Shared setup runner, plugin, and minimal-core fixtures without mocking the budget owner. |
 | managed subprocess context (24) | `managed_subprocess` (7) | `ManagedProcess.close` is the one idempotent escalation and reader-cleanup owner. |
+| two diagnostic race tests (19, 11) | deleted | Stronger production-path transition and concurrency tests made the diagnostic-only assertions redundant. |
 
 Configuration has one deep resolution seam in `_constants.py`.
 `load_config()` is the strict fresh environment parser; `resolve_config()` is
@@ -214,7 +215,20 @@ configuration-consuming generator body first runs. `_paths.py` resolves its
 fixed built-in backend at validation time; opaque extras cannot select a core
 backend. Process sessions include the complete marker in identity, so opaque
 extras can separate resource sessions without becoming canonical core options.
-| two diagnostic race tests (19, 11) | deleted | Stronger production-path transition and concurrency tests made the diagnostic-only assertions redundant. |
+
+CLI argument normalization remains a preparse pass because root options and
+the destructive global actions must be recognized before subcommand dispatch.
+The parser-construction helpers capture the exact metadata needed by that pass
+at the same time they register each argparse action. This keeps one grammar
+owner without making production code traverse argparse's private action tree;
+structural tests may inspect that tree only to prove conservation and to fail
+when a new sensitive registration is not captured.
+
+Retry timing overrides are test-scoped dynamic context, not process
+configuration. `_retry.test_config()` therefore uses a `ContextVar` token and
+resets that token on exit. Token restoration preserves nesting and overlapping
+contexts; a module global or environment-variable override would let one
+concurrent or out-of-order exit overwrite another caller's live setting.
 
 Redis broadcast also improved from 36 to 28 through named selector, patterned
 broadcast, reservation, and result-code seams. Its atomic Lua retry loop
@@ -332,7 +346,9 @@ findings must update source, registry, and policy evidence atomically.
 
 ## Related Plan
 
-- `docs/plans/2026-08-23-correctness-and-concurrency-review-remediation-plan.md`
+- retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
+  source `23d6c9d1` (local-only pin); see the ledger in
+  `docs/plans/README.md`
 - retired: 2026-08-11-activity-waiter-terminal-close-contract-plan — source
   `27f9ae4`; see the ledger in `docs/plans/README.md`
 - retired: 2026-08-04-cmd-watch-locality-plan — source `5023710`; see the

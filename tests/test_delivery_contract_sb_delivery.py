@@ -243,10 +243,12 @@ def test_live_peek_stream_rejects_naive_cursor_completeness() -> None:
 
     row = _verification_row("SB-DELIVERY-4")
     assert "test_live_peek_stream_rejects_naive_cursor_completeness" in row
+    spec_text = SPEC.read_text(encoding="utf-8")
     assert (
-        "docs/plans/2026-08-23-correctness-and-concurrency-review-remediation-plan.md"
-        in SPEC.read_text(encoding="utf-8")
+        "retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan"
+        in spec_text
     )
+    assert "source `23d6c9d1`" in spec_text
 
 
 def test_invalid_generator_selector_fails_on_iteration_without_mutation(

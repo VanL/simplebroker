@@ -145,8 +145,8 @@ claim delivery semantics (`[SB-DELIVERY-1]`).
 
 ## Related Plans
 
-- retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9` (local-only
-  pin); see the ledger in `docs/plans/README.md`
+- retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9`; see the
+  ledger in `docs/plans/README.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-08-08-json-timestamp-string-contract-plan — source `4cb47bc9`;

@@ -483,13 +483,14 @@ Dated moment-tier entries (foldable after age floor and distillation).
   not Golden Rule, runbook, or theory promotion and does not need a separate
   plan. Leave the plan completed only when the reusable correction cannot be
   stated faithfully from the closed record.
-- 2026-08-13: A new environment config key is another import-time trigger.
-  Package-level `load_config()` can raise before any CLI `main()` catch; a
-  local command wrapper cannot hide it, and silent fallback defaults are
-  rejected. Until bootstrap is lazy or staged, the generic no-traceback CLI
-  floor cannot be claimed for invalid env values. (Dump-plan IR-1 at
-  `d0d2de9`; same class as pre-release unit C at `84159198`; follow-up
-  draft `2026-08-13-invalid-environment-import-lifecycle-plan.md`.)
+- 2026-08-13 (revised 2026-08-23; was: eager config load let invalid env
+  escape before `main()`): Keep package imports ambient-free. Sample strict
+  current config once at each handle or invocation ownership seam; Python
+  raises a fresh `InvalidConfigError` before side effects, and the outer CLI
+  translates it to one redacted exit-1 diagnostic. Silent fallback defaults
+  remain rejected. (Original dump-plan IR-1 at `d0d2de9`; resolved by
+  2026-08-13-invalid-environment-import-lifecycle-plan at `6b5b3044` and
+  refined by configuration-snapshot unification at `32210e58`.)
 - 2026-08-13: An informational `warnings.warn()` inside a parser-totality or
   fuzz replay looks like a crash when the harness treats warnings as errors.
   Suppress or exclude the expected informational category in that replay; do
@@ -503,3 +504,48 @@ Dated moment-tier entries (foldable after age floor and distillation).
   At that ceiling every valid ID is already `<= H` and no extra filter is
   required. (Harvested from 2026-08-12-bounded-live-dump-plan at `d0d2de9`;
   rationale also in `docs/implementation/08-message-identity-and-write-visibility.md`.)
+- 2026-08-23: Format rejected configuration values through a separate safe
+  display boundary: redact sensitive fields before value-controlled
+  formatting, tolerate hostile `repr`, escape controls, then apply the size
+  bound. Do not reject otherwise valid scalar subclasses merely to simplify
+  diagnostics. (Harvested from invalid-environment lifecycle at `6b5b3044`.)
+- 2026-08-23: Once CLI parsing recognizes structured-output mode, later
+  validation, preparation, and dispatch failures must preserve that dialect.
+  Only failures before recognition may remain plain. Treat output mode as
+  sticky parsed state, not a command-handler preference. (Harvested from
+  public-API/CLI remediation at `2605b79a`.)
+- 2026-08-23: Static checking has three cohorts: strict production sources,
+  ordinary green tests, and expected-failure fixtures. Exclude negative
+  fixtures from every ordinary CI and release enumerator, then run them in a
+  dedicated test that asserts the exact nonzero diagnostic; otherwise a gate
+  is permanently red or the negative contract silently disappears. (Harvested
+  from public-API/CLI remediation at `2605b79a`; completed by `eef0a1e6`.)
+- 2026-08-23: Downstream candidate-core tests must put the downstream project
+  before the candidate's test tree on `PYTHONPATH`, or install the candidate,
+  and must verify the imported core path. Reversed ordering can import an
+  unrelated same-named test package and produce a false compatibility failure.
+  (Harvested from public-API/CLI remediation at `2605b79a`.)
+- 2026-08-23: A CLI preparse safety pass needs one grammar owner. Capture its
+  metadata while argparse actions are registered; do not maintain a parallel
+  option table or traverse argparse private actions in production. A
+  structural test may inspect those internals to prove every sensitive action
+  was captured and should be mutation-checked against new registrations.
+  (Harvested from maintainability remediation at `a490dcc4`.)
+- 2026-08-23: Judge schema migration success from schema and data facts inside
+  the owned transaction. Check the postcondition before publishing the schema
+  version, and never classify success by native exception prose. (Harvested
+  from maintainability remediation at `a490dcc4`; rationale in implementation
+  doc 09.)
+- 2026-08-23: Scoped test overrides that may nest or overlap need dynamic
+  context with token restoration. A process global or environment variable
+  lets one concurrent or reverse-order exit erase another caller's live
+  override. (Harvested from maintainability remediation at `a490dcc4`.)
+- 2026-08-23: Verification that must survive `python -O` uses explicit
+  failures, not `assert`. Optimization removes assertions, so an assert-based
+  release or repository gate can turn a failed invariant into success.
+  (Harvested from maintainability remediation at `a490dcc4`.)
+- 2026-08-23: A documentation backlink can be a firing contract. When a live
+  plan path becomes a source-pinned retired citation, search tests as well as
+  docs and move the assertion in the same change. Documentation-only gates do
+  not replace the affected contract module or full suite. (Corrected during
+  the 2026-08-23 coalescing sweep.)

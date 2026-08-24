@@ -103,6 +103,16 @@ new core or runner publication; adding a permanent `_closed` latch to the
 runner would assign that ownership to the wrong layer and break intentional
 close-then-reuse behavior.
 
+Fork recovery deliberately retains inherited SQLite connection references in
+the child. Dropping a reference can run an inherited connection finalizer and
+close SQLite state from the wrong process, recreating the hazard recovery is
+meant to avoid. Sibling forks cannot grow the parent's copy-on-write retained
+list; only a nested-fork lineage can accumulate references. A cap or cleanup
+policy would therefore trade a hypothetical nested-lineage memory cost for an
+unsafe finalization path; either requires measured harmful growth and a proven
+close-free disposal mechanism. A warning is also unjustified until that growth
+is observed.
+
 ## Acquisition
 
 `DBConnection.__init__()` and `DBConnection._ensure_shared_session()` are the
@@ -199,7 +209,9 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
-- `docs/plans/2026-08-23-correctness-and-concurrency-review-remediation-plan.md`
+- retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
+  source `23d6c9d1` (local-only pin); see the ledger in
+  `docs/plans/README.md`
 - retired: 2026-08-11-activity-waiter-terminal-close-contract-plan — source
   `27f9ae4`; see the ledger in `docs/plans/README.md`
 - retired: 2026-05-04-process-local-broker-session-plan — source

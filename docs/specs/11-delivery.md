@@ -204,7 +204,9 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- `docs/plans/2026-08-23-correctness-and-concurrency-review-remediation-plan.md`
+- retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
+  source `23d6c9d1` (local-only pin); see the ledger in
+  `docs/plans/README.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the

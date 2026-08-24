@@ -542,16 +542,26 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
-- `docs/plans/2026-08-23-correctness-and-concurrency-review-remediation-plan.md`
-- `docs/plans/2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan.md`
-- `docs/plans/2026-08-23-polling-strategy-burst-sleep-default-plan.md`
-- `docs/plans/2026-08-23-maintainability-and-isolation-remediation-plan.md`
-- `docs/plans/2026-08-23-configuration-snapshot-consistency-plan.md`
-- `docs/plans/2026-08-23-public-api-and-cli-review-remediation-plan.md`
-- `docs/plans/2026-08-13-isolated-embedding-config-plan.md`
-- `docs/plans/2026-08-13-invalid-environment-import-lifecycle-plan.md`
-- retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9` (local-only
-  pin); see the ledger in `docs/plans/README.md`
+- retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
+  source `23d6c9d1` (local-only pin); see the ledger in
+  `docs/plans/README.md`
+- retired: 2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan
+  — source `00fb9f77` (local-only pin); see the ledger in
+  `docs/plans/README.md`
+- retired: 2026-08-23-polling-strategy-burst-sleep-default-plan — source
+  `d63e6552` (local-only pin); see the ledger in `docs/plans/README.md`
+- retired: 2026-08-23-maintainability-and-isolation-remediation-plan — source
+  `a490dcc4` (local-only pin); see the ledger in `docs/plans/README.md`
+- retired: 2026-08-23-configuration-snapshot-consistency-plan — source
+  `32210e58` (local-only pin); see the ledger in `docs/plans/README.md`
+- retired: 2026-08-23-public-api-and-cli-review-remediation-plan — source
+  `2605b79a` (local-only pin); see the ledger in `docs/plans/README.md`
+- retired: 2026-08-13-isolated-embedding-config-plan — source `32210e58`
+  (local-only pin); see the ledger in `docs/plans/README.md`
+- retired: 2026-08-13-invalid-environment-import-lifecycle-plan — source
+  `6b5b3044`; see the ledger in `docs/plans/README.md`
+- retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9`; see the
+  ledger in `docs/plans/README.md`
 - retired: 2026-08-11-activity-waiter-terminal-close-contract-plan — source
   `27f9ae4`; see the ledger in `docs/plans/README.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
