@@ -95,6 +95,13 @@ pass; bootstrap source `2f93ee5`)
 
 Dated moment-tier entries (foldable after age floor and distillation).
 
+- 2026-08-23: A durable timestamp CAS protects persisted monotonicity, not a
+  shared generator's process-local cache. Keep candidate calculation, durable
+  compare-and-advance, conflict refresh, and cache publication under one
+  generator lock; otherwise thread A can store `T`, thread B can store and
+  publish `T+1`, and then A can publish stale `T`. The implementation owner is
+  `docs/implementation/08-message-identity-and-write-visibility.md`; historical
+  fix `6f9bd065`.
 - 2026-08-14: A timeout stack is a sample of where work was executing, not
   proof that the sampled terminal call is stuck. Before assigning a storage
   deadlock, publish and acknowledge exact entered/returned phases from a

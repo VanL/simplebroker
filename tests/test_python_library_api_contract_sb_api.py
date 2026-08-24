@@ -205,6 +205,15 @@ def test_api_activity_waiter_terminal_close_contract() -> None:
     assert not hasattr(simplebroker.ActivityWaiter, "shutdown")
 
 
+def test_api_watcher_start_stop_cleanup_ownership_contract() -> None:
+    body = " ".join(_section("SB-API-6").split()).lower()
+    assert "thread-safe against watcher startup" in body
+    assert "one cleanup owner" in body
+    assert "stop that wins before startup" in body
+    assert "joining stop call times out" in body
+    assert "two concurrent `run_forever()` calls" in body
+
+
 def test_api_command_layer_and_advanced_language() -> None:
     commands_section = _section("SB-API-10")
     assert "simplebroker.commands" in commands_section
@@ -229,6 +238,9 @@ def test_api_owned_runner_lifecycle_and_backend_v7_contract() -> None:
     assert "process-local cache" in advanced
     assert "final read" in advanced
     assert "outcome-ambiguous" in advanced
+    assert "linearization point" in advanced
+    assert "runner remains reusable" in advanced
+    assert "owning process session or factory" in advanced
 
 
 def test_api_cross_surface_matrix_present() -> None:

@@ -70,6 +70,7 @@ import time
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
+from enum import Enum, auto
 from functools import partial
 from pathlib import Path
 from types import TracebackType
@@ -254,6 +255,15 @@ class StopWatching(Exception):
 _StopLoop = StopWatching
 
 
+class _WatcherLifecycleState(Enum):
+    """Private cleanup ownership for one watcher lifecycle."""
+
+    IDLE = auto()
+    RUN_OWNED = auto()
+    STOP_OWNED = auto()
+    RELEASED = auto()
+
+
 class BaseWatcher(ABC):
     """Base class for all watchers with common retry and error handling logic.
 
@@ -329,7 +339,13 @@ class BaseWatcher(ABC):
 
         # Weak reference to the thread running this watcher (for cleanup warnings)
         self._thread: weakref.ref[threading.Thread] | None = None
-        self._run_thread: weakref.ref[threading.Thread] | None = None
+        # One lock-protected slot owns the lifecycle transition. A weakref
+        # denotes the live run owner; enum values denote idle/stop/released
+        # states. Reusing this established private slot avoids expanding the
+        # instance-field surface copied by pinned downstream subclasses.
+        self._run_thread: (
+            weakref.ReferenceType[threading.Thread] | _WatcherLifecycleState | None
+        ) = _WatcherLifecycleState.IDLE
 
         # Thread-local storage for database connections
         self._thread_local = threading.local()
@@ -595,9 +611,10 @@ class BaseWatcher(ABC):
         prevents race conditions where the main program exits while the
         watcher thread is still cleaning up.
 
-        Thread-safety: This method uses a lock to ensure that multiple
-        concurrent calls to stop() are handled correctly. Only the first
-        caller will perform the join operation.
+        Thread-safety: This method serializes lifecycle ownership before any
+        blocking work. A live run remains the sole cleanup owner, while one
+        idle stop caller claims cleanup. Concurrent callers may independently
+        join the live run without becoming additional cleanup owners.
 
         Args:
             join: Whether to wait for the thread to finish. Default is True.
@@ -607,25 +624,23 @@ class BaseWatcher(ABC):
                 anyway (thread might still be running).
 
         """
-        # Use stop_lock if available (from subclasses), otherwise just proceed
-        lock = getattr(self, "_stop_lock", None)
-
-        if lock:
-            with lock:  # idempotent / thread-safe
-                self._perform_stop(join, timeout)
-        else:
-            self._perform_stop(join, timeout)
-
-    def _perform_stop(self, join: bool, timeout: float) -> None:
-        """Internal method to perform the actual stop operations."""
-        run_was_active = self._running_event.is_set()
-        if not self._stop_event.is_set():
+        with self._stop_lock:
+            notify_strategy = not self._stop_event.is_set()
             self._stop_event.set()
-            # Notify strategy to wake up wait_for_activity
-            if hasattr(self._strategy, "notify_activity"):
-                self._strategy.notify_activity()  # Wake up wait_for_activity
+            lifecycle_state = self._lifecycle_state_locked()
+            run_owner = self._run_thread
+            run_thread_ref = (
+                run_owner
+                if isinstance(run_owner, weakref.ReferenceType)
+                else self._thread
+            )
+            owns_cleanup = lifecycle_state is _WatcherLifecycleState.IDLE
+            if owns_cleanup:
+                self._run_thread = _WatcherLifecycleState.STOP_OWNED
 
-        run_thread_ref = self._run_thread or self._thread
+        if notify_strategy and hasattr(self._strategy, "notify_activity"):
+            self._strategy.notify_activity()
+
         if join and run_thread_ref is not None:
             thread = run_thread_ref()
             if (
@@ -635,21 +650,39 @@ class BaseWatcher(ABC):
             ):
                 thread.join(timeout)
 
-        # A live run owns teardown. Its finally block is the only closer, even
-        # if join times out; stop() only cleans watchers that were not running.
-        finalizer = getattr(self, "_finalizer", None)
-        should_cleanup = (
-            not run_was_active
-            and not self._running_event.is_set()
-            and (finalizer is None or finalizer.alive)
-        )
+        # A live run retains cleanup ownership even when join times out. An
+        # idle stop claims cleanup before releasing the lifecycle lock, so a
+        # concurrent run cannot become a second closer.
+        if owns_cleanup:
+            self._cleanup_stop_owned_resources()
 
-        if should_cleanup:
+    def _lifecycle_state_locked(self) -> _WatcherLifecycleState:
+        """Return the state encoded by ``_run_thread`` under ``_stop_lock``."""
+        owner = self._run_thread
+        if isinstance(owner, weakref.ReferenceType):
+            return _WatcherLifecycleState.RUN_OWNED
+        if owner is None:
+            # Pinned subclasses may reset their copied worker slot to the
+            # historical idle value.
+            return _WatcherLifecycleState.IDLE
+        return owner
+
+    def _cleanup_stop_owned_resources(self) -> None:
+        """Run cleanup claimed by an idle stop and publish its outcome."""
+        resources_released = False
+        try:
             self._cleanup_runtime_resources()
-
-        # Detach finalizer only once resources are actually released.
-        if should_cleanup and hasattr(self, "_finalizer"):
-            self._finalizer.detach()
+            resources_released = True
+        finally:
+            with self._stop_lock:
+                if self._run_thread is _WatcherLifecycleState.STOP_OWNED:
+                    self._run_thread = (
+                        _WatcherLifecycleState.RELEASED
+                        if resources_released
+                        else _WatcherLifecycleState.IDLE
+                    )
+            if resources_released and hasattr(self, "_finalizer"):
+                self._finalizer.detach()
 
     def _cleanup_thread_local(self) -> None:
         """Clean up thread-local database connections.
@@ -966,12 +999,35 @@ class BaseWatcher(ABC):
         This method blocks until stop() is called or SIGINT/SIGTERM is received.
         """
         signal_context: contextlib.ExitStack | None = None
-        if hasattr(self, "_finalizer") and not self._finalizer.alive:
-            self._setup_finalizer()
-        self._run_thread = weakref.ref(threading.current_thread())
-        self._running_event.set()
+        with self._stop_lock:
+            state = self._lifecycle_state_locked()
+            if state in {
+                _WatcherLifecycleState.RUN_OWNED,
+                _WatcherLifecycleState.STOP_OWNED,
+            }:
+                return
+            if state is _WatcherLifecycleState.RELEASED:
+                if self._stop_event.is_set():
+                    return
+                self._run_thread = _WatcherLifecycleState.IDLE
+
+            if self._stop_event.is_set():
+                self._run_thread = _WatcherLifecycleState.STOP_OWNED
+                owns_stopped_cleanup = True
+            else:
+                self._run_thread = weakref.ref(threading.current_thread())
+                self._running_event.set()
+                owns_stopped_cleanup = False
+
+        if owns_stopped_cleanup:
+            self._cleanup_stop_owned_resources()
+            return
+
         resources_released = False
         try:
+            if hasattr(self, "_finalizer") and not self._finalizer.alive:
+                self._setup_finalizer()
+
             # Set up signal handler if in main thread
             signal_context = self._setup_signal_handler()
 
@@ -987,8 +1043,17 @@ class BaseWatcher(ABC):
                     if signal_context is not None:
                         signal_context.__exit__(None, None, None)
             finally:
-                self._running_event.clear()
-                self._run_thread = None
+                with self._stop_lock:
+                    if (
+                        self._lifecycle_state_locked()
+                        is _WatcherLifecycleState.RUN_OWNED
+                    ):
+                        self._run_thread = (
+                            _WatcherLifecycleState.RELEASED
+                            if resources_released
+                            else _WatcherLifecycleState.IDLE
+                        )
+                    self._running_event.clear()
                 if resources_released and hasattr(self, "_finalizer"):
                     self._finalizer.detach()
 

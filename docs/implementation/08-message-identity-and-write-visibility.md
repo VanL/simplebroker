@@ -1,8 +1,9 @@
 # Message Identity and Ordinary-Write Visibility
 
-Owner: exact-insert admission in `simplebroker/_message_insert.py`; SQL write
-transactions in `simplebroker/db.py`; Redis ordinary-write allocation and row
-publication in `extensions/simplebroker_redis/simplebroker_redis/core.py` and
+Owner: timestamp allocation in `simplebroker/_timestamp.py`; exact-insert
+admission in `simplebroker/_message_insert.py`; SQL write transactions in
+`simplebroker/db.py`; Redis ordinary-write allocation and row publication in
+`extensions/simplebroker_redis/simplebroker_redis/core.py` and
 `extensions/simplebroker_redis/simplebroker_redis/scripts.py`.
 
 Boundary: realizes `[SB-ID-1]` through `[SB-ID-4]` from
@@ -11,14 +12,17 @@ selection, watcher lifecycle, move identity, patterned-broadcast atomicity, or
 dump record ordering. Persistence load delegates its header-floor meaning to
 `[SB-IO-4]` while using the same high-water machinery described here.
 
-Verification: shared reserved-zero and SQL transaction-ordering tests, a real
-two-connection PostgreSQL monotone-resync test, plus real-Valkey stale-fence,
-two-writer visibility, monotone-resync, command-count, same-core contention,
-and `SM-REDIS-WRITE` transition tests.
+Verification: shared reserved-zero and SQL transaction-ordering tests; the
+real-SQLite `SM-TIMESTAMP-GENERATOR::SHARED_INSTANCE_SERIALIZATION` transition;
+a real two-connection PostgreSQL monotone-resync test; plus real-Valkey
+stale-fence, two-writer visibility, monotone-resync, command-count, same-core
+contention, and `SM-REDIS-WRITE` transition tests.
 
 Required action: keep zero decodable but reject it at exact-insert admission;
 keep every expected Redis Lua result before the first mutation; preserve the
-single shared conflict budget and the post-commit wakeup/maintenance order.
+single shared conflict budget and the post-commit wakeup/maintenance order;
+never narrow one `TimestampGenerator` instance's lock below its complete
+allocation, durable advance or refresh, and cache-publication transition.
 
 ## Why zero is rejected at insertion
 
@@ -47,6 +51,31 @@ The real runner sequence is:
 The pass-through recorder in `tests/test_write_visibility.py` observes that
 sequence without replacing SQL execution. Redis is explicitly excluded from
 that SQL-only proof.
+
+## Same-generator timestamp serialization
+
+One `TimestampGenerator` lock owns PID recovery and lazy initialization,
+candidate calculation, durable compare-and-advance, conflict refresh, and
+local cache publication as one transition. The backend compare-and-advance
+protects durable monotonicity across generator instances and processes. It
+does not serialize the process-local `_last_ts` cache shared by threads using
+one generator.
+
+Before commit `6f9bd065`, candidate calculation was locally locked but the
+durable attempt and cache publication were not part of that same critical
+section. Thread A could durably store `T` and pause before publishing it to
+`_last_ts`; thread B could then durably store and publish `T+1`; thread A could
+resume and regress `_last_ts` to `T`. Durable state remained monotonic, but the
+stale cache caused later candidates to begin behind the surviving high-water
+and spend conflict retries unnecessarily.
+
+The full critical section is therefore intentional. Backend contention retry
+waits may occur while this same-instance lock is held; moving the durable CAS
+or its retry outside the lock would reopen the stale-cache ordering. The
+`SHARED_INSTANCE_SERIALIZATION` firing row pauses the real SQLite plugin's
+advance method, proves another thread cannot enter it through the same
+generator, then checks both durable high-water and `_last_ts` against the
+maximum returned value.
 
 ## SQL conflict repair
 
@@ -175,6 +204,7 @@ not pass/fail thresholds.
 
 ## Related plan
 
+- `docs/plans/2026-08-23-correctness-and-concurrency-review-remediation-plan.md`
 - retired: 2026-08-12-bounded-live-dump-plan — source `d0d2de9` (local-only
   pin); see the ledger in `docs/plans/README.md`
 - retired: 2026-07-30-reserved-zero-and-redis-write-atomicity-plan — source

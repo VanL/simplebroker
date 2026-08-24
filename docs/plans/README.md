@@ -29,6 +29,7 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-23-correctness-and-concurrency-review-remediation-plan.md | completed - Class 5 with mandatory hardening; deterministic Queue generator cleanup, atomic watcher startup/cleanup ownership, timestamp full-transition contract pinning, pagination and reusable-runner clarifications, and evidence-backed no-action dispositions are implemented, fully verified across core, PostgreSQL, Redis, and Weft, and independently reviewed |
 | 2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan.md | completed — Class 5 with mandatory hardening; fail-closed ordinary relative SQLite containment, canonical command/status/vacuum/compact dispatch, and project-config mode-warning removal are implemented, fully verified across Python 3.11–3.14 plus Weft, and independently reviewed |
 | 2026-08-23-polling-strategy-burst-sleep-default-plan.md | completed — Class 5 with mandatory hardening; canonical normalized `BROKER_BURST_SLEEP` now owns the public `PollingStrategy` default, explicit config injection and constructor compatibility are preserved, full core/extensions/Weft verification passed, and independent review closed |
 | 2026-08-23-maintainability-and-isolation-remediation-plan.md | completed — Class 4; single-owned CLI preparse grammar, state-based SQLite migration outcomes, context-isolated retry test overrides, bounded vestige cleanup, full tests and changed-surface gates green, independently reviewed |

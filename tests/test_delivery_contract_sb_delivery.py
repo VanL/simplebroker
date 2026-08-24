@@ -228,6 +228,27 @@ def test_live_peek_stream_mutation_leaves_unvisited_messages(queue_factory) -> N
     assert source.peek_one(with_timestamps=True) is not None
 
 
+def test_live_peek_stream_rejects_naive_cursor_completeness() -> None:
+    """[SB-DELIVERY-4] Stronger traversal must choose its consistency model."""
+    section = _section("SB-DELIVERY-4")
+
+    assert "Exact insertion may put an older public ID" in section
+    assert re.search(r"behind an advanced\s+`\(timestamp, id\)` cursor", section)
+    assert "Move re-homes a row in place" in section
+    assert re.search(
+        r"preserving both\s+its public ID and current internal sequence", section
+    )
+    assert re.search(r"behind\s+a cursor on either ordering", section)
+    assert re.search(r"fixed-start, live-rescan, or snapshot\s+semantics", section)
+
+    row = _verification_row("SB-DELIVERY-4")
+    assert "test_live_peek_stream_rejects_naive_cursor_completeness" in row
+    assert (
+        "docs/plans/2026-08-23-correctness-and-concurrency-review-remediation-plan.md"
+        in SPEC.read_text(encoding="utf-8")
+    )
+
+
 def test_invalid_generator_selector_fails_on_iteration_without_mutation(
     queue_factory,
 ) -> None:

@@ -91,6 +91,18 @@ raise the retryable admission error without closing other tracked connections.
 First-party best-effort shutdown paths suppress that bounded cleanup failure;
 explicit callers must handle it. A foreign orphan is still restart-required.
 
+Runner close is resource-scoped, not terminal. At its linearization point,
+`SQLiteRunner.close()` advances the connection generation and snapshots all
+connections then tracked by that runner. It closes that owned snapshot and
+keeps failed closes tracked so cleanup can be retried safely. The runner itself
+remains reusable: an operation linearized later may acquire a distinct
+connection in the new generation, including when its acquisition overlapped
+the close but registered after the snapshot. Terminal operation admission
+belongs to the process session and private factory. Their closed states prevent
+new core or runner publication; adding a permanent `_closed` latch to the
+runner would assign that ownership to the wrong layer and break intentional
+close-then-reuse behavior.
+
 ## Acquisition
 
 `DBConnection.__init__()` and `DBConnection._ensure_shared_session()` are the
@@ -187,6 +199,7 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
+- `docs/plans/2026-08-23-correctness-and-concurrency-review-remediation-plan.md`
 - retired: 2026-08-11-activity-waiter-terminal-close-contract-plan — source
   `27f9ae4`; see the ledger in `docs/plans/README.md`
 - retired: 2026-05-04-process-local-broker-session-plan — source

@@ -709,7 +709,13 @@ class SQLiteRunner:
                 self._settle_transaction(current_thread)
 
     def close(self) -> None:
-        """Close all connections created by this runner and release resources."""
+        """Close the currently tracked connections while keeping the runner reusable.
+
+        The tracked connection snapshot is fixed at this operation's
+        linearization point. A later or concurrently linearized operation may
+        acquire a connection in the next generation. Terminal operation
+        admission belongs to the owning process session or factory.
+        """
         # After a fork, recovery abandons inherited connections instead of
         # closing them (cross-fork close is unsafe); this close then operates
         # on the child's own (empty) state under fresh locks.

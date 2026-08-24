@@ -205,6 +205,14 @@ WATCHER_LIFECYCLE_TRANSITIONS = (
         "run returns without dispatch",
     ),
     _case(
+        "STOP_RACES_START",
+        "idle",
+        "stop claims cleanup while run starts",
+        "released",
+        "serialize startup and cleanup ownership before blocking cleanup",
+        "runtime cleanup runs exactly once",
+    ),
+    _case(
         "DELIVER_THEN_STOP",
         "running",
         "message arrives then stop",
@@ -375,6 +383,51 @@ def _assert_stop_wait_transition(payload: str, tmp_path: Path) -> None:
     assert waiter.close_calls == 1
 
 
+def _assert_stop_races_start(tmp_path: Path) -> None:
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+    cleanup_lock = threading.Lock()
+
+    class StartRaceWatcher(QueueWatcher):
+        cleanup_calls = 0
+
+        def _cleanup_runtime_resources(self) -> None:
+            with cleanup_lock:
+                self.cleanup_calls += 1
+                cleanup_call = self.cleanup_calls
+            if cleanup_call == 1:
+                cleanup_started.set()
+                assert release_cleanup.wait(timeout=2)
+            super()._cleanup_runtime_resources()
+
+    watcher = StartRaceWatcher(
+        "jobs",
+        lambda message, timestamp: None,
+        db=str(tmp_path / "STOP_RACES_START.db"),
+    )
+    stop_thread = threading.Thread(
+        target=watcher.stop,
+        kwargs={"join": False},
+    )
+    stop_thread.start()
+    assert cleanup_started.wait(2)
+
+    run_thread = threading.Thread(target=watcher.run_forever)
+    run_thread.start()
+    try:
+        run_thread.join(2)
+        assert not run_thread.is_alive()
+        assert watcher.cleanup_calls == 1
+    finally:
+        release_cleanup.set()
+        stop_thread.join(2)
+        run_thread.join(2)
+
+    assert not stop_thread.is_alive()
+    assert not run_thread.is_alive()
+    assert watcher.cleanup_calls == 1
+
+
 @fires_transition_table("SM-WATCHER-LIFECYCLE", WATCHER_LIFECYCLE_TRANSITIONS)
 def test_watcher_lifecycle_fires_transition_table(
     transition_case: TransitionCase[str],
@@ -387,6 +440,10 @@ def test_watcher_lifecycle_fires_transition_table(
 
     if transition_case.payload == "START_FAILURE_DETACH":
         _assert_start_failure_detaches_waiter(tmp_path)
+        return
+
+    if transition_case.payload == "STOP_RACES_START":
+        _assert_stop_races_start(tmp_path)
         return
 
     if transition_case.payload in {"STOP_BEFORE_WAIT", "STOP_DURING_WAIT"}:

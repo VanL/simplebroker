@@ -157,6 +157,114 @@ def test_stop_joins_synchronous_run_owner_before_returning(
     assert not run_thread.is_alive()
 
 
+def test_stop_racing_start_has_one_cleanup_owner(broker_target) -> None:
+    first_cleanup_started = threading.Event()
+    release_first_cleanup = threading.Event()
+    cleanup_calls_lock = threading.Lock()
+
+    class StartRaceWatcher(QueueWatcher):
+        cleanup_calls = 0
+
+        def _cleanup_runtime_resources(self) -> None:
+            with cleanup_calls_lock:
+                self.cleanup_calls += 1
+                cleanup_call = self.cleanup_calls
+            if cleanup_call == 1:
+                first_cleanup_started.set()
+                assert release_first_cleanup.wait(timeout=scale_timeout_for_ci(2.0))
+            super()._cleanup_runtime_resources()
+
+    watcher = StartRaceWatcher(
+        "stop_races_start",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+    )
+    stop_thread = threading.Thread(
+        target=watcher.stop,
+        kwargs={"join": False},
+    )
+    stop_thread.start()
+    assert first_cleanup_started.wait(timeout=scale_timeout_for_ci(2.0))
+
+    run_thread = threading.Thread(target=watcher.run_forever)
+    run_thread.start()
+    try:
+        run_thread.join(timeout=scale_timeout_for_ci(2.0))
+        assert not run_thread.is_alive(), "run blocked behind stop-owned cleanup"
+        assert watcher.cleanup_calls == 1
+    finally:
+        release_first_cleanup.set()
+        stop_thread.join(timeout=scale_timeout_for_ci(2.0))
+        run_thread.join(timeout=scale_timeout_for_ci(2.0))
+
+    assert not stop_thread.is_alive()
+    assert not run_thread.is_alive()
+    assert watcher.cleanup_calls == 1
+
+
+def test_join_timeout_does_not_transfer_cleanup_from_live_run(broker_target) -> None:
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+
+    class BlockingCleanupWatcher(QueueWatcher):
+        cleanup_calls = 0
+
+        def _cleanup_runtime_resources(self) -> None:
+            self.cleanup_calls += 1
+            cleanup_started.set()
+            assert release_cleanup.wait(timeout=scale_timeout_for_ci(2.0))
+            super()._cleanup_runtime_resources()
+
+    watcher = BlockingCleanupWatcher(
+        "join_timeout_owner",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+    )
+    run_thread = watcher.run_in_thread()
+    try:
+        assert watcher._running_event.wait(timeout=scale_timeout_for_ci(2.0))
+        watcher.stop(timeout=0)
+        assert cleanup_started.wait(timeout=scale_timeout_for_ci(2.0))
+        assert run_thread.is_alive()
+        assert watcher.cleanup_calls == 1
+    finally:
+        release_cleanup.set()
+        run_thread.join(timeout=scale_timeout_for_ci(2.0))
+        watcher.stop()
+
+    assert not run_thread.is_alive()
+    assert watcher.cleanup_calls == 1
+
+
+def test_cleanup_failure_keeps_lifecycle_retryable(broker_target) -> None:
+    class RetryCleanupWatcher(QueueWatcher):
+        cleanup_calls = 0
+
+        def _run_with_retries(self, max_retries: int = 3) -> None:
+            del max_retries
+
+        def _cleanup_runtime_resources(self) -> None:
+            self.cleanup_calls += 1
+            if self.cleanup_calls == 1:
+                raise RuntimeError("cleanup failed once")
+            super()._cleanup_runtime_resources()
+
+    watcher = RetryCleanupWatcher(
+        "cleanup_retry",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+    )
+
+    with pytest.raises(RuntimeError, match="cleanup failed once"):
+        watcher.run_forever()
+
+    assert watcher.cleanup_calls == 1
+    assert watcher._finalizer.alive
+    watcher.stop(join=False)
+    assert watcher.cleanup_calls == 2
+    assert not watcher._finalizer.alive
+
+
 def test_batch_peek_checks_stop_between_messages(broker, broker_target) -> None:
     for index in range(20):
         broker.write("peek_stop", f"message-{index}")

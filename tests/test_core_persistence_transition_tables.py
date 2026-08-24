@@ -9,6 +9,7 @@ import signal
 import sqlite3
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import Mock
@@ -678,6 +679,14 @@ TIMESTAMP_GENERATOR_TRANSITIONS = (
         "resolve CAS contention through durable reload",
         "timestamps are unique and durable maximum wins",
     ),
+    _case(
+        "SHARED_INSTANCE_SERIALIZATION",
+        "one initialized generator shared by two threads",
+        "second generate starts during the first durable advance",
+        "two ordered stores",
+        "retain generator-lock ownership through durable advance and cache publication",
+        "second durable advance waits and every high-water view equals the maximum",
+    ),
 )
 
 
@@ -783,6 +792,66 @@ def test_sqlite_fork_transitions_skip_before_runner_construction_without_fork(
     _skip_unavailable_fork_transition("CREATE_REUSE")
 
 
+def _fire_timestamp_shared_instance_serialization(
+    core: BrokerDB,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generator = core._timestamp_gen
+    first_advance_entered = threading.Event()
+    release_first_advance = threading.Event()
+    second_generate_started = threading.Event()
+    second_advance_entered = threading.Event()
+    advance_entries: list[int] = []
+    original_advance = generator._backend_plugin.advance_last_ts
+
+    def observed_advance(runner: object, *, new_ts: int) -> bool:
+        advance_entries.append(threading.get_ident())
+        if len(advance_entries) == 1:
+            first_advance_entered.set()
+            if not release_first_advance.wait(timeout=5):
+                raise AssertionError("first durable timestamp advance was not released")
+        else:
+            second_advance_entered.set()
+        return original_advance(runner, new_ts=new_ts)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        generator._backend_plugin,
+        "advance_last_ts",
+        observed_advance,
+    )
+
+    def generate_second() -> int:
+        second_generate_started.set()
+        return generator.generate()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(generator.generate)
+        try:
+            assert first_advance_entered.wait(timeout=5)
+            first_thread_id = advance_entries[0]
+
+            second_future = executor.submit(generate_second)
+            assert second_generate_started.wait(timeout=5)
+
+            lock_was_available = generator._lock.acquire(blocking=False)
+            if lock_was_available:
+                generator._lock.release()
+            assert not lock_was_available
+            assert not second_advance_entered.is_set()
+            assert advance_entries == [first_thread_id]
+        finally:
+            release_first_advance.set()
+
+        first_value = first_future.result(timeout=5)
+        second_value = second_future.result(timeout=5)
+
+    assert first_value < second_value
+    assert len(advance_entries) == 2
+    assert len(set(advance_entries)) == 2
+    durable = generator._backend_plugin.read_last_ts(core._runner)
+    assert generator.get_cached_last_ts() == durable == second_value
+
+
 def _fire_timestamp_coordination_transition(
     payload: str,
     core: BrokerDB,
@@ -843,6 +912,8 @@ def _fire_timestamp_coordination_transition(
         assert len(set(values)) == 2
         assert generator.refresh_last_ts() == max(values)
         other.close()
+    elif payload == "SHARED_INSTANCE_SERIALIZATION":
+        _fire_timestamp_shared_instance_serialization(core, monkeypatch)
     else:
         _assert_timestamp_fork_reset(core, first)
 
@@ -904,6 +975,14 @@ SQLITE_RUNNER_TRANSITIONS = (
         "closed",
         "close tracked connection",
         "old connection rejects use",
+    ),
+    _case(
+        "CLOSE_REOPEN",
+        "thread connection open",
+        "close then get connection",
+        "new connection generation open",
+        "close the tracked snapshot then acquire a fresh generation",
+        "old connection is closed and the new connection is usable",
     ),
     _case(
         "REPEATED_CLOSE",
@@ -1164,6 +1243,13 @@ def _fire_sqlite_connection_transition(
 ) -> None:
     if payload == "CREATE_REUSE":
         assert runner.get_connection() is first
+    elif payload == "CLOSE_REOPEN":
+        runner.close()
+        with pytest.raises(sqlite3.ProgrammingError):
+            first.execute("SELECT 1")
+        reopened = runner.get_connection()
+        assert reopened is not first
+        assert reopened.execute("SELECT 1").fetchone() == (1,)
     elif payload in {"FORK_RESET", "FORK_ACTIVE_RESET"}:
         if payload == "FORK_ACTIVE_RESET":
             runner.begin_immediate()

@@ -42,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `BaseWatcher.stop()` and watcher startup now serialize cleanup ownership, so
+  a stop racing `run_forever()` cannot close strategy and Queue resources in
+  both threads. A live run retains cleanup ownership even when a joining stop
+  times out; cleanup failure remains retryable by a later stop or finalizer.
+- Range-filtered one-item `Queue.read()` and `Queue.peek()` now close the
+  generators they create immediately on a value or exhaustion instead of
+  relying on interpreter-specific generator finalization timing. The matching
+  `Queue.move()` path uses the same deterministic cleanup rule.
 - Ordinary relative SQLite CLI targets now fail closed when their physical
   containment cannot be established. Command dispatch, status, and vacuum use
   the same canonical target that passed containment; explicit absolute and

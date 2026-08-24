@@ -11,7 +11,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, TypedDict, Union, cast, overload
+from typing import Any, Literal, TypedDict, TypeVar, Union, cast, overload
 
 from ._backend_plugins import (
     ActivityWaiter,
@@ -59,6 +59,7 @@ class _DeleteAllSentinel:
 
 
 _DELETE_ALL = _DeleteAllSentinel()
+_IteratorItem = TypeVar("_IteratorItem")
 
 
 def _close_iterator(iterator: object) -> None:
@@ -66,6 +67,16 @@ def _close_iterator(iterator: object) -> None:
     close = getattr(iterator, "close", None)
     if callable(close):
         close()
+
+
+def _next_or_none_and_close(iterator: Iterator[_IteratorItem]) -> _IteratorItem | None:
+    """Take one item from an owned iterator and release it deterministically."""
+    try:
+        return next(iterator)
+    except StopIteration:
+        return None
+    finally:
+        _close_iterator(iterator)
 
 
 def _moved_message(message: str, timestamp: int) -> MovedMessage:
@@ -529,10 +540,7 @@ class Queue:
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
                 )
-                try:
-                    return next(gen)
-                except StopIteration:
-                    return None
+                return _next_or_none_and_close(gen)
             else:
                 return self.read_one(with_timestamps=with_timestamps)
 
@@ -876,10 +884,7 @@ class Queue:
                     before_timestamp=before_timestamp,
                     include_claimed=include_claimed,
                 )
-                try:
-                    return next(gen)
-                except StopIteration:
-                    return None
+                return _next_or_none_and_close(gen)
             else:
                 return self.peek_one(
                     with_timestamps=with_timestamps,
@@ -1211,14 +1216,11 @@ class Queue:
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
                 )
-                try:
-                    result = next(gen)
-                    msg, ts = result
-                    return _moved_message(msg, ts)
-                except StopIteration:
+                result = _next_or_none_and_close(gen)
+                if result is None:
                     return None
-                finally:
-                    _close_iterator(gen)
+                msg, ts = result
+                return _moved_message(msg, ts)
             else:
                 result = self.move_one(dest_name, with_timestamps=True)
                 if result:

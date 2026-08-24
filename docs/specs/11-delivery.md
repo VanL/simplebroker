@@ -85,6 +85,16 @@ claim) are atomic: one winner.
 Removing rows from the source while such a stream is active can shift offsets
 and skip messages. One-message peek, process, delete-by-id avoids that.
 
+Replacing the offset with the public message ID or the current storage
+sequence would not by itself make this traversal complete under concurrent
+mutation. Exact insertion may put an older public ID behind an advanced
+`(timestamp, id)` cursor. Move re-homes a row in place while preserving both
+its public ID and current internal sequence, so a moved-in row may also land
+behind a cursor on either ordering. Callers needing one bounded observation
+should use a materialized peek; a future exhaustive concurrent traversal
+would first need to choose and specify fixed-start, live-rescan, or snapshot
+semantics.
+
 _Implementation mapping_:
 - `simplebroker/db.py`
 - `simplebroker/sbqueue.py`
@@ -186,7 +196,7 @@ _Implementation mapping_:
 | [SB-DELIVERY-1] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_watcher.py::TestErrorScenarios::test_consuming_watcher_queue_preservation_on_failure` |
 | [SB-DELIVERY-2] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_handler_failure_isolation`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_transaction_safety` |
 | [SB-DELIVERY-3] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_move.py`; `tests/test_move_claim_patterns.py` |
-| [SB-DELIVERY-4] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_agent_kernel_contract.py` |
+| [SB-DELIVERY-4] | `tests/test_delivery_contract_sb_delivery.py::test_live_peek_stream_rejects_naive_cursor_completeness`; `tests/test_delivery_contract_sb_delivery.py`; `tests/test_agent_kernel_contract.py` |
 | [SB-DELIVERY-5] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_generator_methods.py`; `extensions/simplebroker_redis/tests/test_redis_batches.py` |
 | [SB-DELIVERY-6] | `tests/test_delivery_contract_sb_delivery.py` (structural binding); `tests/test_cross_thread_finalization_poisoning.py`; `tests/test_cross_thread_generator_probe.py`; `extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`; `extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py` |
 | [SB-DELIVERY-7] | `tests/test_cli_broken_pipe.py`; `tests/test_delivery_contract_sb_delivery.py` |
@@ -194,6 +204,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- `docs/plans/2026-08-23-correctness-and-concurrency-review-remediation-plan.md`
 - retired: 2026-08-10-test-suite-signal-remediation-plan — source `0d15871`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the

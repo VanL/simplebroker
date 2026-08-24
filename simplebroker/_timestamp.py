@@ -127,13 +127,20 @@ class TimestampGenerator:
         return decode_hybrid_timestamp(ts)
 
     def generate(self) -> int:
-        """
-        Robust, lock-free (DB-wise) timestamp generator.
+        """Generate and durably publish the next timestamp.
+
+        One generator lock owns the complete transition: process identity and
+        lazy initialization, candidate calculation, durable compare-and-advance,
+        conflict refresh, and local cache publication. The backend CAS protects
+        durable monotonicity; it cannot by itself prevent an earlier caller from
+        publishing stale process-local state after a later caller.
         """
         with self._lock:
             self._ensure_pid()
 
-            # one local fast-path loop, *no* DB locks are held here
+            # Keep this bounded allocation/CAS loop inside the shared-instance
+            # lock. Narrowing the critical section can regress ``_last_ts`` even
+            # when every durable compare-and-advance remains monotonic.
             for _ in range(6):  # hard upper bound
                 physical_ns, logical = self._next_components()
                 new_ts = self._encode_hybrid_timestamp(physical_ns, logical)
@@ -142,11 +149,10 @@ class TimestampGenerator:
                 if new_ts >= SQLITE_MAX_INT64:
                     raise TimestampError("Timestamp too far in future")
 
-                # >>> single atomic write – no BEGIN <<< -----------------
+                # One atomic compare-and-advance; no explicit transaction.
                 if self._store_if_greater(new_ts):
                     self._last_ts = new_ts
                     return new_ts
-                # ---------------------------------------------------------
 
                 # Someone beat us – read their value and try again
                 latest = self._peek_last_ts()
