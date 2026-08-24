@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A watcher error handler raising an ordinary exception is now terminal and
+  observable instead of being swallowed. Synchronous watchers re-raise that
+  callback exception after cleanup, background watchers report it through
+  `threading.excepthook`, and consume, peek, and move modes stop before a later
+  dispatch. An ordinary cleanup failure remains secondary note evidence and
+  retryable.
 - Finite CLI and direct command-layer output now handles a closed stdout
   consumer with controlled exit `1` instead of leaking interpreter exit `120`
   and final-flush noise. Streaming commands retain clean stop `0`; completed

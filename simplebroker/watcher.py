@@ -264,6 +264,19 @@ class _WatcherLifecycleState(Enum):
     RELEASED = auto()
 
 
+class _ErrorHandlerFailure(Exception):
+    """Private carrier that bypasses watcher retry before public propagation."""
+
+    def __init__(
+        self,
+        error_handler_exception: Exception,
+        handler_exception: Exception,
+    ) -> None:
+        super().__init__(str(error_handler_exception))
+        self.error_handler_exception = error_handler_exception
+        self.handler_exception = handler_exception
+
+
 class BaseWatcher(ABC):
     """Base class for all watchers with common retry and error handling logic.
 
@@ -542,6 +555,7 @@ class BaseWatcher(ABC):
 
         Raises:
             StopWatching: If error handler returns False
+            _ErrorHandlerFailure: If the error handler raises an ordinary exception
 
         """
         if isinstance(e, (StopWatching, StopException)):
@@ -567,6 +581,8 @@ class BaseWatcher(ABC):
                     f"Error handler failed: {eh_error}\nOriginal error: {e}",
                     exc_info=True,
                 )
+            self._stop_event.set()
+            raise _ErrorHandlerFailure(eh_error, e) from e
 
         # Raise StopWatching outside the try block to avoid catching it
         if stop_requested:
@@ -861,6 +877,10 @@ class BaseWatcher(ABC):
             except (StopException, StopWatching):
                 # Normal shutdown
                 break
+            except _ErrorHandlerFailure:
+                # Callback failure is terminal for this run, not retryable
+                # watcher infrastructure failure.
+                raise
             except KeyboardInterrupt:
                 # Propagate KeyboardInterrupt so callers can handle it specifically
                 raise
@@ -993,6 +1013,41 @@ class BaseWatcher(ABC):
             return True
         return False
 
+    def _cleanup_after_run(
+        self,
+        terminal_failure: _ErrorHandlerFailure | None,
+        signal_context: contextlib.ExitStack | None,
+    ) -> bool:
+        """Clean one run and retain ordinary cleanup failure when callback failed."""
+        resources_released = False
+        try:
+            try:
+                self._cleanup_runtime_resources()
+            except Exception as cleanup_error:
+                if terminal_failure is None:
+                    raise
+                terminal_failure.error_handler_exception.add_note(
+                    "Watcher runtime cleanup also failed: "
+                    f"{type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            else:
+                resources_released = True
+        finally:
+            if signal_context is not None:
+                signal_context.__exit__(None, None, None)
+        return resources_released
+
+    @staticmethod
+    def _propagate_terminal_failure(
+        terminal_failure: _ErrorHandlerFailure | None,
+    ) -> None:
+        """Unwrap the private carrier only after lifecycle cleanup settles."""
+        if terminal_failure is None:
+            return
+        raise terminal_failure.error_handler_exception from (
+            terminal_failure.handler_exception
+        )
+
     def run_forever(self) -> None:
         """Run the watcher continuously until stopped.
 
@@ -1024,6 +1079,7 @@ class BaseWatcher(ABC):
             return
 
         resources_released = False
+        terminal_failure: _ErrorHandlerFailure | None = None
         try:
             if hasattr(self, "_finalizer") and not self._finalizer.alive:
                 self._setup_finalizer()
@@ -1034,14 +1090,15 @@ class BaseWatcher(ABC):
             # Run the main loop with retries
             self._run_with_retries()
 
+        except _ErrorHandlerFailure as failure:
+            terminal_failure = failure
+
         finally:
             try:
-                try:
-                    self._cleanup_runtime_resources()
-                    resources_released = True
-                finally:
-                    if signal_context is not None:
-                        signal_context.__exit__(None, None, None)
+                resources_released = self._cleanup_after_run(
+                    terminal_failure,
+                    signal_context,
+                )
             finally:
                 with self._stop_lock:
                     if (
@@ -1056,6 +1113,8 @@ class BaseWatcher(ABC):
                     self._running_event.clear()
                 if resources_released and hasattr(self, "_finalizer"):
                     self._finalizer.detach()
+
+        self._propagate_terminal_failure(terminal_failure)
 
     def run_in_thread(self) -> threading.Thread:
         """Start the watcher in a new background thread.

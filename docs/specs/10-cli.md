@@ -125,6 +125,21 @@ _Implementation mapping_:
 Global options (for example `-f` / `--file`, `-d` / `--dir`) must appear
 **before** the subcommand.
 
+`write` has a free-form message operand and therefore preserves a narrower
+option-position compatibility rule. Its output options (`-t`,
+`--timestamps`, and `--json`) are recognized before the queue name, after a
+non-dash literal message, after the stdin marker `-`, or before an explicit
+`--` whose following token supplies the literal message. Otherwise, the first
+dash-leading token after the queue name is message content even when it spells
+a recognized write or root option such as `--cleanup`. Unescaped `-h` /
+`--help` remains the help request; place it after `--` to write it literally.
+
+`--` ends option interpretation. For example,
+`broker write -t tasks -- "-literal"` requests timestamp output and writes
+`-literal`. Root options and root actions appearing after a subcommand are
+never hoisted back to the root parser. These rules preserve dash-leading data
+and prevent a message such as `--cleanup` from becoming a destructive action.
+
 `init` is current-directory initialization and rejects an explicitly supplied
 `-d` / `--dir` or `-f` / `--file` with exit `1`; it never silently discards an
 explicit target.
@@ -241,6 +256,9 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- completed: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+  strategy-D [SB-CLI-3] clarification and executable write-token matrix;
+  implemented and verified from baseline `1b8ecfa0`
 - active: 2026-08-24-cli-output-and-error-contract-remediation-plan — reviewed
   Strategy-A spec promotion at baseline `0901c7cd`; local runtime, contract,
   static, documentation, downstream Weft, and independent-review evidence
@@ -289,7 +307,12 @@ _Implementation mapping_:
   `tests/test_commands_stdout_delivery.py`
   (exact direct-command inventory, write-versus-flush failures, mutation
   durability, and the bare-stdout static gate)
-- `tests/test_cli_contract_sb_cli.py` — [SB-CLI-2], [SB-CLI-3], [SB-CLI-4]
+- `tests/test_cli_contract_sb_cli.py` — [SB-CLI-2], [SB-CLI-3], [SB-CLI-4],
+  including the canonical free-form `write` operand rule and its enumerable
+  token matrix
+- `tests/test_cli_write_output.py`; `tests/test_cli_rearrange_args.py` —
+  [SB-CLI-3] write-output placement, dash-leading literals, help, and explicit
+  `--` behavior
 - `[SB-CLI-2]` ordinary diagnostic dialect:
   `tests/test_alias_cli.py::test_cmd_alias_add_remove_direct`,
   `tests/test_commands_init.py::TestInitCommand::test_init_permission_error_database_creation`

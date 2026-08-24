@@ -289,6 +289,28 @@ Cleanup is performed at most once for a successful lifecycle release;
 repeated stop calls remain safe. This guarantee does not make two concurrent
 `run_forever()` calls on one watcher supported.
 
+Error-handler outcomes have four meanings. Returning `True` or `None`
+continues watching. Returning `False`, raising `StopWatching`, or raising the
+internal `StopException` ends the watcher run cleanly. If the error handler
+raises any other ordinary `Exception`, that callback failure is terminal: the
+watcher dispatches no later message in that run, retains the original
+message-handler exception as its explicit cause, and re-raises the
+error-handler exception after runtime cleanup. Synchronous `run()` and
+`run_forever()` expose it to their caller; `run_in_thread()` leaves it
+uncaught for Python's standard `threading.excepthook`. This terminal signal
+does not depend on `BROKER_LOGGING_ENABLED`. An ordinary runtime-cleanup
+exception during that terminal unwind does not replace the callback failure;
+it is retained as an ordered PEP 678 exception note and cleanup remains
+retryable. A `BaseException` outside `Exception` may interrupt cleanup and
+propagates with its existing priority.
+
+`BaseWatcher.__exit__()` requests stop and join. An ordinary stop or cleanup
+exception during exit is best effort: it is suppressed, never replaces an
+exception from the `with` body, and leaves failed cleanup retryable under the
+lifecycle rules above. A `BaseException` outside `Exception` propagates.
+Context exit does not replay a background-thread failure into the exiting
+thread; background failures use `threading.excepthook` as described above.
+
 Watch **modes** (consume, peek, move) and claim/progress rules are
 `[SB-DELIVERY-2]` (and related delivery clauses). This clause owns the public
 types used to run and subclass watchers and multi-queue activity waiting.
@@ -540,7 +562,7 @@ boundary rather than in the storage layer:
 | [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_connection_config.py::test_ephemeral_queue_keeps_constructor_snapshot_after_invalid_env_change`, `tests/test_connection_config.py::test_new_queue_observes_later_environment_while_existing_queue_stays_fixed`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_queue_typing_contract.py`; `tests/test_queue_api_additions.py::test_queue_delete_explicit_none_is_rejected_without_mutation`; `tests/test_queue_api_additions.py::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py` (library-shape language + matrix); delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_reads_ordinary_override_on_first_iteration`; Queue generator / `*_many` suites |
-| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_watcher_start_stop_cleanup_ownership_contract`; `tests/test_watcher_stop_contract.py::test_stop_racing_start_has_one_cleanup_owner`, `tests/test_watcher_stop_contract.py::test_join_timeout_does_not_transfer_cleanup_from_live_run`, `tests/test_watcher_stop_contract.py::test_cleanup_failure_keeps_lifecycle_retryable`; `tests/test_watcher_transition_tables.py::test_watcher_lifecycle_fires_transition_table`; `tests/test_watcher.py::TestPollingStrategy::test_default_burst_sleep_uses_ambient_free_canonical_config_default`; `tests/test_connection_config.py::test_watcher_instance_config_controls_live_polling`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites |
+| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_watcher_start_stop_cleanup_ownership_contract`; `tests/test_watcher_error_handler_contract.py`; `tests/test_watcher_stop_contract.py::test_stop_racing_start_has_one_cleanup_owner`, `tests/test_watcher_stop_contract.py::test_join_timeout_does_not_transfer_cleanup_from_live_run`, `tests/test_watcher_stop_contract.py::test_cleanup_failure_keeps_lifecycle_retryable`, `tests/test_watcher_stop_contract.py::test_context_exit_suppresses_stop_failure_without_replacing_body_exception`, `tests/test_watcher_stop_contract.py::test_context_exit_cleanup_failure_remains_retryable`, `tests/test_watcher_stop_contract.py::test_context_exit_propagates_base_exception_from_stop`; `tests/test_watcher_transition_tables.py::test_watcher_lifecycle_fires_transition_table`; `tests/test_watcher.py::TestPollingStrategy::test_default_burst_sleep_uses_ambient_free_canonical_config_default`; `tests/test_connection_config.py::test_watcher_instance_config_controls_live_polling`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites |
 | [SB-API-7] | `tests/test_python_library_api_contract_sb_api.py`; sidecar suites under tests / examples |
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`, including `test_load_samples_environment_for_each_invocation` |
 | [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_invalid_config_lifecycle.py::test_invalid_environment_does_not_break_package_import`, `tests/test_invalid_config_lifecycle.py::test_sensitive_config_failure_redacts_before_formatting`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
@@ -550,6 +572,9 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
+- completed: [2026-08-24-failure-path-and-contract-findings-resolution-plan](../plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md)
+  — watcher callback-failure and context-exit contract promotion at baseline
+  `1b8ecfa0`
 - active: 2026-08-24-cli-output-and-error-contract-remediation-plan — reviewed
   Strategy-A spec promotion at baseline `0901c7cd`; local runtime, contract,
   static, and documentation evidence recorded; landing and exact-SHA Windows

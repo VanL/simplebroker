@@ -49,6 +49,13 @@ handler dispatch. No handler outcome restores a committed consume claim.
 | Peek | Message remains pending; progress does not advance for that id |
 | Move | Message remains in the destination queue |
 
+The table describes broker state after message-handler failure. The
+error-handler continuation and terminal-failure rules are [SB-API-6]. If the
+error handler itself raises an ordinary exception, the watcher stops before
+another dispatch in every mode; it does not undo the already-committed consume
+claim or move, any state already materialized by an existing batch boundary,
+and it does not advance peek progress past the failed id.
+
 _Implementation mapping_:
 - `simplebroker/commands.py`
 - `simplebroker/watcher.py`
@@ -194,7 +201,7 @@ _Implementation mapping_:
 | Clause | Firing gates |
 |--------|--------------|
 | [SB-DELIVERY-1] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_watcher.py::TestErrorScenarios::test_consuming_watcher_queue_preservation_on_failure` |
-| [SB-DELIVERY-2] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_handler_failure_isolation`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_transaction_safety` |
+| [SB-DELIVERY-2] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_watcher_error_handler_contract.py` (consume, peek, and move terminal-callback matrix); `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_handler_failure_isolation`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_transaction_safety` |
 | [SB-DELIVERY-3] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_move.py`; `tests/test_move_claim_patterns.py` |
 | [SB-DELIVERY-4] | `tests/test_delivery_contract_sb_delivery.py::test_live_peek_stream_rejects_naive_cursor_completeness`; `tests/test_delivery_contract_sb_delivery.py`; `tests/test_agent_kernel_contract.py` |
 | [SB-DELIVERY-5] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_generator_methods.py`; `extensions/simplebroker_redis/tests/test_redis_batches.py` |
@@ -204,6 +211,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- completed: [2026-08-24-failure-path-and-contract-findings-resolution-plan](../plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md)
+  — terminal watcher callback-failure delivery state at baseline `1b8ecfa0`
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
   source `23d6c9d1` (local-only pin); see the ledger in
   `docs/plans/README.md`

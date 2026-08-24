@@ -246,6 +246,14 @@ WATCHER_LIFECYCLE_TRANSITIONS = (
         "third failure propagates",
     ),
     _case(
+        "ERROR_HANDLER_FAILURE",
+        "running dispatch",
+        "error handler raises ordinary exception",
+        "failed",
+        "bypass generic retry, clean runtime resources, and propagate once",
+        "original error-handler exception propagates with handler failure as cause",
+    ),
+    _case(
         "START_FAILURE_DETACH",
         "queue owns candidate waiter",
         "strategy accepts waiter then start fails",
@@ -343,6 +351,31 @@ def _assert_retry_transition(
         watcher.stop(join=False)
 
 
+def _assert_error_handler_failure_transition(tmp_path: Path) -> None:
+    queue = Queue("jobs", db_path=str(tmp_path / "ERROR_HANDLER_FAILURE.db"))
+    queue.write("payload")
+    handler_failure = ValueError("handler failed")
+    callback_failure = RuntimeError("error handler failed")
+    attempts: list[str] = []
+
+    def handler(message: str, _timestamp: int) -> NoReturn:
+        attempts.append(message)
+        raise handler_failure
+
+    def error_handler(_exc: Exception, _message: str, _timestamp: int) -> NoReturn:
+        raise callback_failure
+
+    watcher = QueueWatcher(queue, handler, error_handler=error_handler)
+    with pytest.raises(RuntimeError, match="error handler failed") as raised:
+        watcher.run()
+
+    assert raised.value is callback_failure
+    assert raised.value.__cause__ is handler_failure
+    assert attempts == ["payload"]
+    assert not watcher.is_running()
+    assert not watcher._finalizer.alive
+
+
 def _assert_start_failure_detaches_waiter(tmp_path: Path) -> None:
     stop = threading.Event()
     waiter = _CountingWaiter(stop)
@@ -437,6 +470,10 @@ def test_watcher_lifecycle_fires_transition_table(
 ) -> None:
     if transition_case.payload in {"RETRY_THEN_RUN", "TERMINAL_ERROR"}:
         _assert_retry_transition(transition_case.payload, tmp_path, monkeypatch)
+        return
+
+    if transition_case.payload == "ERROR_HANDLER_FAILURE":
+        _assert_error_handler_failure_transition(tmp_path)
         return
 
     if transition_case.payload == "START_FAILURE_DETACH":
@@ -549,6 +586,20 @@ CLI_WATCH_TRANSITIONS = (
         "owner stop event is set, run ended, and finalizer is detached",
     ),
 )
+
+
+def test_error_handler_failure_and_cli_continue_rows_remain_distinct() -> None:
+    lifecycle = {case.transition_id: case for case in WATCHER_LIFECYCLE_TRANSITIONS}
+    cli = {case.transition_id: case for case in CLI_WATCH_TRANSITIONS}
+
+    assert lifecycle["ERROR_HANDLER_FAILURE"].event == (
+        "error handler raises ordinary exception"
+    )
+    assert lifecycle["ERROR_HANDLER_FAILURE"].next_state == "failed"
+    assert cli["CALLBACK_ERROR_CONTINUES"].event == (
+        "first output callback fails and second reaches a closed pipe"
+    )
+    assert cli["CALLBACK_ERROR_CONTINUES"].next_state == "stopped"
 
 
 @fires_transition_table("SM-CLI-WATCH", CLI_WATCH_TRANSITIONS)

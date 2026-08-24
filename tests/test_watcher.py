@@ -1957,19 +1957,35 @@ class TestErrorScenarios(WatcherTestBase):
         # Should have logged the error
         assert "Handler failed" in caplog.text or "Handler error" in caplog.text
 
-    def test_error_handler_exception(self, broker, broker_target, capsys, caplog):
+    def test_error_handler_exception(
+        self,
+        broker,
+        broker_target,
+        caplog,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
         """Test when error_handler itself raises exception."""
         # Enable logging for this test after it's testing logging behavior
         test_config = load_config()
         test_config["BROKER_LOGGING_ENABLED"] = True
 
         broker.write("test_queue", "message")
+        handler_failure = ValueError("Handler error")
+        callback_failure = RuntimeError("Error handler also failed!")
+        hook_calls: list[threading.ExceptHookArgs] = []
+        hook_called = threading.Event()
 
         def handler(msg: str, ts: int):
-            raise ValueError("Handler error")
+            raise handler_failure
 
         def bad_error_handler(exc: Exception, msg: str, ts: int) -> bool:
-            raise RuntimeError("Error handler also failed!")
+            raise callback_failure
+
+        def capture_thread_failure(args: threading.ExceptHookArgs) -> None:
+            hook_calls.append(args)
+            hook_called.set()
+
+        monkeypatch.setattr(threading, "excepthook", capture_thread_failure)
 
         watcher = QueueWatcher(
             "test_queue",
@@ -1981,21 +1997,14 @@ class TestErrorScenarios(WatcherTestBase):
 
         thread = watcher.run_in_thread()
         try:
-            assert wait_for_condition(
-                lambda: (
-                    "Handler error" in caplog.text
-                    and (
-                        "Error handler also failed" in caplog.text
-                        or "Error handler failed" in caplog.text
-                    )
-                ),
-                timeout=scale_timeout_for_ci(5.0),
-                interval=0.05,
-            )
+            assert hook_called.wait(timeout=scale_timeout_for_ci(5.0))
         finally:
             watcher.stop()
             thread.join(timeout=2.0)
 
+        assert len(hook_calls) == 1
+        assert hook_calls[0].exc_value is callback_failure
+        assert callback_failure.__cause__ is handler_failure
         # Both errors should be logged
         assert "Handler error" in caplog.text
         assert (

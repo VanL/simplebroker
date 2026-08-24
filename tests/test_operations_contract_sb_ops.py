@@ -28,6 +28,11 @@ EVIDENCE_MANIFESTS = {
         "tests/test_batch_delete.py": {
             "test_queue_delete_many_uses_physical_batch_delete"
         },
+        "tests/test_custom_runner_integration.py": {
+            "test_queue_delete_owns_an_explicit_transaction_and_commits_once",
+            "test_delete_all_owns_the_same_explicit_transaction",
+            "test_queue_delete_rolls_back_a_mutation_failure_and_preserves_the_error",
+        },
         "tests/test_safety_fixes.py": {"test_delete_with_all_flag"},
         "extensions/simplebroker_redis/tests/test_redis_atomicity.py": {
             "test_delete_queue_script_rechecks_reservation_without_partial_mutation",

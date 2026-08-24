@@ -17,6 +17,7 @@ import contextlib
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 import warnings
@@ -1779,9 +1780,13 @@ class BrokerCore:
         Returns:
             list of (message_body, timestamp) tuples
         """
-        with self._lock:
-            results = self._runner.run(query, params, fetch=True)
-            return results if isinstance(results, list) else list(results)
+
+        def _do_peek() -> list[tuple[str, int]]:
+            with self._lock:
+                results = self._runner.run(query, params, fetch=True)
+                return results if isinstance(results, list) else list(results)
+
+        return self._run_with_retry(_do_peek)
 
     def _execute_transactional_operation(
         self,
@@ -1789,7 +1794,6 @@ class BrokerCore:
         operation: Literal["claim", "move"],
         query: str,
         params: tuple[object, ...],
-        commit_before_yield: bool,
     ) -> list[tuple[str, int]]:
         """Execute a claim or move operation with transaction.
 
@@ -1798,16 +1802,12 @@ class BrokerCore:
             operation: Transactional retrieve operation
             query: SQL query to execute
             params: Query parameters
-            commit_before_yield: If True, commit before returning (exactly-once)
 
         Returns:
             list of (message_body, timestamp) tuples
         """
         with self._lock:
             self._run_with_retry(self._runner.begin_immediate)
-
-            should_commit = False
-
             try:
                 self._backend_plugin.prepare_queue_operation(
                     self._runner,
@@ -1817,24 +1817,18 @@ class BrokerCore:
                 results = self._runner.run(query, params, fetch=True)
                 results_list = results if isinstance(results, list) else list(results)
 
-                if results_list and commit_before_yield:
+                if results_list:
                     # Commit BEFORE returning for exactly-once semantics
                     self._runner.commit()
-                elif not results_list:
+                else:
                     # No results, rollback
                     self._runner.rollback()
-                else:
-                    # Non-empty at_least_once operation: commit after query succeeds
-                    should_commit = True
 
                 return results_list
 
             except Exception:
                 self._runner.rollback()
                 raise
-            finally:
-                if should_commit:
-                    self._runner.commit()
 
     def _yield_transactional_batches(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-015] exception
         self,
@@ -1999,7 +1993,6 @@ class BrokerCore:
         exact_timestamp: MessageIdInput | None = None,
         after_timestamp: int | None = None,
         before_timestamp: int | None = None,
-        commit_before_yield: bool = True,
         require_unclaimed: bool = True,
     ) -> list[tuple[str, int]]:
         """Unified retrieval with operation-specific behavior.
@@ -2014,7 +2007,6 @@ class BrokerCore:
             exact_timestamp: Retrieve a specific message by exact ID
             after_timestamp: Only retrieve messages after this timestamp
             before_timestamp: Only retrieve messages before this timestamp
-            commit_before_yield: If True, commit before returning (exactly-once)
             require_unclaimed: If True (default), only consider unclaimed messages
 
         Returns:
@@ -2054,7 +2046,7 @@ class BrokerCore:
         else:
             # claim or move operations need transaction
             results = self._execute_transactional_operation(
-                queue, operation, query, params, commit_before_yield
+                queue, operation, query, params
             )
             self._record_maintenance_activity(len(results))
             return results
@@ -2089,7 +2081,6 @@ class BrokerCore:
             operation="claim",
             limit=1,
             exact_timestamp=exact_timestamp,
-            commit_before_yield=True,
         )
         if not results:
             return None
@@ -2140,7 +2131,6 @@ class BrokerCore:
             limit=limit,
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
-            commit_before_yield=True,
         )
 
         if with_timestamps:
@@ -2197,7 +2187,6 @@ class BrokerCore:
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
                     exact_timestamp=exact_timestamp,
-                    commit_before_yield=True,
                 )
                 if not result:
                     break
@@ -2425,7 +2414,6 @@ class BrokerCore:
             target_queue=target_queue,
             limit=1,
             exact_timestamp=exact_timestamp,
-            commit_before_yield=True,
             require_unclaimed=require_unclaimed,
         )
         if not results:
@@ -2486,7 +2474,6 @@ class BrokerCore:
             limit=limit,
             after_timestamp=after_timestamp,
             before_timestamp=before_timestamp,
-            commit_before_yield=True,
             require_unclaimed=require_unclaimed,
         )
 
@@ -2551,7 +2538,6 @@ class BrokerCore:
                     after_timestamp=after_timestamp,
                     before_timestamp=before_timestamp,
                     exact_timestamp=exact_timestamp,
-                    commit_before_yield=True,
                 )
                 if not result:
                     break
@@ -2895,11 +2881,16 @@ class BrokerCore:
 
         def _do_delete() -> int:
             with self._lock:
-                deleted_count = self._backend_plugin.delete_messages(
-                    self._runner, queue=queue
-                )
-                self._runner.commit()
-                return deleted_count
+                self._runner.begin_immediate()
+                try:
+                    deleted_count = self._backend_plugin.delete_messages(
+                        self._runner, queue=queue
+                    )
+                    self._runner.commit()
+                    return deleted_count
+                except Exception:
+                    self._runner.rollback()
+                    raise
 
         # Execute with retry logic
         return self._run_with_retry(_do_delete)
@@ -3631,8 +3622,11 @@ class BrokerDB(BrokerCore):
             self._runner.close()
             raise
 
-        # Store conn reference internally for compatibility
-        self._conn = self._runner._conn
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """Return the runner's current thread-local connection."""
+
+        return cast(SQLiteRunner, self._runner)._conn
 
     def __enter__(self) -> "BrokerDB":  # noqa: PYI034 approved [DOM-10.1.1] [RUFF-SUP-001] exception
         """Enter context manager."""

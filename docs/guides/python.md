@@ -333,11 +333,19 @@ except KeyboardInterrupt:
 
 The error callback contract is exactly
 `(exception, message, timestamp)` and one handler failure invokes it at most
-once. In peek mode, a failed handler does not advance the watcher checkpoint.
-That message remains pending and is retried on a later turn; the watcher does
-not process later message IDs past it. Returning `True` means “keep watching,”
-not “acknowledge” or “skip.” To skip a poison message, the error callback must
-explicitly delete it or move it to another queue.
+once. Returning `True` or `None` means “keep watching,” not “acknowledge” or
+“skip.” Returning `False`, raising `StopWatching`, or raising the internal
+`StopException` stops cleanly. To skip a poison message, the error callback
+must explicitly delete it or move it to another queue.
+
+If the error callback raises another ordinary exception, that exception is
+terminal for the watcher run. Synchronous `run()` and `run_forever()` raise it
+after cleanup, with the message-handler exception as its cause. A
+`run_in_thread()` failure is left uncaught for Python's standard
+`threading.excepthook`; logging is optional diagnostics, not the failure
+signal. No later message is dispatched in that run. Consume claims and moves
+that committed before the callback are not undone. In peek mode, progress does
+not advance past the failed message, so it and later messages remain pending.
 
 Raise `simplebroker.watcher.StopWatching` from a message handler or error
 handler to stop the watcher cleanly. Handlers that catch broad `Exception`
@@ -410,6 +418,12 @@ with QueueWatcher("notifications", handle_message, db="my.db") as watcher:
 # Thread is automatically stopped and joined when exiting the context
 # Ensures proper cleanup even if an exception occurs
 ```
+
+Context exit requests stop and join on a best-effort basis. An ordinary stop
+or cleanup exception is suppressed and never replaces an exception raised by
+the `with` body; failed cleanup remains retryable with a later `stop()`.
+Background watcher failures still report through `threading.excepthook` and
+are not replayed into the thread exiting the context.
 
 ## Async integration
 

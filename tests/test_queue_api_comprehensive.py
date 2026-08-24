@@ -375,6 +375,36 @@ class TestQueueLastTimestampCaching:
         assert refreshed == watcher_queue.last_ts
         assert refreshed > 0
 
+    def test_lazy_fetch_failure_is_unknown_but_explicit_refresh_is_strict(
+        self, queue_factory, monkeypatch
+    ):
+        empty_queue = queue_factory("empty")
+        assert empty_queue.last_ts == 0
+
+        queue = queue_factory("failure")
+        failure = RuntimeError("timestamp high-water unavailable")
+
+        class FailingConnection:
+            def get_cached_last_timestamp(self):
+                raise failure
+
+            def refresh_last_timestamp(self):
+                raise failure
+
+        class FailingConnectionContext:
+            def __enter__(self):
+                return FailingConnection()
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+        monkeypatch.setattr(queue, "get_connection", FailingConnectionContext)
+
+        assert queue.last_ts is None
+        with pytest.raises(RuntimeError, match="timestamp high-water unavailable"):
+            queue.refresh_last_ts()
+        assert queue.last_ts is None
+
     def test_move_one_exact_timestamp(self, queue_factory):
         """Test move_one with exact_timestamp parameter."""
         source = queue_factory("source")

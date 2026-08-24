@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import threading
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import pytest
 
@@ -262,6 +262,122 @@ def test_cleanup_failure_keeps_lifecycle_retryable(broker_target) -> None:
     assert watcher._finalizer.alive
     watcher.stop(join=False)
     assert watcher.cleanup_calls == 2
+    assert not watcher._finalizer.alive
+
+
+@pytest.mark.parametrize("body_raises", [False, True])
+def test_context_exit_suppresses_stop_failure_without_replacing_body_exception(
+    broker_target: Any,
+    body_raises: bool,
+) -> None:
+    body_failure = ValueError("with body failed")
+
+    class StopFailOnceWatcher(QueueWatcher):
+        stop_calls = 0
+
+        def stop(self, *, join: bool = True, timeout: float = 2.0) -> None:
+            self.stop_calls += 1
+            super().stop(join=join, timeout=timeout)
+            if self.stop_calls == 1:
+                raise RuntimeError("stop failed after cleanup")
+
+    watcher = StopFailOnceWatcher(
+        "context_stop_failure",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+        config={"BROKER_LOGGING_ENABLED": False},
+    )
+    run_thread: threading.Thread | None = None
+
+    if body_raises:
+        with (
+            pytest.raises(ValueError, match="with body failed") as raised,
+            watcher,
+        ):
+            assert watcher._running_event.wait(timeout=scale_timeout_for_ci(2.0))
+            run_thread = watcher._thread() if watcher._thread is not None else None
+            raise body_failure
+        assert raised.value is body_failure
+    else:
+        with watcher:
+            assert watcher._running_event.wait(timeout=scale_timeout_for_ci(2.0))
+            run_thread = watcher._thread() if watcher._thread is not None else None
+
+    assert run_thread is not None
+    assert not run_thread.is_alive()
+    assert watcher.stop_calls == 1
+    assert not watcher._finalizer.alive
+
+
+def test_context_exit_cleanup_failure_remains_retryable(
+    broker_target: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_failure_seen = threading.Event()
+    hook_failures: list[BaseException] = []
+
+    class CleanupFailOnceWatcher(QueueWatcher):
+        cleanup_calls = 0
+
+        def _cleanup_runtime_resources(self) -> None:
+            self.cleanup_calls += 1
+            if self.cleanup_calls == 1:
+                raise RuntimeError("context cleanup failed once")
+            super()._cleanup_runtime_resources()
+
+    def capture_thread_failure(args: threading.ExceptHookArgs) -> None:
+        if args.exc_value is not None:
+            hook_failures.append(args.exc_value)
+        cleanup_failure_seen.set()
+
+    monkeypatch.setattr(threading, "excepthook", capture_thread_failure)
+    watcher = CleanupFailOnceWatcher(
+        "context_cleanup_retry",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+    )
+
+    with watcher:
+        assert watcher._running_event.wait(timeout=scale_timeout_for_ci(2.0))
+
+    assert cleanup_failure_seen.wait(timeout=scale_timeout_for_ci(2.0))
+    thread = watcher._thread() if watcher._thread is not None else None
+    assert thread is not None
+    thread.join(timeout=scale_timeout_for_ci(2.0))
+    assert not thread.is_alive()
+    assert len(hook_failures) == 1
+    assert str(hook_failures[0]) == "context cleanup failed once"
+    assert watcher.cleanup_calls == 1
+    assert watcher._finalizer.alive
+
+    watcher.stop(join=False)
+
+    assert watcher.cleanup_calls == 2
+    assert not watcher._finalizer.alive
+
+
+def test_context_exit_propagates_base_exception_from_stop(broker_target: Any) -> None:
+    class StopInterrupted(BaseException):
+        pass
+
+    class InterruptingStopWatcher(QueueWatcher):
+        def stop(self, *, join: bool = True, timeout: float = 2.0) -> None:
+            super().stop(join=join, timeout=timeout)
+            raise StopInterrupted("stop interrupted")
+
+    watcher = InterruptingStopWatcher(
+        "context_stop_interrupt",
+        lambda _message, _timestamp: None,
+        db=broker_target,
+    )
+
+    run_thread: threading.Thread | None = None
+    with pytest.raises(StopInterrupted, match="stop interrupted"), watcher:
+        assert watcher._running_event.wait(timeout=scale_timeout_for_ci(2.0))
+        run_thread = watcher._thread() if watcher._thread is not None else None
+
+    assert run_thread is not None
+    assert not run_thread.is_alive()
     assert not watcher._finalizer.alive
 
 

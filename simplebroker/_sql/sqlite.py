@@ -387,7 +387,7 @@ GET_LAST_TS = """
 SELECT value FROM meta WHERE key = 'last_ts'
 """
 
-# Update last timestamp atomically
+# Legacy exact-CAS string; live monotone updates use SQLiteBackendPlugin.advance_last_ts().
 UPDATE_LAST_TS_ATOMIC = """
 UPDATE meta SET value = ? WHERE key = 'last_ts' AND value = ?
 """

@@ -83,13 +83,12 @@ class TestRetrieveMethod:
                 db.write("test_queue", "message3")
 
                 # Claim messages with exactly-once
-                results = db._retrieve(
-                    "test_queue", operation="claim", limit=2, commit_before_yield=True
-                )
+                results = db._retrieve("test_queue", operation="claim", limit=2)
 
                 assert len(results) == 2
                 assert results[0][0] == "message1"
                 assert results[1][0] == "message2"
+                assert db._conn.in_transaction is False
 
                 # Messages should be gone
                 results2 = db._retrieve("test_queue", operation="peek", limit=10)
@@ -113,12 +112,12 @@ class TestRetrieveMethod:
                     operation="move",
                     target_queue="dest",
                     limit=2,
-                    commit_before_yield=True,
                 )
 
                 assert len(results) == 2
                 assert results[0][0] == "message1"
                 assert results[1][0] == "message2"
+                assert db._conn.in_transaction is False
 
                 # Check source has 1 left
                 source_results = db._retrieve("source", operation="peek", limit=10)
@@ -130,6 +129,33 @@ class TestRetrieveMethod:
                 assert len(dest_results) == 2
                 assert dest_results[0][0] == "message1"
                 assert dest_results[1][0] == "message2"
+
+    def test_retrieve_empty_transaction_rolls_back_before_return(self) -> None:
+        """An empty claim leaves no transaction open for its caller."""
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            BrokerDB(str(Path(tmpdir) / "test.db")) as db,
+        ):
+            assert db._retrieve("empty", operation="claim") == []
+            assert db._conn.in_transaction is False
+
+    def test_transactional_retrieve_rolls_back_query_failure(self) -> None:
+        """A failed transactional query does not leak an open transaction."""
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            BrokerDB(str(Path(tmpdir) / "test.db")) as db,
+        ):
+            with pytest.raises(Exception, match="missing_retrieve_table"):
+                db._execute_transactional_operation(
+                    "test_queue",
+                    "claim",
+                    "SELECT body, ts FROM missing_retrieve_table",
+                    (),
+                )
+
+            assert db._conn.in_transaction is False
 
     def test_retrieve_with_exact_timestamp(self):
         """Test _retrieve with exact_timestamp filter."""

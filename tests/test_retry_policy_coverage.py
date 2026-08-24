@@ -6,10 +6,12 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
+from typing import Any
 
 import pytest
 
-from simplebroker import _retry_policy
+from simplebroker import Queue, _retry_policy
 from simplebroker._exceptions import OperationalError, StopException
 from simplebroker._retry import DEFAULT_MIN_RETRY_SLEEP_S, interruptible_sleep
 from simplebroker._retry_policy import (
@@ -19,6 +21,7 @@ from simplebroker._retry_policy import (
     _is_locked_operational_error,
     execute_setup_with_retry,
 )
+from simplebroker._runner import SetupPhase, SQLiteRunner
 from tests.helpers.state_machine_contracts import (
     TransitionCase,
     fires_transition_table,
@@ -149,6 +152,114 @@ class DeterministicClock:
 
     def advance(self, seconds: float) -> None:
         self.now += seconds
+
+
+class PeekFaultRunner:
+    """Delegate to real SQLite while injecting failures at the peek query."""
+
+    def __init__(self, db_path: Path) -> None:
+        self._inner = SQLiteRunner(str(db_path))
+        self.peek_attempts = 0
+        self._remaining_failures = 0
+        self._failure: OperationalError | None = None
+
+    def fail_peek(self, error: OperationalError, *, times: int = 1) -> None:
+        self.peek_attempts = 0
+        self._remaining_failures = times
+        self._failure = error
+
+    def run(
+        self, sql: str, params: tuple[Any, ...] = (), *, fetch: bool = False
+    ) -> list[tuple[Any, ...]]:
+        if "SELECT body, ts FROM messages" in sql:
+            self.peek_attempts += 1
+            if self._remaining_failures:
+                self._remaining_failures -= 1
+                assert self._failure is not None
+                raise self._failure
+        return list(self._inner.run(sql, params, fetch=fetch))
+
+    def begin_immediate(self) -> None:
+        self._inner.begin_immediate()
+
+    def commit(self) -> None:
+        self._inner.commit()
+
+    def rollback(self) -> None:
+        self._inner.rollback()
+
+    def close(self) -> None:
+        self._inner.close()
+
+    def setup(self, phase: SetupPhase) -> None:
+        self._inner.setup(phase)
+
+    def is_setup_complete(self, phase: SetupPhase) -> bool:
+        return self._inner.is_setup_complete(phase)
+
+
+def test_public_peek_one_retries_an_explicitly_retryable_runner_failure(
+    tmp_path: Path,
+) -> None:
+    """The public peek path shares the core's bounded retry policy."""
+
+    runner = PeekFaultRunner(tmp_path / "peek-retry.db")
+    queue = Queue("jobs", db_path=str(tmp_path / "decoy.db"), runner=runner)
+    try:
+        queue.write("first")
+        retryable = OperationalError("backend-specific contention")
+        retryable.retryable = True
+        runner.fail_peek(retryable)
+
+        assert queue.peek_one() == "first"
+        assert runner.peek_attempts == 2
+    finally:
+        queue.close()
+        runner.close()
+
+
+def test_public_peek_many_retries_an_explicitly_retryable_runner_failure(
+    tmp_path: Path,
+) -> None:
+    """Batch peek uses the same bounded retry owner as single-message peek."""
+
+    runner = PeekFaultRunner(tmp_path / "peek-many-retry.db")
+    queue = Queue("jobs", db_path=str(tmp_path / "decoy.db"), runner=runner)
+    try:
+        queue.write("first")
+        queue.write("second")
+        retryable = OperationalError("backend-specific contention")
+        retryable.retryable = True
+        runner.fail_peek(retryable)
+
+        assert queue.peek_many() == ["first", "second"]
+        assert runner.peek_attempts == 2
+    finally:
+        queue.close()
+        runner.close()
+
+
+def test_public_peek_does_not_retry_an_explicitly_nonretryable_runner_failure(
+    tmp_path: Path,
+) -> None:
+    """Peek propagates a classified permanent failure after one attempt."""
+
+    runner = PeekFaultRunner(tmp_path / "peek-no-retry.db")
+    queue = Queue("jobs", db_path=str(tmp_path / "decoy.db"), runner=runner)
+    try:
+        queue.write("first")
+        nonretryable = OperationalError("database is locked permanently")
+        nonretryable.retryable = False
+        runner.fail_peek(nonretryable)
+
+        with pytest.raises(OperationalError) as exc_info:
+            queue.peek_one()
+
+        assert exc_info.value is nonretryable
+        assert runner.peek_attempts == 1
+    finally:
+        queue.close()
+        runner.close()
 
 
 @fires_transition_table("SM-SETUP-BUDGET", SETUP_PROGRESS_BUDGET_TRANSITIONS)

@@ -168,6 +168,87 @@ def test_sb_cli_3_global_options_after_subcommand_fail(workdir: Path) -> None:
     assert "payload" in ok_out
 
 
+def test_sb_cli_3_write_free_form_operand_rule_is_canonical() -> None:
+    section = (
+        SPEC.read_text(encoding="utf-8")
+        .split("## Global options position [SB-CLI-3]", 1)[1]
+        .split("## JSON and related output shapes [SB-CLI-4]", 1)[0]
+    )
+    normalized = " ".join(section.split())
+
+    for token in (
+        "`-t`",
+        "`--timestamps`",
+        "`--json`",
+        "`--cleanup`",
+        "`-h`",
+        "`--help`",
+        "`--`",
+    ):
+        assert token in section
+    assert (
+        "first dash-leading token after the queue name is message content" in normalized
+    )
+    assert "Root options and root actions appearing after a subcommand" in normalized
+
+
+@pytest.mark.parametrize(
+    ("argv", "stdin", "expected_message", "output_kind"),
+    [
+        (("write", "-t", "q", "body"), None, "body", "id"),
+        (("write", "q", "body", "--timestamps"), None, "body", "id"),
+        (("write", "q", "-", "--json"), "piped", "piped", "json"),
+        (("write", "q", "--json", "--", "--cleanup"), None, "--cleanup", "json"),
+        (("write", "q", "-t"), None, "-t", "silent"),
+        (("write", "q", "--timestamps"), None, "--timestamps", "silent"),
+        (("write", "q", "--json"), None, "--json", "silent"),
+        (("write", "q", "--cleanup"), None, "--cleanup", "silent"),
+        (("write", "q", "-h"), None, None, "help"),
+        (("write", "q", "--help"), None, None, "help"),
+        (("write", "q", "--", "-h"), None, "-h", "silent"),
+        (("write", "q", "--", "--help"), None, "--help", "silent"),
+    ],
+    ids=(
+        "short-output-before-queue",
+        "long-output-after-message",
+        "json-after-stdin",
+        "json-before-marker-root-token-literal",
+        "short-output-token-literal",
+        "long-output-token-literal",
+        "json-token-literal",
+        "root-action-token-literal",
+        "short-help",
+        "long-help",
+        "marker-escapes-short-help",
+        "marker-escapes-long-help",
+    ),
+)
+def test_sb_cli_3_write_token_matrix(
+    workdir: Path,
+    argv: tuple[str, ...],
+    stdin: str | None,
+    expected_message: str | None,
+    output_kind: str,
+) -> None:
+    rc, out, err = run_cli(*argv, cwd=workdir, stdin=stdin)
+
+    assert rc == EXIT_SUCCESS, err
+    if output_kind == "help":
+        assert "usage: simplebroker write" in out
+        return
+    if output_kind == "id":
+        assert re.fullmatch(r"[0-9]{19}", out)
+    elif output_kind == "json":
+        assert set(json.loads(out)) == {"timestamp"}
+    else:
+        assert output_kind == "silent"
+        assert out == ""
+
+    read_rc, read_out, read_err = run_cli("read", "q", cwd=workdir)
+    assert read_rc == EXIT_SUCCESS, read_err
+    assert read_out == expected_message
+
+
 def test_sb_cli_3_init_rejects_explicit_targets(workdir: Path) -> None:
     for args, flag in (
         (("-d", str(workdir), "init"), "--dir"),

@@ -242,15 +242,23 @@ class TestWatcherEdgeCases(WatcherTestBase):
         assert watcher._stop_event.is_set()
 
     def test_type_error_inside_error_handler_is_not_retried(
-        self, broker, broker_target, caplog
+        self,
+        broker,
+        broker_target,
+        caplog,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         broker.write("queue", "payload")
         calls: list[tuple[Exception, str, int, object]] = []
         called = threading.Event()
+        hook_called = threading.Event()
+        hook_calls: list[threading.ExceptHookArgs] = []
+        handler_failure = ValueError("handler failed")
+        callback_failure = TypeError("error handler body failed")
         watcher: QueueWatcher
 
         def handler(_message: str, _timestamp: int) -> None:
-            raise ValueError("handler failed")
+            raise handler_failure
 
         def error_handler(
             exc: Exception,
@@ -262,7 +270,13 @@ class TestWatcherEdgeCases(WatcherTestBase):
             calls.append((exc, message, timestamp, config))
             called.set()
             watcher.stop(join=False)
-            raise TypeError("error handler body failed")
+            raise callback_failure
+
+        def capture_thread_failure(args: threading.ExceptHookArgs) -> None:
+            hook_calls.append(args)
+            hook_called.set()
+
+        monkeypatch.setattr(threading, "excepthook", capture_thread_failure)
 
         watcher = QueueWatcher(
             "queue",
@@ -276,6 +290,7 @@ class TestWatcherEdgeCases(WatcherTestBase):
             thread = watcher.run_in_thread()
             try:
                 assert called.wait(timeout=2.0)
+                assert hook_called.wait(timeout=2.0)
                 thread.join(timeout=2.0)
                 assert not thread.is_alive()
             finally:
@@ -284,6 +299,9 @@ class TestWatcherEdgeCases(WatcherTestBase):
 
         assert len(calls) == 1
         assert calls[0][1] == "payload"
+        assert len(hook_calls) == 1
+        assert hook_calls[0].exc_value is callback_failure
+        assert callback_failure.__cause__ is handler_failure
         assert (
             sum("Error handler failed" in record.message for record in caplog.records)
             == 1

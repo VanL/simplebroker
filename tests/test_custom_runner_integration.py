@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import threading
 import weakref
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ import pytest
 
 from simplebroker import Queue
 from simplebroker._runner import SetupPhase, SQLiteRunner
-from simplebroker.db import BrokerDB
+from simplebroker.db import BrokerCore, BrokerDB
 
 pytestmark = [pytest.mark.sqlite_only]
 
@@ -22,19 +23,30 @@ class RecordingRunner:
     def __init__(self, db_path: str):
         self._inner = SQLiteRunner(db_path)
         self.close_calls = 0
+        self.transaction_events: list[str] = []
+        self.delete_failure: Exception | None = None
 
     def run(
         self, sql: str, params: tuple[Any, ...] = (), *, fetch: bool = False
     ) -> list[tuple[Any, ...]]:
-        return list(self._inner.run(sql, params, fetch=fetch))
+        deleting_messages = sql.strip().startswith("DELETE FROM messages")
+        if deleting_messages:
+            self.transaction_events.append("delete")
+        rows = list(self._inner.run(sql, params, fetch=fetch))
+        if deleting_messages and self.delete_failure is not None:
+            raise self.delete_failure
+        return rows
 
     def begin_immediate(self) -> None:
+        self.transaction_events.append("begin")
         self._inner.begin_immediate()
 
     def commit(self) -> None:
+        self.transaction_events.append("commit")
         self._inner.commit()
 
     def rollback(self) -> None:
+        self.transaction_events.append("rollback")
         self._inner.rollback()
 
     def close(self) -> None:
@@ -101,6 +113,116 @@ def test_injected_runner_is_caller_owned_across_close_and_finalizer(
         observer.close()
         runner.close()
     assert runner.close_calls == 1
+
+
+def test_queue_delete_owns_an_explicit_transaction_and_commits_once(
+    tmp_path: Path,
+) -> None:
+    """Successful queue deletion begins before mutation and commits once."""
+
+    runner_path = tmp_path / "delete-success.db"
+    runner = RecordingRunner(str(runner_path))
+    queue = Queue("tasks", db_path=str(tmp_path / "decoy.db"), runner=runner)
+    try:
+        queue.write("durable")
+        runner.transaction_events.clear()
+
+        assert queue.delete() is True
+        assert runner.transaction_events == ["begin", "delete", "commit"]
+
+        with Queue("tasks", db_path=str(runner_path)) as observer:
+            assert observer.peek_one() is None
+    finally:
+        queue.close()
+        runner.close()
+
+
+def test_delete_all_owns_the_same_explicit_transaction(
+    tmp_path: Path,
+) -> None:
+    """The all-queues form uses the same transaction boundary."""
+
+    runner_path = tmp_path / "delete-all.db"
+    runner = RecordingRunner(str(runner_path))
+    core = BrokerCore(runner)
+    try:
+        core.write("first", "one")
+        core.write("second", "two")
+        runner.transaction_events.clear()
+
+        assert core.delete() == 2
+        assert runner.transaction_events == ["begin", "delete", "commit"]
+
+        with Queue("first", db_path=str(runner_path)) as first:
+            assert first.peek_one() is None
+        with Queue("second", db_path=str(runner_path)) as second:
+            assert second.peek_one() is None
+    finally:
+        core.close()
+
+
+def test_queue_delete_rolls_back_a_mutation_failure_and_preserves_the_error(
+    tmp_path: Path,
+) -> None:
+    """A post-statement failure rolls back durable state without masking it."""
+
+    runner_path = tmp_path / "delete-failure.db"
+    runner = RecordingRunner(str(runner_path))
+    queue = Queue("tasks", db_path=str(tmp_path / "decoy.db"), runner=runner)
+    failure = RuntimeError("injected delete failure")
+    try:
+        queue.write("still-present")
+        runner.transaction_events.clear()
+        runner.delete_failure = failure
+
+        with pytest.raises(RuntimeError) as exc_info:
+            queue.delete()
+
+        assert exc_info.value is failure
+        assert runner.transaction_events == ["begin", "delete", "rollback"]
+        with Queue("tasks", db_path=str(runner_path)) as observer:
+            assert observer.peek_one() == "still-present"
+    finally:
+        queue.close()
+        runner.close()
+
+
+def test_broker_db_private_connection_view_follows_runner_replacement(
+    tmp_path: Path,
+) -> None:
+    """Compatibility access never retains a connection closed by the runner."""
+
+    db = BrokerDB(str(tmp_path / "live-connection.db"))
+    try:
+        first_connection = db._conn
+        db._runner.close()
+
+        replacement = db._conn
+
+        assert replacement is not first_connection
+        assert replacement.execute("SELECT 1").fetchone() == (1,)
+    finally:
+        db.close()
+
+
+def test_broker_db_private_connection_view_follows_thread_local_access(
+    tmp_path: Path,
+) -> None:
+    """Compatibility access delegates to each caller's runner generation."""
+
+    db = BrokerDB(str(tmp_path / "thread-local-connection.db"))
+    worker_connections: list[Any] = []
+    try:
+        main_connection = db._conn
+        worker = threading.Thread(target=lambda: worker_connections.append(db._conn))
+        worker.start()
+        worker.join()
+
+        assert len(worker_connections) == 1
+        assert worker_connections[0] is not main_connection
+        assert db._conn is main_connection
+    finally:
+        db.close()
 
 
 def test_broker_core_teardown_does_not_force_global_gc(

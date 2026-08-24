@@ -66,6 +66,21 @@ promise of exactly-once application processing or external side effects:
 a crash between the claim commit and the handoff can leave a message
 claimed and not handed off.
 
+Materialized SQL claim and move operations have one transaction shape:
+begin, execute, then commit every non-empty result before return; an empty
+result or ordinary exception rolls back. There is no deferred
+commit-after-return mode. Keeping that order in one path makes the public
+handoff boundary auditable and avoids a private flag that implied an unused
+second delivery policy.
+
+**Physical-delete transaction boundary:** SQL queue-specific and all-queue
+delete explicitly begin before the backend plugin mutation, commit once on
+success, and roll back an ordinary failure before it propagates. This matches
+the exact-id and multi-queue SQL paths and makes [SB-OPS-3] atomicity hold for
+injected non-autocommit runners as well as the default SQLite runner. Redis
+keeps its separately specified per-queue orchestration and partial-result
+boundary.
+
 **Buffered CLI delivery seam:** Batched at-least-once `read --all` keeps the
 active claim transaction open across yielded records and commits when the
 generator is resumed after its final yield. The CLI therefore flushes each
@@ -148,8 +163,52 @@ status publication remains an atomic replace through an exclusively created
 temporary file, so that new generation uses the umask active for that
 publication.
 
+## Deferred storage alternatives
+
+### [ALT-IMPL09-001] Add a claimed-row index from the million-row vacuum probe
+
+Disposition: deferred
+Owner: SimpleBroker product owner
+Governs: claimed-row deletion and automatic/explicit vacuum maintenance
+Source record: [ALT-RF20260824-001] in docs/plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md
+Candidate: Add a SQLite partial index on claimed messages, a schema migration
+or current-version repair, and a no-claimed fast path for vacuum eligibility.
+Why plausible: Claimed existence and batch deletion currently scan without a
+claimed-row index. A synthetic table with one million pending rows produced
+roughly 15–22 ms scans while core maintenance held its process-local lock.
+Evidence:
+- contemporaneous: `BrokerCore._record_maintenance_activity()` and `_should_vacuum()` run the
+  synchronous eligibility check only after scheduled committed activity.
+- contemporaneous: `simplebroker._maintenance.vacuum_is_eligible()` and [SB-OPS-6] normally
+  trigger automatic cleanup at the configured ratio or above 10,000 claimed
+  rows, far before the synthetic mostly-pending tail case under ordinary
+  maintenance.
+- contemporaneous: `GET_VACUUM_STATS` still aggregates total rows, so a partial claimed index
+  does not remove the main O(N) eligibility scan.
+- owner-recalled: Explicit `broker --vacuum` is a one-shot administrative process. The
+  observed roughly 22 ms scan is inconsequential beside process setup and the
+  requested maintenance action absent a documented operator latency target.
+Reason: The isolated probe does not represent ordinary maintained queue state,
+and it does not establish user-visible harm. An index would add migration,
+repair, write, and legacy-database costs without removing the aggregate scan.
+Current consequence: Add no claimed-row index, schema version, persistent
+counter, fast path, or vacuum-query change.
+Reconsider when: A production trace or reproducible end-to-end benchmark under
+the default automatic-vacuum policy attributes a user-visible latency or
+throughput regression in a documented supported workload to these scans; the
+product contract is expanded to recommend million-row steady-state tables; or
+explicit CLI vacuum misses a documented operator latency objective because of
+these scans. The isolated million-row microbenchmark alone is not a trigger.
+After a trigger fires, measure index creation, repair, and write costs on
+representative legacy database sizes before adoption. A fired trigger reopens
+evaluation; it does not adopt the index.
+Promoted to: none
+
 ## Related Plans
 
+- completed: 2026-08-24-failure-path-and-contract-findings-resolution-plan —
+  source for [ALT-IMPL09-001], commit-before-handoff cleanup, and explicit SQL
+  delete ownership; implemented and verified from baseline `1b8ecfa0`
 - retired: 2026-08-06-pre-release-review-remediation-plan — source `84159198`;
   see the ledger in `docs/plans/README.md`
 - retired: 2026-08-06-audit-remediation-plan — source `94e15bc`; see the
