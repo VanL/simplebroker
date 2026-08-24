@@ -29,6 +29,8 @@ assignments use `draft` with a note rather than inventing `completed`.
 
 | Plan | Status |
 |------|--------|
+| 2026-08-24-cli-output-and-error-contract-remediation-plan.md | active — class 5 risky public CLI/command-layer contract remediation; local full/static/docs/downstream/review gates pass, landing and exact-SHA Windows pending |
+| 2026-08-24-failure-path-and-contract-findings-resolution-plan.md | draft — class 5; watcher callback failure, CLI/context contract clarification, peek/delete reliability, bounded private cleanup, and durable no-index vacuum disposition |
 | 2026-08-24-phaselock-status-temp-ownership-plan.md | completed — stale fallback-marker cleanup is lock-owned across status and xattr backends; ordering, unlink-failure, fallback-transition, stress, and independent-review gates passed |
 | 2026-07-30-runner-transaction-ownership-and-reactor-correctness-plan.md | status-review — class 4; implementation and reviews landed in b01bc3cb and shipped in 5.6.2, but the plan records no evidence for its required five post-commit coverage-diagnostics runs |
 

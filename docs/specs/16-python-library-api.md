@@ -376,6 +376,14 @@ are stable under the same compatibility policy as other public exports.
   it prints to **stdout** (and uses stderr for diagnostics) and returns an
   **integer exit code** with CLI meanings (`[SB-CLI-1]`), rather than using
   return values as the primary success channel.
+- Direct `cmd_*` stdout behavior matches the corresponding CLI action when the
+  consumer closes: `cmd_read`, `cmd_peek`, `cmd_move`, `cmd_dump`, and
+  `cmd_watch` return clean-stop `0`; every other stdout-producing command
+  function returns `1` after its ordinary plain or JSON error diagnostic. The
+  internal closed-stdout control signal never escapes the public command
+  function. Durable effects completed before output failure remain completed.
+  Where a command function accepts `quiet`, it suppresses the same owned
+  commentary as the CLI without suppressing errors or unrelated warnings.
 - A direct command-layer caller receives `InvalidConfigError` when that command
   consumes an invalid ambient/default configuration; the integer exit-code
   guarantee applies once command execution begins. A command invoked with an
@@ -536,12 +544,16 @@ boundary rather than in the storage layer:
 | [SB-API-7] | `tests/test_python_library_api_contract_sb_api.py`; sidecar suites under tests / examples |
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`, including `test_load_samples_environment_for_each_invocation` |
 | [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_invalid_config_lifecycle.py::test_invalid_environment_does_not_break_package_import`, `tests/test_invalid_config_lifecycle.py::test_sensitive_config_failure_redacts_before_formatting`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
-| [SB-API-10] | `tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_keyboard_interrupt_handling`; `tests/test_cli_watch.py::TestWatchCommand::test_watch_sigint_remains_success`; `tests/test_cli_main.py::test_repeated_main_calls_rebuild_defaults_from_invocation_snapshot`; `tests/test_public_surface.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_invalid_config_lifecycle.py::test_direct_commands_raise_when_their_path_consumes_invalid_config`, `tests/test_invalid_config_lifecycle.py::test_direct_command_early_validation_can_remain_config_independent`, `tests/test_invalid_config_lifecycle.py::test_repeated_direct_command_calls_sample_current_environment` |
+| [SB-API-10] | `tests/test_commands_stdout_delivery.py` (exact direct stdout inventory, write-versus-flush failures, mutation durability, and bare-stdout static gate); `tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_keyboard_interrupt_handling`; `tests/test_cli_watch.py::TestWatchCommand::test_watch_sigint_remains_success`; `tests/test_cli_main.py::test_repeated_main_calls_rebuild_defaults_from_invocation_snapshot`; `tests/test_public_surface.py`; `tests/test_python_library_api_contract_sb_api.py`; `tests/test_invalid_config_lifecycle.py::test_direct_commands_raise_when_their_path_consumes_invalid_config`, `tests/test_invalid_config_lifecycle.py::test_direct_command_early_validation_can_remain_config_independent`, `tests/test_invalid_config_lifecycle.py::test_repeated_direct_command_calls_sample_current_environment` |
 | [SB-API-11] | `tests/test_python_library_api_contract_sb_api.py::test_api_owned_runner_lifecycle_and_backend_v7_contract`, `tests/test_python_library_api_contract_sb_api.py::test_api_load_future_skew_surface_is_root_importable_and_keyword_only`; `tests/test_core_persistence_transition_tables.py::test_sqlite_runner_fires_transition_table` (`CLOSE_REOPEN`); `tests/test_runner_lifecycle.py`; `tests/test_backend_plugin_resolution.py`, including `test_sqlite_initialize_target_passes_config_snapshot_to_broker`; `extensions/simplebroker_pg/tests/test_pg_plugin_contract_edges.py::test_initialize_target_passes_one_config_snapshot_to_runner_and_core`; `extensions/simplebroker_redis/tests/test_redis_plugin_contract_edges.py::test_plugin_runner_receipt_keeps_marker_out_of_redundant_config_path`, `test_direct_runner_snapshots_environment_when_pool_options_are_missing`, `test_cleanup_reuses_one_snapshot_for_runner_and_core`; `tests/test_release_script.py::test_repository_backend_api_v7_handshake_and_floors_match`; `tests/test_dump_load.py::test_load_header_floor_persists_when_local_cache_is_ahead`, `tests/test_dump_load.py::test_load_header_floor_observes_concurrent_durable_winner`, `tests/test_dump_load.py::test_load_header_floor_final_read_failure_is_outcome_ambiguous`; `tests/test_timestamp_advance.py`; `extensions/simplebroker_pg/tests/test_pg_timestamp_resilience.py::test_postgres_missing_last_ts_row_fails_loudly`; `extensions/simplebroker_redis/tests/test_redis_core_behaviors.py::test_redis_timestamp_advance_transport_failure_is_ambiguous_after_real_eval`; `tests/test_timestamp_bound_grammar.py` (public validator grammar) |
 | [SB-API-12] | `tests/test_python_library_api_contract_sb_api.py` (matrix present); kernel CLI↔Python map |
 
 ## Related Plans
 
+- active: 2026-08-24-cli-output-and-error-contract-remediation-plan — reviewed
+  Strategy-A spec promotion at baseline `0901c7cd`; local runtime, contract,
+  static, and documentation evidence recorded; landing and exact-SHA Windows
+  evidence remain pending
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —
   source `23d6c9d1` (local-only pin); see the ledger in
   `docs/plans/README.md`

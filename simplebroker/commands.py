@@ -17,6 +17,7 @@ import sys
 import time
 import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextvars import ContextVar
 from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -32,7 +33,12 @@ from ._constants import (
     snapshot_config,
 )
 from ._dump import DumpClockSkewWarning, dump_lines, load_lines
-from ._exceptions import IntegrityError, InvalidConfigError, TimestampError
+from ._exceptions import (
+    IntegrityError,
+    InvalidConfigError,
+    MessageError,
+    TimestampError,
+)
 from ._message_id import (
     INVALID_MESSAGE_ID_MESSAGE,
     format_message_id,
@@ -41,7 +47,7 @@ from ._message_id import (
 from ._paths import _is_valid_sqlite_db
 from ._targets import BrokerTarget
 from ._timestamp import TimestampGenerator
-from .db import BrokerDB, DBConnection
+from .db import BrokerDB, DBConnection, _suppress_alias_shadow_warning
 from .metadata import QueueRenameResult, QueueStats
 from .sbqueue import Queue, _close_iterator
 from .watcher import QueueMoveWatcher, QueueWatcher, StopWatching
@@ -60,6 +66,28 @@ _JSON_ERROR_KEYS = ("error", "message", "retryable")
 
 class _StdoutClosed(Exception):
     """Internal control flow raised only by a failed stdout write."""
+
+
+class _MessageNewlineWarning(RuntimeWarning):
+    """Human commentary about ambiguous plain-text message framing."""
+
+
+_MESSAGE_NEWLINE_WARNING_SUPPRESSED: ContextVar[bool] = ContextVar(
+    "simplebroker_message_newline_warning_suppressed",
+    default=False,
+)
+
+
+@contextlib.contextmanager
+def _message_newline_warning_policy(*, quiet: bool) -> Iterator[None]:
+    """Apply invocation-local newline commentary policy."""
+    token = _MESSAGE_NEWLINE_WARNING_SUPPRESSED.set(
+        _MESSAGE_NEWLINE_WARNING_SUPPRESSED.get() or quiet
+    )
+    try:
+        yield
+    finally:
+        _MESSAGE_NEWLINE_WARNING_SUPPRESSED.reset(token)
 
 
 def _is_closed_pipe_error(error: OSError) -> bool:
@@ -105,15 +133,27 @@ def _redirect_stdout_to_devnull() -> None:
             pass
 
 
-def _print_stdout(value: str) -> None:
-    """Print one value, translating only a closed stdout into control flow."""
+def _write_stdout(value: str, *, flush: bool = False) -> None:
+    """Write stdout text, translating only a closed pipe into control flow."""
     try:
-        print(value, flush=True)
+        sys.stdout.write(value)
+        if flush:
+            sys.stdout.flush()
     except OSError as error:
         if not _is_closed_pipe_error(error):
             raise
         _redirect_stdout_to_devnull()
         raise _StdoutClosed from None
+
+
+def _print_stdout(value: str, *, flush: bool = True) -> None:
+    """Print one value through the closed-pipe-aware stdout seam."""
+    _write_stdout(f"{value}\n", flush=flush)
+
+
+def _flush_stdout() -> None:
+    """Flush stdout through the closed-pipe-aware stdout seam."""
+    _write_stdout("", flush=True)
 
 
 def _status(message: str, *, quiet: bool = False) -> None:
@@ -152,6 +192,29 @@ def _emit_error(
     sys.stderr.flush()
 
 
+def _stdout_delivery_error(
+    *,
+    json_output: bool,
+    completed_mutation: str | None = None,
+) -> int:
+    """Report a finite command result that could not reach its consumer."""
+    if completed_mutation is None:
+        message = (
+            "stdout closed before result delivery; rerun with an open stdout consumer"
+        )
+    else:
+        message = (
+            f"{completed_mutation} completed, but stdout closed before result "
+            "delivery; inspect broker state before retrying"
+        )
+    _emit_error(
+        message,
+        code="ERROR",
+        json_output=json_output,
+    )
+    return EXIT_ERROR
+
+
 def _reraise_invalid_config(error: BaseException) -> None:
     """Keep command diagnostics from swallowing configuration initialization."""
     if isinstance(error, InvalidConfigError):
@@ -188,18 +251,26 @@ def cmd_alias_list(
     *,
     config: Mapping[str, Any] | None = None,
 ) -> int:
-    resolved_config = snapshot_config(config)
-    with DBConnection(db_path, config=resolved_config) as conn:
-        db = cast(BrokerDB, conn.get_connection())
-        if target:
-            aliases = db.aliases_for_target(target)
-            for alias in aliases:
-                print(f"{alias} -> {target}")
-            if not aliases:
-                return EXIT_QUEUE_EMPTY
-        else:
-            for alias, alias_target in db.list_aliases():
-                print(f"{alias} -> {alias_target}")
+    wrote_output = False
+    try:
+        resolved_config = snapshot_config(config)
+        with DBConnection(db_path, config=resolved_config) as conn:
+            db = cast(BrokerDB, conn.get_connection())
+            if target:
+                aliases = db.aliases_for_target(target)
+                for alias in aliases:
+                    _print_stdout(f"{alias} -> {target}", flush=False)
+                    wrote_output = True
+                if not aliases:
+                    return EXIT_QUEUE_EMPTY
+            else:
+                for alias, alias_target in db.list_aliases():
+                    _print_stdout(f"{alias} -> {alias_target}", flush=False)
+                    wrote_output = True
+        if wrote_output:
+            _flush_stdout()
+    except _StdoutClosed:
+        return _stdout_delivery_error(json_output=False)
     return EXIT_SUCCESS
 
 
@@ -215,8 +286,7 @@ def cmd_alias_add(
     with DBConnection(db_path, config=resolved_config) as conn:
         db = cast(BrokerDB, conn.get_connection())
         if quiet:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
+            with _suppress_alias_shadow_warning():
                 db.add_alias(alias, target)
         else:
             db.add_alias(alias, target)
@@ -317,12 +387,15 @@ def _read_from_stdin(max_bytes: int) -> str:
 
         total_bytes += len(chunk)
         if total_bytes > max_bytes:
-            raise ValueError(f"Input exceeds maximum size of {max_bytes} bytes")
+            raise MessageError(f"Input exceeds maximum size of {max_bytes} bytes")
 
         chunks.append(chunk)
 
     # Join chunks and decode
-    return b"".join(chunks).decode("utf-8")
+    try:
+        return b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise MessageError(f"Input is not valid UTF-8: {error}") from error
 
 
 def _get_message_content(
@@ -348,15 +421,18 @@ def _get_message_content(
         return _read_from_stdin(max_message_size)
     if message is None:
         if sys.stdin.isatty():
-            raise ValueError(
+            raise MessageError(
                 "message is required when stdin is a terminal; pass a message or pipe input"
             )
         return _read_from_stdin(max_message_size)
 
     # Check message size
-    message_bytes = len(message.encode("utf-8"))
+    try:
+        message_bytes = len(message.encode("utf-8"))
+    except UnicodeEncodeError as error:
+        raise MessageError(f"Message is not valid UTF-8: {error}") from error
     if message_bytes > max_message_size:
-        raise ValueError(f"Message exceeds maximum size of {max_message_size} bytes")
+        raise MessageError(f"Message exceeds maximum size of {max_message_size} bytes")
 
     return message
 
@@ -367,6 +443,8 @@ def _output_message(
     json_output: bool,
     show_timestamps: bool,
     warned_newlines: bool,
+    *,
+    suppress_newline_warning: bool = False,
 ) -> bool:
     """Output a message with optional timestamp.
 
@@ -380,6 +458,13 @@ def _output_message(
     Returns:
         True if newline warning was shown (for tracking)
     """
+    if not json_output:
+        warned_newlines = _warn_message_newlines(
+            message,
+            warned_newlines,
+            suppress=suppress_newline_warning,
+        )
+
     if json_output:
         # JSON output includes timestamp by default
         output = {"message": message, "timestamp": format_message_id(timestamp)}
@@ -389,17 +474,31 @@ def _output_message(
         _print_stdout(f"{timestamp}\t{message}")
     else:
         # Plain output
-        if not warned_newlines and "\n" in message:
-            warnings.warn(
-                "Message contains newline characters which may break shell pipelines. "
-                "Consider using --json for safe handling of special characters.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            warned_newlines = True
         _print_stdout(message)
 
     return warned_newlines
+
+
+def _warn_message_newlines(
+    message: str,
+    warned_newlines: bool,
+    *,
+    suppress: bool = False,
+) -> bool:
+    """Warn once when plain message framing is ambiguous."""
+    if warned_newlines or "\n" not in message:
+        return warned_newlines
+    if not suppress and not _MESSAGE_NEWLINE_WARNING_SUPPRESSED.get():
+        warnings.warn_explicit(
+            "Message contains newline characters which may break shell pipelines. "
+            "Consider using --json for safe handling of special characters.",
+            _MessageNewlineWarning,
+            filename=__file__,
+            lineno=_warn_message_newlines.__code__.co_firstlineno,
+            module=__name__,
+            registry={},
+        )
+    return True
 
 
 def _resolve_timestamp_filters(
@@ -478,7 +577,9 @@ def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exc
                 message, timestamp = cast(tuple[str, int], result)
                 _output_message(message, timestamp, json_output, show_timestamps, False)
             else:
-                _print_stdout(cast(str, result))
+                message = cast(str, result)
+                _warn_message_newlines(message, False)
+                _print_stdout(message)
         except _StdoutClosed:
             pass
         return EXIT_SUCCESS
@@ -546,7 +647,9 @@ def _process_queue_fetch(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-014] exc
             message, timestamp = cast(tuple[str, int], result)
             _output_message(message, timestamp, json_output, show_timestamps, False)
         else:
-            _print_stdout(cast(str, result))
+            message = cast(str, result)
+            _warn_message_newlines(message, False)
+            _print_stdout(message)
     except _StdoutClosed:
         pass
     return EXIT_SUCCESS
@@ -582,10 +685,21 @@ def cmd_write(
     )
     with Queue(canonical_queue, db_path=db_path, config=resolved_config) as queue:
         timestamp = queue.write(content)
-    if json_output:
-        print(json.dumps({"timestamp": format_message_id(timestamp)}))
-    elif show_timestamps:
-        print(timestamp)
+    try:
+        if json_output:
+            _print_stdout(
+                json.dumps({"timestamp": format_message_id(timestamp)}),
+                flush=False,
+            )
+            _flush_stdout()
+        elif show_timestamps:
+            _print_stdout(str(timestamp), flush=False)
+            _flush_stdout()
+    except _StdoutClosed:
+        return _stdout_delivery_error(
+            json_output=json_output,
+            completed_mutation="write",
+        )
     return EXIT_SUCCESS
 
 
@@ -762,38 +876,51 @@ def cmd_list(
     """
     # For list command, we need cross-queue operations
     # Use DBConnection as a context manager
-    resolved_config = snapshot_config(config)
-    with DBConnection(db_path, config=resolved_config) as conn:
-        db = cast(BrokerDB, conn.get_connection())
+    wrote_output = False
+    try:
+        resolved_config = snapshot_config(config)
+        with DBConnection(db_path, config=resolved_config) as conn:
+            db = cast(BrokerDB, conn.get_connection())
 
-        if show_stats:
-            queue_stats = db.list_queue_stats(prefix=prefix, pattern=pattern)
+            if show_stats:
+                queue_stats = db.list_queue_stats(prefix=prefix, pattern=pattern)
 
-            # Show each queue with unclaimed count (and total if different)
-            for stats in queue_stats:
-                if json_output:
-                    print(json.dumps(_queue_stats_payload(stats)))
-                elif stats.pending != stats.total:
-                    print(
-                        f"{stats.queue}: {stats.pending} "
-                        f"({stats.total} total, {stats.claimed} claimed)"
-                    )
-                else:
-                    print(f"{stats.queue}: {stats.pending}")
+                # Show each queue with unclaimed count (and total if different)
+                for stats in queue_stats:
+                    if json_output:
+                        line = json.dumps(_queue_stats_payload(stats))
+                    elif stats.pending != stats.total:
+                        line = (
+                            f"{stats.queue}: {stats.pending} "
+                            f"({stats.total} total, {stats.claimed} claimed)"
+                        )
+                    else:
+                        line = f"{stats.queue}: {stats.pending}"
+                    _print_stdout(line, flush=False)
+                    wrote_output = True
 
-            # Only show overall claimed message stats if --stats flag is used
-            if not json_output:
-                total_claimed, total_messages = db.get_overall_stats()
+                # Only show overall claimed message stats if --stats flag is used
+                if not json_output:
+                    total_claimed, total_messages = db.get_overall_stats()
 
-                if total_claimed > 0:
-                    print(f"\nTotal claimed messages: {total_claimed}/{total_messages}")
-        else:
-            queues = db.list_queues(prefix=prefix, pattern=pattern)
-            for queue in queues:
-                if json_output:
-                    print(json.dumps({"queue": queue}))
-                else:
-                    print(queue)
+                    if total_claimed > 0:
+                        _print_stdout(
+                            f"\nTotal claimed messages: "
+                            f"{total_claimed}/{total_messages}",
+                            flush=False,
+                        )
+                        wrote_output = True
+            else:
+                queues = db.list_queues(prefix=prefix, pattern=pattern)
+                for queue in queues:
+                    line = json.dumps({"queue": queue}) if json_output else queue
+                    _print_stdout(line, flush=False)
+                    wrote_output = True
+
+        if wrote_output:
+            _flush_stdout()
+    except _StdoutClosed:
+        return _stdout_delivery_error(json_output=json_output)
 
     return EXIT_SUCCESS
 
@@ -837,7 +964,14 @@ def cmd_exists(
         exists = db.queue_exists(canonical_queue)
 
     if json_output:
-        print(json.dumps({"queue": canonical_queue, "exists": exists}))
+        try:
+            _print_stdout(
+                json.dumps({"queue": canonical_queue, "exists": exists}),
+                flush=False,
+            )
+            _flush_stdout()
+        except _StdoutClosed:
+            return _stdout_delivery_error(json_output=True)
 
     return EXIT_SUCCESS if exists else EXIT_QUEUE_EMPTY
 
@@ -861,14 +995,20 @@ def cmd_stats(
         stats = db.get_queue_stat(canonical_queue)
 
     if json_output:
-        print(json.dumps(_queue_stats_payload(stats)))
+        line = json.dumps(_queue_stats_payload(stats))
     elif stats.pending != stats.total:
-        print(
+        line = (
             f"{stats.queue}: {stats.pending} "
             f"({stats.total} total, {stats.claimed} claimed)"
         )
     else:
-        print(f"{stats.queue}: {stats.pending}")
+        line = f"{stats.queue}: {stats.pending}"
+
+    try:
+        _print_stdout(line, flush=False)
+        _flush_stdout()
+    except _StdoutClosed:
+        return _stdout_delivery_error(json_output=json_output)
 
     return EXIT_SUCCESS
 
@@ -895,16 +1035,23 @@ def cmd_status(
         _emit_error(e, code="ERROR", json_output=json_output)
         return EXIT_ERROR
 
-    if json_output:
-        json_stats: dict[str, int | str] = {
-            **stats,
-            "last_timestamp": format_message_id(stats["last_timestamp"]),
-        }
-        print(json.dumps(json_stats, ensure_ascii=False))
-    else:
-        print(f"total_messages: {stats['total_messages']}")
-        print(f"last_timestamp: {stats['last_timestamp']}")
-        print(f"db_size: {stats['db_size']}")
+    try:
+        if json_output:
+            json_stats: dict[str, int | str] = {
+                **stats,
+                "last_timestamp": format_message_id(stats["last_timestamp"]),
+            }
+            _print_stdout(
+                json.dumps(json_stats, ensure_ascii=False),
+                flush=False,
+            )
+        else:
+            _print_stdout(f"total_messages: {stats['total_messages']}", flush=False)
+            _print_stdout(f"last_timestamp: {stats['last_timestamp']}", flush=False)
+            _print_stdout(f"db_size: {stats['db_size']}", flush=False)
+        _flush_stdout()
+    except _StdoutClosed:
+        return _stdout_delivery_error(json_output=json_output)
     return EXIT_SUCCESS
 
 
@@ -998,7 +1145,17 @@ def cmd_rename(
         )
 
     if json_output:
-        print(json.dumps(_queue_rename_payload(result)))
+        try:
+            _print_stdout(
+                json.dumps(_queue_rename_payload(result)),
+                flush=False,
+            )
+            _flush_stdout()
+        except _StdoutClosed:
+            return _stdout_delivery_error(
+                json_output=True,
+                completed_mutation="rename command",
+            )
 
     return EXIT_SUCCESS if result.renamed else EXIT_QUEUE_EMPTY
 
@@ -1439,6 +1596,7 @@ def _watch_message_handler(
     *,
     json_output: bool,
     show_timestamps: bool,
+    quiet: bool,
 ) -> Callable[[str, int], None]:
     """Build the stateful output callback for a watch command."""
     warned_newlines = False
@@ -1452,6 +1610,7 @@ def _watch_message_handler(
                 json_output,
                 show_timestamps,
                 warned_newlines,
+                suppress_newline_warning=quiet,
             )
         except _StdoutClosed:
             raise StopWatching from None
@@ -1517,6 +1676,7 @@ def cmd_watch(
     handle_message = _watch_message_handler(
         json_output=json_output,
         show_timestamps=show_timestamps,
+        quiet=quiet,
     )
 
     watcher: QueueWatcher | QueueMoveWatcher | None = None

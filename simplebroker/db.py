@@ -23,6 +23,7 @@ import warnings
 import weakref
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from contextvars import ContextVar
 from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import Path
@@ -62,6 +63,7 @@ from ._exceptions import (
     OperationalError,
     QueueNameError,
     StopException,
+    _ArgumentValidationError,
 )
 from ._maintenance import MaintenanceSchedule, vacuum_is_eligible
 from ._message_id import MessageIdInput, normalize_message_id
@@ -106,6 +108,27 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
+
+
+class _AliasShadowsQueueWarning(RuntimeWarning):
+    """Human commentary when an alias name also names a populated queue."""
+
+
+_ALIAS_SHADOW_WARNING_SUPPRESSED: ContextVar[bool] = ContextVar(
+    "simplebroker_alias_shadow_warning_suppressed",
+    default=False,
+)
+
+
+@contextmanager
+def _suppress_alias_shadow_warning() -> Iterator[None]:
+    """Suppress alias commentary in only the current invocation context."""
+    token = _ALIAS_SHADOW_WARNING_SUPPRESSED.set(True)
+    try:
+        yield
+    finally:
+        _ALIAS_SHADOW_WARNING_SUPPRESSED.reset(token)
+
 
 # Module constants
 QUEUE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$")
@@ -400,12 +423,12 @@ def _validate_queue_prefix(prefix: str) -> None:
         return
 
     if len(prefix) > MAX_QUEUE_NAME_LENGTH:
-        raise ValueError(
+        raise _ArgumentValidationError(
             f"Invalid queue prefix: exceeds {MAX_QUEUE_NAME_LENGTH} characters"
         )
 
     if prefix[0] in ".-" or not re.fullmatch(r"[a-zA-Z0-9_.-]*", prefix):
-        raise ValueError(
+        raise _ArgumentValidationError(
             "Invalid queue prefix: must contain only letters, numbers, periods, "
             "underscores, and hyphens. Cannot begin with a hyphen or a period"
         )
@@ -3454,14 +3477,14 @@ class BrokerCore:
                 self._load_aliases_locked()
                 self._validate_alias_invariants_locked(alias, target)
 
-                if should_warn:
+                if should_warn and not _ALIAS_SHADOW_WARNING_SUPPRESSED.get():
                     warnings.warn(
                         (
                             f"Queue '{alias}' already exists with messages. "
                             f"The alias @{alias} will redirect to '{target}' while "
                             f"the queue {alias} remains accessible directly."
                         ),
-                        RuntimeWarning,
+                        _AliasShadowsQueueWarning,
                         stacklevel=3,
                     )
                 self._runner.run(self._sql.INSERT_ALIAS, (alias, target))

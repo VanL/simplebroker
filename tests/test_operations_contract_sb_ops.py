@@ -76,7 +76,7 @@ EVIDENCE_MANIFESTS = {
             "test_cleanup_validates_literal_uri_metacharacters",
             "test_cleanup_cli_accepts_literal_percent_filename",
             "test_cleanup_cli_retains_unsafe_metacharacter_rejection",
-            "test_cleanup_no_namespace_targets_are_noops_without_path_derivation",
+            "test_cleanup_no_namespace_targets_are_noops_without_creation_or_open",
             "test_cleanup_path_derivation_error_is_a_clean_database_error",
             "test_cleanup_freezes_resolved_symlink_target_namespace",
             "test_cleanup_main_lstat_failure_is_a_zero_delete_gate",

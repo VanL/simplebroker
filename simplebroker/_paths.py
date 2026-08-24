@@ -10,6 +10,7 @@ from pathlib import Path, PurePath
 
 from ._backends import get_backend
 from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH, _validate_safe_path_components
+from ._exceptions import _ArgumentValidationError
 
 
 def _is_filesystem_root(path: Path) -> bool:
@@ -134,13 +135,15 @@ def _validate_working_directory(working_dir: Path) -> None:
         ValueError: If directory validation fails
     """
     if not working_dir.exists():
-        raise ValueError(f"Directory not found: {working_dir}")
+        raise _ArgumentValidationError(f"Directory not found: {working_dir}")
     if not working_dir.is_dir():
         # Provide more helpful error message for common mistake
         if working_dir.is_file():
-            raise ValueError(f"Path is a file, not a directory: {working_dir}")
+            raise _ArgumentValidationError(
+                f"Path is a file, not a directory: {working_dir}"
+            )
         else:
-            raise ValueError(f"Not a directory: {working_dir}")
+            raise _ArgumentValidationError(f"Not a directory: {working_dir}")
 
 
 def _is_compound_db_name(db_name: str) -> tuple[bool, list[str]]:
@@ -255,7 +258,7 @@ def _validate_database_parent_directory(db_path: Path) -> None:
     """
     # Check if parent directory exists
     if not db_path.parent.exists():
-        raise ValueError(f"Parent directory not found: {db_path.parent}")
+        raise _ArgumentValidationError(f"Parent directory not found: {db_path.parent}")
 
     # Check if parent directory is accessible (executable/writable)
     if not os.access(db_path.parent, os.X_OK):
@@ -318,12 +321,14 @@ def _validate_path_containment(
     containment_check = not db_path.is_relative_to(working_dir)
 
     if containment_check and not used_project_scope:
-        raise ValueError("Database file must be within the working directory")
+        raise _ArgumentValidationError(
+            "Database file must be within the working directory"
+        )
     # Additional validation for project-scoped paths
     if used_project_scope and not _is_ancestor_of_working_directory(
         db_path, working_dir
     ):
-        raise ValueError(
+        raise _ArgumentValidationError(
             "Project-scoped database path must be in parent directory chain"
         )
 

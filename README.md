@@ -205,7 +205,9 @@ Global options must appear before the command, for example `broker -f queue.db r
 - `-f, --file NAME` - Database filename or absolute path (default: `.broker.db`)
   - If an absolute path is provided, the directory is extracted automatically
   - Cannot be used with `-d` if the directories don't match
-- `-q, --quiet` - Suppress non-error output
+- `-q, --quiet` - Suppress non-error human commentary, including the plain
+  message-newline and alias-shadow warnings. Payload, errors, and unrelated
+  Python warnings remain visible.
 - `--cleanup` - Destructively delete the configured backend target state and
   exit. SQLite cleanup attempts the database and its known SQLite and
   SimpleBroker companion files. It is non-atomic; stop all activity and make
@@ -513,6 +515,10 @@ flags.
 Messages with newlines or special characters can break shell pipelines. Use
 `--json` to avoid shell issues. JSON message IDs are strings, so `jq -r`
 extracts their exact digit text without numeric conversion.
+Loud plain `read`, `peek`, `move`, and `watch` output warns once when any
+emitted body contains an embedded newline, including exact, range, all, and
+timestamped selections. `--quiet` suppresses that commentary; JSON output
+never emits it.
 
 ```bash
 # Problem: newlines break line counting
@@ -741,6 +747,12 @@ moves before printing them. Those completed effects are not reversed.
 Exit `0` means SimpleBroker shut down cleanly. It does not validate that the
 consumer processed any particular message; check the consumer's own exit
 status.
+
+That clean-stop rule is limited to `read`, `peek`, `move`, `dump`, and
+`watch`. If a downstream consumer closes while a finite result such as help,
+version, `list`, `stats`, status, or an opted-in write/rename result is being
+delivered, SimpleBroker returns `1` with a controlled stderr diagnostic. A
+write or rename may already be durable; inspect broker state before retrying.
 
 ### Delivery guarantees
 

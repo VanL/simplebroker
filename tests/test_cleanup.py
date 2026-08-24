@@ -126,7 +126,7 @@ def test_cleanup_removes_owned_orphans_when_main_is_absent(workdir):
 
 
 @pytest.mark.sqlite_only
-def test_cleanup_no_namespace_targets_are_noops_without_path_derivation(
+def test_cleanup_no_namespace_targets_are_noops_without_creation_or_open(
     tmp_path, monkeypatch
 ):
     """[SB-OPS-7] Empty and memory targets never acquire filesystem meaning."""

@@ -141,6 +141,10 @@ class MessageError(BrokerError, ValueError):
     """
 
 
+class _ArgumentValidationError(ValueError):
+    """Internal caller-input rejection without a public domain exception."""
+
+
 class SidecarUnavailableError(BrokerError):
     """The active backend has no SQL storage for sidecar tables.
 

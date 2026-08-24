@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -62,6 +63,154 @@ def _seed_large_queue(workdir: Path, *, count: int = 128) -> None:
     with Queue("bulk", db_path=target_for_directory(workdir), persistent=True) as queue:
         for index in range(count):
             queue.write(f"{index:04d}:" + "x" * 8192)
+
+
+def test_default_buffered_list_pipe_closure_is_controlled_error(
+    workdir: Path,
+) -> None:
+    assert run_cli("write", "listed", "payload", cwd=workdir)[0] == 0
+
+    process = _spawn_broker(workdir, "list", unbuffered=False)
+    returncode, stderr = _close_consumer_and_wait(process)
+
+    assert returncode == 1
+    assert stderr.startswith("simplebroker: error:")
+    assert "stdout" in stderr.lower()
+    assert "rerun" in stderr.lower()
+    assert "Traceback" not in stderr
+    assert "Exception ignored" not in stderr
+
+
+@pytest.mark.parametrize(
+    ("output_flag", "json_output"),
+    [("--json", True), ("--timestamps", False)],
+)
+def test_default_buffered_write_pipe_closure_reports_durable_mutation(
+    workdir: Path,
+    output_flag: str,
+    json_output: bool,
+) -> None:
+    process = _spawn_broker(
+        workdir,
+        "write",
+        "written",
+        "payload",
+        output_flag,
+        unbuffered=False,
+    )
+    returncode, stderr = _close_consumer_and_wait(process)
+
+    assert returncode == 1
+    if json_output:
+        assert stderr.startswith("{")
+        message = json.loads(stderr)["message"]
+    else:
+        assert stderr.startswith("simplebroker: error:")
+        message = stderr
+    assert "inspect broker state before retrying" in message
+    assert "Traceback" not in stderr
+    assert "Exception ignored" not in stderr
+    with Queue("written", db_path=target_for_directory(workdir)) as queue:
+        assert queue.peek() == "payload"
+
+
+def _assert_controlled_finite_output_error(
+    process: subprocess.Popen[str],
+    *,
+    json_output: bool,
+) -> str:
+    returncode, stderr = _close_consumer_and_wait(process)
+
+    assert returncode == 1
+    assert "Traceback" not in stderr
+    assert "Exception ignored" not in stderr
+    if json_output:
+        diagnostic = json.loads(stderr)
+        assert diagnostic["error"] == "ERROR"
+        assert diagnostic["retryable"] is False
+        message = str(diagnostic["message"])
+    else:
+        assert stderr.startswith("simplebroker: error:")
+        message = stderr
+    assert "stdout" in message.lower()
+    return message
+
+
+@pytest.mark.parametrize(
+    "args",
+    [(), ("--quiet",), ("--version",), ("list", "--help")],
+)
+def test_help_and_version_pipe_closure_are_controlled_errors(
+    workdir: Path,
+    args: tuple[str, ...],
+) -> None:
+    process = _spawn_broker(workdir, *args, unbuffered=False)
+
+    _assert_controlled_finite_output_error(process, json_output=False)
+
+
+def test_alias_list_pipe_closure_is_a_controlled_error(workdir: Path) -> None:
+    assert run_cli("alias", "add", "worker", "jobs", cwd=workdir)[0] == 0
+    process = _spawn_broker(workdir, "alias", "list", unbuffered=False)
+
+    _assert_controlled_finite_output_error(process, json_output=False)
+
+
+@pytest.mark.parametrize(
+    ("args", "json_output"),
+    [
+        (("list", "--json"), True),
+        (("list", "--stats"), False),
+        (("exists", "finite", "--json"), True),
+        (("exists", "missing", "--json"), True),
+        (("stats", "finite"), False),
+        (("stats", "finite", "--json"), True),
+        (("--status",), False),
+        (("--status", "--json"), True),
+    ],
+)
+def test_finite_metadata_pipe_closure_is_a_controlled_error(
+    workdir: Path,
+    args: tuple[str, ...],
+    json_output: bool,
+) -> None:
+    assert run_cli("write", "finite", "payload", cwd=workdir)[0] == 0
+    process = _spawn_broker(workdir, *args, unbuffered=False)
+
+    _assert_controlled_finite_output_error(process, json_output=json_output)
+
+
+def test_rename_pipe_closure_reports_durable_mutation(workdir: Path) -> None:
+    assert run_cli("write", "old-name", "payload", cwd=workdir)[0] == 0
+    process = _spawn_broker(
+        workdir,
+        "rename",
+        "old-name",
+        "new-name",
+        "--json",
+        unbuffered=False,
+    )
+
+    message = _assert_controlled_finite_output_error(process, json_output=True)
+
+    assert "inspect broker state before retrying" in message
+    with Queue("new-name", db_path=target_for_directory(workdir)) as queue:
+        assert queue.peek() == "payload"
+
+
+def test_rename_no_match_pipe_closure_overrides_queue_empty(workdir: Path) -> None:
+    process = _spawn_broker(
+        workdir,
+        "rename",
+        "missing-name",
+        "new-name",
+        "--json",
+        unbuffered=False,
+    )
+
+    message = _assert_controlled_finite_output_error(process, json_output=True)
+
+    assert "inspect broker state before retrying" in message
 
 
 def test_watch_stops_claiming_after_stdout_consumer_exits(workdir: Path) -> None:

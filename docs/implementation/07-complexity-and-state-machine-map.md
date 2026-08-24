@@ -224,6 +224,20 @@ owner without making production code traverse argparse's private action tree;
 structural tests may inspect that tree only to prove conservation and to fail
 when a new sensitive registration is not captured.
 
+Post-parse CLI failure mapping is cause-owned rather than phase-owned.
+`_classify_cli_error()` checks `DatabaseError` first because `DataError` also
+inherits `ValueError`, then recognizes the private caller-validation type plus
+the established queue, message, and parser types. A generic `ValueError`
+remains `ERROR`. Target resolution, preparation, and dispatch all emit through
+that same classifier, so moving validation between phases cannot silently
+change the JSON code.
+
+Quiet warning policy is also invocation-local. Message-newline and
+alias-shadow commentary is gated at its producer by `ContextVar` state rather
+than by a process-wide warnings filter. A quiet command therefore cannot hide
+an owned warning emitted by a concurrent loud command, and unrelated runtime
+warnings never match the suppression boundary.
+
 Retry timing overrides are test-scoped dynamic context, not process
 configuration. `_retry.test_config()` therefore uses a `ContextVar` token and
 resets that token on exit. Token restoration preserves nesting and overlapping

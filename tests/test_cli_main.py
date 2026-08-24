@@ -4,12 +4,212 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import types
+import warnings
+from pathlib import Path
 
 import pytest
 
-from simplebroker import cli
+from simplebroker import _paths, cli
+from simplebroker._exceptions import DatabaseError, DataError, InvalidConfigError
 from simplebroker._targets import BrokerTarget
+
+
+class _ForeignBackendError(Exception):
+    """Synthetic third-party failure outside SimpleBroker's hierarchy."""
+
+
+def test_quiet_suppresses_only_owned_runtime_warnings(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["broker", "--quiet", "write", "jobs", "payload"],
+    )
+
+    def warn_from_command(*_args, **_kwargs):
+        warnings.warn("unrelated runtime warning", RuntimeWarning, stacklevel=2)
+        return cli.EXIT_SUCCESS
+
+    monkeypatch.setattr(cli.commands, "cmd_write", warn_from_command)
+
+    with pytest.warns(RuntimeWarning, match="unrelated runtime warning"):
+        assert cli.main() == cli.EXIT_SUCCESS
+
+
+def test_omitted_terminal_message_is_invalid_argument_json(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["broker", "write", "--json", "jobs"],
+    )
+    monkeypatch.setattr(cli.sys, "stdin", types.SimpleNamespace(isatty=lambda: True))
+
+    assert cli.main() == cli.EXIT_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert "message is required" in payload["message"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [DataError("dual database value error"), ValueError("generic value error")],
+)
+def test_dispatch_value_error_fallbacks_remain_error_json(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    error,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["broker", "write", "--json", "jobs", "payload"],
+    )
+
+    def fail_write(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(cli.commands, "cmd_write", fail_write)
+
+    assert cli.main() == cli.EXIT_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["error"] == "ERROR"
+    assert payload["retryable"] is False
+
+
+@pytest.mark.parametrize("phase", ["resolution", "preparation"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        DatabaseError("database failure"),
+        ValueError("generic value failure"),
+        RuntimeError("unknown failure"),
+        _ForeignBackendError("foreign plugin failure"),
+    ],
+)
+def test_pre_dispatch_failures_use_cause_classifier_json(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    phase,
+    error,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["broker", "list", "--json"],
+    )
+
+    if phase == "resolution":
+        monkeypatch.setattr(
+            cli,
+            "_resolve_target",
+            lambda _args, *, config: (_ for _ in ()).throw(error),
+        )
+    else:
+        monkeypatch.setattr(
+            cli,
+            "_validate_legacy_sqlite_target",
+            lambda _args, _target, *, config: (_ for _ in ()).throw(error),
+        )
+
+    assert cli.main() == cli.EXIT_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload == {
+        "error": "ERROR",
+        "message": str(error),
+        "retryable": False,
+    }
+    assert "Traceback" not in captured.err
+
+
+def test_resolution_invalid_config_keeps_outer_plain_text_boundary(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli.sys, "argv", ["broker", "list", "--json"])
+    error = InvalidConfigError(
+        key="BROKER_BACKEND",
+        source="injected test",
+        expected="a registered backend",
+        value_display="'unknown'",
+    )
+
+    def fail_resolution(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(cli, "_resolve_target", fail_resolution)
+
+    assert cli.main() == cli.EXIT_ERROR
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"{cli.PROG_NAME}: {error}\n"
+    assert not captured.err.lstrip().startswith("{")
+    assert "Traceback" not in captured.err
+
+
+def test_resolution_keyboard_interrupt_keeps_outer_interrupt_boundary(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli.sys, "argv", ["broker", "list", "--json"])
+
+    def interrupt_resolution(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_resolve_target", interrupt_resolution)
+
+    assert cli.main() == cli.EXIT_INTERRUPTED
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "interrupted" in captured.err
+    assert not captured.err.lstrip().startswith("{")
+    assert "Traceback" not in captured.err
+
+
+def test_inaccessible_database_parent_remains_operational_error_json(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    target = tmp_path / "selected" / "broker.db"
+    target.parent.mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["broker", "-f", str(target), "list", "--json"],
+    )
+
+    def deny_execute(path, mode):
+        return not (Path(path) == target.parent and mode == os.X_OK)
+
+    monkeypatch.setattr(_paths.os, "access", deny_execute)
+
+    assert cli.main() == cli.EXIT_ERROR
+    captured = capsys.readouterr()
+    payload = json.loads(captured.err)
+    assert payload["error"] == "ERROR"
+    assert "not accessible" in payload["message"]
 
 
 def test_main_prints_help_when_no_args(monkeypatch, capsys):

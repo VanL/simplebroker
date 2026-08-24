@@ -75,6 +75,14 @@ the batch is still uncommitted, so its claims roll back and remain eligible for
 retry. A flush after the batch would be too late: resuming past the final yield
 would already have committed the claims.
 
+Finite CLI output has a different boundary. Finite commands buffer through
+the same exact write classifier and perform one command-owned final flush.
+They flush only after producing output, so an empty selection keeps its
+ordinary result. A closed consumer returns error `1`; the five streaming
+families retain clean stop `0`. For `write` and `rename`, mutation commit
+precedes result rendering. Output failure does not roll the mutation back, so
+the diagnostic directs callers to inspect state before retrying.
+
 **FIFO Ordering:** Messages are read in write order for a queue, regardless of
 which process wrote them. SQLite uses the autoincrement `id` plus serialized
 write transactions; other backends must preserve the same public ordering

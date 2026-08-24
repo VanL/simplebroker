@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from simplebroker import _paths
+from simplebroker._exceptions import _ArgumentValidationError
 from simplebroker._paths import (
     _create_compound_db_directories,
     _find_project_database,
@@ -25,12 +26,12 @@ from simplebroker._paths import (
 def test_validate_working_directory_reports_missing_and_file_paths(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(ValueError, match="Directory not found"):
+    with pytest.raises(_ArgumentValidationError, match="Directory not found"):
         _validate_working_directory(tmp_path / "missing")
 
     file_path = tmp_path / "not-a-dir"
     file_path.write_text("", encoding="utf-8")
-    with pytest.raises(ValueError, match="Path is a file"):
+    with pytest.raises(_ArgumentValidationError, match="Path is a file"):
         _validate_working_directory(file_path)
 
 
@@ -110,7 +111,7 @@ def test_create_compound_db_directories_wraps_mkdir_errors(
 def test_validate_database_parent_directory_rejects_missing_parent(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(ValueError, match="Parent directory not found"):
+    with pytest.raises(_ArgumentValidationError, match="Parent directory not found"):
         _validate_database_parent_directory(tmp_path / "missing" / "broker.db")
 
 
@@ -121,15 +122,17 @@ def test_validate_database_parent_directory_rejects_inaccessible_parent(
     db_path = tmp_path / "broker.db"
 
     monkeypatch.setattr(_paths.os, "access", lambda path, mode: False)
-    with pytest.raises(ValueError, match="not accessible"):
+    with pytest.raises(ValueError, match="not accessible") as inaccessible:
         _validate_database_parent_directory(db_path)
+    assert not isinstance(inaccessible.value, _ArgumentValidationError)
 
     def writable_but_not_executable(path: Path, mode: int) -> bool:
         return mode != _paths.os.W_OK
 
     monkeypatch.setattr(_paths.os, "access", writable_but_not_executable)
-    with pytest.raises(ValueError, match="not writable"):
+    with pytest.raises(ValueError, match="not writable") as unwritable:
         _validate_database_parent_directory(db_path)
+    assert not isinstance(unwritable.value, _ArgumentValidationError)
 
 
 def test_validate_path_containment_rejects_outside_db_and_bad_project_scope(
@@ -139,12 +142,12 @@ def test_validate_path_containment_rejects_outside_db_and_bad_project_scope(
     workdir.mkdir()
     outside = tmp_path / "outside.db"
 
-    with pytest.raises(ValueError, match="within the working directory"):
+    with pytest.raises(_ArgumentValidationError, match="within the working directory"):
         _validate_path_containment(outside, workdir, used_project_scope=False)
 
     sibling_db = tmp_path / "sibling" / "broker.db"
     sibling_db.parent.mkdir()
-    with pytest.raises(ValueError, match="parent directory chain"):
+    with pytest.raises(_ArgumentValidationError, match="parent directory chain"):
         _validate_path_containment(sibling_db, workdir, used_project_scope=True)
 
 

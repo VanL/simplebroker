@@ -32,6 +32,16 @@ seam, stops producing further output, does not select new work after detection,
 and exits `0`. Selection or mutation already completed before the output seam
 remains completed; delivery effects are governed by `[SB-DELIVERY-*]`.
 
+For every other stdout-producing command or global action, a downstream close
+is an output-delivery error. The command detects closure at the stdout write or
+explicit flush seam, emits the ordinary error diagnostic on stderr, and exits
+`1`; it does not leak a traceback, an interpreter-flush warning, or an exit
+status outside this section's set. A computed success or no-match result does
+not override failure to deliver its finite payload. If a durable mutation
+completed before output failed, it remains completed and the diagnostic tells
+the caller to inspect state before retrying. After JSON mode has been
+established, the stderr diagnostic follows `[SB-CLI-4]` with code `ERROR`.
+
 Invalid global-option placement is an error and exits `1`.
 
 _Implementation mapping_:
@@ -52,8 +62,17 @@ On a successful data-bearing read, the message body — plain or JSON — is
 written to **stdout**, never to stderr. Redirecting stdout captures the
 payload in full.
 
-Quiet mode suppresses human commentary on stderr. It never suppresses an error
-diagnostic and never moves payload or errors to a different stream.
+Quiet mode suppresses human commentary on stderr. This includes the
+message-newline safety warning described below. Quiet never suppresses an error
+diagnostic, payload, or unrelated runtime warning, and never moves payload or
+errors to a different stream; implementations must suppress explicitly owned
+commentary rather than install a blanket runtime-warning filter.
+
+A non-JSON `read`, `peek`, `move`, or `watch` invocation that emits one or more
+message bodies containing an embedded newline emits one newline-safety warning
+on stderr, at the first such body. The rule is independent of selector mode and
+`--timestamps`. JSON output and output with no embedded newline emit no such
+warning.
 
 Ordinary plain-text errors use the shared
 `simplebroker: error: <message>` dialect derived from `PROG_NAME`. A winning
@@ -147,6 +166,29 @@ unclassified failures, and explicitly non-retryable failures emit false. The
 pre-parse invalid configuration exception remains the `[SB-CLI-2]` plain-text
 boundary.
 
+Error-code choice follows the failure cause, not the parser, target,
+preparation, or dispatch phase in which it is observed. A malformed exact
+message ID uses `INVALID_MESSAGE_ID`, and a malformed timestamp bound uses
+`INVALID_TIMESTAMP`. `INVALID_ARGUMENT` is used for parser-owned option or
+operand conflicts; invalid queue syntax; an empty or undefined `@alias` queue
+operand; omitted, oversized, non-UTF-8, or non-encodable message input; an
+invalid list prefix; and these CLI target-selection failures: conflicting
+target flags, an unsafe path component, a missing or wrong-kind selected
+directory when the action requires a target namespace, a missing selected
+database parent, a rejected relative-path containment check, or a requested
+project-scope search with no project target. Cleanup of an absent namespace
+retains `[SB-OPS-7]`'s no-op behavior without creating or opening that
+namespace.
+
+`ERROR` is used for backend or storage failure; an inaccessible or unwritable
+target directory; failure to resolve a selected path or symlink; a corrupt or
+invalid existing target; output-delivery failure; and any unclassified or
+internal failure.
+
+Classification follows the most specific owned cause. In particular, a
+database exception that also inherits from `ValueError` remains `ERROR`, and
+inheritance from `ValueError` alone is not sufficient for `INVALID_ARGUMENT`.
+
 _Implementation mapping_:
 - `simplebroker/commands.py`
 - `simplebroker/cli.py`
@@ -199,6 +241,10 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- active: 2026-08-24-cli-output-and-error-contract-remediation-plan — reviewed
+  Strategy-A spec promotion at baseline `0901c7cd`; local runtime, contract,
+  static, documentation, downstream Weft, and independent-review evidence
+  recorded; landing and exact-SHA Windows evidence remain pending
 - retired: 2026-08-23-relative-sqlite-containment-and-config-mode-warning-removal-plan
   — source `00fb9f77` (local-only pin); see the ledger in
   `docs/plans/README.md`
@@ -237,10 +283,23 @@ _Implementation mapping_:
   `tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_keyboard_interrupt_handling`,
   `tests/test_cli_edge_cases.py::TestCLIEdgeCases::test_pre_dispatch_keyboard_interrupt_handling`,
   `tests/test_cli_watch.py::TestWatchCommand::test_watch_sigint_remains_success`
+- `[SB-CLI-1]` closed-stdout split:
+  `tests/test_cli_broken_pipe.py` (default-buffered finite process output and
+  five streaming families, including parsed flags-only help) and
+  `tests/test_commands_stdout_delivery.py`
+  (exact direct-command inventory, write-versus-flush failures, mutation
+  durability, and the bare-stdout static gate)
 - `tests/test_cli_contract_sb_cli.py` — [SB-CLI-2], [SB-CLI-3], [SB-CLI-4]
 - `[SB-CLI-2]` ordinary diagnostic dialect:
   `tests/test_alias_cli.py::test_cmd_alias_add_remove_direct`,
   `tests/test_commands_init.py::TestInitCommand::test_init_permission_error_database_creation`
+- `[SB-CLI-2]` owned warning policy:
+  `tests/test_json_output.py` (selector, timestamp, JSON, empty, quiet, and
+  concurrent loud/quiet matrix, plus repeated direct and in-process CLI
+  invocations),
+  `tests/test_watcher_transition_tables.py::test_cmd_watch_quiet_suppresses_owned_newline_warning`,
+  `tests/test_watcher_transition_tables.py::test_cmd_watch_json_newline_payload_has_no_plain_framing_warning`, and
+  `tests/test_alias_cli.py::test_quiet_alias_policy_does_not_hide_concurrent_loud_warning`
 - `[SB-CLI-2]` relative SQLite containment and prepared-target behavior:
   `tests/test_symlink_security.py::test_legitimate_symlink_within_directory`,
   `tests/test_symlink_security.py::test_symlink_path_traversal_attack`,
@@ -259,9 +318,18 @@ _Implementation mapping_:
   `tests/test_project_config.py::test_project_config_trust_anchor_allows_parent_target`, and
   `tests/test_project_config.py::test_project_config_trust_anchor_follows_target_symlink`
 - `[SB-CLI-4]` post-parse JSON and closed vocabulary:
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_error_classifier_uses_cause_with_database_precedence`,
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_error_inventory_and_public_paths`,
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_oversized_message_is_invalid_argument`,
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_non_utf8_stdin_is_invalid_argument`,
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_caller_path_failures_are_invalid_arguments`,
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_relative_containment_rejection_is_invalid_argument`,
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_post_parse_global_errors_preserve_json`,
   `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_emit_error_codes_are_closed_at_callsites`,
-  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_unknown_internal_error_code_fails_loudly`
+  `tests/test_cli_contract_sb_cli.py::test_sb_cli_4_unknown_internal_error_code_fails_loudly`,
+  `tests/test_cli_main.py::test_pre_dispatch_failures_use_cause_classifier_json`,
+  `tests/test_cli_main.py::test_resolution_invalid_config_keeps_outer_plain_text_boundary`, and
+  `tests/test_cli_main.py::test_resolution_keyboard_interrupt_keeps_outer_interrupt_boundary`
 - `[SB-CLI-4]` JSON identity representation:
   `tests/test_json_message_id_contract.py`,
   `tests/test_cli_write_output.py::test_write_json_prints_timestamp_only`,

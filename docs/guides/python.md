@@ -894,6 +894,18 @@ rc = cmd_read(db, "jobs")  # prints the message, returns 0 (or 2 if empty)
 cmd_list(db)  # prints queue names, returns 0
 ```
 
+The five streaming command functions (`cmd_read`, `cmd_peek`, `cmd_move`,
+`cmd_dump`, and `cmd_watch`) treat a closed stdout consumer as a clean stop and
+return `0`. Every other output-producing command function returns `1` with a
+plain or JSON error diagnostic when result delivery fails. `cmd_write` and
+`cmd_rename` may have committed before that failure; inspect state before a
+retry. The internal closed-pipe signal never escapes this public layer.
+
+Where a command accepts `quiet`, it suppresses only its owned human
+commentary. It does not install a blanket `RuntimeWarning` filter. Plain
+message output warns once per invocation for embedded newlines; JSON message
+records do not warn.
+
 Process-signal translation belongs to the CLI wrapper, not ordinary direct
 `cmd_*` calls. The wrapper returns `130` when an unhandled
 `KeyboardInterrupt` reaches it; `cmd_watch` retains its own normal-stop

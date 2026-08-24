@@ -99,11 +99,17 @@ Normative: `docs/specs/10-cli.md` [SB-CLI-1]–[SB-CLI-4].
   `130`; completed effects are not rolled back.
 - Prefer **`--json`** for any automation (bodies may contain newlines and
   shell metacharacters).
+- Loud plain message output warns once when an emitted body contains an
+  embedded newline. `--quiet` suppresses this owned commentary, not payload,
+  errors, or unrelated warnings; JSON message output never warns.
 - **Global options before the command:**  
   `broker -f /path/to.db read tasks`  
   not `broker read tasks -f ...`.
 - Closed downstream pipes on streaming commands: clean shutdown (do not keep
   claiming forever) — `[SB-DELIVERY-7]`.
+- Closed downstream pipes on finite stdout output: error `1`, never an
+  interpreter-specific exit. If a write or rename already committed, inspect
+  state before retrying.
 
 ## Delivery (use-level)
 

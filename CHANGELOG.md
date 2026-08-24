@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Structured CLI errors now classify established caller-input causes as
+  `INVALID_ARGUMENT` regardless of resolution, preparation, or dispatch
+  phase. Exact message IDs and timestamps keep their specialized codes;
+  database, access, generic `ValueError`, and unknown failures remain `ERROR`.
+- Global `--quiet` now suppresses the owned plain-message newline warning
+  across read, peek, move, and watch output without hiding unrelated runtime
+  warnings. Warning suppression is invocation-local for concurrent callers.
+
+### Fixed
+
+- Finite CLI and direct command-layer output now handles a closed stdout
+  consumer with controlled exit `1` instead of leaking interpreter exit `120`
+  and final-flush noise. Streaming commands retain clean stop `0`; completed
+  write and rename mutations are reported as durable-but-undelivered results.
+- Explicit SQLite targets now validate their immediate parent directory.
+  Missing selected parents fail as `INVALID_ARGUMENT` instead of reaching a
+  later backend open or being implicitly created.
+
 ## [7.4.0] - 2026-08-24
 
 ### Added

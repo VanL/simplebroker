@@ -19,7 +19,13 @@ from ._constants import (
     resolve_isolated_config,
     snapshot_config,
 )
-from ._exceptions import DatabaseError, InvalidConfigError
+from ._exceptions import (
+    DatabaseError,
+    InvalidConfigError,
+    MessageError,
+    QueueNameError,
+    _ArgumentValidationError,
+)
 from ._paths import (
     _find_project_database,
     _resolve_symlinks_safely,
@@ -48,6 +54,15 @@ class ArgumentParserError(Exception):
 
 class CustomArgumentParser(argparse.ArgumentParser):
     """Custom ArgumentParser that doesn't exit on error."""
+
+    def _print_message(self, message: str, file: Any = None) -> None:
+        """Route argparse stdout through the command-layer delivery seam."""
+        if not message:
+            return
+        if file is None or file is sys.stdout:
+            commands._write_stdout(message, flush=True)
+            return
+        super()._print_message(message, file)
 
     def error(self, message: str) -> NoReturn:
         raise ArgumentParserError(message)
@@ -85,6 +100,36 @@ def _json_output_requested(
     """Return whether the parsed command explicitly requested JSON output."""
 
     return status_json_output or bool(getattr(args, "json", False))
+
+
+def _classify_cli_error(error: BaseException) -> commands._JSONErrorCode:
+    """Classify a post-parse failure by cause, never by pipeline phase."""
+    if isinstance(error, DatabaseError):
+        return "ERROR"
+    if isinstance(
+        error,
+        (ArgumentParserError, QueueNameError, MessageError, _ArgumentValidationError),
+    ):
+        return "INVALID_ARGUMENT"
+    return "ERROR"
+
+
+def _emit_classified_cli_error(
+    error: BaseException,
+    args: argparse.Namespace,
+    *,
+    status_json_output: bool,
+) -> int:
+    """Emit one post-parse error object using the cause classifier."""
+    commands._emit_error(
+        error,
+        code=_classify_cli_error(error),
+        json_output=_json_output_requested(
+            args,
+            status_json_output=status_json_output,
+        ),
+    )
+    return EXIT_ERROR
 
 
 def _read_peek_filters(
@@ -933,7 +978,7 @@ def _resolve_database_path(
                 resolved_working_dir = args.dir.resolve()
 
                 if resolved_file_dir != resolved_working_dir:
-                    raise ValueError(
+                    raise _ArgumentValidationError(
                         f"Inconsistent paths: absolute database path '{file_path}' "
                         f"conflicts with directory '{args.dir}'"
                     )
@@ -957,12 +1002,13 @@ def _resolve_database_path(
     if config["BROKER_PROJECT_SCOPE"] and args.command != "init":
         # Use resolved working directory, not Path.cwd(), to account for -d flag
         search_start_dir = working_dir
+        _validate_working_directory(search_start_dir)
         found_path = _find_project_database(db_filename, search_start_dir)
         if found_path:
             return found_path, True
         else:
             # Project scoping enabled but no database found - error condition
-            raise ValueError(
+            raise _ArgumentValidationError(
                 f"BROKER_PROJECT_SCOPE is enabled but no project database '{db_filename}' "
                 f"was found in '{search_start_dir}' or any parent directory. "
                 f"Run 'broker init' in the project root directory to create one."
@@ -1003,6 +1049,8 @@ def _resolve_target(
     args: argparse.Namespace, *, config: Mapping[str, Any]
 ) -> BrokerTarget:
     """Resolve the backend target for the current CLI invocation."""
+    if getattr(args, "_dir_explicitly_provided", False) and not args.cleanup:
+        _validate_working_directory(Path(args.dir).expanduser())
     root = Path(args.dir).expanduser().resolve()
 
     if args.command != "init" and getattr(args, "_file_explicitly_provided", False):
@@ -1134,6 +1182,14 @@ def _require_legacy_sqlite_path(resolved_target: BrokerTarget) -> Path:
     return db_path
 
 
+def _validate_cli_path_components(value: str, label: str) -> None:
+    """Retype only CLI-owned unsafe path input as an argument failure."""
+    try:
+        _validate_safe_path_components(value, label)
+    except ValueError as error:
+        raise _ArgumentValidationError(str(error)) from error
+
+
 def _run_cleanup(
     args: argparse.Namespace,
     resolved_target: BrokerTarget,
@@ -1145,11 +1201,11 @@ def _run_cleanup(
     try:
         if resolved_target.legacy_sqlite_path_mode:
             db_path = _require_legacy_sqlite_path(resolved_target)
-            _validate_safe_path_components(
+            _validate_cli_path_components(
                 str(args.dir), "Directory argument (-d/--dir)"
             )
             if not resolved_target.used_project_scope:
-                _validate_safe_path_components(args.file, "Database filename")
+                _validate_cli_path_components(args.file, "Database filename")
 
             file_existed = resolved_target.plugin.cleanup_target(
                 str(db_path),
@@ -1177,15 +1233,11 @@ def _run_cleanup(
                     )
         return EXIT_SUCCESS
     except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        commands._emit_error(
+        return _emit_classified_cli_error(
             error,
-            code="ERROR",
-            json_output=_json_output_requested(
-                args,
-                status_json_output=status_json_output,
-            ),
+            args,
+            status_json_output=status_json_output,
         )
-        return EXIT_ERROR
 
 
 def _run_vacuum(
@@ -1214,15 +1266,11 @@ def _run_vacuum(
             config=config,
         )
     except Exception as error:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        commands._emit_error(
+        return _emit_classified_cli_error(
             error,
-            code="ERROR",
-            json_output=_json_output_requested(
-                args,
-                status_json_output=status_json_output,
-            ),
+            args,
+            status_json_output=status_json_output,
         )
-        return EXIT_ERROR
 
 
 def _run_target_action(
@@ -1277,7 +1325,7 @@ def _validate_legacy_sqlite_target(
     used_project_scope = resolved_target.used_project_scope
     containment_required = not (Path(args.file).is_absolute() or used_project_scope)
 
-    _validate_safe_path_components(str(working_dir), "Directory argument (-d/--dir)")
+    _validate_cli_path_components(str(working_dir), "Directory argument (-d/--dir)")
     _validate_working_directory(working_dir)
 
     if containment_required:
@@ -1293,7 +1341,7 @@ def _validate_legacy_sqlite_target(
         else:
             db_path = working_dir / args.file
     if not used_project_scope:
-        _validate_safe_path_components(args.file, "Database filename")
+        _validate_cli_path_components(args.file, "Database filename")
 
     db_path = _resolve_legacy_sqlite_path(
         db_path,
@@ -1301,7 +1349,7 @@ def _validate_legacy_sqlite_target(
         containment_required=containment_required,
     )
 
-    _validate_database_parent_directory(db_path.parent)
+    _validate_database_parent_directory(db_path)
     if db_path.exists() and args.command in {
         "read",
         "peek",
@@ -1614,53 +1662,12 @@ def _read_invocation(
         return EXIT_ERROR
     except SystemExit as error:
         return _system_exit_code(error)
+    except commands._StdoutClosed:
+        return commands._stdout_delivery_error(json_output=False)
 
     if parsed is None:
         return EXIT_SUCCESS
     return parsed
-
-
-def _resolve_cli_target(
-    args: argparse.Namespace,
-    *,
-    status_json_output: bool,
-    config: Mapping[str, Any],
-) -> BrokerTarget | int:
-    """Resolve the invocation target or emit its user-facing error."""
-    try:
-        return _resolve_target(args, config=config)
-    except ValueError as error:
-        commands._emit_error(
-            error,
-            code="INVALID_ARGUMENT",
-            json_output=_json_output_requested(
-                args,
-                status_json_output=status_json_output,
-            ),
-        )
-        return EXIT_ERROR
-
-
-def _prepare_command_target(
-    args: argparse.Namespace,
-    resolved_target: BrokerTarget,
-    *,
-    status_json_output: bool,
-    config: Mapping[str, Any],
-) -> BrokerTarget | int:
-    """Return a prepared command target or its emitted error code."""
-    try:
-        return _validate_legacy_sqlite_target(args, resolved_target, config=config)
-    except (ValueError, DatabaseError) as error:
-        commands._emit_error(
-            error,
-            code="ERROR",
-            json_output=_json_output_requested(
-                args,
-                status_json_output=status_json_output,
-            ),
-        )
-        return EXIT_ERROR
 
 
 def _run_pre_target_action(
@@ -1679,28 +1686,17 @@ def _run_pre_target_action(
     if global_error is not None:
         return global_error
     if args.version:
-        print(f"{PROG_NAME} {VERSION}")
-        return EXIT_SUCCESS
+        try:
+            commands._print_stdout(f"{PROG_NAME} {VERSION}")
+            return EXIT_SUCCESS
+        except commands._StdoutClosed:
+            return commands._stdout_delivery_error(
+                json_output=_json_output_requested(
+                    args,
+                    status_json_output=status_json_output,
+                )
+            )
     return None
-
-
-def _prepare_dispatch(
-    args: argparse.Namespace,
-    resolved_target: BrokerTarget,
-    *,
-    status_json_output: bool,
-    config: Mapping[str, Any],
-) -> BrokerTarget | int:
-    """Return the prepared target after command-local validation."""
-    early_error = _validate_early_command_args(args)
-    if early_error is not None:
-        return early_error
-    return _prepare_command_target(
-        args,
-        resolved_target,
-        status_json_output=status_json_output,
-        config=config,
-    )
 
 
 def _run_preparation_exempt_target_action(
@@ -1738,80 +1734,58 @@ def _main(*, config: ResolvedConfig) -> int:
         return invocation
     args, status_json_output = invocation
 
-    pre_target_result = _run_pre_target_action(
-        args,
-        status_json_output=status_json_output,
-    )
-    if pre_target_result is not None:
-        return pre_target_result
-
-    target_result = _resolve_cli_target(
-        args,
-        status_json_output=status_json_output,
-        config=config,
-    )
-    if isinstance(target_result, int):
-        return target_result
-    resolved_target = target_result
-
-    action_result = _run_preparation_exempt_target_action(
-        args,
-        resolved_target,
-        parser,
-        status_json_output=status_json_output,
-        config=config,
-    )
-    if action_result is not None:
-        return action_result
-
-    preparation_result = _prepare_dispatch(
-        args,
-        resolved_target,
-        status_json_output=status_json_output,
-        config=config,
-    )
-    if isinstance(preparation_result, int):
-        return preparation_result
-    resolved_target = preparation_result
-
-    action_result = _run_target_action(
-        args,
-        resolved_target,
-        parser,
-        status_json_output=status_json_output,
-        config=config,
-    )
-    if action_result is not None:
-        return action_result
-
     try:
+        pre_target_result = _run_pre_target_action(
+            args,
+            status_json_output=status_json_output,
+        )
+        if pre_target_result is not None:
+            return pre_target_result
+
+        resolved_target = _resolve_target(args, config=config)
+
+        action_result = _run_preparation_exempt_target_action(
+            args,
+            resolved_target,
+            parser,
+            status_json_output=status_json_output,
+            config=config,
+        )
+        if action_result is not None:
+            return action_result
+
+        early_error = _validate_early_command_args(args)
+        if early_error is not None:
+            return early_error
+        resolved_target = _validate_legacy_sqlite_target(
+            args,
+            resolved_target,
+            config=config,
+        )
+
+        action_result = _run_target_action(
+            args,
+            resolved_target,
+            parser,
+            status_json_output=status_json_output,
+            config=config,
+        )
+        if action_result is not None:
+            return action_result
+
         _validate_command_target(args, resolved_target, config=config)
-        return _dispatch_command(args, resolved_target, parser, config=config)
+        with commands._message_newline_warning_policy(quiet=args.quiet):
+            return _dispatch_command(args, resolved_target, parser, config=config)
+    except commands._StdoutClosed:
+        raise
     except InvalidConfigError:
         raise
-    except (ValueError, DatabaseError) as e:
-        commands._emit_error(
-            e,
-            code="ERROR",
-            json_output=_json_output_requested(
-                args,
-                status_json_output=status_json_output,
-            ),
-        )
-        return EXIT_ERROR
     except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-003] exception
-        code: commands._JSONErrorCode = (
-            "INVALID_ARGUMENT" if isinstance(e, ArgumentParserError) else "ERROR"
-        )
-        commands._emit_error(
+        return _emit_classified_cli_error(
             e,
-            code=code,
-            json_output=_json_output_requested(
-                args,
-                status_json_output=status_json_output,
-            ),
+            args,
+            status_json_output=status_json_output,
         )
-        return EXIT_ERROR
 
 
 def main(*, config: Mapping[str, Any] | None = None) -> int:
@@ -1821,6 +1795,8 @@ def main(*, config: Mapping[str, Any] | None = None) -> int:
     except InvalidConfigError as error:
         print(f"{PROG_NAME}: {error}", file=sys.stderr)
         return EXIT_ERROR
+    except commands._StdoutClosed:
+        return commands._stdout_delivery_error(json_output=False)
     except KeyboardInterrupt:
         print(f"\n{PROG_NAME}: interrupted", file=sys.stderr)
         return EXIT_INTERRUPTED

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import errno
+import io
 import json
 import types
 from collections.abc import Iterator
@@ -13,9 +14,11 @@ import pytest
 
 from simplebroker import commands
 from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
+from simplebroker._exceptions import MessageError
 from simplebroker.commands import (
     _get_message_content,
     _process_queue_fetch,
+    _read_from_stdin,
     _resolve_timestamp_filters,
 )
 
@@ -77,12 +80,28 @@ class TestGetMessageContent:
             commands.sys, "stdin", types.SimpleNamespace(isatty=lambda: True)
         )
 
-        with pytest.raises(ValueError, match="message is required"):
+        with pytest.raises(MessageError, match="message is required"):
             _get_message_content(None)
 
     def test_uses_configured_message_size_limit(self) -> None:
-        with pytest.raises(ValueError, match="maximum size of 3 bytes"):
+        with pytest.raises(MessageError, match="maximum size of 3 bytes"):
             _get_message_content("toolong", config={"BROKER_MAX_MESSAGE_SIZE": 3})
+
+    def test_retypes_non_utf8_stdin_as_message_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            commands.sys,
+            "stdin",
+            types.SimpleNamespace(buffer=io.BytesIO(b"\xff")),
+        )
+
+        with pytest.raises(MessageError, match="not valid UTF-8"):
+            _read_from_stdin(10)
+
+    def test_retypes_nonencodable_direct_message_as_message_error(self) -> None:
+        with pytest.raises(MessageError, match="not valid UTF-8"):
+            _get_message_content("\ud800")
 
 
 class TestProcessQueueFetch:
@@ -352,7 +371,7 @@ class TestProcessQueueFetch:
         def failing_warning(*_args, **_kwargs):
             raise OSError(errno.EPIPE, "stderr warning failed")
 
-        monkeypatch.setattr(commands.warnings, "warn", failing_warning)
+        monkeypatch.setattr(commands.warnings, "warn_explicit", failing_warning)
         monkeypatch.setattr(commands, "_redirect_stdout_to_devnull", lambda: None)
 
         with pytest.raises(OSError, match="stderr warning failed"):

@@ -4,13 +4,24 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
 import pytest
 
+from simplebroker import cli
 from simplebroker._constants import EXIT_ERROR, EXIT_SUCCESS
+from simplebroker._exceptions import (
+    DatabaseError,
+    DataError,
+    MessageError,
+    QueueNameError,
+    _ArgumentValidationError,
+)
 from simplebroker.commands import (
     _JSON_ERROR_CODES,
     _JSON_ERROR_KEYS,
@@ -36,6 +47,26 @@ SB_CLI_5_EVIDENCE = {
 }
 
 
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (DatabaseError("database"), "ERROR"),
+        (DataError("dual inheritance"), "ERROR"),
+        (QueueNameError("queue"), "INVALID_ARGUMENT"),
+        (MessageError("message"), "INVALID_ARGUMENT"),
+        (_ArgumentValidationError("argument"), "INVALID_ARGUMENT"),
+        (cli.ArgumentParserError("parser"), "INVALID_ARGUMENT"),
+        (ValueError("generic"), "ERROR"),
+        (RuntimeError("unknown"), "ERROR"),
+    ],
+)
+def test_sb_cli_4_error_classifier_uses_cause_with_database_precedence(
+    error: BaseException,
+    expected: str,
+) -> None:
+    assert cli._classify_cli_error(error) == expected
+
+
 def _emit_error_code_nodes(tree: ast.AST) -> list[ast.expr]:
     calls = [
         node
@@ -54,28 +85,6 @@ def _emit_error_code_nodes(tree: ast.AST) -> list[ast.expr]:
     ]
     assert len(code_nodes) == len(calls)
     return code_nodes
-
-
-def _conditional_string_assignments(tree: ast.AST) -> dict[str, set[str]]:
-    result: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.AnnAssign):
-            continue
-        if not isinstance(node.target, ast.Name) or not isinstance(
-            node.value, ast.IfExp
-        ):
-            continue
-        body = node.value.body
-        fallback = node.value.orelse
-        if not (
-            isinstance(body, ast.Constant)
-            and isinstance(body.value, str)
-            and isinstance(fallback, ast.Constant)
-            and isinstance(fallback.value, str)
-        ):
-            continue
-        result[node.target.id] = {body.value, fallback.value}
-    return result
 
 
 def test_sb_cli_1_closed_pipe_command_inventory_is_exact() -> None:
@@ -235,6 +244,10 @@ def test_sb_cli_4_error_inventory_and_public_paths(workdir: Path) -> None:
     invalid_db.write_text("not sqlite", encoding="utf-8")
     cases = (
         (("move", "same", "same", "--json"), "INVALID_ARGUMENT"),
+        (("write", "", "payload", "--json"), "INVALID_ARGUMENT"),
+        (("stats", "@", "--json"), "INVALID_ARGUMENT"),
+        (("rename", "@missing", "new", "--json"), "INVALID_ARGUMENT"),
+        (("list", "--prefix=.bad", "--json"), "INVALID_ARGUMENT"),
         (("peek", "q", "--json", "-m", "bad"), "INVALID_MESSAGE_ID"),
         (("read", "q", "--json", "--after", "bad"), "INVALID_TIMESTAMP"),
         (("-f", str(invalid_db), "list", "--json"), "ERROR"),
@@ -278,29 +291,148 @@ def test_sb_cli_4_post_parse_global_errors_preserve_json(
     assert not (workdir / "custom.db").exists()
 
 
+def test_sb_cli_4_oversized_message_is_invalid_argument(workdir: Path) -> None:
+    rc, out, err = run_cli(
+        "write",
+        "q",
+        "toolong",
+        "--json",
+        cwd=workdir,
+        env={"BROKER_MAX_MESSAGE_SIZE": "3"},
+    )
+
+    assert rc == EXIT_ERROR
+    assert out == ""
+    payload = json.loads(err)
+    assert tuple(payload) == _JSON_ERROR_KEYS
+    assert payload["error"] == "INVALID_ARGUMENT"
+    assert payload["retryable"] is False
+    assert "maximum size" in payload["message"]
+    assert "Traceback" not in err
+
+
+def test_sb_cli_4_non_utf8_stdin_is_invalid_argument(workdir: Path) -> None:
+    env = os.environ.copy()
+    root = SPEC.parents[2]
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(root), env.get("PYTHONPATH", "")])
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "simplebroker.cli",
+            "write",
+            "q",
+            "-",
+            "--json",
+        ],
+        cwd=workdir,
+        env=env,
+        input=b"\xff",
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    payload = _assert_json_error(
+        (
+            completed.returncode,
+            completed.stdout.decode("utf-8", errors="replace").strip(),
+            completed.stderr.decode("utf-8", errors="replace").strip(),
+        ),
+        "INVALID_ARGUMENT",
+    )
+    assert "not valid UTF-8" in str(payload["message"])
+
+
+def _assert_json_error(
+    result: tuple[int, str, str],
+    expected_code: str,
+) -> dict[str, object]:
+    rc, out, err = result
+    assert rc == EXIT_ERROR
+    assert out == ""
+    payload = json.loads(err)
+    assert tuple(payload) == _JSON_ERROR_KEYS
+    assert payload["error"] == expected_code
+    assert payload["retryable"] is False
+    assert "Traceback" not in err
+    return cast(dict[str, object], payload)
+
+
+def test_sb_cli_4_caller_path_failures_are_invalid_arguments(workdir: Path) -> None:
+    selected = workdir / "selected"
+    selected.mkdir()
+    wrong_kind = workdir / "not-a-directory"
+    wrong_kind.write_text("file", encoding="utf-8")
+    missing_directory = workdir / "missing-directory"
+    missing_parent_target = workdir / "missing-parent" / "broker.db"
+    absolute_target = workdir / "absolute.db"
+
+    cases = [
+        (("-f", str(absolute_target), "-d", str(selected), "list", "--json"), {}),
+        (("-f", "../outside.db", "list", "--json"), {}),
+        (("-d", str(missing_directory), "list", "--json"), {}),
+        (("-d", str(wrong_kind), "list", "--json"), {}),
+        (("-f", str(missing_parent_target), "list", "--json"), {}),
+        (("list", "--json"), {"BROKER_PROJECT_SCOPE": "1"}),
+        (
+            ("-d", str(missing_directory), "list", "--json"),
+            {"BROKER_PROJECT_SCOPE": "1"},
+        ),
+    ]
+
+    for args, env in cases:
+        _assert_json_error(
+            run_cli(*args, cwd=workdir, env=env),
+            "INVALID_ARGUMENT",
+        )
+
+
+@pytest.mark.skipif(not hasattr(Path, "symlink_to"), reason="symlinks unavailable")
+def test_sb_cli_4_relative_containment_rejection_is_invalid_argument(
+    workdir: Path,
+) -> None:
+    external = workdir.parent / f"{workdir.name}-outside.db"
+    external.write_text("outside", encoding="utf-8")
+    link = workdir / "linked.db"
+    try:
+        link.symlink_to(external)
+    except (OSError, NotImplementedError):
+        pytest.skip("Cannot create symlinks on this system")
+
+    payload = _assert_json_error(
+        run_cli("-f", link.name, "list", "--json", cwd=workdir),
+        "INVALID_ARGUMENT",
+    )
+
+    assert "within the working directory" in str(payload["message"])
+
+
 def test_sb_cli_4_emit_error_codes_are_closed_at_callsites() -> None:
     literal_codes: set[str] = set()
-    conditional_codes: set[str] = set()
+    classifier_calls = 0
     root = SPEC.parents[2]
 
     for relative_path in ("simplebroker/commands.py", "simplebroker/cli.py"):
         tree = ast.parse((root / relative_path).read_text(encoding="utf-8"))
-        named_code_assignments = _conditional_string_assignments(tree)
         for code_keyword in _emit_error_code_nodes(tree):
             if isinstance(code_keyword, ast.Constant) and isinstance(
                 code_keyword.value, str
             ):
                 literal_codes.add(code_keyword.value)
                 continue
-            if isinstance(code_keyword, ast.Name):
+            if isinstance(code_keyword, ast.Call):
                 assert relative_path == "simplebroker/cli.py"
-                assert code_keyword.id == "code"
-                conditional_codes.update(named_code_assignments[code_keyword.id])
+                assert isinstance(code_keyword.func, ast.Name)
+                assert code_keyword.func.id == "_classify_cli_error"
+                classifier_calls += 1
                 continue
             pytest.fail(f"unreviewed _emit_error code expression in {relative_path}")
 
     assert literal_codes <= _JSON_ERROR_CODES
-    assert conditional_codes == {"INVALID_ARGUMENT", "ERROR"}
+    assert classifier_calls == 1
 
 
 def test_sb_cli_4_unknown_internal_error_code_fails_loudly() -> None:

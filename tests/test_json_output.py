@@ -2,10 +2,14 @@
 
 import json
 import sys
+import threading
 import time
+import types
+import warnings
 
 import pytest
 
+from simplebroker import commands
 from simplebroker.cli import main
 
 from .conftest import run_cli
@@ -110,6 +114,225 @@ def test_peek_json_multiple_messages(workdir):
     assert out.strip() == expected_output
     # Also verify the warning was issued
     assert "newline characters" in err
+
+
+def test_quiet_read_all_suppresses_newline_commentary(workdir):
+    run_cli("write", "quiet_newline", "line1\nline2", cwd=workdir)
+
+    rc, out, err = run_cli("-q", "read", "quiet_newline", "--all", cwd=workdir)
+
+    assert rc == 0
+    assert out == "line1\nline2"
+    assert err == ""
+
+
+def test_single_plain_read_warns_once_for_embedded_newline(workdir):
+    run_cli("write", "single_newline", "line1\nline2", cwd=workdir)
+
+    rc, out, err = run_cli("read", "single_newline", cwd=workdir)
+
+    assert rc == 0
+    assert out == "line1\nline2"
+    assert err.count("Message contains newline characters") == 1
+
+
+def test_repeated_direct_invocations_each_emit_newline_warning(workdir):
+    db_path = workdir / "broker.db"
+    assert commands.cmd_write(str(db_path), "direct_warning", "line1\nline2") == 0
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("default", commands._MessageNewlineWarning)
+        assert commands.cmd_peek(str(db_path), "direct_warning") == 0
+        assert commands.cmd_peek(str(db_path), "direct_warning") == 0
+
+    owned = [
+        warning
+        for warning in caught
+        if warning.category is commands._MessageNewlineWarning
+    ]
+    assert len(owned) == 2
+
+
+def test_repeated_in_process_cli_invocations_each_emit_newline_warning(
+    workdir,
+    monkeypatch,
+):
+    monkeypatch.chdir(workdir)
+    dummy_sys = types.SimpleNamespace(
+        argv=["broker", "write", "cli_warning", "line1\nline2"],
+        stderr=sys.stderr,
+        stdout=sys.stdout,
+    )
+    monkeypatch.setattr("simplebroker.cli.sys", dummy_sys)
+    assert main() == 0
+    dummy_sys.argv = ["broker", "peek", "cli_warning"]
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("default", commands._MessageNewlineWarning)
+        assert main() == 0
+        assert main() == 0
+
+    owned = [
+        warning
+        for warning in caught
+        if warning.category is commands._MessageNewlineWarning
+    ]
+    assert len(owned) == 2
+
+
+@pytest.mark.parametrize("command", ["read", "peek"])
+@pytest.mark.parametrize("selector", ["single", "all", "message", "after"])
+@pytest.mark.parametrize("timestamps", [False, True])
+def test_plain_fetch_newline_warning_covers_selectors_and_timestamps(
+    workdir,
+    command,
+    selector,
+    timestamps,
+):
+    queue = f"warning_{command}_{selector}_{timestamps}"
+    args = [command, queue]
+    if selector == "after":
+        rc, anchor, err = run_cli("write", queue, "anchor", "--timestamps", cwd=workdir)
+        assert rc == 0, err
+        run_cli("write", queue, "line1\nline2", cwd=workdir)
+        args.extend(["--after", anchor])
+    else:
+        rc, message_id, err = run_cli(
+            "write", queue, "line1\nline2", "--timestamps", cwd=workdir
+        )
+        assert rc == 0, err
+        if selector == "all":
+            run_cli("write", queue, "again\nnext", cwd=workdir)
+            args.append("--all")
+        elif selector == "message":
+            args.extend(["--message", message_id])
+    if timestamps:
+        args.append("--timestamps")
+
+    rc, _out, err = run_cli(*args, cwd=workdir)
+
+    assert rc == 0
+    assert err.count("Message contains newline characters") == 1
+
+
+@pytest.mark.parametrize("selector", ["single", "all", "message", "after"])
+@pytest.mark.parametrize("timestamps", [False, True])
+def test_plain_move_newline_warning_covers_selectors_and_timestamps(
+    workdir,
+    selector,
+    timestamps,
+):
+    source = f"move_warning_{selector}_{timestamps}"
+    destination = f"move_warning_dest_{selector}_{timestamps}"
+    args = ["move", source, destination]
+    if selector == "after":
+        rc, anchor, err = run_cli(
+            "write", source, "anchor", "--timestamps", cwd=workdir
+        )
+        assert rc == 0, err
+        run_cli("write", source, "line1\nline2", cwd=workdir)
+        args.extend(["--after", anchor])
+    else:
+        rc, message_id, err = run_cli(
+            "write", source, "line1\nline2", "--timestamps", cwd=workdir
+        )
+        assert rc == 0, err
+        if selector == "all":
+            run_cli("write", source, "again\nnext", cwd=workdir)
+            args.append("--all")
+        elif selector == "message":
+            args.extend(["--message", message_id])
+    if timestamps:
+        args.append("--timestamps")
+
+    rc, _out, err = run_cli(*args, cwd=workdir)
+
+    assert rc == 0
+    assert err.count("Message contains newline characters") == 1
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("read", "json_warning", "--json"),
+        ("peek", "json_warning", "--json"),
+        ("move", "json_warning", "json_warning_dest", "--json"),
+    ],
+)
+def test_json_message_output_never_warns_about_newlines(workdir, args):
+    run_cli("write", "json_warning", "line1\nline2", cwd=workdir)
+
+    rc, _out, err = run_cli(*args, cwd=workdir)
+
+    assert rc == 0
+    assert "Message contains newline characters" not in err
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("read", "quiet_warning", "--all"),
+        ("peek", "quiet_warning", "--all"),
+        ("move", "quiet_warning", "quiet_warning_dest", "--all"),
+    ],
+)
+def test_quiet_suppresses_owned_newline_warning_for_message_commands(
+    workdir,
+    args,
+):
+    run_cli("write", "quiet_warning", "line1\nline2", cwd=workdir)
+
+    rc, _out, err = run_cli("--quiet", *args, cwd=workdir)
+
+    assert rc == 0
+    assert err == ""
+
+
+def test_quiet_newline_policy_does_not_hide_concurrent_loud_warning(
+    monkeypatch,
+):
+    ready = threading.Barrier(2)
+    loud_finished = threading.Barrier(2)
+    emitted = []
+
+    monkeypatch.setattr(
+        commands.warnings,
+        "warn_explicit",
+        lambda message, category, **_kwargs: emitted.append((message, category)),
+    )
+
+    def quiet_invocation():
+        with commands._message_newline_warning_policy(quiet=True):
+            ready.wait(timeout=5)
+            commands._warn_message_newlines("quiet\nmessage", False)
+            loud_finished.wait(timeout=5)
+
+    thread = threading.Thread(target=quiet_invocation)
+    thread.start()
+    ready.wait(timeout=5)
+    commands._warn_message_newlines("loud\nmessage", False)
+    loud_finished.wait(timeout=5)
+    thread.join(timeout=5)
+
+    assert not thread.is_alive()
+    assert emitted == [
+        (
+            (
+                "Message contains newline characters which may break shell pipelines. "
+                "Consider using --json for safe handling of special characters."
+            ),
+            commands._MessageNewlineWarning,
+        )
+    ]
+
+
+@pytest.mark.parametrize("command", ["read", "peek"])
+def test_empty_plain_selection_does_not_warn(workdir, command):
+    rc, out, err = run_cli(command, "empty_warning", "--all", cwd=workdir)
+
+    assert rc == 2
+    assert out == ""
+    assert "Message contains newline characters" not in err
 
 
 def test_json_with_special_characters(workdir):

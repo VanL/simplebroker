@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from ._constants import ALIAS_PREFIX
+from ._exceptions import _ArgumentValidationError
 
 
 def resolve_queue_operand(
@@ -38,9 +39,9 @@ def resolve_queue_operand(
 
     alias_key = name[len(ALIAS_PREFIX) :]
     if not alias_key:
-        raise ValueError("Alias name cannot be empty")
+        raise _ArgumentValidationError("Alias name cannot be empty")
 
     target = resolve_alias(alias_key)
     if target is None:
-        raise ValueError(f"Alias '{alias_key}' is not defined")
+        raise _ArgumentValidationError(f"Alias '{alias_key}' is not defined")
     return target, alias_key

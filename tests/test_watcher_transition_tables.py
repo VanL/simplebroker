@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 from pathlib import Path
@@ -748,3 +749,58 @@ def test_cmd_watch_wires_ordinary_constructor(
     assert captured["after_timestamp"] == 1705329000000000000
     assert captured["run_calls"] == 1
     assert captured["stop_calls"] == 1
+
+
+def test_cmd_watch_quiet_suppresses_owned_newline_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = str(tmp_path / "QUIET_NEWLINE_WARNING.db")
+
+    class NewlineWatcher:
+        def __init__(self, _queue_name: str, handler: Any, **_kwargs: Any) -> None:
+            self.handler = handler
+
+        def run_forever(self) -> None:
+            self.handler("line1\nline2", 1)
+            self.handler("again\nnext", 2)
+
+        def stop(self) -> None:
+            return
+
+    monkeypatch.setattr(commands_module, "QueueWatcher", NewlineWatcher)
+
+    result = cmd_watch(path, "jobs", quiet=True)
+    captured = capsys.readouterr()
+
+    assert result == 0
+    assert captured.out == "line1\nline2\nagain\nnext\n"
+    assert captured.err == ""
+
+
+def test_cmd_watch_json_newline_payload_has_no_plain_framing_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = str(tmp_path / "JSON_NEWLINE_WARNING.db")
+
+    class JsonWatcher:
+        def __init__(self, _queue_name: str, handler: Any, **_kwargs: Any) -> None:
+            self.handler = handler
+
+        def run_forever(self) -> None:
+            self.handler("line1\nline2", 1)
+
+        def stop(self) -> None:
+            return
+
+    monkeypatch.setattr(commands_module, "QueueWatcher", JsonWatcher)
+
+    result = cmd_watch(path, "jobs", json_output=True, quiet=True)
+    captured = capsys.readouterr()
+
+    assert result == 0
+    assert json.loads(captured.out)["message"] == "line1\nline2"
+    assert captured.err == ""
