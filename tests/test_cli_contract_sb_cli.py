@@ -470,7 +470,7 @@ def test_sb_cli_4_sqlite_directory_and_scope_failures_are_invalid_arguments(
     wrong_kind.write_text("file", encoding="utf-8")
     missing_directory = workdir / "missing-directory"
 
-    cases = (
+    cases: tuple[tuple[tuple[str, ...], dict[str, str]], ...] = (
         (("-d", str(missing_directory), "list", "--json"), {}),
         (("-d", str(wrong_kind), "list", "--json"), {}),
         (("list", "--json"), {"BROKER_PROJECT_SCOPE": "1"}),
