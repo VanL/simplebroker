@@ -256,6 +256,12 @@ environment; an explicit complete `ResolvedConfig` replaces it for
 watcher-local policy. The supplied Queue remains governed by its own retained
 snapshot in either explicit-config case.
 
+`PollingStrategy`'s `burst_sleep` constructor default is the canonical
+normalized default of `BROKER_BURST_SLEEP`. Direct construction does not read
+ambient configuration. `BaseWatcher` continues to pass its resolved instance
+configuration explicitly, and an explicit `burst_sleep` argument continues to
+override the constructor default.
+
 `ActivityWaiter.close()` is terminal and idempotent. The first invocation
 marks the waiter closed before backend cleanup begins. During that invocation
 it attempts every owned cleanup action that remains safe to attempt
@@ -503,7 +509,7 @@ boundary rather than in the storage layer:
 | [SB-API-3] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_connection_config.py::test_ephemeral_queue_keeps_constructor_snapshot_after_invalid_env_change`, `tests/test_connection_config.py::test_new_queue_observes_later_environment_while_existing_queue_stays_fixed`, `tests/test_connection_config.py::test_persistent_queue_keeps_snapshot_before_first_lazy_core_creation`; Queue lifecycle coverage in `tests/test_queue_api_*.py` |
 | [SB-API-4] | `tests/test_queue_typing_contract.py`; `tests/test_queue_api_additions.py::test_queue_delete_explicit_none_is_rejected_without_mutation`; `tests/test_queue_api_additions.py::test_queue_move_returns_plain_dictionary_with_typed_fields`; `tests/test_python_library_api_contract_sb_api.py` (library-shape language + matrix); delivery/id/select/bcast suites for meaning |
 | [SB-API-5] | `tests/test_queue_typing_contract.py`; `tests/test_delivery_contract_sb_delivery.py`; `tests/test_connection_config.py::test_generator_override_inherits_core_snapshot_without_ambient_reread`, `tests/test_connection_config.py::test_generator_reads_ordinary_override_on_first_iteration`; Queue generator / `*_many` suites |
-| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites |
+| [SB-API-6] | `tests/test_python_library_api_contract_sb_api.py::test_api_activity_waiter_terminal_close_contract`; `tests/test_watcher.py::TestPollingStrategy::test_default_burst_sleep_uses_ambient_free_canonical_config_default`; `tests/test_connection_config.py::test_watcher_instance_config_controls_live_polling`; `tests/test_connection_config.py::test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient`; `extensions/simplebroker_pg/tests/test_pg_activity_waiter_lifecycle.py`; `extensions/simplebroker_redis/tests/test_redis_activity_waiter_lifecycle.py`; PostgreSQL notify and Redis integration replacement tests; watcher suites |
 | [SB-API-7] | `tests/test_python_library_api_contract_sb_api.py`; sidecar suites under tests / examples |
 | [SB-API-8] | `tests/test_persistence_io_contract_sb_io.py`; `tests/test_dump_load.py`, including `test_load_samples_environment_for_each_invocation` |
 | [SB-API-9] | `tests/test_python_library_api_contract_sb_api.py`; `tests/test_ext_imports.py`; `tests/test_invalid_config_lifecycle.py::test_invalid_environment_does_not_break_package_import`, `tests/test_invalid_config_lifecycle.py::test_sensitive_config_failure_redacts_before_formatting`, `tests/test_invalid_config_lifecycle.py::test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers` |
@@ -513,6 +519,7 @@ boundary rather than in the storage layer:
 
 ## Related Plans
 
+- `docs/plans/2026-08-23-polling-strategy-burst-sleep-default-plan.md`
 - `docs/plans/2026-08-23-maintainability-and-isolation-remediation-plan.md`
 - `docs/plans/2026-08-23-configuration-snapshot-consistency-plan.md`
 - `docs/plans/2026-08-23-public-api-and-cli-review-remediation-plan.md`

@@ -1456,6 +1456,36 @@ class TestQueueWatcher(WatcherTestBase):
 class TestPollingStrategy:
     """Test polling strategy behavior."""
 
+    def test_default_burst_sleep_uses_ambient_free_canonical_config_default(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("BROKER_BURST_SLEEP", "0.5")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                """
+import inspect
+import threading
+
+from simplebroker import resolve_isolated_config
+from simplebroker.ext import PollingStrategy
+
+default = inspect.signature(PollingStrategy).parameters["burst_sleep"].default
+assert default == resolve_isolated_config({})["BROKER_BURST_SLEEP"]
+assert type(default) is float
+assert PollingStrategy(threading.Event())._burst_sleep == default
+assert PollingStrategy(threading.Event(), burst_sleep=0.25)._burst_sleep == 0.25
+""",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
+
     def test_detach_activity_waiter_returns_without_closing(self):
         from simplebroker.watcher import PollingStrategy
 

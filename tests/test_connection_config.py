@@ -304,11 +304,13 @@ def test_watcher_instance_config_controls_live_polling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     delays: list[float] = []
+    burst_sleeps: list[float] = []
     original_get_delay = PollingStrategy._get_delay
 
     def recording_get_delay(strategy: PollingStrategy) -> float:
         delay = original_get_delay(strategy)
         delays.append(delay)
+        burst_sleeps.append(strategy._burst_sleep)
         return delay
 
     monkeypatch.setattr(PollingStrategy, "_get_delay", recording_get_delay)
@@ -335,6 +337,7 @@ def test_watcher_instance_config_controls_live_polling(
 
     assert delays[:3] == [0, 0, 0]
     assert delays[3] > 0
+    assert burst_sleeps and set(burst_sleeps) == {0.0001}
 
 
 def test_watcher_environment_config_controls_live_polling(

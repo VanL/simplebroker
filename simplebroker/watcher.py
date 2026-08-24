@@ -78,6 +78,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from ._constants import (
     MAX_TOTAL_RETRY_TIME,
     _overlay_config,
+    resolve_isolated_config,
     snapshot_config,
 )
 from ._exceptions import OperationalError, StopException
@@ -380,7 +381,6 @@ class BaseWatcher(ABC):
                         stop_event=self._stop_event,
                         initial_checks=1000,
                         max_interval=0.001,
-                        burst_sleep=0.00001,
                         jitter_factor=0.15,
                     )
 
@@ -388,7 +388,7 @@ class BaseWatcher(ABC):
             PollingStrategy: Configured with retained settings for:
                 - BROKER_INITIAL_CHECKS (default: 100)
                 - BROKER_MAX_INTERVAL (default: 0.1)
-                - BROKER_BURST_SLEEP (default: 0.0002)
+                - BROKER_BURST_SLEEP (retained resolved value)
                 - BROKER_JITTER_FACTOR (default: 0.15 - 15%)
 
         See Also:
@@ -1149,7 +1149,7 @@ class PollingStrategy:
         stop_event: threading.Event,
         initial_checks: int = 100,
         max_interval: float = 0.1,
-        burst_sleep: float = 0.0002,
+        burst_sleep: float = resolve_isolated_config({})["BROKER_BURST_SLEEP"],
         jitter_factor: float = 0.15,
     ) -> None:
         self._initial_checks = initial_checks
