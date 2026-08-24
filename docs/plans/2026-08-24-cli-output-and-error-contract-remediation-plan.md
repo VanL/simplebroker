@@ -775,6 +775,16 @@ Execution started 2026-08-24 after owner authorization:
     paths, suppression index, and diff integrity. The read-only Weft candidate
     suite passes with one Postgres-only skip and does not alter Weft's existing
     dirty files. Exact-SHA Windows and owner-authorized landing remain pending.
+14. Post-landing backend verification exposed one test-ownership defect:
+    `test_sb_cli_4_caller_path_failures_are_invalid_arguments` mixed explicit
+    target conflicts with SQLite-only missing-directory and project-scope
+    cases. PostgreSQL and Redis CLI setup installs a real project target before
+    each subprocess, so the latter cases could not fire there. The test is now
+    split into an explicitly shared explicit-target-failure matrix and an
+    explicitly `sqlite_only` directory/scope matrix. Unmodified
+    `pytest-pg --fast` and `pytest-redis --fast` now pass both shared and
+    extension stages without deselection; no CLI behavior or normative spec
+    text changed.
 
 ## Completion Gate
 

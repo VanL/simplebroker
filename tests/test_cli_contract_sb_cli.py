@@ -442,27 +442,43 @@ def _assert_json_error(
     return cast(dict[str, object], payload)
 
 
-def test_sb_cli_4_caller_path_failures_are_invalid_arguments(workdir: Path) -> None:
+@pytest.mark.shared
+def test_sb_cli_4_shared_explicit_target_failures_are_invalid_arguments(
+    workdir: Path,
+) -> None:
     selected = workdir / "selected"
     selected.mkdir()
-    wrong_kind = workdir / "not-a-directory"
-    wrong_kind.write_text("file", encoding="utf-8")
-    missing_directory = workdir / "missing-directory"
     missing_parent_target = workdir / "missing-parent" / "broker.db"
     absolute_target = workdir / "absolute.db"
 
-    cases = [
-        (("-f", str(absolute_target), "-d", str(selected), "list", "--json"), {}),
-        (("-f", "../outside.db", "list", "--json"), {}),
+    for args in (
+        ("-f", str(absolute_target), "-d", str(selected), "list", "--json"),
+        ("-f", "../outside.db", "list", "--json"),
+        ("-f", str(missing_parent_target), "list", "--json"),
+    ):
+        _assert_json_error(
+            run_cli(*args, cwd=workdir),
+            "INVALID_ARGUMENT",
+        )
+
+
+@pytest.mark.sqlite_only
+def test_sb_cli_4_sqlite_directory_and_scope_failures_are_invalid_arguments(
+    workdir: Path,
+) -> None:
+    wrong_kind = workdir / "not-a-directory"
+    wrong_kind.write_text("file", encoding="utf-8")
+    missing_directory = workdir / "missing-directory"
+
+    cases = (
         (("-d", str(missing_directory), "list", "--json"), {}),
         (("-d", str(wrong_kind), "list", "--json"), {}),
-        (("-f", str(missing_parent_target), "list", "--json"), {}),
         (("list", "--json"), {"BROKER_PROJECT_SCOPE": "1"}),
         (
             ("-d", str(missing_directory), "list", "--json"),
             {"BROKER_PROJECT_SCOPE": "1"},
         ),
-    ]
+    )
 
     for args, env in cases:
         _assert_json_error(
