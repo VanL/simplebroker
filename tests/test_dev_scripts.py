@@ -2948,6 +2948,13 @@ def test_packaging_smoke_main_uses_published_artifact_mode(
         root_wheel=tmp_path / "simplebroker-7.5.0-py3-none-any.whl",
         root_sdist=tmp_path / "simplebroker-7.5.0.tar.gz",
     )
+
+    def download_published_artifacts(
+        version: str, destination: Path
+    ) -> _scripts._RootPackagingArtifacts:
+        calls.append(("download", version, destination))
+        return artifacts
+
     monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(
         _scripts.sys,
@@ -2962,9 +2969,7 @@ def test_packaging_smoke_main_uses_published_artifact_mode(
     monkeypatch.setattr(
         _scripts,
         "_download_published_root_artifacts",
-        lambda version, destination: (
-            calls.append(("download", version, destination)) or artifacts
-        ),
+        download_published_artifacts,
     )
     monkeypatch.setattr(
         _scripts,
