@@ -1,6 +1,6 @@
 # Closeable Queue Iterator Contract Plan
 
-Status: active
+Status: completed
 Class: 5 - normative delivery and Python API text changes, and the public
 return-type compatibility surface changes. The public-contract risk trigger
 also fires, so the hardening requirements apply even though the runtime delta
@@ -243,8 +243,8 @@ same-thread close is a release blocker.
   `docs/specs/11-delivery.md` and `docs/specs/16-python-library-api.md` at plan
   authoring time.
 - Plan type: implementation with spec revision.
-- Promotion baseline: pending the reviewed strategy-B atomic
-  contract/implementation slice.
+- Promotion baseline: `81b80403b963c4332297b6946085d806be535b8e` - reviewed
+  strategy-B atomic contract/implementation slice.
 
 ## Proposed Spec Delta
 
@@ -637,9 +637,9 @@ transient worktree or staging claims.
   The retained-delegate test for high-level move also failed with no observed
   inner close. After the minimal implementation, both gates passed: mypy found
   no issues in 47 source files and the delegate test passed.
-- **2026-08-25 promotion baseline:** atomic strategy B is represented by
-  pre-change commit `0694c769972689482f72287563fa9ad08832889c` plus this exact
-  combined implementation/spec/test/documentation diff pending final commit.
+- **2026-08-25 promotion baseline:** atomic strategy B landed as
+  `81b80403b963c4332297b6946085d806be535b8e` from pre-change commit
+  `0694c769972689482f72287563fa9ad08832889c`.
   No backend Protocol, backend implementation, poison, recovery, settlement,
   or message-shape code changed.
 - **2026-08-25 lifecycle evidence:** the ten-row public Queue matrix passed on
@@ -692,6 +692,10 @@ interface-review candidate.
   files) passed. DOM-15 fixtures, plan context, documentation paths, and diff
   whitespace gates passed after the accepted review corrections. The
   post-correction contract/documentation subset passed 58 tests.
+- **2026-08-25 commit evidence:** `git log -1 --oneline` and `git rev-parse
+  HEAD` verified atomic implementation commit
+  `81b80403b963c4332297b6946085d806be535b8e` (`Expose closeable Queue
+  iterators`) before plan closure.
 
 ## Fresh-Eyes Review
 

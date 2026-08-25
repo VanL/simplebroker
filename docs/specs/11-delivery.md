@@ -276,7 +276,7 @@ _Implementation mapping_:
 
 ## Related Plans
 
-- active: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
+- completed: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
   — public closeable read, move, and stream iterator contract
 - completed: [2026-08-24-peek-generator-close-contract-plan](../plans/2026-08-24-peek-generator-close-contract-plan.md)
   — closeable peek iterator and same-thread synchronous Queue-operation cleanup

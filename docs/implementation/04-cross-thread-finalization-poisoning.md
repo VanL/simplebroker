@@ -41,7 +41,7 @@ the mechanism.
   [SB-DELIVERY-6] own the public same-thread contract, diagnostic behavior,
   and restart instruction. `README.md`, **Delivery guarantees**, is the
   user-facing restatement.
-- active: `2026-08-25-closeable-queue-iterator-contract-plan` makes the
+- completed: `2026-08-25-closeable-queue-iterator-contract-plan` makes the
   existing owner-thread cleanup capability public without widening poison.
 - retired: 2026-07-27-cross-thread-generator-orphan-healing-plan — source
   `197629e2`; see the ledger in `docs/plans/README.md`

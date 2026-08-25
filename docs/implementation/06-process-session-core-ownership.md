@@ -294,7 +294,7 @@ subprocess tests for both module import orders plus registry atexit shutdown.
 
 ## Related Plans
 
-- active: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
+- completed: [2026-08-25-closeable-queue-iterator-contract-plan](../plans/2026-08-25-closeable-queue-iterator-contract-plan.md)
   — public closeable Queue iterator ownership
 - completed: 2026-08-24-comprehensive-review-findings-remediation-plan — target
   snapshots, pre-lock fork recovery, Redis listener ownership, and PostgreSQL
