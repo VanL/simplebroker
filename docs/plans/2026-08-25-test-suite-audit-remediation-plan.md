@@ -1,6 +1,6 @@
 # Test Suite Audit Remediation Plan
 
-Status: draft
+Status: active
 Class: 4 — the plan deletes and rewrites tests across the whole suite,
 changes CI workflow timeout wiring, and adds small private clock, rng,
 and pid alias seams to production modules (no file-operation
