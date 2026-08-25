@@ -249,6 +249,9 @@ def test_sidecar_probe_timeout_reports_owned_stage_and_process_state(
         str(tmp_path / f"sidecar-timeout-{block_stage}.db"),
         timeout=scale_timeout_for_ci(1.0),
         _test_block_stage=block_stage,
+        _test_readiness_timeout=(
+            scale_timeout_for_ci(5.0) if block_stage == "after-readiness" else None
+        ),
     )
 
     assert result["parent_timeout"] is True

@@ -496,6 +496,7 @@ def run_cross_thread_sidecar_probe(
     action: str = "clean_exit",
     timeout: float = 10.0,
     _test_block_stage: Literal["before-readiness", "after-readiness"] | None = None,
+    _test_readiness_timeout: float | None = None,
 ) -> dict[str, Any]:
     """Run one sidecar foreign-resumption probe in a spawned process."""
 
@@ -518,11 +519,15 @@ def run_cross_thread_sidecar_probe(
     process.start()
     send_connection.close()
     try:
-        child_ready, result_available = _wait_for_probe_result(
-            ready_event,
-            receive_connection,
-            timeout,
-        )
+        if _test_readiness_timeout is None:
+            child_ready, result_available = _wait_for_probe_result(
+                ready_event,
+                receive_connection,
+                timeout,
+            )
+        else:
+            child_ready = ready_event.wait(timeout=_test_readiness_timeout)
+            result_available = child_ready and receive_connection.poll(timeout)
         if not result_available:
             process_alive_before_terminate = process.is_alive()
             if process_alive_before_terminate:
