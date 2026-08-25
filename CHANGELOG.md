@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.4.2] - 2026-08-25
+
+### Added
+
+- Added package-root `CloseableIterator[T]`. `Queue.peek_generator()` and the
+  `Queue.peek(all_messages=True)` view now expose `.close()` in their public
+  return types without promising generator-only `send()` or `throw()`.
+
 ### Changed
 
 - `Queue.read_generator()`, `Queue.move_generator()`,
@@ -26,6 +34,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   types instead of coercing them.
 - Root help now advertises action-only `--json` for `--status`, `--cleanup`,
   and `--vacuum`; unsupported bare or subcommand use remains an error.
+- Documented and verified that closeable peek iterators are lazy and
+  single-use. Same-thread exhaustion, advancement failure, or explicit early
+  close synchronously ends the iterator-owned Queue operation. This hardens
+  the existing implementation behavior; live offset paging and resource
+  ownership are unchanged.
+- Packaging smoke now installs the root wheel and sdist separately outside the
+  source checkout, rejects checkout-shadowed imports, and exercises SQLite
+  early-close reuse. A version-pinned published-artifact mode also verifies
+  both PyPI SHA-256 digests before running the same probes.
+- Advanced the coordinated first-party extensions to `simplebroker-pg` 3.9.2
+  and `simplebroker-redis` 3.9.2. Both extensions now require
+  `simplebroker>=7.4.2`, and the root `pg` and `redis` extras require the new
+  extension patch versions.
 
 ### Fixed
 
@@ -71,30 +92,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through waiter registration and final close.
 - Required workflow checks now fail explicitly under both normal and optimized
   Python instead of relying on removable `assert` statements.
-
-## [7.4.2] - 2026-08-24
-
-### Added
-
-- Added package-root `CloseableIterator[T]`. `Queue.peek_generator()` and the
-  `Queue.peek(all_messages=True)` view now expose `.close()` in their public
-  return types without promising generator-only `send()` or `throw()`.
-
-### Changed
-
-- Documented and verified that closeable peek iterators are lazy and
-  single-use. Same-thread exhaustion, advancement failure, or explicit early
-  close synchronously ends the iterator-owned Queue operation. This hardens
-  the existing implementation behavior; live offset paging and resource
-  ownership are unchanged.
-- Packaging smoke now installs the root wheel and sdist separately outside the
-  source checkout, rejects checkout-shadowed imports, and exercises SQLite
-  early-close reuse. A version-pinned published-artifact mode also verifies
-  both PyPI SHA-256 digests before running the same probes.
-- Advanced the coordinated first-party extensions to `simplebroker-pg` 3.9.2
-  and `simplebroker-redis` 3.9.2. Both extensions now require
-  `simplebroker>=7.4.2`, and the root `pg` and `redis` extras require the new
-  extension patch versions.
 
 ### simplebroker-pg 3.9.2
 
