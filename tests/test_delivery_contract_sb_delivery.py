@@ -251,6 +251,23 @@ def test_live_peek_stream_rejects_naive_cursor_completeness() -> None:
     assert "source `23d6c9d1`" in spec_text
 
 
+def test_closeable_peek_lifecycle_contract_is_bound_to_real_backends() -> None:
+    """[SB-DELIVERY-4] Early stop has an explicit same-thread cleanup action."""
+    section = " ".join(_section("SB-DELIVERY-4").split()).lower()
+    assert "single-use closeable iterator" in section
+    assert "first advancement attempt" in section
+    assert "same thread" in section
+    assert "stopiteration" in section
+    assert "caller's loop body" in section
+    assert "before closing its queue or higher-level client" in section
+    assert "persistent queue" in section
+    assert "ephemeral queue" in section
+    assert "caller-supplied runner" in section
+
+    row = _verification_row("SB-DELIVERY-4")
+    assert "tests/test_peek_generator_lifecycle.py" in row
+
+
 def test_invalid_generator_selector_fails_on_iteration_without_mutation(
     queue_factory,
 ) -> None:

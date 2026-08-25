@@ -59,6 +59,30 @@ when the scopes coincide. `close_owned_runner()` prefers callable `shutdown()`
 and falls back to `close()`, but only at a SimpleBroker-owned runner boundary.
 An explicitly injected runner remains caller-owned.
 
+### Suspended observational Queue operations
+
+`Queue.peek_generator()` is an outer Python generator whose
+`Queue.get_connection()` context stays open while the delegated backend
+iterator is suspended. That outer Queue seam owns public iterator cleanup;
+backend `BrokerConnection.peek_generator()` implementations remain ordinary
+iterators and do not acquire a second public lifecycle interface.
+
+The first advancement enters the context on the caller's thread. Exhaustion,
+an advancement failure, or explicit close unwinds it on that same thread. For
+a persistent Queue, context exit ends the process-session operation while the
+thread-local core and backend checkout remain cached. For a no-runner
+ephemeral Queue, it closes the operation-owned `DBConnection` and releases its
+private core. For a Queue with an injected runner, it invokes the lexical
+operation release hook but retains the Queue-owned borrowed core until
+`Queue.close()`; neither step closes or shuts down the caller-owned runner.
+
+This split is why the public promise is synchronous Queue-operation exit and
+owned cleanup invocation, not unconditional physical connection destruction.
+It also makes close thread-affine: the process-session operation stack is
+thread-local, so this design does not transfer a suspended operation to a
+foreign cleanup thread. The public contract is `[SB-DELIVERY-4]`; this section
+records the implementation reason for that shape.
+
 An `ActivityWaiter` sits below that boundary. It owns a backend activity
 registration or composite registration, not the runner, pool, listener
 substrate, or process session. It therefore exposes only `close()`. Terminal

@@ -121,7 +121,8 @@ Normative: `docs/specs/11-delivery.md`
 | Default `read` / consume `watch` | Claim commits **before** handoff to your code. Claim is atomic (once). If the process does not die between claim and handoff, delivery to the caller/handler is once. Crash in that window can leave the message claimed and not handed off. Not exactly-once application processing. |
 | **Move reservation** | **Atomic move** relocates the message; it still exists at the destination after success (including after a crash). Common pattern: move to inflight/private queue, process, delete by id. |
 | Peek | Observes without claiming. Mutating actions (delete/move/claim) are atomic (one winner). App concurrency model is the app’s responsibility. |
-| Generators | Default `exactly_once`: one-by-one, commit before yield. `at_least_once`: strongest public **batch** promise (commit after full batch yield; early stop may redeliver). Same thread only; cross-thread is undefined behavior (implementations may fail loud). |
+| Transactional generators | Default `exactly_once`: one-by-one, commit before yield. `at_least_once`: strongest public **batch** promise (commit after full batch yield; early stop may redeliver). Same thread only; cross-thread is undefined behavior (implementations may fail loud). |
+| Peek iterators | `Queue.peek_generator()` and `Queue.peek(all_messages=True)` return the package-root `CloseableIterator`. Construction is lazy. Exhaust it or call `close()` on the same thread before closing the Queue/client. |
 
 `include_claimed` / claimed rows: inspection only; vacuum may remove them.
 
@@ -130,6 +131,12 @@ Normative: `docs/specs/11-delivery.md`
 `peek --all` and `Queue.peek_generator()` are live offset-paged streams.
 Removing rows during that iteration can shift offsets and skip messages.
 Prefer one-message peek + delete-by-id, or move-then-process.
+
+The Python peek iterator owns one Queue operation from first advancement until
+`StopIteration`, an advancement error, or explicit `close()` on that same
+thread. Creating it acquires nothing. If a loop may stop early, close the
+iterator in a `finally` block or with `contextlib.closing()` before closing the
+Queue/client.
 
 ## Message IDs
 
@@ -344,7 +351,8 @@ SimpleBroker will comply; your product will not.
 
 - For append-only / correctness-critical history, prefer
   `Queue.peek_generator(...)` (or full iteration helpers), not fixed
-  `peek_many(limit=N)`. Do **not** delete rows while that generator runs.
+  `peek_many(limit=N)`. Exhaust or close the iterator on its owner thread. Do
+  **not** delete rows while that generator runs.
 - Put domain structure in **JSON bodies** (envelopes, control messages). The
   broker owns **order + id + durability**, not your schema.
 - When application-owned JSON includes a broker message ID or high-water value

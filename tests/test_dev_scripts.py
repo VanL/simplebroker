@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import runpy
 import signal
@@ -2716,7 +2718,13 @@ def test_packaging_backend_discovery_rejects_wrong_plugin_under_optimization(
         lambda command, **kwargs: commands.append(command),
     )
     _scripts._smoke_install_artifacts(artifacts, python=sys.executable)
-    verification_source = commands[-1][2]
+    verification_source = next(
+        command[2]
+        for command in commands
+        if len(command) >= 3
+        and command[1] == "-c"
+        and "get_backend_plugin" in command[2]
+    ).replace(_scripts._ARTIFACT_ORIGIN_CHECK, "")
 
     package_dir = tmp_path / "simplebroker"
     package_dir.mkdir()
@@ -2755,6 +2763,245 @@ def get_backend_plugin(name):
         f"Packaging smoke expected backend '{wrong_backend}', got 'wrong'"
         in result.stderr
     )
+
+
+def test_packaging_smoke_probes_root_wheel_and_sdist_outside_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifacts = _scripts._PackagingArtifacts(
+        root_wheel=tmp_path / "simplebroker-7.5.0-py3-none-any.whl",
+        root_sdist=tmp_path / "simplebroker-7.5.0.tar.gz",
+        pg_wheel=tmp_path / "simplebroker_pg-3.9.1-py3-none-any.whl",
+        pg_sdist=tmp_path / "simplebroker_pg-3.9.1.tar.gz",
+        redis_wheel=tmp_path / "simplebroker_redis-3.9.1-py3-none-any.whl",
+        redis_sdist=tmp_path / "simplebroker_redis-3.9.1.tar.gz",
+    )
+    calls: list[tuple[list[str], Path, dict[str, str] | None]] = []
+    monkeypatch.setenv("PYTHONPATH", str(REPO_ROOT))
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path = _scripts.ROOT,
+        env: dict[str, str] | None = None,
+        capture_output: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        del capture_output
+        calls.append((command, cwd, env))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(_scripts, "_run", fake_run)
+
+    _scripts._smoke_install_artifacts(artifacts, python=sys.executable)
+
+    assert len(calls) == 9
+    assert all(cwd != REPO_ROOT for _, cwd, _ in calls)
+    assert all(env is not None and "PYTHONPATH" not in env for _, _, env in calls)
+
+    install_commands = [
+        command for command, _, _ in calls if command[:3] == ["uv", "pip", "install"]
+    ]
+    assert len(install_commands) == 3
+    assert any(
+        artifacts.root_wheel.resolve().as_uri() in command[-1]
+        for command in install_commands
+    )
+    assert any(
+        artifacts.root_sdist.resolve().as_uri() in command[-1]
+        for command in install_commands
+    )
+
+    probe_sources = [
+        command[2]
+        for command, _, _ in calls
+        if len(command) >= 3 and command[1] == "-c"
+    ]
+    assert len(probe_sources) == 3
+    root_sources = [source for source in probe_sources if "peek_generator" in source]
+    assert len(root_sources) == 2
+    assert root_sources[0] == root_sources[1]
+    assert all("simplebroker.__file__" in source for source in probe_sources)
+    assert all("sys.prefix" in source for source in probe_sources)
+
+    output = capsys.readouterr().out
+    assert "Root wheel artifact smoke passed" in output
+    assert "Root sdist artifact smoke passed" in output
+
+
+def test_root_artifact_probe_rejects_source_checkout_shadow(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", _scripts._ROOT_ARTIFACT_PROBE],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        check=False,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+
+    assert result.returncode != 0
+    assert "outside the smoke virtual environment" in result.stderr
+
+
+def test_validate_published_version_requires_exact_release_pin() -> None:
+    assert _scripts._validate_published_version("7.5.0") == "7.5.0"
+
+    for invalid in ("", "7.5", ">=7.5.0", "7.5.0.post1", "latest", "7.5.0/other"):
+        with pytest.raises(RuntimeError, match="exact X.Y.Z release version"):
+            _scripts._validate_published_version(invalid)
+
+
+def test_download_published_root_artifacts_selects_and_verifies_both_formats(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    version = "7.5.0"
+    wheel_bytes = b"root wheel"
+    sdist_bytes = b"root sdist"
+    wheel_url = "https://files.pythonhosted.org/simplebroker-7.5.0.whl"
+    sdist_url = "https://files.pythonhosted.org/simplebroker-7.5.0.tar.gz"
+    metadata_url = "https://pypi.org/pypi/simplebroker/7.5.0/json"
+    payload = {
+        "info": {"name": "simplebroker", "version": version},
+        "urls": [
+            {
+                "filename": "simplebroker-7.5.0-py3-none-any.whl",
+                "packagetype": "bdist_wheel",
+                "url": wheel_url,
+                "digests": {"sha256": hashlib.sha256(wheel_bytes).hexdigest()},
+            },
+            {
+                "filename": "simplebroker-7.5.0.tar.gz",
+                "packagetype": "sdist",
+                "url": sdist_url,
+                "digests": {"sha256": hashlib.sha256(sdist_bytes).hexdigest()},
+            },
+            {
+                "filename": "simplebroker-7.4.1-py3-none-any.whl",
+                "packagetype": "bdist_wheel",
+                "url": "https://files.pythonhosted.org/old.whl",
+                "digests": {"sha256": "0" * 64},
+            },
+        ],
+    }
+    responses = {
+        metadata_url: json.dumps(payload).encode(),
+        wheel_url: wheel_bytes,
+        sdist_url: sdist_bytes,
+    }
+    monkeypatch.setattr(_scripts, "_read_url_bytes", responses.__getitem__)
+
+    artifacts = _scripts._download_published_root_artifacts(version, tmp_path)
+
+    assert artifacts.root_wheel.read_bytes() == wheel_bytes
+    assert artifacts.root_sdist.read_bytes() == sdist_bytes
+    output = capsys.readouterr().out
+    assert hashlib.sha256(wheel_bytes).hexdigest() in output
+    assert hashlib.sha256(sdist_bytes).hexdigest() in output
+
+
+def test_download_published_root_artifact_rejects_digest_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    version = "7.5.0"
+    wheel_url = "https://files.pythonhosted.org/simplebroker-7.5.0.whl"
+    sdist_url = "https://files.pythonhosted.org/simplebroker-7.5.0.tar.gz"
+    metadata_url = "https://pypi.org/pypi/simplebroker/7.5.0/json"
+    payload = {
+        "info": {"name": "simplebroker", "version": version},
+        "urls": [
+            {
+                "filename": "simplebroker-7.5.0-py3-none-any.whl",
+                "packagetype": "bdist_wheel",
+                "url": wheel_url,
+                "digests": {"sha256": "0" * 64},
+            },
+            {
+                "filename": "simplebroker-7.5.0.tar.gz",
+                "packagetype": "sdist",
+                "url": sdist_url,
+                "digests": {"sha256": hashlib.sha256(b"sdist").hexdigest()},
+            },
+        ],
+    }
+    responses = {
+        metadata_url: json.dumps(payload).encode(),
+        wheel_url: b"tampered wheel",
+        sdist_url: b"sdist",
+    }
+    monkeypatch.setattr(_scripts, "_read_url_bytes", responses.__getitem__)
+
+    with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+        _scripts._download_published_root_artifacts(version, tmp_path)
+
+
+def test_packaging_smoke_main_uses_published_artifact_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+    artifacts = _scripts._RootPackagingArtifacts(
+        root_wheel=tmp_path / "simplebroker-7.5.0-py3-none-any.whl",
+        root_sdist=tmp_path / "simplebroker-7.5.0.tar.gz",
+    )
+    monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        _scripts.sys,
+        "argv",
+        ["packaging-smoke", "--python", "3.11", "--published-version", "7.5.0"],
+    )
+    monkeypatch.setattr(
+        _scripts,
+        "_build_packaging_artifacts",
+        lambda: pytest.fail("published mode must not build checkout artifacts"),
+    )
+    monkeypatch.setattr(
+        _scripts,
+        "_download_published_root_artifacts",
+        lambda version, destination: (
+            calls.append(("download", version, destination)) or artifacts
+        ),
+    )
+    monkeypatch.setattr(
+        _scripts,
+        "_smoke_install_root_artifacts",
+        lambda root_artifacts, *, python: calls.append(
+            ("smoke", root_artifacts, python)
+        ),
+    )
+
+    assert _scripts.packaging_smoke_main() == 0
+    assert calls[0][0:2] == ("download", "7.5.0")
+    assert calls[1] == ("smoke", artifacts, "3.11")
+
+
+def test_packaging_smoke_main_rejects_non_exact_published_version_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(_scripts.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        _scripts.sys,
+        "argv",
+        ["packaging-smoke", "--published-version", ">=7.5.0"],
+    )
+    monkeypatch.setattr(
+        _scripts,
+        "_download_published_root_artifacts",
+        lambda version, destination: pytest.fail(
+            f"invalid pin reached download: {version} in {destination}"
+        ),
+    )
+
+    assert _scripts.packaging_smoke_main() == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "exact X.Y.Z release version" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_packaging_smoke_main_builds_and_smoke_installs(
@@ -2857,23 +3104,43 @@ def test_packaging_smoke_main_builds_and_smoke_installs(
     assert ("license", redis_extension_wheel) in calls
 
     run_calls = [call for call in calls if call[0] == "run"]
-    assert len(run_calls) == 3
-    assert run_calls[0][1][:4] == ["uv", "venv", "--python", "3.11"]
-    assert run_calls[1][1][:4] == ["uv", "pip", "install", "--python"]
-    assert "--find-links" not in run_calls[1][1]
-    assert (
-        f"simplebroker[pg,redis] @ {root_wheel.resolve().as_uri()}" in run_calls[1][1]
+    assert len(run_calls) == 9
+    venv_calls = [call for call in run_calls if call[1][:2] == ["uv", "venv"]]
+    install_calls = [
+        call for call in run_calls if call[1][:3] == ["uv", "pip", "install"]
+    ]
+    probe_calls = [
+        call for call in run_calls if len(call[1]) > 2 and call[1][1] == "-c"
+    ]
+    assert len(venv_calls) == len(install_calls) == len(probe_calls) == 3
+    assert all(call[1][:4] == ["uv", "venv", "--python", "3.11"] for call in venv_calls)
+    assert all("--find-links" not in call[1] for call in install_calls)
+    extension_install = next(
+        call
+        for call in install_calls
+        if any("simplebroker[pg,redis]" in argument for argument in call[1])
     )
     assert (
-        f"simplebroker-pg @ {pg_extension_wheel.resolve().as_uri()}" in run_calls[1][1]
+        f"simplebroker[pg,redis] @ {root_wheel.resolve().as_uri()}"
+        in extension_install[1]
+    )
+    assert (
+        f"simplebroker-pg @ {pg_extension_wheel.resolve().as_uri()}"
+        in extension_install[1]
     )
     assert (
         f"simplebroker-redis @ {redis_extension_wheel.resolve().as_uri()}"
-        in run_calls[1][1]
+        in extension_install[1]
     )
-    assert run_calls[2][1][1] == "-c"
-    assert "get_backend_plugin('postgres')" in run_calls[2][1][2]
-    assert "get_backend_plugin('redis')" in run_calls[2][1][2]
+    extension_probe = next(
+        call for call in probe_calls if "get_backend_plugin" in call[1][2]
+    )
+    assert "get_backend_plugin('postgres')" in extension_probe[1][2]
+    assert "get_backend_plugin('redis')" in extension_probe[1][2]
+    assert all(call[2] != REPO_ROOT for call in run_calls)
+    assert all(
+        call[3] is not None and "PYTHONPATH" not in call[3] for call in run_calls
+    )
 
 
 def test_build_distribution_uses_locked_nonisolated_frontend(

@@ -68,6 +68,32 @@ Only `"exactly_once"` and `"at_least_once"` are valid selector values. Unknown
 values raise `ValueError` before a connection or message-state mutation; lazy
 generators raise on first iteration.
 
+### Closeable observational peek iterators
+
+`Queue.peek_generator()` and `Queue.peek(all_messages=True)` return the
+package-root `CloseableIterator`. Creating one is lazy and starts no Queue
+operation. The first advancement starts its operation and establishes the
+thread that must perform later advancement, exhaustion, or explicit close.
+
+Use `contextlib.closing()` when the loop may stop early:
+
+```python
+from contextlib import closing
+
+with closing(q.peek_generator(with_timestamps=True)) as messages:
+    for body, message_id in messages:
+        inspect(body, message_id)
+        if found_enough():
+            break
+```
+
+Exhaustion means advancing until `StopIteration`; merely receiving the last
+row leaves the iterator suspended. Close it before closing its Queue or
+higher-level client. Peek cleanup ends the iterator-owned Queue operation. It
+does not roll back or acknowledge messages, turn live offset paging into a
+snapshot, destroy a persistent Queue's cached resources, or take ownership of
+a caller-injected runner.
+
 Peeks can also inspect claimed (consumed but not yet vacuumed) messages:
 
 ```python

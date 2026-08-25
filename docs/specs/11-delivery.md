@@ -92,6 +92,35 @@ claim) are atomic: one winner.
 Removing rows from the source while such a stream is active can shift offsets
 and skip messages. One-message peek, process, delete-by-id avoids that.
 
+`Queue.peek_generator()` returns a single-use closeable iterator. Creating the
+iterator is lazy and starts no Queue operation. Its first advancement attempt
+enters one iterator-owned Queue operation and establishes the owner thread.
+While active, the iterator must be advanced, exhausted, and closed on that same
+thread; cross-thread use is unsupported, and callers must not rely on garbage
+collection for cleanup.
+
+Advancing the iterator through `StopIteration`, an exception raised by an
+advancement attempt (including validation or backend failure), or an explicit
+same-thread `close()` synchronously exits that Queue operation and invokes its
+owned cleanup before the action returns or raises. An exception raised by the
+caller's loop body does not advance or terminate the iterator; the caller must
+close it in `finally`.
+
+Closing before first advancement acquires no Queue operation and makes the
+single-use iterator terminal, so a later `next()` raises `StopIteration`.
+Closing after a terminal outcome or more than once is safe. A caller that may
+stop early must close the iterator before closing its Queue or higher-level
+client.
+
+Operation exit does not close resources owned by another lifecycle: a
+persistent Queue may retain its cached process session, core, or backend
+checkout; an ephemeral Queue releases its operation-owned connection/core
+handle; and a Queue with a caller-supplied runner retains its cached
+connection/core handle until `Queue.close()` without closing or shutting down
+the runner. These lifecycle rules do not change the live, offset-paged
+traversal or strengthen peek into a snapshot, claim, or exhaustive concurrent
+traversal.
+
 Replacing the offset with the public message ID or the current storage
 sequence would not by itself make this traversal complete under concurrent
 mutation. Exact insertion may put an older public ID behind an advanced
@@ -203,7 +232,7 @@ _Implementation mapping_:
 | [SB-DELIVERY-1] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_watcher.py::TestErrorScenarios::test_consuming_watcher_queue_preservation_on_failure` |
 | [SB-DELIVERY-2] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_watcher_error_handler_contract.py` (consume, peek, and move terminal-callback matrix); `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_handler_failure_isolation`; `tests/test_queue_move_watcher.py::TestQueueMoveWatcher::test_transaction_safety` |
 | [SB-DELIVERY-3] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_move.py`; `tests/test_move_claim_patterns.py` |
-| [SB-DELIVERY-4] | `tests/test_delivery_contract_sb_delivery.py::test_live_peek_stream_rejects_naive_cursor_completeness`; `tests/test_delivery_contract_sb_delivery.py`; `tests/test_agent_kernel_contract.py` |
+| [SB-DELIVERY-4] | `tests/test_peek_generator_lifecycle.py`; `tests/test_delivery_contract_sb_delivery.py::test_live_peek_stream_rejects_naive_cursor_completeness`, `::test_closeable_peek_lifecycle_contract_is_bound_to_real_backends`; `tests/test_agent_kernel_contract.py` |
 | [SB-DELIVERY-5] | `tests/test_delivery_contract_sb_delivery.py`; `tests/test_exactly_once_delivery.py`; `tests/test_generator_methods.py`; `extensions/simplebroker_redis/tests/test_redis_batches.py` |
 | [SB-DELIVERY-6] | `tests/test_delivery_contract_sb_delivery.py` (structural binding); `tests/test_cross_thread_finalization_poisoning.py`; `tests/test_cross_thread_generator_probe.py`; `extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py`; `extensions/simplebroker_redis/tests/test_redis_cross_thread_generator_probe.py` |
 | [SB-DELIVERY-7] | `tests/test_cli_broken_pipe.py`; `tests/test_delivery_contract_sb_delivery.py` |
@@ -211,6 +240,8 @@ _Implementation mapping_:
 
 ## Related Plans
 
+- active: [2026-08-24-peek-generator-close-contract-plan](../plans/2026-08-24-peek-generator-close-contract-plan.md)
+  — closeable peek iterator and same-thread synchronous Queue-operation cleanup
 - completed: [2026-08-24-failure-path-and-contract-findings-resolution-plan](../plans/2026-08-24-failure-path-and-contract-findings-resolution-plan.md)
   — terminal watcher callback-failure delivery state at baseline `1b8ecfa0`
 - retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan —

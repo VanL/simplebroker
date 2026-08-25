@@ -403,6 +403,13 @@ is idempotent. Do not delete or move source rows while iterating `peek --all`
 or `Queue.peek_generator()`, because their live offset pagination can skip
 messages.
 
+Python callers receive a package-root `CloseableIterator` from
+`Queue.peek_generator()` and `Queue.peek(all_messages=True)`. Creating it is
+lazy. Exhaust it or call `close()` on the same thread before closing the Queue
+or higher-level client; use `contextlib.closing()` when a loop may stop early.
+Closing ends the iterator-owned Queue operation but does not claim messages or
+turn the live traversal into a snapshot.
+
 Normative delivery contract:
 `docs/specs/11-delivery.md` ([SB-DELIVERY-1]–[SB-DELIVERY-8]).
 
@@ -765,6 +772,9 @@ broker delivery state, not proof of application processing
 accept `delivery_guarantee="at_least_once"` (`[SB-DELIVERY-5]`) for
 retry-on-stop batch processing; generators are thread-affine and must be
 closed on their own thread.
+
+Observational peek iterators are also thread-affine while active. They are
+lazy, and early-stop callers must close them before their Queue/client.
 
 Specifications: `docs/specs/11-delivery.md`
 (`[SB-DELIVERY-1]`–`[SB-DELIVERY-8]`); worked patterns, generator rules,

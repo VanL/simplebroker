@@ -97,6 +97,14 @@ uv run python bin/release.py --check-repository-settings
 Replace `X.Y.Z` with the next unpublished version for the package being
 released.
 
+After PyPI publishes a root release, verify the indexed wheel and sdist by
+exact version. This checks their SHA-256 digests, imports them outside the
+checkout, and runs the same SQLite close-lifecycle probe against each:
+
+```bash
+uv run ./bin/packaging-smoke --python 3.11 --published-version X.Y.Z
+```
+
 Real releases must run from `main`. The helper checks the target version against
 GitHub Releases and PyPI, verifies the repository's immutable-release, tag,
 environment, and Actions SHA-pinning settings, runs the local release checks,

@@ -5,6 +5,26 @@ All notable changes to SimpleBroker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added package-root `CloseableIterator[T]`. `Queue.peek_generator()` and the
+  `Queue.peek(all_messages=True)` view now expose `.close()` in their public
+  return types without promising generator-only `send()` or `throw()`.
+
+### Changed
+
+- Documented and verified that closeable peek iterators are lazy and
+  single-use. Same-thread exhaustion, advancement failure, or explicit early
+  close synchronously ends the iterator-owned Queue operation. This hardens
+  the existing implementation behavior; live offset paging and resource
+  ownership are unchanged.
+- Packaging smoke now installs the root wheel and sdist separately outside the
+  source checkout, rejects checkout-shadowed imports, and exercises SQLite
+  early-close reuse. A version-pinned published-artifact mode also verifies
+  both PyPI SHA-256 digests before running the same probes.
+
 ## [7.4.1] - 2026-08-24
 
 ### Changed

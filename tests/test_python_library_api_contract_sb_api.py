@@ -113,6 +113,38 @@ def test_api_moved_message_is_package_root_public() -> None:
     }
 
 
+def test_api_closeable_peek_iterator_contract() -> None:
+    """[SB-API-1/4/5] expose one close-only Queue iterator surface."""
+    public = _section("SB-API-1")
+    shape = _section("SB-API-4")
+    generators = _section("SB-API-5")
+    spec = SPEC.read_text(encoding="utf-8")
+
+    assert "CloseableIterator[T]" in public
+    assert "structural protocol" in public
+    assert "send()" in public and "throw()" in public
+    assert "all_messages=True" in shape
+    assert "CloseableIterator" in shape
+    assert "BrokerConnection.peek_generator()" in generators
+    assert "ordinary iterator seam" in generators
+    assert "`tests/test_dev_scripts.py` (isolated root wheel/sdist import" in spec
+    assert "published-artifact verification" in spec
+
+    assert "CloseableIterator" in simplebroker.__all__
+    assert simplebroker.CloseableIterator is sbqueue_module.CloseableIterator
+    protocol_members = vars(simplebroker.CloseableIterator)
+    assert {"__iter__", "__next__", "close"} <= protocol_members.keys()
+    assert "send" not in protocol_members
+    assert "throw" not in protocol_members
+
+    for method in (Queue.peek, Queue.peek_generator):
+        doc = " ".join((method.__doc__ or "").split()).lower()
+        assert "lazy" in doc
+        assert "same thread" in doc
+        assert "close" in doc
+        assert "queue operation" in doc
+
+
 def test_api_queue_rejects_alias_sigil_before_config_or_target_setup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

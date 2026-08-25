@@ -21,13 +21,19 @@ from .project import (
     serialize_broker_target,
     target_for_directory,
 )
-from .sbqueue import MovedMessage, Queue, create_activity_waiter_for_queues
+from .sbqueue import (
+    CloseableIterator,
+    MovedMessage,
+    Queue,
+    create_activity_waiter_for_queues,
+)
 from .watcher import QueueMoveWatcher, QueueWatcher
 
 # Only export the new API
 __all__ = [
     "ActivityWaiter",
     "BrokerTarget",
+    "CloseableIterator",
     "DumpClockSkewWarning",
     "LoadResult",
     "MovedMessage",

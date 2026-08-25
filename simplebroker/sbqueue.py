@@ -11,7 +11,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Literal, TypedDict, TypeVar, Union, cast, overload
+from typing import Any, Literal, Protocol, TypedDict, TypeVar, Union, cast, overload
 
 from ._backend_plugins import (
     ActivityWaiter,
@@ -47,6 +47,19 @@ class MovedMessage(TypedDict):
 
     message: str
     timestamp: int
+
+
+_CloseableItem_co = TypeVar("_CloseableItem_co", covariant=True)
+
+
+class CloseableIterator(Protocol[_CloseableItem_co]):
+    """Single-use iterator with explicit synchronous cleanup."""
+
+    def __iter__(self) -> "CloseableIterator[_CloseableItem_co]": ...
+
+    def __next__(self) -> _CloseableItem_co: ...
+
+    def close(self) -> None: ...
 
 
 class _DeleteAllSentinel:
@@ -787,7 +800,7 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
-    ) -> Iterator[str]: ...
+    ) -> CloseableIterator[str]: ...
 
     @overload
     def peek(
@@ -799,7 +812,7 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
-    ) -> Iterator[tuple[str, int]]: ...
+    ) -> CloseableIterator[tuple[str, int]]: ...
 
     @overload
     def peek(
@@ -811,7 +824,7 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
-    ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None: ...
+    ) -> str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None: ...
 
     def peek(
         self,
@@ -822,11 +835,17 @@ class Queue:
         before_timestamp: int | None = None,
         message_id: MessageIdInput | None = None,
         include_claimed: bool = False,
-    ) -> str | tuple[str, int] | Iterator[str | tuple[str, int]] | None:
+    ) -> str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None:
         """View message(s) without removing them from the queue (CLI-mirroring method).
 
         This is the high-level method that mirrors CLI behavior. For more precise
         control, use the granular methods: peek_one(), peek_many(), peek_generator().
+
+        With ``all_messages=True``, the returned closeable iterator is lazy:
+        creating it starts no Queue operation. Its first advancement starts the
+        operation, and callers must advance, exhaust, or close it on the same
+        thread. A caller that may stop early must close the iterator before
+        closing this Queue or a higher-level client.
 
         Args:
             all_messages: If True, peek at all messages as a generator
@@ -1036,7 +1055,7 @@ class Queue:
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
-    ) -> Iterator[str]: ...
+    ) -> CloseableIterator[str]: ...
 
     @overload
     def peek_generator(
@@ -1047,7 +1066,7 @@ class Queue:
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
-    ) -> Iterator[tuple[str, int]]: ...
+    ) -> CloseableIterator[tuple[str, int]]: ...
 
     @overload
     def peek_generator(
@@ -1058,7 +1077,7 @@ class Queue:
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
-    ) -> Iterator[str | tuple[str, int]]: ...
+    ) -> CloseableIterator[str | tuple[str, int]]: ...
 
     def peek_generator(
         self,
@@ -1068,10 +1087,16 @@ class Queue:
         before_timestamp: int | None = None,
         exact_timestamp: MessageIdInput | None = None,
         include_claimed: bool = False,
-    ) -> Iterator[str | tuple[str, int]]:
+    ) -> CloseableIterator[str | tuple[str, int]]:
         """Generator that peeks at messages without removing them from the queue.
 
-        This is memory-efficient for viewing large queues.
+        This is memory-efficient for viewing large queues. The returned
+        closeable iterator is lazy: creating it starts no Queue operation. Its
+        first advancement starts the operation, and callers must advance,
+        exhaust, or close it on the same thread. A caller that may stop early
+        must close the iterator before closing this Queue or a higher-level
+        client. Closing before first advancement starts no operation and makes
+        the iterator terminal.
 
         Args:
             with_timestamps: If True, yield (message, timestamp) tuples

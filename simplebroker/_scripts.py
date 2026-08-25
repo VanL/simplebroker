@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import importlib
+import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -20,6 +24,8 @@ from email.message import Message
 from email.parser import BytesParser
 from pathlib import Path
 from typing import Any, cast
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 
 from ._targets import redact_backend_target
 
@@ -30,6 +36,68 @@ POSTGRES_USER = os.environ.get("SIMPLEBROKER_PG_TEST_USER", "postgres")
 POSTGRES_PASSWORD = os.environ.get("SIMPLEBROKER_PG_TEST_PASSWORD", "postgres")
 VALKEY_IMAGE = os.environ.get("SIMPLEBROKER_VALKEY_TEST_IMAGE", "valkey/valkey:7.2")
 _SHARED_BACKEND_MARKER = "shared and not sqlite_only"
+_PUBLISHED_VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
+_PYPI_ROOT_RELEASE_URL = "https://pypi.org/pypi/simplebroker/{version}/json"
+
+_ARTIFACT_ORIGIN_CHECK = (
+    "package_file = Path(simplebroker.__file__ or '').resolve()\n"
+    "environment_root = Path(sys.prefix).resolve()\n"
+    "try:\n"
+    "    package_file.relative_to(environment_root)\n"
+    "except ValueError as exc:\n"
+    "    raise RuntimeError(\n"
+    '        f"simplebroker imported from {package_file}, outside the smoke "\n'
+    '        f"virtual environment {environment_root}"\n'
+    "    ) from exc\n"
+)
+
+_ROOT_ARTIFACT_PROBE = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "from tempfile import TemporaryDirectory\n"
+    "import simplebroker\n"
+    + _ARTIFACT_ORIGIN_CHECK
+    + "from simplebroker import CloseableIterator, Queue\n"
+    "if CloseableIterator.__name__ != 'CloseableIterator':\n"
+    "    raise RuntimeError('CloseableIterator root export is unavailable')\n"
+    "with TemporaryDirectory(prefix='simplebroker-root-probe-') as tmp:\n"
+    "    for persistent in (False, True):\n"
+    "        db_path = str(Path(tmp) / f'broker-{persistent}.db')\n"
+    "        queue = Queue('artifact_probe', db_path=db_path, persistent=persistent)\n"
+    "        try:\n"
+    "            queue.write('first')\n"
+    "            queue.write('second')\n"
+    "            iterator = queue.peek_generator()\n"
+    "            if next(iterator) != 'first':\n"
+    "                raise RuntimeError('peek generator returned an unexpected row')\n"
+    "            iterator.close()\n"
+    "            if queue.peek_one() != 'first':\n"
+    "                raise RuntimeError('Queue was not reusable after early close')\n"
+    "            queue.write('third')\n"
+    "        finally:\n"
+    "            queue.close()\n"
+    "print('simplebroker-root-artifact-smoke-passed')\n"
+)
+
+_EXTENSION_ARTIFACT_PROBE = (
+    "import sys\n"
+    "from pathlib import Path\n"
+    "import simplebroker\n" + _ARTIFACT_ORIGIN_CHECK + "import simplebroker_pg\n"
+    "import simplebroker_redis\n"
+    "from simplebroker.ext import get_backend_plugin\n"
+    "pg_plugin = get_backend_plugin('postgres')\n"
+    "redis_plugin = get_backend_plugin('redis')\n"
+    "if pg_plugin.name != 'postgres':\n"
+    "    raise RuntimeError(\n"
+    "        f\"Packaging smoke expected backend 'postgres', "
+    'got {pg_plugin.name!r}"\n'
+    "    )\n"
+    "if redis_plugin.name != 'redis':\n"
+    "    raise RuntimeError(\n"
+    "        f\"Packaging smoke expected backend 'redis', "
+    'got {redis_plugin.name!r}"\n'
+    "    )\n"
+)
 
 
 def _run(
@@ -873,6 +941,169 @@ class _PackagingArtifacts:
     redis_sdist: Path
 
 
+@dataclass(frozen=True)
+class _RootPackagingArtifacts:
+    root_wheel: Path
+    root_sdist: Path
+
+
+def _validate_published_version(version: str) -> str:
+    """Require the exact release-version shape owned by the release driver."""
+
+    normalized = version.strip()
+    if not _PUBLISHED_VERSION_PATTERN.fullmatch(normalized):
+        raise RuntimeError(
+            "--published-version requires an exact X.Y.Z release version"
+        )
+    return normalized
+
+
+def _read_url_bytes(url: str) -> bytes:
+    """Fetch one release resource with a bounded network timeout."""
+
+    request = urllib_request.Request(
+        url,
+        headers={"User-Agent": "simplebroker-packaging-smoke"},
+    )
+    with urllib_request.urlopen(request, timeout=30) as response:
+        return cast(bytes, response.read())
+
+
+def _select_published_root_file(
+    release: dict[str, Any],
+    *,
+    version: str,
+    package_type: str,
+) -> dict[str, Any]:
+    """Select exactly one root wheel or sdist from PyPI release metadata."""
+
+    urls = release.get("urls")
+    if not isinstance(urls, list):
+        raise TypeError("PyPI release metadata is missing its artifact list")
+
+    if package_type == "bdist_wheel":
+        expected_prefix = f"simplebroker-{version}-"
+
+        def matches(filename: str) -> bool:
+            return filename.startswith(expected_prefix) and filename.endswith(".whl")
+
+        label = "wheel"
+    elif package_type == "sdist":
+
+        def matches(filename: str) -> bool:
+            return filename == f"simplebroker-{version}.tar.gz"
+
+        label = "sdist"
+    else:  # pragma: no cover - internal caller invariant
+        raise RuntimeError(f"Unsupported PyPI artifact type {package_type!r}")
+
+    candidates: list[dict[str, Any]] = []
+    for value in urls:
+        if not isinstance(value, dict) or value.get("packagetype") != package_type:
+            continue
+        filename = value.get("filename")
+        if isinstance(filename, str) and matches(filename):
+            candidates.append(cast(dict[str, Any], value))
+
+    if len(candidates) != 1:
+        filenames = [candidate.get("filename") for candidate in candidates]
+        raise RuntimeError(
+            f"Expected exactly one simplebroker {version} {label}, got {filenames!r}"
+        )
+    return candidates[0]
+
+
+def _download_verified_published_file(
+    entry: dict[str, Any],
+    *,
+    destination: Path,
+    label: str,
+) -> Path:
+    """Download one PyPI artifact and require its indexed SHA-256."""
+
+    filename = entry.get("filename")
+    url = entry.get("url")
+    digests = entry.get("digests")
+    if not isinstance(filename, str) or Path(filename).name != filename:
+        raise RuntimeError(f"PyPI {label} metadata has an unsafe filename")
+    if not isinstance(url, str) or urllib_parse.urlparse(url).scheme != "https":
+        raise RuntimeError(f"PyPI {label} metadata has a non-HTTPS URL")
+    if not isinstance(digests, dict):
+        raise TypeError(f"PyPI {label} metadata is missing digests")
+    expected_digest = digests.get("sha256")
+    if not isinstance(expected_digest, str) or not re.fullmatch(
+        r"[0-9a-fA-F]{64}", expected_digest
+    ):
+        raise RuntimeError(f"PyPI {label} metadata has an invalid SHA-256")
+
+    content = _read_url_bytes(url)
+    actual_digest = hashlib.sha256(content).hexdigest()
+    if not hmac.compare_digest(actual_digest, expected_digest.lower()):
+        raise RuntimeError(
+            f"SHA-256 mismatch for {filename}: expected "
+            f"{expected_digest.lower()}, got {actual_digest}"
+        )
+
+    artifact_path = destination / filename
+    artifact_path.write_bytes(content)
+    print(
+        f"Verified published {label} {filename} sha256={actual_digest}",
+        flush=True,
+    )
+    return artifact_path
+
+
+def _download_published_root_artifacts(
+    version: str,
+    destination: Path,
+) -> _RootPackagingArtifacts:
+    """Download an exact published root wheel and sdist with digest checks."""
+
+    normalized_version = _validate_published_version(version)
+    metadata_url = _PYPI_ROOT_RELEASE_URL.format(
+        version=urllib_parse.quote(normalized_version, safe="")
+    )
+    try:
+        raw_release = json.loads(_read_url_bytes(metadata_url))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RuntimeError("PyPI returned invalid release metadata") from exc
+    if not isinstance(raw_release, dict):
+        raise TypeError("PyPI returned invalid release metadata")
+    release = cast(dict[str, Any], raw_release)
+
+    info = release.get("info")
+    if not isinstance(info, dict):
+        raise TypeError("PyPI release metadata is missing package information")
+    if info.get("name") != "simplebroker" or info.get("version") != normalized_version:
+        raise RuntimeError(
+            f"PyPI release metadata did not match simplebroker=={normalized_version}"
+        )
+
+    destination.mkdir(parents=True, exist_ok=True)
+    wheel_entry = _select_published_root_file(
+        release,
+        version=normalized_version,
+        package_type="bdist_wheel",
+    )
+    sdist_entry = _select_published_root_file(
+        release,
+        version=normalized_version,
+        package_type="sdist",
+    )
+    return _RootPackagingArtifacts(
+        root_wheel=_download_verified_published_file(
+            wheel_entry,
+            destination=destination,
+            label="wheel",
+        ),
+        root_sdist=_download_verified_published_file(
+            sdist_entry,
+            destination=destination,
+            label="sdist",
+        ),
+    )
+
+
 def _build_packaging_artifacts() -> _PackagingArtifacts:
     """Build and locate every released distribution artifact."""
     _remove_build_outputs()
@@ -965,17 +1196,35 @@ def _inspect_packaging_artifacts(artifacts: _PackagingArtifacts) -> str:
     return root_version
 
 
-def _smoke_install_artifacts(
-    artifacts: _PackagingArtifacts,
+def _artifact_probe_environment() -> dict[str, str]:
+    """Return an inherited environment without source-path injection."""
+
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+    return environment
+
+
+def _run_clean_artifact_probe(
+    install_requirements: list[str],
     *,
     python: str,
+    probe_source: str,
+    temp_prefix: str,
 ) -> None:
-    """Install built wheels together and verify backend discovery."""
-    with tempfile.TemporaryDirectory(prefix="simplebroker-packaging-smoke-") as tmp:
-        env_dir = Path(tmp) / "venv"
-        _run(["uv", "venv", "--python", python, str(env_dir)])
-        venv_python = _venv_python(env_dir)
+    """Install artifacts and run a probe wholly outside the source checkout."""
 
+    with tempfile.TemporaryDirectory(prefix=temp_prefix) as tmp:
+        probe_root = Path(tmp)
+        work_dir = probe_root / "work"
+        work_dir.mkdir()
+        env_dir = probe_root / "venv"
+        environment = _artifact_probe_environment()
+        _run(
+            ["uv", "venv", "--python", python, str(env_dir)],
+            cwd=work_dir,
+            env=environment,
+        )
+        venv_python = _venv_python(env_dir)
         _run(
             [
                 "uv",
@@ -983,38 +1232,92 @@ def _smoke_install_artifacts(
                 "install",
                 "--python",
                 str(venv_python),
-                f"simplebroker[pg,redis] @ {artifacts.root_wheel.resolve().as_uri()}",
-                f"simplebroker-pg @ {artifacts.pg_wheel.resolve().as_uri()}",
-                f"simplebroker-redis @ {artifacts.redis_wheel.resolve().as_uri()}",
-            ]
+                *install_requirements,
+            ],
+            cwd=work_dir,
+            env=environment,
         )
         _run(
-            [
-                str(venv_python),
-                "-c",
-                (
-                    "import simplebroker_pg\n"
-                    "import simplebroker_redis\n"
-                    "from simplebroker.ext import get_backend_plugin\n"
-                    "pg_plugin = get_backend_plugin('postgres')\n"
-                    "redis_plugin = get_backend_plugin('redis')\n"
-                    "if pg_plugin.name != 'postgres':\n"
-                    "    raise RuntimeError(\n"
-                    "        f\"Packaging smoke expected backend 'postgres', "
-                    'got {pg_plugin.name!r}"\n'
-                    "    )\n"
-                    "if redis_plugin.name != 'redis':\n"
-                    "    raise RuntimeError(\n"
-                    "        f\"Packaging smoke expected backend 'redis', "
-                    'got {redis_plugin.name!r}"\n'
-                    "    )\n"
-                ),
-            ]
+            [str(venv_python), "-c", probe_source],
+            cwd=work_dir,
+            env=environment,
         )
+
+
+def _smoke_install_extension_wheels(
+    artifacts: _PackagingArtifacts,
+    *,
+    python: str,
+) -> None:
+    """Install the three built wheels together and verify backend discovery."""
+
+    _run_clean_artifact_probe(
+        [
+            f"simplebroker[pg,redis] @ {artifacts.root_wheel.resolve().as_uri()}",
+            f"simplebroker-pg @ {artifacts.pg_wheel.resolve().as_uri()}",
+            f"simplebroker-redis @ {artifacts.redis_wheel.resolve().as_uri()}",
+        ],
+        python=python,
+        probe_source=_EXTENSION_ARTIFACT_PROBE,
+        temp_prefix="simplebroker-extension-wheel-smoke-",
+    )
+
+
+def _smoke_install_root_artifact(
+    artifact: Path,
+    *,
+    artifact_kind: str,
+    python: str,
+) -> None:
+    """Install and exercise one root distribution in a clean environment."""
+
+    _run_clean_artifact_probe(
+        [f"simplebroker @ {artifact.resolve().as_uri()}"],
+        python=python,
+        probe_source=_ROOT_ARTIFACT_PROBE,
+        temp_prefix=f"simplebroker-root-{artifact_kind}-smoke-",
+    )
+    print(f"Root {artifact_kind} artifact smoke passed", flush=True)
+
+
+def _smoke_install_root_artifacts(
+    artifacts: _RootPackagingArtifacts,
+    *,
+    python: str,
+) -> None:
+    """Probe the root wheel and sdist in separate clean environments."""
+
+    _smoke_install_root_artifact(
+        artifacts.root_wheel,
+        artifact_kind="wheel",
+        python=python,
+    )
+    _smoke_install_root_artifact(
+        artifacts.root_sdist,
+        artifact_kind="sdist",
+        python=python,
+    )
+
+
+def _smoke_install_artifacts(
+    artifacts: _PackagingArtifacts,
+    *,
+    python: str,
+) -> None:
+    """Probe extension wheels plus separate root wheel and sdist installs."""
+
+    _smoke_install_extension_wheels(artifacts, python=python)
+    _smoke_install_root_artifacts(
+        _RootPackagingArtifacts(
+            root_wheel=artifacts.root_wheel,
+            root_sdist=artifacts.root_sdist,
+        ),
+        python=python,
+    )
 
 
 def packaging_smoke_main() -> int:
-    """Build wheels, inspect metadata, and smoke-install supported extras."""
+    """Smoke-test built artifacts or one exact published root release."""
 
     parser = argparse.ArgumentParser(
         description="Build and smoke-test SimpleBroker packaging artifacts."
@@ -1024,6 +1327,13 @@ def packaging_smoke_main() -> int:
         default="3.11",
         help="Python version or interpreter to use for the install smoke env.",
     )
+    parser.add_argument(
+        "--published-version",
+        help=(
+            "Download and probe the exact published simplebroker X.Y.Z root "
+            "wheel and sdist instead of building checkout artifacts."
+        ),
+    )
     args = parser.parse_args()
 
     if shutil.which("uv") is None:
@@ -1031,6 +1341,23 @@ def packaging_smoke_main() -> int:
         return 1
 
     try:
+        if args.published_version is not None:
+            published_version = _validate_published_version(args.published_version)
+            with tempfile.TemporaryDirectory(
+                prefix="simplebroker-published-artifacts-"
+            ) as tmp:
+                root_artifacts = _download_published_root_artifacts(
+                    published_version,
+                    Path(tmp),
+                )
+                _smoke_install_root_artifacts(root_artifacts, python=args.python)
+            print(
+                "Published packaging smoke passed for "
+                f"simplebroker {published_version} on Python {args.python}",
+                flush=True,
+            )
+            return 0
+
         artifacts = _build_packaging_artifacts()
         root_version = _inspect_packaging_artifacts(artifacts)
         _smoke_install_artifacts(artifacts, python=args.python)

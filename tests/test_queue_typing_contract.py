@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import assert_type
 
-from simplebroker import MovedMessage, Queue
+from simplebroker import CloseableIterator, MovedMessage, Queue
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -28,15 +28,16 @@ def assert_high_level_queue_types(queue: Queue, runtime_bool: bool) -> None:
 
     assert_type(queue.peek(), str | None)
     assert_type(queue.peek(with_timestamps=True), tuple[str, int] | None)
-    assert_type(queue.peek(all_messages=True), Iterator[str])
+    assert_type(queue.peek(all_messages=True), CloseableIterator[str])
     assert_type(
         queue.peek(all_messages=True, with_timestamps=True),
-        Iterator[tuple[str, int]],
+        CloseableIterator[tuple[str, int]],
     )
     assert_type(
         queue.peek(all_messages=runtime_bool),
-        str | tuple[str, int] | Iterator[str | tuple[str, int]] | None,
+        str | tuple[str, int] | CloseableIterator[str | tuple[str, int]] | None,
     )
+    queue.peek(all_messages=True).close()
 
     assert_type(queue.move("destination"), MovedMessage | None)
     assert_type(queue.move("destination", all_messages=True), Iterator[MovedMessage])
@@ -76,12 +77,18 @@ def assert_granular_queue_types(queue: Queue, runtime_bool: bool) -> None:
         queue.peek_many(with_timestamps=runtime_bool),
         list[str] | list[tuple[str, int]],
     )
-    assert_type(queue.peek_generator(), Iterator[str])
-    assert_type(queue.peek_generator(with_timestamps=True), Iterator[tuple[str, int]])
+    assert_type(queue.peek_generator(), CloseableIterator[str])
+    assert_type(
+        queue.peek_generator(with_timestamps=True),
+        CloseableIterator[tuple[str, int]],
+    )
     assert_type(
         queue.peek_generator(with_timestamps=runtime_bool),
-        Iterator[str | tuple[str, int]],
+        CloseableIterator[str | tuple[str, int]],
     )
+    queue.peek_generator().close()
+    ordinary_iterator: Iterator[str] = queue.peek_generator()
+    assert_type(ordinary_iterator, Iterator[str])
 
     assert_type(queue.move_one("destination"), str | None)
     assert_type(

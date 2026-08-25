@@ -74,6 +74,9 @@ def test_agent_kernel_forbids_delete_while_peek_stream() -> None:
     assert "offset" in normalized and "skip" in normalized
     assert "removing rows during that iteration" in normalized
     assert "move-then-process" in normalized
+    assert "close" in normalized
+    assert "same thread" in normalized
+    assert "queue operation" in normalized
 
 
 def test_agent_kernel_does_not_claim_identical_cli_python_packaging() -> None:
@@ -92,6 +95,7 @@ def test_agent_kernel_public_surface_symbols_exist() -> None:
     # against renames (no "mentioned in doc" fallback).
     required = (
         "Queue",
+        "CloseableIterator",
         "MovedMessage",
         "QueueWatcher",
         "open_broker",
