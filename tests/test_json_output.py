@@ -9,7 +9,7 @@ import warnings
 
 import pytest
 
-from simplebroker import commands
+from simplebroker import Queue, commands
 from simplebroker.cli import main
 
 from .conftest import run_cli
@@ -189,30 +189,42 @@ def test_plain_fetch_newline_warning_covers_selectors_and_timestamps(
     selector,
     timestamps,
 ):
+    """Exhaustive matrix runs in-process against the command layer.
+
+    The warning is commands-owned; CLI plumbing (parsing, exit codes,
+    stderr routing, cross-process filter isolation) keeps subprocess
+    representatives for the normal, quiet, and JSON modes elsewhere in
+    this file (plan Task 3.4).
+    """
+    db_path = str(workdir / "broker.db")
     queue = f"warning_{command}_{selector}_{timestamps}"
-    args = [command, queue]
-    if selector == "after":
-        rc, anchor, err = run_cli("write", queue, "anchor", "--timestamps", cwd=workdir)
-        assert rc == 0, err
-        run_cli("write", queue, "line1\nline2", cwd=workdir)
-        args.extend(["--after", anchor])
-    else:
-        rc, message_id, err = run_cli(
-            "write", queue, "line1\nline2", "--timestamps", cwd=workdir
-        )
-        assert rc == 0, err
-        if selector == "all":
-            run_cli("write", queue, "again\nnext", cwd=workdir)
-            args.append("--all")
-        elif selector == "message":
-            args.extend(["--message", message_id])
-    if timestamps:
-        args.append("--timestamps")
+    kwargs: dict[str, object] = {"show_timestamps": timestamps}
+    with Queue(queue, db_path=db_path, persistent=True) as seeder:
+        if selector == "after":
+            seeder.write("anchor")
+            rows = seeder.peek_many(10, with_timestamps=True)
+            kwargs["after_str"] = str(rows[0][1])
+            seeder.write("line1\nline2")
+        else:
+            seeder.write("line1\nline2")
+            rows = seeder.peek_many(10, with_timestamps=True)
+            if selector == "all":
+                seeder.write("again\nnext")
+                kwargs["all_messages"] = True
+            elif selector == "message":
+                kwargs["message_id_str"] = str(rows[0][1])
 
-    rc, _out, err = run_cli(*args, cwd=workdir)
+    runner = commands.cmd_read if command == "read" else commands.cmd_peek
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("default", commands._MessageNewlineWarning)
+        assert runner(db_path, queue, **kwargs) == 0  # type: ignore[arg-type]
 
-    assert rc == 0
-    assert err.count("Message contains newline characters") == 1
+    owned = [
+        warning
+        for warning in caught
+        if warning.category is commands._MessageNewlineWarning
+    ]
+    assert len(owned) == 1
 
 
 @pytest.mark.parametrize("selector", ["single", "all", "message", "after"])
@@ -222,33 +234,39 @@ def test_plain_move_newline_warning_covers_selectors_and_timestamps(
     selector,
     timestamps,
 ):
+    """Exhaustive move matrix, in-process (see the fetch matrix above)."""
+    db_path = str(workdir / "broker.db")
     source = f"move_warning_{selector}_{timestamps}"
     destination = f"move_warning_dest_{selector}_{timestamps}"
-    args = ["move", source, destination]
-    if selector == "after":
-        rc, anchor, err = run_cli(
-            "write", source, "anchor", "--timestamps", cwd=workdir
-        )
-        assert rc == 0, err
-        run_cli("write", source, "line1\nline2", cwd=workdir)
-        args.extend(["--after", anchor])
-    else:
-        rc, message_id, err = run_cli(
-            "write", source, "line1\nline2", "--timestamps", cwd=workdir
-        )
-        assert rc == 0, err
-        if selector == "all":
-            run_cli("write", source, "again\nnext", cwd=workdir)
-            args.append("--all")
-        elif selector == "message":
-            args.extend(["--message", message_id])
-    if timestamps:
-        args.append("--timestamps")
+    kwargs: dict[str, object] = {"show_timestamps": timestamps}
+    with Queue(source, db_path=db_path, persistent=True) as seeder:
+        if selector == "after":
+            seeder.write("anchor")
+            rows = seeder.peek_many(10, with_timestamps=True)
+            kwargs["after_str"] = str(rows[0][1])
+            seeder.write("line1\nline2")
+        else:
+            seeder.write("line1\nline2")
+            rows = seeder.peek_many(10, with_timestamps=True)
+            if selector == "all":
+                seeder.write("again\nnext")
+                kwargs["all_messages"] = True
+            elif selector == "message":
+                kwargs["message_id_str"] = str(rows[0][1])
 
-    rc, _out, err = run_cli(*args, cwd=workdir)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("default", commands._MessageNewlineWarning)
+        assert (
+            commands.cmd_move(db_path, source, destination, **kwargs)  # type: ignore[arg-type]
+            == 0
+        )
 
-    assert rc == 0
-    assert err.count("Message contains newline characters") == 1
+    owned = [
+        warning
+        for warning in caught
+        if warning.category is commands._MessageNewlineWarning
+    ]
+    assert len(owned) == 1
 
 
 @pytest.mark.parametrize(

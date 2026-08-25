@@ -11,9 +11,17 @@ import re
 
 import pytest
 
+from simplebroker import Queue, target_for_directory
+
 from .conftest import run_cli
 
 _ID_RE = re.compile(r"^\d{19}$")
+
+
+def _peek_one(workdir) -> str | None:
+    """Verify durable state through the Queue API (no subprocess spawn)."""
+    with Queue("q", db_path=target_for_directory(workdir), persistent=True) as queue:
+        return queue.peek_one()
 
 
 def test_write_default_is_silent(workdir):
@@ -29,7 +37,8 @@ def test_write_timestamps_flag_before_queue_prints_id(workdir):
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
 
-    # Round-trip: the printed ID addresses exactly this message.
+    # Retained end-to-end representative (plan Task 3.3): a full
+    # write -> emitted ID -> separate CLI read round trip.
     code, out, _ = run_cli("read", "q", "-m", stdout, cwd=workdir)
     assert code == 0
     assert out == "hello"
@@ -52,6 +61,7 @@ def test_write_json_prints_timestamp_only(workdir):
     assert re.fullmatch(r"[0-9]{19}", payload["timestamp"])
     assert re.search(r'"timestamp"\s*:\s*"[0-9]{19}"', stdout)
 
+    # Retained end-to-end JSON representative (plan Task 3.3).
     code, out, _ = run_cli("read", "q", "--json", cwd=workdir)
     assert code == 0
     assert json.loads(out)["timestamp"] == payload["timestamp"]
@@ -80,9 +90,7 @@ def test_write_flag_with_stdin_marker(workdir):
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
 
-    code, out, _ = run_cli("read", "q", cwd=workdir)
-    assert code == 0
-    assert out == "piped body"
+    assert _peek_one(workdir) == "piped body"
 
 
 def test_write_flag_with_omitted_message_stdin(workdir):
@@ -100,9 +108,7 @@ def test_write_flag_before_queue_with_stdin_marker(workdir):
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
 
-    code, out, _ = run_cli("read", "q", cwd=workdir)
-    assert code == 0
-    assert out == "piped body"
+    assert _peek_one(workdir) == "piped body"
 
 
 def test_dash_leading_queue_operand_still_fails_validation(workdir):
@@ -122,33 +128,7 @@ def test_output_option_after_queue_uses_omitted_message_stdin(workdir):
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
 
-    code, out, _ = run_cli("read", "q", cwd=workdir)
-    assert code == 0
-    assert out == "piped body"
-
-
-@pytest.mark.parametrize(
-    "token",
-    [
-        "--cleanup",
-        "--cleanup=yes",
-        "--force",
-        "--after=1s",
-        "--target=other",
-        "-m123",
-        "-pqueue*",
-        "-d/tmp",
-    ],
-)
-def test_registered_non_write_option_rejects_without_target_mutation(workdir, token):
-    code, stdout, stderr = run_cli("write", "q", token, cwd=workdir)
-
-    assert code == 1
-    assert stdout == ""
-    assert token in stderr
-    assert "use --" in stderr.lower()
-    assert "traceback" not in stderr.lower()
-    assert not (workdir / ".broker.db").exists()
+    assert _peek_one(workdir) == "piped body"
 
 
 @pytest.mark.parametrize("message", ["--not-registered", "-t-prefixed"])
@@ -157,7 +137,7 @@ def test_unknown_dash_leading_write_message_remains_literal(workdir, message):
 
     assert code == 0, stderr
     assert stdout == ""
-    assert run_cli("read", "q", cwd=workdir)[1] == message
+    assert _peek_one(workdir) == message
 
 
 def test_raw_json_does_not_establish_mode_for_registered_token_conflict(workdir):
@@ -177,9 +157,7 @@ def test_flag_plus_literal_dash_message_via_escape(workdir):
     assert code == 0, stderr
     assert _ID_RE.match(stdout), stdout
 
-    code, out, _ = run_cli("read", "q", cwd=workdir)
-    assert code == 0
-    assert out == "-t"
+    assert _peek_one(workdir) == "-t"
 
 
 def test_status_operand_after_double_dash_does_not_disable_write_json(workdir):
@@ -189,7 +167,7 @@ def test_status_operand_after_double_dash_does_not_disable_write_json(workdir):
 
     assert code == 0, stderr
     assert set(json.loads(stdout)) == {"timestamp"}
-    assert run_cli("read", "q", cwd=workdir)[1] == "--status"
+    assert _peek_one(workdir) == "--status"
 
 
 @pytest.mark.parametrize("help_token", ["-h", "--help"])
@@ -202,4 +180,4 @@ def test_help_operand_after_double_dash_stays_literal_with_write_json(
 
     assert code == 0, stderr
     assert set(json.loads(stdout)) == {"timestamp"}
-    assert run_cli("read", "q", cwd=workdir)[1] == help_token
+    assert _peek_one(workdir) == help_token

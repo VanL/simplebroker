@@ -25,72 +25,6 @@ from .conftest import run_cli
 # ============================================================================
 
 
-def test_timestamp_wrong_length_returns_error(workdir: Path):
-    """Test that timestamps with wrong length return exit code 1 without database query."""
-    # Write a message to ensure queue exists
-    run_cli("write", "test_queue", "message1", cwd=workdir)
-
-    # Test various wrong lengths
-    invalid_timestamps = [
-        "123",  # Too short
-        "12345678901234567890",  # Too long (20 digits)
-        "1",  # Single digit
-        "123456789012345678",  # 18 digits (one short)
-        "12345678901234567890123",  # Way too long
-        "",  # Empty string
-    ]
-
-    for ts in invalid_timestamps:
-        # Read
-        rc, out, _err = run_cli("read", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 1, f"Expected exit code 1 for timestamp '{ts}', got {rc}"
-        assert out == "", f"Expected no output for invalid timestamp '{ts}'"
-
-        # Peek
-        rc, out, _err = run_cli("peek", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 1
-        assert out == ""
-
-        # Delete
-        rc, out, _err = run_cli("delete", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 1
-        assert out == ""
-
-
-def test_timestamp_non_digits_returns_error(workdir: Path):
-    """Test that timestamps with non-digits return exit code 1 without database query."""
-    # Write a message to ensure queue exists
-    run_cli("write", "test_queue", "message1", cwd=workdir)
-
-    # Test various non-digit patterns (all 19 chars long)
-    invalid_timestamps = [
-        "abc1234567890123456",  # Letters at start
-        "1234567890123456abc",  # Letters at end
-        "123456789a123456789",  # Letter in middle
-        "1234567890123456.89",  # Decimal point
-        "1234567890123456-89",  # Hyphen
-        "1234567890123456 89",  # Space
-        "1234567890123456789!",  # Special character
-        "123456789012345678x",  # Single non-digit
-    ]
-
-    for ts in invalid_timestamps:
-        # Read
-        rc, out, _err = run_cli("read", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 1, f"Expected exit code 1 for timestamp '{ts}', got {rc}"
-        assert out == ""
-
-        # Peek
-        rc, out, _err = run_cli("peek", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 1
-        assert out == ""
-
-        # Delete
-        rc, out, _err = run_cli("delete", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 1
-        assert out == ""
-
-
 def test_valid_format_proceeds_to_database(workdir: Path):
     """Test that valid format timestamps (19 digits) proceed to database query."""
     # Valid but non-existent timestamp
@@ -142,47 +76,6 @@ def test_malformed_message_id_reports_error_but_absent_id_is_silent(
     assert rc == 2
     assert out == ""
     assert err == ""
-
-
-def test_other_valid_timestamp_formats_rejected(workdir: Path):
-    """Test that other valid timestamp formats are rejected for -m flag."""
-    # Write a message to ensure queue exists
-    run_cli("write", "test_queue", "message1", cwd=workdir)
-
-    # These are all valid timestamps for --after, but NOT for -m/--message
-    invalid_for_message_flag = [
-        "2024-01-15",  # ISO date
-        "2024-01-15T14:30:00Z",  # ISO datetime
-        "1705329000",  # Unix seconds (10 digits)
-        "1705329000s",  # Unix seconds with suffix
-        "1705329000000",  # Unix milliseconds (13 digits)
-        "1705329000000ms",  # Unix milliseconds with suffix
-        "1705329000000000000ns",  # Unix nanoseconds with suffix
-        "1837025672140161024hyb",  # Hybrid timestamp with suffix
-        "1.705329e9",  # Scientific notation
-        "1705329000.123",  # Float format
-    ]
-
-    for ts in invalid_for_message_flag:
-        # Read
-        rc, out, _err = run_cli("read", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 1, f"Expected exit code 1 for timestamp '{ts}', got {rc}"
-        assert out == "", f"Expected no output for timestamp '{ts}'"
-
-        # Peek
-        rc, out, _err = run_cli("peek", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 1
-        assert out == ""
-
-        # Delete
-        rc, out, _err = run_cli("delete", "test_queue", "-m", ts, cwd=workdir)
-        assert rc == 1
-        assert out == ""
-
-
-# ============================================================================
-# Basic Functionality Tests
-# ============================================================================
 
 
 def test_read_message_by_timestamp(workdir: Path):

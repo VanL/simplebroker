@@ -256,7 +256,16 @@ def test_sb_cli_3_write_token_matrix(
 
 @pytest.mark.parametrize(
     "token",
-    ["--cleanup", "--force", "--after=1s", "--target=queue", "-pqueue*"],
+    [
+        "--cleanup",
+        "--cleanup=yes",
+        "--force",
+        "--after=1s",
+        "--target=queue",
+        "-m123",
+        "-pqueue*",
+        "-d/tmp",
+    ],
 )
 def test_sb_cli_3_registered_write_tokens_reject_before_mutation(
     workdir: Path, token: str

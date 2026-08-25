@@ -7,7 +7,6 @@ Tests how broadcast messages interact with checkpoint-based consumption.
 import json
 
 from .conftest import run_cli
-from .helper_scripts.timing import wait_for_condition
 
 
 def _queue_has_broadcast(workdir, queue_name, checkpoint):
@@ -51,13 +50,10 @@ def test_broadcast_with_after_filtering(workdir):
     # Broadcast a message after the checkpoint
     run_cli("broadcast", "broadcast_msg", cwd=workdir)
 
-    # Check each queue for messages after checkpoint
+    # Broadcast is synchronous: once run_cli returns 0 the rows are
+    # durable, so assert directly instead of polling (plan Task 3.7).
     for q in queues:
-        assert wait_for_condition(
-            lambda q=q: _queue_has_broadcast(workdir, q, int(checkpoint)),  # type: ignore[misc]
-            timeout=3.0,
-            interval=0.05,
-        )
+        assert _queue_has_broadcast(workdir, q, int(checkpoint))
 
 
 def test_broadcast_checkpoint_based_workers(workdir):
@@ -111,11 +107,8 @@ def test_broadcast_ordering_with_timestamps(workdir):
 
     # Check ordering in each queue
     for q in queues:
-        assert wait_for_condition(
-            lambda q=q: _has_expected_messages(workdir, q, 3),  # type: ignore[misc]
-            timeout=3.0,
-            interval=0.05,
-        )
+        # Synchronous writes and broadcast: assert directly, no polling.
+        assert _has_expected_messages(workdir, q, 3)
         rc, out, err = run_cli("peek", q, "--all", "--timestamps", cwd=workdir)
         assert rc == 0, err
         lines = [line for line in out.strip().split("\n") if line]
