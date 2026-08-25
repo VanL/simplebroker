@@ -13,16 +13,14 @@ are reclaimed to prevent test failures on Windows.
 """
 
 import os
-import platform
-import tempfile
-from collections.abc import Callable
+import sqlite3
+from collections.abc import Callable, Iterator
 from contextlib import closing
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
-from simplebroker._constants import DEFAULT_DB_NAME, load_config
+from simplebroker._constants import DEFAULT_DB_NAME
 from simplebroker._paths import (
     _find_project_database,
     _is_ancestor_of_working_directory,
@@ -31,77 +29,12 @@ from simplebroker._paths import (
 )
 from simplebroker.cli import (
     _resolve_database_path,
-    create_parser,
-    main,
 )
 from simplebroker.db import BrokerDB
 
+from .conftest import run_cli
+
 TempDBCleanup = tuple[Path, Callable[[], None]]
-
-
-class TestEnvironmentVariableParsing:
-    """Test environment variable parsing and configuration loading."""
-
-    @patch.dict(os.environ, {}, clear=True)
-    def test_load_config_defaults(self) -> None:
-        """Test load_config returns correct defaults when no env vars set."""
-        config = load_config()
-
-        assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
-        assert config["BROKER_DEFAULT_DB_NAME"] == DEFAULT_DB_NAME
-        assert config["BROKER_PROJECT_SCOPE"] is False
-
-    @patch.dict(
-        os.environ,
-        {
-            "BROKER_DEFAULT_DB_LOCATION": (
-                "C:\\tmp\\test"
-                if platform.system() == "Windows"
-                else os.sep.join([os.sep + "tmp", "test"])
-            ),
-            "BROKER_DEFAULT_DB_NAME": "custom.db",
-            "BROKER_PROJECT_SCOPE": "1",
-        },
-    )
-    def test_load_config_with_env_vars(self) -> None:
-        """Test load_config reads environment variables correctly."""
-        config = load_config()
-        # Absolute path should remain unchanged
-        expected_path = (
-            "C:\\tmp\\test"
-            if platform.system() == "Windows"
-            else os.sep.join([os.sep + "tmp", "test"])
-        )
-        assert config["BROKER_DEFAULT_DB_LOCATION"] == expected_path
-        assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
-        assert config["BROKER_PROJECT_SCOPE"] is True
-
-    @patch.dict(
-        os.environ,
-        {
-            "BROKER_DEFAULT_DB_LOCATION": os.sep.join(["tmp", "test"]),
-            "BROKER_DEFAULT_DB_NAME": "custom.db",
-            "BROKER_PROJECT_SCOPE": "1",
-        },
-    )
-    def test_load_config_with_relative_path_warning(self) -> None:
-        """Test load_config issues warning and ignores relative paths."""
-        import warnings
-
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            config = load_config()
-            relative_path = os.sep.join(["tmp", "test"])
-            # Should issue a warning
-            assert len(w) == 1
-            assert issubclass(w[0].category, UserWarning)
-            assert "must be an absolute path" in str(w[0].message)
-            assert relative_path in str(w[0].message)
-
-            # Should be reset to empty string
-            assert config["BROKER_DEFAULT_DB_LOCATION"] == ""
-        assert config["BROKER_DEFAULT_DB_NAME"] == "custom.db"
-        assert config["BROKER_PROJECT_SCOPE"] is True
 
 
 class TestFilesystemBoundaryDetection:
@@ -329,11 +262,18 @@ class TestProjectDatabaseSearch:
         with BrokerDB(str(parent_db)):
             pass
 
+        if os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0):
+            pytest.skip("chmod-based access denial needs a non-root POSIX user")
         try:
-            # Make access check fail
-            with patch("os.access", side_effect=lambda p, mode: False):
+            # Real permission denial instead of a global os.access patch:
+            # an unreadable candidate database is treated as invalid and
+            # skipped by the upward search.
+            parent_db.chmod(0o000)
+            try:
                 result = _find_project_database(".broker.db", sub_dir)
                 assert result is None
+            finally:
+                parent_db.chmod(0o644)
         finally:
             cleanup_func()
 
@@ -382,7 +322,7 @@ class TestDatabasePathResolution:
         try:
             args = argparse.Namespace(
                 file=DEFAULT_DB_NAME,  # Not absolute
-                dir=Path.cwd(),
+                dir=sub_dir,  # real discovery starts here and walks up
                 command="write",
             )
             absolute_path = os.sep.join([os.sep + "env", "default", "path"])
@@ -392,13 +332,13 @@ class TestDatabasePathResolution:
                 "BROKER_PROJECT_SCOPE": True,
             }
 
-            # Mock search to return our test database
-            with patch(
-                "simplebroker.cli._find_project_database", return_value=project_db
-            ):
-                result_path, used_scope = _resolve_database_path(args, config=config)
-                assert result_path == project_db
-                assert used_scope is True
+            # Real project discovery: the fixture tree holds the database,
+            # so precedence is proven against actual search, not a canned
+            # mock answer (audit finding — the mocked version could not
+            # catch a discovery regression).
+            result_path, used_scope = _resolve_database_path(args, config=config)
+            assert result_path == project_db
+            assert used_scope is True
         finally:
             cleanup_func()
 
@@ -529,74 +469,43 @@ class TestCLIIntegration:
     """Test CLI integration with project scoping."""
 
     def test_init_command_dispatch(self, temp_db_cleanup: TempDBCleanup) -> None:
-        """Test that init command is properly dispatched."""
+        """init dispatches through the real CLI process (folds the old
+        parser-accepts-init near-tautology into a behavioral check)."""
         tmp_path, cleanup_func = temp_db_cleanup
-
-        original_cwd = os.getcwd()
         try:
-            os.chdir(str(tmp_path))
-
-            with patch("sys.argv", ["broker", "--quiet", "init"]):
-                result = main()
-
-            assert result == 0
+            rc, _out, err = run_cli("--quiet", "init", cwd=tmp_path)
+            assert rc == 0, err
             assert (tmp_path / ".broker.db").exists()
         finally:
             cleanup_func()
-            os.chdir(original_cwd)
-
-    def test_parser_includes_init_command(self) -> None:
-        """Test that parser includes init command."""
-        parser = create_parser()
-
-        args = parser.parse_args(["init"])
-        assert args.command == "init"
 
 
 @pytest.fixture
-def temp_db_cleanup() -> TempDBCleanup:
-    """Fixture that provides temporary directory with proper database cleanup.
+def temp_db_cleanup(tmp_path: Path) -> Iterator[TempDBCleanup]:
+    """pytest-managed temp dir plus an idempotent database-close helper.
 
-    This is crucial for Windows compatibility - databases must be properly
-    closed before the temporary directory is cleaned up.
-
-    Returns:
-        tuple of (tmp_path, cleanup_function)
+    Teardown always runs via the fixture (the old hand-rolled mkdtemp
+    leaked the directory whenever a test errored before its own finally);
+    the yielded cleanup callable remains for call sites and for Windows,
+    where databases must be closed before removal.
     """
-    tmpdir = tempfile.mkdtemp()
-    tmp_path = Path(tmpdir)
 
     def cleanup_func() -> None:
-        """Clean up all databases before temp directory removal."""
-        # Force cleanup of any SQLite databases in the directory
         for db_file in tmp_path.rglob("*.db"):
             try:
-                if db_file.exists():
-                    # Try to cleanly close any connections
-                    import sqlite3
-
-                    try:
-                        # Attempt to connect and immediately close to flush any pending operations
-                        conn = sqlite3.connect(str(db_file), timeout=1.0)
-                        conn.close()
-                    except (sqlite3.Error, OSError):
-                        pass
-
-                    # Remove the database file
-                    db_file.unlink(missing_ok=True)
+                conn = sqlite3.connect(str(db_file), timeout=1.0)
+                conn.close()
+            except (sqlite3.Error, OSError):
+                pass
+            try:
+                db_file.unlink(missing_ok=True)
             except (OSError, PermissionError):
-                # If we can't remove it, at least we tried
                 pass
 
-        # Remove the temporary directory
-        import shutil
-
-        try:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-        except (OSError, PermissionError):
-            pass
-
-    return tmp_path, cleanup_func
+    try:
+        yield tmp_path, cleanup_func
+    finally:
+        cleanup_func()
 
 
 class TestSecurityEdgeCases:

@@ -5,9 +5,6 @@ Tests the intelligent burst mode management that only resets on actual activity.
 
 from __future__ import annotations
 
-import contextlib
-import os
-import sys
 import threading
 import time
 
@@ -22,15 +19,10 @@ pytestmark = [pytest.mark.shared]
 
 
 @pytest.fixture
-def no_jitter():
-    """Disable jitter for timing-sensitive tests."""
-    old_val = os.environ.get("BROKER_JITTER_FACTOR")
-    os.environ["BROKER_JITTER_FACTOR"] = "0"
+def no_jitter(monkeypatch: pytest.MonkeyPatch):
+    """Disable jitter for timing-sensitive tests (monkeypatch-scoped)."""
+    monkeypatch.setenv("BROKER_JITTER_FACTOR", "0")
     yield
-    if old_val is None:
-        os.environ.pop("BROKER_JITTER_FACTOR", None)
-    else:
-        os.environ["BROKER_JITTER_FACTOR"] = old_val
 
 
 class InstrumentedPollingStrategy(PollingStrategy):
@@ -503,137 +495,35 @@ def test_burst_mode_with_errors_batch_processing(no_jitter, broker_target) -> No
         broker.shutdown()
 
 
-def test_polling_jitter(broker_target) -> None:  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-032] exception
-    """Test that polling includes jitter to prevent synchronization."""
-    watchers = []
-    strategies: list[InstrumentedPollingStrategy] = []
-    broker = make_broker(broker_target)
-    try:
+def test_polling_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Jitter bounds and variation, deterministically.
 
-        def handler(msg, ts) -> None:
-            pass
+    Direct _get_delay calls with a scripted module-owned _uniform seam
+    (plan Task 5.9) replace five live watchers and 60s of statistical
+    sampling: every value must stay inside the jitter band AND vary, so
+    a constant in-range delay fails deterministically.
+    """
+    import itertools
 
-        # Create multiple watchers
-        for i in range(5):
-            w, strategy = make_recorded_watcher(
-                f"queue_{i}",
-                handler,
-                broker_target=broker_target,
-                jitter_factor=0.2,
-            )
-            watchers.append(w)
-            strategies.append(strategy)
-            w.run_in_thread()
+    import simplebroker.watcher as watcher_module
 
-        # Wait until we have enough samples to test jitter properly
-        # Keep running until we collect sufficient backed-off delay samples
-        required_samples = 30  # Need at least 30 samples for meaningful jitter test
-        start_time = time.monotonic()
-        max_wait = 60.0  # Give up to 60 seconds to collect samples
+    scripted = itertools.cycle([-0.2, -0.1, 0.0, 0.1, 0.2])
+    monkeypatch.setattr(
+        watcher_module, "_uniform", lambda low, high: next(scripted)
+    )
 
-        while time.monotonic() - start_time < max_wait:
-            # Count backed-off samples across all watchers
-            all_backed_off_delays = []
+    strategy = PollingStrategy(
+        threading.Event(),
+        initial_checks=0,
+        max_interval=0.1,
+        jitter_factor=0.2,
+    )
+    strategy._check_count = 300  # deep backoff: base delay = max_interval
 
-            for strategy in strategies:
-                if len(strategy.delay_history) > 0:
-                    # Collect delays that indicate backed-off state (near max_interval)
-                    # Using 0.7 threshold to ensure we're testing at full backoff
-                    backed_off = [
-                        d
-                        for d in strategy.delay_history
-                        if d > strategy._max_interval * 0.7
-                    ]
-                    all_backed_off_delays.extend(backed_off)
+    delays = [strategy._get_delay() for _ in range(100)]
 
-            # If we have enough backed-off samples, we can proceed
-            if len(all_backed_off_delays) >= required_samples:
-                break
-
-            time.sleep(0.1)  # Check every 100ms
-
-        # Ensure we got enough samples before timeout
-        elapsed = time.monotonic() - start_time
-        assert elapsed < max_wait, (
-            f"Timeout: could not collect {required_samples} backed-off samples in {max_wait}s"
-        )
-
-        # Collect the same backed-off delays we were waiting for
-        all_delays = []
-        all_strategies = []
-        for strategy in strategies:
-            all_strategies.append(strategy)
-            # Collect delays that indicate backed-off state (same criteria as wait loop)
-            backed_off_delays = [
-                d for d in strategy.delay_history if d > strategy._max_interval * 0.7
-            ]
-            all_delays.extend(backed_off_delays)
-
-        # We should have collected enough samples from the wait loop above
-        assert len(all_delays) >= 20, (
-            f"Should have at least 20 delay samples for jitter test, got {len(all_delays)}"
-        )
-
-        # Delays should vary due to jitter
-        unique_delays = set(all_delays)
-
-        # With jitter and multiple watchers, we should see variety
-        # But after we're using random.uniform, we might get some repeated values
-        # Require at least 2 unique values as absolute minimum
-        assert len(unique_delays) >= 2, (
-            f"Delays should vary due to jitter: got only {len(unique_delays)} unique values from {len(all_delays)} samples"
-        )
-
-        # Calculate the actual base delay for backed-off state
-        actual_base_delay = 0.01
-
-        # Check jitter range against actual base delay
-        min_delay = min(all_delays)
-        max_delay = max(all_delays)
-
-        # With jitter factor of 0.2 (±20%), delays should be:
-        # theoretical min: 0.1 * (1 - 0.2) = 0.08
-        # theoretical max: 0.1 * (1 + 0.2) = 0.12
-        # Allow some tolerance for timing/rounding issues
-        assert min_delay >= actual_base_delay * 0.70, (
-            f"Min delay {min_delay} should be >= {actual_base_delay * 0.70} (with tolerance)"
-        )
-        assert max_delay <= actual_base_delay * 1.30, (
-            f"Max delay {max_delay} should be <= {actual_base_delay * 1.30} (with tolerance)"
-        )
-
-        # Verify we have some spread of delays (not all identical)
-        # With many samples, even a small spread shows jitter is working
-        delay_spread = max_delay - min_delay
-        assert delay_spread > 0, (
-            f"Delay spread should be non-zero to show jitter is active, got {delay_spread}"
-        )
-
-        # If we have enough unique values, check for reasonable spread
-        if len(unique_delays) >= 5:
-            assert delay_spread >= actual_base_delay * 0.05, (
-                f"With {len(unique_delays)} unique values, spread {delay_spread} should be at least 5% of base delay"
-            )
-
-        # Cleanup watchers
-        for w in watchers:
-            # Ignore errors during cleanup
-            with contextlib.suppress(Exception):
-                w.stop()
-                if sys.platform == "win32":
-                    time.sleep(0.5)  # Allow threads to terminate
-    finally:
-        # Delete the watchers list to clean up references
-        for w in watchers:
-            del w
-        # On Windows, add a small delay to ensure threads fully terminate
-        # and file handles are released before closing the database
-
-        if sys.platform == "win32":
-            time.sleep(1)
-
-        # Now safe to close the broker
-        broker.shutdown()
+    assert all(0.08 - 1e-9 <= delay <= 0.12 + 1e-9 for delay in delays), delays
+    assert len(set(delays)) > 1, "constant in-range delay must fail"
 
 
 def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:

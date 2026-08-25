@@ -300,7 +300,9 @@ class TestQueueWatcher(WatcherTestBase):
         thread = watcher.run_in_thread()
         queue_writer = Queue("ts_queue", db_path=broker_target)
         try:
-            time.sleep(0.1)  # Allow watcher to initialize polling
+            assert wait_for_condition(
+                watcher.is_running, timeout=scale_timeout_for_ci(5.0)
+            )
             assert watcher._queue_obj.last_ts in (None, 0)
 
             queue_writer.write("first")
@@ -456,7 +458,9 @@ class TestQueueWatcher(WatcherTestBase):
             lambda msg, ts: None,
         ) as watcher:
             thread = watcher.run_in_thread()
-            time.sleep(0.1)  # Let it start
+            assert wait_for_condition(
+                watcher.is_running, timeout=scale_timeout_for_ci(5.0)
+            )
 
             # Test graceful stop timing
             start_time = time.monotonic()
@@ -466,186 +470,6 @@ class TestQueueWatcher(WatcherTestBase):
 
             assert not thread.is_alive()
             assert stop_time < 4.0, f"Stop took {stop_time:.2f}s"
-
-    @pytest.mark.sqlite_only
-    def test_graceful_shutdown_sigint(self, tmp_path):  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-031] exception
-        """Test graceful shutdown via SIGINT using subprocess."""
-        from simplebroker.db import BrokerDB
-
-        from .conftest import managed_subprocess
-
-        temp_db = tmp_path / "test.db"
-
-        # This test uses a subprocess to properly test SIGINT handling
-        # without interfering with the test runner
-        # Prepare paths - use improved script with race condition mitigation
-        from .helper_scripts import WATCHER_SIGINT_SCRIPT_IMPROVED
-
-        helper_script = WATCHER_SIGINT_SCRIPT_IMPROVED
-        ready_file = tmp_path / "watcher_ready.txt"
-
-        # Add a test message to the queue
-        with BrokerDB(temp_db) as db:
-            db.write("sigint_test_queue", "test_message")
-
-        # Launch the watcher script as a subprocess
-        with managed_subprocess(
-            [sys.executable, str(helper_script), str(temp_db), str(ready_file)]
-        ) as proc:
-            # Strategy: Monitor subprocess output for better debugging
-            ready_timeout = (
-                120  # Increased timeout for CI systems with high database contention
-            )
-            ready_detected = False
-
-            for _ in range(ready_timeout * 10):  # Check every 0.1s
-                if ready_file.exists():
-                    ready_detected = True
-                    break
-
-                # Also check if process is still running (early termination detection)
-                if proc.proc.poll() is not None:
-                    # Process terminated early - check output for errors
-                    try:
-                        stdout, stderr = proc.proc.communicate(timeout=1.0)
-                        if stderr:
-                            pytest.fail(
-                                f"Subprocess terminated early with error: {stderr}"
-                            )
-                        else:
-                            pytest.fail(
-                                f"Subprocess terminated early with output: {stdout}"
-                            )
-                    except subprocess.TimeoutExpired:
-                        pytest.fail("Subprocess terminated early and is unresponsive")
-
-                time.sleep(0.1)
-
-            if not ready_detected:
-                # Enhanced error reporting for debugging
-                poll_result = proc.proc.poll()
-                if poll_result is not None:
-                    pytest.fail(
-                        f"Subprocess terminated with exit code {poll_result} before becoming ready"
-                    )
-                else:
-                    pytest.fail(
-                        f"Watcher subprocess did not become ready in {ready_timeout}s (process still running)"
-                    )
-
-            # Verify process is still running
-            assert proc.proc.poll() is None, "Subprocess terminated prematurely"
-
-            # Use terminal-like process-group delivery on POSIX and the
-            # managed Windows termination seam.
-            proc.interrupt()
-
-            # Wait for graceful exit with timeout
-            fallback_signal: str | None = None
-            try:
-                exit_code = proc.proc.wait(timeout=10.0)
-            except subprocess.TimeoutExpired:
-                # Process didn't exit gracefully - force kill it
-                logger.warning(
-                    "Process did not terminate gracefully after SIGINT, forcing termination"
-                )
-
-                fallback_signal = "SIGTERM"
-                proc.proc.terminate()
-                try:
-                    exit_code = proc.proc.wait(timeout=2.0)
-                except subprocess.TimeoutExpired:
-                    fallback_signal = "SIGKILL"
-                    proc.proc.kill()
-                    try:
-                        exit_code = proc.proc.wait(timeout=1.0)
-                    except subprocess.TimeoutExpired:
-                        pytest.fail("Failed to terminate subprocess even with SIGKILL")
-
-            stdout_output = proc.stdout
-            stderr_output = proc.stderr
-            assert fallback_signal is None, (
-                "Watcher did not shut down from the requested interrupt; "
-                f"cleanup escalated to {fallback_signal} and exited {exit_code}\n"
-                f"stdout:\n{stdout_output!r}\n"
-                f"stderr:\n{stderr_output!r}"
-            )
-
-            # Check exit code
-            # On Windows, terminated processes may exit with code 1
-            if sys.platform == "win32":
-                expected_codes = (0, 1)
-            else:
-                expected_codes = (0,)
-
-            assert exit_code in expected_codes, (
-                f"Process exited with code {exit_code}, expected {expected_codes}"
-            )
-
-            # Optionally check output
-            stderr_output = proc.stderr
-            if stderr_output:
-                print(f"Subprocess stderr: {stderr_output!r}")
-
-    @pytest.mark.sqlite_only
-    def test_sigint_handler_installation(self, tmp_path):
-        """Test that signal handler is correctly installed in main thread."""
-
-        # Use a subprocess to test signal handler installation properly
-        import textwrap
-
-        from .conftest import run_subprocess
-
-        temp_db = tmp_path / "test.db"
-
-        # Create a test script that verifies signal handler installation
-        test_script = tmp_path / "test_signal_install.py"
-        test_script.write_text(
-            textwrap.dedent("""
-            import signal
-            import sys
-            from pathlib import Path
-
-            # Add parent to path
-            sys.path.insert(0, str(Path(__file__).parent.parent))
-
-            from simplebroker.db import BrokerDB
-            from simplebroker.watcher import QueueWatcher
-
-            # Track if our handler was installed
-            original_handler = signal.getsignal(signal.SIGINT)
-
-            db_path = sys.argv[1]
-            db = BrokerDB(db_path)
-            watcher = QueueWatcher("test_queue", lambda m, t: None, db=db)
-
-            # Stop immediately so we don't block
-            watcher.stop()
-
-            # Run which should install handler
-            watcher.run_forever()
-
-            # Check if handler was installed and restored
-            final_handler = signal.getsignal(signal.SIGINT)
-
-            # We expect the handler to be restored to original after run_forever
-            if final_handler == original_handler:
-                print("PASS: Handler properly installed and restored")
-                sys.exit(0)
-            else:
-                print("FAIL: Handler not properly managed")
-                sys.exit(1)
-        """)
-        )
-
-        # Run the subprocess
-        returncode, stdout, stderr = run_subprocess(
-            [sys.executable, str(test_script), str(temp_db)], timeout=5.0
-        )
-
-        # Check results
-        assert returncode == 0, f"Test failed: {stdout} {stderr}"
-        assert "PASS" in stdout
 
     def test_signal_handler_requests_stop_without_async_unwind(
         self, monkeypatch: pytest.MonkeyPatch

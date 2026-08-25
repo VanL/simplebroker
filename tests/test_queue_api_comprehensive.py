@@ -802,99 +802,52 @@ class TestQueueDelete:
 class TestQueueHighLevelMethods:
     """Test high-level read/peek/move methods that mirror CLI behavior."""
 
-    def test_range_filtered_read_closes_owned_generator_immediately(
-        self, tmp_path, monkeypatch
+    @pytest.mark.parametrize("operation", ["read", "peek", "move"])
+    @pytest.mark.parametrize("outcome", ["hit", "exhausted"])
+    def test_range_filtered_one_item_closes_owned_generator(
+        self, tmp_path, monkeypatch, operation, outcome
     ):
-        """A one-item filtered read closes the real generator it creates."""
-        q = Queue("test", db_path=str(tmp_path / "broker.db"), persistent=True)
-        try:
-            q.write("message1")
-            q.write("message2")
-            original_read_generator = q.read_generator
-            created_generators: list[GeneratorType] = []
+        """One-item filtered read/peek/move close the real generator.
 
-            def capture_generator(**kwargs):
-                generator = original_read_generator(**kwargs)
-                assert isinstance(generator, GeneratorType)
-                created_generators.append(generator)
-                return generator
-
-            monkeypatch.setattr(q, "read_generator", capture_generator)
-
-            assert q.read(after_timestamp=0) == "message1"
-            assert len(created_generators) == 1
-            assert created_generators[0].gi_frame is None
-        finally:
-            q.close()
-
-    def test_range_filtered_peek_closes_owned_generator_immediately(
-        self, tmp_path, monkeypatch
-    ):
-        """A one-item filtered peek closes the real generator it creates."""
-        q = Queue("test", db_path=str(tmp_path / "broker.db"), persistent=True)
-        try:
-            q.write("message1")
-            q.write("message2")
-            original_peek_generator = q.peek_generator
-            created_generators: list[GeneratorType] = []
-
-            def capture_generator(**kwargs):
-                generator = original_peek_generator(**kwargs)
-                assert isinstance(generator, GeneratorType)
-                created_generators.append(generator)
-                return generator
-
-            monkeypatch.setattr(q, "peek_generator", capture_generator)
-
-            assert q.peek(after_timestamp=0) == "message1"
-            assert len(created_generators) == 1
-            assert created_generators[0].gi_frame is None
-        finally:
-            q.close()
-
-    def test_exhausted_range_filtered_read_closes_owned_generator(
-        self, tmp_path, monkeypatch
-    ):
-        """An empty filtered read releases the real generator it creates."""
+        Collapsed from four structurally identical tests and extended to
+        cover move (plan Tasks 5.4/7.7 — move previously had only a
+        fake-generator owner; the move case must survive any future
+        collapse).
+        """
         q = Queue("test", db_path=str(tmp_path / "broker.db"), persistent=True)
         try:
             cutoff = q.write("message1")
-            original_read_generator = q.read_generator
+            if outcome == "hit":
+                q.write("message2")
+            generator_attr = f"{operation}_generator"
+            original_factory = getattr(q, generator_attr)
             created_generators: list[GeneratorType] = []
 
-            def capture_generator(**kwargs):
-                generator = original_read_generator(**kwargs)
+            def capture_generator(*args, **kwargs):
+                generator = original_factory(*args, **kwargs)
                 assert isinstance(generator, GeneratorType)
                 created_generators.append(generator)
                 return generator
 
-            monkeypatch.setattr(q, "read_generator", capture_generator)
+            monkeypatch.setattr(q, generator_attr, capture_generator)
 
-            assert q.read(after_timestamp=cutoff) is None
-            assert len(created_generators) == 1
-            assert created_generators[0].gi_frame is None
-        finally:
-            q.close()
+            after = 0 if outcome == "hit" else cutoff
+            if operation == "read":
+                result = q.read(after_timestamp=after)
+                expected = "message1" if outcome == "hit" else None
+                assert result == expected
+            elif operation == "peek":
+                result = q.peek(after_timestamp=after)
+                expected = "message1" if outcome == "hit" else None
+                assert result == expected
+            else:
+                moved = q.move("dest", after_timestamp=after)
+                if outcome == "hit":
+                    assert moved is not None
+                    assert moved["message"] == "message1"
+                else:
+                    assert moved is None
 
-    def test_exhausted_range_filtered_peek_closes_owned_generator(
-        self, tmp_path, monkeypatch
-    ):
-        """An empty filtered peek releases the real generator it creates."""
-        q = Queue("test", db_path=str(tmp_path / "broker.db"), persistent=True)
-        try:
-            cutoff = q.write("message1")
-            original_peek_generator = q.peek_generator
-            created_generators: list[GeneratorType] = []
-
-            def capture_generator(**kwargs):
-                generator = original_peek_generator(**kwargs)
-                assert isinstance(generator, GeneratorType)
-                created_generators.append(generator)
-                return generator
-
-            monkeypatch.setattr(q, "peek_generator", capture_generator)
-
-            assert q.peek(after_timestamp=cutoff) is None
             assert len(created_generators) == 1
             assert created_generators[0].gi_frame is None
         finally:

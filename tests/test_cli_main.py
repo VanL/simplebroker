@@ -332,7 +332,12 @@ def test_main_status_json_flag_before_status(tmp_path, monkeypatch, capsys):
 
 
 def test_main_preprocesses_each_invocation_once(tmp_path, monkeypatch, capsys):
-    """Global action JSON detection must share the normalization scan."""
+    """Global action JSON detection must share the normalization scan.
+
+    Sensor on the normalization call count — kept deliberately: a
+    double-normalization regression (the historical bug class this
+    guards) has no black-box observable when both passes agree.
+    """
     monkeypatch.chdir(tmp_path)
     dummy_sys = types.SimpleNamespace(
         argv=["broker", "--json", "--status"],
@@ -407,7 +412,13 @@ def test_malformed_legacy_target_fails_closed_before_plugin_use(
 def test_main_dispatches_validated_canonical_relative_target(
     tmp_path, monkeypatch, capsys
 ):
-    """Command dispatch should use the contained path that was validated."""
+    """Command dispatch should use the contained path that was validated.
+
+    Deliberate sensor patch ([SB-CLI-2]): the backend must receive the
+    exact validated canonical target string, and a symlinked path and its
+    resolved target produce identical filesystem effects, so no
+    real-effect assertion can distinguish them (audit review Task 5.5).
+    """
     monkeypatch.chdir(tmp_path)
     target_path = tmp_path / "data" / "queue.db"
     target_path.parent.mkdir()
@@ -441,7 +452,12 @@ def test_main_dispatches_validated_canonical_relative_target(
 def test_main_status_uses_validated_canonical_relative_target(
     tmp_path, monkeypatch, capsys
 ):
-    """Status should receive the same contained target that was validated."""
+    """Status should receive the same contained target that was validated.
+
+    Sensor patch kept deliberately — see the dispatch test's [SB-CLI-2]
+    canonical-target rationale (effects cannot distinguish symlinked vs
+    resolved targets).
+    """
     monkeypatch.chdir(tmp_path)
     target_path = tmp_path / "data" / "queue.db"
     target_path.parent.mkdir()
@@ -474,7 +490,12 @@ def test_main_status_uses_validated_canonical_relative_target(
 def test_main_vacuum_uses_validated_canonical_relative_target(
     tmp_path, monkeypatch, capsys
 ):
-    """Vacuum should receive the same contained target that was validated."""
+    """Vacuum should receive the same contained target that was validated.
+
+    Sensor patch kept deliberately — see the dispatch test's [SB-CLI-2]
+    canonical-target rationale (effects cannot distinguish symlinked vs
+    resolved targets).
+    """
     monkeypatch.chdir(tmp_path)
     target_path = tmp_path / "data" / "queue.db"
     target_path.parent.mkdir()

@@ -111,6 +111,15 @@ def test_validate_database_accepts_a_filesystem_string(workdir: Path) -> None:
 def test_validate_database_reports_corruption_during_schema_probe(
     workdir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The generic sqlite corruption branch wraps and chains the cause.
+
+    Deliberate fault injection (permitted synchronous patch under the
+    audit plan's narrowed anti-mocking rule): the probe is PRAGMA
+    schema_version, which reads only the header page, so no real
+    corrupt file can reach this branch — real corruption classifies as
+    invalid-header instead (verified empirically during the audit
+    remediation; see the plan's Deviation Log).
+    """
     db_path = workdir / "corrupt.db"
     db_path.write_bytes(b"nonempty")
     corruption = sqlite3.DatabaseError("database disk image is malformed")

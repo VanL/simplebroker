@@ -24,7 +24,6 @@ from simplebroker.db import BrokerCore, DBConnection
 from simplebroker.watcher import PollingStrategy, QueueWatcher
 
 from .helper_scripts.broker_factory import make_broker
-from .helper_scripts.timing import scale_timeout_for_ci, wait_for_condition
 
 
 def test_resolve_config_normalizes_partial_override_values() -> None:
@@ -299,21 +298,14 @@ def test_target_discovery_samples_environment_for_each_call(
     assert Path(second.target) == tmp_path / "second.db"
 
 
-def test_watcher_instance_config_controls_live_polling(
+def test_watcher_instance_config_maps_into_strategy_fields(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    delays: list[float] = []
-    burst_sleeps: list[float] = []
-    original_get_delay = PollingStrategy._get_delay
-
-    def recording_get_delay(strategy: PollingStrategy) -> float:
-        delay = original_get_delay(strategy)
-        delays.append(delay)
-        burst_sleeps.append(strategy._burst_sleep)
-        return delay
-
-    monkeypatch.setattr(PollingStrategy, "_get_delay", recording_get_delay)
+    """Part (i) of the two-part polling-config proof (plan Task 5.8):
+    QueueWatcher construction maps instance configuration into the
+    strategy's fields. Part (ii) below proves those fields determine the
+    delay schedule; together they replace two live-thread _get_delay
+    spies that were the file's flake vector."""
     watcher = QueueWatcher(
         "jobs",
         lambda _message, _timestamp: None,
@@ -326,57 +318,60 @@ def test_watcher_instance_config_controls_live_polling(
         },
     )
     try:
-        watcher.run_in_thread()
-        assert wait_for_condition(
-            lambda: len(delays) >= 5,
-            timeout=scale_timeout_for_ci(5.0),
-            message="configured watcher did not enter its live polling schedule",
-        )
+        strategy = watcher._strategy
+        assert strategy._initial_checks == 2
+        assert strategy._max_interval == 0.01
+        assert strategy._burst_sleep == 0.0001
+        assert strategy._jitter_factor == 0
     finally:
         watcher.stop()
 
-    assert delays[:3] == [0, 0, 0]
-    assert delays[3] > 0
-    assert burst_sleeps and set(burst_sleeps) == {0.0001}
 
-
-def test_watcher_environment_config_controls_live_polling(
+def test_watcher_environment_config_maps_into_strategy_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Environment variant of part (i)."""
     monkeypatch.setenv("BROKER_INITIAL_CHECKS", "0")
     monkeypatch.setenv("BROKER_MAX_INTERVAL", "0.007")
     monkeypatch.setenv("BROKER_BURST_SLEEP", "0.0001")
     monkeypatch.setenv("BROKER_JITTER_FACTOR", "0")
 
-    delays: list[float] = []
-    original_get_delay = PollingStrategy._get_delay
-
-    def recording_get_delay(strategy: PollingStrategy) -> float:
-        delay = original_get_delay(strategy)
-        delays.append(delay)
-        return delay
-
-    monkeypatch.setattr(PollingStrategy, "_get_delay", recording_get_delay)
     watcher = QueueWatcher(
         "jobs",
         lambda _message, _timestamp: None,
         db=tmp_path / "environment-watcher.db",
     )
     try:
-        watcher.run_in_thread()
-        assert wait_for_condition(
-            lambda: len(delays) >= 4,
-            timeout=scale_timeout_for_ci(5.0),
-            message="environment-configured watcher did not poll",
-        )
+        strategy = watcher._strategy
+        assert strategy._initial_checks == 0
+        assert strategy._max_interval == 0.007
+        assert strategy._burst_sleep == 0.0001
+        assert strategy._jitter_factor == 0
     finally:
         watcher.stop()
 
-    assert delays[0] == 0
-    assert delays[1] > 0
-    assert all(0 <= delay <= 0.007 for delay in delays)
 
+def test_polling_strategy_fields_determine_delay_schedule() -> None:
+    """Part (ii): the configured fields drive the delay schedule — no
+    threads, direct _get_delay calls."""
+    import threading
+
+    strategy = PollingStrategy(
+        threading.Event(),
+        initial_checks=2,
+        max_interval=0.01,
+        burst_sleep=0.0001,
+        jitter_factor=0,
+    )
+    delays = []
+    for _ in range(6):
+        strategy._check_count += 1
+        delays.append(strategy._get_delay())
+
+    assert delays[:2] == [0, 0]
+    assert all(delay > 0 for delay in delays[2:])
+    assert all(delay <= 0.01 for delay in delays)
 
 def test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient(
     tmp_path: Path,

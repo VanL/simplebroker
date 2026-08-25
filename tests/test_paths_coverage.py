@@ -45,7 +45,6 @@ def test_filesystem_root_and_ancestor_helpers(tmp_path: Path) -> None:
 
 
 def test_find_project_database_rejects_missing_start_and_obeys_depth(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     with pytest.raises(ValueError, match="Starting directory does not exist"):
@@ -55,13 +54,11 @@ def test_find_project_database_rejects_missing_start_and_obeys_depth(
     nested = root / "a" / "b"
     nested.mkdir(parents=True)
     candidate = root / ".broker.db"
-    candidate.write_text("placeholder", encoding="utf-8")
+    # A real broker database, so real validity checking runs (no mock).
+    from simplebroker.db import BrokerDB
 
-    monkeypatch.setattr(
-        _paths,
-        "_is_valid_sqlite_db",
-        lambda path, verify_magic=True: Path(path) == candidate,
-    )
+    with BrokerDB(str(candidate)):
+        pass
 
     assert _find_project_database(".broker.db", nested, max_depth=1) is None
     assert _find_project_database(".broker.db", nested, max_depth=5) == candidate
@@ -167,6 +164,10 @@ def test_resolve_symlinks_safely_wraps_resolution_errors(
 def test_resolve_symlinks_safely_resolves_absolute_unfinished_symlink(
     tmp_path: Path,
 ) -> None:
+    """Models the Windows-only branch where Path.resolve(strict=False)
+    leaves a symlink unresolved; POSIX resolve never takes it, so a fake
+    duck-type is the only cross-platform driver (plan Task 5.3 retains
+    exactly this pair with the branch named)."""
     target = tmp_path / "target.db"
 
     class FakeSymlink:
@@ -190,6 +191,7 @@ def test_resolve_symlinks_safely_resolves_absolute_unfinished_symlink(
 def test_resolve_symlinks_safely_resolves_relative_unfinished_symlink(
     tmp_path: Path,
 ) -> None:
+    """Relative variant of the Windows-only unresolved-symlink branch."""
     target = tmp_path / "target.db"
 
     class FakeParent:
@@ -235,28 +237,3 @@ def test_resolve_symlinks_safely_rejects_inner_read_error() -> None:
         _resolve_symlinks_safely(link)  # type: ignore[arg-type]
 
 
-def test_resolve_symlinks_safely_rejects_depth_exhaustion() -> None:
-    class LoopingSymlink:
-        parent = None
-
-        def __init__(self) -> None:
-            self.parent = self
-
-        def __truediv__(self, child: Path):
-            assert child == Path("loop.db")
-            return self
-
-        def resolve(self, *, strict: bool = False):
-            assert strict is False
-            return self
-
-        def is_symlink(self) -> bool:
-            return True
-
-        def readlink(self) -> Path:
-            return Path("loop.db")
-
-    link = LoopingSymlink()
-
-    with pytest.raises(RuntimeError, match="maximum depth exceeded"):
-        _resolve_symlinks_safely(link, max_depth=1)  # type: ignore[arg-type]

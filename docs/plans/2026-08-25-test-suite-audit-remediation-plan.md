@@ -858,7 +858,15 @@ wording/internals freeze.
 
 ## Deviation Log
 
-- (empty)
+- 2026-08-25, Task 5.7: the real-corrupt-file rewrite is impossible —
+  `validate_database`'s probe is `PRAGMA schema_version`, which reads
+  only the header page, so every reachable real corruption classifies
+  as invalid-header; the generic corruption branch is only reachable
+  by fault injection. The MagicMock `sqlite3.connect` test is retained
+  with a docstring recording this empirical finding (permitted
+  synchronous fault patch under the narrowed anti-mocking rule).
+  Attempted and falsified: header+garbage, post-page-1 corruption,
+  spilled sqlite_master corruption.
 
 ## Out of Scope
 

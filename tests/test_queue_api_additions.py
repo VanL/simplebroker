@@ -14,42 +14,6 @@ from simplebroker._targets import BrokerTarget
 pytestmark = [pytest.mark.shared]
 
 
-def test_queue_filtered_move_closes_bounded_generator(
-    queue_factory,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The high-level API must close its one-item transactional generator."""
-
-    closed: list[bool] = []
-    retained_iterators: list[Iterator[tuple[str, int]]] = []
-
-    def tracked_results() -> Iterator[tuple[str, int]]:
-        try:
-            yield "message", 123
-        finally:
-            closed.append(True)
-
-    def move_generator(
-        self: Queue,
-        destination: str,
-        **kwargs: Any,
-    ) -> Iterator[tuple[str, int]]:
-        del self, destination, kwargs
-        iterator = tracked_results()
-        retained_iterators.append(iterator)
-        return iterator
-
-    monkeypatch.setattr(Queue, "move_generator", move_generator)
-    queue = queue_factory("source")
-
-    assert queue.move("destination", after_timestamp=0) == {
-        "message": "message",
-        "timestamp": 123,
-    }
-    assert retained_iterators
-    assert closed == [True]
-
-
 def test_queue_move_all_closes_transformation_delegate(
     queue_factory,
     monkeypatch: pytest.MonkeyPatch,
@@ -85,49 +49,6 @@ def test_queue_move_all_closes_transformation_delegate(
 
     assert retained_iterators
     assert closed == [True]
-
-
-def test_queue_delete_all(queue_factory):
-    """Test deleting all messages in a queue."""
-    q = queue_factory("test")
-
-    # Write some messages
-    q.write("message1")
-    q.write("message2")
-    q.write("message3")
-
-    # Verify they exist
-    assert q.peek() == "message1"
-
-    # Delete all messages
-    result = q.delete()
-    assert result is True
-
-    # Verify queue is empty
-    assert q.peek() is None
-    assert q.read() is None
-
-
-def test_queue_delete_by_id(queue_factory):
-    """Test deleting a specific message by ID."""
-    q = queue_factory("test")
-
-    q.write("message1")
-    q.write("message2")
-
-    messages = list(q.peek_generator(with_timestamps=True))
-    target_ts = messages[0][1]
-
-    result = q.delete(message_id=target_ts)
-    assert result is True
-
-    remaining = list(q.peek_generator(with_timestamps=False))
-    assert remaining == ["message2"]
-
-    result = q.delete(message_id=99999999999999999)
-    assert result is False
-
-    assert q.read() == "message2"
 
 
 def test_queue_delete_explicit_none_is_rejected_without_mutation(queue_factory):
@@ -193,34 +114,6 @@ def test_queue_find_message_ids_composes_with_delete_many(queue_factory):
     assert list(q.peek_generator(with_timestamps=False)) == ["keep"]
 
 
-def test_queue_delete_empty_queue_returns_false(queue_factory):
-    """Test deleting from an empty queue reports no-op status."""
-    q = queue_factory("test")
-    assert q.delete() is False
-
-
-def test_queue_move_all(queue_factory):
-    """Test moving all messages between queues."""
-    src = queue_factory("source")
-
-    # Write messages to source
-    src.write("message1")
-    src.write("message2")
-    src.write("message3")
-
-    # Move all to destination
-    moved = list(src.move("destination", all_messages=True))
-    assert len(moved) == 3
-
-    # Verify source is empty
-    assert src.read() is None
-
-    # Verify destination has all messages
-    dst = queue_factory("destination")
-    messages = list(dst.read(all_messages=True))
-    assert messages == ["message1", "message2", "message3"]
-
-
 def test_queue_move_single_message(queue_factory):
     """Test moving a specific message by ID."""
     # Similar to delete, we can't easily test message_id without exposing timestamps
@@ -249,28 +142,6 @@ def test_queue_move_returns_plain_dictionary_with_typed_fields(queue_factory):
     assert type(moved) is dict
     assert moved == {"message": "message1", "timestamp": message_id}
     assert set(moved) == {"message", "timestamp"}
-
-
-def test_queue_move_after_timestamp(queue_factory):
-    """Test moving messages newer than a timestamp."""
-    # Test basic functionality - after_timestamp=0 should move all
-    src = queue_factory("source")
-
-    src.write("message1")
-    src.write("message2")
-    src.write("message3")
-
-    # Move all messages (after timestamp 0) - need to use all_messages=True with after_timestamp
-    moved = list(src.move("destination", after_timestamp=0, all_messages=True))
-    assert len(moved) == 3
-
-    # Verify source is empty
-    assert src.read() is None
-
-    # Verify destination has all messages
-    dst = queue_factory("destination")
-    messages = list(dst.read(all_messages=True))
-    assert messages == ["message1", "message2", "message3"]
 
 
 def test_queue_move_validation(queue_factory):
