@@ -820,8 +820,25 @@ def test_persistent_sqlite_queue_close_waits_for_in_flight_operation(
     operation_thread.start()
     assert operation_entered.wait(timeout=_LIVENESS)
 
+    # Deterministic close-is-waiting observation: close_all blocks on the
+    # session's operation condition, whose only .wait caller is the close
+    # path, so this fires exactly when close has entered its wait.
+    assert queue.conn is not None
+    session = queue.conn._shared_session
+    assert session is not None
+    close_waiting = threading.Event()
+    original_condition_wait = session._operation_condition.wait
+
+    def observe_close_wait(timeout: float | None = None) -> bool:
+        close_waiting.set()
+        return original_condition_wait(timeout)
+
+    session._operation_condition.wait = observe_close_wait  # type: ignore[method-assign]
+
     close_thread.start()
     try:
+        assert close_waiting.wait(timeout=_LIVENESS)
+        assert not close_returned.is_set()
         # Positive happens-after proof: if close() failed to block on the
         # in-flight operation, "close-returned" would precede
         # "write-finished" regardless of scheduler timing.

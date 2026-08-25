@@ -107,18 +107,35 @@ def test_execute_with_retry_survives_real_sqlite_lock(tmp_path):
         finally:
             write_done.set()
 
+    # Positive contention proof: execute_retry reads the module-owned
+    # clock once before the first attempt and once after each attempt, so
+    # a second reading means at least one write attempt ran against the
+    # held lock. Real clock, counting delegate.
+    import simplebroker._retry as retry_module
+
+    real_monotonic = retry_module._monotonic
+    clock_reads = threading.Event()
+    read_count = [0]
+
+    def counting_monotonic() -> float:
+        read_count[0] += 1
+        if read_count[0] >= 2:
+            clock_reads.set()
+        return real_monotonic()
+
+    retry_module._monotonic = counting_monotonic
+
     writer = threading.Thread(target=write_payload)
     try:
         writer.start()
-        # The lock is held until release_lock fires, so this wait can only
-        # return True early if the write bypassed the lock or errored —
-        # both failures. It is a failure detector, not a scheduling race.
-        assert not write_done.wait(timeout=0.2)
+        assert clock_reads.wait(timeout=liveness)
+        assert not write_done.is_set()
         release_lock.set()
         assert write_done.wait(timeout=liveness)
         assert write_errors == []
         assert queue.read() == "payload"
     finally:
+        retry_module._monotonic = real_monotonic
         release_lock.set()
         writer.join(timeout=liveness)
         queue.close()
