@@ -420,8 +420,8 @@ def test_foreign_thread_contract_binds_sql_and_redis_process_probes() -> None:
         "tests/test_cross_thread_finalization_poisoning.py": {
             "test_foreign_generator_finalization_publishes_poison"
         },
-        "tests/test_cross_thread_generator_probe.py": {
-            "test_sqlite_cross_thread_generator_probe"
+        "tests/test_cross_thread_probe_transitions.py": {
+            "test_cross_thread_probe_fires_transition_table"
         },
         "extensions/simplebroker_pg/tests/test_pg_cross_thread_generator_probe.py": {
             "test_postgres_cross_thread_generator_probe"

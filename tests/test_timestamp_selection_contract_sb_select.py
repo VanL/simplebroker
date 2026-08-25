@@ -24,7 +24,7 @@ AFFECTED_EVIDENCE = {
         "tests/test_timestamp_selection_contract_sb_select.py": {
             "test_strict_open_bounds_on_queue_api"
         },
-        "tests/test_after_flag.py": {"test_after_exact_boundary"},
+        "tests/test_after_flag.py": {"test_after_boundary_is_strictly_greater"},
         "tests/test_generator_methods.py": {
             "TestGeneratorMethods::test_generator_with_after_timestamp"
         },

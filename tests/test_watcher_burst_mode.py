@@ -507,10 +507,21 @@ def test_polling_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
 
     import simplebroker.watcher as watcher_module
 
-    scripted = itertools.cycle([-0.2, -0.1, 0.0, 0.1, 0.2])
-    monkeypatch.setattr(
-        watcher_module, "_uniform", lambda low, high: next(scripted)
-    )
+    scripted = itertools.cycle([0.0, 0.25, 0.5, 0.75, 1.0])
+
+    jitter_band_calls = []
+
+    def scripted_uniform(low: float, high: float) -> float:
+        # Values derive from the received bounds so the requested range
+        # itself stays under test (review finding: a bounds-ignoring
+        # stub would mask an incorrect range). Other _uniform call
+        # sites (native idle-poll scheduling) get the midpoint.
+        if (low, high) == (-0.2, 0.2):
+            jitter_band_calls.append((low, high))
+            return low + (high - low) * next(scripted)
+        return (low + high) / 2
+
+    monkeypatch.setattr(watcher_module, "_uniform", scripted_uniform)
 
     strategy = PollingStrategy(
         threading.Event(),
@@ -524,6 +535,8 @@ def test_polling_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert all(0.08 - 1e-9 <= delay <= 0.12 + 1e-9 for delay in delays), delays
     assert len(set(delays)) > 1, "constant in-range delay must fail"
+    # Every sampled delay came through the configured ±jitter_factor band.
+    assert len(jitter_band_calls) == len(delays)
 
 
 def test_burst_mode_with_peek_mode(no_jitter, broker_target) -> None:

@@ -760,14 +760,6 @@ def _build_cli_parser(
     return _CliParserBundle(parser=parser, grammar=grammar_builder.build())
 
 
-def create_parser(
-    *,
-    config: Mapping[str, Any] | None = None,
-) -> argparse.ArgumentParser:
-    """Create the public CLI parser with global options and subcommands."""
-    return _build_cli_parser(config=config).parser
-
-
 _HELP_TOKENS = frozenset({"-h", "--help"})
 
 

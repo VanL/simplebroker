@@ -164,6 +164,7 @@ def test_list_rejects_prefix_and_pattern_together(workdir) -> None:
     assert rc == 1
     assert "not allowed with argument" in err or "error:" in err
 
+
 # Folded from the retired test_cli_queue_metadata.py (audit Task 7.3).
 def test_cli_list_stats_json_reports_claimed_counts_and_filters(workdir: Path) -> None:
     for queue, message in (

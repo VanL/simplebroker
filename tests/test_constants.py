@@ -115,6 +115,7 @@ class TestConstants:
         assert ConnectionPhase.SCHEMA == "schema"
         assert ConnectionPhase.OPTIMIZATION == "optimization"
 
+
 class TestLoadConfig:
     """Test the load_config function with various environment configurations."""
 

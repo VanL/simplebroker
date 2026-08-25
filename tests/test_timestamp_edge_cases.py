@@ -367,9 +367,7 @@ class TestTimestampEdgeCases:
         plugin = AlwaysLosingPlugin()
         gen = TimestampGenerator(object(), backend_plugin=plugin)  # type: ignore[arg-type]
 
-        with pytest.raises(
-            IntegrityError, match="unable to generate unique timestamp"
-        ):
+        with pytest.raises(IntegrityError, match="unable to generate unique timestamp"):
             gen.generate()
 
     def test_parse_numeric_edge_cases(self):

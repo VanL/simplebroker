@@ -86,7 +86,7 @@ lower bound filter on eligibility; it does not change claim semantics
 
 | Clause | Firing evidence |
 |--------|-----------------|
-| [SB-SELECT-1] | `tests/test_timestamp_selection_contract_sb_select.py::test_strict_open_bounds_on_queue_api`; `tests/test_after_flag.py::test_after_exact_boundary`; `tests/test_generator_methods.py::TestGeneratorMethods::test_generator_with_after_timestamp`; `tests/test_watcher.py::TestQueueWatcher::test_explicit_zero_after_timestamp_excludes_legacy_zero` |
+| [SB-SELECT-1] | `tests/test_timestamp_selection_contract_sb_select.py::test_strict_open_bounds_on_queue_api`; `tests/test_after_flag.py::test_after_boundary_is_strictly_greater`; `tests/test_generator_methods.py::TestGeneratorMethods::test_generator_with_after_timestamp`; `tests/test_watcher.py::TestQueueWatcher::test_explicit_zero_after_timestamp_excludes_legacy_zero` |
 | [SB-SELECT-2] | `tests/test_timestamp_selection_contract_sb_select.py` (structural + filter framing); README/kernel residual links |
 | [SB-SELECT-3] | `tests/test_timestamp_selection_contract_sb_select.py`; `tests/test_move_by_id.py` (id preserved under move); move-behind-bound documentation bind |
 | [SB-SELECT-4] | `tests/test_timestamp_selection_contract_sb_select.py::test_select_watch_progress`; `tests/test_watcher.py::TestQueueWatcher::test_peek_handler_failure_does_not_advance_checkpoint`, `tests/test_watcher.py::TestQueueWatcher::test_explicit_zero_after_timestamp_excludes_legacy_zero`; `[SB-DELIVERY-2]` |

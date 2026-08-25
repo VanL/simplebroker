@@ -1992,9 +1992,7 @@ def test_wait_for_postgres_waits_for_host_port(
     monkeypatch.setattr(_scripts, "_docker_port", lambda container_name: "32786")
     monkeypatch.setattr(_scripts.subprocess, "run", fake_run)
     monkeypatch.setattr(_scripts, "_host_port_accepts_connections", fake_host_check)
-    monkeypatch.setattr(
-        _scripts, "_sleep", lambda seconds: sleep_calls.append(seconds)
-    )
+    monkeypatch.setattr(_scripts, "_sleep", lambda seconds: sleep_calls.append(seconds))
 
     assert _scripts._wait_for_postgres("pg", timeout_seconds=60) == "32786"
     assert len(pg_isready_calls) == 2
@@ -3316,3 +3314,29 @@ def test_venv_python_uses_platform_specific_layout(
 
     monkeypatch.setattr(_scripts.os, "name", "posix")
     assert _venv_python(tmp_path) == tmp_path / "bin" / "python"
+
+
+def test_wrapper_appends_default_timeout_bounds_when_caller_sets_none() -> None:
+    """Add-if-missing per-test bounds (audit plan Task 8.1)."""
+    args = _scripts._with_default_timeout_bounds(["tests", "-q"])
+    assert args[-2:] == ["--timeout=180", "--timeout-method=thread"]
+
+
+@pytest.mark.parametrize(
+    "explicit",
+    [
+        ["--timeout", "30"],
+        ["--timeout=30"],
+        ["--timeout-method", "signal"],
+        ["--timeout-method=signal"],
+        ["--max-worker-restart", "1"],
+        ["--max-worker-restart=1"],
+    ],
+)
+def test_wrapper_never_overrides_explicit_timeout_controls(
+    explicit: list[str],
+) -> None:
+    """An explicit caller control suppresses every appended default."""
+    args = _scripts._with_default_timeout_bounds(["tests", *explicit])
+    assert args == ["tests", *explicit]
+    assert "--timeout=180" not in args

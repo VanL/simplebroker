@@ -236,6 +236,7 @@ def test_resolve_symlinks_safely_rejects_inner_read_error() -> None:
     with pytest.raises(RuntimeError, match="Failed to resolve symlinks"):
         _resolve_symlinks_safely(link)  # type: ignore[arg-type]
 
+
 # Folded from the retired test_compound_db_names.py (audit Task 7.3);
 # end-to-end compound behavior lives in test_queue_config_defaults.
 @pytest.mark.parametrize(
@@ -263,4 +264,3 @@ def test_is_compound_db_name_rejects_nested_directories(name: str) -> None:
         ValueError, match="Database name must not contain nested directories"
     ):
         _is_compound_db_name(name)
-

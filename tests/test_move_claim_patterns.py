@@ -203,5 +203,3 @@ def test_move_failure_is_atomic(workdir: Path, monkeypatch: pytest.MonkeyPatch):
             == source_before
         )
         assert db.peek_many("atomic_dest", limit=10, with_timestamps=True) == []
-
-

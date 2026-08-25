@@ -1500,9 +1500,7 @@ class PollingStrategy:
         if base_delay > 0:
             # Add +/-15% jitter to prevent synchronized polling
             jitter_factor = self._jitter_factor
-            jittered_delay = (
-                _uniform(-jitter_factor, jitter_factor) + 1
-            ) * base_delay
+            jittered_delay = (_uniform(-jitter_factor, jitter_factor) + 1) * base_delay
             return max(0, jittered_delay)
 
         return base_delay

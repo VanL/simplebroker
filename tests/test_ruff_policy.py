@@ -107,9 +107,7 @@ def test_ruff_extends_defaults_without_losing_legacy_families() -> None:
     # PLR2004's enforcement boundary is the shipped package only
     # (owner-scoped, audit plan Task 6.6): every per-file ignore must be
     # a PLR2004 scope exclusion, nothing else.
-    per_file_ignores = cast(
-        "dict[str, list[str]]", lint.get("per-file-ignores", {})
-    )
+    per_file_ignores = cast("dict[str, list[str]]", lint.get("per-file-ignores", {}))
     for path_pattern, ignored in per_file_ignores.items():
         assert ignored == ["PLR2004"], (path_pattern, ignored)
         assert not path_pattern.startswith("simplebroker"), path_pattern
@@ -140,7 +138,9 @@ def test_approved_suppressions_match_the_registry() -> None:
     # catches registry drift). Retired IDs stay retired: group IDs are
     # strictly increasing with no reuse, and every group carries at
     # least one live directive (enforced by the tool itself).
-    numbers = [int(group.group_id.removeprefix("RUFF-SUP-")) for group in snapshot.groups]
+    numbers = [
+        int(group.group_id.removeprefix("RUFF-SUP-")) for group in snapshot.groups
+    ]
     assert numbers == sorted(numbers)
     assert len(numbers) == len(set(numbers))
     retired = set(range(1, max(numbers) + 1)) - set(numbers)

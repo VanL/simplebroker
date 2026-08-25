@@ -47,6 +47,8 @@ def _write_messages_direct(queue_name: str, messages) -> None:
     with Queue(queue_name, persistent=True) as queue:
         for message in messages:
             queue.write(message)
+
+
 INVALID_TIMESTAMPS = [
     ("", "Invalid timestamp: empty string"),  # Empty string validation
     ("abc", "Invalid timestamp: abc"),
@@ -211,8 +213,7 @@ def test_after_iso_date_precise_boundary(workdir):
     assert rc == 0, err
     assert out.splitlines() == ["after"]
 
-
-            # Due to precision loss, might include messages from the same second as msg5
+    # Due to precision loss, might include messages from the same second as msg5
 
 
 @pytest.mark.parametrize("ts_str,expected_error", INVALID_TIMESTAMPS)
@@ -261,15 +262,17 @@ def test_after_during_concurrent_writes(workdir):
 
         # --after must see concurrent messages while the writer is live.
         assert wait_for_condition(
-            lambda: run_cli(
-                "peek",
-                queue_name,
-                "--all",
-                "--after",
-                str(checkpoint_ts),
-                cwd=workdir,
-            )[0]
-            == 0,
+            lambda: (
+                run_cli(
+                    "peek",
+                    queue_name,
+                    "--all",
+                    "--after",
+                    str(checkpoint_ts),
+                    cwd=workdir,
+                )[0]
+                == 0
+            ),
             timeout=scale_timeout_for_ci(10.0),
         ), "No concurrent messages found after waiting"
 
@@ -532,8 +535,6 @@ def test_after_error_messages_are_helpful(workdir):
 # ============================================================================
 # Integration Test Patterns
 # ============================================================================
-
-
 
 
 # ---------------------------------------------------------------------------

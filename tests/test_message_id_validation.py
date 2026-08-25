@@ -107,7 +107,14 @@ def test_normalize_message_id_rejects_non_id_types(value: object) -> None:
 
 @pytest.mark.parametrize(
     "invalid",
-    ["", "123", "1705329000", "2024-01-15", "9223372036854775808", "1.23456789012345e19"],
+    [
+        "",
+        "123",
+        "1705329000",
+        "2024-01-15",
+        "9223372036854775808",
+        "1.23456789012345e19",
+    ],
 )
 def test_parse_exact_message_id_returns_none_instead_of_raising(invalid: str) -> None:
     """The commands-layer wrapper converts grammar rejection to None.

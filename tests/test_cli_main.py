@@ -666,6 +666,7 @@ def test_default_db_location_owns_target_without_explicit_dir(
 
     assert not (location_dir / cli.DEFAULT_DB_NAME).exists()
 
+
 # ---------------------------------------------------------------------------
 # Folded from the retired test_cli_edge_cases.py (audit Task 7.3). The
 # bare-MagicMock invalid-message-id test was NOT ported: ID grammar is
@@ -743,3 +744,36 @@ def test_pre_dispatch_keyboard_interrupt_handling(capsys):
     assert "interrupted" in captured.lower()
     assert "Traceback" not in captured
 
+
+def test_malformed_message_id_rejected_before_target_resolution(
+    tmp_path, monkeypatch, capsys
+):
+    """A malformed -m fails in-process at the pre-dispatch boundary.
+
+    Restores in-process coverage of the INVALID_MESSAGE_ID early-exit
+    (the subprocess representative lives in test_message_by_timestamp;
+    local branch-coverage measurement cannot see subprocess runs).
+    """
+    monkeypatch.chdir(tmp_path)
+    with patch("sys.argv", ["simplebroker", "read", "queue", "-m", "not-an-id"]):
+        assert cli.main() == 1
+    err = capsys.readouterr().err
+    assert "invalid message id" in err.lower()
+    assert not (tmp_path / ".broker.db").exists()
+
+
+def test_init_dispatch_in_process(tmp_path, monkeypatch, capsys):
+    """init dispatches in-process and rejects explicit targets.
+
+    In-process counterpart of the subprocess init test (same coverage
+    rationale as above).
+    """
+    monkeypatch.chdir(tmp_path)
+    with patch("sys.argv", ["simplebroker", "--quiet", "init"]):
+        assert cli.main() == 0
+    assert (tmp_path / ".broker.db").exists()
+    capsys.readouterr()
+
+    with patch("sys.argv", ["simplebroker", "-d", str(tmp_path), "init"]):
+        assert cli.main() == 1
+    assert "init does not accept" in capsys.readouterr().err

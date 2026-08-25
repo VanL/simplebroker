@@ -145,9 +145,7 @@ class TestWatchCommand:
             stdout = proc.stdout
             stderr = proc.stderr
 
-            assert "peekmsg" in stdout, (
-                f"stdout: {stdout!r}, stderr: {stderr!r}"
-            )
+            assert "peekmsg" in stdout, f"stdout: {stdout!r}, stderr: {stderr!r}"
 
         # Message should still be in queue
         rc, out, _err = run_cli("read", "peektest", cwd=workdir)

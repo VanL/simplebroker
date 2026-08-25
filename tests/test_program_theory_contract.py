@@ -563,6 +563,8 @@ def test_repository_and_product_entry_orders() -> None:
     )
     assert INITIAL_README_SHA not in startup
     assert "initial README" not in startup
+
+
 def test_record_corpus_uses_exact_grammar(
     corpus_records: dict[str, Record],
 ) -> None:
@@ -645,6 +647,8 @@ def test_core_concepts_resolve_to_registry_owners(theory_text: str) -> None:
     assert referenced >= len(concept_rows), (
         "each concept row should reference at least one registry concern"
     )
+
+
 def test_identity_concepts_route_ordered_selection_contract(
     theory_text: str,
 ) -> None:

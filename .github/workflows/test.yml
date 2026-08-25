@@ -161,6 +161,9 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
+    # Bounds the serial lint-job pytest steps (state-machine manifest,
+    # examples) that carry no per-test timeout of their own.
+    timeout-minutes: 45
     env:
       UV_PYTHON: "3.12"
     steps:
@@ -200,7 +203,7 @@ jobs:
         uv run --frozen --no-sync python bin/release.py --check-shell-examples
 
     - name: Test Python examples
-      run: uv run --frozen --no-sync pytest -n auto examples
+      run: uv run --frozen --no-sync pytest -n auto --dist loadgroup --timeout=180 --timeout-method=thread --max-worker-restart=0 examples
 
     - name: Validate full state-machine manifest
       run: SIMPLEBROKER_REQUIRE_FULL_MANIFEST=1 uv run --frozen --no-sync pytest -q tests/test_state_machine_policy.py

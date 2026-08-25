@@ -27,7 +27,6 @@ def _seed(workdir: Path, queue: str, *messages: str) -> None:
             q.write(message)
 
 
-
 def _peek_json(cwd, queue: str) -> list[dict[str, object]]:
     rc, out, err = run_cli("peek", queue, "--all", "--json", cwd=cwd)
     assert rc == 0, err

@@ -373,6 +373,7 @@ def test_polling_strategy_fields_determine_delay_schedule() -> None:
     assert all(delay > 0 for delay in delays[2:])
     assert all(delay <= 0.01 for delay in delays)
 
+
 def test_watcher_given_queue_adopts_queue_snapshot_and_overlays_without_ambient(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -496,6 +496,26 @@ def _classify_pytest_target(
     return None
 
 
+# Per-test hang bound applied by the wrapper when the caller does not
+# choose their own timeout discipline. Job-level workflow ceilings still
+# bound the Docker/setup phases that run before pytest starts.
+_DEFAULT_PYTEST_TIMEOUT_ARGS = ("--timeout=180", "--timeout-method=thread")
+
+
+def _with_default_timeout_bounds(args: list[str]) -> list[str]:
+    """Append the default per-test timeout unless the caller set one.
+
+    Add-if-missing only (audit plan Task 8.1): an explicit --timeout,
+    --timeout-method, or worker-restart control from the caller is never
+    overridden by an appended default.
+    """
+    explicit = ("--timeout", "--timeout-method", "--max-worker-restart")
+    for arg in args:
+        if arg in explicit or arg.startswith(tuple(f"{name}=" for name in explicit)):
+            return args
+    return [*args, *_DEFAULT_PYTEST_TIMEOUT_ARGS]
+
+
 def _with_default_suite_path(args: list[str], default_path: str) -> list[str]:
     """Append the suite's default test path unless a target was routed.
 
@@ -682,7 +702,9 @@ def pytest_pg_main() -> int:
             _run(
                 _pg_test_uv_command(
                     "pytest",
-                    *_with_default_suite_path(shared_pytest_args, "tests"),
+                    *_with_default_timeout_bounds(
+                        _with_default_suite_path(shared_pytest_args, "tests")
+                    ),
                     "-m",
                     shared_marker,
                     "-n",
@@ -697,8 +719,10 @@ def pytest_pg_main() -> int:
             _run(
                 _pg_test_uv_command(
                     "pytest",
-                    *_with_default_suite_path(
-                        extension_pytest_args, "extensions/simplebroker_pg/tests"
+                    *_with_default_timeout_bounds(
+                        _with_default_suite_path(
+                            extension_pytest_args, "extensions/simplebroker_pg/tests"
+                        )
                     ),
                     "-m",
                     extension_marker,
@@ -787,7 +811,9 @@ def pytest_redis_main() -> int:
             _run(
                 _redis_test_uv_command(
                     "pytest",
-                    *_with_default_suite_path(shared_pytest_args, "tests"),
+                    *_with_default_timeout_bounds(
+                        _with_default_suite_path(shared_pytest_args, "tests")
+                    ),
                     "-m",
                     shared_marker,
                     "-n",
@@ -802,9 +828,11 @@ def pytest_redis_main() -> int:
             _run(
                 _redis_test_uv_command(
                     "pytest",
-                    *_with_default_suite_path(
-                        extension_pytest_args,
-                        "extensions/simplebroker_redis/tests",
+                    *_with_default_timeout_bounds(
+                        _with_default_suite_path(
+                            extension_pytest_args,
+                            "extensions/simplebroker_redis/tests",
+                        )
                     ),
                     "-m",
                     extension_marker,
