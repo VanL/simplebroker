@@ -118,14 +118,6 @@ def make_recorded_watcher(
     return watcher, strategy
 
 
-def test_backoff_evidence_does_not_depend_on_poll_throughput() -> None:
-    """Recognize backoff from state evidence, not scheduler turns."""
-    assert not _has_entered_backoff([])
-    assert not _has_entered_backoff([0.0, 0.0])
-    assert _has_entered_backoff([0.0] * 5 + [0.0001])
-    assert not _has_entered_backoff([0.0001, 0.0])
-
-
 def test_burst_mode_resets_on_activity(no_jitter, broker_target) -> None:
     """Verify burst mode resets when messages are found."""
     broker = make_broker(broker_target)

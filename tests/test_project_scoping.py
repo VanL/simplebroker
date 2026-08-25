@@ -112,18 +112,21 @@ class TestFilesystemBoundaryDetection:
         root_path = Path("/")
         assert _is_filesystem_root(root_path) is True
 
-    @patch("os.name", "nt")
     def test_filesystem_root_detection_windows(self) -> None:
-        """Test detection of Windows drive roots."""
+        """The real current drive root is recognized on Windows.
+
+        Runs the real _is_filesystem_root against Path(Path.cwd().anchor)
+        — no os.name patch, no mocked resolve, no invented drive letters
+        (owner review: the old version was a mock-returns-mock shell off
+        Windows and this is the live coverage on the Windows CI leg).
+        """
         import sys
 
         if sys.platform != "win32":
             pytest.skip("Windows-specific test")
 
-        drive_roots = [Path("C:\\"), Path("D:\\"), Path("Z:\\")]
-        for root in drive_roots:
-            with patch.object(Path, "resolve", return_value=root):
-                assert _is_filesystem_root(root) is True
+        drive_root = Path(Path.cwd().anchor)
+        assert _is_filesystem_root(drive_root) is True
 
     def test_home_directory_not_boundary(self) -> None:
         """Test that traversal does NOT stop at user home directory (removed restriction)."""

@@ -462,18 +462,16 @@ class TestQueueMoveWatcher(WatcherTestBase):
 
         thread = watcher.run_in_thread()
         try:
-            time.sleep(0.1)  # Let some moves happen
-
-            # Signal stop
+            # The contract under test: an external stop_event stops the
+            # thread. The old move_count bounds (>= 0, <= 5) were vacuous
+            # and the pacing sleep guarded nothing (audit finding).
             stop_event.set()
         finally:
-            thread.join(timeout=2.0)
+            thread.join(timeout=scale_timeout_for_ci(5.0))
             if thread.is_alive():
                 pytest.fail("Watcher thread did not stop within timeout")
 
-        # Should have stopped (may have moved some but not necessarily all)
         assert not thread.is_alive()
-        assert watcher.move_count >= 0
         assert watcher.move_count <= 5
 
     def test_move_properties(self, broker, broker_target):

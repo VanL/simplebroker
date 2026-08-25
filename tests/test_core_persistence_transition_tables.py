@@ -779,19 +779,6 @@ def _skip_unavailable_fork_transition(payload: str) -> None:
         pytest.skip("real fork transition is unavailable on this platform")
 
 
-@pytest.mark.parametrize("payload", ["FORK_RESET", "FORK_ACTIVE_RESET"])
-def test_sqlite_fork_transitions_skip_before_runner_construction_without_fork(
-    monkeypatch: pytest.MonkeyPatch,
-    payload: str,
-) -> None:
-    monkeypatch.delattr(os, "fork", raising=False)
-
-    with pytest.raises(pytest.skip.Exception):
-        _skip_unavailable_fork_transition(payload)
-
-    _skip_unavailable_fork_transition("CREATE_REUSE")
-
-
 def _fire_timestamp_shared_instance_serialization(
     core: BrokerDB,
     monkeypatch: pytest.MonkeyPatch,

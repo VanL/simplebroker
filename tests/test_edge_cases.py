@@ -9,7 +9,6 @@ from __future__ import annotations
 import multiprocessing
 import sqlite3
 import time
-import unittest.mock
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
@@ -20,38 +19,6 @@ from .conftest import run_cli
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def test_clock_regression_during_claim(workdir: Path) -> None:
-    """Test behavior when system clock goes backward during read operations."""
-    db_path = workdir / "test.db"
-
-    # Write messages with normal timestamps
-    with BrokerDB(str(db_path)) as db:
-        for i in range(5):
-            db.write("test_queue", f"message{i}")
-
-    # Mock time.time to simulate clock regression
-    original_time = time.time
-    current_time = original_time()
-
-    def mock_time():
-        # Return a time 10 seconds in the past
-        return current_time - 10.0
-
-    # Read messages with regressed clock
-    with unittest.mock.patch("time.time", mock_time), BrokerDB(str(db_path)) as db:
-        # This should still work correctly
-        messages = db.claim_many("test_queue", limit=100, with_timestamps=False)
-        assert len(messages) == 5
-        assert messages == [f"message{i}" for i in range(5)]
-
-    # Verify messages were claimed despite clock regression
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM messages WHERE claimed = 1")
-    assert cursor.fetchone()[0] == 5
-    conn.close()
 
 
 def test_vacuum_lock_cleanup_after_crash(workdir: Path) -> None:

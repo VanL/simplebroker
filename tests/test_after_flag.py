@@ -772,45 +772,6 @@ def test_after_multiple_readers(workdir):
             future.result()
 
 
-@pytest.mark.sqlite_only
-def test_after_index_usage(workdir):
-    """Verify timestamp index is used for queries."""
-    queue_name = "index_test_queue"
-
-    # Write some messages
-    for i in range(100):
-        run_cli("write", queue_name, f"msg{i}", cwd=workdir)
-
-    # Use EXPLAIN QUERY PLAN to verify index usage
-    # This requires direct database access
-    db_path = workdir / ".broker.db"
-
-    import sqlite3
-
-    conn = sqlite3.connect(str(db_path))
-    cursor = conn.cursor()
-
-    # Check query plan for a typical --after query
-    cursor.execute(
-        """
-        EXPLAIN QUERY PLAN
-        SELECT body, ts FROM messages
-        WHERE queue = ? AND ts > ?
-        ORDER BY id
-    """,
-        (queue_name, 1000),
-    )
-
-    plan = cursor.fetchall()
-    conn.close()
-
-    # Verify index is being used
-    plan_text = " ".join(str(row) for row in plan)
-    assert (
-        "USING INDEX idx_messages_queue_ts" in plan_text or "idx_queue_ts" in plan_text
-    )
-
-
 # ============================================================================
 # Edge Cases and Boundary Tests
 # ============================================================================

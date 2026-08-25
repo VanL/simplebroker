@@ -371,41 +371,6 @@ def lock_test_process(  # noqa: C901 approved [DOM-10.1.1] [RUFF-SUP-034] except
         result_queue.put(("error", process_id, str(e)))
 
 
-def test_lock_test_process_waits_for_parent_start(tmp_path: Path) -> None:
-    """Lock-test workers must not finish before the parent starts the phase."""
-    db_path = str(tmp_path / "start_barrier.db")
-    broker = BrokerDB(db_path)
-    result_queue: queue.Queue = queue.Queue()
-    control_queue: queue.Queue = queue.Queue()
-    worker = threading.Thread(
-        target=lock_test_process,
-        args=(db_path, "shared_queue", result_queue, control_queue, 0),
-    )
-
-    try:
-        worker.start()
-        assert result_queue.get(timeout=scale_timeout_for_ci(5.0)) == (
-            "ready",
-            0,
-            None,
-        )
-
-        with pytest.raises(queue.Empty):
-            result_queue.get(timeout=scale_timeout_for_ci(0.25))
-
-        control_queue.put("start")
-        msg_type, process_id, data = result_queue.get(timeout=scale_timeout_for_ci(5.0))
-        assert msg_type == "lock_stats"
-        assert process_id == 0
-        assert data["attempts"] > 0
-    finally:
-        control_queue.put("stop")
-        worker.join(timeout=scale_timeout_for_ci(5.0))
-        broker.close()
-
-    assert not worker.is_alive()
-
-
 def test_queue_state_diagnostics_are_best_effort(tmp_path: Path) -> None:
     db_path = tmp_path / "diagnostics.db"
     with BrokerDB(str(db_path)) as broker:

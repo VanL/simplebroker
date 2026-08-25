@@ -145,8 +145,7 @@ class TestWatchCommand:
             stdout = proc.stdout
             stderr = proc.stderr
 
-            # Should have seen the message OR at least started watching
-            assert "peekmsg" in stdout or "Watching queue" in stderr, (
+            assert "peekmsg" in stdout, (
                 f"stdout: {stdout!r}, stderr: {stderr!r}"
             )
 

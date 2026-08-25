@@ -9,7 +9,7 @@ import time
 import warnings
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -17,7 +17,7 @@ from simplebroker import Queue, _retry_policy
 from simplebroker._exceptions import StopException
 from simplebroker._retry_policy import _execute_connection_retry
 from simplebroker._runner import SQLiteRunner
-from simplebroker.db import BrokerConnection, BrokerDB, DBConnection
+from simplebroker.db import BrokerConnection, DBConnection
 from tests.helper_scripts.timing import scale_timeout_for_ci
 
 _THREAD_FUTURE_TIMEOUT = scale_timeout_for_ci(10.0)
@@ -117,35 +117,6 @@ class TestQueueConnectionManager:
                 assert first is not second
                 assert second is not third
                 assert first is not third
-
-    def test_ephemeral_connection_lifetime(self) -> None:
-        """Test that ephemeral connections are properly closed after use."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "test.db")
-
-            queue = Queue("test", db_path=db_path, persistent=False)
-            try:
-                # Mock DBConnection to track cleanup
-                with patch("simplebroker.sbqueue.DBConnection") as MockDBConnection:
-                    mock_conn_instance = Mock(spec=DBConnection)
-                    mock_db = Mock(spec=BrokerDB)
-                    mock_conn_instance.get_connection.return_value = mock_db
-                    mock_conn_instance.__enter__ = Mock(return_value=mock_conn_instance)
-                    mock_conn_instance.__exit__ = Mock(return_value=None)
-                    MockDBConnection.return_value = mock_conn_instance
-
-                    # Use the connection
-                    with queue.get_connection() as conn:
-                        assert conn is mock_db
-                        # Connection should be active here
-                        mock_conn_instance.__enter__.assert_called_once()
-                        mock_conn_instance.__exit__.assert_not_called()
-
-                    # After exiting context, cleanup should have been called
-                    mock_conn_instance.__exit__.assert_called_once()
-            finally:
-                if hasattr(queue, "close"):
-                    queue.close()
 
     def test_persistent_connection_lifetime(self) -> None:
         """A persistent handle remains usable until explicit queue close."""

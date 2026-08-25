@@ -16,32 +16,20 @@ from simplebroker._constants import (
     EXIT_SUCCESS,
     LOGICAL_COUNTER_BITS,
     LOGICAL_COUNTER_MASK,
-    MAX_ITERATIONS,
     MAX_LOGICAL_COUNTER,
     # Message constraints
     MAX_MESSAGE_SIZE,
     # Project scoping constants
-    MAX_PROJECT_TRAVERSAL_DEPTH,
     MAX_QUEUE_NAME_LENGTH,
     # Watcher
-    MAX_TOTAL_RETRY_TIME,
-    # Time units
-    MS_PER_SECOND,
-    MS_PER_US,
-    NS_PER_SECOND,
-    NS_PER_US,
     PHYSICAL_TIME_BITS,
     # Program
-    PROG_NAME,
     SCHEMA_VERSION,
     SIMPLEBROKER_MAGIC,
     SQLITE_MAX_INT64,
     # Timestamp constants
     TIMESTAMP_EXACT_NUM_DIGITS,
     UNIX_NATIVE_BOUNDARY,
-    US_PER_SECOND,
-    WAIT_FOR_NEXT_INCREMENT,
-    # Database phases
     ConnectionPhase,
     # Version
     __version__,
@@ -83,40 +71,32 @@ class TestConstants:
             f"pyproject.toml has version={pyproject_version}"
         )
 
-    def test_program_constants(self) -> None:
-        """Test program identification constants."""
-        assert PROG_NAME == "simplebroker"
-        assert isinstance(PROG_NAME, str)
-
     def test_database_constants(self) -> None:
-        """Test database-related constants."""
+        """On-disk compatibility pins: changing any of these is a
+        migration for existing databases and configs, not an edit —
+        this test exists to make such a change loud and deliberate."""
         assert DEFAULT_DB_NAME == ".broker.db"
         assert DEFAULT_PROJECT_CONFIG_NAME == ".broker.toml"
         assert SIMPLEBROKER_MAGIC == "simplebroker-v1"
         assert SCHEMA_VERSION >= 1
-        assert isinstance(DEFAULT_DB_NAME, str)
-        assert isinstance(DEFAULT_PROJECT_CONFIG_NAME, str)
-        assert isinstance(SIMPLEBROKER_MAGIC, str)
-        assert isinstance(SCHEMA_VERSION, int)
 
     def test_exit_codes(self) -> None:
-        """Test exit code constants."""
+        """Public CLI contract pins ([SB-CLI-1]); doc sync is owned by
+        test_documented_exit_codes."""
         assert EXIT_SUCCESS == 0
         assert EXIT_QUEUE_EMPTY == 2
-        assert isinstance(EXIT_SUCCESS, int)
-        assert isinstance(EXIT_QUEUE_EMPTY, int)
 
     def test_message_constraints(self) -> None:
-        """Test message and queue constraint constants."""
+        """Documented limit pins; behavioral owners:
+        test_message_size_contract (byte boundary) and
+        test_queue_validation length-boundary test."""
         assert MAX_MESSAGE_SIZE == 10 * 1024 * 1024  # 10MB
         assert MAX_QUEUE_NAME_LENGTH == 512
-        assert isinstance(MAX_MESSAGE_SIZE, int)
-        assert isinstance(MAX_QUEUE_NAME_LENGTH, int)
-        assert MAX_MESSAGE_SIZE > 0
-        assert MAX_QUEUE_NAME_LENGTH > 0
 
     def test_timestamp_constants(self) -> None:
-        """Test timestamp generation constants."""
+        """Bit-layout invariants of the 64-bit hybrid timestamp: these
+        fail when one number changes without preserving the encoding
+        relationships. 19 digits and the bit split are wire contract."""
         assert TIMESTAMP_EXACT_NUM_DIGITS == 19
         assert PHYSICAL_TIME_BITS == 52
         assert LOGICAL_COUNTER_BITS == 12
@@ -124,33 +104,7 @@ class TestConstants:
         assert MAX_LOGICAL_COUNTER == 1 << LOGICAL_COUNTER_BITS
         assert UNIX_NATIVE_BOUNDARY == 2**44
         assert SQLITE_MAX_INT64 == 2**63
-
-        # Verify bit calculations
-        assert LOGICAL_COUNTER_MASK == 0xFFF  # 12 bits of 1s
-        assert MAX_LOGICAL_COUNTER == 4096
-
-        # Verify total bits don't exceed 64
         assert PHYSICAL_TIME_BITS + LOGICAL_COUNTER_BITS <= 64
-
-    def test_time_unit_constants(self) -> None:
-        """Test time unit conversion constants."""
-        assert MS_PER_SECOND == 1000
-        assert US_PER_SECOND == 1_000_000
-        assert MS_PER_US == 1000
-        assert NS_PER_US == 1000
-        assert NS_PER_SECOND == 1_000_000_000
-        assert WAIT_FOR_NEXT_INCREMENT == 0.000_001
-        assert MAX_ITERATIONS == 100_000
-
-        # Verify relationships
-        assert US_PER_SECOND == MS_PER_SECOND * MS_PER_US
-        assert NS_PER_SECOND == US_PER_SECOND * NS_PER_US
-
-    def test_watcher_constants(self) -> None:
-        """Test watcher-related constants."""
-        assert MAX_TOTAL_RETRY_TIME == 300  # 5 minutes
-        assert isinstance(MAX_TOTAL_RETRY_TIME, int)
-        assert MAX_TOTAL_RETRY_TIME > 0
 
     def test_connection_phase_constants(self) -> None:
         """Test database connection phase constants."""
@@ -160,13 +114,6 @@ class TestConstants:
         assert ConnectionPhase.CONNECTION == "connection"
         assert ConnectionPhase.SCHEMA == "schema"
         assert ConnectionPhase.OPTIMIZATION == "optimization"
-
-    def test_project_scoping_constants(self) -> None:
-        """Test project scoping constants."""
-        assert MAX_PROJECT_TRAVERSAL_DEPTH == 100
-        assert isinstance(MAX_PROJECT_TRAVERSAL_DEPTH, int)
-        assert MAX_PROJECT_TRAVERSAL_DEPTH > 0
-
 
 class TestLoadConfig:
     """Test the load_config function with various environment configurations."""

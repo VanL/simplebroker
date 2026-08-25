@@ -194,9 +194,12 @@ class TestInitCommand:
         # Should succeed
         assert result == EXIT_SUCCESS
 
-        # Should have no stdout output
+        # Quiet suppresses BOTH streams — init's informational message
+        # goes to stderr, so asserting stdout alone passed under any
+        # quiet regression (audit finding).
         captured = capsys.readouterr()
         assert captured.out == ""
+        assert captured.err == ""
 
     def test_init_non_quiet_mode_shows_output(self, tmp_path, capsys):
         """Test that non-quiet mode shows informational output."""

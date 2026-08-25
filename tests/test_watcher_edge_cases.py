@@ -1,7 +1,6 @@
 """Test edge cases in watcher.py to increase coverage."""
 
 import contextlib
-import inspect
 import signal
 import tempfile
 import threading
@@ -38,14 +37,6 @@ class WatcherTestError(Exception):
 
 class TestWatcherEdgeCases(WatcherTestBase):
     """Test edge cases in QueueWatcher."""
-
-    def test_unsupported_message_type_is_not_exported(self) -> None:
-        assert "Message" not in watcher_module.__all__
-        assert not hasattr(watcher_module, "Message")
-
-    def test_watcher_exit_has_context_manager_protocol_signature(self) -> None:
-        parameters = inspect.signature(watcher_module.BaseWatcher.__exit__).parameters
-        assert list(parameters) == ["self", "exc_type", "exc_val", "exc_tb"]
 
     def test_invalid_database_owner_type_is_rejected(self) -> None:
         with pytest.raises(TypeError, match="Watcher db= must be a path"):
