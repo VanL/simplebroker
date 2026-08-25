@@ -243,23 +243,12 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
     ) in readme
     assert "[SB-ID-1]" in readme
     assert "[SB-ID-5]" in readme
-    assert "ID `0` is reserved" in normalized_spec
-    assert "Exact selectors still accept zero" in normalized_spec
-    assert "allocation/high-water advancement and insertion" in normalized_spec
+    # Enumerable identifier tokens only; the narrated behaviors each
+    # have cited firing tests (audit Task 6.2 removed ~25 wording pins
+    # — the regex-growing-alternations pattern that broke on rewording).
+    assert "ID `0`" in normalized_spec
     assert "19 decimal digits" in normalized_spec
     assert "str.isdecimal()" in normalized_spec
-    assert "whitespace is stripped" in normalized_spec
-    assert "New exact-id insertion rejects reserved zero" in normalized_spec
-    assert "consume remaining logical-counter values" in normalized_spec
-    assert (
-        "same message identity and delivery state with only the queue binding updated"
-        in normalized_spec
-    )
-    assert "Broker-generated message IDs are positive" in normalized_readme
-    assert re.search(r"Exact selectors (?:still )?accept zero", normalized_readme)
-    assert re.search(
-        r"(?:the )?`?move`?(?: operation)? preserves IDs", normalized_readme
-    )
     assert "19 decimal digits" in normalized_readme
     assert "High 52 bits: microseconds" not in readme
     assert "14-timestamp-selection.md" in readme
@@ -271,10 +260,7 @@ def test_message_identity_contract_clause_inventory_and_authority() -> None:
         assert "[SB-ID-5]" in surface
     kernel = KERNEL.read_text(encoding="utf-8")
     normalized_kernel = " ".join(kernel.split())
-    assert "Generated ids are positive" in normalized_kernel
-    assert "ID `0` is reserved origin" in normalized_kernel
     assert "19 decimal digits" in normalized_kernel
-    assert "preserves ids" in normalized_kernel
 
     assert "13-message-identity.md" in SPEC_INDEX.read_text(encoding="utf-8")
     invariant_text = INVARIANTS.read_text(encoding="utf-8")

@@ -36,6 +36,13 @@ _time_ns = time.time_ns
 _sleep = time.sleep
 _uniform = random.uniform
 
+# Unit-heuristic digit boundaries for bare integer timestamps: more than
+# 16 integer digits reads as nanoseconds, more than 11 as milliseconds.
+# A bare 8-digit decimal is the ISO-8601 basic date form (YYYYMMDD).
+_NS_DIGIT_BOUNDARY = 16
+_MS_DIGIT_BOUNDARY = 11
+_ISO_BASIC_DATE_DIGITS = 8
+
 if TYPE_CHECKING:
     from ._runner import SQLRunner
 
@@ -561,7 +568,10 @@ class TimestampGenerator:
             "-" in timestamp_str
             or "T" in timestamp_str.upper()
             or "Z" in timestamp_str.upper()
-            or (len(timestamp_str) == 8 and timestamp_str.isdecimal())
+            or (
+                len(timestamp_str) == _ISO_BASIC_DATE_DIGITS
+                and timestamp_str.isdecimal()
+            )
         ):
             return None
 
@@ -623,9 +633,9 @@ class TimestampGenerator:
             # Heuristic based on number of digits for the integer part
             # Current time (2025) is ~10 digits in seconds, ~13 digits in ms, ~19 digits in ns
 
-            if integer_digits > 16:  # Likely nanoseconds
+            if integer_digits > _NS_DIGIT_BOUNDARY:  # Likely nanoseconds
                 ns_after_epoch = int_val
-            elif integer_digits > 11:  # Likely milliseconds
+            elif integer_digits > _MS_DIGIT_BOUNDARY:  # Likely milliseconds
                 ns_after_epoch = int_val * 1_000_000
             else:  # Likely seconds
                 ns_after_epoch = int_val * 1_000_000_000

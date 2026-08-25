@@ -229,43 +229,33 @@ def test_live_peek_stream_mutation_leaves_unvisited_messages(queue_factory) -> N
 
 
 def test_live_peek_stream_rejects_naive_cursor_completeness() -> None:
-    """[SB-DELIVERY-4] Stronger traversal must choose its consistency model."""
-    section = _section("SB-DELIVERY-4")
+    """[SB-DELIVERY-4] exists and binds this test through its row.
 
-    assert "Exact insertion may put an older public ID" in section
-    assert re.search(r"behind an advanced\s+`\(timestamp, id\)` cursor", section)
-    assert "Move re-homes a row in place" in section
-    assert re.search(
-        r"preserving both\s+its public ID and current internal sequence", section
-    )
-    assert re.search(r"behind\s+a cursor on either ordering", section)
-    assert re.search(r"fixed-start, live-rescan, or snapshot\s+semantics", section)
+    Prose-fragment and plan-path/SHA pins removed (audit Task 6.1 —
+    they broke twice on pure doc reorganizations); the live-rescan
+    behavior itself is owned by
+    test_live_peek_stream_mutation_leaves_unvisited_messages.
+    """
+    section = _section("SB-DELIVERY-4")
+    assert section.strip()
 
     row = _verification_row("SB-DELIVERY-4")
     assert "test_live_peek_stream_rejects_naive_cursor_completeness" in row
-    spec_text = SPEC.read_text(encoding="utf-8")
-    assert (
-        "retired: 2026-08-23-correctness-and-concurrency-review-remediation-plan"
-        in spec_text
-    )
-    assert "source `23d6c9d1`" in spec_text
 
 
 def test_closeable_peek_lifecycle_contract_is_bound_to_real_backends() -> None:
-    """[SB-DELIVERY-4] Early stop has an explicit same-thread cleanup action."""
-    section = " ".join(_section("SB-DELIVERY-4").split()).lower()
-    assert "single-use closeable iterator" in section
-    assert "first advancement attempt" in section
-    assert "same thread" in section
-    assert "stopiteration" in section
-    assert "caller's loop body" in section
-    assert "before closing its queue or higher-level client" in section
-    assert "persistent queue" in section
-    assert "ephemeral queue" in section
-    assert "caller-supplied runner" in section
+    """[SB-DELIVERY-4] cites the real lifecycle suite, which must exist.
 
+    Wording pins replaced by existence/collection facts (audit Task
+    6.1); the behavior lives in tests/test_peek_generator_lifecycle.py.
+    """
     row = _verification_row("SB-DELIVERY-4")
     assert "tests/test_peek_generator_lifecycle.py" in row
+    cited = Path(__file__).parent / "test_peek_generator_lifecycle.py"
+    assert cited.exists()
+    assert "def test_early_peek_close_releases_before_return_and_queue_reuse" in (
+        cited.read_text(encoding="utf-8")
+    )
 
 
 def test_invalid_generator_selector_fails_on_iteration_without_mutation(

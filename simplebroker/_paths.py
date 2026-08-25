@@ -9,7 +9,11 @@ import os
 from pathlib import Path, PurePath
 
 from ._backends import get_backend
-from ._constants import MAX_PROJECT_TRAVERSAL_DEPTH, _validate_safe_path_components
+from ._constants import (
+    COMPOUND_DB_NAME_PARTS,
+    MAX_PROJECT_TRAVERSAL_DEPTH,
+    _validate_safe_path_components,
+)
 from ._exceptions import _ArgumentValidationError
 
 
@@ -175,14 +179,14 @@ def _is_compound_db_name(db_name: str) -> tuple[bool, list[str]]:
     parts = list(pure_path.parts)
 
     # Check for nested directories (more than 2 parts)
-    if len(parts) > 2:
+    if len(parts) > COMPOUND_DB_NAME_PARTS:
         raise ValueError(
             f"Database name must not contain nested directories: {db_name}. "
             f"Only single directory level is supported (e.g., 'dir/name.db')"
         )
 
     # If there are exactly 2 parts, it's compound
-    is_compound = len(parts) == 2
+    is_compound = len(parts) == COMPOUND_DB_NAME_PARTS
     return is_compound, parts if is_compound else []
 
 

@@ -36,6 +36,9 @@ from ..._sql.sqlite import (
     build_insert_delete_queue_names_query,
 )
 
+# PRAGMA auto_vacuum mode 2 is INCREMENTAL (SQLite documented value).
+_AUTO_VACUUM_INCREMENTAL = 2
+
 if TYPE_CHECKING:
     from ..._runner import SQLRunner
 
@@ -231,5 +234,5 @@ def _has_claimed_messages(runner: SQLRunner) -> bool:
 
 def _maybe_run_incremental_vacuum(runner: SQLRunner) -> None:
     result = list(runner.run(GET_AUTO_VACUUM, fetch=True))
-    if result and result[0] and int(result[0][0]) == 2:
+    if result and result[0] and int(result[0][0]) == _AUTO_VACUUM_INCREMENTAL:
         runner.run(INCREMENTAL_VACUUM)

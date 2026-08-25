@@ -97,21 +97,30 @@ def _commands_text(commands: tuple[tuple[str, ...], ...]) -> str:
     return "\n".join(" ".join(command) for command in commands)
 
 
+def _exactly_once_pair(command: tuple[str, ...], flag: str, value: str) -> None:
+    """Assert flag appears exactly once and is immediately followed by value.
+
+    Replaces exact command-tail slices (audit Task 6.4): the release
+    property is the option/value pairing with no duplicate or
+    conflicting later occurrence — argv position is incidental.
+    """
+    assert command.count(flag) == 1, (flag, command)
+    index = command.index(flag)
+    assert command[index + 1] == value, (flag, command)
+
+
 def test_local_release_gate_uses_logical_cpus_plus_one_worker() -> None:
     assert release._local_pytest_worker_count(8) == 9
     assert release._local_pytest_worker_count(1) == 2
     assert release._local_pytest_worker_count(0) == 2
-    assert release.ROOT_TEST_PYTEST_ARGS[-4:] == (
-        "-n",
-        str(release.LOCAL_PYTEST_WORKERS),
-        "--dist",
-        "loadgroup",
+    _exactly_once_pair(
+        release.ROOT_TEST_PYTEST_ARGS, "-n", str(release.LOCAL_PYTEST_WORKERS)
     )
-    assert release.EXAMPLE_TEST_COMMAND[-3:] == (
-        "-n",
-        str(release.LOCAL_PYTEST_WORKERS),
-        "examples",
+    _exactly_once_pair(release.ROOT_TEST_PYTEST_ARGS, "--dist", "loadgroup")
+    _exactly_once_pair(
+        release.EXAMPLE_TEST_COMMAND, "-n", str(release.LOCAL_PYTEST_WORKERS)
     )
+    assert release.EXAMPLE_TEST_COMMAND[-1] == "examples"
     assert release.PRECHECK_ENV_OVERRIDES["PYTEST_XDIST_AUTO_NUM_WORKERS"] == str(
         release.LOCAL_PYTEST_WORKERS
     )
@@ -125,15 +134,11 @@ def test_release_gate_isolates_benchmarks_from_parallel_suite_load() -> None:
 
     assert len(root_pytest_commands) == 2
     functional, benchmarks = root_pytest_commands
-    assert functional[functional.index("-m") + 1] == "not benchmark"
-    assert functional[-4:] == (
-        "-n",
-        str(release.LOCAL_PYTEST_WORKERS),
-        "--dist",
-        "loadgroup",
-    )
-    assert benchmarks[benchmarks.index("-m") + 1] == "benchmark"
-    assert benchmarks[-2:] == ("-n", "0")
+    _exactly_once_pair(tuple(functional), "-m", "not benchmark")
+    _exactly_once_pair(tuple(functional), "-n", str(release.LOCAL_PYTEST_WORKERS))
+    _exactly_once_pair(tuple(functional), "--dist", "loadgroup")
+    _exactly_once_pair(tuple(benchmarks), "-m", "benchmark")
+    _exactly_once_pair(tuple(benchmarks), "-n", "0")
 
 
 def test_release_gate_worker_modes_override_ambient_pytest_addopts(

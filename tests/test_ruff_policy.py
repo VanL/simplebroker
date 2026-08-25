@@ -7,6 +7,7 @@ import re
 import subprocess
 import tomllib
 from pathlib import Path, PureWindowsPath
+from typing import cast
 
 from bin.ruff_suppression_index import repository_path, run
 
@@ -17,7 +18,7 @@ SUPPRESSION_REGISTRY = (
     ROOT / "docs" / "implementation" / "10-ruff-suppression-registry.md"
 )
 
-REVIEWED_FAMILIES = ["E", "W", "F", "I", "B", "C901", "C4", "UP"]
+REVIEWED_FAMILIES = ["E", "W", "F", "I", "B", "C901", "C4", "UP", "PLR2004"]
 GLOBAL_IGNORES = ["E501", "B008"]
 EXTENSIONLESS_PYTHON = ["bin/*"]
 MCCABE_MAX_COMPLEXITY = 10
@@ -103,7 +104,15 @@ def test_ruff_extends_defaults_without_losing_legacy_families() -> None:
     assert lint["ignore"] == GLOBAL_IGNORES
     assert lint["mccabe"] == {"max-complexity": MCCABE_MAX_COMPLEXITY}
     assert lint.get("preview", False) is False
-    assert lint.get("per-file-ignores", {}) == {}
+    # PLR2004's enforcement boundary is the shipped package only
+    # (owner-scoped, audit plan Task 6.6): every per-file ignore must be
+    # a PLR2004 scope exclusion, nothing else.
+    per_file_ignores = cast(
+        "dict[str, list[str]]", lint.get("per-file-ignores", {})
+    )
+    for path_pattern, ignored in per_file_ignores.items():
+        assert ignored == ["PLR2004"], (path_pattern, ignored)
+        assert not path_pattern.startswith("simplebroker"), path_pattern
 
 
 def test_effective_ruff_rules_match_reviewed_inventory() -> None:
@@ -125,12 +134,18 @@ def test_approved_suppressions_match_the_registry() -> None:
         write=False,
     )
 
-    # Stable retired IDs are not reused or filled by renumbering later groups.
-    expected_numbers = [*range(1, 13), *range(14, 36)]
-    assert [group.group_id for group in snapshot.groups] == [
-        f"RUFF-SUP-{number:03d}" for number in expected_numbers
-    ]
-    assert len(snapshot.directives) == 172
+    # Derived properties instead of a hardcoded ID list and directive
+    # count (audit Task 6.4 — the count pin made every approved
+    # suppression a triple-entry edit; the --check CI gate already
+    # catches registry drift). Retired IDs stay retired: group IDs are
+    # strictly increasing with no reuse, and every group carries at
+    # least one live directive (enforced by the tool itself).
+    numbers = [int(group.group_id.removeprefix("RUFF-SUP-")) for group in snapshot.groups]
+    assert numbers == sorted(numbers)
+    assert len(numbers) == len(set(numbers))
+    retired = set(range(1, max(numbers) + 1)) - set(numbers)
+    assert 13 in retired, "retired ID 13 must never be reused"
+    assert snapshot.directives, "registry must track live directives"
 
 
 def test_configured_complexity_boundary_fires_at_eleven() -> None:
@@ -308,13 +323,15 @@ def test_ci_uses_comprehensive_lint_and_explicit_formatter_paths() -> None:
     suppression_check = (
         "uv run --frozen --no-sync python bin/ruff_suppression_index.py --check"
     )
-    expected_formatter = (
-        "uv run --frozen --no-sync ruff format --check "
-        "simplebroker tests bin .github/scripts "
-        "extensions/simplebroker_pg/simplebroker_pg "
-        "extensions/simplebroker_pg/tests "
-        "extensions/simplebroker_redis/simplebroker_redis "
-        "extensions/simplebroker_redis/tests"
+    formatter_directories = (
+        "simplebroker",
+        "tests",
+        "bin",
+        ".github/scripts",
+        "extensions/simplebroker_pg/simplebroker_pg",
+        "extensions/simplebroker_pg/tests",
+        "extensions/simplebroker_redis/simplebroker_redis",
+        "extensions/simplebroker_redis/tests",
     )
 
     assert ruff_check in lint_job
@@ -325,5 +342,57 @@ def test_ci_uses_comprehensive_lint_and_explicit_formatter_paths() -> None:
     assert "-not -path 'tests/typecheck_fixtures/*'" in lint_job
     assert '"${core_test_files[@]}"' in lint_job
     assert "--preview" not in lint_job
-    assert expected_formatter in " ".join(lint_job.split())
+    # Per-directory containment with exactly-once semantics instead of
+    # one frozen command string (audit Task 6.4): a new formatted
+    # directory no longer breaks this test, while dropping a directory
+    # or reverting to a bare "." still does.
+    flattened = " ".join(lint_job.split())
+    assert flattened.count("ruff format --check") == 1
+    formatter_command = flattened.split("ruff format --check", 1)[1]
+    formatter_command = formatter_command.split(" - name:", 1)[0]
+    for directory in formatter_directories:
+        assert f" {directory}" in formatter_command, directory
     assert "ruff format --check ." not in lint_job
+
+
+def test_magic_comparison_literal_fires_in_package_scope() -> None:
+    """PLR2004 live-fire probe (audit plan Task 6.6).
+
+    A new unexplained comparison literal in the shipped package must
+    produce a diagnostic; the same code under tests/ must not (the
+    owner-scoped enforcement boundary).
+    """
+    probe = "def check(value: int) -> bool:\n    return value > 42\n"
+    in_package = _ruff(
+        "check",
+        "--config",
+        str(PYPROJECT),
+        "--select",
+        "PLR2004",
+        "--output-format",
+        "json",
+        "--stdin-filename",
+        "simplebroker/magic_probe.py",
+        "-",
+        input_text=probe,
+    )
+    assert in_package.returncode == 1, in_package.stderr
+    diagnostics = json.loads(in_package.stdout)
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["code"] == "PLR2004"
+
+    in_tests = _ruff(
+        "check",
+        "--config",
+        str(PYPROJECT),
+        "--select",
+        "PLR2004",
+        "--output-format",
+        "json",
+        "--stdin-filename",
+        "tests/magic_probe.py",
+        "-",
+        input_text=probe,
+    )
+    assert in_tests.returncode == 0, in_tests.stdout
+    assert json.loads(in_tests.stdout) == []

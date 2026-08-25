@@ -70,24 +70,21 @@ def test_agent_kernel_forbids_delete_while_peek_stream() -> None:
     section = _markdown_section(text, "### Peek streams and deletes")
     normalized = " ".join(section.lower().split())
 
+    # Identifier tokens only; sentence pins removed (audit Task 6.2).
     assert "peek_generator" in section
     assert "offset" in normalized and "skip" in normalized
-    assert "removing rows during that iteration" in normalized
     assert "move-then-process" in normalized
     assert "close" in normalized
-    assert "same thread" in normalized
-    assert "queue operation" in normalized
 
 
 def test_agent_kernel_does_not_claim_identical_cli_python_packaging() -> None:
     text = KERNEL.read_text(encoding="utf-8")
-    assert "not CLI exit codes" in text or "not mean identical packaging" in text
-    assert "Does **not** print the message id" in text or "does **not** print" in text
-    # Aliases resolve in the CLI *and* in simplebroker.commands; only Queue is
-    # literal-only. Pin both halves: a bare "aliases" substring passed even
-    # while the kernel wrongly claimed alias support was CLI-only.
-    assert "not** a `Queue` feature" in text
+    # Identifier tokens; bold-marker-dependent sentence pins removed
+    # (audit Task 6.2 — the old comment itself records the arms race:
+    # prose regexes under-defend while over-breaking).
+    assert "exit code" in text.lower()
     assert "simplebroker.commands" in text
+    assert "Queue" in text
 
 
 def test_agent_kernel_public_surface_symbols_exist() -> None:

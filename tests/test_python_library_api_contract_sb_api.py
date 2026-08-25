@@ -127,8 +127,7 @@ def test_api_closeable_peek_iterator_contract() -> None:
     assert "CloseableIterator" in shape
     assert "Backend-facing `BrokerConnection` generator methods" in generators
     assert "`Iterator[...]` seams" in generators
-    assert "`tests/test_dev_scripts.py` (isolated root wheel/sdist import" in spec
-    assert "published-artifact verification" in spec
+    assert "`tests/test_dev_scripts.py`" in spec
 
     assert "CloseableIterator" in simplebroker.__all__
     assert simplebroker.CloseableIterator is sbqueue_module.CloseableIterator
@@ -137,20 +136,9 @@ def test_api_closeable_peek_iterator_contract() -> None:
     assert "send" not in protocol_members
     assert "throw" not in protocol_members
 
-    for method in (
-        Queue.read,
-        Queue.peek,
-        Queue.move,
-        Queue.read_generator,
-        Queue.peek_generator,
-        Queue.move_generator,
-        Queue.stream_messages,
-    ):
-        doc = " ".join((method.__doc__ or "").split()).lower()
-        assert "lazy" in doc
-        assert "same thread" in doc
-        assert "close" in doc
-        assert "queue operation" in doc
+    # Docstring-wording pins removed (audit Task 6.2); the lazy
+    # first-iteration and same-thread-close behaviors are owned by the
+    # generator lifecycle suites.
 
 
 def test_api_queue_rejects_alias_sigil_before_config_or_target_setup(
@@ -223,11 +211,8 @@ def test_api_generators_watchers_sidecar_io_errors_language() -> None:
     assert "SB-IO" in io
     errors = _section("SB-API-9")
     assert "exception" in errors.lower()
-    assert "message text" in errors.lower() or "not a frozen" in errors.lower()
     assert "InvalidConfigError" in errors
     assert "ValueError" in errors
-    config = _section("SB-API-2")
-    assert "lower layers and later lazy resource" in config.lower()
 
 
 def test_api_polling_strategy_defaults_match_canonical_config() -> None:
@@ -253,25 +238,19 @@ def test_api_polling_strategy_defaults_match_canonical_config() -> None:
 def test_api_activity_waiter_terminal_close_contract() -> None:
     body = _section("SB-API-6")
     normalized_body = " ".join(body.split()).lower()
-    assert "close-only leaf resource" in normalized_body
-    assert "terminal and idempotent" in normalized_body
+    # Identifier tokens only; behaviors owned by the terminal-close
+    # runtime tests cited in the SB-API-6 verification row.
     assert "baseexception.add_note()" in normalized_body
-    assert "does not define `wait()` behavior after close" in normalized_body
-
-    protocol_doc = " ".join((simplebroker.ActivityWaiter.__doc__ or "").split())
-    assert "terminal" in protocol_doc.lower()
-    assert "before backend cleanup" in protocol_doc.lower()
-    assert "does not retry partial cleanup" in protocol_doc.lower()
     assert not hasattr(simplebroker.ActivityWaiter, "shutdown")
 
 
 def test_api_watcher_start_stop_cleanup_ownership_contract() -> None:
+    """[SB-API-6] names the ownership contract; behavior owners are the
+    test_watcher_stop_contract nodes in the verification row (audit
+    Task 6.2 removed the sentence pins)."""
     body = " ".join(_section("SB-API-6").split()).lower()
-    assert "thread-safe against watcher startup" in body
-    assert "one cleanup owner" in body
-    assert "stop that wins before startup" in body
-    assert "joining stop call times out" in body
-    assert "two concurrent `run_forever()` calls" in body
+    assert "cleanup" in body
+    assert "run_forever()" in body
 
 
 def test_api_command_layer_and_advanced_language() -> None:
@@ -287,17 +266,13 @@ def test_api_command_layer_and_advanced_language() -> None:
 
 
 def test_api_owned_runner_lifecycle_and_backend_v7_contract() -> None:
+    """[SB-API-11] identifier and version tokens; behaviors owned by the
+    runner-lifecycle and timestamp-advance suites in the verification
+    row."""
     advanced = " ".join(_section("SB-API-11").split()).lower()
-    assert "lifecycle verbs follow ownership scope" in advanced
-    assert "simplebroker-owned runner teardown" in advanced
-    assert "explicitly injected runner" in advanced
     assert "backend api v6" in advanced
-    assert "terminal close semantics" in advanced
     assert "backend api v7" in advanced
     assert "advance_last_timestamp(timestamp)" in advanced
-    assert "process-local cache" in advanced
-    assert "final read" in advanced
-    assert "outcome-ambiguous" in advanced
     assert "linearization point" in advanced
     assert "runner remains reusable" in advanced
     assert "owning process session or factory" in advanced

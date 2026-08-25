@@ -68,7 +68,7 @@ def _is_status_temp_name(name: str, *, prefix: str) -> bool:
         return False
     components = name[len(prefix) :].split(".")
     return (
-        len(components) == 2
+        len(components) == 2  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-037] exception
         and all(components)
         and all(
             all("0" <= character <= "9" for character in component)

@@ -863,3 +863,47 @@ class TestConfigValidation:
             ),
         ):
             load_config()
+
+
+def test_every_bare_constant_declaration_carries_an_explanation() -> None:
+    """No-magic-constants policy, explanation half (audit plan Task 6.6).
+
+    Every module-level UPPER_CASE constant assignment in _constants.py
+    must carry meaning or units: a comment directly above it (or above
+    its contiguous constant block), an inline trailing comment, or the
+    file's house-style docstring on the following line.
+    _CONFIG_FIELDS entries are separately gated by their non-empty
+    ``expected`` form in test_invalid_config_lifecycle.
+    """
+    import re
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parent.parent / "simplebroker" / "_constants.py"
+    ).read_text(encoding="utf-8")
+    lines = source.splitlines()
+    assignment = re.compile(r"^(_?[A-Z][A-Z0-9_]+)(?::[^=]+)?\s*=")
+    missing: list[str] = []
+    for index, line in enumerate(lines):
+        match = assignment.match(line)
+        if not match:
+            continue
+        previous = lines[index - 1].strip() if index else ""
+        if previous.startswith("#"):
+            continue
+        # Contiguous constant blocks share the comment above the block.
+        if assignment.match(lines[index - 1]) if index else False:
+            continue
+        # An inline trailing comment also counts as an explanation.
+        if "#" in line:
+            continue
+        # The file's house style: a docstring on the following line.
+        following = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if following.startswith(('"""', "'''")):
+            continue
+        missing.append(f"{index + 1}: {match.group(1)}")
+
+    assert not missing, (
+        "constants without an adjacent explanation (add a comment naming "
+        f"meaning or units): {missing}"
+    )

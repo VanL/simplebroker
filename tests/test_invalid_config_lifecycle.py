@@ -266,25 +266,23 @@ def test_each_invalid_snapshot_raises_a_fresh_exception_and_repair_recovers(
 
 
 def test_config_consumers_do_not_resolve_ambient_config_at_module_scope() -> None:
-    module_paths = [
-        "simplebroker/_broker_session.py",
-        "simplebroker/_paths.py",
-        "simplebroker/_runner.py",
-        "simplebroker/cli.py",
-        "simplebroker/commands.py",
-        "simplebroker/db.py",
-        "simplebroker/project.py",
-        "simplebroker/sbqueue.py",
-        "simplebroker/watcher.py",
-        "simplebroker/_dump.py",
-        "simplebroker/_project_config.py",
-        "simplebroker/_backends/sqlite/plugin.py",
-        "extensions/simplebroker_pg/simplebroker_pg/plugin.py",
-        "extensions/simplebroker_redis/simplebroker_redis/core.py",
-        "extensions/simplebroker_redis/simplebroker_redis/plugin.py",
-        "extensions/simplebroker_redis/simplebroker_redis/pool.py",
-        "extensions/simplebroker_redis/simplebroker_redis/runner.py",
-    ]
+    # Glob-derived so a new module cannot silently escape the guard
+    # (audit Task 6.5 — the old hardcoded 17-path list exempted new
+    # files by default). Sanity anchors below keep the derivation
+    # honest.
+    module_paths = sorted(
+        str(path.relative_to(PROJECT_ROOT))
+        for pattern in (
+            "simplebroker/**/*.py",
+            "extensions/simplebroker_pg/simplebroker_pg/**/*.py",
+            "extensions/simplebroker_redis/simplebroker_redis/**/*.py",
+        )
+        for path in PROJECT_ROOT.glob(pattern)
+        if "__pycache__" not in path.parts
+    )
+    assert "simplebroker/cli.py" in module_paths
+    assert "extensions/simplebroker_redis/simplebroker_redis/pool.py" in module_paths
+    assert len(module_paths) > 17
     offenders: list[str] = []
     for relative_path in module_paths:
         tree = ast.parse((PROJECT_ROOT / relative_path).read_text(encoding="utf-8"))

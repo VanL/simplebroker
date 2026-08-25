@@ -27,6 +27,11 @@ from typing import Any, TypeVar
 _monotonic = time.monotonic
 _uniform = random.uniform
 
+# Hot-loop detection: this many retry wake-ups inside this window (in
+# seconds) triggers the diagnostic slow-down path.
+_HOT_LOOP_WINDOW_S = 0.1
+_HOT_LOOP_THRESHOLD = 5
+
 T = TypeVar("T")
 
 __version__ = "1.0"
@@ -252,12 +257,12 @@ def _check_hot_loop() -> None:
     now = _monotonic()
     with _hot_loop_lock:
         prev = float(_hot_loop_data["last_retry"])
-        if prev > 0 and now - prev < 0.1:
+        if prev > 0 and now - prev < _HOT_LOOP_WINDOW_S:
             _hot_loop_data["count"] = int(_hot_loop_data["count"]) + 1
         else:
             _hot_loop_data["count"] = 0
         _hot_loop_data["last_retry"] = now
-        if int(_hot_loop_data["count"]) >= 5:
+        if int(_hot_loop_data["count"]) >= _HOT_LOOP_THRESHOLD:
             _logger.warning(
                 "Hot loop detected: %d retries in quick succession. "
                 "Add jitter or increase backoff.",

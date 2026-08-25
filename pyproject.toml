@@ -143,11 +143,24 @@ extend-select = [
     "C901", # mccabe complexity visibility and auditability
     "C4", # flake8-comprehensions
     "UP", # pyupgrade
+    "PLR2004", # no unexplained comparison literals (audit plan Task 6.6)
 ]
 ignore = [
     "E501", # line too long (handled by black)
     "B008", # do not perform function calls in argument defaults
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# PLR2004 enforces the no-magic-constants policy on the shipped package
+# only; tests, tooling, examples, and extensions stay review-enforced
+# (owner-scoped enforcement boundary, audit plan Task 6.6).
+"tests/**" = ["PLR2004"]
+"bin/**" = ["PLR2004"]
+"examples/**" = ["PLR2004"]
+"extensions/**" = ["PLR2004"]
+"fuzz/**" = ["PLR2004"]
+".github/**" = ["PLR2004"]
+"benchmarks/**" = ["PLR2004"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["simplebroker"]

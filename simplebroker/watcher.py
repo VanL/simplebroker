@@ -97,6 +97,10 @@ from .sbqueue import Queue
 _monotonic = time.monotonic
 _uniform = random.uniform
 
+# Consecutive PRAGMA data_version failures tolerated before the polling
+# strategy stops trusting the fast-path change hint.
+_MAX_PRAGMA_FAILURES = 10
+
 if TYPE_CHECKING:
     from ._backend_plugins import ActivityWaiter
 
@@ -1572,7 +1576,7 @@ class PollingStrategy:
         except Exception as e:  # noqa: BLE001 approved [DOM-10.1.1] [RUFF-SUP-004] exception
             # Track PRAGMA failures
             self._pragma_failures += 1
-            if self._pragma_failures >= 10:
+            if self._pragma_failures >= _MAX_PRAGMA_FAILURES:
                 msg = f"PRAGMA data_version failed 10 times consecutively. Last error: {e}"
                 raise RuntimeError(
                     msg,

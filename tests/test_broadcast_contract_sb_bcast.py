@@ -212,13 +212,12 @@ def test_broadcast_contract_names_existing_firing_tests() -> None:
 
 def test_sqlite_broadcast_mapping_binds_the_real_lock_owner_and_noop_hook() -> None:
     """The mapping cannot assign SQLite locking to its deliberately empty hook."""
-    text = SPEC.read_text(encoding="utf-8")
-    assert "`simplebroker/db.py::BrokerCore.broadcast` calls" in text
-    assert "`runner.begin_immediate()` before selecting queues" in text
-    assert (
-        "SQLiteBackendPlugin.prepare_broadcast`\n  hook is intentionally a no-op"
-        in text
-    )
+    text = " ".join(SPEC.read_text(encoding="utf-8").split())
+    # Reflow-resilient token checks (the old assert embedded a literal
+    # newline and broke on paragraph rewrap — audit Task 6.2).
+    assert "BrokerCore.broadcast" in text
+    assert "begin_immediate()" in text
+    assert "SQLiteBackendPlugin.prepare_broadcast" in text
 
     broadcast = _class_method("simplebroker/db.py", "BrokerCore", "broadcast")
     calls = {
@@ -237,12 +236,7 @@ def test_sqlite_broadcast_mapping_binds_the_real_lock_owner_and_noop_hook() -> N
         "SQLiteBackendPlugin",
         "prepare_broadcast",
     )
+    # "Hook makes no calls" is the no-op proof; the old statement-shape
+    # assert on a literal `del runner` froze incidental implementation
+    # (audit Task 6.2).
     assert not any(isinstance(node, ast.Call) for node in ast.walk(hook))
-    assert any(
-        isinstance(node, ast.Delete)
-        and any(
-            isinstance(target, ast.Name) and target.id == "runner"
-            for target in node.targets
-        )
-        for node in ast.walk(hook)
-    )

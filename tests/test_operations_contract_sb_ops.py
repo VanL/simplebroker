@@ -21,8 +21,10 @@ EVIDENCE_MANIFESTS = {
         "tests/test_operations_contract_sb_ops.py": {
             "test_ops_delete_removes_row_immediately"
         },
+        "tests/test_queue_api_comprehensive.py": {
+            "test_delete_all",
+        },
         "tests/test_queue_api_additions.py": {
-            "test_queue_delete_all",
             "test_queue_delete_explicit_none_is_rejected_without_mutation",
         },
         "tests/test_batch_delete.py": {
@@ -172,6 +174,14 @@ def test_ops_clause_inventory_and_authority() -> None:
 
 
 def test_ops_language_core_promises() -> None:
+    """Keyword and enumerable-token presence per section.
+
+    Sentence-fragment pins removed (audit Task 6.2): each narrated
+    promise has a cited firing test in the SB-OPS manifests. Retained
+    tokens are identifiers and enumerable contract surface — the
+    status-temp filename pattern and the 10,000 vacuum threshold are
+    themselves contract, so their tokens stay.
+    """
     existence = _section("SB-OPS-1")
     assert "implicit" in existence.lower()
     assert "claimed" in existence.lower()
@@ -186,14 +196,6 @@ def test_ops_language_core_promises() -> None:
     delete = " ".join(_section("SB-OPS-3").split())
     assert "immediately" in delete.lower()
     assert "claim" in delete.lower()
-    for phrase in (
-        "not promised to be failure-atomic",
-        "reservation or operational failure",
-        "re-list live state",
-        "retry deletion idempotently",
-        "SQL backends may provide stronger transaction atomicity",
-    ):
-        assert phrase in delete
 
     rename = _section("SB-OPS-4")
     assert "retag" in rename.lower() or "rename" in rename.lower()
@@ -202,31 +204,15 @@ def test_ops_language_core_promises() -> None:
     aliases = " ".join(_section("SB-OPS-5").split())
     assert "@" in aliases
     assert "canonical" in aliases.lower()
-    for phrase in (
-        "ordinary queue-name grammar",
-        "need not currently have message rows",
-        "publishes the alias plus alias-version update atomically",
-        "cannot create alias-to-alias chains or cycles in either order",
-        "one-hop resolvable",
-    ):
-        assert phrase in aliases
 
     vacuum = " ".join(_section("SB-OPS-6").split())
     assert "claimed" in vacuum.lower()
     assert "compact" in vacuum.lower()
-    assert "more than 10,000 claimed messages" in vacuum
-    assert "10,000 alone does not fire" in vacuum
+    assert "10,000" in vacuum
 
     cleanup = " ".join(_section("SB-OPS-7").split())
-    for phrase in (
-        "explicitly destructive",
-        ".status.tmp.<decimal-pid>.<decimal-time_ns>",
-        "validation leaves the whole namespace untouched",
-        "other entries may already be gone",
-        "does not retry or roll back",
-        "exact storage, coordination, and client outcomes are undefined",
-    ):
-        assert phrase in cleanup
+    assert "destructive" in cleanup.lower()
+    assert ".status.tmp.<decimal-pid>.<decimal-time_ns>" in cleanup
 
 
 def test_ops_affected_evidence_rows_match_exact_executable_manifests() -> None:

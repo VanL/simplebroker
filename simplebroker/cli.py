@@ -931,7 +931,7 @@ class ArgumentProcessor:
 
     def _protect_write_operands(self, command_args: list[str]) -> list[str]:
         """Protect the write queue/message positionals."""
-        if len(command_args) < 2:
+        if len(command_args) < 2:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-037] exception
             return command_args
 
         if "--" in command_args[1:]:
@@ -971,7 +971,7 @@ class ArgumentProcessor:
 
         # A bare '-' is the unambiguous stdin marker; it needs no protection,
         # which also lets output flags follow it.
-        if len(rest) >= 2 and rest[1].startswith("-") and rest[1] != "-":
+        if len(rest) >= 2 and rest[1].startswith("-") and rest[1] != "-":  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-037] exception
             return [*protected, rest[0], "--", *rest[1:]]
 
         return command_args
@@ -1058,7 +1058,7 @@ class ArgumentProcessor:
         """Return whether token abbreviates a broadcast long selector."""
         option_name = token.partition("=")[0]
         return (
-            len(option_name) > 2
+            len(option_name) > len("--")
             and option_name.startswith("--")
             and option_name not in self.broadcast_long_options
             and any(

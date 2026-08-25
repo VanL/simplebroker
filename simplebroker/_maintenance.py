@@ -1,5 +1,7 @@
 """Backend-neutral policy for opportunistic automatic maintenance."""
 
+from ._constants import VACUUM_CLAIMED_ABSOLUTE_LIMIT
+
 
 class MaintenanceSchedule:
     """Track committed message activity between maintenance checks."""
@@ -28,4 +30,7 @@ def vacuum_is_eligible(
     """Return whether claimed-message cleanup should run."""
     if total_count == 0:
         return False
-    return (claimed_count >= total_count * threshold) or claimed_count > 10_000
+    return (
+        claimed_count >= total_count * threshold
+        or claimed_count > VACUUM_CLAIMED_ABSOLUTE_LIMIT
+    )

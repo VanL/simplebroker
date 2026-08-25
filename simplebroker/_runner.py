@@ -46,6 +46,9 @@ from ._retry_policy import (
     setup_busy_timeout_ms,
 )
 
+# A file below the 16-byte SQLite magic header cannot be a database.
+_SQLITE_HEADER_MIN_BYTES = 16
+
 logger = logging.getLogger(__name__)
 
 # Connections inherited across a fork are abandoned here (never closed): see
@@ -924,7 +927,7 @@ class SQLiteRunner:
                 return True
             # SQLite database headers are 16 bytes. Smaller non-empty files
             # cannot be initialized databases, so stale markers cannot be trusted.
-            return db_path.stat().st_size < 16
+            return db_path.stat().st_size < _SQLITE_HEADER_MIN_BYTES
         except (ValueError, OSError, TypeError):
             return False
 

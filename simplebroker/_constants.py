@@ -92,7 +92,25 @@ Can be overridden with BROKER_MAX_MESSAGE_SIZE environment variable.
 Messages larger than this will be rejected with a ValueError.
 """
 
+# Longest accepted queue name, in characters.
 MAX_QUEUE_NAME_LENGTH: Final[int] = 512
+
+# Vacuum eligibility's absolute claimed-row limit ([SB-OPS-6]: "more
+# than 10,000 claimed messages" fires regardless of ratio).
+VACUUM_CLAIMED_ABSOLUTE_LIMIT: Final[int] = 10_000
+
+# A compound default database name is exactly one directory plus one
+# filename (for example ".weft/broker.db"): two path parts.
+COMPOUND_DB_NAME_PARTS: Final[int] = 2
+
+# Longest single path component accepted from configuration; matches the
+# common POSIX/NTFS per-component filename limit in bytes.
+_MAX_PATH_COMPONENT_LENGTH: Final[int] = 255
+
+# Safe-display bounds: ASCII control characters below space (0x20) and
+# DEL (0x7f) are hex-escaped before a rejected value is shown.
+_ASCII_PRINTABLE_MIN: Final[int] = 32
+_ASCII_DEL: Final[int] = 127
 """Maximum allowed length for queue names in characters."""
 
 # ==============================================================================
@@ -338,7 +356,7 @@ def _validate_path_component(
         raise ValueError(
             f"{context} component cannot start or end with spaces: '{part}' in {path}"
         )
-    if len(part) > 255:
+    if len(part) > _MAX_PATH_COMPONENT_LENGTH:
         raise ValueError(
             f"{context} component too long (max 255 chars): '{part[:50]}...' in {path}"
         )
@@ -505,6 +523,8 @@ class _ConfigField:
     expected: str
 
 
+# Canonical BROKER_* field registry: default, coercion, and expected
+# form for every recognized configuration key.
 _CONFIG_FIELDS: Final[dict[str, _ConfigField]] = {
     "BROKER_BUSY_TIMEOUT": _ConfigField(
         "5000", int, "an integer number of milliseconds"
@@ -569,6 +589,7 @@ _CONFIG_FIELDS: Final[dict[str, _ConfigField]] = {
 }
 """Canonical defaults and coercion shared by environment and overrides."""
 
+# Per-key coercion callables derived from the field registry.
 _CONFIG_NORMALIZERS: Final[dict[str, Callable[[Any], Any]]] = {
     key: field.normalize for key, field in _CONFIG_FIELDS.items()
 }
@@ -603,9 +624,11 @@ class ResolvedConfig(Mapping[str, Any]):
         return len(self._values)
 
 
+# Keys whose values are redacted before any diagnostic display.
 _SENSITIVE_CONFIG_KEYS: Final = frozenset(
     {"BROKER_BACKEND_PASSWORD", "BROKER_BACKEND_TARGET"}
 )
+# Longest rejected-value excerpt shown in a diagnostic, in characters.
 _CONFIG_VALUE_DISPLAY_LIMIT: Final = 160
 
 
@@ -617,7 +640,9 @@ def _safe_config_value_display(key: str, value: Any) -> str:
     else:
         display = f"<{type(value).__name__}>"
     display = "".join(
-        f"\\x{ord(char):02x}" if ord(char) < 32 or ord(char) == 127 else char
+        f"\\x{ord(char):02x}"
+        if ord(char) < _ASCII_PRINTABLE_MIN or ord(char) == _ASCII_DEL
+        else char
         for char in display
     )
     if len(display) > _CONFIG_VALUE_DISPLAY_LIMIT:
@@ -806,7 +831,7 @@ def _validate_default_database_name(config: dict[str, Any]) -> None:
             f"BROKER_DEFAULT_DB_NAME must be a relative path, not absolute: {db_name}. "
             f"Use BROKER_DEFAULT_DB_LOCATION to specify the directory instead."
         )
-    if len(PurePath(db_name).parts) > 2:
+    if len(PurePath(db_name).parts) > COMPOUND_DB_NAME_PARTS:
         raise ValueError(
             f"Database name must not contain nested directories: {db_name}. "
             f"Only single directory level is supported (e.g., 'dir/name.db')"
@@ -855,7 +880,7 @@ def _validate_project_config_name(config: dict[str, Any]) -> None:
             "to specify the directory instead."
         )
     name_parts = PurePath(project_config_name.replace("\\", "/")).parts
-    if len(name_parts) > 2:
+    if len(name_parts) > COMPOUND_DB_NAME_PARTS:
         raise ValueError(
             f"Project config name must not contain nested directories: "
             f"{project_config_name}. Only single directory level is supported "
@@ -868,7 +893,7 @@ def _validate_project_config_name(config: dict[str, Any]) -> None:
         and not os.path.isabs(project_config_path)
     ):
         path_parts = PurePath(project_config_path.replace("\\", "/")).parts
-        if len(path_parts) + len(name_parts) > 2:
+        if len(path_parts) + len(name_parts) > COMPOUND_DB_NAME_PARTS:
             raise ValueError(
                 "BROKER_PROJECT_CONFIG_PATH and BROKER_PROJECT_CONFIG_NAME "
                 "must not combine into nested directories. Only single "

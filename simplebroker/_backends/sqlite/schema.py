@@ -165,7 +165,7 @@ def ensure_schema_v2(
 
         runner.run(CREATE_UNCLAIMED_INDEX)
 
-        if current_version < 2:
+        if current_version < 2:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
             write_schema_version(2)
 
         runner.commit()
@@ -182,11 +182,11 @@ def ensure_schema_v3(
     write_schema_version: Callable[[int], None],
 ) -> None:
     """Ensure SQLite schema v3 (timestamp unique index)."""
-    if current_version < 2:
+    if current_version < 2:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
     has_unique_index = ts_unique_index_exists(runner)
-    if current_version >= 3 and has_unique_index:
+    if current_version >= 3 and has_unique_index:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
     runner.begin_immediate()
@@ -205,7 +205,7 @@ def ensure_schema_v3(
                 "Failed to ensure the timestamp unique index during schema migration"
             )
 
-        if current_version < 3:
+        if current_version < 3:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
             write_schema_version(3)
         runner.commit()
     except BaseException:
@@ -221,7 +221,7 @@ def ensure_schema_v4(
     write_schema_version: Callable[[int], None],
 ) -> None:
     """Ensure SQLite schema v4 (queue aliases)."""
-    if current_version >= 4:
+    if current_version >= 4:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         runner.begin_immediate()
         try:
             for statement in (
@@ -236,7 +236,7 @@ def ensure_schema_v4(
             raise
         return
 
-    if current_version < 3:
+    if current_version < 3:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
     try:
@@ -258,7 +258,7 @@ def ensure_schema_v5(
     write_schema_version: Callable[[int], None],
 ) -> None:
     """Ensure SQLite schema v5 (pending queue/timestamp index)."""
-    if current_version >= 5:
+    if current_version >= 5:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         runner.begin_immediate()
         try:
             runner.run(CREATE_PENDING_QUEUE_TS_INDEX)
@@ -268,7 +268,7 @@ def ensure_schema_v5(
             raise
         return
 
-    if current_version < 4:
+    if current_version < 4:  # noqa: PLR2004 approved [DOM-10.1.1] [RUFF-SUP-036] exception
         return
 
     try:

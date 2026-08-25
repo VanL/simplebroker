@@ -174,25 +174,57 @@ def test_fuzz_dependency_group_is_opt_in() -> None:
 
 
 def test_development_tool_floors_are_current() -> None:
+    """Dev-dependency inventory and floor discipline, derived.
+
+    The exact-floor mirror is gone (audit Task 6.4 — every dependabot
+    bump edited two files for zero protection). What remains: the
+    closed NAME inventory (supply-chain contract), every entry carries
+    a lower bound, and the version-specific floors the repository
+    actually relies on stay exact: pytest (minversion consistency,
+    derived), pytest-timeout (the --timeout-method=thread contract),
+    and ruff (the 0.16 stable-rule expansion).
+    """
     root_pyproject = tomllib.loads(
         (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     )
-    assert set(root_pyproject["project"]["optional-dependencies"]["dev"]) == {
-        "build>=1.5.0",
-        "hypothesis>=6.163.0",
-        "pytest>=9.1.1",
-        "pytest-cov>=7.1.0",
-        "pytest-xdist>=3.8.0",
-        "mypy>=2.3.0",
-        "psycopg[binary]>=3",
-        "psycopg-pool>=3.1",
-        "redis>=5",
-        "ruff>=0.16.0",
-        "pytest-timeout>=2.4.0",
-        "aiosqlite>=0.22.1",
-        "aiosqlitepool>=1.0.0",
+    dev = root_pyproject["project"]["optional-dependencies"]["dev"]
+    requirements = {Requirement(entry).name: Requirement(entry) for entry in dev}
+
+    assert set(requirements) == {
+        "build",
+        "hypothesis",
+        "pytest",
+        "pytest-cov",
+        "pytest-xdist",
+        "mypy",
+        "psycopg",
+        "psycopg-pool",
+        "redis",
+        "ruff",
+        "pytest-timeout",
+        "aiosqlite",
+        "aiosqlitepool",
     }
-    assert root_pyproject["tool"]["pytest"]["ini_options"]["minversion"] == "9.1.1"
+    for name, requirement in requirements.items():
+        assert any(
+            specifier.operator in {">=", "==", "~="}
+            for specifier in requirement.specifier
+        ), f"{name} must carry a lower bound"
+
+    # Version-specific behavior the repo relies on keeps exact floors.
+    assert str(requirements["pytest-timeout"].specifier) == ">=2.4.0"
+    assert str(requirements["ruff"].specifier) == ">=0.16.0"
+
+    # pytest floor and configured minversion stay consistent, derived
+    # from the requirement rather than double-booked.
+    pytest_floor = next(
+        specifier.version
+        for specifier in requirements["pytest"].specifier
+        if specifier.operator == ">="
+    )
+    assert root_pyproject["tool"]["pytest"]["ini_options"]["minversion"] == (
+        pytest_floor
+    )
 
     for extension in ("simplebroker_pg", "simplebroker_redis"):
         extension_pyproject = tomllib.loads(
@@ -200,16 +232,20 @@ def test_development_tool_floors_are_current() -> None:
                 encoding="utf-8"
             )
         )
-        assert set(extension_pyproject["project"]["optional-dependencies"]["dev"]) == {
-            "pytest>=9.1.1",
-            "pytest-timeout>=2.4.0",
+        extension_dev = extension_pyproject["project"]["optional-dependencies"]["dev"]
+        extension_requirements = {
+            Requirement(entry).name: Requirement(entry) for entry in extension_dev
         }
+        assert set(extension_requirements) == {"pytest", "pytest-timeout"}
+        extension_floor = next(
+            specifier.version
+            for specifier in extension_requirements["pytest"].specifier
+            if specifier.operator == ">="
+        )
         assert (
             extension_pyproject["tool"]["pytest"]["ini_options"]["minversion"]
-            == "9.1.1"
+            == extension_floor
         )
-
-
 def test_every_uv_workflow_uses_the_repository_pin() -> None:
     for workflow_path in UV_WORKFLOWS:
         workflow_text = _workflow_text(workflow_path)
